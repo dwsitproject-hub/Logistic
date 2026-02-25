@@ -66,7 +66,9 @@ export default function TruckingPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editedData, setEditedData] = useState<Partial<TruckingOperation>>({})
   const [statusFilter, setStatusFilter] = useState<string>('ALL')
-  const [locationFilter, setLocationFilter] = useState('')
+  const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
+  const [loadingLocationFilter, setLoadingLocationFilter] = useState('')
+  const [unloadingLocationFilter, setUnloadingLocationFilter] = useState('')
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [dateFrom, setDateFrom] = useState('')
@@ -164,8 +166,11 @@ export default function TruckingPage() {
       if (statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
       }
-      if (locationFilter) {
-        params.append('location', locationFilter)
+      if (loadingLocationFilter) {
+        params.append('loadingLocation', loadingLocationFilter)
+      }
+      if (unloadingLocationFilter) {
+        params.append('unloadingLocation', unloadingLocationFilter)
       }
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
@@ -680,11 +685,21 @@ export default function TruckingPage() {
       operation.operation_id?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       operation.contract_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       operation.sto_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      operation.location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      operation.loading_location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      operation.unloading_location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       operation.trucking_owner?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       operation.supplier?.toLowerCase().includes(searchTerm.toLowerCase())
     
     if (!matchesSearch) return false
+    
+    // Filter by Late Indicator
+    if (lateIndicatorFilter !== 'ALL') {
+      const indicator = getLateIndicator(operation)
+      if (lateIndicatorFilter === 'ON_TIME' && indicator.text !== 'On Time') return false
+      if (lateIndicatorFilter === 'LATE' && indicator.text !== 'Late') return false
+      if (lateIndicatorFilter === 'NA' && indicator.text !== '-') return false
+    }
+    
     return passesColumnFilters(operation)
   })
 
@@ -1250,7 +1265,7 @@ export default function TruckingPage() {
               <div className="flex-1 relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                 <Input
-                  placeholder="Search by Operation ID, Contract, Location, Owner, or Supplier..."
+                  placeholder="Search by Operation ID, Contract, Truck Loading/Discharge Location, Owner, or Supplier..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
@@ -1270,10 +1285,26 @@ export default function TruckingPage() {
                 <option value="COMPLETED">Completed</option>
                 <option value="CANCELLED">Cancelled</option>
               </select>
+              <select
+                value={lateIndicatorFilter}
+                onChange={(e) => setLateIndicatorFilter(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="ALL">All Late Indicator</option>
+                <option value="ON_TIME">On Time</option>
+                <option value="LATE">Late</option>
+                <option value="NA">N/A</option>
+              </select>
               <Input
-                placeholder="Filter by location..."
-                value={locationFilter}
-                onChange={(e) => setLocationFilter(e.target.value)}
+                placeholder="Truck Loading Location"
+                value={loadingLocationFilter}
+                onChange={(e) => setLoadingLocationFilter(e.target.value)}
+                className="w-48"
+              />
+              <Input
+                placeholder="Truck Discharge Location"
+                value={unloadingLocationFilter}
+                onChange={(e) => setUnloadingLocationFilter(e.target.value)}
                 className="w-48"
               />
               <div className="flex items-center gap-2">
@@ -1286,11 +1317,13 @@ export default function TruckingPage() {
                 <Filter className="h-4 w-4 mr-1" />
                 Apply
               </Button>
-              {(statusFilter !== 'ALL' || locationFilter || dateFrom || dateTo) && (
+              {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || loadingLocationFilter || unloadingLocationFilter || dateFrom || dateTo) && (
                 <Button 
                   onClick={() => {
                     setStatusFilter('ALL')
-                    setLocationFilter('')
+                    setLateIndicatorFilter('ALL')
+                    setLoadingLocationFilter('')
+                    setUnloadingLocationFilter('')
                     setDateFrom('')
                     setDateTo('')
                     handleFilterChange()
@@ -1303,6 +1336,53 @@ export default function TruckingPage() {
                   Clear
                 </Button>
               )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Status Distribution */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Status Distribution</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto pb-4 px-4">
+              {[
+                { status: 'PLANNED', label: 'Planned', color: 'bg-blue-100', textColor: 'text-blue-800', badgeColor: 'bg-blue-600' },
+                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600' },
+                { status: 'LOADING', label: 'Loading', color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600' },
+                { status: 'IN_TRANSIT', label: 'In Transit', color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600' },
+                { status: 'UNLOADING', label: 'Unloading', color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600' },
+                { status: 'COMPLETED', label: 'Completed', color: 'bg-green-100', textColor: 'text-green-800', badgeColor: 'bg-green-600' },
+                { status: 'CANCELLED', label: 'Cancelled', color: 'bg-red-100', textColor: 'text-red-800', badgeColor: 'bg-red-600' }
+              ].map((statusInfo, index, array) => {
+                const count = filteredOperations.filter(op => op.status === statusInfo.status).length
+                return (
+                  <div key={statusInfo.status} className="flex items-center flex-shrink-0">
+                    <div className="relative">
+                      {/* Status Circle */}
+                      <div className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg hover:shadow-xl transition-shadow`}>
+                        {/* Count Badge */}
+                        <div className={`absolute -top-2 -right-2 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-7 h-7 md:w-8 md:h-8 flex items-center justify-center shadow-lg z-10`}>
+                          {count}
+                        </div>
+                        {/* Status Label */}
+                        <span className={`text-xs md:text-sm font-semibold ${statusInfo.textColor} text-center px-2 leading-tight`}>
+                          {statusInfo.label}
+                        </span>
+                      </div>
+                    </div>
+                    {/* Arrow */}
+                    {index < array.length - 1 && (
+                      <div className="flex-shrink-0 mx-2 md:mx-3">
+                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-gray-400">
+                          <path d="M9 18L15 12L9 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </CardContent>
         </Card>

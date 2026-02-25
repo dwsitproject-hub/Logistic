@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -68,6 +68,21 @@ interface DocumentItem {
   created_at?: string
 }
 
+interface StoInfoRow {
+  type: 'shipment' | 'trucking'
+  sto_number: string
+  operation_id?: string | null
+  late_indicator: string
+  status: string
+  sto_quantity: number
+  quantity_delivered?: number
+  quantity_receive?: number
+  vessel_name?: string
+  trucking_owner?: string
+  eta_vessel_arrival_loading_port?: string | null
+  eta_trucking_completion_date?: string | null
+}
+
 export default function ContractsPage() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -97,6 +112,15 @@ export default function ContractsPage() {
   const [uploadingId, setUploadingId] = useState<string>('')
   const [docsLoading, setDocsLoading] = useState<boolean>(false)
   const [selectedContractDocs, setSelectedContractDocs] = useState<DocumentItem[]>([])
+  const [stoInfoLoading, setStoInfoLoading] = useState<boolean>(false)
+  const [stoInfo, setStoInfo] = useState<StoInfoRow[]>([])
+  const [stoDetailRow, setStoDetailRow] = useState<StoInfoRow | null>(null)
+  const [stoDetailData, setStoDetailData] = useState<any>(null)
+  const [stoDetailLoading, setStoDetailLoading] = useState<boolean>(false)
+  const [contractPayments, setContractPayments] = useState<Array<{ payment_status: string }>>([])
+  const [contractPaymentsLoading, setContractPaymentsLoading] = useState(false)
+  const [activityLog, setActivityLog] = useState<Array<{ id: string; username: string; full_name?: string; action: string; entity_type: string; timestamp: string; before_data: Record<string, unknown> | null; after_data: Record<string, unknown> | null }>>([])
+  const [activityLogLoading, setActivityLogLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [totalContracts, setTotalContracts] = useState(0)
@@ -157,6 +181,22 @@ export default function ContractsPage() {
     fetchContracts(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authReady, searchParams, statusFilter, companyCodeFilter, b2bFlagFilter, dateFrom, dateTo])
+
+  // When user types (or clears) search, refetch so contract_id filter is applied and we find a contract even with "All Status"
+  const isFirstSearchRender = useRef(true)
+  useEffect(() => {
+    if (!authReady) return
+    if (isFirstSearchRender.current) {
+      isFirstSearchRender.current = false
+      return
+    }
+    const t = setTimeout(() => {
+      setCurrentPage(1)
+      fetchContracts(1)
+    }, 500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchTerm])
   
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) {
@@ -193,6 +233,10 @@ export default function ContractsPage() {
       const params = new URLSearchParams()
       params.append('page', page.toString())
       params.append('limit', contractsPerPage.toString())
+      const searchTrim = searchTerm.trim()
+      if (searchTrim.length >= 4 && /^[a-zA-Z0-9]+$/.test(searchTrim)) {
+        params.append('contract_id', searchTrim)
+      }
       if (statusFilter && statusFilter !== 'All Status') {
         // Map frontend status to backend status
         const statusMap: { [key: string]: string } = {
@@ -224,6 +268,18 @@ export default function ContractsPage() {
       const loadedContracts: Contract[] = response.data?.data?.contracts || []
       console.log('Contracts loaded:', loadedContracts.length)
       console.log('Pagination:', response.data?.data?.pagination)
+      // Debug: payment dates from API (in Network tab filter by "contracts" to see this request)
+      const sample = loadedContracts.find(c => c.contract_id === '1004020799') || loadedContracts[0]
+      if (sample) {
+        console.log('Payment fields from API (sample):', {
+          contract_id: sample.contract_id,
+          due_date_payment: sample.due_date_payment,
+          dp_date: sample.dp_date,
+          payoff_date: sample.payoff_date,
+          dp_date_deviation_days: sample.dp_date_deviation_days,
+          payoff_date_deviation_days: sample.payoff_date_deviation_days,
+        })
+      }
       setContracts(loadedContracts)
       
       // Update pagination state
@@ -425,6 +481,96 @@ export default function ContractsPage() {
       setSelectedContractDocs([])
     }
   }, [selectedContract])
+
+  useEffect(() => {
+    if (!selectedContract?.id) {
+      setStoInfo([])
+      return
+    }
+    let cancelled = false
+    setStoInfoLoading(true)
+    setStoInfo([])
+    api.get(`/contracts/${selectedContract.id}/sto-information`)
+      .then((res) => {
+        if (cancelled || !res.data?.data?.stos) return
+        setStoInfo(res.data.data.stos)
+      })
+      .catch(() => {
+        if (!cancelled) setStoInfo([])
+      })
+      .finally(() => {
+        if (!cancelled) setStoInfoLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [selectedContract?.id])
+
+  useEffect(() => {
+    if (!selectedContract?.contract_id) {
+      setContractPayments([])
+      return
+    }
+    let cancelled = false
+    setContractPaymentsLoading(true)
+    api.get('/finance/payments', { params: { contract_id: selectedContract.contract_id } })
+      .then((res) => {
+        if (cancelled) return
+        const list = res.data?.data ?? []
+        setContractPayments(Array.isArray(list) ? list : [])
+      })
+      .catch(() => { if (!cancelled) setContractPayments([]) })
+      .finally(() => { if (!cancelled) setContractPaymentsLoading(false) })
+    return () => { cancelled = true }
+  }, [selectedContract?.contract_id])
+
+  useEffect(() => {
+    if (!selectedContract?.id) {
+      setActivityLog([])
+      return
+    }
+    let cancelled = false
+    setActivityLogLoading(true)
+    api.get(`/contracts/${selectedContract.id}/activity-log`)
+      .then((res) => {
+        if (cancelled) return
+        setActivityLog(Array.isArray(res.data?.data) ? res.data.data : [])
+      })
+      .catch(() => { if (!cancelled) setActivityLog([]) })
+      .finally(() => { if (!cancelled) setActivityLogLoading(false) })
+    return () => { cancelled = true }
+  }, [selectedContract?.id])
+
+  const openStoDetail = useCallback((row: StoInfoRow) => {
+    if (!selectedContract?.contract_id) return
+    setStoDetailRow(row)
+    setStoDetailData(null)
+    setStoDetailLoading(true)
+    if (row.type === 'shipment') {
+      api.get('/shipments', { params: { sto: row.sto_number, contract: selectedContract.contract_id, limit: 1 } })
+        .then((res) => {
+          const list = res.data?.data?.shipments ?? res.data?.shipments ?? []
+          setStoDetailData(Array.isArray(list) && list.length > 0 ? list[0] : null)
+        })
+        .catch(() => setStoDetailData(null))
+        .finally(() => setStoDetailLoading(false))
+    } else {
+      api.get('/trucking', { params: { contract: selectedContract.contract_id, limit: 200 } })
+        .then((res) => {
+          const list = res.data?.data?.operations ?? res.data?.operations ?? []
+          const op = Array.isArray(list) && row.operation_id
+            ? list.find((o: any) => String(o.operation_id || '') === String(row.operation_id))
+            : (Array.isArray(list) && list.length > 0 ? list[0] : null)
+          setStoDetailData(op ?? null)
+        })
+        .catch(() => setStoDetailData(null))
+        .finally(() => setStoDetailLoading(false))
+    }
+  }, [selectedContract?.contract_id])
+
+  const closeStoDetail = useCallback(() => {
+    setStoDetailRow(null)
+    setStoDetailData(null)
+    setStoDetailLoading(false)
+  }, [])
 
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
     if (colId === 'contract_qty' || colId === 'outstanding_qty') return 'number'
@@ -1161,17 +1307,17 @@ export default function ContractsPage() {
                           return (
                             <div key={col.id} className="relative min-w-0">
                               <div className="flex items-center gap-1 min-w-0">
-                                <button
-                                  type="button"
+                            <button
+                              type="button"
                                   className={`flex items-center gap-1 text-left min-w-0 ${col.sortable ? 'hover:text-gray-900' : ''}`}
-                                  onClick={() => onSortHeaderClick(col)}
-                                  title={col.sortable ? 'Sort' : undefined}
-                                >
-                                  <span className="truncate">{col.label}</span>
+                              onClick={() => onSortHeaderClick(col)}
+                              title={col.sortable ? 'Sort' : undefined}
+                            >
+                              <span className="truncate">{col.label}</span>
                                   {col.sortable && activeSort && (
-                                    sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                                  )}
-                                </button>
+                                sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                              )}
+                            </button>
 
                                 <button
                                   type="button"
@@ -1782,15 +1928,84 @@ export default function ContractsPage() {
                           {selectedContract.po_numbers || selectedContract.po_number || '-'}
                         </div>
                       </div>
-                      <div className="p-3 bg-gray-50 rounded col-span-2">
-                        <div className="text-gray-500">
-                          STO Number{selectedContract.sto_count > 1 ? `s (${selectedContract.sto_count} total)` : ''}
-                        </div>
-                        <div className="font-medium mt-1 text-xs">
-                          {selectedContract.sto_numbers || selectedContract.sto_number || '-'}
-                        </div>
-                      </div>
                     </div>
+                  </div>
+
+                  {/* STO Information */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">STO Information</h3>
+                    {stoInfoLoading ? (
+                      <div className="text-sm text-gray-500">Loading STO information...</div>
+                    ) : stoInfo.length === 0 ? (
+                      <div className="text-sm text-gray-500">No STO information for this contract.</div>
+                    ) : (
+                      <div className="overflow-x-auto border rounded">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="bg-gray-100 border-b">
+                              <th className="text-left p-2 font-medium">STO No</th>
+                              <th className="text-left p-2 font-medium">Operation ID</th>
+                              <th className="text-left p-2 font-medium">Type</th>
+                              <th className="text-left p-2 font-medium">Late Indicator</th>
+                              <th className="text-left p-2 font-medium">Status</th>
+                              <th className="text-left p-2 font-medium">STO Quantity</th>
+                              <th className="text-left p-2 font-medium">Quantity Delivered / Quantity Receive (MT)</th>
+                              <th className="text-left p-2 font-medium">Vessel Name / Trucking Owner</th>
+                              <th className="text-left p-2 font-medium">ETA Vessel Arrival at Loading Port / ETA Trucking Completion Date</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {stoInfo.map((row, idx) => (
+                              <tr key={`${row.type}-${row.sto_number}-${idx}`} className="border-b last:border-0 hover:bg-gray-50">
+                                <td className="p-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => openStoDetail(row)}
+                                    className="text-left text-blue-600 hover:underline font-medium cursor-pointer"
+                                  >
+                                    {row.sto_number || '-'}
+                                  </button>
+                                </td>
+                                <td className="p-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => openStoDetail(row)}
+                                    className="text-left text-blue-600 hover:underline font-medium cursor-pointer"
+                                  >
+                                    {row.operation_id ?? '-'}
+                                  </button>
+                                </td>
+                                <td className="p-2">
+                                  <Badge variant="outline" className={row.type === 'shipment' ? 'border-blue-300 text-blue-700' : 'border-amber-300 text-amber-700'}>
+                                    {row.type === 'shipment' ? 'Shipment' : 'Trucking'}
+                                  </Badge>
+                                </td>
+                                <td className="p-2">
+                                  <Badge className={row.late_indicator === 'Late' ? 'bg-red-500' : row.late_indicator === 'On Time' ? 'bg-green-500' : 'bg-gray-400'}>
+                                    {row.late_indicator}
+                                  </Badge>
+                                </td>
+                                <td className="p-2">{row.status}</td>
+                                <td className="p-2">{formatNumber(row.sto_quantity)}</td>
+                                <td className="p-2">
+                                  {row.type === 'shipment'
+                                    ? formatNumber(row.quantity_delivered ?? 0)
+                                    : formatNumber(row.quantity_receive ?? 0)}
+                                </td>
+                                <td className="p-2">
+                                  {row.type === 'shipment' ? (row.vessel_name ?? '-') : (row.trucking_owner ?? '-')}
+                                </td>
+                                <td className="p-2">
+                                  {row.type === 'shipment'
+                                    ? (row.eta_vessel_arrival_loading_port ? formatDate(row.eta_vessel_arrival_loading_port) : '-')
+                                    : (row.eta_trucking_completion_date ? formatDate(row.eta_trucking_completion_date) : '-')}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
 
                   {/* Documents */}
@@ -1867,14 +2082,6 @@ export default function ContractsPage() {
                           <div className="text-xs text-red-500 mt-1">Overshipped</div>
                         )}
                       </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Unit Price</div>
-                        <div className="font-medium mt-1">{formatCurrency(selectedContract.unit_price, selectedContract.currency)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Contract Value</div>
-                        <div className="font-medium mt-1">{formatCurrency(selectedContract.contract_value, selectedContract.currency)}</div>
-                      </div>
                     </div>
                   </div>
 
@@ -1929,6 +2136,14 @@ export default function ContractsPage() {
                     <h3 className="text-lg font-semibold mb-3">Payment Information</h3>
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Unit Price</div>
+                        <div className="font-medium mt-1">{formatCurrency(selectedContract.unit_price, selectedContract.currency)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Contract Value</div>
+                        <div className="font-medium mt-1">{formatCurrency(selectedContract.contract_value, selectedContract.currency)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Due Date Payment</div>
                         <div className="font-medium mt-1">{formatDate(selectedContract.due_date_payment as any)}</div>
                       </div>
@@ -1948,6 +2163,18 @@ export default function ContractsPage() {
                         <div className="text-gray-500">Payoff Date Deviation (Days)</div>
                         <div className="font-medium mt-1">{selectedContract.payoff_date_deviation_days ?? '-'}</div>
                       </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Status</div>
+                        <div className="font-medium mt-1">
+                          {contractPaymentsLoading ? (
+                            <span className="text-gray-400">Loading...</span>
+                          ) : contractPayments.length === 0 ? (
+                            '-'
+                          ) : (
+                            contractPayments.map((p) => p.payment_status).filter(Boolean).join(', ') || '-'
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -1965,7 +2192,144 @@ export default function ContractsPage() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Activity Log */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Activity Log</h3>
+                    {activityLogLoading ? (
+                      <p className="text-sm text-gray-500 py-4">Loading activity...</p>
+                    ) : activityLog.length === 0 ? (
+                      <p className="text-sm text-gray-500 py-4">No activity recorded for this contract.</p>
+                    ) : (
+                      <div className="overflow-x-auto rounded border">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="bg-gray-50 border-b">
+                              <th className="text-left p-2 font-medium">User</th>
+                              <th className="text-left p-2 font-medium">Date &amp; Time</th>
+                              <th className="text-left p-2 font-medium">Action</th>
+                              <th className="text-left p-2 font-medium">Area</th>
+                              <th className="text-left p-2 font-medium">Old value</th>
+                              <th className="text-left p-2 font-medium">New value</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {activityLog.flatMap((log) => {
+                              const before = log.before_data && typeof log.before_data === 'object' ? log.before_data as Record<string, unknown> : {}
+                              const after = log.after_data && typeof log.after_data === 'object' ? log.after_data as Record<string, unknown> : {}
+                              const toStr = (v: unknown): string => {
+                                if (v == null) return ''
+                                if (typeof v === 'object') return JSON.stringify(v)
+                                return String(v)
+                              }
+                              const keys = new Set([...Object.keys(before), ...Object.keys(after)])
+                              const rows = Array.from(keys)
+                                .filter((k) => toStr(before[k]) !== toStr(after[k]))
+                                .map((k) => ({
+                                  key: k,
+                                  old: before[k] != null ? (typeof before[k] === 'object' ? JSON.stringify(before[k]) : String(before[k])) : '—',
+                                  new: after[k] != null ? (typeof after[k] === 'object' ? JSON.stringify(after[k]) : String(after[k])) : '—',
+                                }))
+                              const entityLabel = log.entity_type.replace(/_/g, ' ')
+                              const userLabel = log.username || log.full_name || '—'
+                              const timeLabel = log.timestamp ? new Date(log.timestamp).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '—'
+                              if (rows.length > 0) {
+                                return rows.map((row, i) => (
+                                  <tr key={`${log.id}-${row.key}-${i}`} className="border-b last:border-0">
+                                    {i === 0 ? (
+                                      <>
+                                        <td className="p-2 align-top" rowSpan={rows.length}>{userLabel}</td>
+                                        <td className="p-2 align-top whitespace-nowrap" rowSpan={rows.length}>{timeLabel}</td>
+                                        <td className="p-2 align-top" rowSpan={rows.length}>{log.action}</td>
+                                        <td className="p-2 align-top" rowSpan={rows.length}>{entityLabel}</td>
+                                      </>
+                                    ) : null}
+                                    <td className="p-2 align-top text-gray-600 max-w-[200px] truncate" title={row.old}>{row.old}</td>
+                                    <td className="p-2 align-top max-w-[200px] truncate" title={row.new}>{row.new}</td>
+                                  </tr>
+                                ))
+                              }
+                              return [
+                                <tr key={log.id} className="border-b">
+                                  <td className="p-2">{userLabel}</td>
+                                  <td className="p-2 whitespace-nowrap">{timeLabel}</td>
+                                  <td className="p-2">{log.action}</td>
+                                  <td className="p-2">{entityLabel}</td>
+                                  <td className="p-2 text-gray-500">—</td>
+                                  <td className="p-2 text-gray-500">—</td>
+                                </tr>,
+                              ]
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
                 </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* STO / Operation detail modal */}
+        {stoDetailRow && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
+            <Card className="max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle>
+                    {stoDetailRow.type === 'shipment' ? 'Shipment' : 'Trucking'} details
+                    {stoDetailRow.sto_number && stoDetailRow.sto_number !== '-' && ` · STO ${stoDetailRow.sto_number}`}
+                    {stoDetailRow.operation_id && ` · ${stoDetailRow.operation_id}`}
+                  </CardTitle>
+                  <Button variant="ghost" size="sm" onClick={closeStoDetail}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {stoDetailLoading ? (
+                  <div className="text-sm text-gray-500 py-8">Loading details...</div>
+                ) : !stoDetailData ? (
+                  <div className="text-sm text-gray-500 py-8">No details found for this STO / Operation.</div>
+                ) : stoDetailRow.type === 'shipment' ? (
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">STO No</span><div className="font-medium mt-1">{stoDetailData.sto_number ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Operation ID</span><div className="font-medium mt-1">{stoDetailData.operation_id ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Status</span><div className="font-medium mt-1">{stoDetailData.status ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Vessel Name</span><div className="font-medium mt-1">{stoDetailData.vessel_name ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Contract(s)</span><div className="font-medium mt-1">{stoDetailData.contract_numbers ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Port of Loading</span><div className="font-medium mt-1">{stoDetailData.port_of_loading ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Port of Discharge</span><div className="font-medium mt-1">{stoDetailData.port_of_discharge ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">STO Quantity</span><div className="font-medium mt-1">{formatNumber(stoDetailData.sto_quantity ?? 0)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Quantity Delivered</span><div className="font-medium mt-1">{formatNumber(stoDetailData.quantity_delivered ?? 0)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Due Date Delivery Start</span><div className="font-medium mt-1">{formatDate(stoDetailData.delivery_start_date)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Due Date Delivery End</span><div className="font-medium mt-1">{formatDate(stoDetailData.delivery_end_date)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">ATA Vessel Completed Loading</span><div className="font-medium mt-1">{formatDate(stoDetailData.ata_vessel_completed_loading)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">ATA Vessel Complete Discharge</span><div className="font-medium mt-1">{formatDate(stoDetailData.ata_vessel_complete_discharge)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">ETA Vessel Complete Discharge</span><div className="font-medium mt-1">{formatDate(stoDetailData.eta_vessel_complete_discharge)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded col-span-2"><span className="text-gray-500">Product</span><div className="font-medium mt-1">{stoDetailData.product ?? '-'}</div></div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">STO No</span><div className="font-medium mt-1">{stoDetailData.sto_number ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Operation ID</span><div className="font-medium mt-1">{stoDetailData.operation_id ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Status</span><div className="font-medium mt-1">{stoDetailData.status ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Trucking Owner</span><div className="font-medium mt-1">{stoDetailData.trucking_owner ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Contract</span><div className="font-medium mt-1">{stoDetailData.contract_number ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Loading Location</span><div className="font-medium mt-1">{stoDetailData.loading_location ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Unloading Location</span><div className="font-medium mt-1">{stoDetailData.unloading_location ?? '-'}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Contract Qty</span><div className="font-medium mt-1">{formatNumber(stoDetailData.contract_qty ?? stoDetailData.sto_quantity ?? 0)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Quantity Receive (MT)</span><div className="font-medium mt-1">{formatNumber(stoDetailData.quantity_delivered ?? 0)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Due Date Delivery Start</span><div className="font-medium mt-1">{formatDate(stoDetailData.delivery_start_date)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Due Date Delivery End</span><div className="font-medium mt-1">{formatDate(stoDetailData.delivery_end_date)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Trucking Start Receive Date</span><div className="font-medium mt-1">{formatDate(stoDetailData.trucking_start_date)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Trucking Last Receive Date</span><div className="font-medium mt-1">{formatDate(stoDetailData.trucking_completion_date)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">ETA Trucking Start Receive Date</span><div className="font-medium mt-1">{formatDate(stoDetailData.eta_trucking_start_date)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">ETA Trucking Completion Date</span><div className="font-medium mt-1">{formatDate(stoDetailData.eta_trucking_completion_date)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded col-span-2"><span className="text-gray-500">Product</span><div className="font-medium mt-1">{stoDetailData.product ?? '-'}</div></div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>

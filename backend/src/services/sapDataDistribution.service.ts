@@ -999,15 +999,29 @@ export class SapDataDistributionService {
     if (!contractId) {
       throw new Error('Contract ID is required for payment');
     }
-    
+
+    const contractRow = await client.query(
+      `SELECT contract_value, quantity_ordered, unit_price FROM contracts WHERE id = $1 LIMIT 1`,
+      [contractId]
+    );
+    const amount =
+      contractRow.rows[0]?.contract_value != null
+        ? Number(contractRow.rows[0].contract_value)
+        : contractRow.rows[0]?.quantity_ordered != null && contractRow.rows[0]?.unit_price != null
+          ? Number(contractRow.rows[0].quantity_ordered) * Number(contractRow.rows[0].unit_price)
+          : 0;
+
+    const paymentAmount = paymentData?.payment_amount != null ? this.parseNumber(paymentData.payment_amount) : null;
+    const finalAmount = paymentAmount != null ? paymentAmount : amount;
+
     // Check if payment exists for this contract
     const existing = await client.query(
       `SELECT id FROM payments WHERE contract_id = $1 ORDER BY created_at DESC LIMIT 1`,
       [contractId]
     );
-    
+
     if (existing.rows.length > 0) {
-      // Update existing payment
+      // Update existing payment (including amount from contract if currently 0)
       const paymentId = existing.rows[0].id;
       await client.query(
         `UPDATE payments SET
@@ -1016,26 +1030,27 @@ export class SapDataDistributionService {
           payoff_date = COALESCE($3::date, payoff_date),
           payment_date = COALESCE($4::date, payment_date),
           payment_deviation_days = COALESCE($5::int, payment_deviation_days),
+          payment_amount = CASE WHEN payment_amount = 0 OR payment_amount IS NULL THEN $6::numeric ELSE payment_amount END,
           updated_at = CURRENT_TIMESTAMP
-         WHERE id = $6`,
+         WHERE id = $7`,
         [
           this.parseDate(paymentData.due_date_payment),
           this.parseDate(paymentData.dp_date),
           this.parseDate(paymentData.payoff_date),
-          this.parseDate(paymentData.payoff_date), // Use payoff as payment date
+          this.parseDate(paymentData.payoff_date),
           this.parseNumber(paymentData.payment_date_deviation_days),
+          finalAmount,
           paymentId
         ]
       );
       return paymentId;
     } else {
-      // Create new payment
       const result = await client.query(
         `INSERT INTO payments (
           contract_id, payment_due_date, dp_date, payoff_date, payment_date,
           payment_deviation_days, payment_status, payment_amount
         ) VALUES (
-          $1::uuid, $2::date, $3::date, $4::date, $5::date, $6::int, 'PENDING', 0
+          $1::uuid, $2::date, $3::date, $4::date, $5::date, $6::int, 'PENDING', $7::numeric
         ) RETURNING id`,
         [
           contractId,
@@ -1043,7 +1058,8 @@ export class SapDataDistributionService {
           this.parseDate(paymentData.dp_date),
           this.parseDate(paymentData.payoff_date),
           this.parseDate(paymentData.payoff_date),
-          this.parseNumber(paymentData.payment_date_deviation_days)
+          this.parseNumber(paymentData.payment_date_deviation_days),
+          finalAmount
         ]
       );
       return result.rows[0].id;

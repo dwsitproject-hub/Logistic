@@ -1,6 +1,7 @@
 import express from 'express';
 import { authenticateToken, authorize } from '../middleware/auth';
-import { getFinanceSummary, getPaymentById, getPayments } from '../controllers/finance.controller';
+import { auditLog } from '../middleware/audit';
+import { getFinanceSummary, getPaymentById, getPayments, updatePayment } from '../controllers/finance.controller';
 
 const router = express.Router();
 
@@ -22,6 +23,13 @@ router.get(
   '/payments/:id',
   authorize('ADMIN', 'FINANCE'),
   getPaymentById
+);
+
+router.patch(
+  '/payments/:id',
+  authorize('ADMIN', 'FINANCE'),
+  auditLog('UPDATE', 'PAYMENT'),
+  updatePayment
 );
 
 export default router;

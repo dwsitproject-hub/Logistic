@@ -8,14 +8,18 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     const { status, vessel, port, dateFrom, dateTo, delayed, sto, contract, page = 1, limit = 10 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
 
-    // Query shipments grouped by STO number (one STO can have multiple contracts)
+    // Query shipments grouped by STO number or Operation ID:
+    // - SAP shipments are grouped by contracts.sto_number
+    // - Manual shipments (no STO) are grouped by operation_id so that multiple contracts
+    //   under the same operation appear as a single transaction in the UI
     let queryText = `
       WITH shipment_base AS (
         SELECT 
-          COALESCE(c.sto_number, s.shipment_id) as sto_key,
+          COALESCE(c.sto_number, s.operation_id, s.shipment_id) as sto_key,
           (array_agg(s.id ORDER BY s.created_at DESC) FILTER (WHERE s.id IS NOT NULL))[1] as id,
-          COALESCE(MAX(c.sto_number), MAX(s.shipment_id)) as sto_number,
+          MAX(c.sto_number) as sto_number,
           MAX(s.shipment_id) as shipment_id,
+          MAX(s.operation_id) as operation_id,
           MAX(s.vessel_name) as vessel_name,
           MAX(s.vessel_code) as vessel_code,
           MAX(s.voyage_no) as voyage_no,
@@ -65,7 +69,21 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           COUNT(DISTINCT c.contract_id) FILTER (WHERE c.contract_id IS NOT NULL) as contract_count,
           -- Get delivery dates from contracts
           MAX(c.delivery_start_date) as delivery_start_date,
-          MAX(c.delivery_end_date) as delivery_end_date
+          MAX(c.delivery_end_date) as delivery_end_date,
+          -- Get ATA dates from shipments or vessel_loading_ports
+          MAX(COALESCE(s.ata_loading_complete, (SELECT vlp1.ata_loading_completed::date FROM vessel_loading_ports vlp1 WHERE vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false LIMIT 1))) as ata_vessel_completed_loading,
+          MAX(COALESCE(s.ata_discharge_complete, (SELECT vlpd.ata_loading_completed::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) as ata_vessel_complete_discharge,
+          -- Get ETA dates from shipments or vessel_loading_ports
+          MAX(COALESCE(s.eta_discharge_complete, (SELECT vlpd.eta_vessel_complete_discharge::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) as eta_vessel_complete_discharge,
+          -- Get contract reference PO from contracts or sap_processed_data
+          MAX((SELECT COALESCE(
+                  spd.data->'contract'->>'contract_reference_po',
+                  spd.data->>'CONTRACT REFF PO'
+                )
+           FROM sap_processed_data spd
+           WHERE spd.sto_number = COALESCE(c.sto_number, s.shipment_id)
+           ORDER BY spd.created_at DESC NULLS LAST
+           LIMIT 1)) AS contract_reference_po
         FROM shipments s
         LEFT JOIN contracts c ON s.contract_id = c.id
         WHERE 1=1
@@ -120,7 +138,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     }
 
     queryText += `
-        GROUP BY COALESCE(c.sto_number, s.shipment_id)
+        GROUP BY COALESCE(c.sto_number, s.operation_id, s.shipment_id)
       )
       SELECT 
         sb.*,
@@ -164,7 +182,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
 
     // Get total count (grouped by STO)
     let countQuery = `
-      SELECT COUNT(DISTINCT COALESCE(c.sto_number, s.shipment_id)) as count 
+      SELECT COUNT(DISTINCT COALESCE(c.sto_number, s.operation_id, s.shipment_id)) as count 
       FROM shipments s
       LEFT JOIN contracts c ON s.contract_id = c.id
       WHERE 1=1
@@ -625,7 +643,54 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
          ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
         [shipmentId]
       );
-      
+
+      // Backfill: if shipment has port names but no vessel_loading_ports rows, create one loading + one discharge row from shipments
+      if (portsResult.rows.length === 0) {
+        const shipRow = await query(
+          `SELECT id, port_of_loading, port_of_discharge, actual_vessel_qty_receive
+           FROM shipments WHERE id = $1`,
+          [shipmentId]
+        );
+        if (shipRow.rows.length > 0) {
+          const s = shipRow.rows[0];
+          const pol = (s.port_of_loading && String(s.port_of_loading).trim()) || null;
+          const pod = (s.port_of_discharge && String(s.port_of_discharge).trim()) || null;
+          if (pol) {
+            await query(
+              `INSERT INTO vessel_loading_ports (shipment_id, port_name, port_sequence, quantity_at_loading_port, is_discharge_port)
+               VALUES ($1, $2, 1, $3::numeric, false)`,
+              [shipmentId, pol, s.actual_vessel_qty_receive ?? null]
+            );
+          }
+          if (pod) {
+            await query(
+              `INSERT INTO vessel_loading_ports (shipment_id, port_name, port_sequence, quantity_at_loading_port, is_discharge_port)
+               VALUES ($1, $2, 999, 0, true)`,
+              [shipmentId, pod]
+            );
+          }
+          if (pol || pod) {
+            portsResult = await query(
+              `SELECT vlp.id, vlp.shipment_id, vlp.port_name, vlp.port_sequence, vlp.quantity_at_loading_port,
+                vlp.eta_vessel_arrival, vlp.ata_vessel_arrival, vlp.eta_vessel_berthed, vlp.ata_vessel_berthed,
+                vlp.eta_loading_start, vlp.ata_loading_start, vlp.eta_loading_completed, vlp.ata_loading_completed,
+                vlp.eta_vessel_sailed, vlp.ata_vessel_sailed,
+                vlp.eta_vessel_berthed_at_loading_port, vlp.eta_vessel_arrive_at_discharge_port,
+                vlp.eta_vessel_berthed_at_discharge_port, vlp.eta_vessel_start_discharging, vlp.eta_vessel_complete_discharge,
+                vlp.loading_rate, vlp.quality_ffa, vlp.quality_mi, vlp.quality_dobi, vlp.quality_red, vlp.quality_ds, vlp.quality_stone,
+                vlp.is_discharge_port, vlp.created_at, vlp.updated_at,
+                c.contract_id as contract_number
+               FROM vessel_loading_ports vlp
+               LEFT JOIN shipments sh ON vlp.shipment_id = sh.id
+               LEFT JOIN contracts c ON sh.contract_id = c.id
+               WHERE vlp.shipment_id = $1
+               ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
+              [shipmentId]
+            );
+          }
+        }
+      }
+
       // Get shipment-level information
       // Also pull ATA dates from first loading port if not in shipments table
       // Include ETA dates from loading ports and calculate loading rate
@@ -647,16 +712,16 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           COALESCE(s.ata_discharge_berthed, vlpd.ata_vessel_berthed::date) as ata_vessel_berthed_at_discharge_port,
           COALESCE(s.ata_discharge_start, vlpd.ata_loading_start::date) as ata_vessel_start_discharging,
           COALESCE(s.ata_discharge_complete, vlpd.ata_loading_completed::date) as ata_vessel_complete_discharge,
-          -- ETA fields from loading ports
-          vlp1.eta_vessel_arrival::date as eta_vessel_arrival_at_loading_port,
-          vlp1.eta_vessel_berthed_at_loading_port::date as eta_vessel_berthed_at_loading_port,
-          vlp1.eta_loading_start::date as eta_vessel_start_loading,
-          vlp1.eta_loading_completed::date as eta_vessel_completed_loading,
-          vlp1.eta_vessel_sailed::date as eta_vessel_sailed_from_loading_port,
-          vlpd.eta_vessel_arrive_at_discharge_port::date as eta_vessel_arrive_at_discharge_port,
-          vlpd.eta_vessel_berthed_at_discharge_port::date as eta_vessel_berthed_at_discharge_port,
-          vlpd.eta_vessel_start_discharging::date as eta_vessel_start_discharging,
-          vlpd.eta_vessel_complete_discharge::date as eta_vessel_complete_discharge,
+          -- ETA fields: prefer vessel_loading_ports, fallback to shipments so UI shows data from either table
+          COALESCE(vlp1.eta_vessel_arrival::date, s.eta_arrival) as eta_vessel_arrival_at_loading_port,
+          COALESCE(vlp1.eta_vessel_berthed_at_loading_port::date, s.eta_berthed) as eta_vessel_berthed_at_loading_port,
+          COALESCE(vlp1.eta_loading_start::date, s.eta_loading_start) as eta_vessel_start_loading,
+          COALESCE(vlp1.eta_loading_completed::date, s.eta_loading_complete) as eta_vessel_completed_loading,
+          COALESCE(vlp1.eta_vessel_sailed::date, s.eta_sailed) as eta_vessel_sailed_from_loading_port,
+          COALESCE(vlpd.eta_vessel_arrive_at_discharge_port::date, s.eta_discharge_arrival) as eta_vessel_arrive_at_discharge_port,
+          COALESCE(vlpd.eta_vessel_berthed_at_discharge_port::date, s.eta_discharge_berthed) as eta_vessel_berthed_at_discharge_port,
+          COALESCE(vlpd.eta_vessel_start_discharging::date, s.eta_discharge_start) as eta_vessel_start_discharging,
+          COALESCE(vlpd.eta_vessel_complete_discharge::date, s.eta_discharge_complete) as eta_vessel_complete_discharge,
           -- Calculate Loading Rate: Quantity Receive / (ATA Completed Loading - ATA Start Loading) in hours
           CASE 
             WHEN s.actual_vessel_qty_receive > 0 
@@ -813,7 +878,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
 // Add or update vessel loading port
 export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) => {
   try {
-    const { shipmentId } = req.params;
+    const { shipmentId, portId } = req.params;
     
     // Check if shipmentId is a UUID or STO number/shipment_id, and convert to actual shipment UUID
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(shipmentId);
@@ -842,7 +907,7 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
     }
     
     const {
-      id,
+      id: bodyId,
       port_name,
       port_sequence,
       quantity_at_loading_port,
@@ -862,6 +927,35 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
       eta_vessel_start_discharging,
       eta_vessel_complete_discharge
     } = req.body;
+
+    // Normalize date-like fields: empty string or invalid -> null so DB accepts them
+    const toDateOrNull = (v: unknown): string | null => {
+      if (v == null || v === '') return null;
+      if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return v;
+      if (typeof v === 'string') {
+        const d = new Date(v);
+        if (!Number.isNaN(d.getTime())) return v;
+      }
+      return null;
+    };
+    const eta_vessel_arrival_n = toDateOrNull(eta_vessel_arrival);
+    const ata_vessel_arrival_n = toDateOrNull(ata_vessel_arrival);
+    const eta_vessel_berthed_n = toDateOrNull(eta_vessel_berthed);
+    const ata_vessel_berthed_n = toDateOrNull(ata_vessel_berthed);
+    const eta_loading_start_n = toDateOrNull(eta_loading_start);
+    const ata_loading_start_n = toDateOrNull(ata_loading_start);
+    const eta_loading_completed_n = toDateOrNull(eta_loading_completed);
+    const ata_loading_completed_n = toDateOrNull(ata_loading_completed);
+    const eta_vessel_sailed_n = toDateOrNull(eta_vessel_sailed);
+    const ata_vessel_sailed_n = toDateOrNull(ata_vessel_sailed);
+    const eta_vessel_berthed_at_loading_port_n = toDateOrNull(eta_vessel_berthed_at_loading_port);
+    const eta_vessel_arrive_at_discharge_port_n = toDateOrNull(eta_vessel_arrive_at_discharge_port);
+    const eta_vessel_berthed_at_discharge_port_n = toDateOrNull(eta_vessel_berthed_at_discharge_port);
+    const eta_vessel_start_discharging_n = toDateOrNull(eta_vessel_start_discharging);
+    const eta_vessel_complete_discharge_n = toDateOrNull(eta_vessel_complete_discharge);
+
+    // Prefer explicit id from body, then fallback to route param (for PUT /:shipmentId/loading-ports/:portId)
+    const id = bodyId || portId;
 
     // Calculate loading rate if we have the required data
     let loading_rate = null;
@@ -903,14 +997,14 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
          RETURNING *`,
         [
           id, port_name, port_sequence, quantity_at_loading_port,
-          eta_vessel_arrival, ata_vessel_arrival, eta_vessel_berthed, ata_vessel_berthed,
-          eta_loading_start, ata_loading_start, eta_loading_completed, ata_loading_completed,
-          eta_vessel_sailed, ata_vessel_sailed,
-          eta_vessel_berthed_at_loading_port,
-          eta_vessel_arrive_at_discharge_port,
-          eta_vessel_berthed_at_discharge_port,
-          eta_vessel_start_discharging,
-          eta_vessel_complete_discharge,
+          eta_vessel_arrival_n, ata_vessel_arrival_n, eta_vessel_berthed_n, ata_vessel_berthed_n,
+          eta_loading_start_n, ata_loading_start_n, eta_loading_completed_n, ata_loading_completed_n,
+          eta_vessel_sailed_n, ata_vessel_sailed_n,
+          eta_vessel_berthed_at_loading_port_n,
+          eta_vessel_arrive_at_discharge_port_n,
+          eta_vessel_berthed_at_discharge_port_n,
+          eta_vessel_start_discharging_n,
+          eta_vessel_complete_discharge_n,
           loading_rate,
           actualShipmentId
         ]
@@ -921,6 +1015,17 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
           success: false,
           error: { message: 'Vessel loading port not found' },
         });
+      }
+
+      const updated = result.rows[0];
+      if (updated.port_sequence === 1 && !updated.is_discharge_port) {
+        await query(
+          `UPDATE shipments SET
+            eta_arrival = $2, eta_berthed = $3, eta_loading_start = $4, eta_loading_complete = $5, eta_sailed = $6,
+            updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1`,
+          [actualShipmentId, eta_vessel_arrival_n, eta_vessel_berthed_at_loading_port_n, eta_loading_start_n, eta_loading_completed_n, eta_vessel_sailed_n]
+        );
       }
 
       return res.json({
@@ -946,17 +1051,28 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
          RETURNING *`,
         [
           actualShipmentId, port_name, port_sequence, quantity_at_loading_port,
-          eta_vessel_arrival, ata_vessel_arrival, eta_vessel_berthed, ata_vessel_berthed,
-          eta_loading_start, ata_loading_start, eta_loading_completed, ata_loading_completed,
-          eta_vessel_sailed, ata_vessel_sailed,
-          eta_vessel_berthed_at_loading_port,
-          eta_vessel_arrive_at_discharge_port,
-          eta_vessel_berthed_at_discharge_port,
-          eta_vessel_start_discharging,
-          eta_vessel_complete_discharge,
+          eta_vessel_arrival_n, ata_vessel_arrival_n, eta_vessel_berthed_n, ata_vessel_berthed_n,
+          eta_loading_start_n, ata_loading_start_n, eta_loading_completed_n, ata_loading_completed_n,
+          eta_vessel_sailed_n, ata_vessel_sailed_n,
+          eta_vessel_berthed_at_loading_port_n,
+          eta_vessel_arrive_at_discharge_port_n,
+          eta_vessel_berthed_at_discharge_port_n,
+          eta_vessel_start_discharging_n,
+          eta_vessel_complete_discharge_n,
           loading_rate
         ]
       );
+
+      const inserted = result.rows[0];
+      if (inserted.port_sequence === 1 && !inserted.is_discharge_port) {
+        await query(
+          `UPDATE shipments SET
+            eta_arrival = $2, eta_berthed = $3, eta_loading_start = $4, eta_loading_complete = $5, eta_sailed = $6,
+            updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1`,
+          [actualShipmentId, eta_vessel_arrival_n, eta_vessel_berthed_at_loading_port_n, eta_loading_start_n, eta_loading_completed_n, eta_vessel_sailed_n]
+        );
+      }
 
       return res.json({
         success: true,
@@ -1226,7 +1342,9 @@ export const getContractDetailsForSto = async (req: AuthRequest, res: Response) 
            LIMIT 1),
           0
         ) as sto_qty_assigned,
-        STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') as po_number
+        STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') as po_number,
+        MAX(c.delivery_start_date) as delivery_start_date,
+        MAX(c.delivery_end_date) as delivery_end_date
       FROM contracts c
       WHERE c.contract_id IN (${placeholders})
       GROUP BY c.contract_id
@@ -1316,6 +1434,7 @@ export const updateStoQtyAssigned = async (req: AuthRequest, res: Response) => {
 export const createShipment = async (req: AuthRequest, res: Response) => {
   try {
     const { 
+      operationId,
       stoNumber, 
       contractNumbers, 
       vesselName, 
@@ -1341,8 +1460,10 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // Check if STO already exists (only if STO is provided)
-    if (stoNumber) {
+    // For manual shipments, STO Number should be empty (will be filled from SAP Data later)
+    // Only check STO if it's explicitly provided and not empty
+    const hasStoNumber = stoNumber && stoNumber.trim() !== ''
+    if (hasStoNumber) {
       const stoCheck = await query(`
         SELECT sto_number FROM contracts WHERE sto_number = $1 LIMIT 1
       `, [stoNumber]);
@@ -1371,28 +1492,32 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
     }
 
     // Create shipment for each contract
+    // All shipments will share the same operation_id (one transaction)
+    // If STO is not provided (manual shipment), use operation_id as the grouping key
     const shipmentIds = [];
+    const timestamp = Date.now().toString()
+    
     for (const contract of contractCheck.rows) {
       // Generate shipment_id:
       // - If STO is provided, use "<STO>-<CONTRACT_ID>" so all contracts under an STO can be grouped
-      // - If STO is NOT provided (manual shipment), generate a unique ID to avoid clashing with
-      //   existing SAP-imported shipments that might already use contract_number as shipment_id.
-      const shipmentId = stoNumber
+      // - If STO is NOT provided (manual shipment), use "<OPERATION_ID>-<CONTRACT_ID>" to group by operation
+      const shipmentId = hasStoNumber
         ? `${stoNumber}-${contract.contract_id}`
-        : `${contract.contract_id}-${Date.now()}`;
+        : `${operationId || `OP-${contractNumbers[0]}-${timestamp.slice(-8)}`}-${contract.contract_id}`;
       
       const result = await query(`
         INSERT INTO shipments (
-          shipment_id, contract_id, vessel_name, vessel_code, voyage_no, vessel_owner,
+          shipment_id, operation_id, contract_id, vessel_name, vessel_code, voyage_no, vessel_owner,
           vessel_draft, vessel_capacity, vessel_hull_type, charter_type,
           port_of_loading, port_of_discharge, quantity_shipped, 
           shipment_date, arrival_date, status
         ) VALUES (
-          $1, $2::uuid, $3, $4, $5, $6, $7::numeric, $8::numeric, $9, $10,
-          $11, $12, $13::numeric, $14::date, $15::date, 'PLANNED'
+          $1, $2, $3::uuid, $4, $5, $6, $7, $8::numeric, $9::numeric, $10, $11,
+          $12, $13, $14::numeric, $15::date, $16::date, 'PLANNED'
         ) RETURNING id
       `, [
         shipmentId,
+        operationId || null, // Same operation_id for all contracts in this transaction
         contract.id,
         vesselName || null,
         vesselCode || null,
@@ -1412,8 +1537,9 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       shipmentIds.push(result.rows[0].id);
     }
 
-    // Update contracts with STO number (only if STO is provided)
-    if (stoNumber) {
+    // Update contracts with STO number (only if STO is explicitly provided)
+    // For manual shipments, STO remains empty and will be filled from SAP Data later
+    if (hasStoNumber) {
       await query(`
         UPDATE contracts 
         SET sto_number = $1, updated_at = CURRENT_TIMESTAMP

@@ -1,5 +1,6 @@
 import express from 'express';
 import { authenticateToken } from '../middleware/auth';
+import { auditLog } from '../middleware/audit';
 import multer from 'multer';
 import { downloadDocument, listDocuments, uploadDocumentHandler, ensureUploadDir } from '../controllers/document.controller';
 
@@ -21,7 +22,7 @@ const upload = multer({ storage });
 router.get('/', listDocuments);
 
 // Upload document
-router.post('/upload', upload.single('file'), uploadDocumentHandler);
+router.post('/upload', upload.single('file'), auditLog('CREATE', 'DOCUMENT'), uploadDocumentHandler);
 
 // Download document
 router.get('/:id/download', downloadDocument);

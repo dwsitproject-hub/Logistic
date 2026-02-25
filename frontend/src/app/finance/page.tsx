@@ -42,6 +42,11 @@ interface Payment {
   supplier: string | null
   product: string | null
   created_at: string
+  due_date_payment?: string | null
+  dp_date?: string | null
+  payoff_date?: string | null
+  dp_date_deviation_days?: number | null
+  payoff_date_deviation_days?: number | null
 }
 
 interface FinanceSummary {
@@ -96,6 +101,7 @@ export default function FinancePage() {
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [searchTerm, setSearchTerm] = useState('')
   const [error, setError] = useState('')
+  const [savingId, setSavingId] = useState<string | null>(null)
 
   const fetchSummary = async () => {
     try {
@@ -161,6 +167,26 @@ export default function FinancePage() {
       setError(err.response?.data?.error?.message || 'Failed to refresh finance data')
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  const handleUpdatePayment = async (
+    id: string,
+    updates: Partial<Pick<Payment, 'payment_status' | 'payment_method'>>
+  ) => {
+    if (!updates.payment_status && updates.payment_method === undefined) return
+    try {
+      setSavingId(id)
+      await api.patch(`/finance/payments/${id}`, updates)
+      setPayments((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, ...updates } : p))
+      )
+      // Refresh summary so dashboard numbers stay accurate
+      void fetchSummary()
+    } catch (err: any) {
+      setError(err.response?.data?.error?.message || 'Failed to update payment')
+    } finally {
+      setSavingId(null)
     }
   }
 
@@ -317,14 +343,18 @@ export default function FinancePage() {
               </CardHeader>
               <CardContent>
                 <div className="overflow-x-auto">
-                  <Table>
+                    <Table>
                     <TableHeader>
                       <TableRow>
                         <TableHead>Invoice</TableHead>
                         <TableHead>Contract</TableHead>
                         <TableHead>Supplier</TableHead>
                         <TableHead className="text-right">Amount</TableHead>
-                        <TableHead>Due Date</TableHead>
+                        <TableHead>Due Date Payment</TableHead>
+                        <TableHead>DP Date</TableHead>
+                        <TableHead>Payoff Date</TableHead>
+                        <TableHead>DP Dev. (Days)</TableHead>
+                        <TableHead>Payoff Dev. (Days)</TableHead>
                         <TableHead>Payment Date</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Method</TableHead>
@@ -333,7 +363,7 @@ export default function FinancePage() {
                     <TableBody>
                       {payments.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={8} className="py-10 text-center text-gray-500">
+                          <TableCell colSpan={12} className="py-10 text-center text-gray-500">
                             No payments found for the selected filters
                           </TableCell>
                         </TableRow>
@@ -358,16 +388,58 @@ export default function FinancePage() {
                             <TableCell className="text-right font-semibold text-gray-900">
                               {formatAmount(payment.payment_amount, payment.currency || latestCurrency)}
                             </TableCell>
-                            <TableCell>{formatDate(payment.payment_due_date)}</TableCell>
+                            <TableCell>{formatDate(payment.due_date_payment ?? null)}</TableCell>
+                            <TableCell>{formatDate(payment.dp_date ?? null)}</TableCell>
+                            <TableCell>{formatDate(payment.payoff_date ?? null)}</TableCell>
+                            <TableCell>{payment.dp_date_deviation_days ?? '-'}</TableCell>
+                            <TableCell>{payment.payoff_date_deviation_days ?? '-'}</TableCell>
                             <TableCell>{formatDate(payment.payment_date)}</TableCell>
                             <TableCell>
-                              <Badge className={`${statusColors[payment.payment_status] || 'bg-gray-100 text-gray-800'}`}>
-                                {payment.payment_status}
-                              </Badge>
+                              <Select
+                                value={payment.payment_status}
+                                disabled={savingId === payment.id}
+                                onValueChange={(value) =>
+                                  handleUpdatePayment(payment.id, {
+                                    payment_status: value as PaymentStatus,
+                                  })
+                                }
+                              >
+                                <SelectTrigger className="w-32">
+                                  <SelectValue>
+                                    <Badge
+                                      className={`${
+                                        statusColors[payment.payment_status] ||
+                                        'bg-gray-100 text-gray-800'
+                                      }`}
+                                    >
+                                      {payment.payment_status}
+                                    </Badge>
+                                  </SelectValue>
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="PENDING">PENDING</SelectItem>
+                                  <SelectItem value="PARTIAL">PARTIAL</SelectItem>
+                                  <SelectItem value="PAID">PAID</SelectItem>
+                                  <SelectItem value="OVERDUE">OVERDUE</SelectItem>
+                                </SelectContent>
+                              </Select>
                             </TableCell>
                             <TableCell>
-                              <div className="text-sm text-gray-900">{payment.payment_method || '-'}</div>
-                              <div className="text-xs text-gray-500">{payment.bank_reference || ''}</div>
+                              <Input
+                                defaultValue={payment.payment_method || ''}
+                                disabled={savingId === payment.id}
+                                placeholder="Method"
+                                onBlur={(e) => {
+                                  const next = e.target.value.trim()
+                                  if (next === (payment.payment_method || '')) return
+                                  void handleUpdatePayment(payment.id, {
+                                    payment_method: next || null,
+                                  })
+                                }}
+                              />
+                              <div className="text-xs text-gray-500 mt-1">
+                                {payment.bank_reference || ''}
+                              </div>
                             </TableCell>
                           </TableRow>
                         ))

@@ -116,13 +116,17 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
       WHERE 1=1 ${contractFilter} ${req.query.plant ? buildFilterConditions(req).truckingFilter : ''}
     `, params);
 
-    // Get finance statistics
+    // Get finance statistics (counts and amounts aligned with Finance page)
     const financeStats = await query(`
       SELECT 
         COUNT(*) as total_payments,
-        COUNT(*) FILTER (WHERE p.payment_status = 'PENDING') as pending_payments,
+        COUNT(*) FILTER (WHERE p.payment_status = 'PENDING' AND (p.payment_due_date IS NULL OR p.payment_due_date >= CURRENT_DATE)) as pending_payments,
         COUNT(*) FILTER (WHERE p.payment_status = 'PAID') as paid_payments,
-        COALESCE(SUM(p.payment_amount) FILTER (WHERE p.payment_status = 'PAID'), 0) as total_revenue
+        COUNT(*) FILTER (WHERE p.payment_status = 'OVERDUE' OR (p.payment_status = 'PENDING' AND p.payment_due_date IS NOT NULL AND p.payment_due_date < CURRENT_DATE)) as overdue_payments,
+        COALESCE(SUM(p.payment_amount), 0) as total_amount,
+        COALESCE(SUM(p.payment_amount) FILTER (WHERE p.payment_status = 'PENDING' AND (p.payment_due_date IS NULL OR p.payment_due_date >= CURRENT_DATE)), 0) as pending_amount,
+        COALESCE(SUM(p.payment_amount) FILTER (WHERE p.payment_status = 'PAID'), 0) as paid_amount,
+        COALESCE(SUM(p.payment_amount) FILTER (WHERE p.payment_status = 'OVERDUE' OR (p.payment_status = 'PENDING' AND p.payment_due_date IS NOT NULL AND p.payment_due_date < CURRENT_DATE)), 0) as overdue_amount
       FROM payments p
       LEFT JOIN contracts c ON p.contract_id = c.id
       WHERE 1=1 ${contractFilter}
@@ -154,7 +158,12 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         total: parseInt(financeStats.rows[0].total_payments) || 0,
         pending: parseInt(financeStats.rows[0].pending_payments) || 0,
         paid: parseInt(financeStats.rows[0].paid_payments) || 0,
-        revenue: parseFloat(financeStats.rows[0].total_revenue) || 0
+        overdue: parseInt(financeStats.rows[0].overdue_payments) || 0,
+        totalAmount: parseFloat(financeStats.rows[0].total_amount) || 0,
+        pendingAmount: parseFloat(financeStats.rows[0].pending_amount) || 0,
+        paidAmount: parseFloat(financeStats.rows[0].paid_amount) || 0,
+        overdueAmount: parseFloat(financeStats.rows[0].overdue_amount) || 0,
+        revenue: parseFloat(financeStats.rows[0].paid_amount) || 0
       }
     };
 

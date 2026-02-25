@@ -5,7 +5,7 @@ import logger from '../utils/logger';
 
 export const getTruckingOperations = async (req: AuthRequest, res: Response) => {
   try {
-    const { status, location, dateFrom, dateTo, sto, contract, page = 1, limit = 10 } = req.query;
+    const { status, location, loadingLocation, unloadingLocation, dateFrom, dateTo, sto, contract, page = 1, limit = 10 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
 
     let queryText = `
@@ -60,6 +60,18 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
     if (location) {
       queryText += ` AND t.location ILIKE $${paramIndex}`;
       queryParams.push(`%${location}%`);
+      paramIndex++;
+    }
+
+    if (loadingLocation) {
+      queryText += ` AND t.loading_location ILIKE $${paramIndex}`;
+      queryParams.push(`%${loadingLocation}%`);
+      paramIndex++;
+    }
+
+    if (unloadingLocation) {
+      queryText += ` AND t.unloading_location ILIKE $${paramIndex}`;
+      queryParams.push(`%${unloadingLocation}%`);
       paramIndex++;
     }
 

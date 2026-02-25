@@ -24,7 +24,7 @@ const tableExists = async (tableName: string): Promise<boolean> => {
     `SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1 LIMIT 1;`,
     [tableName]
   );
-  return res.rowCount > 0;
+  return (res.rowCount ?? 0) > 0;
 };
 
 const getAppliedMigrationSet = async (): Promise<Set<string>> => {

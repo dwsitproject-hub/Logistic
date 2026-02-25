@@ -2,6 +2,8 @@ import express from 'express';
 import {
   getContracts,
   getContract,
+  getContractStoInformation,
+  getContractActivityLog,
   createContract,
   updateContract,
 } from '../controllers/contract.controller';
@@ -64,6 +66,8 @@ router.get('/', getContracts);
  *       404:
  *         description: Contract not found
  */
+router.get('/:id/sto-information', getContractStoInformation);
+router.get('/:id/activity-log', getContractActivityLog);
 router.get('/:id', getContract);
 
 /**

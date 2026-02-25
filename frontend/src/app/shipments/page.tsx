@@ -15,6 +15,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 interface Shipment {
   id: string
   shipment_id: string
+  operation_id?: string
   contract_id: string
   contract_number: string
   vessel_name: string
@@ -77,6 +78,10 @@ interface Shipment {
   incoterm?: string
   b2b_flag?: string
   source_type?: string
+  contract_reference_po?: string
+  ata_vessel_completed_loading?: string
+  ata_vessel_complete_discharge?: string
+  eta_vessel_complete_discharge?: string
   // Contract details (for expanded view)
   contract_details?: Array<{
     contract_number: string
@@ -141,8 +146,32 @@ export default function ShipmentsPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editedData, setEditedData] = useState<Partial<Shipment>>({})
   const [statusFilter, setStatusFilter] = useState<string>('ALL')
+  const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
   const [vesselFilter, setVesselFilter] = useState('')
   const [saving, setSaving] = useState(false)
+  
+  // Excel-like column filtering
+  type ColumnFilter =
+    | { type: 'text'; value: string; exact?: boolean; emptyOnly?: boolean }
+    | { type: 'number'; min?: string; max?: string; emptyOnly?: boolean }
+    | { type: 'date'; from?: string; to?: string; emptyOnly?: boolean }
+
+  const [columnFilters, setColumnFilters] = useState<Record<string, ColumnFilter>>({})
+  const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
+  const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onMouseDown = (e: MouseEvent) => {
+      if (!openHeaderFilterId) return
+      const el = headerFilterPopoverRef.current
+      if (!el) return
+      if (e.target instanceof Node && el.contains(e.target)) return
+      setOpenHeaderFilterId(null)
+    }
+    window.addEventListener('mousedown', onMouseDown)
+    return () => window.removeEventListener('mousedown', onMouseDown)
+  }, [openHeaderFilterId])
   const [uploading, setUploading] = useState(false)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -185,6 +214,7 @@ export default function ShipmentsPage() {
   // Add new shipment state
   const [showAddShipment, setShowAddShipment] = useState(false)
   const [newShipment, setNewShipment] = useState({
+    operationId: '',
     stoNumber: '',
     contractNumbers: [] as string[],
     vesselName: '',
@@ -231,6 +261,8 @@ export default function ShipmentsPage() {
     outstanding_qty: number
     sto_qty_assigned: number
     po_number?: string
+    delivery_start_date?: string | null
+    delivery_end_date?: string | null
   }> }>({})
   const [loadingContractDetails, setLoadingContractDetails] = useState<{ [shipmentId: string]: boolean }>({})
   const [savingStoQty, setSavingStoQty] = useState<{ [key: string]: boolean }>({})
@@ -754,6 +786,193 @@ export default function ShipmentsPage() {
   const [viewOption, setViewOption] = useState<'all' | 'sto' | 'contract' | 'vessel' | 'port_loading' | 'port_discharge'>('all')
   const [viewFilterValue, setViewFilterValue] = useState('')
 
+  // Helper function to calculate late indicator for shipments
+  const getLateIndicator = (shipment: Shipment): { color: string; text: string } => {
+    if (!shipment.delivery_end_date) {
+      return { color: 'bg-gray-100 text-gray-800', text: '-' }
+    }
+    
+    const deliveryEnd = new Date(shipment.delivery_end_date).getTime()
+    const today = new Date().setHours(0, 0, 0, 0)
+    const ataDischarge = shipment.ata_vessel_complete_discharge ? new Date(shipment.ata_vessel_complete_discharge).getTime() : null
+    const etaDischarge = shipment.eta_vessel_complete_discharge ? new Date(shipment.eta_vessel_complete_discharge).getTime() : null
+    
+    // Red if delivery_end < Today
+    if (deliveryEnd < today) {
+      return { color: 'bg-red-100 text-red-800', text: 'Late' }
+    }
+    
+    // If both discharge dates are null, cannot determine (but check if past due date)
+    if (ataDischarge === null && etaDischarge === null) {
+      return { color: 'bg-gray-100 text-gray-800', text: '-' }
+    }
+    
+    // Red if delivery_end < ata_discharge OR delivery_end < eta_discharge
+    // Green if delivery_end >= ata_discharge OR delivery_end >= eta_discharge
+    const isLate = 
+      (ataDischarge !== null && deliveryEnd < ataDischarge) ||
+      (etaDischarge !== null && deliveryEnd < etaDischarge)
+    
+    if (isLate) {
+      return { color: 'bg-red-100 text-red-800', text: 'Late' }
+    } else {
+      return { color: 'bg-green-100 text-green-800', text: 'On Time' }
+    }
+  }
+
+  // Excel-like filtering helpers
+  const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
+    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days') return 'number'
+    if (colId === 'shipment_date' || colId === 'arrival_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'ata_vessel_completed_loading' || colId === 'ata_vessel_complete_discharge' || colId === 'eta_vessel_complete_discharge' || colId === 'created_at') return 'date'
+    return 'text'
+  }
+
+  const getColumnRawValue = (s: Shipment, colId: string): string | number | null => {
+    switch (colId) {
+      case 'late_indicator': return getLateIndicator(s).text
+      case 'operation_id': return s.operation_id || ''
+      case 'shipment_id': return s.shipment_id || ''
+      case 'sto_number': return s.sto_number || ''
+      case 'status': return s.status || ''
+      case 'contract_numbers': return s.contract_numbers || s.contract_number || ''
+      case 'contract_number': return s.contract_number || ''
+      case 'po_numbers': return s.po_numbers || ''
+      case 'contract_reference_po': return s.contract_reference_po || ''
+      case 'vessel_name': return s.vessel_name || ''
+      case 'vessel_code': return s.vessel_code || ''
+      case 'voyage_no': return s.voyage_no || ''
+      case 'vessel_owner': return s.vessel_owner || ''
+      case 'port_of_loading': return s.port_of_loading || ''
+      case 'port_of_discharge': return s.port_of_discharge || ''
+      case 'plant_site': return s.plant_site || ''
+      case 'supplier': return s.supplier || ''
+      case 'buyers': return s.buyers || ''
+      case 'buyer': return s.buyer || ''
+      case 'product': return s.product || ''
+      case 'products': return s.products || ''
+      case 'group_name': return s.group_name || ''
+      case 'group_names': return s.group_names || ''
+      case 'incoterm': return s.incoterm || ''
+      case 'b2b_flag': return s.b2b_flag || ''
+      case 'charter_type': return s.charter_type || ''
+      case 'quantity_shipped': return typeof s.quantity_shipped === 'number' ? s.quantity_shipped : null
+      case 'quantity_delivered': return typeof s.quantity_delivered === 'number' ? s.quantity_delivered : null
+      case 'sto_quantity': return typeof s.sto_quantity === 'number' ? s.sto_quantity : null
+      case 'inbound_weight': return typeof s.inbound_weight === 'number' ? s.inbound_weight : null
+      case 'outbound_weight': return typeof s.outbound_weight === 'number' ? s.outbound_weight : null
+      case 'gain_loss_percentage': return typeof s.gain_loss_percentage === 'number' ? s.gain_loss_percentage : null
+      case 'gain_loss_amount': return typeof s.gain_loss_amount === 'number' ? s.gain_loss_amount : null
+      case 'estimated_km': return typeof s.estimated_km === 'number' ? s.estimated_km : null
+      case 'estimated_nautical_miles': return typeof s.estimated_nautical_miles === 'number' ? s.estimated_nautical_miles : null
+      case 'vessel_oa_budget': return typeof s.vessel_oa_budget === 'number' ? s.vessel_oa_budget : null
+      case 'vessel_oa_actual': return typeof s.vessel_oa_actual === 'number' ? s.vessel_oa_actual : null
+      case 'bl_quantity': return typeof s.bl_quantity === 'number' ? s.bl_quantity : null
+      case 'actual_vessel_qty_receive': return typeof s.actual_vessel_qty_receive === 'number' ? s.actual_vessel_qty_receive : null
+      case 'difference_final_qty_vs_bl_qty': return typeof s.difference_final_qty_vs_bl_qty === 'number' ? s.difference_final_qty_vs_bl_qty : null
+      case 'average_vessel_speed': return typeof s.average_vessel_speed === 'number' ? s.average_vessel_speed : null
+      case 'vessel_draft': return typeof s.vessel_draft === 'number' ? s.vessel_draft : null
+      case 'vessel_loa': return typeof s.vessel_loa === 'number' ? s.vessel_loa : null
+      case 'vessel_capacity': return typeof s.vessel_capacity === 'number' ? s.vessel_capacity : null
+      case 'vessel_registration_year': return typeof s.vessel_registration_year === 'number' ? s.vessel_registration_year : null
+      case 'sla_days': return typeof s.sla_days === 'number' ? s.sla_days : null
+      case 'shipment_date': return s.shipment_date || ''
+      case 'arrival_date': return s.arrival_date || ''
+      case 'delivery_start': return s.delivery_start_date || ''
+      case 'delivery_end': return s.delivery_end_date || ''
+      case 'delivery_start_date': return s.delivery_start_date || ''
+      case 'delivery_end_date': return s.delivery_end_date || ''
+      case 'ata_vessel_completed_loading': return s.ata_vessel_completed_loading || ''
+      case 'ata_vessel_complete_discharge': return s.ata_vessel_complete_discharge || ''
+      case 'eta_vessel_complete_discharge': return s.eta_vessel_complete_discharge || ''
+      case 'created_at': return s.created_at || ''
+      default: return (s as any)[colId] ?? ''
+    }
+  }
+
+  const isEmptyValue = (v: unknown) => {
+    if (v === null || v === undefined) return true
+    const s = String(v).trim()
+    return s === '' || s === '-' || s.toLowerCase() === 'null' || s.toLowerCase() === 'undefined'
+  }
+
+  const passesColumnFilters = (s: Shipment) => {
+    for (const [colId, filter] of Object.entries(columnFilters)) {
+      const raw = getColumnRawValue(s, colId)
+      if (filter.emptyOnly) {
+        if (!isEmptyValue(raw)) return false
+        continue
+      }
+
+      if (filter.type === 'text') {
+        const needle = (filter.value || '').trim().toLowerCase()
+        if (!needle) continue
+        const hay = String(raw ?? '').toLowerCase()
+        if (filter.exact) {
+          if (hay.trim() !== needle) return false
+        } else {
+          if (!hay.includes(needle)) return false
+        }
+      }
+
+      if (filter.type === 'number') {
+        const n = typeof raw === 'number' ? raw : Number(String(raw ?? '').replace(/,/g, ''))
+        if (Number.isNaN(n)) return false
+        const min = filter.min !== undefined && filter.min !== '' ? Number(filter.min) : null
+        const max = filter.max !== undefined && filter.max !== '' ? Number(filter.max) : null
+        if (min !== null && !Number.isNaN(min) && n < min) return false
+        if (max !== null && !Number.isNaN(max) && n > max) return false
+      }
+
+      if (filter.type === 'date') {
+        const rawStr = String(raw ?? '').trim()
+        if (!rawStr) return false
+        const rawTime = Date.parse(rawStr)
+        if (Number.isNaN(rawTime)) return false
+        const fromTime = filter.from ? Date.parse(filter.from) : null
+        const toTime = filter.to ? Date.parse(filter.to) : null
+        if (fromTime !== null && !Number.isNaN(fromTime) && rawTime < fromTime) return false
+        if (toTime !== null && !Number.isNaN(toTime) && rawTime > toTime + 24 * 60 * 60 * 1000 - 1) return false
+      }
+    }
+    return true
+  }
+
+  const isColumnFilterActive = (colId: string) => {
+    const f = columnFilters[colId]
+    if (!f) return false
+    if (f.emptyOnly) return true
+    if (f.type === 'text') return Boolean(f.value && f.value.trim() !== '')
+    if (f.type === 'number') return Boolean((f.min && f.min !== '') || (f.max && f.max !== ''))
+    if (f.type === 'date') return Boolean((f.from && f.from !== '') || (f.to && f.to !== ''))
+    return false
+  }
+
+  const clearColumnFilter = (colId: string) => {
+    setColumnFilters(prev => {
+      const next = { ...prev }
+      delete next[colId]
+      return next
+    })
+  }
+
+  const setOrClearFilter = (colId: string, next: ColumnFilter) => {
+    const active =
+      next.emptyOnly ||
+      (next.type === 'text' && Boolean(next.value?.trim())) ||
+      (next.type === 'number' && Boolean((next.min && next.min !== '') || (next.max && next.max !== ''))) ||
+      (next.type === 'date' && Boolean((next.from && next.from !== '') || (next.to && next.to !== '')))
+
+    setColumnFilters(prev => {
+      const copy = { ...prev }
+      if (!active) {
+        delete copy[colId]
+      } else {
+        copy[colId] = next
+      }
+      return copy
+    })
+  }
+
   const filteredShipments = shipments.filter(shipment => {
     // Search filter - works with Shipment ID, Contract Numbers, PO No, and Vessel Name
     const matchesSearch = searchTerm === '' || 
@@ -785,7 +1004,15 @@ export default function ShipmentsPage() {
       }
     }
     
-    return matchesSearch && matchesViewOption
+    // Filter by Late Indicator
+    if (lateIndicatorFilter !== 'ALL') {
+      const indicator = getLateIndicator(shipment)
+      if (lateIndicatorFilter === 'ON_TIME' && indicator.text !== 'On Time') return false
+      if (lateIndicatorFilter === 'LATE' && indicator.text !== 'Late') return false
+      if (lateIndicatorFilter === 'NA' && indicator.text !== '-') return false
+    }
+    
+    return matchesSearch && matchesViewOption && passesColumnFilters(shipment)
   })
 
   // Fetch contract details for a shipment
@@ -798,53 +1025,59 @@ export default function ShipmentsPage() {
     try {
       const contractNumbers = shipment.contract_numbers.split(', ').filter(c => c.trim())
       const hasSto = Boolean(shipment.sto_number && shipment.sto_number.trim() !== '')
-
+      
       if (hasSto) {
         // Use STO-specific endpoint when a real STO number exists
         const stoNumber = shipment.sto_number as string
-        const response = await api.get(`/shipments/contracts/details?sto=${encodeURIComponent(stoNumber)}&contractNumbers=${contractNumbers.join(',')}`)
-        
-        if (response.data.success && response.data.data.length > 0) {
-          const details = response.data.data.map((detail: any) => ({
-            contract_number: detail.contract_number,
-            contract_qty: detail.contract_qty || 0,
-            outstanding_qty: detail.outstanding_qty || 0,
-            sto_qty_assigned: detail.sto_qty_assigned || 0,
-            po_number: detail.po_number || ''
-          }))
-          setContractDetailsMap(prev => ({ ...prev, [shipment.id]: details }))
+      const response = await api.get(`/shipments/contracts/details?sto=${encodeURIComponent(stoNumber)}&contractNumbers=${contractNumbers.join(',')}`)
+      
+      if (response.data.success && response.data.data.length > 0) {
+        const details = response.data.data.map((detail: any) => ({
+          contract_number: detail.contract_number,
+          contract_qty: detail.contract_qty || 0,
+          outstanding_qty: detail.outstanding_qty || 0,
+          sto_qty_assigned: detail.sto_qty_assigned || 0,
+          po_number: detail.po_number || '',
+          delivery_start_date: detail.delivery_start_date || null,
+          delivery_end_date: detail.delivery_end_date || null
+        }))
+        setContractDetailsMap(prev => ({ ...prev, [shipment.id]: details }))
           return
         }
       }
 
       // No STO, or STO-based API returned no data: use aggregated Contracts API so numbers match Contracts page
       const fallbackDetails = await Promise.all(
-        contractNumbers.map(async (contractNumber) => {
+          contractNumbers.map(async (contractNumber) => {
           const trimmed = contractNumber.trim()
-          try {
+            try {
             const contractResponse = await api.get(`/contracts?contract_id=${encodeURIComponent(trimmed)}&limit=1`)
-            if (contractResponse.data.success && contractResponse.data.data.contracts.length > 0) {
-              const contract = contractResponse.data.data.contracts[0]
-              return {
+              if (contractResponse.data.success && contractResponse.data.data.contracts.length > 0) {
+                const contract = contractResponse.data.data.contracts[0]
+                return {
                 contract_number: trimmed,
-                contract_qty: contract.quantity_ordered || 0,
-                outstanding_qty: contract.outstanding_quantity || 0,
+                  contract_qty: contract.quantity_ordered || 0,
+                  outstanding_qty: contract.outstanding_quantity || 0,
                 sto_qty_assigned: 0,
-                po_number: contract.po_numbers || contract.po_number || ''
+                  po_number: contract.po_numbers || contract.po_number || '',
+                  delivery_start_date: contract.delivery_start_date || null,
+                  delivery_end_date: contract.delivery_end_date || null
+                }
               }
-            }
-          } catch (err) {
+            } catch (err) {
             console.error(`Error fetching contract ${trimmed}:`, err)
-          }
-          return {
+            }
+            return {
             contract_number: trimmed,
-            contract_qty: 0,
-            outstanding_qty: 0,
-            sto_qty_assigned: 0,
-            po_number: ''
-          }
-        })
-      )
+              contract_qty: 0,
+              outstanding_qty: 0,
+              sto_qty_assigned: 0,
+              po_number: '',
+              delivery_start_date: null,
+              delivery_end_date: null
+            }
+          })
+        )
       setContractDetailsMap(prev => ({ ...prev, [shipment.id]: fallbackDetails }))
     } catch (error) {
       console.error('Error fetching contract details:', error)
@@ -855,7 +1088,9 @@ export default function ShipmentsPage() {
         contract_qty: 0,
         outstanding_qty: 0,
         sto_qty_assigned: 0,
-        po_number: ''
+        po_number: '',
+        delivery_start_date: null,
+        delivery_end_date: null
       }))
       setContractDetailsMap(prev => ({ ...prev, [shipment.id]: details }))
     } finally {
@@ -962,7 +1197,7 @@ export default function ShipmentsPage() {
   }, [sortKey, sortDir])
 
   const toggleColumn = (colId: string) => {
-    if (colId === 'shipment_id' || colId === 'status') return // Always visible
+    if (colId === 'late_indicator' || colId === 'operation_id' || colId === 'shipment_id' || colId === 'status') return // Always visible
     setVisibleColumnIds(prev => {
       const next = new Set(prev)
       if (next.has(colId)) {
@@ -987,14 +1222,40 @@ export default function ShipmentsPage() {
 
   const compactColumns: CompactColumn[] = useMemo(() => [
     {
+      id: 'late_indicator',
+      label: 'Late Indicator',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => {
+        const indicator = getLateIndicator(s)
+        return indicator.text
+      },
+      render: (s) => {
+        const indicator = getLateIndicator(s)
+        return <Badge className={indicator.color}>{indicator.text}</Badge>
+      }
+    },
+    {
+      id: 'operation_id',
+      label: 'Operation ID',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.operation_id || '',
+      render: (s) => (
+        <span className="text-sm break-words block" title={s.operation_id || ''}>
+          {s.operation_id || '-'}
+        </span>
+      )
+    },
+    {
       id: 'shipment_id',
       label: 'STO No',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => s.sto_number || s.shipment_id || '',
+      getSortValue: (s) => s.sto_number || '',
       render: (s) => (
         <div className="min-w-0 break-words">
-          <div className="font-semibold break-words">{s.sto_number || s.shipment_id}</div>
+          <div className="font-semibold break-words">{s.sto_number || ''}</div>
           <div className="text-xs text-gray-600 break-words">{s.vessel_name || '-'} • {s.contract_number || '-'}</div>
         </div>
       )
@@ -1036,20 +1297,50 @@ export default function ShipmentsPage() {
       )
     },
     {
-      id: 'delivery_start',
-      label: 'Delivery Start',
+      id: 'contract_reference_po',
+      label: 'CONTRACT REFF PO',
       defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.contract_reference_po || '',
+      render: (s) => (
+        <span className="text-sm break-words block" title={s.contract_reference_po || ''}>
+          {s.contract_reference_po || '-'}
+        </span>
+      )
+    },
+    // Due Date Delivery Start/End are shown in the Contract Details section,
+    // so they are hidden from the compact view by default.
+    {
+      id: 'delivery_start',
+      label: 'Due Date Delivery Start',
+      defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.delivery_start_date || '',
       render: (s) => <span className="text-sm">{formatShortDate(s.delivery_start_date || '')}</span>
     },
     {
       id: 'delivery_end',
-      label: 'Delivery End',
-      defaultVisible: true,
+      label: 'Due Date Delivery End',
+      defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.delivery_end_date || '',
       render: (s) => <span className="text-sm">{formatShortDate(s.delivery_end_date || '')}</span>
+    },
+    {
+      id: 'ata_vessel_completed_loading',
+      label: 'ATA Vessel Completed Loading',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_completed_loading || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_completed_loading || '')}</span>
+    },
+    {
+      id: 'ata_vessel_complete_discharge',
+      label: 'ATA Vessel Complete Discharge',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_complete_discharge || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_complete_discharge || '')}</span>
     },
     {
       id: 'vessel_name',
@@ -1114,22 +1405,6 @@ export default function ShipmentsPage() {
           {formatNumber(s.total_quantity_shipped || s.quantity_shipped)} MT
         </span>
       )
-    },
-    {
-      id: 'shipment_date',
-      label: 'Shipment Date',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (s) => s.shipment_date || '',
-      render: (s) => <span className="text-sm">{formatShortDate(s.shipment_date)}</span>
-    },
-    {
-      id: 'arrival_date',
-      label: 'Arrival Date',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (s) => s.arrival_date || '',
-      render: (s) => <span className="text-sm">{formatShortDate(s.arrival_date)}</span>
     },
     {
       id: 'voyage_no',
@@ -1244,21 +1519,43 @@ export default function ShipmentsPage() {
   useEffect(() => {
     if (visibleColumnIds.size === 0) {
       setVisibleColumnIds(new Set(defaultVisibleColumnIds))
+    } else {
+      // Ensure required columns are always included
+      const required = ['late_indicator', 'operation_id', 'shipment_id', 'status']
+      const current = Array.from(visibleColumnIds)
+      const missing = required.filter(id => !current.includes(id))
+      if (missing.length > 0) {
+        setVisibleColumnIds(new Set([...current, ...missing]))
+      }
     }
-  }, [defaultVisibleColumnIds, visibleColumnIds.size])
+  }, [defaultVisibleColumnIds, visibleColumnIds])
 
   const visibleColumns = useMemo(() => {
     const visible = compactColumns.filter(c => visibleColumnIds.has(c.id))
-    // Ensure shipment_id and status are always first
-    // If status is not visible but we're editing, include it
+    // Ensure late_indicator, operation_id, shipment_id and status are always visible
+    const lateIndicatorCol = compactColumns.find(c => c.id === 'late_indicator')
+    const operationIdCol = compactColumns.find(c => c.id === 'operation_id')
+    const shipmentIdCol = compactColumns.find(c => c.id === 'shipment_id')
     const statusCol = compactColumns.find(c => c.id === 'status')
-    const hasStatus = visible.some(c => c.id === 'status')
-    const visibleWithStatus = hasStatus ? visible : (statusCol ? [...visible, statusCol] : visible)
+    
+    // Build visible columns with required ones always included
+    const requiredCols: typeof compactColumns = []
+    if (lateIndicatorCol) requiredCols.push(lateIndicatorCol)
+    if (operationIdCol) requiredCols.push(operationIdCol)
+    if (shipmentIdCol) requiredCols.push(shipmentIdCol)
+    if (statusCol) requiredCols.push(statusCol)
+    
+    // Add required columns if they're not already visible
+    const visibleIds = new Set(visible.map(c => c.id))
+    const missingRequired = requiredCols.filter(col => !visibleIds.has(col.id))
+    const visibleWithRequired = [...visible, ...missingRequired]
     
     const ordered = [
-      ...visibleWithStatus.filter(c => c.id === 'shipment_id'),
-      ...visibleWithStatus.filter(c => c.id === 'status'),
-      ...visibleWithStatus.filter(c => c.id !== 'shipment_id' && c.id !== 'status')
+      ...visibleWithRequired.filter(c => c.id === 'late_indicator'),
+      ...visibleWithRequired.filter(c => c.id === 'operation_id'),
+      ...visibleWithRequired.filter(c => c.id === 'shipment_id'),
+      ...visibleWithRequired.filter(c => c.id === 'status'),
+      ...visibleWithRequired.filter(c => c.id !== 'late_indicator' && c.id !== 'operation_id' && c.id !== 'shipment_id' && c.id !== 'status')
     ]
     return ordered
   }, [compactColumns, visibleColumnIds, editingId])
@@ -1323,10 +1620,12 @@ export default function ShipmentsPage() {
   }, [visibleColumns, sortedShipments.length])
 
   // Vessel loading port functions
-  const fetchLoadingPorts = async (shipmentId: string) => {
+  const fetchLoadingPorts = async (shipmentId: string, skipCache = false) => {
     try {
-      console.log('Fetching loading ports for:', shipmentId)
-      const response = await api.get(`/shipments/${shipmentId}/loading-ports`)
+      const url = skipCache
+        ? `/shipments/${shipmentId}/loading-ports?_t=${Date.now()}`
+        : `/shipments/${shipmentId}/loading-ports`
+      const response = await api.get(url)
       console.log('Loading ports response:', response.data)
       if (response.data.success) {
         // Handle new response structure: { ports: [], shipmentInfo: {} }
@@ -1391,9 +1690,8 @@ export default function ShipmentsPage() {
   const handleViewLoadingPorts = async (shipment: Shipment) => {
     setSelectedShipment(shipment)
     setShowLoadingPorts(true)
-    // Use STO number or shipment_id if available, otherwise fall back to UUID
-    const identifier = shipment.sto_number || shipment.shipment_id || shipment.id
-    await fetchLoadingPorts(identifier)
+    // For editing/saving we always work per specific shipment (UUID)
+    await fetchLoadingPorts(shipment.id)
   }
 
   const handleSaveLoadingPort = async () => {
@@ -1488,15 +1786,19 @@ export default function ShipmentsPage() {
   }
 
   const handleSaveAll = async () => {
-    // Save overall shipment info first
+    // Save overall shipment info (includes first loading + first discharge port ETA)
     await handleSaveShipmentInfo()
 
-    // Then save the currently edited loading port (if any)
+    // Only save the edited port separately when it's an *additional* port (not the first loading/discharge already saved above)
     if (editingPortId) {
-      await handleSavePort(editingPortId)
+      const firstLoading = loadingPorts.find(p => !p.is_discharge_port)
+      const firstDischarge = loadingPorts.find(p => p.is_discharge_port)
+      const isFirstPort = editingPortId === firstLoading?.id || editingPortId === firstDischarge?.id
+      if (!isFirstPort) {
+        await handleSavePort(editingPortId)
+      }
     }
 
-    // After saving, keep only view mode (no per-port edit buttons)
     setEditingPortId(null)
     setEditedPortData(null)
   }
@@ -1532,8 +1834,8 @@ export default function ShipmentsPage() {
     if (!selectedShipment || !editedShipmentInfo) return
 
     try {
-      // Get the identifier (STO number, shipment_id, or UUID)
-      const identifier = selectedShipment.sto_number || selectedShipment.shipment_id || selectedShipment.id
+      // Always work with specific shipment UUID for loading ports
+      const identifier = selectedShipment.id
       
       // Map the edited fields to the update format
       const updateData: any = {
@@ -1580,47 +1882,63 @@ export default function ShipmentsPage() {
                      || refreshedPorts.find((p: any) => !p.is_discharge_port)
                      || loadingPorts.find(p => !p.is_discharge_port && p.port_sequence === 1)
                      || loadingPorts.find(p => !p.is_discharge_port)
-        
-        // Only create if no loading port exists at all
-        const hasAnyLoadingPort = refreshedPorts.some((p: any) => !p.is_discharge_port) || loadingPorts.some(p => !p.is_discharge_port)
-        
+
+        // Detect if shipment already has any loading port at all
+        const hasAnyLoadingPort =
+          refreshedPorts.some((p: any) => !p.is_discharge_port) ||
+          loadingPorts.some(p => !p.is_discharge_port)
+
         if (firstPort && firstPort.id) {
-          // Update existing loading port with ETA fields
+          // Update existing loading port: merge existing port data so backend does not overwrite with null
+          const toDateStr = (v: unknown) => (v != null && v !== '' ? String(v).split('T')[0] : null)
           const loadingPortUpdateData: any = {
-            // Always include these fields, even if empty, to ensure they're saved
-            eta_vessel_arrival: editedShipmentInfo.eta_vessel_arrival_at_loading_port || null,
-            eta_vessel_berthed_at_loading_port: editedShipmentInfo.eta_vessel_berthed_at_loading_port || null,
-            eta_loading_start: editedShipmentInfo.eta_vessel_start_loading || null,
-            eta_loading_completed: editedShipmentInfo.eta_vessel_completed_loading || null,
-            eta_vessel_sailed: editedShipmentInfo.eta_vessel_sailed_from_loading_port || null,
-            // Preserve existing port data
-            port_name: firstPort.port_name || editedShipmentInfo.vessel_loading_port_1 || 'Loading Port 1',
-            port_sequence: firstPort.port_sequence || 1,
-            quantity_at_loading_port: firstPort.quantity_at_loading_port || editedShipmentInfo.actual_vessel_qty_receive || 0,
-            is_discharge_port: false
+            port_name: editedShipmentInfo.vessel_loading_port_1 || firstPort.port_name || 'Loading Port 1',
+            port_sequence: firstPort.port_sequence ?? 1,
+            quantity_at_loading_port: editedShipmentInfo.actual_vessel_qty_receive ?? firstPort.quantity_at_loading_port ?? 0,
+            is_discharge_port: false,
+            // ETA from form (override); use existing firstPort values as fallback so we don't clear other fields
+            eta_vessel_arrival: toDateStr(editedShipmentInfo.eta_vessel_arrival_at_loading_port) ?? toDateStr(firstPort.eta_vessel_arrival),
+            eta_vessel_berthed_at_loading_port: toDateStr(editedShipmentInfo.eta_vessel_berthed_at_loading_port) ?? toDateStr(firstPort.eta_vessel_berthed_at_loading_port),
+            eta_loading_start: toDateStr(editedShipmentInfo.eta_vessel_start_loading) ?? toDateStr(firstPort.eta_loading_start),
+            eta_loading_completed: toDateStr(editedShipmentInfo.eta_vessel_completed_loading) ?? toDateStr(firstPort.eta_loading_completed),
+            eta_vessel_sailed: toDateStr(editedShipmentInfo.eta_vessel_sailed_from_loading_port) ?? toDateStr(firstPort.eta_vessel_sailed),
+            // Preserve existing ATA so backend UPDATE does not overwrite with null
+            ata_vessel_arrival: toDateStr(firstPort.ata_vessel_arrival),
+            ata_vessel_berthed: toDateStr(firstPort.ata_vessel_berthed),
+            ata_loading_start: toDateStr(firstPort.ata_loading_start),
+            ata_loading_completed: toDateStr(firstPort.ata_loading_completed),
+            ata_vessel_sailed: toDateStr(firstPort.ata_vessel_sailed),
+            eta_vessel_arrive_at_discharge_port: null,
+            eta_vessel_berthed_at_discharge_port: null,
+            eta_vessel_start_discharging: null,
+            eta_vessel_complete_discharge: null
           }
           
           await api.put(`/shipments/${identifier}/loading-ports/${firstPort.id}`, loadingPortUpdateData)
-        } else if (!hasAnyLoadingPort && (editedShipmentInfo.eta_vessel_arrival_at_loading_port || 
+        } else if (
+          !hasAnyLoadingPort &&
+          (
+            editedShipmentInfo.eta_vessel_arrival_at_loading_port ||
             editedShipmentInfo.eta_vessel_berthed_at_loading_port ||
             editedShipmentInfo.eta_vessel_start_loading ||
             editedShipmentInfo.eta_vessel_completed_loading ||
             editedShipmentInfo.eta_vessel_sailed_from_loading_port ||
-            editedShipmentInfo.vessel_loading_port_1)) {
-          // Create a new loading port ONLY if no loading port exists at all
+            editedShipmentInfo.vessel_loading_port_1
+          )
+        ) {
+          // Create a first loading port ONLY if none exists yet and user entered ETA/port data
           const newPortData: any = {
             port_name: editedShipmentInfo.vessel_loading_port_1 || 'Loading Port 1',
             port_sequence: 1,
             quantity_at_loading_port: editedShipmentInfo.actual_vessel_qty_receive || 0,
             is_discharge_port: false,
-            // Add ETA fields
             eta_vessel_arrival: editedShipmentInfo.eta_vessel_arrival_at_loading_port || null,
             eta_vessel_berthed_at_loading_port: editedShipmentInfo.eta_vessel_berthed_at_loading_port || null,
             eta_loading_start: editedShipmentInfo.eta_vessel_start_loading || null,
             eta_loading_completed: editedShipmentInfo.eta_vessel_completed_loading || null,
-            eta_vessel_sailed: editedShipmentInfo.eta_vessel_sailed_from_loading_port || null
+            eta_vessel_sailed: editedShipmentInfo.eta_vessel_sailed_from_loading_port || null,
           }
-          
+
           await api.post(`/shipments/${identifier}/loading-ports`, newPortData)
         }
         
@@ -1633,47 +1951,32 @@ export default function ShipmentsPage() {
         }
         let dischargePort = finalPorts.find((p: any) => p.is_discharge_port) || refreshedPorts.find((p: any) => p.is_discharge_port) || loadingPorts.find(p => p.is_discharge_port)
         if (dischargePort && dischargePort.id) {
+          const toDateStrD = (v: unknown) => (v != null && v !== '' ? String(v).split('T')[0] : null)
           const dischargePortUpdateData: any = {
-            // Always include these fields, even if empty, to ensure they're saved
-            eta_vessel_arrive_at_discharge_port: editedShipmentInfo.eta_vessel_arrive_at_discharge_port || null,
-            eta_vessel_berthed_at_discharge_port: editedShipmentInfo.eta_vessel_berthed_at_discharge_port || null,
-            eta_vessel_start_discharging: editedShipmentInfo.eta_vessel_start_discharging || null,
-            eta_vessel_complete_discharge: editedShipmentInfo.eta_vessel_complete_discharge || null,
-            // Also preserve existing port data
-            port_name: dischargePort.port_name || editedShipmentInfo.vessel_discharge_port_1 || 'Discharge Port',
-            port_sequence: dischargePort.port_sequence || 1,
-            quantity_at_loading_port: dischargePort.quantity_at_loading_port || 0,
-            is_discharge_port: true
-          }
-          
-          console.log('Updating discharge port with data:', dischargePortUpdateData)
-          const dischargeResponse = await api.put(`/shipments/${identifier}/loading-ports/${dischargePort.id}`, dischargePortUpdateData)
-          console.log('Discharge port update response:', dischargeResponse.data)
-        } else {
-          // Only create discharge port if no discharge port exists at all
-          const hasAnyDischargePort = finalPorts.some((p: any) => p.is_discharge_port) || refreshedPorts.some((p: any) => p.is_discharge_port) || loadingPorts.some(p => p.is_discharge_port)
-          if (!hasAnyDischargePort && (editedShipmentInfo.eta_vessel_arrive_at_discharge_port || 
-                     editedShipmentInfo.eta_vessel_berthed_at_discharge_port ||
-                     editedShipmentInfo.eta_vessel_start_discharging ||
-                     editedShipmentInfo.eta_vessel_complete_discharge ||
-                     editedShipmentInfo.vessel_discharge_port_1)) {
-          // Create discharge port if ETA data exists but no discharge port exists at all
-          const newDischargePortData: any = {
-            port_name: editedShipmentInfo.vessel_discharge_port_1 || 'Discharge Port',
-            port_sequence: 1,
-            quantity_at_loading_port: 0,
+            port_name: editedShipmentInfo.vessel_discharge_port_1 || dischargePort.port_name || 'Discharge Port',
+            port_sequence: dischargePort.port_sequence ?? 999,
+            quantity_at_loading_port: dischargePort.quantity_at_loading_port ?? 0,
             is_discharge_port: true,
-            eta_vessel_arrive_at_discharge_port: editedShipmentInfo.eta_vessel_arrive_at_discharge_port || null,
-            eta_vessel_berthed_at_discharge_port: editedShipmentInfo.eta_vessel_berthed_at_discharge_port || null,
-            eta_vessel_start_discharging: editedShipmentInfo.eta_vessel_start_discharging || null,
-            eta_vessel_complete_discharge: editedShipmentInfo.eta_vessel_complete_discharge || null
+            eta_vessel_arrive_at_discharge_port: toDateStrD(editedShipmentInfo.eta_vessel_arrive_at_discharge_port) ?? toDateStrD(dischargePort.eta_vessel_arrive_at_discharge_port),
+            eta_vessel_berthed_at_discharge_port: toDateStrD(editedShipmentInfo.eta_vessel_berthed_at_discharge_port) ?? toDateStrD(dischargePort.eta_vessel_berthed_at_discharge_port),
+            eta_vessel_start_discharging: toDateStrD(editedShipmentInfo.eta_vessel_start_discharging) ?? toDateStrD(dischargePort.eta_vessel_start_discharging),
+            eta_vessel_complete_discharge: toDateStrD(editedShipmentInfo.eta_vessel_complete_discharge) ?? toDateStrD(dischargePort.eta_vessel_complete_discharge),
+            eta_vessel_arrival: null,
+            eta_vessel_berthed_at_loading_port: null,
+            eta_loading_start: null,
+            eta_loading_completed: null,
+            eta_vessel_sailed: null,
+            ata_vessel_arrival: toDateStrD(dischargePort.ata_vessel_arrival),
+            ata_vessel_berthed: toDateStrD(dischargePort.ata_vessel_berthed),
+            ata_loading_start: toDateStrD(dischargePort.ata_loading_start),
+            ata_loading_completed: toDateStrD(dischargePort.ata_loading_completed),
+            ata_vessel_sailed: toDateStrD(dischargePort.ata_vessel_sailed)
           }
-          
-          await api.post(`/shipments/${identifier}/loading-ports`, newDischargePortData)
-          }
+          await api.put(`/shipments/${identifier}/loading-ports/${dischargePort.id}`, dischargePortUpdateData)
         }
         
-        await fetchLoadingPorts(identifier)
+        // Refetch so Shipment Information (including ETA) shows saved data (skipCache to avoid stale response)
+        await fetchLoadingPorts(identifier, true)
         setEditingShipmentInfo(false)
         setEditedShipmentInfo(null)
         alert('Shipment information updated successfully!')
@@ -1877,8 +2180,8 @@ export default function ShipmentsPage() {
   }
 
   const autoFillContractInfo = (contractData: any) => {
-    setNewShipment(prev => ({
-      ...prev,
+      setNewShipment(prev => ({
+        ...prev,
       // Auto-fill port information if not already set
       portOfLoading: prev.portOfLoading || contractData.port_of_loading || '',
       portOfDischarge: prev.portOfDischarge || contractData.port_of_discharge || ''
@@ -1947,19 +2250,28 @@ export default function ShipmentsPage() {
       return
     }
 
-    if (stoValidation?.exists) {
-      alert('STO Number already exists. Please update the existing shipment instead.')
-      return
-    }
+    // Don't validate STO number - it should remain empty for manual shipments
+    // STO will be filled from SAP Data later
 
     try {
       setSaving(true)
-      const response = await api.post('/shipments', newShipment)
+      
+      // Auto-generate Operation ID - one Operation ID for all contracts
+      const operationId = `OP-${newShipment.contractNumbers[0]}-${Date.now().toString().slice(-8)}`
+      
+      const shipmentData = {
+        ...newShipment,
+        operationId,
+        stoNumber: '' // Ensure STO Number remains empty - will be filled from SAP Data later
+      }
+      
+      const response = await api.post('/shipments', shipmentData)
       
       if (response.data.success) {
         alert('Shipment created successfully!')
         setShowAddShipment(false)
         setNewShipment({
+          operationId: '',
           stoNumber: '',
           contractNumbers: [],
           vesselName: '',
@@ -1999,24 +2311,27 @@ export default function ShipmentsPage() {
 
   const getColumnWidth = (colId: string): string => {
     const widths: { [key: string]: string } = {
-      'shipment_id': '200px',
-      'status': '120px',
-      'contract_numbers': '180px',
-      'po_numbers': '150px',
-      'delivery_start': '120px',
-      'delivery_end': '120px',
-      'vessel_name': '180px',
-      'sto_quantity': '140px',
-      'incoterm': '120px',
-      'b2b_flag': '100px',
-      'port_of_loading': '160px',
-      'port_of_discharge': '160px',
-      'quantity_shipped': '140px',
-      'shipment_date': '120px',
-      'arrival_date': '120px',
-      'voyage_no': '120px',
-      'vessel_code': '120px',
-      'quantity_delivered': '140px'
+      operation_id: '150px',
+      shipment_id: '200px',
+      status: '120px',
+      contract_numbers: '180px',
+      po_numbers: '150px',
+      contract_reference_po: '150px',
+      delivery_start: '180px',
+      delivery_end: '180px',
+      ata_vessel_completed_loading: '200px',
+      ata_vessel_complete_discharge: '200px',
+      late_indicator: '130px',
+      vessel_name: '180px',
+      sto_quantity: '140px',
+      incoterm: '120px',
+      b2b_flag: '100px',
+      port_of_loading: '160px',
+      port_of_discharge: '160px',
+      quantity_shipped: '140px',
+      voyage_no: '120px',
+      vessel_code: '120px',
+      quantity_delivered: '140px'
     }
     return widths[colId] || '150px'
   }
@@ -2122,6 +2437,16 @@ export default function ShipmentsPage() {
                 <option value="COMPLETED">Completed</option>
                 <option value="CANCELLED">Cancelled</option>
               </select>
+              <select
+                value={lateIndicatorFilter}
+                onChange={(e) => setLateIndicatorFilter(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="ALL">All Late Indicator</option>
+                <option value="ON_TIME">On Time</option>
+                <option value="LATE">Late</option>
+                <option value="NA">N/A</option>
+              </select>
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600">View by:</span>
                 <select
@@ -2140,7 +2465,7 @@ export default function ShipmentsPage() {
                   <option value="port_discharge">Port of Discharge</option>
                 </select>
                 {viewOption !== 'all' && (
-                  <Input
+              <Input
                     placeholder={`Filter by ${
                       viewOption === 'sto' ? 'STO Number' 
                       : viewOption === 'contract' ? 'Contract Numbers' 
@@ -2150,8 +2475,8 @@ export default function ShipmentsPage() {
                     }...`}
                     value={viewFilterValue}
                     onChange={(e) => setViewFilterValue(e.target.value)}
-                    className="w-48"
-                  />
+                className="w-48"
+              />
                 )}
               </div>
               <div className="flex items-center gap-2">
@@ -2164,10 +2489,11 @@ export default function ShipmentsPage() {
                 <Filter className="h-4 w-4 mr-1" />
                 Apply
               </Button>
-              {(statusFilter !== 'ALL' || viewFilterValue || dateFrom || dateTo) && (
+              {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || viewFilterValue || dateFrom || dateTo) && (
                 <Button 
                   onClick={() => {
                     setStatusFilter('ALL')
+                    setLateIndicatorFilter('ALL')
                     setViewOption('all')
                     setViewFilterValue('')
                     setDateFrom('')
@@ -2182,6 +2508,54 @@ export default function ShipmentsPage() {
                   Clear
                 </Button>
               )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Status Distribution */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Status Distribution</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto pb-4 px-4">
+              {[
+                { status: 'PLANNED', label: 'Planned', color: 'bg-blue-100', textColor: 'text-blue-800', badgeColor: 'bg-blue-600' },
+                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600' },
+                { status: 'LOADING', label: 'Loading', color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600' },
+                { status: 'IN_TRANSIT', label: 'In Transit', color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600' },
+                { status: 'ARRIVED', label: 'Arrived', color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600' },
+                { status: 'UNLOADING', label: 'Unloading', color: 'bg-cyan-100', textColor: 'text-cyan-800', badgeColor: 'bg-cyan-600' },
+                { status: 'COMPLETED', label: 'Completed', color: 'bg-green-100', textColor: 'text-green-800', badgeColor: 'bg-green-600' },
+                { status: 'CANCELLED', label: 'Cancelled', color: 'bg-red-100', textColor: 'text-red-800', badgeColor: 'bg-red-600' }
+              ].map((statusInfo, index, array) => {
+                const count = filteredShipments.filter(s => s.status === statusInfo.status).length
+                return (
+                  <div key={statusInfo.status} className="flex items-center flex-shrink-0">
+                    <div className="relative">
+                      {/* Status Circle */}
+                      <div className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg hover:shadow-xl transition-shadow`}>
+                        {/* Count Badge */}
+                        <div className={`absolute -top-2 -right-2 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-7 h-7 md:w-8 md:h-8 flex items-center justify-center shadow-lg z-10`}>
+                          {count}
+                        </div>
+                        {/* Status Label */}
+                        <span className={`text-xs md:text-sm font-semibold ${statusInfo.textColor} text-center px-2 leading-tight`}>
+                          {statusInfo.label}
+                        </span>
+                      </div>
+                    </div>
+                    {/* Arrow */}
+                    {index < array.length - 1 && (
+                      <div className="flex-shrink-0 mx-2 md:mx-3">
+                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-gray-400">
+                          <path d="M9 18L15 12L9 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </CardContent>
         </Card>
@@ -2212,7 +2586,7 @@ export default function ShipmentsPage() {
                       <div className="text-xs font-semibold text-gray-600 mb-2">Visible columns</div>
                       <div className="space-y-2 max-h-72 overflow-auto pr-1">
                         {compactColumns
-                          .filter(c => c.id !== 'shipment_id' && c.id !== 'status')
+                          .filter(c => c.id !== 'late_indicator' && c.id !== 'operation_id' && c.id !== 'shipment_id' && c.id !== 'status')
                           .map(col => (
                             <label key={col.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
                               <Checkbox
@@ -2317,19 +2691,202 @@ export default function ShipmentsPage() {
                         <div />
                         {visibleColumns.map(col => {
                           const active = sortKey === col.id
+                          const filterActive = isColumnFilterActive(col.id)
+                          const filterType = getFilterTypeForColumn(col.id)
+                          const current = columnFilters[col.id]
+
                           return (
-                            <button
-                              key={col.id}
-                              type="button"
-                              className={`flex items-center gap-1 text-left ${col.sortable ? 'hover:text-gray-900' : ''}`}
-                              onClick={() => onSortHeaderClick(col)}
-                              title={col.sortable ? 'Sort' : undefined}
-                            >
-                              <span className="truncate">{col.label}</span>
-                              {col.sortable && active && (
-                                sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                            <div key={col.id} className="relative min-w-0">
+                              <div className="flex items-center gap-1 min-w-0">
+                                <button
+                                  type="button"
+                                  className={`flex items-center gap-1 text-left min-w-0 ${col.sortable ? 'hover:text-gray-900' : ''}`}
+                                  onClick={() => {
+                                    if (col.sortable) {
+                                      onSortHeaderClick(col)
+                                    }
+                                  }}
+                                  title={col.sortable ? 'Sort' : undefined}
+                                >
+                                  <span className="truncate">{col.label}</span>
+                                  {col.sortable && active && (
+                                    sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                                  )}
+                                </button>
+
+                                <button
+                                  type="button"
+                                  className={`p-1 rounded hover:bg-gray-100 ${filterActive ? 'text-blue-700' : 'text-gray-500'}`}
+                                  title="Filter"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setOpenHeaderFilterId(prev => (prev === col.id ? null : col.id))
+                                  }}
+                                >
+                                  <Filter className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+
+                              {openHeaderFilterId === col.id && (
+                                <div
+                                  ref={headerFilterPopoverRef}
+                                  className="absolute left-0 top-full mt-2 w-[280px] bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-30"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="text-xs font-semibold text-gray-700 truncate">{col.label} Filter</div>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-gray-500 hover:text-gray-800"
+                                      onClick={() => setOpenHeaderFilterId(null)}
+                                    >
+                                      Close
+                                    </button>
+                                  </div>
+
+                                  {/* Text filter */}
+                                  {filterType === 'text' && (
+                                    <div className="space-y-2">
+                                      <Input
+                                        value={(current?.type === 'text' && current.value) ? current.value : ''}
+                                        onChange={(e) => {
+                                          const value = e.target.value
+                                          setOrClearFilter(col.id, {
+                                            type: 'text',
+                                            value,
+                                            exact: current?.type === 'text' ? Boolean(current.exact) : false,
+                                            emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
+                                          })
+                                        }}
+                                        placeholder="Type to filter (contains)"
+                                        className="h-8 text-sm"
+                                      />
+                                      <div className="flex items-center justify-between gap-3">
+                                        <label className="flex items-center gap-2 text-xs text-gray-700">
+                                          <Checkbox
+                                            checked={current?.type === 'text' ? Boolean(current.exact) : false}
+                                            onCheckedChange={(checked) => {
+                                              const value = current?.type === 'text' ? current.value : ''
+                                              setOrClearFilter(col.id, {
+                                                type: 'text',
+                                                value,
+                                                exact: Boolean(checked),
+                                                emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
+                                              })
+                                            }}
+                                          />
+                                          Exact match
+                                        </label>
+                                        <label className="flex items-center gap-2 text-xs text-gray-700">
+                                          <Checkbox
+                                            checked={Boolean(current?.emptyOnly)}
+                                            onCheckedChange={(checked) => {
+                                              const value = current?.type === 'text' ? current.value : ''
+                                              setOrClearFilter(col.id, {
+                                                type: 'text',
+                                                value,
+                                                exact: current?.type === 'text' ? Boolean(current.exact) : false,
+                                                emptyOnly: Boolean(checked),
+                                              })
+                                            }}
+                                          />
+                                          Only blanks
+                                        </label>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Number filter */}
+                                  {filterType === 'number' && (
+                                    <div className="space-y-2">
+                                      <div className="grid grid-cols-2 gap-2">
+                                        <Input
+                                          value={(current?.type === 'number' && current.min) ? current.min : ''}
+                                          onChange={(e) => {
+                                            const min = e.target.value
+                                            const max = current?.type === 'number' ? current.max : ''
+                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly) })
+                                          }}
+                                          placeholder="Min"
+                                          className="h-8 text-sm"
+                                        />
+                                        <Input
+                                          value={(current?.type === 'number' && current.max) ? current.max : ''}
+                                          onChange={(e) => {
+                                            const max = e.target.value
+                                            const min = current?.type === 'number' ? current.min : ''
+                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly) })
+                                          }}
+                                          placeholder="Max"
+                                          className="h-8 text-sm"
+                                        />
+                                      </div>
+                                      <label className="flex items-center gap-2 text-xs text-gray-700">
+                                        <Checkbox
+                                          checked={Boolean(current?.emptyOnly)}
+                                          onCheckedChange={(checked) => {
+                                            const min = current?.type === 'number' ? current.min : ''
+                                            const max = current?.type === 'number' ? current.max : ''
+                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(checked) })
+                                          }}
+                                        />
+                                        Only blanks
+                                      </label>
+                                    </div>
+                                  )}
+
+                                  {/* Date filter */}
+                                  {filterType === 'date' && (
+                                    <div className="space-y-2">
+                                      <div className="grid grid-cols-2 gap-2">
+                                        <Input
+                                          type="date"
+                                          value={(current?.type === 'date' && current.from) ? current.from : ''}
+                                          onChange={(e) => {
+                                            const from = e.target.value
+                                            const to = current?.type === 'date' ? current.to : ''
+                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly) })
+                                          }}
+                                          className="h-8 text-sm"
+                                        />
+                                        <Input
+                                          type="date"
+                                          value={(current?.type === 'date' && current.to) ? current.to : ''}
+                                          onChange={(e) => {
+                                            const to = e.target.value
+                                            const from = current?.type === 'date' ? current.from : ''
+                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly) })
+                                          }}
+                                          className="h-8 text-sm"
+                                        />
+                                      </div>
+                                      <label className="flex items-center gap-2 text-xs text-gray-700">
+                                        <Checkbox
+                                          checked={Boolean(current?.emptyOnly)}
+                                          onCheckedChange={(checked) => {
+                                            const from = current?.type === 'date' ? current.from : ''
+                                            const to = current?.type === 'date' ? current.to : ''
+                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(checked) })
+                                          }}
+                                        />
+                                        Only blanks
+                                      </label>
+                                    </div>
+                                  )}
+
+                                  <div className="flex items-center justify-between mt-3 pt-2 border-t">
+                                    <button
+                                      type="button"
+                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      onClick={() => clearColumnFilter(col.id)}
+                                      disabled={!filterActive}
+                                    >
+                                      Clear filter
+                                    </button>
+                                  </div>
+                                </div>
                               )}
-                            </button>
+                            </div>
                           )
                         })}
                         <div className="text-right sticky right-0 bg-gray-50 border-l pl-3 pr-2">Actions</div>
@@ -2513,42 +3070,50 @@ export default function ShipmentsPage() {
                                             ? (editedContractDetails[key] ?? detail.sto_qty_assigned ?? 0)
                                             : (detail.sto_qty_assigned ?? 0)
                                           return (
-                                            <div key={idx} className="border rounded p-3 bg-gray-50">
-                                              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                                                <div>
-                                                  <div className="text-gray-500">Contract Number</div>
-                                                  <div className="font-medium">{detail.contract_number}</div>
-                                                </div>
-                                                <div>
-                                                  <div className="text-gray-500">Contract Qty</div>
-                                                  <div className="font-medium">{formatNumber(detail.contract_qty)} MT</div>
-                                                </div>
-                                                <div>
-                                                  <div className="text-gray-500">Outstanding Qty</div>
-                                                  <div className={`font-medium ${detail.outstanding_qty < 0 ? 'text-red-600' : 'text-gray-900'}`}>
-                                                    {formatNumber(detail.outstanding_qty)} MT
-                                                  </div>
-                                                </div>
-                                                <div>
-                                                  <div className="text-gray-500 mb-1">Contract Qty assign to STO</div>
-                                                  <div className="flex items-center gap-2">
-                                                    {isEditing ? (
-                                                      <Input
-                                                        type="number"
-                                                        value={displayValue}
-                                                        onChange={(e) => {
-                                                          const newValue = parseFloat(e.target.value) || 0
-                                                          setEditedContractDetails(prev => ({ ...prev, [key]: newValue }))
-                                                        }}
-                                                        className="h-8 text-sm w-32"
-                                                      />
-                                                    ) : (
-                                                      <div className="font-medium">{formatNumber(displayValue)} MT</div>
-                                                    )}
-                                                  </div>
+                                          <div key={idx} className="border rounded p-3 bg-gray-50">
+                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                              <div>
+                                                <div className="text-gray-500">Contract Number</div>
+                                                <div className="font-medium">{detail.contract_number}</div>
+                                              </div>
+                                              <div>
+                                                <div className="text-gray-500">Contract Qty</div>
+                                                <div className="font-medium">{formatNumber(detail.contract_qty)} MT</div>
+                                              </div>
+                                              <div>
+                                                <div className="text-gray-500">Outstanding Qty</div>
+                                                <div className={`font-medium ${detail.outstanding_qty < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                                                  {formatNumber(detail.outstanding_qty)} MT
                                                 </div>
                                               </div>
+                                              <div>
+                                                <div className="text-gray-500 mb-1">Contract Qty assign to STO</div>
+                                                <div className="flex items-center gap-2">
+                                                    {isEditing ? (
+                                                  <Input
+                                                    type="number"
+                                                        value={displayValue}
+                                                    onChange={(e) => {
+                                                      const newValue = parseFloat(e.target.value) || 0
+                                                          setEditedContractDetails(prev => ({ ...prev, [key]: newValue }))
+                                                    }}
+                                                    className="h-8 text-sm w-32"
+                                                  />
+                                                    ) : (
+                                                      <div className="font-medium">{formatNumber(displayValue)} MT</div>
+                                                  )}
+                                                </div>
+                                              </div>
+                                              <div>
+                                                <div className="text-gray-500">Due Date Delivery Start</div>
+                                                <div className="font-medium">{formatShortDate(detail.delivery_start_date || '')}</div>
+                                              </div>
+                                              <div>
+                                                <div className="text-gray-500">Due Date Delivery End</div>
+                                                <div className="font-medium">{formatShortDate(detail.delivery_end_date || '')}</div>
+                                              </div>
                                             </div>
+                                          </div>
                                           )
                                         })}
                                       </div>
@@ -2733,16 +3298,24 @@ export default function ShipmentsPage() {
                                             )}
                                           </div>
                                         </div>
+                                        <div>
+                                          <div className="text-gray-500">Due Date Delivery Start</div>
+                                          <div className="font-medium">{formatShortDate(detail.delivery_start_date || '')}</div>
+                                        </div>
+                                        <div>
+                                          <div className="text-gray-500">Due Date Delivery End</div>
+                                          <div className="font-medium">{formatShortDate(detail.delivery_end_date || '')}</div>
+                                        </div>
                                       </div>
                                     </div>
                                   ))}
                                 </div>
-                                    ) : (
-                                      <div className="space-y-3">
-                                        <div className="text-sm font-semibold text-gray-700 mb-2">Contract Details</div>
+                              ) : (
+                                <div className="space-y-3">
+                                  <div className="text-sm font-semibold text-gray-700 mb-2">Contract Details</div>
                                         <div className="text-gray-500 text-sm">No contract details available. Click "Load Contract Details" to fetch.</div>
-                                      </div>
-                                    )}
+                                </div>
+                              )}
                               {loadingContractDetails[shipment.id] && (
                                 <div className="text-center py-2 text-sm text-gray-500">
                                   <Loader2 className="h-4 w-4 inline animate-spin mr-2" />
@@ -2801,23 +3374,23 @@ export default function ShipmentsPage() {
                     <div className="border rounded-md p-4 bg-gray-50 mb-4">
                       <div className="flex items-center justify-between mb-3">
                         <h5 className="font-semibold text-sm">Shipment Information</h5>
-                        <div className="flex gap-2">
+                          <div className="flex gap-2">
                           {editingShipmentInfo ? (
                             <>
-                              <Button
-                                variant="outline"
-                                size="sm"
+                            <Button
+                              variant="outline"
+                              size="sm"
                                 onClick={handleCancelEditAll}
-                              >
-                                <X className="h-4 w-4 mr-1" /> Cancel
-                              </Button>
-                              <Button
-                                size="sm"
+                            >
+                              <X className="h-4 w-4 mr-1" /> Cancel
+                            </Button>
+                            <Button
+                              size="sm"
                                 onClick={handleSaveAll}
-                                className="bg-green-600 hover:bg-green-700"
-                              >
-                                <Save className="h-4 w-4 mr-1" /> Save
-                              </Button>
+                              className="bg-green-600 hover:bg-green-700"
+                            >
+                              <Save className="h-4 w-4 mr-1" /> Save
+                            </Button>
                             </>
                           ) : (
                             <Button
@@ -2834,7 +3407,7 @@ export default function ShipmentsPage() {
                               Edit
                             </Button>
                           )}
-                        </div>
+                          </div>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                         <div>
@@ -2875,7 +3448,7 @@ export default function ShipmentsPage() {
                               placeholder="Loading Port Name"
                             />
                           ) : (
-                            <div className="font-medium">{shipmentInfo.vessel_loading_port_1 || '-'}</div>
+                          <div className="font-medium">{shipmentInfo.vessel_loading_port_1 || '-'}</div>
                           )}
                         </div>
                         <div>
@@ -2975,15 +3548,15 @@ export default function ShipmentsPage() {
                             {shipmentInfo.loading_rate_mt_per_hour !== null && shipmentInfo.loading_rate_mt_per_hour !== undefined 
                               ? formatNumber(shipmentInfo.loading_rate_mt_per_hour) 
                               : '-'}
-                          </div>
+                      </div>
                           {shipmentInfo.loading_rate_mt_per_hour && (
                             <div className="text-xs text-gray-500 mt-1">
                               Formula: Quantity Receive / (ATA Completed - ATA Start) hours
-                            </div>
-                          )}
+                    </div>
+                  )}
                         </div>
                       </div>
-                      
+
                       {/* ETA Fields Section */}
                       <div className="mt-4 pt-4 border-t">
                         <h6 className="font-semibold text-sm mb-3 text-gray-700">ETA (Estimated Time of Arrival) Information</h6>
@@ -3000,7 +3573,7 @@ export default function ShipmentsPage() {
                             ) : (
                               <div className="font-medium">{formatDate(shipmentInfo.eta_vessel_arrival_at_loading_port)}</div>
                             )}
-                          </div>
+                  </div>
                           <div>
                             <div className="text-gray-500">ETA Vessel Berthed at Loading Port</div>
                             {editingShipmentInfo ? (
@@ -3173,17 +3746,26 @@ export default function ShipmentsPage() {
                 {loadingPorts.length === 0 ? (
                   <div className="text-gray-500">No loading ports yet.</div>
                 ) : (() => {
-                  // Group ports: if there's only 1 loading port and 1 discharge port, show 1 group
-                  // Otherwise, show one group per port
                   const loadingPortsList = loadingPorts.filter(p => !p.is_discharge_port)
                   const dischargePortsList = loadingPorts.filter(p => p.is_discharge_port)
-                  
-                  // If only 1 loading and 1 discharge, hide individual port cards (shipment info already shown above)
-                  if (loadingPortsList.length === 1 && dischargePortsList.length === 1) {
-                    return <div className="text-gray-500 text-sm mt-2">Port information is shown in the Shipment Information section above.</div>
-                  } else {
-                    // Show one shipment info group per port
-                    return loadingPorts.map((port) => {
+                  const isSingleSet = loadingPortsList.length === 1 && dischargePortsList.length === 1
+
+                  // Single set (1 loading + 1 discharge): everything is in Shipment Information above; no extra sections
+                  if (isSingleSet) {
+                    return null
+                  }
+
+                  // Multiple sets: new section for each additional loading or discharge port (first set stays in Shipment Information)
+                  const additionalLoading = loadingPortsList.slice(1)
+                  const additionalDischarge = dischargePortsList.slice(1)
+                  const additionalPorts = [...additionalLoading, ...additionalDischarge]
+
+                  return (
+                    <>
+                  {additionalPorts.map((port) => {
+                    const sectionTitle = port.is_discharge_port
+                      ? `Discharge Port ${dischargePortsList.indexOf(port) + 1} — ${port.port_name || 'Unnamed'}`
+                      : `Loading Port ${port.port_sequence} — ${port.port_name || 'Unnamed'}`
                     const quantityLabel = port.is_discharge_port ? 'Received Quantity (MT)' : 'Quantity at Loading Port (MT)'
                     const rateLabel = port.is_discharge_port ? 'Discharge Rate (MT/hour)' : 'Loading Rate (MT/hour)'
 
@@ -3228,7 +3810,9 @@ export default function ShipmentsPage() {
                     const displayData = isEditing && editedPortData ? editedPortData : port
 
                     return (
-                      <div key={port.id ?? `${port.port_name}-${port.port_sequence}`} className="border rounded-md p-4">
+                      <div key={port.id ?? `${port.port_name}-${port.port_sequence}-${port.is_discharge_port}`} className="mt-4">
+                        <h5 className="font-semibold text-sm mb-2 text-gray-700 border-b pb-1">{sectionTitle}</h5>
+                        <div className="border rounded-md p-4">
                         <div className="flex items-center justify-between mb-3">
                           <div>
                             <div className="flex items-center gap-2">
@@ -3247,14 +3831,14 @@ export default function ShipmentsPage() {
                           </div>
                           <div className="flex gap-2">
                             {!isEditing && port.id && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleDeleteLoadingPort(port.id!)}
-                                className="text-red-600 border-red-200 hover:bg-red-50"
-                              >
-                                Delete
-                              </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleDeleteLoadingPort(port.id!)}
+                                    className="text-red-600 border-red-200 hover:bg-red-50"
+                                  >
+                                    Delete
+                                  </Button>
                             )}
                           </div>
                         </div>
@@ -3423,7 +4007,7 @@ export default function ShipmentsPage() {
                           </div>
                           <div>
                             <div className="text-gray-500">{rateLabel}</div>
-                            <div className="font-semibold text-blue-700">
+                              <div className="font-semibold text-blue-700">
                               {computedLoadingRate !== null
                                 ? formatNumber(computedLoadingRate)
                                 : displayData.loading_rate !== null && displayData.loading_rate !== undefined
@@ -3448,10 +4032,12 @@ export default function ShipmentsPage() {
                             ))}
                           </div>
                         )}
+                        </div>
                       </div>
                     )
-                  })
-                  }
+                  })}
+                    </>
+                  )
                 })()}
                 </div>
                 )}
@@ -3662,26 +4248,42 @@ export default function ShipmentsPage() {
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <p className="text-sm text-blue-800">
                   <strong>Required:</strong> At least one Contract Number<br/>
-                  <strong>Optional:</strong> STO Number, Port of Loading, Plant/Site (Discharge Port), Shipment Date, and Arrival Date
+                  <strong>Optional:</strong> Port of Loading, Plant/Site (Discharge Port), Shipment Date, and Arrival Date<br/>
+                  <strong>Note:</strong> Operation ID and STO Number are automatically generated and cannot be manually entered
                 </p>
               </div>
 
-              {/* STO Number */}
+              {/* Operation ID */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  STO Number <span className="text-gray-500 text-xs">(Optional)</span>
+                  Operation ID <span className="text-gray-500 text-xs">(Auto-generated)</span>
                 </label>
                 <Input
-                  value={newShipment.stoNumber}
-                  onChange={(e) => handleStoNumberChange(e.target.value)}
-                  placeholder="Enter STO Number (optional)"
-                  className="w-full"
+                  value={newShipment.contractNumbers.length > 0 
+                    ? `OP-${newShipment.contractNumbers[0]}-${Date.now().toString().slice(-8)}`
+                    : 'Will be auto-generated when contract is added'}
+                  disabled
+                  className="w-full bg-gray-100 cursor-not-allowed"
                 />
-                {stoValidation && (
-                  <div className={`mt-2 text-sm ${stoValidation.exists ? 'text-red-600' : 'text-green-600'}`}>
-                    {stoValidation.message}
-                  </div>
-                )}
+                <p className="text-xs text-gray-500 mt-1">
+                  Operation ID will be automatically generated as: OP-{newShipment.contractNumbers[0] || '{ContractNumber}'}-{'{timestamp}'}
+                </p>
+              </div>
+
+              {/* STO Number - Read-only, only from SAP */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  STO Number <span className="text-gray-500 text-xs">(Will be filled from SAP Data)</span>
+                </label>
+                <Input
+                  value=""
+                  disabled
+                  placeholder="STO Number will remain empty and be filled from SAP Data later"
+                  className="w-full bg-gray-100 cursor-not-allowed"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  STO Number will remain empty for manual shipments and will be automatically filled when SAP Data is imported.
+                </p>
               </div>
 
               {/* Contract Numbers */}
@@ -3691,10 +4293,10 @@ export default function ShipmentsPage() {
                 </label>
                 <div className="relative">
                   <div className="flex gap-2">
-                    <Input
-                      value={contractSearchTerm}
-                      onChange={(e) => handleContractSearch(e.target.value)}
-                      onFocus={() => setShowContractSuggestions(true)}
+                  <Input
+                    value={contractSearchTerm}
+                    onChange={(e) => handleContractSearch(e.target.value)}
+                    onFocus={() => setShowContractSuggestions(true)}
                       onKeyPress={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault()
@@ -3703,7 +4305,7 @@ export default function ShipmentsPage() {
                       }}
                       placeholder="Search or enter contract number and press Enter"
                       className="flex-1"
-                    />
+                  />
                     <Button
                       type="button"
                       onClick={handleAddContractManually}
@@ -3740,19 +4342,19 @@ export default function ShipmentsPage() {
                       return (
                         <div key={contractId} className="border rounded-md px-2 py-2 bg-gray-50">
                           <div className="flex items-center gap-2">
-                            <Badge
+                      <Badge
                               variant={validation?.exists ? "default" : validation?.exists === false ? "destructive" : "secondary"}
-                              className="flex items-center gap-1"
-                            >
-                              {contractId}
+                        className="flex items-center gap-1"
+                      >
+                        {contractId}
                               {validation?.checking && <Loader2 className="h-3 w-3 animate-spin" />}
                               {validation?.exists && <Check className="h-3 w-3" />}
                               {validation?.exists === false && !validation?.checking && <X className="h-3 w-3" />}
-                              <X
-                                className="h-3 w-3 cursor-pointer"
-                                onClick={() => handleRemoveContract(contractId)}
-                              />
-                            </Badge>
+                        <X
+                          className="h-3 w-3 cursor-pointer"
+                          onClick={() => handleRemoveContract(contractId)}
+                        />
+                      </Badge>
                             {validation?.message && (
                               <span className={`text-xs ${
                                 validation.exists ? 'text-green-600' : 'text-red-600'
@@ -3782,13 +4384,13 @@ export default function ShipmentsPage() {
                                 </div>
                               </div>
                               <div>
-                                <div className="text-gray-500">Delivery Start</div>
+                                <div className="text-gray-500">Due Date Delivery Start</div>
                                 <div className="font-medium">
                                   {formatShortDate(data.delivery_start_date || '')}
                                 </div>
                               </div>
                               <div>
-                                <div className="text-gray-500">Delivery End</div>
+                                <div className="text-gray-500">Due Date Delivery End</div>
                                 <div className="font-medium">
                                   {formatShortDate(data.delivery_end_date || '')}
                                 </div>

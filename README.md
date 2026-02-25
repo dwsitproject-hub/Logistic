@@ -68,7 +68,7 @@ npm run db:seed
 npm run dev
 ```
 
-### Default URLs
+### Default URLs (local)
 
 - Frontend: `http://localhost:3001`
 - Backend API: `http://localhost:5001/api`
@@ -355,6 +355,124 @@ npm run dev
 cd backend
 npm run db:migrate
 ```
+
+## Production deployment
+
+For a **full step-by-step deployment guide** (database, backend, frontend, Nginx, PM2, SSL, firewall, troubleshooting), see **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+
+Below is a minimal outline matching the AliCloud setup (frontend 172.28.92.56 / 8.215.6.189, backend 172.28.92.57):
+
+- **Frontend server**
+  - Private IP: `172.28.92.56`
+  - Public IP: `8.215.6.189`
+- **Backend server**
+  - Private IP: `172.28.92.57` (no public IP – only reachable inside the VPC)
+- **Database**
+  - PostgreSQL instance reachable from the backend (for example: AliCloud RDS)
+
+### 1. Backend deployment (172.28.92.57)
+
+- **Environment (`backend/.env`):**
+
+```env
+PORT=5001
+NODE_ENV=production
+
+DB_HOST=<your-db-host>
+DB_PORT=5432
+DB_NAME=klip_db
+DB_USER=<your-db-user>
+DB_PASSWORD=<your-db-password>
+```
+
+- **Install & migrate (on the backend server):**
+
+```bash
+cd backend
+npm ci
+npm run db:migrate   # applies all SQL migrations, including vessel_loading_ports backfill
+```
+
+- **Run backend API (choose one):**
+
+```bash
+# Simple
+npm run start
+
+# Or with PM2
+pm2 start dist/index.js --name klip-backend
+```
+
+Backend listens on `http://172.28.92.57:5001` inside the VPC.
+
+### 2. Frontend deployment (172.28.92.56 / 8.215.6.189)
+
+Because the backend has only a **private** IP, the browser must call the API via
+the frontend server, using a reverse proxy.
+
+#### 2.1 Configure frontend env
+
+On the frontend server create `frontend/.env.production`:
+
+```env
+NEXT_PUBLIC_API_URL=/api
+```
+
+Using `/api` keeps all requests on the same origin (`https://8.215.6.189`) and lets
+Nginx proxy them to the backend private IP.
+
+Build and start the frontend:
+
+```bash
+cd frontend
+npm ci
+npm run build
+npm run start   # Next.js production server (default :3001)
+```
+
+Frontend will be reachable at `http://8.215.6.189:3001` (or behind your load balancer).
+
+#### 2.2 Nginx reverse proxy on frontend server
+
+On the frontend host, configure Nginx (or another reverse proxy) so that:
+
+- `/` is proxied to the Next.js frontend
+- `/api` is proxied to the backend private IP `172.28.92.57:5001`
+
+Example Nginx server block (HTTP, adjust for HTTPS as needed):
+
+```nginx
+server {
+    listen 80;
+    server_name 8.215.6.189;
+
+    # Frontend (Next.js) – running on localhost:3001
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Backend API – private IP in the same VPC
+    location /api/ {
+        proxy_pass http://172.28.92.57:5001/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+After reloading Nginx:
+
+- Browser → `http://8.215.6.189` (or `:3001` depending on your setup)
+- Frontend JavaScript calls `NEXT_PUBLIC_API_URL=/api`
+- Nginx forwards `/api/*` to `http://172.28.92.57:5001/api/*` over the private network
+
 
 ## API Documentation
 

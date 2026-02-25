@@ -54,6 +54,11 @@ interface DashboardStats {
     total: number
     pending: number
     paid: number
+    overdue: number
+    totalAmount: number
+    pendingAmount: number
+    paidAmount: number
+    overdueAmount: number
     revenue: number
   }
 }
@@ -115,7 +120,7 @@ export default function DashboardPage() {
     contracts: { total: 0, active: 0, completed: 0, cancelled: 0, outstanding: 0, outstandingQuantity: 0 },
     shipments: { total: 0, active: 0, completed: 0, planned: 0, delayed: 0 },
     trucking: { total: 0, active: 0, completed: 0, planned: 0 },
-    finance: { total: 0, pending: 0, paid: 0, revenue: 0 }
+    finance: { total: 0, pending: 0, paid: 0, overdue: 0, totalAmount: 0, pendingAmount: 0, paidAmount: 0, overdueAmount: 0, revenue: 0 }
   })
   const [topSuppliers, setTopSuppliers] = useState<TopPerformer[]>([])
   const [topTruckingOwners, setTopTruckingOwners] = useState<TopPerformer[]>([])
@@ -522,16 +527,47 @@ export default function DashboardPage() {
 
           <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => handleViewDetails('finance')}>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
+              <CardTitle className="text-sm font-medium">Total Payments</CardTitle>
               <div className="p-2 rounded-lg bg-purple-100">
                 <DollarSign className="h-4 w-4 text-purple-600" />
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{loading ? '...' : `$${formatNumber(stats.finance.revenue)}`}</div>
+              <div className="text-2xl font-bold">{loading ? '...' : `$${formatNumber(stats.finance.totalAmount)}`}</div>
               <p className="text-xs text-muted-foreground mt-1">
-                {stats.finance.pending} pending payments
+                {stats.finance.total} records
               </p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Finance overview: amounts by status (aligned with Finance page) */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => handleViewDetails('finance')}>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Pending Amount</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-yellow-600">{loading ? '...' : `$${formatNumber(stats.finance.pendingAmount)}`}</div>
+              <p className="text-xs text-muted-foreground mt-1">{stats.finance.pending} pending</p>
+            </CardContent>
+          </Card>
+          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => handleViewDetails('finance')}>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Paid Amount</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-green-600">{loading ? '...' : `$${formatNumber(stats.finance.paidAmount)}`}</div>
+              <p className="text-xs text-muted-foreground mt-1">{stats.finance.paid} paid</p>
+            </CardContent>
+          </Card>
+          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => handleViewDetails('finance')}>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Overdue Amount</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-red-600">{loading ? '...' : `$${formatNumber(stats.finance.overdueAmount)}`}</div>
+              <p className="text-xs text-muted-foreground mt-1">{stats.finance.overdue} overdue</p>
             </CardContent>
           </Card>
         </div>
@@ -868,15 +904,15 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
-          {/* Pending Payments */}
+          {/* Pending Payments (amount) */}
           <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => handleViewDetails('finance')}>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Pending Payments</CardTitle>
               <Clock className="h-4 w-4 text-yellow-600" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{loading ? '...' : formatNumber(stats.finance.pending)}</div>
-              <p className="text-xs text-muted-foreground mt-1">Click to view details</p>
+              <div className="text-2xl font-bold">{loading ? '...' : `$${formatNumber(stats.finance.pendingAmount)}`}</div>
+              <p className="text-xs text-muted-foreground mt-1">{stats.finance.pending} payments</p>
             </CardContent>
           </Card>
         </div>
