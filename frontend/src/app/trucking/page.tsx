@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -58,7 +58,7 @@ interface DocumentItem {
   created_at?: string
 }
 
-export default function TruckingPage() {
+function TruckingPageContent() {
   const searchParams = useSearchParams()
   const [truckingOperations, setTruckingOperations] = useState<TruckingOperation[]>([])
   const [loading, setLoading] = useState(true)
@@ -2563,5 +2563,13 @@ export default function TruckingPage() {
         </div>
       )}
     </Layout>
+  )
+}
+
+export default function TruckingPage() {
+  return (
+    <Suspense fallback={<Layout><div className="flex items-center justify-center p-8"><div className="text-gray-500">Loading...</div></div></Layout>}>
+      <TruckingPageContent />
+    </Suspense>
   )
 }

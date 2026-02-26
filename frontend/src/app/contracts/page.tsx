@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -83,7 +83,7 @@ interface StoInfoRow {
   eta_trucking_completion_date?: string | null
 }
 
-export default function ContractsPage() {
+function ContractsPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [contracts, setContracts] = useState<Contract[]>([])
@@ -2339,3 +2339,10 @@ export default function ContractsPage() {
   )
 }
 
+export default function ContractsPage() {
+  return (
+    <Suspense fallback={<Layout><div className="flex items-center justify-center p-8"><div className="text-gray-500">Loading...</div></div></Layout>}>
+      <ContractsPageContent />
+    </Suspense>
+  )
+}

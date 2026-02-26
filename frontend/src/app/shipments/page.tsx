@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -138,7 +138,7 @@ interface DocumentItem {
   created_at?: string
 }
 
-export default function ShipmentsPage() {
+function ShipmentsPageContent() {
   const searchParams = useSearchParams()
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [loading, setLoading] = useState(true)
@@ -4582,5 +4582,12 @@ export default function ShipmentsPage() {
   )
 }
 
+export default function ShipmentsPage() {
+  return (
+    <Suspense fallback={<Layout><div className="flex items-center justify-center p-8"><div className="text-gray-500">Loading...</div></div></Layout>}>
+      <ShipmentsPageContent />
+    </Suspense>
+  )
+}
 
 
