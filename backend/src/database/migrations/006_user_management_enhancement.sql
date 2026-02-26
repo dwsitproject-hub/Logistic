@@ -172,6 +172,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Ensure trigger is recreated safely even if it already exists
+DROP TRIGGER IF EXISTS roles_updated_at_trigger ON roles;
 CREATE TRIGGER roles_updated_at_trigger
 BEFORE UPDATE ON roles
 FOR EACH ROW
