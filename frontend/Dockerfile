@@ -45,6 +45,10 @@ RUN addgroup -g 1001 -S nodejs && \
 
 USER nextjs
 
+# Listen on all interfaces so the app is reachable from outside the container (Docker port mapping)
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3001
+
 # Expose port
 EXPOSE 3001
 

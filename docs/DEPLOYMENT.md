@@ -250,14 +250,34 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
    - `/` is proxied to the **frontend container** at `127.0.0.1:3001`.
    - `/api/` is proxied to the **backend server** at `http://172.28.92.57:5001/api/`.
 
-   Create a site config, e.g. `/etc/nginx/sites-available/klip`:
+   Follow these steps on the **frontend server** (172.28.92.56).
+
+   **Step 5a – Ensure Nginx is installed**
+
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y nginx
+   nginx -v
+   ```
+
+   **Step 5b – Create the site configuration file**
+
+   Create a new file for the KLIP site (sites-available is the standard place; enabling is done later with a symlink):
+
+   ```bash
+   sudo nano /etc/nginx/sites-available/klip
+   ```
+
+   Paste the configuration below. Adjust `server_name` if you use a domain instead of the IP (e.g. `klip.example.com`). Replace `172.28.92.57` only if your backend runs on a different host.
 
    ```nginx
+   # Upstream: frontend container (Next.js) on this server
    upstream klip_frontend {
        server 127.0.0.1:3001;
        keepalive 64;
    }
 
+   # Upstream: backend API on the other server
    upstream klip_backend {
        server 172.28.92.57:5001;
        keepalive 32;
@@ -270,6 +290,7 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
        add_header X-Frame-Options "SAMEORIGIN" always;
        add_header X-Content-Type-Options "nosniff" always;
 
+       # All non-/api requests → Next.js (frontend container)
        location / {
            proxy_pass http://klip_frontend;
            proxy_http_version 1.1;
@@ -282,6 +303,7 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
            proxy_cache_bypass $http_upgrade;
        }
 
+       # /api/* → backend server
        location /api/ {
            proxy_pass http://klip_backend/api/;
            proxy_http_version 1.1;
@@ -297,13 +319,64 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
    }
    ```
 
-   Enable and reload:
+   Save and exit (in nano: `Ctrl+O`, Enter, then `Ctrl+X`).
+
+   **Step 5c – Enable the site**
+
+   Enable the KLIP site by creating a symlink in `sites-enabled` (Debian/Ubuntu style):
 
    ```bash
    sudo ln -sf /etc/nginx/sites-available/klip /etc/nginx/sites-enabled/
+   ```
+
+   If a default site is enabled and you want only KLIP on port 80, remove it:
+
+   ```bash
+   sudo rm -f /etc/nginx/sites-enabled/default
+   ```
+
+   **Step 5d – Test the Nginx configuration**
+
+   Run the built-in test so you don’t load a broken config:
+
+   ```bash
    sudo nginx -t
+   ```
+
+   You should see: `syntax is ok` and `test is successful`. If not, fix the reported errors in `/etc/nginx/sites-available/klip` and run `sudo nginx -t` again.
+
+   **Step 5e – Reload Nginx**
+
+   Apply the new config without dropping existing connections:
+
+   ```bash
    sudo systemctl reload nginx
    ```
+
+   Check that Nginx is running:
+
+   ```bash
+   sudo systemctl status nginx
+   ```
+
+   **Step 5f – Verify in the browser and from the server**
+
+   - In a browser: open **http://8.215.6.189** (or your domain). You should see the KLIP login page.
+   - From the frontend server: `curl -s -o /dev/null -w "%{http_code}" http://localhost/api/health` should return `200`, and the response body can be checked with `curl -s http://localhost/api/health`.
+
+   If the app or API doesn’t load, check: (1) frontend container is up: `docker compose -f docker-compose.frontend.yml ps`; (2) backend is reachable: `curl -s http://172.28.92.57:5001/health` from the frontend server; (3) Nginx error log: `sudo tail -50 /var/log/nginx/error.log`.
+
+   **"Site can't be reached" from your laptop**
+
+   If the browser shows *This site can't be reached* when you open **http://8.215.6.189** from your laptop, the request is not reaching the server. Do the following:
+
+   1. **Use the public IP** — Open **http://8.215.6.189** (not 172.28.92.56). The private IP 172.28.92.56 only works from inside the same VPC (e.g. from the backend server or another machine in the cloud).
+
+   2. **Open port 80 in the cloud (AliCloud) security group** — In AliCloud Console go to ECS, your frontend instance (public IP 8.215.6.189), then Security Groups. Add an **Inbound** rule: Port 80, Protocol TCP, Source `0.0.0.0/0` (or your IP range). Save. Without this, the cloud blocks traffic from the internet to port 80.
+
+   3. **Open port 80 on the server firewall (if enabled)** — On the frontend server run `sudo ufw status`. If UFW is active: `sudo ufw allow 80/tcp` and `sudo ufw reload`. Other firewalls: ensure TCP port 80 is allowed for inbound.
+
+   4. **Check from your laptop** — After the above, try in the browser or run: `curl -v --connect-timeout 5 http://8.215.6.189`. If you see *Connection timed out*, the cloud or firewall is still blocking. If *Connection refused*, on the server check `sudo ss -tlnp | grep :80` (Nginx should be listening on 80).
 
 6. **Firewall**: Allow inbound **80** (and **443** if you add SSL) on the frontend server’s public IP. Port 3001 does not need to be exposed to the internet (Nginx proxies to it on localhost).
 
