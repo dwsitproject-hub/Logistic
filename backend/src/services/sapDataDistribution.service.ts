@@ -956,16 +956,23 @@ export class SapDataDistributionService {
       unloadingLocation = null;
     }
     
+    const startDate = this.parseDate(data.trucking_starting_date_at_starting_location);
+    const completionDate = this.parseDate(data.trucking_completion_date_at_starting_location);
+    const status =
+      completionDate != null ? 'COMPLETED' :
+      startDate != null ? 'IN_PROGRESS' :
+      'PLANNED';
+
     const result = await client.query(
       `INSERT INTO trucking_operations (
         shipment_id, contract_id, location_sequence, cargo_readiness_date,
         loading_location, unloading_location, trucking_owner,
         oa_budget, oa_actual, quantity_sent, quantity_delivered, gain_loss,
-        trucking_start_date, trucking_completion_date
+        trucking_start_date, trucking_completion_date, status
       ) VALUES (
         $1::uuid, $2::uuid, $3, $4::date, $5, $6, $7,
         $8::numeric, $9::numeric, $10::numeric, $11::numeric, $12::numeric,
-        $13::date, $14::date
+        $13::date, $14::date, $15
       ) RETURNING id`,
       [
         shipmentId,
@@ -980,8 +987,9 @@ export class SapDataDistributionService {
         this.parseNumber(data.quantity_sent_via_trucking_based_on_surat_jalan),
         this.parseNumber(data.quantity_delivered_via_trucking),
         this.parseNumber(data.trucking_gain_loss_at_starting_location),
-        this.parseDate(data.trucking_starting_date_at_starting_location),
-        this.parseDate(data.trucking_completion_date_at_starting_location)
+        startDate,
+        completionDate,
+        status
       ]
     );
     
