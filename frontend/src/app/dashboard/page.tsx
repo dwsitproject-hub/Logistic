@@ -153,6 +153,7 @@ export default function DashboardPage() {
   const [availablePlants, setAvailablePlants] = useState<string[]>([])
   const [availableSuppliers, setAvailableSuppliers] = useState<string[]>([])
   const [showFilters, setShowFilters] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     fetchDashboardData()

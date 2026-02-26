@@ -955,6 +955,9 @@ export class SapDataDistributionService {
     if (unloadingLocation && (unloadingLocation === '0.00' || unloadingLocation.trim() === '')) {
       unloadingLocation = null;
     }
+
+    // Derive a generic plant/location value for filters and dashboards
+    const location = unloadingLocation || loadingLocation || null;
     
     const startDate = this.parseDate(data.trucking_starting_date_at_starting_location);
     const completionDate = this.parseDate(data.trucking_completion_date_at_starting_location);
@@ -966,13 +969,13 @@ export class SapDataDistributionService {
     const result = await client.query(
       `INSERT INTO trucking_operations (
         shipment_id, contract_id, location_sequence, cargo_readiness_date,
-        loading_location, unloading_location, trucking_owner,
+        loading_location, unloading_location, location, trucking_owner,
         oa_budget, oa_actual, quantity_sent, quantity_delivered, gain_loss,
         trucking_start_date, trucking_completion_date, status
       ) VALUES (
-        $1::uuid, $2::uuid, $3, $4::date, $5, $6, $7,
-        $8::numeric, $9::numeric, $10::numeric, $11::numeric, $12::numeric,
-        $13::date, $14::date, $15
+        $1::uuid, $2::uuid, $3, $4::date, $5, $6, $7, $8,
+        $9::numeric, $10::numeric, $11::numeric, $12::numeric, $13::numeric,
+        $14::date, $15::date, $16
       ) RETURNING id`,
       [
         shipmentId,
@@ -981,6 +984,7 @@ export class SapDataDistributionService {
         this.parseDate(data.cargo_readiness_at_starting_location),
         loadingLocation,
         unloadingLocation,
+        location,
         data.trucking_owner_at_starting_location,
         this.parseNumber(data.trucking_oa_budget_at_starting_location),
         this.parseNumber(data.trucking_oa_actual_at_starting_location),
