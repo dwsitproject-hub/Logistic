@@ -164,36 +164,45 @@ export default function DashboardPage() {
   }, [dateFrom, dateTo, selectedPlantFilter, selectedSupplier])
 
   const fetchDashboardData = async () => {
+    setLoading(true)
+    setError(null)
+
     try {
-      setLoading(true)
-      
       // Build query parameters
       const params = new URLSearchParams()
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
       if (selectedPlantFilter) params.append('plant', selectedPlantFilter)
       if (selectedSupplier) params.append('supplier', selectedSupplier)
-      
+
       const queryString = params.toString()
       const urlSuffix = queryString ? `?${queryString}` : ''
 
-      const [statsRes, suppliersRes, truckingRes, vesselsRes, productRes, plantRes] = await Promise.all([
-        api.get(`/dashboard/stats${urlSuffix}`),
-        api.get(`/dashboard/top-suppliers${urlSuffix}`),
-        api.get(`/dashboard/top-trucking-owners${urlSuffix}`),
-        api.get(`/dashboard/top-vessels${urlSuffix}`),
-        api.get(`/dashboard/contract-quantity-by-product${urlSuffix}`),
-        api.get(`/dashboard/contract-quantity-by-plant${urlSuffix}`)
-      ])
-
+      // 1) Always fetch stats first so cards update even if a widget fails
+      const statsRes = await api.get(`/dashboard/stats${urlSuffix}`)
       setStats(statsRes.data.data)
-      setTopSuppliers(suppliersRes.data.data)
-      setTopTruckingOwners(truckingRes.data.data)
-      setTopVessels(vesselsRes.data.data)
-      setProductQuantities(productRes.data.data)
-      setPlantQuantities(plantRes.data.data)
-    } catch (error) {
-      console.error('Failed to fetch dashboard data:', error)
+
+      // 2) Fetch the rest in parallel, but don't block stats if one fails
+      try {
+        const [suppliersRes, truckingRes, vesselsRes, productRes, plantRes] = await Promise.all([
+          api.get(`/dashboard/top-suppliers${urlSuffix}`),
+          api.get(`/dashboard/top-trucking-owners${urlSuffix}`),
+          api.get(`/dashboard/top-vessels${urlSuffix}`),
+          api.get(`/dashboard/contract-quantity-by-product${urlSuffix}`),
+          api.get(`/dashboard/contract-quantity-by-plant${urlSuffix}`)
+        ])
+
+        setTopSuppliers(suppliersRes.data.data)
+        setTopTruckingOwners(truckingRes.data.data)
+        setTopVessels(vesselsRes.data.data)
+        setProductQuantities(productRes.data.data)
+        setPlantQuantities(plantRes.data.data)
+      } catch (err) {
+        console.error('Failed to fetch some dashboard widgets:', err)
+      }
+    } catch (err) {
+      console.error('Failed to fetch dashboard stats:', err)
+      setError('Failed to load dashboard data. Please try again.')
     } finally {
       setLoading(false)
     }
