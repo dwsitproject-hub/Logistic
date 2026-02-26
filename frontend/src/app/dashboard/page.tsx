@@ -853,7 +853,7 @@ export default function DashboardPage() {
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="font-semibold text-sm">{formatNumber(vessel.total_quantity_shipped || 0)} MT</div>
+                        <div className="font-semibold text-sm">{formatNumber(vessel.total_quantity_sent || 0)} MT</div>
                         <div className="text-xs text-gray-500">
                           {vessel.delayed_count || 0} delays
                         </div>
