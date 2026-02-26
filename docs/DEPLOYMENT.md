@@ -1,27 +1,13 @@
 # KLIP – Comprehensive Deployment Guide
 
-This guide covers production deployment of KLIP (KPN Logistics Intelligence Platform) end-to-end: database, backend API, frontend, reverse proxy, process management, and optional SSL. The example topology uses **AliCloud** with the IPs you provided; the same steps apply to other clouds or on-premises with different IPs.
-
-- **Section 2** describes **staging deployment with Docker** on two servers (frontend server runs the Next.js container; backend server runs PostgreSQL + backend API in Docker). Use it for staging or if you prefer Docker on both servers.
-- **Sections 3–13** describe **traditional (non-Docker) production deployment** (Node.js + PM2, optional RDS).
+This guide covers **Docker-based deployment** of KLIP (KPN Logistics Intelligence Platform): database, backend API, frontend, and Nginx reverse proxy. The example topology uses **AliCloud** with the IPs you provided; the same steps apply to other clouds or on-premises with different IPs.
 
 ---
 
 ## Table of contents
 
 1. [Architecture overview](#1-architecture-overview)
-2. [Staging deployment with Docker](#2-staging-deployment-with-docker)
-3. [Prerequisites](#3-prerequisites)
-4. [Network topology (AliCloud example)](#4-network-topology-alicloud-example)
-5. [Database setup](#5-database-setup)
-6. [Backend deployment](#6-backend-deployment)
-7. [Frontend deployment](#7-frontend-deployment)
-8. [Reverse proxy (Nginx)](#8-reverse-proxy-nginx)
-9. [Process management (PM2)](#9-process-management-pm2)
-10. [SSL/HTTPS (optional)](#10-sslhttps-optional)
-11. [Security and firewall](#11-security-and-firewall)
-12. [Health checks and troubleshooting](#12-health-checks-and-troubleshooting)
-13. [Updates and rollback](#13-updates-and-rollback)
+2. [Staging / production deployment with Docker](#2-staging-deployment-with-docker)
 
 ---
 
@@ -590,7 +576,7 @@ NODE_ENV=production
 
 # Database (use your actual RDS or DB host)
 DB_HOST=your-postgres-host.rds.aliyuncs.com
-DB_PORT=5432
+DB_PORT=5433
 DB_NAME=klip_db
 DB_USER=klip_user
 DB_PASSWORD=your_secure_password

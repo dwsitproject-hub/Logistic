@@ -173,9 +173,13 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
     });
   } catch (error) {
     logger.error('Get dashboard stats error:', error);
+    const message =
+      error instanceof Error
+        ? error.message
+        : (error as any)?.message || 'Failed to fetch dashboard statistics';
     return res.status(500).json({
       success: false,
-      error: { message: 'Failed to fetch dashboard statistics' },
+      error: { message },
     });
   }
 };
