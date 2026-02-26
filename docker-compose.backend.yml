@@ -1,9 +1,9 @@
-# Optional env (create .env or export): DB_NAME, DB_USER, DB_PASSWORD, POSTGRES_PORT,
-# BACKEND_PORT, FRONTEND_PORT, JWT_SECRET, NEXT_PUBLIC_API_URL (URL the browser uses for API)
+# Backend server stack: PostgreSQL + Backend API
+# Run on backend server (e.g. 172.28.92.57): docker-compose -f docker-compose.backend.yml up -d
+# Optional .env: DB_NAME, DB_USER, DB_PASSWORD, POSTGRES_PORT, BACKEND_PORT, JWT_SECRET
 version: '3.8'
 
 services:
-  # PostgreSQL Database
   postgres:
     image: postgres:14-alpine
     container_name: klip-postgres
@@ -15,9 +15,8 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    # Schema is created by backend migrations on first backend startup
     networks:
-      - klip-network
+      - klip-backend-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
       interval: 10s
@@ -25,7 +24,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Backend API
   backend:
     build:
       context: ./backend
@@ -47,10 +45,10 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - klip-network
+      - klip-backend-network
     volumes:
-      - ./backend/uploads:/app/uploads
-      - ./backend/logs:/app/logs
+      - backend_uploads:/app/uploads
+      - backend_logs:/app/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:5001/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
@@ -59,32 +57,14 @@ services:
       retries: 3
       start_period: 40s
 
-  # Frontend Web App
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: klip-frontend
-    environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5001/api}
-    ports:
-      - "${FRONTEND_PORT:-3001}:3001"
-    depends_on:
-      - backend
-    networks:
-      - klip-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
 volumes:
   postgres_data:
     driver: local
+  backend_uploads:
+    driver: local
+  backend_logs:
+    driver: local
 
 networks:
-  klip-network:
+  klip-backend-network:
     driver: bridge

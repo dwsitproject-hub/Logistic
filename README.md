@@ -356,6 +356,18 @@ cd backend
 npm run db:migrate
 ```
 
+## Run with Docker
+
+To run the full stack (PostgreSQL, backend, frontend) in containers:
+
+```bash
+docker-compose up -d --build
+```
+
+Then open http://localhost:3001. Optional env vars and details: **[docs/DOCKER.md](docs/DOCKER.md)**.
+
+---
+
 ## Production deployment
 
 For a **full step-by-step deployment guide** (database, backend, frontend, Nginx, PM2, SSL, firewall, troubleshooting), see **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.

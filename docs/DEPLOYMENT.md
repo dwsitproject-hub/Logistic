@@ -2,22 +2,26 @@
 
 This guide covers production deployment of KLIP (KPN Logistics Intelligence Platform) end-to-end: database, backend API, frontend, reverse proxy, process management, and optional SSL. The example topology uses **AliCloud** with the IPs you provided; the same steps apply to other clouds or on-premises with different IPs.
 
+- **Section 2** describes **staging deployment with Docker** on two servers (frontend server runs the Next.js container; backend server runs PostgreSQL + backend API in Docker). Use it for staging or if you prefer Docker on both servers.
+- **Sections 3–13** describe **traditional (non-Docker) production deployment** (Node.js + PM2, optional RDS).
+
 ---
 
 ## Table of contents
 
 1. [Architecture overview](#1-architecture-overview)
-2. [Prerequisites](#2-prerequisites)
-3. [Network topology (AliCloud example)](#3-network-topology-alicloud-example)
-4. [Database setup](#4-database-setup)
-5. [Backend deployment](#5-backend-deployment)
-6. [Frontend deployment](#6-frontend-deployment)
-7. [Reverse proxy (Nginx)](#7-reverse-proxy-nginx)
-8. [Process management (PM2)](#8-process-management-pm2)
-9. [SSL/HTTPS (optional)](#9-sslhttps-optional)
-10. [Security and firewall](#10-security-and-firewall)
-11. [Health checks and troubleshooting](#11-health-checks-and-troubleshooting)
-12. [Updates and rollback](#12-updates-and-rollback)
+2. [Staging deployment with Docker](#2-staging-deployment-with-docker)
+3. [Prerequisites](#3-prerequisites)
+4. [Network topology (AliCloud example)](#4-network-topology-alicloud-example)
+5. [Database setup](#5-database-setup)
+6. [Backend deployment](#6-backend-deployment)
+7. [Frontend deployment](#7-frontend-deployment)
+8. [Reverse proxy (Nginx)](#8-reverse-proxy-nginx)
+9. [Process management (PM2)](#9-process-management-pm2)
+10. [SSL/HTTPS (optional)](#10-sslhttps-optional)
+11. [Security and firewall](#11-security-and-firewall)
+12. [Health checks and troubleshooting](#12-health-checks-and-troubleshooting)
+13. [Updates and rollback](#13-updates-and-rollback)
 
 ---
 
@@ -61,9 +65,289 @@ This guide covers production deployment of KLIP (KPN Logistics Intelligence Plat
 
 ---
 
-## 2. Prerequisites
+## 2. Staging deployment with Docker
 
-### 2.1 On both application servers (frontend and backend)
+This section gives **detailed steps** to run the app on two servers using **Docker**:
+
+- **Backend server (172.28.92.57)**: PostgreSQL + Backend API in Docker.
+- **Frontend server (172.28.92.56)**: Next.js in Docker; Nginx on the host proxies `/` to the frontend container and `/api/` to the backend server.
+
+No Node.js or PM2 is required on the servers; only Docker and Docker Compose.
+
+### 2.1 Architecture (Docker staging)
+
+```
+                    Internet
+                        │
+                        ▼
+              ┌─────────────────────┐
+              │  Frontend server     │
+              │  172.28.92.56        │
+              │  Public: 8.215.6.189 │
+              │  Nginx :80 / :443    │
+              └──────────┬──────────┘
+                         │
+         ┌───────────────┼───────────────┐
+         │               │               │
+         ▼               ▼               │
+   ┌──────────────┐  /api → backend      │
+   │ Docker:      │  (proxy to           │
+   │ Next.js :3001│  172.28.92.57:5001)  │
+   └──────────────┘                      │
+                                         │
+              ┌──────────────────────────┘
+              │  Backend server 172.28.92.57
+              ▼
+   ┌─────────────────────────────────────┐
+   │  Docker: postgres :5432 + backend :5001
+   └─────────────────────────────────────┘
+```
+
+- **Frontend server**: Nginx listens on 80/443; `/` → `127.0.0.1:3001` (frontend container); `/api/` → `http://172.28.92.57:5001`.
+- **Backend server**: `docker-compose.backend.yml` runs Postgres and the backend; backend runs migrations on startup. No Nginx on this server.
+
+### 2.2 Prerequisites (Docker staging)
+
+| Where | Requirement |
+|-------|-------------|
+| Both servers | Docker Engine 20.10+ and Docker Compose v2 |
+| Frontend server only | Nginx (for reverse proxy and optional SSL) |
+
+Install Docker and Docker Compose (example for Ubuntu/Aliyun):
+
+```bash
+# Docker
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod 644 /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Add your user to docker group (optional, to run without sudo)
+sudo usermod -aG docker $USER
+# Log out and back in for group to take effect
+
+# Verify
+docker --version
+docker compose version
+```
+
+On the **frontend server**, install Nginx if not already present:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y nginx
+```
+
+### 2.3 Backend server (172.28.92.57) – step-by-step
+
+1. **Clone the repository** (if not already):
+
+   ```bash
+   cd /opt
+   sudo mkdir -p klip && sudo chown $USER:$USER klip
+   git clone https://github.com/jerrypra0906/Logistic.git klip
+   cd klip
+   ```
+
+2. **Create `.env` in the project root** (same directory as `docker-compose.backend.yml`):
+
+   ```bash
+   nano .env
+   ```
+
+   Example (set strong values for staging/production):
+
+   ```env
+   DB_NAME=klip_db
+   DB_USER=postgres
+   DB_PASSWORD=your_secure_postgres_password
+   POSTGRES_PORT=5432
+   BACKEND_PORT=5001
+   JWT_SECRET=your_jwt_secret_at_least_32_characters_long
+   ```
+
+   Save and exit.
+
+3. **Start PostgreSQL and the backend** (migrations run automatically when the backend container starts):
+
+   ```bash
+   cd /opt/klip
+   docker compose -f docker-compose.backend.yml up -d --build
+   ```
+
+4. **Check that containers are running**:
+
+   ```bash
+   docker compose -f docker-compose.backend.yml ps
+   ```
+
+   You should see `klip-postgres` and `klip-backend` with status “Up”. Backend health:
+
+   ```bash
+   curl -s http://localhost:5001/health
+   ```
+
+5. **Firewall**: Allow inbound TCP **5001** from the frontend server only (e.g. 172.28.92.56). Example with `ufw`:
+
+   ```bash
+   sudo ufw allow from 172.28.92.56 to any port 5001
+   sudo ufw reload
+   ```
+
+6. **Optional – bind backend to a specific IP**: By default the backend listens on all interfaces (0.0.0.0). If you want it only on the private IP, you would need to set `PORT` and use a custom command or override in the compose file; for most cases the default is fine and firewall restricts access.
+
+Backend server is done. The frontend server will call `http://172.28.92.57:5001` for API requests (via Nginx proxy).
+
+### 2.4 Frontend server (172.28.92.56) – step-by-step
+
+1. **Clone the repository** (if not already):
+
+   ```bash
+   cd /opt
+   sudo mkdir -p klip && sudo chown $USER:$USER klip
+   git clone https://github.com/jerrypra0906/Logistic.git klip
+   cd klip
+   ```
+
+2. **Create `.env` in the project root** (same directory as `docker-compose.frontend.yml`):
+
+   ```bash
+   nano .env
+   ```
+
+   For staging with Nginx proxying `/api` to the backend, the **browser** must send API requests to the same origin (e.g. `http://8.215.6.189/api`). So set:
+
+   ```env
+   NEXT_PUBLIC_API_URL=/api
+   FRONTEND_PORT=3001
+   ```
+
+   Save and exit. **Important**: `NEXT_PUBLIC_API_URL` is baked into the frontend at **build** time. Use `/api` so the browser uses the same host as the page and Nginx can proxy to the backend.
+
+3. **Build and start the frontend container**:
+
+   ```bash
+   cd /opt/klip
+   docker compose -f docker-compose.frontend.yml up -d --build
+   ```
+
+   The first run may take a few minutes (npm install and Next.js build). Subsequent starts are fast.
+
+4. **Check that the container is running**:
+
+   ```bash
+   docker compose -f docker-compose.frontend.yml ps
+   curl -s -o /dev/null -w "%{http_code}" http://localhost:3001
+   ```
+
+   You should get `200`.
+
+5. **Configure Nginx** on the frontend server so that:
+   - `/` is proxied to the **frontend container** at `127.0.0.1:3001`.
+   - `/api/` is proxied to the **backend server** at `http://172.28.92.57:5001/api/`.
+
+   Create a site config, e.g. `/etc/nginx/sites-available/klip`:
+
+   ```nginx
+   upstream klip_frontend {
+       server 127.0.0.1:3001;
+       keepalive 64;
+   }
+
+   upstream klip_backend {
+       server 172.28.92.57:5001;
+       keepalive 32;
+   }
+
+   server {
+       listen 80;
+       server_name 8.215.6.189;   # or your domain, e.g. klip.example.com
+
+       add_header X-Frame-Options "SAMEORIGIN" always;
+       add_header X-Content-Type-Options "nosniff" always;
+
+       location / {
+           proxy_pass http://klip_frontend;
+           proxy_http_version 1.1;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+           proxy_set_header Upgrade $http_upgrade;
+           proxy_set_header Connection "upgrade";
+           proxy_cache_bypass $http_upgrade;
+       }
+
+       location /api/ {
+           proxy_pass http://klip_backend/api/;
+           proxy_http_version 1.1;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+           proxy_connect_timeout 60s;
+           proxy_send_timeout 60s;
+           proxy_read_timeout 60s;
+           client_max_body_size 50M;
+       }
+   }
+   ```
+
+   Enable and reload:
+
+   ```bash
+   sudo ln -sf /etc/nginx/sites-available/klip /etc/nginx/sites-enabled/
+   sudo nginx -t
+   sudo systemctl reload nginx
+   ```
+
+6. **Firewall**: Allow inbound **80** (and **443** if you add SSL) on the frontend server’s public IP. Port 3001 does not need to be exposed to the internet (Nginx proxies to it on localhost).
+
+### 2.5 Verify staging (Docker)
+
+- From a browser: **http://8.215.6.189** → KLIP login/dashboard.
+- **http://8.215.6.189/api/health** → backend health JSON (via Nginx → backend server).
+- Log in and use the app; all API calls go to `/api` and are proxied to the backend container on 172.28.92.57.
+
+### 2.6 Updates and rollback (Docker staging)
+
+**Backend server (172.28.92.57):**
+
+```bash
+cd /opt/klip
+git pull
+docker compose -f docker-compose.backend.yml up -d --build
+```
+
+New migrations run automatically when the backend container starts. To see logs: `docker compose -f docker-compose.backend.yml logs -f backend`.
+
+**Frontend server (172.28.92.56):**
+
+Because `NEXT_PUBLIC_API_URL` is fixed at build time, you must rebuild the image after pulling:
+
+```bash
+cd /opt/klip
+git pull
+docker compose -f docker-compose.frontend.yml up -d --build
+```
+
+**Rollback:** Check out the previous commit (e.g. `git checkout <tag>`) and run the same `docker compose ... up -d --build` on each server. Data in the Postgres volume on the backend server is preserved unless you remove the volume.
+
+**Backup (backend server):** Postgres data is in the Docker volume `postgres_data`. To backup:
+
+```bash
+docker compose -f docker-compose.backend.yml exec postgres pg_dump -U postgres klip_db > backup_$(date +%Y%m%d).sql
+```
+
+---
+
+## 3. Prerequisites
+
+### 3.1 On both application servers (frontend and backend)
 
 | Requirement | Version / notes |
 |-------------|------------------|
@@ -81,7 +365,7 @@ node -v   # v20.x
 npm -v
 ```
 
-### 2.2 On the frontend server only
+### 3.2 On the frontend server only
 
 | Requirement | Purpose |
 |-------------|---------|
@@ -92,11 +376,11 @@ sudo apt-get update
 sudo apt-get install -y nginx
 ```
 
-### 2.3 On the backend server only
+### 3.3 On the backend server only
 
 - No extra system packages required beyond Node.js and network access to PostgreSQL.
 
-### 2.4 Optional (recommended for production)
+### 3.4 Optional (recommended for production)
 
 | Tool | Purpose |
 |------|---------|
@@ -109,14 +393,14 @@ sudo npm install -g pm2
 sudo apt-get install -y certbot python3-certbot-nginx
 ```
 
-### 2.5 Database
+### 3.5 Database
 
 - **PostgreSQL 14+** (AliCloud RDS PostgreSQL or self-managed).
 - A dedicated database and user for KLIP (e.g. `klip_db` / `klip_user`).
 
 ---
 
-## 3. Network topology (AliCloud example)
+## 4. Network topology (AliCloud example)
 
 | Role | Private IP | Public IP | Ports |
 |------|------------|-----------|--------|
@@ -134,13 +418,13 @@ Ensure:
 
 ---
 
-## 4. Database setup
+## 5. Database setup
 
 You can use either **AliCloud RDS PostgreSQL** or a **self-managed PostgreSQL** instance. The application does **not** create tables automatically at runtime – all schema changes are applied by the migration tool in `backend`.
 
-### 4.1 Create database and user
+### 5.1 Create database and user
 
-#### 4.1.1 Self‑managed PostgreSQL (Linux VM)
+#### 5.1.1 Self‑managed PostgreSQL (Linux VM)
 
 1. **Log in as postgres user** on the DB host:
 
@@ -167,7 +451,7 @@ You can use either **AliCloud RDS PostgreSQL** or a **self-managed PostgreSQL** 
    psql \"postgresql://klip_user:your_secure_password@<db-host>:5432/klip_db\" -c \"SELECT 1;\"
    ```
 
-#### 4.1.2 AliCloud RDS PostgreSQL
+#### 5.1.2 AliCloud RDS PostgreSQL
 
 1. In the **AliCloud RDS console**:
    - Create a new **PostgreSQL instance** (or reuse an existing one).
@@ -188,15 +472,15 @@ You can use either **AliCloud RDS PostgreSQL** or a **self-managed PostgreSQL** 
    - Database name (`klip_db`)
    - Username / password (`klip_user` / password)
 
-### 4.2 Run migrations (from backend server)
+### 5.2 Run migrations (from backend server)
 
-Migrations are executed from the **backend** host (172.28.92.57). They read SQL files from `backend/src/database/migrations/` and record what has been applied in the `schema_migrations` table.\n+\n+1. **Configure backend DB env** on the backend host (`backend/.env`), see [section 5.2](#52-environment-variables).\n+2. **Install dependencies and build once** (if you haven’t already):\n+\n+   ```bash\n+   cd /path/to/klip/backend\n+   npm ci\n+   npm run build\n+   ```\n+\n+3. **Run migrations**:\n+\n+   ```bash\n+   cd /path/to/klip/backend\n+   npm run db:migrate\n+   ```\n+\n+   Behind the scenes this will:\n+\n+   - Ensure the `schema_migrations` table exists (and the `pgcrypto` extension).\n+   - Discover all `*.sql` files in `src/database/migrations/`, sorted by filename (e.g. `001_initial_schema.sql`, `003_create_vessel_loading_ports.sql`, ..., `015_backfill_vessel_loading_ports_from_shipments.sql`).\n+   - Skip any migration whose filename is already recorded in `schema_migrations`.\n+   - Execute each **new** migration inside a transaction and then insert its filename into `schema_migrations`.\n+\n+4. **Verify the schema** (from any SQL client):\n+\n+   ```sql\n+   \\dt          -- list tables (contracts, shipments, vessel_loading_ports, ...)\n+   SELECT * FROM schema_migrations ORDER BY applied_at;\n+   ```\n+\n+If `npm run db:migrate` fails, fix the problem (e.g. wrong DB_HOST/credentials, missing permissions) and run the same command again; already-applied filenames are skipped, so rerunning is safe.\n+\n+### 4.3 Seed data (optional, usually only for dev/staging)\n+\n+The seed script inserts example data for local development and **should not** normally be run on production.\n+\n+From the backend directory:\n+\n+```bash\n+npm run db:seed\n+```\n+\n+Run this **only** on:\n+\n+- Developer laptops (local Docker/Postgres), or\n+- A non-production environment (staging/sandbox) where sample contracts/shipments are useful.\n+
+Migrations are executed from the **backend** host (172.28.92.57). They read SQL files from `backend/src/database/migrations/` and record what has been applied in the `schema_migrations` table.\n+\n+1. **Configure backend DB env** on the backend host (`backend/.env`), see [section 6.2](#62-environment-variables).\n+2. **Install dependencies and build once** (if you haven’t already):\n+\n+   ```bash\n+   cd /path/to/klip/backend\n+   npm ci\n+   npm run build\n+   ```\n+\n+3. **Run migrations**:\n+\n+   ```bash\n+   cd /path/to/klip/backend\n+   npm run db:migrate\n+   ```\n+\n+   Behind the scenes this will:\n+\n+   - Ensure the `schema_migrations` table exists (and the `pgcrypto` extension).\n+   - Discover all `*.sql` files in `src/database/migrations/`, sorted by filename (e.g. `001_initial_schema.sql`, `003_create_vessel_loading_ports.sql`, ..., `015_backfill_vessel_loading_ports_from_shipments.sql`).\n+   - Skip any migration whose filename is already recorded in `schema_migrations`.\n+   - Execute each **new** migration inside a transaction and then insert its filename into `schema_migrations`.\n+\n+4. **Verify the schema** (from any SQL client):\n+\n+   ```sql\n+   \\dt          -- list tables (contracts, shipments, vessel_loading_ports, ...)\n+   SELECT * FROM schema_migrations ORDER BY applied_at;\n+   ```\n+\n+If `npm run db:migrate` fails, fix the problem (e.g. wrong DB_HOST/credentials, missing permissions) and run the same command again; already-applied filenames are skipped, so rerunning is safe.\n+\n+### 4.3 Seed data (optional, usually only for dev/staging)\n+\n+The seed script inserts example data for local development and **should not** normally be run on production.\n+\n+From the backend directory:\n+\n+```bash\n+npm run db:seed\n+```\n+\n+Run this **only** on:\n+\n+- Developer laptops (local Docker/Postgres), or\n+- A non-production environment (staging/sandbox) where sample contracts/shipments are useful.\n+
 
 ---
 
-## 5. Backend deployment
+## 6. Backend deployment
 
-### 5.1 Clone and install (on 172.28.92.57)
+### 6.1 Clone and install (on 172.28.92.57)
 
 ```bash
 cd /opt   # or your preferred path
@@ -207,7 +491,7 @@ npm ci
 npm run build
 ```
 
-### 5.2 Environment variables
+### 6.2 Environment variables
 
 Create `backend/.env` (do not commit this file):
 
@@ -233,14 +517,14 @@ Important:
 - `DB_HOST` can be an RDS endpoint or the private IP of your PostgreSQL server.
 - `JWT_SECRET` must be strong and unique in production.
 
-### 5.3 Run migrations
+### 6.3 Run migrations
 
 ```bash
 cd /opt/klip/backend
 npm run db:migrate
 ```
 
-### 5.4 Start the backend
+### 6.4 Start the backend
 
 **Option A – Direct (foreground):**
 
@@ -265,9 +549,9 @@ curl -s http://172.28.92.57:5001/api/health
 
 ---
 
-## 6. Frontend deployment
+## 7. Frontend deployment
 
-### 6.1 Clone and install (on 172.28.92.56)
+### 7.1 Clone and install (on 172.28.92.56)
 
 ```bash
 cd /opt/klip
@@ -276,7 +560,7 @@ cd klip/frontend
 npm ci
 ```
 
-### 6.2 Environment variables for production
+### 7.2 Environment variables for production
 
 Create `frontend/.env.production`:
 
@@ -288,7 +572,7 @@ NEXT_PUBLIC_API_URL=/api
 
 Do **not** put the backend’s private IP here; the browser cannot reach it. Using `/api` keeps same-origin requests; Nginx proxies them to `172.28.92.57:5001`.
 
-### 6.3 Build and start
+### 7.3 Build and start
 
 ```bash
 cd /opt/klip/frontend
@@ -309,11 +593,11 @@ Frontend is now reachable on the frontend server at `http://127.0.0.1:3001`. Ext
 
 ---
 
-## 7. Reverse proxy (Nginx)
+## 8. Reverse proxy (Nginx)
 
 Nginx runs on the **frontend** server (172.28.92.56 / 8.215.6.189). It serves the Next.js app and proxies `/api` to the backend.
 
-### 7.1 Site configuration
+### 8.1 Site configuration
 
 Create a config file, e.g. `/etc/nginx/sites-available/klip` (or under `conf.d`):
 
@@ -384,7 +668,7 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-### 7.2 Verifying
+### 8.2 Verifying
 
 - From the internet: `http://8.215.6.189` → Next.js UI.
 - `http://8.215.6.189/api/health` → backend health response.
@@ -392,9 +676,9 @@ sudo systemctl reload nginx
 
 ---
 
-## 8. Process management (PM2)
+## 9. Process management (PM2)
 
-### 8.1 Backend (on 172.28.92.57)
+### 9.1 Backend (on 172.28.92.57)
 
 ```bash
 cd /opt/klip/backend
@@ -403,7 +687,7 @@ pm2 save
 pm2 startup
 ```
 
-### 8.2 Frontend (on 172.28.92.56)
+### 9.2 Frontend (on 172.28.92.56)
 
 ```bash
 cd /opt/klip/frontend
@@ -412,7 +696,7 @@ pm2 save
 pm2 startup
 ```
 
-### 8.3 Useful commands
+### 9.3 Useful commands
 
 ```bash
 pm2 list
@@ -425,17 +709,17 @@ pm2 monit
 
 ---
 
-## 9. SSL/HTTPS (optional)
+## 10. SSL/HTTPS (optional)
 
 For HTTPS on the public IP (or a domain pointing to 8.215.6.189):
 
-### 9.1 Install Certbot
+### 10.1 Install Certbot
 
 ```bash
 sudo apt-get install -y certbot python3-certbot-nginx
 ```
 
-### 9.2 Obtain certificate
+### 10.2 Obtain certificate
 
 If you have a domain (e.g. `klip.example.com`) pointing to 8.215.6.189:
 
@@ -445,7 +729,7 @@ sudo certbot --nginx -d klip.example.com
 
 Certbot will adjust your Nginx config and set up HTTPS. For a certificate bound only to an IP, you would need another approach (e.g. a cloud load balancer with a certificate).
 
-### 9.3 Nginx HTTPS server block (manual alternative)
+### 10.3 Nginx HTTPS server block (manual alternative)
 
 After you have certificates (e.g. under `/etc/letsencrypt/live/klip.example.com/`):
 
@@ -459,7 +743,7 @@ server {
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
-    # Same location blocks as in section 7.1 (/, /api/, etc.)
+    # Same location blocks as in section 8.1 (/, /api/, etc.)
     location / {
         proxy_pass http://klip_frontend;
         # ... same proxy headers
@@ -488,23 +772,23 @@ NEXT_PUBLIC_API_URL=/api
 
 ---
 
-## 10. Security and firewall
+## 11. Security and firewall
 
-### 10.1 Frontend server (172.28.92.56)
+### 11.1 Frontend server (172.28.92.56)
 
 - Allow inbound: 80 (HTTP), 443 (HTTPS). Restrict source IPs if possible.
 - Port 3001: bind Next.js to `127.0.0.1` only (default with `next start`), so no firewall rule needed for 3001 from the internet.
 
-### 10.2 Backend server (172.28.92.57)
+### 11.2 Backend server (172.28.92.57)
 
 - Allow inbound TCP 5001 only from the frontend server (e.g. 172.28.92.56) or from the VPC CIDR.
 - Do not expose 5001 to the public internet.
 
-### 10.3 Database
+### 11.3 Database
 
 - Allow PostgreSQL (5432) only from the backend server (172.28.92.57) or your VPC.
 
-### 10.4 Application
+### 11.4 Application
 
 - Keep `JWT_SECRET` and `DB_PASSWORD` in `.env` only; never commit them.
 - Use strong passwords and rotate them periodically.
@@ -512,9 +796,9 @@ NEXT_PUBLIC_API_URL=/api
 
 ---
 
-## 11. Health checks and troubleshooting
+## 12. Health checks and troubleshooting
 
-### 11.1 Backend health
+### 12.1 Backend health
 
 From the backend server:
 
@@ -530,11 +814,11 @@ curl -s http://127.0.0.1/api/health
 curl -s http://8.215.6.189/api/health
 ```
 
-### 11.2 Frontend
+### 12.2 Frontend
 
 Open in a browser: `http://8.215.6.189` (or your domain). You should see the KLIP login/dashboard.
 
-### 11.3 Database connectivity (from backend)
+### 12.3 Database connectivity (from backend)
 
 ```bash
 cd /opt/klip/backend
@@ -552,7 +836,7 @@ p.query('SELECT 1').then(() => { console.log('DB OK'); process.exit(0); }).catch
 "
 ```
 
-### 11.4 Common issues
+### 12.4 Common issues
 
 | Symptom | What to check |
 |--------|----------------|
@@ -562,7 +846,7 @@ p.query('SELECT 1').then(() => { console.log('DB OK'); process.exit(0); }).catch
 | DB connection errors | Check DB_HOST, DB_PORT, DB_USER, DB_PASSWORD and that the DB allows connections from 172.28.92.57. |
 | Migrations fail | Ensure DB user has rights on `public` schema and that `pgcrypto` extension can be created. Run migrations from the backend server with correct `.env`. |
 
-### 11.5 Logs
+### 12.5 Logs
 
 - Backend: `pm2 logs klip-backend` or log files if you configured file transport in the app.
 - Frontend: `pm2 logs klip-frontend`
@@ -570,9 +854,9 @@ p.query('SELECT 1').then(() => { console.log('DB OK'); process.exit(0); }).catch
 
 ---
 
-## 12. Updates and rollback
+## 13. Updates and rollback
 
-### 12.1 Deploying a new version
+### 13.1 Deploying a new version
 
 **Backend (172.28.92.57):**
 
@@ -599,12 +883,12 @@ pm2 restart klip-frontend
 
 If you use a single clone for both, do backend first, then frontend.
 
-### 12.2 Rollback
+### 13.2 Rollback
 
 - Restore the previous commit (e.g. `git checkout <previous-tag>`), then run the same steps (install, build, restart).
 - Database: migrations are additive; there is no automatic “down” script. Rollback of data changes would require a backup restore or manual SQL if you keep rollback scripts.
 
-### 12.3 Backup before major changes
+### 13.3 Backup before major changes
 
 - Database: use `pg_dump` or RDS snapshots before running new migrations or big releases.
 - Keep a copy of the previous app version (e.g. a Git tag or tarball) so you can revert quickly.

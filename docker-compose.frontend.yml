@@ -1,0 +1,31 @@
+# Frontend server stack: Next.js only
+# Run on frontend server (e.g. 172.28.92.56): docker-compose -f docker-compose.frontend.yml up -d
+# Set NEXT_PUBLIC_API_URL in .env: use /api when Nginx proxies /api to backend (same-origin).
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+    container_name: klip-frontend
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+    ports:
+      - "${FRONTEND_PORT:-3001}:3001"
+    networks:
+      - klip-frontend-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  klip-frontend-network:
+    driver: bridge
