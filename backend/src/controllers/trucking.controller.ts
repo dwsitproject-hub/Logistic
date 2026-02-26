@@ -166,9 +166,13 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
     });
   } catch (error) {
     logger.error('Get trucking operations error:', error);
+    const message =
+      error instanceof Error
+        ? error.message
+        : (error as any)?.message || 'Failed to fetch trucking operations';
     return res.status(500).json({
       success: false,
-      error: { message: 'Failed to fetch trucking operations' },
+      error: { message },
     });
   }
 };
