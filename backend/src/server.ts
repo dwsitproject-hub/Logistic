@@ -80,8 +80,11 @@ app.use(express.urlencoded({ extended: true }));
 // API Documentation
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-// Health check
+// Health check (also under /api for Nginx proxy: /api/health → backend /api/health)
 app.get('/health', (_req, res) => {
+  res.json({ status: 'OK', message: 'KLIP Backend is running' });
+});
+app.get('/api/health', (_req, res) => {
   res.json({ status: 'OK', message: 'KLIP Backend is running' });
 });
 

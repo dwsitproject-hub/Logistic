@@ -241,7 +241,7 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
 
    ```bash
    docker compose -f docker-compose.frontend.yml ps
-   curl -s -o /dev/null -w "%{http_code}" http://localhost:3001
+   curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3001
    ```
 
    You should get `200`.
@@ -270,6 +270,8 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
 
    Paste the configuration below. Adjust `server_name` if you use a domain instead of the IP (e.g. `klip.example.com`). Replace `172.28.92.57` only if your backend runs on a different host.
 
+   **Important:** In `location /` use `proxy_pass http://klip_frontend;` and in `location /api/` use `proxy_pass http://klip_backend/api/;`. Do **not** put `http://172.28.92.56` or `http://172.28.92.57` in `proxy_pass` — that would use port 80 instead of 3001 (frontend) and 5001 (backend) and cause 502 or 400 errors.
+
    ```nginx
    # Upstream: frontend container (Next.js) on this server
    upstream klip_frontend {
@@ -285,12 +287,18 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
 
    server {
        listen 80;
-       server_name 8.215.6.189;   # or your domain, e.g. klip.example.com
+       server_name 8.215.6.189 localhost 127.0.0.1;   # public IP + local so curl http://localhost works
 
        add_header X-Frame-Options "SAMEORIGIN" always;
        add_header X-Content-Type-Options "nosniff" always;
 
-       # All non-/api requests → Next.js (frontend container)
+       # Next.js can send large response headers; avoid "upstream sent too big header"
+       proxy_buffer_size 128k;
+       proxy_buffers 4 256k;
+       proxy_busy_buffers_size 256k;
+       proxy_temp_file_write_size 256k;
+
+       # All non-/api requests → Next.js (frontend container on port 3001)
        location / {
            proxy_pass http://klip_frontend;
            proxy_http_version 1.1;
@@ -362,21 +370,28 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
    **Step 5f – Verify in the browser and from the server**
 
    - In a browser: open **http://8.215.6.189** (or your domain). You should see the KLIP login page.
-   - From the frontend server: `curl -s -o /dev/null -w "%{http_code}" http://localhost/api/health` should return `200`, and the response body can be checked with `curl -s http://localhost/api/health`.
+   - From the frontend server: `curl -s -o /dev/null -w "%{http_code}\n" http://localhost/api/health` should return `200`, and the response body can be checked with `curl -s http://localhost/api/health`. If `http://localhost` returns **502**, ensure `server_name` in the KLIP config includes `localhost` and `127.0.0.1` (see Step 5b), then `sudo nginx -t` and `sudo systemctl reload nginx`.
 
    If the app or API doesn’t load, check: (1) frontend container is up: `docker compose -f docker-compose.frontend.yml ps`; (2) backend is reachable: `curl -s http://172.28.92.57:5001/health` from the frontend server; (3) Nginx error log: `sudo tail -50 /var/log/nginx/error.log`.
 
+   **504 Gateway Time-out on /api/health or other /api/* URLs** — Nginx is proxying but the backend (172.28.92.57:5001) is not responding in time. On the **backend server** (172.28.92.57): (1) Ensure the backend container is running: `docker compose -f docker-compose.backend.yml ps`. (2) Allow the frontend server to reach port 5001: `sudo ufw allow from 172.28.92.56 to any port 5001` and `sudo ufw reload`. (3) From the frontend server test: `curl -s -o /dev/null -w "%{http_code}\n" http://172.28.92.57:5001/health` should return 200. If that works, then http://8.215.6.189/api/health should work after a backend deploy that includes the `/api/health` route.
+
+   **502 and "upstream sent too big header"** — Next.js often sends large response headers. Add to your KLIP `server` or `location /` block: `proxy_buffer_size 128k;`, `proxy_buffers 4 256k;`, `proxy_busy_buffers_size 256k;`, `proxy_temp_file_write_size 256k;` (see Step 5b config above), then `sudo nginx -t` and `sudo systemctl reload nginx`. If the error log shows **upstream: "http://...:80/"** (port 80), the frontend upstream is wrong: it must be **127.0.0.1:3001**. Edit `/etc/nginx/sites-available/klip` and set `upstream klip_frontend { server 127.0.0.1:3001; }`; disable or fix any other server block that proxies to port 80 on this host (e.g. remove `default` from sites-enabled if it conflicts).
+
    **"Site can't be reached" from your laptop**
 
-   If the browser shows *This site can't be reached* when you open **http://8.215.6.189** from your laptop, the request is not reaching the server. Do the following:
+   If the browser shows *This site can't be reached* when you open the site from your laptop (while it works with `curl http://localhost` on the server), the request from the internet is not reaching the server. Work through this checklist:
 
-   1. **Use the public IP** — Open **http://8.215.6.189** (not 172.28.92.56). The private IP 172.28.92.56 only works from inside the same VPC (e.g. from the backend server or another machine in the cloud).
+   1. **Use the correct public IP** — In **AliCloud Console** go to **ECS** → **Instances**, find your **frontend** instance (e.g. StagingdwsFront), and note its **Public IP** (it may not be 8.215.6.189). In the browser open **http://&lt;that-public-IP&gt;** (never use 172.28.92.56 from the laptop; that is private and only works inside the VPC).
 
-   2. **Open port 80 in the cloud (AliCloud) security group** — In AliCloud Console go to ECS, your frontend instance (public IP 8.215.6.189), then Security Groups. Add an **Inbound** rule: Port 80, Protocol TCP, Source `0.0.0.0/0` (or your IP range). Save. Without this, the cloud blocks traffic from the internet to port 80.
+   2. **Security group for the frontend instance** — Open that instance → **Security Groups** tab → click the security group ID. Under **Inbound**, ensure there is a rule: **Port 80**, **Protocol TCP**, **Source** `0.0.0.0/0` (or your IP). Apply to the **frontend** instance’s security group; a rule on another instance does not help.
 
-   3. **Open port 80 on the server firewall (if enabled)** — On the frontend server run `sudo ufw status`. If UFW is active: `sudo ufw allow 80/tcp` and `sudo ufw reload`. Other firewalls: ensure TCP port 80 is allowed for inbound.
+   3. **From your laptop, run** `curl -v --connect-timeout 10 http://<public-IP>` (replace with the real public IP).  
+     - **Connection timed out** → Traffic is blocked before reaching the server (recheck security group and that you used the frontend instance’s public IP).  
+     - **Connection refused** → Port 80 is reachable but nothing is listening (on the server run `sudo ss -tlnp | grep :80`; Nginx should be there).  
+     - **HTTP/1.1 200** or HTML output → The site is reachable; try the same URL in the browser again.
 
-   4. **Check from your laptop** — After the above, try in the browser or run: `curl -v --connect-timeout 5 http://8.215.6.189`. If you see *Connection timed out*, the cloud or firewall is still blocking. If *Connection refused*, on the server check `sudo ss -tlnp | grep :80` (Nginx should be listening on 80).
+   4. **Server firewall (UFW)** — If the cloud security group allows 80 but the laptop still times out, UFW on the server may be blocking it. On the frontend server run `sudo ufw status`. You must see **80** in the "To" column with "ALLOW IN" from "Anywhere". If port 80 is missing, run `sudo ufw allow 80/tcp` and `sudo ufw reload`. Then try from the laptop again.
 
 6. **Firewall**: Allow inbound **80** (and **443** if you add SSL) on the frontend server’s public IP. Port 3001 does not need to be exposed to the internet (Nginx proxies to it on localhost).
 
