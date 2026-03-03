@@ -868,6 +868,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           s.bl_quantity,
           s.port_of_loading as vessel_loading_port_1,
           s.port_of_discharge as vessel_discharge_port_1,
+          c.contract_id as contract_number,
           COALESCE(s.ata_arrival, vlp1.ata_vessel_arrival::date) as ata_vessel_arrival_at_loading_port,
           COALESCE(s.ata_berthed, vlp1.ata_vessel_berthed::date) as ata_vessel_berthed_at_loading_port,
           COALESCE(s.ata_loading_start, vlp1.ata_loading_start::date) as ata_vessel_start_loading,
@@ -906,6 +907,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           vlp1.quality_ds as quality_at_loading_loc_1_ds,
           vlp1.quality_stone as quality_at_loading_loc_1_stone
          FROM shipments s
+         LEFT JOIN contracts c ON s.contract_id = c.id
          LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false
          LEFT JOIN vessel_loading_ports vlpd ON vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true
          WHERE s.id = $1
@@ -967,6 +969,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           MAX(s.bl_quantity) as bl_quantity,
           MAX(s.port_of_loading) as vessel_loading_port_1,
           MAX(s.port_of_discharge) as vessel_discharge_port_1,
+          MAX(c.contract_id) as contract_number,
           MAX(COALESCE(s.ata_arrival, vlp1.ata_vessel_arrival::date)) as ata_vessel_arrival_at_loading_port,
           MAX(COALESCE(s.ata_berthed, vlp1.ata_vessel_berthed::date)) as ata_vessel_berthed_at_loading_port,
           MAX(COALESCE(s.ata_loading_start, vlp1.ata_loading_start::date)) as ata_vessel_start_loading,
@@ -1014,7 +1017,85 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
       );
     }
 
-    const shipmentInfo = shipmentInfoResult.rows[0] || null;
+    let shipmentInfo = shipmentInfoResult.rows[0] || null;
+
+    // Fallback: if all ATA fields are null but SAP processed data has values,
+    // hydrate shipmentInfo ATA dates directly from sap_processed_data.shipment.
+    if (shipmentInfo && shipmentInfo.contract_number) {
+      const ataKeys = [
+        'ata_vessel_arrival_at_loading_port',
+        'ata_vessel_berthed_at_loading_port',
+        'ata_vessel_start_loading',
+        'ata_vessel_completed_loading',
+        'ata_vessel_sailed_from_loading_port',
+        'ata_vessel_arrive_at_discharge_port',
+        'ata_vessel_berthed_at_discharge_port',
+        'ata_vessel_start_discharging',
+        'ata_vessel_complete_discharge'
+      ] as const;
+
+      const allAtaNull = ataKeys.every(
+        (k) => shipmentInfo[k as keyof typeof shipmentInfo] == null
+      );
+
+      if (allAtaNull) {
+        const sapResult = await query(
+          `SELECT data
+             FROM sap_processed_data
+            WHERE contract_number = $1
+            ORDER BY created_at DESC NULLS LAST
+            LIMIT 1`,
+          [shipmentInfo.contract_number]
+        );
+
+        if (sapResult.rows.length > 0) {
+          const data: any = sapResult.rows[0].data || {};
+          const shp: any = data.shipment || {};
+
+          const normalizeDate = (value: any): string | null => {
+            if (value === null || value === undefined || value === '') return null;
+            if (value instanceof Date && !isNaN(value.getTime())) {
+              return value.toISOString().split('T')[0];
+            }
+            if (typeof value === 'number') {
+              // Interpret as Excel serial date (days since 1899-12-30)
+              const excelEpoch = Date.UTC(1899, 11, 30);
+              const ms = excelEpoch + value * 86400000;
+              const d = new Date(ms);
+              if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+              return null;
+            }
+            if (typeof value === 'string') {
+              const d = new Date(value);
+              if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+            }
+            return null;
+          };
+
+          const mapping: Record<string, string> = {
+            ata_vessel_arrival_at_loading_port: 'ata_vessel_arrival_at_loading_port_1',
+            ata_vessel_berthed_at_loading_port: 'ata_vessel_berthed_at_loading_port_1',
+            ata_vessel_start_loading: 'ata_vessel_start_loading',
+            ata_vessel_completed_loading: 'ata_vessel_completed_loading',
+            ata_vessel_sailed_from_loading_port: 'ata_vessel_sailed_from_loading_port',
+            ata_vessel_arrive_at_discharge_port: 'ata_vessel_arrival_at_discharge_port',
+            ata_vessel_berthed_at_discharge_port: 'ata_vessel_berthed_at_discharge_port',
+            ata_vessel_start_discharging: 'ata_vessel_start_discharging',
+            ata_vessel_complete_discharge: 'ata_vessel_completed_discharge'
+          };
+
+          for (const [uiKey, sapKey] of Object.entries(mapping)) {
+            const current = (shipmentInfo as any)[uiKey];
+            if (current == null && shp && sapKey in shp) {
+              const normalized = normalizeDate(shp[sapKey]);
+              if (normalized) {
+                (shipmentInfo as any)[uiKey] = normalized;
+              }
+            }
+          }
+        }
+      }
+    }
     logger.info('ShipmentInfo result:', { 
       hasData: !!shipmentInfo,
       rowCount: shipmentInfoResult.rows.length,

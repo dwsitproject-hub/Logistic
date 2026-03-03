@@ -51,66 +51,101 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
   try {
     const { contractFilter, params } = buildFilterConditions(req);
     
-    // Get basic contract statistics
+    // Get basic contract statistics (status derived from latest SAP data where available)
     const contractsStats = await query(`
+      WITH latest_spd AS (
+        SELECT DISTINCT ON (spd.contract_number)
+          spd.contract_number,
+          spd.data
+        FROM sap_processed_data spd
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      )
       SELECT 
         COUNT(DISTINCT c.contract_id) as total_contracts,
-        COUNT(DISTINCT c.contract_id) FILTER (WHERE c.status = 'ACTIVE') as active_contracts,
-        COUNT(DISTINCT c.contract_id) FILTER (WHERE c.status = 'COMPLETED') as completed_contracts,
-        COUNT(DISTINCT c.contract_id) FILTER (WHERE c.status = 'CANCELLED') as cancelled_contracts
+        -- Open contracts (status = Open/ACTIVE from SAP, fallback to contracts.status)
+        COUNT(DISTINCT c.contract_id) FILTER (
+          WHERE
+            (
+              l.data->'contract'->>'status' = 'Open'
+              OR UPPER(l.data->'contract'->>'status') = 'ACTIVE'
+            )
+            OR (
+              l.data IS NULL
+              AND UPPER(COALESCE(c.status, '')) IN ('ACTIVE', 'OPEN')
+            )
+        ) as open_contracts,
+        -- Closed contracts (Close/CLOSED/COMPLETED/CANCELLED from SAP, fallback to contracts.status)
+        COUNT(DISTINCT c.contract_id) FILTER (
+          WHERE
+            (
+              l.data->'contract'->>'status' = 'Close'
+              OR UPPER(l.data->'contract'->>'status') IN ('CLOSE', 'CLOSED', 'COMPLETED', 'CANCELLED')
+            )
+            OR (
+              l.data IS NULL
+              AND UPPER(COALESCE(c.status, '')) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'CANCELLED')
+            )
+        ) as closed_contracts
       FROM contracts c
+      LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       WHERE 1=1 ${contractFilter}
     `, params);
 
-    // Get outstanding contracts and quantities
-    // Outstanding = Contract Quantity - Total STO Quantity (from sap_processed_data JSON)
+    // Quantity statistics across all contracts
+    // Total Quantity = sum of contract quantities
+    // Quantity Delivered = sum of STO quantities from sap_processed_data
+    // Outstanding Quantity = Total Quantity - Quantity Delivered
     const outstandingStats = await query(`
       SELECT 
-        COUNT(*) as outstanding_contracts,
-        COALESCE(SUM(outstanding_quantity), 0) as outstanding_quantity
+        COALESCE(SUM(contract_quantity), 0) as total_quantity,
+        COALESCE(SUM(delivered_quantity), 0) as delivered_quantity,
+        COALESCE(SUM(contract_quantity - delivered_quantity), 0) as outstanding_quantity
       FROM (
         SELECT 
           c.contract_id,
-          MAX(c.quantity_ordered) - COALESCE((
-            SELECT SUM(CAST(REPLACE(REPLACE(data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
-            FROM sap_processed_data 
-            WHERE contract_number = c.contract_id 
-            AND sto_number IS NOT NULL 
-            AND data->'contract'->>'sto_quantity' IS NOT NULL
-          ), 0) as outstanding_quantity
+          MAX(c.quantity_ordered) as contract_quantity,
+          COALESCE((
+            SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = c.contract_id 
+              AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+          ), 0) as delivered_quantity
         FROM contracts c
         WHERE 1=1 ${contractFilter}
         GROUP BY c.contract_id
-        HAVING MAX(c.quantity_ordered) > COALESCE((
-          SELECT SUM(CAST(REPLACE(REPLACE(data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
-          FROM sap_processed_data 
-          WHERE contract_number = c.contract_id 
-          AND sto_number IS NOT NULL 
-          AND data->'contract'->>'sto_quantity' IS NOT NULL
-        ), 0)
-      ) outstanding_data
+      ) q
     `, params);
 
-    // Get shipment statistics
+    // Get shipment statistics by status
     const shipmentsStats = await query(`
       SELECT 
         COUNT(*) as total_shipments,
-        COUNT(*) FILTER (WHERE s.status = 'IN_TRANSIT') as active_shipments,
-        COUNT(*) FILTER (WHERE s.status = 'COMPLETED') as completed_shipments,
         COUNT(*) FILTER (WHERE s.status = 'PLANNED') as planned_shipments,
-        COUNT(*) FILTER (WHERE s.is_delayed = true) as delayed_shipments
+        COUNT(*) FILTER (WHERE s.status = 'IN_PROGRESS') as in_progress_shipments,
+        COUNT(*) FILTER (WHERE s.status = 'LOADING') as loading_shipments,
+        COUNT(*) FILTER (WHERE s.status = 'IN_TRANSIT') as in_transit_shipments,
+        COUNT(*) FILTER (WHERE s.status = 'ARRIVED') as arrived_shipments,
+        COUNT(*) FILTER (WHERE s.status = 'UNLOADING') as unloading_shipments,
+        COUNT(*) FILTER (WHERE s.status = 'COMPLETED') as completed_shipments,
+        COUNT(*) FILTER (WHERE s.status = 'CANCELLED') as cancelled_shipments,
+        COUNT(*) FILTER (WHERE s.is_delayed = true) as late_shipments
       FROM shipments s
       LEFT JOIN contracts c ON s.contract_id = c.id
       WHERE 1=1 ${contractFilter} ${req.query.plant ? buildFilterConditions(req).shipmentFilter : ''}
     `, params);
 
-    // Get trucking operations statistics
+    // Get trucking operations statistics by status
     const truckingStats = await query(`
       SELECT 
         COUNT(*) as total_trucking_operations,
-        COUNT(*) FILTER (WHERE t.status = 'IN_PROGRESS') as active_trucking_operations,
+        COUNT(*) FILTER (WHERE t.status = 'PLANNED') as planned_trucking_operations,
+        COUNT(*) FILTER (WHERE t.status = 'IN_PROGRESS') as in_progress_trucking_operations,
+        COUNT(*) FILTER (WHERE t.status = 'LOADING') as loading_trucking_operations,
+        COUNT(*) FILTER (WHERE t.status = 'IN_TRANSIT') as in_transit_trucking_operations,
+        COUNT(*) FILTER (WHERE t.status = 'UNLOADING') as unloading_trucking_operations,
         COUNT(*) FILTER (WHERE t.status = 'COMPLETED') as completed_trucking_operations,
-        COUNT(*) FILTER (WHERE t.status = 'PLANNED') as planned_trucking_operations
+        COUNT(*) FILTER (WHERE t.status = 'CANCELLED') as cancelled_trucking_operations,
+        COUNT(*) FILTER (WHERE t.status = 'LATE') as late_trucking_operations
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
       WHERE 1=1 ${contractFilter} ${req.query.plant ? buildFilterConditions(req).truckingFilter : ''}
@@ -135,24 +170,41 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
     const stats = {
       contracts: {
         total: parseInt(contractsStats.rows[0].total_contracts) || 0,
-        active: parseInt(contractsStats.rows[0].active_contracts) || 0,
-        completed: parseInt(contractsStats.rows[0].completed_contracts) || 0,
-        cancelled: parseInt(contractsStats.rows[0].cancelled_contracts) || 0,
-        outstanding: parseInt(outstandingStats.rows[0].outstanding_contracts) || 0,
+        // Active/Open contracts
+        active: parseInt(contractsStats.rows[0].open_contracts) || 0,
+        // Closed contracts (Close / Closed / Completed / Cancelled)
+        closed: parseInt(contractsStats.rows[0].closed_contracts) || 0,
+        completed: 0,
+        cancelled: 0,
+        // Outstanding contracts count = Open contracts
+        outstanding: parseInt(contractsStats.rows[0].open_contracts) || 0,
+        // Quantity performance metrics
+        totalQuantity: parseFloat(outstandingStats.rows[0].total_quantity) || 0,
+        deliveredQuantity: parseFloat(outstandingStats.rows[0].delivered_quantity) || 0,
         outstandingQuantity: parseFloat(outstandingStats.rows[0].outstanding_quantity) || 0
       },
       shipments: {
         total: parseInt(shipmentsStats.rows[0].total_shipments) || 0,
-        active: parseInt(shipmentsStats.rows[0].active_shipments) || 0,
-        completed: parseInt(shipmentsStats.rows[0].completed_shipments) || 0,
         planned: parseInt(shipmentsStats.rows[0].planned_shipments) || 0,
-        delayed: parseInt(shipmentsStats.rows[0].delayed_shipments) || 0
+        inProgress: parseInt(shipmentsStats.rows[0].in_progress_shipments) || 0,
+        loading: parseInt(shipmentsStats.rows[0].loading_shipments) || 0,
+        inTransit: parseInt(shipmentsStats.rows[0].in_transit_shipments) || 0,
+        arrived: parseInt(shipmentsStats.rows[0].arrived_shipments) || 0,
+        unloading: parseInt(shipmentsStats.rows[0].unloading_shipments) || 0,
+        completed: parseInt(shipmentsStats.rows[0].completed_shipments) || 0,
+        cancelled: parseInt(shipmentsStats.rows[0].cancelled_shipments) || 0,
+        late: parseInt(shipmentsStats.rows[0].late_shipments) || 0
       },
       trucking: {
         total: parseInt(truckingStats.rows[0].total_trucking_operations) || 0,
-        active: parseInt(truckingStats.rows[0].active_trucking_operations) || 0,
+        planned: parseInt(truckingStats.rows[0].planned_trucking_operations) || 0,
+        inProgress: parseInt(truckingStats.rows[0].in_progress_trucking_operations) || 0,
+        loading: parseInt(truckingStats.rows[0].loading_trucking_operations) || 0,
+        inTransit: parseInt(truckingStats.rows[0].in_transit_trucking_operations) || 0,
+        unloading: parseInt(truckingStats.rows[0].unloading_trucking_operations) || 0,
         completed: parseInt(truckingStats.rows[0].completed_trucking_operations) || 0,
-        planned: parseInt(truckingStats.rows[0].planned_trucking_operations) || 0
+        cancelled: parseInt(truckingStats.rows[0].cancelled_trucking_operations) || 0,
+        late: parseInt(truckingStats.rows[0].late_trucking_operations) || 0
       },
       finance: {
         total: parseInt(financeStats.rows[0].total_payments) || 0,
@@ -488,12 +540,66 @@ export const getContractQuantityByProduct = async (req: AuthRequest, res: Respon
   }
 };
 
+// Get contract quantity by Incoterm (same logic pattern as product, but grouped by incoterm)
+export const getContractQuantityByIncoterm = async (req: AuthRequest, res: Response) => {
+  try {
+    const { contractFilter, params } = buildFilterConditions(req);
+
+    const result = await query(`
+      SELECT
+        incoterm,
+        contract_count,
+        total_quantity,
+        completed_quantity,
+        total_quantity - completed_quantity AS outstanding_quantity,
+        avg_unit_price,
+        total_contract_value,
+        supplier_count
+      FROM (
+        SELECT
+          COALESCE(c.incoterm, 'Blank') AS incoterm,
+          COUNT(DISTINCT c.contract_id) AS contract_count,
+          SUM(c.quantity_ordered) AS total_quantity,
+          -- Sum of STO quantities from SAP data for all contracts under this incoterm
+          SUM(
+            COALESCE((
+              SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
+              FROM sap_processed_data spd
+              WHERE spd.contract_number = c.contract_id
+                AND spd.sto_number IS NOT NULL
+                AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+            ), 0)
+          ) AS completed_quantity,
+          AVG(c.unit_price) AS avg_unit_price,
+          SUM(c.contract_value) AS total_contract_value,
+          COUNT(DISTINCT c.supplier) AS supplier_count
+        FROM contracts c
+        WHERE 1=1 ${contractFilter}
+        GROUP BY COALESCE(c.incoterm, 'Blank')
+      ) incoterm_data
+      ORDER BY total_quantity DESC
+      LIMIT 10
+    `, params);
+
+    return res.json({
+      success: true,
+      data: result.rows,
+    });
+  } catch (error) {
+    logger.error('Get contract quantity by incoterm error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch contract quantity by incoterm' },
+    });
+  }
+};
+
 // Get contract quantity by plant (Sea/Land logic)
 // Updated to use actual shipped/delivered quantities from Shipments and Trucking
 export const getContractQuantityByPlant = async (req: AuthRequest, res: Response) => {
   try {
     const { contractFilter, shipmentFilter, truckingFilter, params } = buildFilterConditions(req);
-    
+
     // Get quantities from Shipments (Sea transport) - using port_of_discharge as Plant/Site
     const shipmentResult = await query(`
       SELECT 
@@ -501,12 +607,10 @@ export const getContractQuantityByPlant = async (req: AuthRequest, res: Response
           WHEN s.port_of_discharge IS NULL OR s.port_of_discharge = '' THEN 'Blank'
           ELSE s.port_of_discharge
         END as plant_location,
-        'Sea' as transport_mode,
         COUNT(DISTINCT c.contract_id) as contract_count,
         SUM(COALESCE(s.quantity_shipped, 0)) as total_quantity_shipped,
         SUM(COALESCE(s.quantity_delivered, 0)) as total_quantity_delivered,
         SUM(COALESCE(s.quantity_shipped, 0) + COALESCE(s.quantity_delivered, 0)) as total_quantity,
-        AVG(c.unit_price) as avg_unit_price,
         SUM(c.contract_value) as total_contract_value,
         COUNT(DISTINCT c.supplier) as supplier_count
       FROM shipments s
@@ -526,12 +630,10 @@ export const getContractQuantityByPlant = async (req: AuthRequest, res: Response
           WHEN t.location IS NULL OR t.location = '' THEN 'Blank'
           ELSE t.location
         END as plant_location,
-        'Land' as transport_mode,
         COUNT(DISTINCT c.contract_id) as contract_count,
         SUM(COALESCE(t.quantity_sent, 0)) as total_quantity_shipped,
         SUM(COALESCE(t.quantity_delivered, 0)) as total_quantity_delivered,
         SUM(COALESCE(t.quantity_sent, 0) + COALESCE(t.quantity_delivered, 0)) as total_quantity,
-        AVG(c.unit_price) as avg_unit_price,
         SUM(c.contract_value) as total_contract_value,
         COUNT(DISTINCT c.supplier) as supplier_count
       FROM trucking_operations t
@@ -544,31 +646,55 @@ export const getContractQuantityByPlant = async (req: AuthRequest, res: Response
         END
     `, params);
 
-    // Combine and sort results
-    const combined = [
-      ...shipmentResult.rows.map(row => ({
-        plant_location: row.plant_location,
-        transport_mode: row.transport_mode,
-        contract_count: parseInt(row.contract_count) || 0,
-        total_quantity: parseFloat(row.total_quantity) || 0,
-        total_quantity_shipped: parseFloat(row.total_quantity_shipped) || 0,
-        total_quantity_delivered: parseFloat(row.total_quantity_delivered) || 0,
-        avg_unit_price: parseFloat(row.avg_unit_price) || 0,
-        total_contract_value: parseFloat(row.total_contract_value) || 0,
-        supplier_count: parseInt(row.supplier_count) || 0
-      })),
-      ...truckingResult.rows.map(row => ({
-        plant_location: row.plant_location,
-        transport_mode: row.transport_mode,
-        contract_count: parseInt(row.contract_count) || 0,
-        total_quantity: parseFloat(row.total_quantity) || 0,
-        total_quantity_shipped: parseFloat(row.total_quantity_shipped) || 0,
-        total_quantity_delivered: parseFloat(row.total_quantity_delivered) || 0,
-        avg_unit_price: parseFloat(row.avg_unit_price) || 0,
-        total_contract_value: parseFloat(row.total_contract_value) || 0,
-        supplier_count: parseInt(row.supplier_count) || 0
-      }))
-    ];
+    // Aggregate by plant_location (combine Sea + Land)
+    type PlantAgg = {
+      plant_location: string;
+      contract_count: number;
+      total_quantity_shipped: number;
+      total_quantity_delivered: number;
+      total_quantity: number;
+      total_contract_value: number;
+      supplier_count: number;
+    };
+
+    const plantMap = new Map<string, PlantAgg>();
+
+    const addRow = (row: any) => {
+      const key = row.plant_location as string;
+      const existing = plantMap.get(key) || {
+        plant_location: key,
+        contract_count: 0,
+        total_quantity_shipped: 0,
+        total_quantity_delivered: 0,
+        total_quantity: 0,
+        total_contract_value: 0,
+        supplier_count: 0,
+      };
+
+      existing.contract_count += parseInt(row.contract_count) || 0;
+      existing.total_quantity_shipped += parseFloat(row.total_quantity_shipped) || 0;
+      existing.total_quantity_delivered += parseFloat(row.total_quantity_delivered) || 0;
+      existing.total_quantity += parseFloat(row.total_quantity) || 0;
+      existing.total_contract_value += parseFloat(row.total_contract_value) || 0;
+      existing.supplier_count += parseInt(row.supplier_count) || 0;
+
+      plantMap.set(key, existing);
+    };
+
+    shipmentResult.rows.forEach(addRow);
+    truckingResult.rows.forEach(addRow);
+
+    let combined = Array.from(plantMap.values()).map(p => ({
+      plant_location: p.plant_location,
+      contract_count: p.contract_count,
+      total_quantity: p.total_quantity,
+      total_quantity_shipped: p.total_quantity_shipped,
+      total_quantity_delivered: p.total_quantity_delivered,
+      // Derive avg_unit_price from totals where possible
+      avg_unit_price: p.total_quantity > 0 ? p.total_contract_value / p.total_quantity : 0,
+      total_contract_value: p.total_contract_value,
+      supplier_count: p.supplier_count,
+    }));
 
     // Sort by total_quantity descending and limit to top 10
     combined.sort((a, b) => b.total_quantity - a.total_quantity);
@@ -590,94 +716,90 @@ export const getContractQuantityByPlant = async (req: AuthRequest, res: Response
 // Get detailed contract information for a specific plant
 export const getPlantDetails = async (req: AuthRequest, res: Response) => {
   try {
-    const { plant, transport_mode } = req.query;
+    const { plant } = req.query;
 
-    if (!plant || !transport_mode) {
+    if (!plant) {
       return res.status(400).json({
         success: false,
-        error: { message: 'Plant location and transport mode are required' },
+        error: { message: 'Plant location is required' },
       });
     }
 
-    let result;
+    let shipmentsResult;
+    let truckingResult;
 
-    if (transport_mode === 'Sea') {
-      // Get details from shipments for Sea transport
-      if (plant === 'Blank') {
-        // For blank plant locations, get records where port_of_discharge is NULL or empty
-        result = await query(`
-          SELECT 
-            c.contract_id,
-            c.sto_number,
-            c.supplier,
-            c.product,
-            COALESCE(s.quantity_shipped, 0) as quantity_shipped,
-            COALESCE(s.quantity_delivered, 0) as quantity_delivered,
-            COALESCE(s.quantity_shipped, 0) + COALESCE(s.quantity_delivered, 0) as total_quantity,
-            COALESCE(s.status, 'UNKNOWN') as status
-          FROM shipments s
-          LEFT JOIN contracts c ON s.contract_id = c.id
-          WHERE s.port_of_discharge IS NULL OR s.port_of_discharge = ''
-          ORDER BY c.contract_id
-        `);
-      } else {
-        result = await query(`
-          SELECT 
-            c.contract_id,
-            c.sto_number,
-            c.supplier,
-            c.product,
-            COALESCE(s.quantity_shipped, 0) as quantity_shipped,
-            COALESCE(s.quantity_delivered, 0) as quantity_delivered,
-            COALESCE(s.quantity_shipped, 0) + COALESCE(s.quantity_delivered, 0) as total_quantity,
-            COALESCE(s.status, 'UNKNOWN') as status
-          FROM shipments s
-          LEFT JOIN contracts c ON s.contract_id = c.id
-          WHERE s.port_of_discharge = $1
-          ORDER BY c.contract_id
-        `, [plant]);
-      }
+    if (plant === 'Blank') {
+      // For blank plant locations, get records where port_of_discharge/location is NULL or empty
+      shipmentsResult = await query(`
+        SELECT 
+          c.contract_id,
+          c.sto_number,
+          c.supplier,
+          c.product,
+          COALESCE(s.quantity_shipped, 0) as quantity_shipped,
+          COALESCE(s.quantity_delivered, 0) as quantity_delivered,
+          COALESCE(s.quantity_shipped, 0) + COALESCE(s.quantity_delivered, 0) as total_quantity,
+          COALESCE(s.status, 'UNKNOWN') as status
+        FROM shipments s
+        LEFT JOIN contracts c ON s.contract_id = c.id
+        WHERE s.port_of_discharge IS NULL OR s.port_of_discharge = ''
+        ORDER BY c.contract_id
+      `);
+
+      truckingResult = await query(`
+        SELECT 
+          c.contract_id,
+          c.sto_number,
+          c.supplier,
+          c.product,
+          COALESCE(t.quantity_sent, 0) as quantity_shipped,
+          COALESCE(t.quantity_delivered, 0) as quantity_delivered,
+          COALESCE(t.quantity_sent, 0) + COALESCE(t.quantity_delivered, 0) as total_quantity,
+          COALESCE(t.status, 'UNKNOWN') as status
+        FROM trucking_operations t
+        LEFT JOIN contracts c ON t.contract_id = c.id
+        WHERE t.location IS NULL OR t.location = ''
+        ORDER BY c.contract_id
+      `);
     } else {
-      // Get details from trucking operations for Land transport
-      if (plant === 'Blank') {
-        // For blank plant locations, get records where location is NULL or empty
-        result = await query(`
-          SELECT 
-            c.contract_id,
-            c.sto_number,
-            c.supplier,
-            c.product,
-            COALESCE(t.quantity_sent, 0) as quantity_shipped,
-            COALESCE(t.quantity_delivered, 0) as quantity_delivered,
-            COALESCE(t.quantity_sent, 0) + COALESCE(t.quantity_delivered, 0) as total_quantity,
-            COALESCE(t.status, 'UNKNOWN') as status
-          FROM trucking_operations t
-          LEFT JOIN contracts c ON t.contract_id = c.id
-          WHERE t.location IS NULL OR t.location = ''
-          ORDER BY c.contract_id
-        `);
-      } else {
-        result = await query(`
-          SELECT 
-            c.contract_id,
-            c.sto_number,
-            c.supplier,
-            c.product,
-            COALESCE(t.quantity_sent, 0) as quantity_shipped,
-            COALESCE(t.quantity_delivered, 0) as quantity_delivered,
-            COALESCE(t.quantity_sent, 0) + COALESCE(t.quantity_delivered, 0) as total_quantity,
-            COALESCE(t.status, 'UNKNOWN') as status
-          FROM trucking_operations t
-          LEFT JOIN contracts c ON t.contract_id = c.id
-          WHERE t.location = $1
-          ORDER BY c.contract_id
-        `, [plant]);
-      }
+      shipmentsResult = await query(`
+        SELECT 
+          c.contract_id,
+          c.sto_number,
+          c.supplier,
+          c.product,
+          COALESCE(s.quantity_shipped, 0) as quantity_shipped,
+          COALESCE(s.quantity_delivered, 0) as quantity_delivered,
+          COALESCE(s.quantity_shipped, 0) + COALESCE(s.quantity_delivered, 0) as total_quantity,
+          COALESCE(s.status, 'UNKNOWN') as status
+        FROM shipments s
+        LEFT JOIN contracts c ON s.contract_id = c.id
+        WHERE s.port_of_discharge = $1
+        ORDER BY c.contract_id
+      `, [plant]);
+
+      truckingResult = await query(`
+        SELECT 
+          c.contract_id,
+          c.sto_number,
+          c.supplier,
+          c.product,
+          COALESCE(t.quantity_sent, 0) as quantity_shipped,
+          COALESCE(t.quantity_delivered, 0) as quantity_delivered,
+          COALESCE(t.quantity_sent, 0) + COALESCE(t.quantity_delivered, 0) as total_quantity,
+          COALESCE(t.status, 'UNKNOWN') as status
+        FROM trucking_operations t
+        LEFT JOIN contracts c ON t.contract_id = c.id
+        WHERE t.location = $1
+        ORDER BY c.contract_id
+      `, [plant]);
     }
+
+    const resultRows = [...shipmentsResult.rows, ...truckingResult.rows];
 
     return res.json({
       success: true,
-      data: result.rows,
+      data: resultRows,
     });
   } catch (error) {
     logger.error('Get plant details error:', error);
@@ -737,6 +859,61 @@ export const getProductDetails = async (req: AuthRequest, res: Response) => {
     return res.status(500).json({
       success: false,
       error: { message: 'Failed to fetch product details' },
+    });
+  }
+};
+
+// Get detailed contract information for a specific incoterm
+export const getIncotermDetails = async (req: AuthRequest, res: Response) => {
+  try {
+    const { incoterm } = req.query;
+
+    if (!incoterm) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Incoterm is required' },
+      });
+    }
+
+    const result = await query(
+      `
+      SELECT
+        c.contract_id,
+        c.sto_number,
+        c.supplier,
+        c.product,
+        c.quantity_ordered AS total_quantity,
+        COALESCE((
+          SELECT SUM(CAST(REPLACE(REPLACE(s.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
+          FROM sap_processed_data s
+          WHERE s.contract_number = c.contract_id
+            AND s.sto_number IS NOT NULL
+            AND s.data->'contract'->>'sto_quantity' IS NOT NULL
+        ), 0) AS quantity_delivered,
+        c.quantity_ordered - COALESCE((
+          SELECT SUM(CAST(REPLACE(REPLACE(s.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
+          FROM sap_processed_data s
+          WHERE s.contract_number = c.contract_id
+            AND s.sto_number IS NOT NULL
+            AND s.data->'contract'->>'sto_quantity' IS NOT NULL
+        ), 0) AS quantity_shipped,
+        c.status
+      FROM contracts c
+      WHERE COALESCE(c.incoterm, 'Blank') = $1
+      ORDER BY c.contract_id
+      `,
+      [incoterm],
+    );
+
+    return res.json({
+      success: true,
+      data: result.rows,
+    });
+  } catch (error) {
+    logger.error('Get incoterm details error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch incoterm details' },
     });
   }
 };

@@ -235,8 +235,14 @@ function ContractsPageContent() {
       params.append('page', page.toString())
       params.append('limit', contractsPerPage.toString())
       const searchTrim = searchTerm.trim()
-      if (searchTrim.length >= 4 && /^[a-zA-Z0-9]+$/.test(searchTrim)) {
-        params.append('contract_id', searchTrim)
+      if (searchTrim.length >= 3) {
+        // If purely numeric, treat as Contract ID (server-side filter)
+        if (/^\d+$/.test(searchTrim)) {
+          params.append('contract_id', searchTrim)
+        } else {
+          // Otherwise, use it as a supplier filter so we can find contracts by supplier across all pages
+          params.append('supplier', searchTrim)
+        }
       }
       if (statusFilter && statusFilter !== 'All Status') {
         // Map frontend status to backend status
@@ -391,6 +397,31 @@ function ContractsPageContent() {
     if (Number.isNaN(d.getTime())) return '-'
     // Keep compact and consistent (MM/DD/YYYY)
     return d.toLocaleDateString('en-US')
+  }
+
+  const getContractStatusRaw = (c: Contract) => {
+    return (c.import_status || c.status || '').toUpperCase()
+  }
+
+  const getContractAgingDays = (c: Contract): number | null => {
+    if (!c.delivery_end_date) return null
+    const statusRaw = getContractStatusRaw(c)
+    // Do not age closed/completed contracts
+    if (['CLOSE', 'CLOSED', 'COMPLETED'].includes(statusRaw)) return null
+    const end = new Date(c.delivery_end_date)
+    if (Number.isNaN(end.getTime())) return null
+    const today = new Date()
+    const diffMs = today.getTime() - end.getTime()
+    return Math.floor(diffMs / (1000 * 60 * 60 * 24))
+  }
+
+  const getContractAgingInfo = (c: Contract) => {
+    const days = getContractAgingDays(c)
+    if (days === null) return null
+    return {
+      days,
+      isOverdue: days >= 0,
+    }
   }
 
   const handleFilterChange = () => {
@@ -574,7 +605,7 @@ function ContractsPageContent() {
   }, [])
 
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
-    if (colId === 'contract_qty' || colId === 'outstanding_qty') return 'number'
+    if (colId === 'contract_qty' || colId === 'outstanding_qty' || colId === 'contract_aging') return 'number'
     if (colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'created_at') return 'date'
     return 'text'
   }
@@ -597,6 +628,10 @@ function ContractsPageContent() {
         return c.po_numbers || c.po_number || ''
       case 'sto_number':
         return c.sto_numbers || c.sto_number || ''
+      case 'contract_aging': {
+        const days = getContractAgingDays(c)
+        return days === null ? null : days
+      }
       case 'contract_qty':
         return typeof c.quantity_ordered === 'number' ? c.quantity_ordered : null
       case 'outstanding_qty':
@@ -705,6 +740,37 @@ function ContractsPageContent() {
           <div className="text-xs text-gray-600 truncate">{c.supplier || '-'} • {c.product || '-'}</div>
         </div>
       )
+    },
+    {
+      id: 'contract_aging',
+      label: 'Contract Aging',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => getContractAgingDays(c) ?? 0,
+      render: (c) => {
+        const info = getContractAgingInfo(c)
+        if (!info) {
+          return <span className="text-xs text-gray-500">-</span>
+        }
+        const absDays = Math.abs(info.days)
+        const daysLabel = `${absDays} day${absDays === 1 ? '' : 's'}`
+        const text =
+          info.days === 0
+            ? 'Due today'
+            : info.isOverdue
+              ? `${daysLabel} overdue`
+              : `${daysLabel} left`
+        return (
+          <span
+            className={`text-xs font-semibold ${
+              info.isOverdue ? 'text-red-600' : 'text-green-600'
+            }`}
+          >
+            {text}
+          </span>
+        )
+      },
+      className: 'whitespace-nowrap'
     },
     {
       id: 'contract_ext_no',
@@ -1901,15 +1967,17 @@ function ContractsPageContent() {
                     <h3 className="text-lg font-semibold mb-3">Basic Information</h3>
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Contract ID</div>
-                        <div className="font-medium mt-1">{selectedContract.contract_id}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Status</div>
                         <div className="mt-1">
                           <Badge className={getStatusColor(selectedContract.import_status || selectedContract.status)}>
                             {selectedContract.import_status || selectedContract.status}
                           </Badge>
+                        </div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Contract Ext No</div>
+                        <div className="font-medium mt-1 break-words whitespace-normal">
+                          {selectedContract.contract_ext_no || '-'}
                         </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
@@ -1927,12 +1995,6 @@ function ContractsPageContent() {
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">B2B Flag</div>
                         <div className="font-medium mt-1">{selectedContract.b2b_flag || '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Contract Ext No</div>
-                        <div className="font-medium mt-1 break-words whitespace-normal">
-                          {selectedContract.contract_ext_no || '-'}
-                        </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">CONTRACT REFF PO</div>

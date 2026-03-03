@@ -9,8 +9,10 @@ import {
   getTruckingOperationsByStatus,
   getContractQuantityByProduct,
   getContractQuantityByPlant,
+  getContractQuantityByIncoterm,
   getPlantDetails,
   getProductDetails,
+  getIncotermDetails,
   getFilterPlants,
   getFilterSuppliers,
   getFilteredContracts
@@ -37,8 +39,10 @@ router.get('/trucking-operations', getTruckingOperationsByStatus);
 // New dashboard widgets
 router.get('/contract-quantity-by-product', getContractQuantityByProduct);
 router.get('/contract-quantity-by-plant', getContractQuantityByPlant);
+router.get('/contract-quantity-by-incoterm', getContractQuantityByIncoterm);
 router.get('/plant-details', getPlantDetails);
 router.get('/product-details', getProductDetails);
+router.get('/incoterm-details', getIncotermDetails);
 
 // Filter options
 router.get('/filter-options/plants', getFilterPlants);

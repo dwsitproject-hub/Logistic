@@ -192,6 +192,11 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       queryText += ` AND (base.quantity_ordered - COALESCE(base.total_sto_quantity, 0)) > 0`;
     }
 
+    // Optional: delivered=true -> only contracts that have any STO quantity (delivered > 0)
+    if ((req.query as any).delivered === 'true') {
+      queryText += ` AND COALESCE(base.total_sto_quantity, 0) > 0`;
+    }
+
     queryText += ` ORDER BY base.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     queryParams.push(Number(limit), offset);
 

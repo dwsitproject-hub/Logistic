@@ -986,16 +986,19 @@ function ShipmentsPageContent() {
   }
 
   const filteredShipments = shipments.filter(shipment => {
-    // Search filter - works with Shipment ID, Contract Numbers, PO No, and Vessel Name
-    const matchesSearch = searchTerm === '' || 
-      shipment.shipment_id?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      shipment.contract_numbers?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      shipment.po_numbers?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      shipment.vessel_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      shipment.contract_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      shipment.supplier?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      shipment.plant_site?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      shipment.port_of_discharge?.toLowerCase().includes(searchTerm.toLowerCase())
+    // Search filter - works with STO No, Shipment ID, Contract Numbers, PO No, Vessel Name, Supplier, and Port/Plant
+    const term = searchTerm.trim().toLowerCase()
+    const matchesSearch =
+      term === '' ||
+      shipment.sto_number?.toLowerCase().includes(term) ||
+      shipment.shipment_id?.toLowerCase().includes(term) ||
+      shipment.contract_numbers?.toLowerCase().includes(term) ||
+      shipment.po_numbers?.toLowerCase().includes(term) ||
+      shipment.vessel_name?.toLowerCase().includes(term) ||
+      shipment.contract_number?.toLowerCase().includes(term) ||
+      shipment.supplier?.toLowerCase().includes(term) ||
+      shipment.plant_site?.toLowerCase().includes(term) ||
+      shipment.port_of_discharge?.toLowerCase().includes(term)
     
     // View option filter
     let matchesViewOption = true
@@ -1269,12 +1272,9 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.sto_number || '',
       render: (s) => (
-        <div className="min-w-0 break-words">
-          <div className="font-semibold break-words">{s.sto_number || ''}</div>
-          {s.sto_number ? (
-            <div className="text-xs text-gray-600 break-words">{s.vessel_name || '-'} • {s.contract_number || '-'}</div>
-          ) : null}
-        </div>
+        <span className="text-sm font-semibold break-words block">
+          {s.sto_number || ''}
+        </span>
       )
     },
     {
