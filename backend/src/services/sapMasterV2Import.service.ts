@@ -1004,24 +1004,20 @@ export class SapMasterV2ImportService {
         parsedData,
         undefined // userId - can be passed from import context
       );
-      
+
       return {
         contractCreated: !!distributionResult.contractId,
         shipmentCreated: !!distributionResult.shipmentId,
         qualitySurveysCreated: distributionResult.qualitySurveyIds.length,
         truckingOperationsCreated: distributionResult.truckingOperationIds.length,
-        paymentCreated: !!distributionResult.paymentId
+        paymentCreated: !!distributionResult.paymentId,
       };
     } catch (error) {
+      // Important: rethrow so the caller can rollback to the row SAVEPOINT.
+      // If we swallow the error, Postgres marks the transaction as aborted and subsequent commands fail
+      // with "current transaction is aborted...".
       logger.error('Data distribution failed', error);
-      // Return empty result on error - record will be marked as failed
-      return {
-        contractCreated: false,
-        shipmentCreated: false,
-        qualitySurveysCreated: 0,
-        truckingOperationsCreated: 0,
-        paymentCreated: false
-      };
+      throw error;
     }
   }
 }

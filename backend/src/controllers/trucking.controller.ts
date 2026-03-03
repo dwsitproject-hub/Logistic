@@ -18,10 +18,57 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
         t.unloading_location,
         t.trucking_owner,
         t.cargo_readiness_date,
-        t.trucking_start_date,
-        t.trucking_completion_date,
+        -- Use DB trucking dates, but fallback to SAP \"Trucking Start/Last Receive Date\" when DB is empty
+        COALESCE(
+          t.trucking_start_date,
+          (
+            SELECT (
+              CASE
+                WHEN trim(v.val) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(v.val)::date
+                WHEN trim(v.val) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(v.val), 'MM/DD/YY')
+                ELSE NULL
+              END
+            )
+            FROM (
+              SELECT COALESCE(
+                spd.data->'raw'->>'Trucking Start Receive Date',
+                spd.data->>'Trucking Start Receive Date'
+              ) AS val
+              FROM sap_processed_data spd
+              WHERE spd.contract_number = c.contract_id
+              ORDER BY spd.created_at DESC NULLS LAST
+              LIMIT 1
+            ) v
+            WHERE v.val IS NOT NULL AND length(trim(v.val)) >= 6
+          )
+        ) AS trucking_start_date,
+        COALESCE(
+          t.trucking_completion_date,
+          (
+            SELECT (
+              CASE
+                WHEN trim(v.val) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(v.val)::date
+                WHEN trim(v.val) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(v.val), 'MM/DD/YY')
+                ELSE NULL
+              END
+            )
+            FROM (
+              SELECT COALESCE(
+                spd.data->'raw'->>'Trucking Last Receive Date',
+                spd.data->>'Trucking Last Receive Date'
+              ) AS val
+              FROM sap_processed_data spd
+              WHERE spd.contract_number = c.contract_id
+              ORDER BY spd.created_at DESC NULLS LAST
+              LIMIT 1
+            ) v
+            WHERE v.val IS NOT NULL AND length(trim(v.val)) >= 6
+          )
+        ) AS trucking_completion_date,
         t.eta_trucking_start_date,
         t.eta_trucking_completion_date,
+        t.eta_delivery_start_date,
+        t.eta_delivery_end_date,
         t.quantity_sent,
         t.quantity_delivered,
         t.gain_loss_percentage,
@@ -42,7 +89,15 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
         c.buyer,
         c.product,
         c.group_name,
-        s.estimated_km
+        s.estimated_km,
+        (SELECT COALESCE(
+                  spd.data->'raw'->>'Contract Ext No',
+                  spd.data->>'Contract Ext No'
+                )
+         FROM sap_processed_data spd
+         WHERE spd.contract_number = c.contract_id
+         ORDER BY spd.created_at DESC NULLS LAST
+         LIMIT 1) AS contract_ext_no
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
       LEFT JOIN shipments s ON t.shipment_id = s.id
@@ -231,6 +286,8 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
       trucking_completion_date,
       eta_trucking_start_date,
       eta_trucking_completion_date,
+      eta_delivery_start_date,
+      eta_delivery_end_date,
       quantity_sent,
       quantity_delivered,
       gain_loss_percentage,
@@ -273,14 +330,16 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         trucking_owner, cargo_readiness_date,
         trucking_start_date, trucking_completion_date,
         eta_trucking_start_date, eta_trucking_completion_date,
+        eta_delivery_start_date, eta_delivery_end_date,
         quantity_sent, quantity_delivered,
         gain_loss_percentage, gain_loss_amount, oa_budget, oa_actual, status
       ) VALUES (
         $1::uuid, $2, $3, $4, $5, $6, $7::date,
         $8::date, $9::date,
         $10::date, $11::date,
-        $12::numeric, $13::numeric, $14::numeric,
-        $15::numeric, $16::numeric, $17
+        $12::date, $13::date,
+        $14::numeric, $15::numeric, $16::numeric,
+        $17::numeric, $18::numeric, $19
       ) RETURNING *`,
       [
         contractId,
@@ -294,6 +353,8 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         trucking_completion_date || null,
         eta_trucking_start_date || null,
         eta_trucking_completion_date || null,
+        eta_delivery_start_date || null,
+        eta_delivery_end_date || null,
         quantity_sent || null,
         quantity_delivered || null,
         gain_loss_percentage || null,
@@ -365,14 +426,6 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
     const { id } = req.params;
     const updateData = req.body;
 
-    // Validate required fields
-    if (!updateData.operation_id) {
-      return res.status(400).json({
-        success: false,
-        error: { message: 'Operation ID is required' },
-      });
-    }
-
     // Build dynamic update query
     const updateFields = [];
     const updateValues = [];
@@ -384,6 +437,7 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
       'trucking_owner', 'cargo_readiness_date',
       'trucking_start_date', 'trucking_completion_date',
       'eta_trucking_start_date', 'eta_trucking_completion_date',
+      'eta_delivery_start_date', 'eta_delivery_end_date',
       'quantity_sent', 'quantity_delivered', 'gain_loss_percentage',
       'gain_loss_amount', 'oa_budget', 'oa_actual', 'status'
     ];
@@ -392,7 +446,8 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
     const dateFields = [
       'cargo_readiness_date',
       'trucking_start_date', 'trucking_completion_date',
-      'eta_trucking_start_date', 'eta_trucking_completion_date'
+      'eta_trucking_start_date', 'eta_trucking_completion_date',
+      'eta_delivery_start_date', 'eta_delivery_end_date'
     ];
 
     for (const [key, value] of Object.entries(updateData)) {

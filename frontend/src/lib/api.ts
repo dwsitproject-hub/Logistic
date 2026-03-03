@@ -42,12 +42,14 @@ api.interceptors.response.use(
       }
     }
 
-    if (error.response?.status === 401) {
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        window.location.href = '/login';
-      }
+    // Treat 401 or 403 (invalid/expired token) as "need to re-login"
+    const status = error.response?.status;
+    const message = error.response?.data?.error?.message || '';
+    const isAuthFailure = status === 401 || (status === 403 && (message.includes('token') || message.includes('expired')));
+    if (isAuthFailure && typeof window !== 'undefined') {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      window.location.href = '/login';
     }
     return Promise.reject(error);
   }

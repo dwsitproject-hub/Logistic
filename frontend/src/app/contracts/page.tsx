@@ -55,6 +55,7 @@ interface Contract {
   dp_date_deviation_days?: number
   payoff_date_deviation_days?: number
   trucking_count?: number
+  contract_ext_no?: string
 }
 
 interface DocumentItem {
@@ -672,7 +673,8 @@ function ContractsPageContent() {
         contract.sto_numbers?.toLowerCase().includes(q) ||
         contract.supplier?.toLowerCase().includes(q) ||
         contract.product?.toLowerCase().includes(q) ||
-        contract.transport_mode?.toLowerCase().includes(q)
+        contract.transport_mode?.toLowerCase().includes(q) ||
+        contract.contract_ext_no?.toLowerCase().includes(q)
 
       if (!matchesSearch) return false
       return passesColumnFilters(contract)
@@ -702,6 +704,18 @@ function ContractsPageContent() {
           <div className="font-semibold truncate">{c.contract_id}</div>
           <div className="text-xs text-gray-600 truncate">{c.supplier || '-'} • {c.product || '-'}</div>
         </div>
+      )
+    },
+    {
+      id: 'contract_ext_no',
+      label: 'Contract Ext No',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => c.contract_ext_no || '',
+      render: (c) => (
+        <span className="text-sm break-words whitespace-normal" title={c.contract_ext_no || ''}>
+          {c.contract_ext_no || '-'}
+        </span>
       )
     },
     {
@@ -891,6 +905,8 @@ function ContractsPageContent() {
         return 'minmax(90px, 0.6fr)'
       case 'lt_spot':
         return 'minmax(90px, 0.6fr)'
+      case 'contract_ext_no':
+        return 'minmax(140px, 1fr)'
       case 'po_number':
       case 'sto_number':
         return 'minmax(150px, 1fr)'
@@ -1913,6 +1929,12 @@ function ContractsPageContent() {
                         <div className="font-medium mt-1">{selectedContract.b2b_flag || '-'}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Contract Ext No</div>
+                        <div className="font-medium mt-1 break-words whitespace-normal">
+                          {selectedContract.contract_ext_no || '-'}
+                        </div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">CONTRACT REFF PO</div>
                         <div className="font-medium mt-1">{selectedContract.contract_reference_po || '-'}</div>
                       </div>
@@ -2097,14 +2119,6 @@ function ContractsPageContent() {
                         <div className="text-gray-500">Incoterm</div>
                         <div className="font-medium mt-1">{selectedContract.incoterm || '-'}</div>
                       </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Logistics Classification</div>
-                        <div className="font-medium mt-1">{selectedContract.logistics_classification || '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">PO Classification</div>
-                        <div className="font-medium mt-1">{selectedContract.po_classification || '-'}</div>
-                      </div>
                     </div>
                   </div>
 
@@ -2123,10 +2137,6 @@ function ContractsPageContent() {
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Delivery End</div>
                         <div className="font-medium mt-1">{formatDate(selectedContract.delivery_end_date)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Created At</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.created_at)}</div>
                       </div>
                     </div>
                   </div>

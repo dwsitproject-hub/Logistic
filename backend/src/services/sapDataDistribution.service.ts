@@ -72,6 +72,16 @@ export class SapDataDistributionService {
     };
     
     try {
+      // Normalize: in some files STO lives under shipment (not contract). Ensure contract upsert receives it.
+      if (parsedData?.contract && parsedData?.shipment) {
+        if (!parsedData.contract.sto_no && parsedData.shipment.sto_no) {
+          parsedData.contract.sto_no = parsedData.shipment.sto_no;
+        }
+        if (!parsedData.contract.sto_quantity && parsedData.shipment.sto_quantity) {
+          parsedData.contract.sto_quantity = parsedData.shipment.sto_quantity;
+        }
+      }
+
       // 1. Create or update contract
       if (this.hasContractData(parsedData.contract, parsedData)) {
         try {
@@ -99,16 +109,28 @@ export class SapDataDistributionService {
       const seaLandValue = parsedData.contract?.sea_land || parsedData.contract?.transport_mode || null;
       const isLand = seaLandValue && seaLandValue.toString().toUpperCase().trim() === 'LAND';
       const isSea = seaLandValue && seaLandValue.toString().toUpperCase().trim() === 'SEA';
+      const hasShipment = this.hasShipmentData(parsedData.shipment);
+      const hasVesselLike =
+        !!(
+          parsedData.shipment?.vessel_name ||
+          parsedData.shipment?.vessel_code ||
+          parsedData.shipment?.voyage_no ||
+          parsedData.shipment?.vessel_owner ||
+          parsedData.shipment?.vessel_loading_port_1 ||
+          parsedData.shipment?.vessel_discharge_port
+        );
+      const assumeSea = !isLand && !isSea && hasShipment && hasVesselLike;
       
       logger.info('Routing decision based on SEA / LAND:', {
         sea_land: seaLandValue,
         isLand,
-        isSea,
-        hasShipmentData: this.hasShipmentData(parsedData.shipment)
+        isSea: isSea || assumeSea,
+        hasShipmentData: hasShipment,
+        assumedSea: assumeSea
       });
       
       // 2a. Create or update shipment (only if SEA / LAND = "SEA")
-      if (isSea && this.hasShipmentData(parsedData.shipment)) {
+      if ((isSea || assumeSea) && hasShipment) {
         try {
           // Extract vessel data from shipment object (where it's actually stored)
           const vesselData = {
@@ -241,126 +263,79 @@ export class SapDataDistributionService {
     contractData: any,
     userId?: string
   ): Promise<string> {
-    const contractNumber = contractData.contract_no;
-    const poNumber = contractData.po_no;
-    
-    console.log('DEBUG upsertContract - Full contractData:', JSON.stringify(contractData, null, 2));
-    console.log('DEBUG upsertContract - contractNumber:', contractNumber);
-    console.log('DEBUG upsertContract - poNumber:', poNumber);
-    console.log('DEBUG upsertContract - Final contract_id will be:', contractNumber || `PO-${poNumber}`);
-    
-    if (!contractNumber && !poNumber) {
+    const contractNumber = contractData.contract_no != null ? String(contractData.contract_no).trim() || null : null;
+    const poNumber = contractData.po_no != null ? String(contractData.po_no).trim() || null : null;
+    const effectiveContractId = contractNumber || (poNumber ? `PO-${poNumber}` : null);
+
+    if (!effectiveContractId) {
       throw new Error('Contract number or PO number is required');
     }
-    
-    // Check if contract exists
-    const existing = await client.query(
-      `SELECT id FROM contracts WHERE contract_id = $1 OR po_number = $2 LIMIT 1`,
-      [contractNumber, poNumber]
+
+    const quantity = this.parseNumber(contractData.contract_quantity);
+    const unitPrice = this.parseNumber(contractData.unit_price);
+    const contractValue = (quantity && unitPrice) ? quantity * unitPrice : null;
+
+    // Upsert: insert or update on conflict (contract_id unique) so re-upload of same contract updates instead of failing
+    const result = await client.query(
+      `INSERT INTO contracts (
+        contract_id, group_name, supplier, buyer, contract_date, product, po_number,
+        incoterm, transport_mode, quantity_ordered, unit, unit_price, contract_value,
+        delivery_start_date, delivery_end_date, source_type, contract_type,
+        status, sto_number, sto_quantity, logistics_classification, po_classification,
+        created_by
+      ) VALUES (
+        $1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10::numeric, 'MT', $11::numeric, $12::numeric,
+        $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22
+      )
+      ON CONFLICT (contract_id) DO UPDATE SET
+        group_name = COALESCE(EXCLUDED.group_name, contracts.group_name),
+        supplier = COALESCE(EXCLUDED.supplier, contracts.supplier),
+        buyer = COALESCE(EXCLUDED.buyer, contracts.buyer),
+        contract_date = COALESCE(EXCLUDED.contract_date, contracts.contract_date),
+        product = COALESCE(EXCLUDED.product, contracts.product),
+        po_number = COALESCE(EXCLUDED.po_number, contracts.po_number),
+        incoterm = COALESCE(EXCLUDED.incoterm, contracts.incoterm),
+        transport_mode = COALESCE(EXCLUDED.transport_mode, contracts.transport_mode),
+        quantity_ordered = COALESCE(EXCLUDED.quantity_ordered, contracts.quantity_ordered),
+        unit_price = COALESCE(EXCLUDED.unit_price, contracts.unit_price),
+        contract_value = COALESCE(EXCLUDED.contract_value, contracts.contract_value),
+        delivery_start_date = COALESCE(EXCLUDED.delivery_start_date, contracts.delivery_start_date),
+        delivery_end_date = COALESCE(EXCLUDED.delivery_end_date, contracts.delivery_end_date),
+        source_type = COALESCE(EXCLUDED.source_type, contracts.source_type),
+        contract_type = COALESCE(EXCLUDED.contract_type, contracts.contract_type),
+        status = COALESCE(EXCLUDED.status, contracts.status),
+        sto_number = COALESCE(EXCLUDED.sto_number, contracts.sto_number),
+        sto_quantity = COALESCE(EXCLUDED.sto_quantity, contracts.sto_quantity),
+        logistics_classification = COALESCE(EXCLUDED.logistics_classification, contracts.logistics_classification),
+        po_classification = COALESCE(EXCLUDED.po_classification, contracts.po_classification),
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING id`,
+      [
+        effectiveContractId,
+        contractData.group,
+        contractData.supplier,
+        contractData.buyer || contractData.group || 'Unknown',
+        this.parseDate(contractData.contract_date),
+        contractData.product,
+        poNumber,
+        contractData.incoterm,
+        contractData.sea_land || contractData.transport_mode,
+        quantity,
+        unitPrice,
+        contractValue,
+        this.parseDate(contractData.due_date_delivery_start),
+        this.parseDate(contractData.due_date_delivery_end),
+        contractData.source,
+        contractData.contract_type || contractData.ltc_spot,
+        'ACTIVE',
+        contractData.sto_no,
+        this.parseNumber(contractData.sto_quantity),
+        contractData.logistics_area_classification,
+        contractData.sto_classification || contractData.po_classification,
+        userId
+      ]
     );
-    
-    if (existing.rows.length > 0) {
-      // Update existing contract
-      const contractId = existing.rows[0].id;
-      const quantity = this.parseNumber(contractData.contract_quantity);
-      const unitPrice = this.parseNumber(contractData.unit_price);
-      const contractValue = (quantity && unitPrice) ? quantity * unitPrice : null;
-      
-      await client.query(
-        `UPDATE contracts SET
-          contract_id = COALESCE($1, contract_id),
-          group_name = COALESCE($2, group_name),
-          supplier = COALESCE($3, supplier),
-          buyer = COALESCE($4, buyer),
-          contract_date = COALESCE($5::date, contract_date),
-          product = COALESCE($6, product),
-          po_number = COALESCE($7, po_number),
-          incoterm = COALESCE($8, incoterm),
-          transport_mode = COALESCE($9, transport_mode),
-          quantity_ordered = COALESCE($10::numeric, quantity_ordered),
-          unit_price = COALESCE($11::numeric, unit_price),
-          contract_value = COALESCE($12::numeric, contract_value),
-          delivery_start_date = COALESCE($13::date, delivery_start_date),
-          delivery_end_date = COALESCE($14::date, delivery_end_date),
-          source_type = COALESCE($15, source_type),
-          contract_type = COALESCE($16, contract_type),
-          status = COALESCE($17, status),
-          sto_number = COALESCE($18, sto_number),
-          sto_quantity = COALESCE($19::numeric, sto_quantity),
-          logistics_classification = COALESCE($20, logistics_classification),
-          po_classification = COALESCE($21, po_classification),
-          updated_at = CURRENT_TIMESTAMP
-         WHERE id = $22`,
-        [
-          contractNumber || `PO-${poNumber}`, // contract_id
-          contractData.group,
-          contractData.supplier,
-          contractData.buyer || contractData.group || null, // NEW: Use buyer field, fallback to group
-          this.parseDate(contractData.contract_date),
-          contractData.product,
-          poNumber,
-          contractData.incoterm,
-          contractData.sea_land || contractData.transport_mode,
-          quantity,
-          unitPrice,
-          contractValue,
-          this.parseDate(contractData.due_date_delivery_start),
-          this.parseDate(contractData.due_date_delivery_end),
-          contractData.source,
-          contractData.contract_type || contractData.ltc_spot, // UPDATED: Use contract_type (changed from B2B Flag)
-          'ACTIVE', // Force valid status
-          contractData.sto_no,
-          this.parseNumber(contractData.sto_quantity),
-          contractData.logistics_area_classification,
-          contractData.sto_classification || contractData.po_classification, // UPDATED: Use sto_classification (changed from PO Classification)
-          contractId
-        ]
-      );
-      return contractId;
-    } else {
-      // Create new contract
-      const quantity = this.parseNumber(contractData.contract_quantity);
-      const unitPrice = this.parseNumber(contractData.unit_price);
-      const contractValue = (quantity && unitPrice) ? quantity * unitPrice : null;
-      
-      const result = await client.query(
-        `INSERT INTO contracts (
-          contract_id, group_name, supplier, buyer, contract_date, product, po_number,
-          incoterm, transport_mode, quantity_ordered, unit, unit_price, contract_value,
-          delivery_start_date, delivery_end_date, source_type, contract_type,
-          status, sto_number, sto_quantity, logistics_classification, po_classification,
-          created_by
-        ) VALUES (
-          $1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10::numeric, 'MT', $11::numeric, $12::numeric,
-          $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22
-        ) RETURNING id`,
-        [
-          contractNumber || `PO-${poNumber}`,
-          contractData.group,
-          contractData.supplier,
-          contractData.buyer || contractData.group || 'Unknown', // NEW: Use buyer field, fallback to group
-          this.parseDate(contractData.contract_date),
-          contractData.product,
-          poNumber,
-          contractData.incoterm,
-          contractData.sea_land || contractData.transport_mode,
-          quantity,
-          unitPrice,
-          contractValue,
-          this.parseDate(contractData.due_date_delivery_start),
-          this.parseDate(contractData.due_date_delivery_end),
-          contractData.source,
-          contractData.contract_type || contractData.ltc_spot, // UPDATED: Use contract_type (changed from B2B Flag)
-          'ACTIVE', // Force valid status
-          contractData.sto_no,
-          this.parseNumber(contractData.sto_quantity),
-          contractData.logistics_area_classification,
-          contractData.sto_classification || contractData.po_classification, // UPDATED: Use sto_classification (changed from PO Classification)
-          userId
-        ]
-      );
-      return result.rows[0].id;
-    }
+    return result.rows[0].id;
   }
   
   /**
@@ -373,18 +348,7 @@ export class SapDataDistributionService {
     vesselData: any,
     _userId?: string
   ): Promise<string> {
-    const shipmentId = shipmentData.shipment_id || shipmentData.sto_no;
-    
-    if (!shipmentId) {
-      logger.warn('No shipment ID provided, skipping shipment creation');
-      return '';
-    }
-    
-    // Resolve existing shipment
-    const existing = await client.query(
-      `SELECT id FROM shipments WHERE shipment_id = $1 LIMIT 1`,
-      [shipmentId]
-    );
+    const shipmentIdFromSap = shipmentData.shipment_id || shipmentData.sto_no;
 
     const voyageNo = vesselData.voyage_no || shipmentData.voyage_no;
     const vesselCode = vesselData.vessel_code || shipmentData.vessel_code;
@@ -415,7 +379,7 @@ export class SapDataDistributionService {
     const etaArrival = this.parseDate(shipmentData.eta_vessel_arrival_loading_port_1 || shipmentData.eta_arrival_loading_port_1);
     const ataArrival = this.parseDate(shipmentData.ata_vessel_arrival_at_loading_port_1);
     const etaSailed = this.parseDate(shipmentData.eta_vessel_sailed_at_loading_port_1);
-    const ataSailed = this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_1);
+    const ataSailed = this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_1 ?? shipmentData.ata_vessel_sailed_from_loading_port);
 
     const shipmentDate = this.parseDate(shipmentData.shipment_date);
     const arrivalDate = this.parseDate(shipmentData.arrival_date);
@@ -436,16 +400,16 @@ export class SapDataDistributionService {
     const averageVesselSpeed = this.parseNumber(shipmentData.average_vessel_speed);
 
     const etaLoadingStart = this.parseDate(shipmentData.eta_loading_start_at_loading_port_1);
-    const ataLoadingStart = this.parseDate(shipmentData.ata_loading_start_at_loading_port_1);
+    const ataLoadingStart = this.parseDate(shipmentData.ata_loading_start_at_loading_port_1 ?? shipmentData.ata_vessel_start_loading);
     const etaLoadingComplete = this.parseDate(shipmentData.eta_loading_completed_at_loading_port_1);
-    const ataLoadingComplete = this.parseDate(shipmentData.ata_loading_completed_at_loading_port_1);
+    const ataLoadingComplete = this.parseDate(shipmentData.ata_loading_completed_at_loading_port_1 ?? shipmentData.ata_vessel_completed_loading);
 
     const etaDischargeArrival = this.parseDate(shipmentData.eta_arrival_at_discharge_port);
     const ataDischargeArrival = this.parseDate(shipmentData.ata_vessel_arrival_at_discharge_port);
     const etaDischargeStart = this.parseDate(shipmentData.eta_discharging_start_at_discharge_port);
-    const ataDischargeStart = this.parseDate(shipmentData.ata_discharging_start_at_discharge_port);
+    const ataDischargeStart = this.parseDate(shipmentData.ata_discharging_start_at_discharge_port ?? shipmentData.ata_vessel_start_discharging);
     const etaDischargeComplete = this.parseDate(shipmentData.eta_discharging_completed_at_discharge_port);
-    const ataDischargeComplete = this.parseDate(shipmentData.ata_discharging_completed_at_discharge_port);
+    const ataDischargeComplete = this.parseDate(shipmentData.ata_discharging_completed_at_discharge_port ?? shipmentData.ata_vessel_completed_discharge);
 
     const loadingRate = this.parseNumber(shipmentData.loading_rate_at_loading_port_1);
     const dischargeRate = this.parseNumber(shipmentData.discharge_rate_at_discharging_port);
@@ -456,65 +420,99 @@ export class SapDataDistributionService {
     const shipmentStatus = shipmentData.status ? String(shipmentData.status).trim().toUpperCase() : null;
     const statusForInsert = shipmentStatus || 'PLANNED';
 
-    if (existing.rows.length > 0) {
-      const id = existing.rows[0].id;
+    // Strategy:
+    // 1) Prefer direct match by shipment_id from SAP.
+    // 2) Otherwise, when contractId + vesselName are present, look for a shipment for this contract
+    //    whose vessel_name is at least 80% similar. If found, update that shipment instead of inserting.
+
+    let targetShipmentId: string | null = null;
+
+    if (shipmentIdFromSap) {
+      const existingByShipment = await client.query(
+        `SELECT id FROM shipments WHERE shipment_id = $1 LIMIT 1`,
+        [shipmentIdFromSap]
+      );
+      if (existingByShipment.rows.length > 0) {
+        targetShipmentId = existingByShipment.rows[0].id;
+      }
+    }
+
+    if (!targetShipmentId && contractId && vesselName) {
+      const existingForContract = await client.query(
+        `SELECT id, vessel_name FROM shipments WHERE contract_id = $1`,
+        [contractId]
+      );
+
+      let bestId: string | null = null;
+      let bestScore = 0;
+      for (const row of existingForContract.rows) {
+        const score = this.stringSimilarity(vesselName, row.vessel_name);
+        if (score > bestScore) {
+          bestScore = score;
+          bestId = row.id;
+        }
+      }
+
+      if (bestId && bestScore >= 0.8) {
+        targetShipmentId = bestId;
+      }
+    }
+
+    if (targetShipmentId) {
+      const id = targetShipmentId;
       await client.query(
         `UPDATE shipments SET
           contract_id = COALESCE($1::uuid, contract_id),
-          status = COALESCE($2, status),
-          voyage_no = COALESCE($3, voyage_no),
-          vessel_code = COALESCE($4, vessel_code),
-          vessel_name = COALESCE($5, vessel_name),
-          vessel_owner = COALESCE($6, vessel_owner),
-          vessel_draft = COALESCE($7::numeric, vessel_draft),
-          vessel_loa = COALESCE($8::numeric, vessel_loa),
-          vessel_capacity = COALESCE($9::numeric, vessel_capacity),
-          vessel_hull_type = COALESCE($10, vessel_hull_type),
-          vessel_registration_year = COALESCE($11::int, vessel_registration_year),
-          charter_type = COALESCE($12, charter_type),
-          loading_method = COALESCE($13, loading_method),
-          discharge_method = COALESCE($14, discharge_method),
-          port_of_loading = CASE WHEN $15 IS NOT NULL AND $15 != '' AND $15 != '0.00' THEN $15 ELSE port_of_loading END,
-          port_of_discharge = CASE WHEN $16 IS NOT NULL AND $16 != '' AND $16 != '0.00' THEN $16 ELSE port_of_discharge END,
-          eta_arrival = COALESCE($17::date, eta_arrival),
-          ata_arrival = COALESCE($18::date, ata_arrival),
-          eta_sailed = COALESCE($19::date, eta_sailed),
-          ata_sailed = COALESCE($20::date, ata_sailed),
-          shipment_date = COALESCE($21::date, shipment_date),
-          arrival_date = COALESCE($22::date, arrival_date),
-          quantity_shipped = COALESCE($23::numeric, quantity_shipped),
-          quantity_delivered = COALESCE($24::numeric, quantity_delivered),
-          bl_quantity = COALESCE($25::numeric, bl_quantity),
-          actual_vessel_qty_receive = COALESCE($26::numeric, actual_vessel_qty_receive),
-          difference_final_qty_vs_bl_qty = COALESCE($27::numeric, difference_final_qty_vs_bl_qty),
-          estimated_km = COALESCE($28::numeric, estimated_km),
-          estimated_nautical_miles = COALESCE($29::numeric, estimated_nautical_miles),
-          vessel_oa_budget = COALESCE($30::numeric, vessel_oa_budget),
-          vessel_oa_actual = COALESCE($31::numeric, vessel_oa_actual),
-          average_vessel_speed = COALESCE($32::numeric, average_vessel_speed),
-          eta_loading_start = COALESCE($33::date, eta_loading_start),
-          ata_loading_start = COALESCE($34::date, ata_loading_start),
-          eta_loading_complete = COALESCE($35::date, eta_loading_complete),
-          ata_loading_complete = COALESCE($36::date, ata_loading_complete),
-          eta_discharge_arrival = COALESCE($37::date, eta_discharge_arrival),
-          ata_discharge_arrival = COALESCE($38::date, ata_discharge_arrival),
-          eta_discharge_start = COALESCE($39::date, eta_discharge_start),
-          ata_discharge_start = COALESCE($40::date, ata_discharge_start),
-          eta_discharge_complete = COALESCE($41::date, eta_discharge_complete),
-          ata_discharge_complete = COALESCE($42::date, ata_discharge_complete),
-          loading_rate = COALESCE($43::numeric, loading_rate),
-          discharge_rate = COALESCE($44::numeric, discharge_rate),
-          loading_duration_days = COALESCE($45::int, loading_duration_days),
-          discharge_duration_days = COALESCE($46::int, discharge_duration_days),
-          total_lead_time_days = COALESCE($47::int, total_lead_time_days),
+          voyage_no = COALESCE($2, voyage_no),
+          vessel_code = COALESCE($3, vessel_code),
+          vessel_owner = COALESCE($4, vessel_owner),
+          vessel_draft = COALESCE($5::numeric, vessel_draft),
+          vessel_loa = COALESCE($6::numeric, vessel_loa),
+          vessel_capacity = COALESCE($7::numeric, vessel_capacity),
+          vessel_hull_type = COALESCE($8, vessel_hull_type),
+          vessel_registration_year = COALESCE($9::int, vessel_registration_year),
+          charter_type = COALESCE($10, charter_type),
+          loading_method = COALESCE($11, loading_method),
+          discharge_method = COALESCE($12, discharge_method),
+          port_of_loading = CASE WHEN $13::text IS NOT NULL AND trim(COALESCE($13::text, '')) != '' AND trim(COALESCE($13::text, '')) != '0.00' THEN $13::text ELSE port_of_loading END,
+          port_of_discharge = CASE WHEN $14::text IS NOT NULL AND trim(COALESCE($14::text, '')) != '' AND trim(COALESCE($14::text, '')) != '0.00' THEN $14::text ELSE port_of_discharge END,
+          shipment_date = COALESCE($15::date, shipment_date),
+          arrival_date = COALESCE($16::date, arrival_date),
+          quantity_shipped = COALESCE($17::numeric, quantity_shipped),
+          quantity_delivered = COALESCE($18::numeric, quantity_delivered),
+          bl_quantity = COALESCE($19::numeric, bl_quantity),
+          actual_vessel_qty_receive = COALESCE($20::numeric, actual_vessel_qty_receive),
+          difference_final_qty_vs_bl_qty = COALESCE($21::numeric, difference_final_qty_vs_bl_qty),
+          estimated_km = COALESCE($22::numeric, estimated_km),
+          estimated_nautical_miles = COALESCE($23::numeric, estimated_nautical_miles),
+          vessel_oa_budget = COALESCE($24::numeric, vessel_oa_budget),
+          vessel_oa_actual = COALESCE($25::numeric, vessel_oa_actual),
+          average_vessel_speed = COALESCE($26::numeric, average_vessel_speed),
+          loading_rate = COALESCE($27::numeric, loading_rate),
+          discharge_rate = COALESCE($28::numeric, discharge_rate),
+          loading_duration_days = COALESCE($29::int, loading_duration_days),
+          discharge_duration_days = COALESCE($30::int, discharge_duration_days),
+          total_lead_time_days = COALESCE($31::int, total_lead_time_days),
+          eta_arrival = COALESCE($32::date, eta_arrival),
+          ata_arrival = COALESCE($33::date, ata_arrival),
+          eta_sailed = COALESCE($34::date, eta_sailed),
+          ata_sailed = COALESCE($35::date, ata_sailed),
+          eta_loading_start = COALESCE($36::date, eta_loading_start),
+          ata_loading_start = COALESCE($37::date, ata_loading_start),
+          eta_loading_complete = COALESCE($38::date, eta_loading_complete),
+          ata_loading_complete = COALESCE($39::date, ata_loading_complete),
+          eta_discharge_arrival = COALESCE($40::date, eta_discharge_arrival),
+          ata_discharge_arrival = COALESCE($41::date, ata_discharge_arrival),
+          eta_discharge_start = COALESCE($42::date, eta_discharge_start),
+          ata_discharge_start = COALESCE($43::date, ata_discharge_start),
+          eta_discharge_complete = COALESCE($44::date, eta_discharge_complete),
+          ata_discharge_complete = COALESCE($45::date, ata_discharge_complete),
           updated_at = CURRENT_TIMESTAMP
-         WHERE id = $48`,
+         WHERE id = $46`,
         [
           contractId,
-          shipmentStatus,
           voyageNo,
           vesselCode,
-          vesselName,
           vesselOwner,
           vesselDraft,
           vesselLoa,
@@ -526,10 +524,6 @@ export class SapDataDistributionService {
           dischargeMethod,
           portOfLoading,
           portOfDischarge,
-          etaArrival,
-          ataArrival,
-          etaSailed,
-          ataSailed,
           shipmentDate,
           arrivalDate,
           quantityShipped,
@@ -542,6 +536,15 @@ export class SapDataDistributionService {
           vesselOaBudget,
           vesselOaActual,
           averageVesselSpeed,
+          loadingRate,
+          dischargeRate,
+          loadingDurationDays,
+          dischargeDurationDays,
+          totalLeadTimeDays,
+          etaArrival,
+          ataArrival,
+          etaSailed,
+          ataSailed,
           etaLoadingStart,
           ataLoadingStart,
           etaLoadingComplete,
@@ -552,16 +555,11 @@ export class SapDataDistributionService {
           ataDischargeStart,
           etaDischargeComplete,
           ataDischargeComplete,
-          loadingRate,
-          dischargeRate,
-          loadingDurationDays,
-          dischargeDurationDays,
-          totalLeadTimeDays,
           id
         ]
       );
       return id;
-    } else {
+    } else if (shipmentIdFromSap) {
       const result = await client.query(
         `INSERT INTO shipments (
           shipment_id, contract_id, status, voyage_no, vessel_code, vessel_name, vessel_owner,
@@ -584,7 +582,7 @@ export class SapDataDistributionService {
           $46::int, $47::int, $48::int
         ) RETURNING id`,
         [
-          shipmentId,
+          shipmentIdFromSap,
           contractId,
           statusForInsert,
           voyageNo,
@@ -636,6 +634,15 @@ export class SapDataDistributionService {
       );
       return result.rows[0].id;
     }
+
+    // If we reach here, we had neither a direct shipment_id nor a good vessel-name match.
+    // Safely skip creating a shipment for this row.
+    logger.warn('No suitable shipment target found for SAP row; skipping shipment upsert', {
+      shipmentIdFromSap,
+      contractId,
+      vesselName
+    });
+    return '';
   }
   
   /**
@@ -698,11 +705,11 @@ export class SapDataDistributionService {
         eta_vessel_berthed: this.parseDate(shipmentData.eta_vessel_berthed_at_loading_port_1),
         ata_vessel_berthed: this.parseDate(shipmentData.ata_vessel_berthed_at_loading_port_1),
         eta_loading_start: this.parseDate(shipmentData.eta_loading_start_at_loading_port_1),
-        ata_loading_start: this.parseDate(shipmentData.ata_loading_start_at_loading_port_1),
+        ata_loading_start: this.parseDate(shipmentData.ata_loading_start_at_loading_port_1 ?? shipmentData.ata_vessel_start_loading),
         eta_loading_completed: this.parseDate(shipmentData.eta_loading_completed_at_loading_port_1),
-        ata_loading_completed: this.parseDate(shipmentData.ata_loading_completed_at_loading_port_1),
+        ata_loading_completed: this.parseDate(shipmentData.ata_loading_completed_at_loading_port_1 ?? shipmentData.ata_vessel_completed_loading),
         eta_vessel_sailed: this.parseDate(shipmentData.eta_vessel_sailed_at_loading_port_1),
-        ata_vessel_sailed: this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_1),
+        ata_vessel_sailed: this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_1 ?? shipmentData.ata_vessel_sailed_from_loading_port),
         loading_rate: this.parseNumber(shipmentData.loading_rate_at_loading_port_1),
         is_discharge_port: false,
         ...mapQualityColumns('Loading Port 1')
@@ -769,11 +776,11 @@ export class SapDataDistributionService {
         eta_vessel_berthed: this.parseDate(shipmentData.eta_vessel_berthed_at_discharge_port),
         ata_vessel_berthed: this.parseDate(shipmentData.ata_vessel_berthed_at_discharge_port),
         eta_loading_start: this.parseDate(shipmentData.eta_discharging_start_at_discharge_port),
-        ata_loading_start: this.parseDate(shipmentData.ata_discharging_start_at_discharge_port),
+        ata_loading_start: this.parseDate(shipmentData.ata_discharging_start_at_discharge_port ?? shipmentData.ata_vessel_start_discharging),
         eta_loading_completed: this.parseDate(shipmentData.eta_discharging_completed_at_discharge_port),
-        ata_loading_completed: this.parseDate(shipmentData.ata_discharging_completed_at_discharge_port),
+        ata_loading_completed: this.parseDate(shipmentData.ata_discharging_completed_at_discharge_port ?? shipmentData.ata_vessel_completed_discharge),
         eta_vessel_sailed: this.parseDate(shipmentData.eta_discharging_completed_at_discharge_port),
-        ata_vessel_sailed: this.parseDate(shipmentData.ata_discharging_completed_at_discharge_port),
+        ata_vessel_sailed: this.parseDate(shipmentData.ata_discharging_completed_at_discharge_port ?? shipmentData.ata_vessel_completed_discharge),
         loading_rate: dischargeRate,
         is_discharge_port: true,
         ...dischargeQuality
@@ -932,7 +939,7 @@ export class SapDataDistributionService {
   }
   
   /**
-   * Create trucking operation
+   * Create or update trucking operation
    */
   private static async createTruckingOperation(
     client: PoolClient,
@@ -966,6 +973,75 @@ export class SapDataDistributionService {
       startDate != null ? 'IN_PROGRESS' :
       'PLANNED';
 
+    const truckingOwner = data.trucking_owner_at_starting_location;
+
+    // Try to find existing trucking operation by contract + similar trucking owner (>= 0.8)
+    let targetTruckingId: string | null = null;
+    if (contractId && truckingOwner) {
+      const existingForContract = await client.query(
+        `SELECT id, trucking_owner FROM trucking_operations WHERE contract_id = $1`,
+        [contractId]
+      );
+
+      let bestId: string | null = null;
+      let bestScore = 0;
+      for (const row of existingForContract.rows) {
+        const score = this.stringSimilarity(truckingOwner, row.trucking_owner);
+        if (score > bestScore) {
+          bestScore = score;
+          bestId = row.id;
+        }
+      }
+
+      if (bestId && bestScore >= 0.8) {
+        targetTruckingId = bestId;
+      }
+    }
+
+    if (targetTruckingId) {
+      // Update existing trucking operation, but do NOT override:
+      // - status
+      // - eta_delivery_start_date, eta_delivery_end_date
+      // - eta_trucking_start_date, eta_trucking_completion_date
+      await client.query(
+        `UPDATE trucking_operations SET
+          shipment_id = COALESCE($1::uuid, shipment_id),
+          location_sequence = COALESCE($2, location_sequence),
+          cargo_readiness_date = COALESCE($3::date, cargo_readiness_date),
+          loading_location = COALESCE($4, loading_location),
+          unloading_location = COALESCE($5, unloading_location),
+          location = COALESCE($6, location),
+          trucking_owner = COALESCE($7, trucking_owner),
+          oa_budget = COALESCE($8::numeric, oa_budget),
+          oa_actual = COALESCE($9::numeric, oa_actual),
+          quantity_sent = COALESCE($10::numeric, quantity_sent),
+          quantity_delivered = COALESCE($11::numeric, quantity_delivered),
+          gain_loss = COALESCE($12::numeric, gain_loss),
+          trucking_start_date = COALESCE($13::date, trucking_start_date),
+          trucking_completion_date = COALESCE($14::date, trucking_completion_date),
+          updated_at = CURRENT_TIMESTAMP
+         WHERE id = $15`,
+        [
+          shipmentId,
+          truckingData.sequence,
+          this.parseDate(data.cargo_readiness_at_starting_location),
+          loadingLocation,
+          unloadingLocation,
+          location,
+          truckingOwner,
+          this.parseNumber(data.trucking_oa_budget_at_starting_location),
+          this.parseNumber(data.trucking_oa_actual_at_starting_location),
+          this.parseNumber(data.quantity_sent_via_trucking_based_on_surat_jalan),
+          this.parseNumber(data.quantity_delivered_via_trucking),
+          this.parseNumber(data.trucking_gain_loss_at_starting_location),
+          startDate,
+          completionDate,
+          targetTruckingId
+        ]
+      );
+      return targetTruckingId;
+    }
+
     const result = await client.query(
       `INSERT INTO trucking_operations (
         shipment_id, contract_id, location_sequence, cargo_readiness_date,
@@ -985,7 +1061,7 @@ export class SapDataDistributionService {
         loadingLocation,
         unloadingLocation,
         location,
-        data.trucking_owner_at_starting_location,
+        truckingOwner,
         this.parseNumber(data.trucking_oa_budget_at_starting_location),
         this.parseNumber(data.trucking_oa_actual_at_starting_location),
         this.parseNumber(data.quantity_sent_via_trucking_based_on_surat_jalan),
@@ -1096,7 +1172,56 @@ export class SapDataDistributionService {
    * Helper: Check if has shipment data
    */
   private static hasShipmentData(shipmentData: any): boolean {
-    return shipmentData && (shipmentData.shipment_id || shipmentData.sto_no);
+    if (!shipmentData) return false;
+
+    // Strong identifiers
+    if (shipmentData.shipment_id || shipmentData.sto_no) {
+      return true;
+    }
+
+    // If we have key vessel/port/quantity or ETA/ATA fields populated, we still
+    // want to treat this row as shipment data so we can update an existing
+    // shipment (matched by contract + vessel) without requiring shipment_id/STO.
+    const candidateKeys = [
+      // Vessel identity
+      'vessel_name',
+      'vessel_code',
+      'vessel_owner',
+      // Ports
+      'vessel_loading_port_1',
+      'vessel_discharge_port',
+      'port_of_loading',
+      'port_of_discharge',
+      // Quantities
+      'quantity_at_loading_port_1_based_on_bast',
+      'quantity_shipped',
+      'quantity_delivered',
+      'bl_quantity',
+      // ETA / ATA fields at loading port
+      'eta_vessel_arrival_loading_port_1',
+      'eta_loading_start_at_loading_port_1',
+      'eta_loading_completed_at_loading_port_1',
+      'eta_vessel_sailed_at_loading_port_1',
+      'ata_vessel_arrival_at_loading_port_1',
+      'ata_vessel_berthed_at_loading_port_1',
+      'ata_vessel_start_loading',
+      'ata_vessel_completed_loading',
+      'ata_vessel_sailed_from_loading_port',
+      // ETA / ATA fields at discharge port
+      'eta_arrival_at_discharge_port',
+      'eta_discharging_start_at_discharge_port',
+      'eta_discharging_completed_at_discharge_port',
+      'ata_vessel_arrival_at_discharge_port',
+      'ata_discharging_start_at_discharge_port',
+      'ata_vessel_start_discharging',
+      'ata_discharging_completed_at_discharge_port',
+      'ata_vessel_completed_discharge'
+    ];
+
+    return candidateKeys.some((key) => {
+      const value = (shipmentData as any)[key];
+      return value !== undefined && value !== null && String(value).trim() !== '';
+    });
   }
   
   /**
@@ -1168,6 +1293,39 @@ export class SapDataDistributionService {
     } catch (error) {
       return null;
     }
+  }
+
+  /**
+   * Compute a simple similarity ratio between two strings (0.0 - 1.0)
+   * using normalized Levenshtein distance. Good enough for 80% "similarity" checks.
+   */
+  private static stringSimilarity(a?: string | null, b?: string | null): number {
+    const s1 = (a || '').trim().toUpperCase();
+    const s2 = (b || '').trim().toUpperCase();
+    if (!s1 || !s2) return 0;
+    if (s1 === s2) return 1;
+
+    const len1 = s1.length;
+    const len2 = s2.length;
+    const dp: number[][] = Array.from({ length: len1 + 1 }, () => new Array(len2 + 1).fill(0));
+
+    for (let i = 0; i <= len1; i++) dp[i][0] = i;
+    for (let j = 0; j <= len2; j++) dp[0][j] = j;
+
+    for (let i = 1; i <= len1; i++) {
+      for (let j = 1; j <= len2; j++) {
+        const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+        dp[i][j] = Math.min(
+          dp[i - 1][j] + 1,
+          dp[i][j - 1] + 1,
+          dp[i - 1][j - 1] + cost
+        );
+      }
+    }
+
+    const distance = dp[len1][len2];
+    const maxLen = Math.max(len1, len2);
+    return maxLen === 0 ? 1 : 1 - distance / maxLen;
   }
 
   /**

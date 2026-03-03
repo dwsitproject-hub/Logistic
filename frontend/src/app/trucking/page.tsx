@@ -40,11 +40,14 @@ interface TruckingOperation {
   status: string
   eta_trucking_start_date?: string
   eta_trucking_completion_date?: string
+  eta_delivery_start_date?: string
+  eta_delivery_end_date?: string
   created_at: string
   supplier: string
   buyer: string
   product: string
   group_name: string
+  contract_ext_no?: string
 }
 
 interface DocumentItem {
@@ -222,9 +225,11 @@ function TruckingPageContent() {
         setEditedData({})
         alert('Trucking operation updated successfully!')
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Update trucking operation error:', error)
-      alert('Failed to update trucking operation. Please try again.')
+      const msg = error?.response?.data?.error?.message || 'Failed to update trucking operation. Please try again.'
+      const detail = error?.response?.data?.error?.details || error?.response?.data?.error?.detail
+      alert(detail ? `${msg}\n\nDetails: ${detail}` : msg)
     } finally {
       setSaving(false)
     }
@@ -768,6 +773,18 @@ function TruckingPageContent() {
       )
     },
     {
+      id: 'contract_ext_no',
+      label: 'Contract Ext No',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.contract_ext_no || '',
+      render: (o) => (
+        <span className="text-sm break-words block" title={o.contract_ext_no || ''}>
+          {o.contract_ext_no || '-'}
+        </span>
+      )
+    },
+    {
       id: 'po_number',
       label: 'PO No',
       defaultVisible: true,
@@ -981,11 +998,27 @@ function TruckingPageContent() {
     },
     {
       id: 'eta_trucking_completion_date',
-      label: 'ETA Trucking Completion Date',
+      label: 'ETA Trucking Last Receive Date',
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.eta_trucking_completion_date || '',
       render: (o) => <span className="text-sm">{formatShortDate(o.eta_trucking_completion_date || '')}</span>
+    },
+    {
+      id: 'eta_delivery_start_date',
+      label: 'ETA Due Date Delivery Start',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.eta_delivery_start_date || '',
+      render: (o) => <span className="text-sm">{formatShortDate(o.eta_delivery_start_date || '')}</span>
+    },
+    {
+      id: 'eta_delivery_end_date',
+      label: 'ETA Due Date Delivery End',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.eta_delivery_end_date || '',
+      render: (o) => <span className="text-sm">{formatShortDate(o.eta_delivery_end_date || '')}</span>
     },
     {
       id: 'delivery_start_date',
@@ -1154,6 +1187,7 @@ function TruckingPageContent() {
       'operation_id': '180px',
       'status': '120px',
       'contract_number': '140px',
+      'contract_ext_no': '140px',
       'po_number': '120px',
       'sto_number': '120px',
       'sto_quantity': '130px',
@@ -1176,6 +1210,8 @@ function TruckingPageContent() {
       'trucking_completion_date': '200px',
       'eta_trucking_start_date': '200px',
       'eta_trucking_completion_date': '200px',
+      'eta_delivery_start_date': '200px',
+      'eta_delivery_end_date': '200px',
       'delivery_start_date': '180px',
       'delivery_end_date': '180px',
       'contract_qty': '130px',
@@ -1770,6 +1806,34 @@ function TruckingPageContent() {
                                           <option value="COMPLETED">COMPLETED</option>
                                           <option value="CANCELLED">CANCELLED</option>
                                         </select>
+                                      ) : isEditing && col.id === 'eta_trucking_start_date' ? (
+                                        <Input
+                                          type="date"
+                                          className="h-8 text-sm"
+                                          value={(editedData.eta_trucking_start_date ?? operation.eta_trucking_start_date ?? '').split('T')[0]}
+                                          onChange={(e) => handleFieldChange('eta_trucking_start_date', e.target.value)}
+                                        />
+                                      ) : isEditing && col.id === 'eta_trucking_completion_date' ? (
+                                        <Input
+                                          type="date"
+                                          className="h-8 text-sm"
+                                          value={(editedData.eta_trucking_completion_date ?? operation.eta_trucking_completion_date ?? '').split('T')[0]}
+                                          onChange={(e) => handleFieldChange('eta_trucking_completion_date', e.target.value)}
+                                        />
+                                      ) : isEditing && col.id === 'eta_delivery_start_date' ? (
+                                        <Input
+                                          type="date"
+                                          className="h-8 text-sm"
+                                          value={(editedData.eta_delivery_start_date ?? operation.eta_delivery_start_date ?? '').split('T')[0]}
+                                          onChange={(e) => handleFieldChange('eta_delivery_start_date', e.target.value)}
+                                        />
+                                      ) : isEditing && col.id === 'eta_delivery_end_date' ? (
+                                        <Input
+                                          type="date"
+                                          className="h-8 text-sm"
+                                          value={(editedData.eta_delivery_end_date ?? operation.eta_delivery_end_date ?? '').split('T')[0]}
+                                          onChange={(e) => handleFieldChange('eta_delivery_end_date', e.target.value)}
+                                        />
                                       ) : (
                                         col.render(operation)
                                       )}
@@ -1936,24 +2000,7 @@ function TruckingPageContent() {
                                         )}
                                       </div>
                                     </div>
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                                      <div>
-                                        <div className="text-gray-500">Due Date Delivery Start</div>
-                                        <div className="font-medium">{formatDate(operation.delivery_start_date || '')}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Due Date Delivery End</div>
-                                        <div className="font-medium">{formatDate(operation.delivery_end_date || '')}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Late Indicator</div>
-                                        <div className="font-medium">
-                                          <Badge className={getLateIndicator(operation).color}>
-                                            {getLateIndicator(operation).text}
-                                          </Badge>
-                                        </div>
-                                      </div>
-                                    </div>
+                                    {/* Removed Due Date Delivery Start/End and Late Indicator from expanded view as requested */}
                                   </div>
                                 )}
                               </div>
@@ -2237,36 +2284,63 @@ function TruckingPageContent() {
                           </div>
                           <div>
                             <div className="text-gray-500 mb-1">Trucking Last Receive Date</div>
+                            <div className="font-medium">{formatDate(operation.trucking_completion_date)}</div>
+                          </div>
+                          <div>
+                            <div className="text-gray-500 mb-1">ETA Trucking Start Receive Date</div>
                             {isEditing ? (
                               <Input
                                 type="date"
-                                value={currentData.trucking_completion_date ? currentData.trucking_completion_date.split('T')[0] : ''}
-                                onChange={(e) => handleFieldChange('trucking_completion_date', e.target.value)}
+                                value={currentData.eta_trucking_start_date ? currentData.eta_trucking_start_date.split('T')[0] : ''}
+                                onChange={(e) => handleFieldChange('eta_trucking_start_date', e.target.value)}
                                 className="h-8 text-sm"
                               />
                             ) : (
-                              <div className="font-medium">{formatDate(operation.trucking_completion_date)}</div>
+                              <div className="font-medium">{formatDate(operation.eta_trucking_start_date || '')}</div>
+                            )}
+                          </div>
+                          <div>
+                            <div className="text-gray-500 mb-1">ETA Trucking Last Receive Date</div>
+                            {isEditing ? (
+                              <Input
+                                type="date"
+                                value={currentData.eta_trucking_completion_date ? currentData.eta_trucking_completion_date.split('T')[0] : ''}
+                                onChange={(e) => handleFieldChange('eta_trucking_completion_date', e.target.value)}
+                                className="h-8 text-sm"
+                              />
+                            ) : (
+                              <div className="font-medium">{formatDate(operation.eta_trucking_completion_date || '')}</div>
                             )}
                           </div>
                         </div>
 
-                        {/* Additional Date Fields */}
+                        {/* ETA Due Date Delivery Fields */}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm pt-3">
                           <div>
-                            <div className="text-gray-500 mb-1">Due Date Delivery Start</div>
-                            <div className="font-medium">{formatDate(operation.delivery_start_date || '')}</div>
+                            <div className="text-gray-500 mb-1">ETA Due Date Delivery Start</div>
+                            {isEditing ? (
+                              <Input
+                                type="date"
+                                value={currentData.eta_delivery_start_date ? currentData.eta_delivery_start_date.split('T')[0] : ''}
+                                onChange={(e) => handleFieldChange('eta_delivery_start_date', e.target.value)}
+                                className="h-8 text-sm"
+                              />
+                            ) : (
+                              <div className="font-medium">{formatDate(operation.eta_delivery_start_date || '')}</div>
+                            )}
                           </div>
                           <div>
-                            <div className="text-gray-500 mb-1">Due Date Delivery End</div>
-                            <div className="font-medium">{formatDate(operation.delivery_end_date || '')}</div>
-                          </div>
-                          <div>
-                            <div className="text-gray-500 mb-1">Late Indicator</div>
-                            <div className="font-medium">
-                              <Badge className={getLateIndicator(operation).color}>
-                                {getLateIndicator(operation).text}
-                              </Badge>
-                            </div>
+                            <div className="text-gray-500 mb-1">ETA Due Date Delivery End</div>
+                            {isEditing ? (
+                              <Input
+                                type="date"
+                                value={currentData.eta_delivery_end_date ? currentData.eta_delivery_end_date.split('T')[0] : ''}
+                                onChange={(e) => handleFieldChange('eta_delivery_end_date', e.target.value)}
+                                className="h-8 text-sm"
+                              />
+                            ) : (
+                              <div className="font-medium">{formatDate(operation.eta_delivery_end_date || '')}</div>
+                            )}
                           </div>
                         </div>
                       </div>

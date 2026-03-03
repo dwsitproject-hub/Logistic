@@ -10,424 +10,206 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const contractIdFilter = (req.query as any).contract_id || (req.query as any).contractId || null;
     const offset = (Number(page) - 1) * Number(limit);
 
-    // Updated query to group contracts by contract_id
-    // Outstanding Quantity = Contract Quantity - Total STO Quantity from contracts table
-    // STO Numbers come from sap_processed_data table via subquery
+    // Optimized: one CTE for latest sap_processed_data per contract, then reuse for all display fields (avoids 15+ correlated subqueries per row).
     let queryText = `
-      SELECT 
-        c.contract_id,
-        (array_agg(c.id ORDER BY c.created_at DESC))[1] as id,
-        MAX(c.buyer) as buyer,
-        MAX(c.supplier) as supplier,
-        MAX(c.group_name) as group_name,
-        MAX(c.product) as product,
-        MAX(c.quantity_ordered) as quantity_ordered,
-        MAX(c.unit) as unit,
-        MAX(c.contract_date) as contract_date,
-        MAX(c.delivery_start_date) as delivery_start_date,
-        MAX(c.delivery_end_date) as delivery_end_date,
-        MAX(c.contract_value) as contract_value,
-        MAX(c.unit_price) as unit_price,
-        MAX(c.currency) as currency,
-        MAX(c.status) as status,
-        MAX(c.incoterm) as incoterm,
-        MAX(c.transport_mode) as transport_mode,
-        MAX(c.source_type) as source_type,
-        MAX(c.contract_type) as contract_type,
-        MAX(c.logistics_classification) as logistics_classification,
-        MAX(c.po_classification) as po_classification,
-        MAX(c.created_at) as created_at,
-        STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') as po_numbers,
-        (SELECT STRING_AGG(DISTINCT sto_number, ', ' ORDER BY sto_number) 
-         FROM sap_processed_data 
-         WHERE contract_number = c.contract_id AND sto_number IS NOT NULL AND sto_number != '') as sto_numbers,
-        COALESCE((SELECT SUM(CAST(REPLACE(REPLACE(data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
-         FROM sap_processed_data 
-         WHERE contract_number = c.contract_id 
-         AND sto_number IS NOT NULL 
-         AND data->'contract'->>'sto_quantity' IS NOT NULL), 0) as total_sto_quantity,
-        COALESCE(MAX(c.quantity_ordered) - COALESCE((SELECT SUM(CAST(REPLACE(REPLACE(data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
-         FROM sap_processed_data 
-         WHERE contract_number = c.contract_id 
-         AND sto_number IS NOT NULL 
-         AND data->'contract'->>'sto_quantity' IS NOT NULL), 0), MAX(c.quantity_ordered)) as outstanding_quantity,
-        COUNT(DISTINCT c.po_number) FILTER (WHERE c.po_number IS NOT NULL) as po_count,
-        (SELECT COUNT(DISTINCT sto_number) 
-         FROM sap_processed_data 
-         WHERE contract_number = c.contract_id AND sto_number IS NOT NULL) as sto_count,
-        -- Latest processed row JSON for this contract (for display-only fields)
-        (SELECT COALESCE(
-                  spd.data->'contract'->>'company_code',
-                  spd.data->'raw'->>'Company Code',
-                  spd.data->'raw'->>'company code',
-                  spd.data->>'Company Code',
-                  spd.data->>'company code'
-                )
-           FROM sap_processed_data spd
-           WHERE spd.contract_number = c.contract_id
-           ORDER BY spd.created_at DESC NULLS LAST
-           LIMIT 1) AS company_code,
-        (SELECT COALESCE(
-                  spd.data->'contract'->>'contract_type',         -- normalized from 'B2B Flag'
-                  spd.data->>'B2B Flag'
-                )
-           FROM sap_processed_data spd
-           WHERE spd.contract_number = c.contract_id
-           ORDER BY spd.created_at DESC NULLS LAST
-           LIMIT 1) AS b2b_flag,
-        (SELECT COALESCE(
-                  spd.data->'contract'->>'contract_reference_po',
-                  spd.data->>'CONTRACT REFF PO'
-                )
-           FROM sap_processed_data spd
-           WHERE spd.contract_number = c.contract_id
-           ORDER BY spd.created_at DESC NULLS LAST
-           LIMIT 1) AS contract_reference_po,
-        -- LT/SPOT display (prefer normalized ltc_spot from JSON if present, else contract_type column)
-        (SELECT COALESCE(
-                  spd.data->'contract'->>'ltc_spot',
-                  MAX(c.contract_type)::text
-                )
-           FROM sap_processed_data spd
-           WHERE spd.contract_number = c.contract_id
-           ORDER BY spd.created_at DESC NULLS LAST
-           LIMIT 1) AS lt_spot,
-        -- Status from import JSON for display (does not override DB enum)
-        (SELECT spd.data->'contract'->>'status'
-           FROM sap_processed_data spd
-           WHERE spd.contract_number = c.contract_id
-           ORDER BY spd.created_at DESC NULLS LAST
-           LIMIT 1) AS import_status,
-        -- Payment dates: SAP data (payment + raw keys). Support ISO, DD.MM.YYYY, YYYY/MM/DD, DD/MM/YYYY, "16 May 2025" (DD Mon YYYY), "16 January 2025" (DD Month YYYY).
-        COALESCE(
-          (SELECT (
-              CASE
-                WHEN trim(v.val) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(v.val)::date
-                WHEN trim(v.val) ~ '^(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[0-2])\.[0-9]{4}$' THEN to_date(trim(v.val), 'DD.MM.YYYY')
-                WHEN trim(v.val) ~ '^[0-9]{4}/(0[1-9]|1[0-2])/(0[1-9]|[12][0-9]|3[01])$' THEN to_date(trim(v.val), 'YYYY/MM/DD')
-                WHEN trim(v.val) ~ '^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/[0-9]{4}$' THEN to_date(trim(v.val), 'DD/MM/YYYY')
-                WHEN trim(v.val) ~ '^(0[1-9]|1[0-2])/(0[1-9]|[12][0-9]|3[01])/[0-9]{4}$' THEN to_date(trim(v.val), 'MM/DD/YYYY')
-                WHEN trim(v.val) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(v.val), 'MM/DD/YY')
-                WHEN regexp_replace(trim(v.val), '\s+', ' ', 'g') ~ '^[0-9]{1,2} [A-Za-z]{3} [0-9]{4}$' THEN to_date(regexp_replace(trim(v.val), '\s+', ' ', 'g'), 'DD Mon YYYY')
-                WHEN regexp_replace(trim(v.val), '\s+', ' ', 'g') ~ '^[0-9]{1,2} [A-Za-z]{4,9} [0-9]{4}$' THEN to_date(regexp_replace(trim(v.val), '\s+', ' ', 'g'), 'DD Month YYYY')
-                WHEN trim(v.val) ~ '^[0-9]{1,2}-[A-Za-z]{3}-[0-9]{4}$' THEN to_date(trim(v.val), 'DD-Mon-YYYY')
-                ELSE NULL
-              END
-            )
-             FROM (
-               SELECT COALESCE(
-                 NULLIF(trim(x.data->'payment'->>'due_date_payment'), ''),
-                 NULLIF(trim(x.data->>'due date payment'), ''),
-                 NULLIF(trim(x.data->'raw'->>'Due Date Payment'), ''),
-                 NULLIF(trim(x.data->'raw'->>'due date payment'), ''),
-                 (SELECT e.v FROM jsonb_each_text(x.data->'raw') AS e(k,v) WHERE lower(replace(trim(e.k), ' ', '')) = 'duedatepayment' AND trim(e.v) <> '' LIMIT 1)
-               ) AS val
-               FROM (SELECT data FROM sap_processed_data WHERE contract_number = c.contract_id
-                 ORDER BY (CASE WHEN trim(COALESCE(data->'raw'->>'Due Date Payment', data->'payment'->>'due_date_payment', '')) <> '' THEN 0 ELSE 1 END), (CASE WHEN trim(COALESCE(data->'raw'->>'DP Date', data->'payment'->>'dp_date', '')) <> '' THEN 0 ELSE 1 END), (CASE WHEN trim(COALESCE(data->'raw'->>'Payoff Date', data->'payment'->>'payoff_date', '')) <> '' THEN 0 ELSE 1 END), created_at DESC NULLS LAST LIMIT 1) x
-             ) v
-             WHERE v.val IS NOT NULL AND length(trim(v.val)) >= 6
-             LIMIT 1),
-          (SELECT p.payment_due_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = c.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1)
-        ) AS due_date_payment,
-        COALESCE(
-          (SELECT (
-              CASE
-                WHEN trim(v.val) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(v.val)::date
-                WHEN trim(v.val) ~ '^(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[0-2])\.[0-9]{4}$' THEN to_date(trim(v.val), 'DD.MM.YYYY')
-                WHEN trim(v.val) ~ '^[0-9]{4}/(0[1-9]|1[0-2])/(0[1-9]|[12][0-9]|3[01])$' THEN to_date(trim(v.val), 'YYYY/MM/DD')
-                WHEN trim(v.val) ~ '^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/[0-9]{4}$' THEN to_date(trim(v.val), 'DD/MM/YYYY')
-                WHEN trim(v.val) ~ '^(0[1-9]|1[0-2])/(0[1-9]|[12][0-9]|3[01])/[0-9]{4}$' THEN to_date(trim(v.val), 'MM/DD/YYYY')
-                WHEN trim(v.val) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(v.val), 'MM/DD/YY')
-                WHEN regexp_replace(trim(v.val), '\s+', ' ', 'g') ~ '^[0-9]{1,2} [A-Za-z]{3} [0-9]{4}$' THEN to_date(regexp_replace(trim(v.val), '\s+', ' ', 'g'), 'DD Mon YYYY')
-                WHEN regexp_replace(trim(v.val), '\s+', ' ', 'g') ~ '^[0-9]{1,2} [A-Za-z]{4,9} [0-9]{4}$' THEN to_date(regexp_replace(trim(v.val), '\s+', ' ', 'g'), 'DD Month YYYY')
-                WHEN trim(v.val) ~ '^[0-9]{1,2}-[A-Za-z]{3}-[0-9]{4}$' THEN to_date(trim(v.val), 'DD-Mon-YYYY')
-                ELSE NULL
-              END
-            )
-             FROM (
-               SELECT COALESCE(
-                 NULLIF(trim(x.data->'payment'->>'dp_date'), ''),
-                 NULLIF(trim(x.data->'payment'->>'DP Date'), ''),
-                 NULLIF(trim(x.data->>'dp date'), ''),
-                 NULLIF(trim(x.data->>'DP Date'), ''),
-                 NULLIF(trim(x.data->'raw'->>'DP Date'), ''),
-                 NULLIF(trim(x.data->'raw'->>'dp date'), ''),
-                 NULLIF(trim(x.data->'raw'->>'D.P. Date'), ''),
-                 NULLIF(trim(x.data->'raw'->>'DPDate'), ''),
-                 NULLIF(trim(x.data->'raw'->>'dp_date'), ''),
-                 (SELECT e.v FROM jsonb_each_text(x.data->'raw') AS e(k,v) WHERE lower(replace(trim(e.k), ' ', '')) = 'dpdate' AND trim(e.v) <> '' LIMIT 1)
-               ) AS val
-               FROM (SELECT data FROM sap_processed_data WHERE contract_number = c.contract_id
-                 ORDER BY (CASE WHEN trim(COALESCE(data->'raw'->>'Due Date Payment', data->'payment'->>'due_date_payment', '')) <> '' THEN 0 ELSE 1 END), (CASE WHEN trim(COALESCE(data->'raw'->>'DP Date', data->'payment'->>'dp_date', '')) <> '' THEN 0 ELSE 1 END), (CASE WHEN trim(COALESCE(data->'raw'->>'Payoff Date', data->'payment'->>'payoff_date', '')) <> '' THEN 0 ELSE 1 END), created_at DESC NULLS LAST LIMIT 1) x
-             ) v
-             WHERE v.val IS NOT NULL AND length(trim(v.val)) >= 6
-             LIMIT 1),
-          (SELECT p.dp_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = c.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1)
-        ) AS dp_date,
-        COALESCE(
-          (SELECT (
-              CASE
-                WHEN trim(v.val) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(v.val)::date
-                WHEN trim(v.val) ~ '^(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[0-2])\.[0-9]{4}$' THEN to_date(trim(v.val), 'DD.MM.YYYY')
-                WHEN trim(v.val) ~ '^[0-9]{4}/(0[1-9]|1[0-2])/(0[1-9]|[12][0-9]|3[01])$' THEN to_date(trim(v.val), 'YYYY/MM/DD')
-                WHEN trim(v.val) ~ '^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/[0-9]{4}$' THEN to_date(trim(v.val), 'DD/MM/YYYY')
-                WHEN trim(v.val) ~ '^(0[1-9]|1[0-2])/(0[1-9]|[12][0-9]|3[01])/[0-9]{4}$' THEN to_date(trim(v.val), 'MM/DD/YYYY')
-                WHEN trim(v.val) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(v.val), 'MM/DD/YY')
-                WHEN regexp_replace(trim(v.val), '\s+', ' ', 'g') ~ '^[0-9]{1,2} [A-Za-z]{3} [0-9]{4}$' THEN to_date(regexp_replace(trim(v.val), '\s+', ' ', 'g'), 'DD Mon YYYY')
-                WHEN regexp_replace(trim(v.val), '\s+', ' ', 'g') ~ '^[0-9]{1,2} [A-Za-z]{4,9} [0-9]{4}$' THEN to_date(regexp_replace(trim(v.val), '\s+', ' ', 'g'), 'DD Month YYYY')
-                WHEN trim(v.val) ~ '^[0-9]{1,2}-[A-Za-z]{3}-[0-9]{4}$' THEN to_date(trim(v.val), 'DD-Mon-YYYY')
-                ELSE NULL
-              END
-            )
-             FROM (
-               SELECT COALESCE(
-                 NULLIF(trim(x.data->'payment'->>'payoff_date'), ''),
-                 NULLIF(trim(x.data->'payment'->>'Payoff Date'), ''),
-                 NULLIF(trim(x.data->>'payoff date'), ''),
-                 NULLIF(trim(x.data->>'Payoff Date'), ''),
-                 NULLIF(trim(x.data->'raw'->>'Payoff Date'), ''),
-                 NULLIF(trim(x.data->'raw'->>'payoff date'), ''),
-                 NULLIF(trim(x.data->'raw'->>'PayoffDate'), ''),
-                 NULLIF(trim(x.data->'raw'->>'payoff_date'), ''),
-                 (SELECT e.v FROM jsonb_each_text(x.data->'raw') AS e(k,v) WHERE lower(replace(trim(e.k), ' ', '')) = 'payoffdate' AND trim(e.v) <> '' LIMIT 1)
-               ) AS val
-               FROM (SELECT data FROM sap_processed_data WHERE contract_number = c.contract_id
-                 ORDER BY (CASE WHEN trim(COALESCE(data->'raw'->>'Due Date Payment', data->'payment'->>'due_date_payment', '')) <> '' THEN 0 ELSE 1 END), (CASE WHEN trim(COALESCE(data->'raw'->>'DP Date', data->'payment'->>'dp_date', '')) <> '' THEN 0 ELSE 1 END), (CASE WHEN trim(COALESCE(data->'raw'->>'Payoff Date', data->'payment'->>'payoff_date', '')) <> '' THEN 0 ELSE 1 END), created_at DESC NULLS LAST LIMIT 1) x
-             ) v
-             WHERE v.val IS NOT NULL AND length(trim(v.val)) >= 6
-             LIMIT 1),
-          (SELECT p.payoff_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = c.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1)
-        ) AS payoff_date,
-        -- DP Date Deviation (Days) = DP Date - Due Date Payment: use stored integer or compute from dates
-        COALESCE(
-          (SELECT (
-              CASE
-                WHEN v.dev_tex ~ '^-?[0-9]+$' THEN (v.dev_tex)::int
-                WHEN v.dp ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND v.due ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-                  THEN v.dp::date - v.due::date
-                WHEN v.dp ~ '^(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[0-2])\.[0-9]{4}$' AND v.due ~ '^(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[0-2])\.[0-9]{4}$'
-                  THEN to_date(v.dp, 'DD.MM.YYYY') - to_date(v.due, 'DD.MM.YYYY')
-                WHEN v.dp ~ '^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/[0-9]{4}$' AND v.due ~ '^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/[0-9]{4}$'
-                  THEN to_date(v.dp, 'DD/MM/YYYY') - to_date(v.due, 'DD/MM/YYYY')
-                WHEN v.dp ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' AND v.due ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$'
-                  THEN to_date(v.dp, 'MM/DD/YY') - to_date(v.due, 'MM/DD/YY')
-                WHEN v.dp ~ '^[0-9]{1,2} [A-Za-z]{3} [0-9]{4}$' AND v.due ~ '^[0-9]{1,2} [A-Za-z]{3} [0-9]{4}$'
-                  THEN to_date(v.dp, 'DD Mon YYYY') - to_date(v.due, 'DD Mon YYYY')
-                WHEN regexp_replace(trim(v.dp), '\s+', ' ', 'g') ~ '^[0-9]{1,2} [A-Za-z]{3} [0-9]{4}$' AND regexp_replace(trim(v.due), '\s+', ' ', 'g') ~ '^[0-9]{1,2} [A-Za-z]{3} [0-9]{4}$'
-                  THEN to_date(regexp_replace(trim(v.dp), '\s+', ' ', 'g'), 'DD Mon YYYY') - to_date(regexp_replace(trim(v.due), '\s+', ' ', 'g'), 'DD Mon YYYY')
-                WHEN v.dp ~ '^[0-9]{1,2} [A-Za-z]{4,9} [0-9]{4}$' AND v.due ~ '^[0-9]{1,2} [A-Za-z]{4,9} [0-9]{4}$'
-                  THEN to_date(v.dp, 'DD Month YYYY') - to_date(v.due, 'DD Month YYYY')
-                WHEN v.dp ~ '^[0-9]{1,2}-[A-Za-z]{3}-[0-9]{4}$' AND v.due ~ '^[0-9]{1,2}-[A-Za-z]{3}-[0-9]{4}$'
-                  THEN to_date(v.dp, 'DD-Mon-YYYY') - to_date(v.due, 'DD-Mon-YYYY')
-                ELSE NULL
-              END
-            )
-             FROM (
-               SELECT
-                 COALESCE(NULLIF(trim(spd.data->'payment'->>'dp_date'), ''), NULLIF(trim(spd.data->'payment'->>'DP Date'), ''), NULLIF(trim(spd.data->>'dp date'), ''), NULLIF(trim(spd.data->>'DP Date'), ''), NULLIF(trim(spd.data->'raw'->>'DP Date'), ''), NULLIF(trim(spd.data->'raw'->>'dp date'), ''), NULLIF(trim(spd.data->'raw'->>'D.P. Date'), ''), NULLIF(trim(spd.data->'raw'->>'DPDate'), ''), NULLIF(trim(spd.data->'raw'->>'dp_date'), '')) AS dp,
-                 COALESCE(NULLIF(trim(spd.data->'payment'->>'due_date_payment'), ''), NULLIF(trim(spd.data->>'due date payment'), ''), NULLIF(trim(spd.data->'raw'->>'Due Date Payment'), ''), NULLIF(trim(spd.data->'raw'->>'due date payment'), '')) AS due,
-                 COALESCE(NULLIF(trim(spd.data->'payment'->>'dp_date_deviation_days'), ''), NULLIF(trim(spd.data->'raw'->>'DP Date Deviation (Days) DP Date - Due Date'), ''), NULLIF(trim(spd.data->'raw'->>'DP Date - Due Date'), '')) AS dev_tex
-               FROM sap_processed_data spd
-               WHERE spd.contract_number = c.contract_id
-               ORDER BY spd.created_at DESC NULLS LAST
-               LIMIT 1
-             ) v
-             WHERE (v.dev_tex IS NOT NULL AND trim(v.dev_tex) <> '' AND v.dev_tex ~ '^-?[0-9]+$')
-                OR (length(trim(v.dp)) >= 6 AND length(trim(v.due)) >= 6)
-             LIMIT 1),
-          (SELECT (p.dp_date::date - p.payment_due_date::date)
-             FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = c.contract_id AND p.dp_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1)
-        ) AS dp_date_deviation_days,
-        -- Payoff Date Deviation (Days) = Payoff Date - Due Date Payment: use stored integer or compute from dates
-        COALESCE(
-          (SELECT (
-              CASE
-                WHEN v.dev_tex ~ '^-?[0-9]+$' THEN (v.dev_tex)::int
-                WHEN v.pay ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND v.due ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-                  THEN v.pay::date - v.due::date
-                WHEN v.pay ~ '^(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[0-2])\.[0-9]{4}$' AND v.due ~ '^(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[0-2])\.[0-9]{4}$'
-                  THEN to_date(v.pay, 'DD.MM.YYYY') - to_date(v.due, 'DD.MM.YYYY')
-                WHEN v.pay ~ '^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/[0-9]{4}$' AND v.due ~ '^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/[0-9]{4}$'
-                  THEN to_date(v.pay, 'DD/MM/YYYY') - to_date(v.due, 'DD/MM/YYYY')
-                WHEN v.pay ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' AND v.due ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$'
-                  THEN to_date(v.pay, 'MM/DD/YY') - to_date(v.due, 'MM/DD/YY')
-                WHEN v.pay ~ '^[0-9]{1,2} [A-Za-z]{3} [0-9]{4}$' AND v.due ~ '^[0-9]{1,2} [A-Za-z]{3} [0-9]{4}$'
-                  THEN to_date(v.pay, 'DD Mon YYYY') - to_date(v.due, 'DD Mon YYYY')
-                WHEN regexp_replace(trim(v.pay), '\s+', ' ', 'g') ~ '^[0-9]{1,2} [A-Za-z]{3} [0-9]{4}$' AND regexp_replace(trim(v.due), '\s+', ' ', 'g') ~ '^[0-9]{1,2} [A-Za-z]{3} [0-9]{4}$'
-                  THEN to_date(regexp_replace(trim(v.pay), '\s+', ' ', 'g'), 'DD Mon YYYY') - to_date(regexp_replace(trim(v.due), '\s+', ' ', 'g'), 'DD Mon YYYY')
-                WHEN v.pay ~ '^[0-9]{1,2} [A-Za-z]{4,9} [0-9]{4}$' AND v.due ~ '^[0-9]{1,2} [A-Za-z]{4,9} [0-9]{4}$'
-                  THEN to_date(v.pay, 'DD Month YYYY') - to_date(v.due, 'DD Month YYYY')
-                WHEN v.pay ~ '^[0-9]{1,2}-[A-Za-z]{3}-[0-9]{4}$' AND v.due ~ '^[0-9]{1,2}-[A-Za-z]{3}-[0-9]{4}$'
-                  THEN to_date(v.pay, 'DD-Mon-YYYY') - to_date(v.due, 'DD-Mon-YYYY')
-                ELSE NULL
-              END
-            )
-             FROM (
-               SELECT
-                 COALESCE(NULLIF(trim(spd.data->'payment'->>'payoff_date'), ''), NULLIF(trim(spd.data->'payment'->>'Payoff Date'), ''), NULLIF(trim(spd.data->>'payoff date'), ''), NULLIF(trim(spd.data->>'Payoff Date'), ''), NULLIF(trim(spd.data->'raw'->>'Payoff Date'), ''), NULLIF(trim(spd.data->'raw'->>'payoff date'), ''), NULLIF(trim(spd.data->'raw'->>'PayoffDate'), ''), NULLIF(trim(spd.data->'raw'->>'payoff_date'), '')) AS pay,
-                 COALESCE(NULLIF(trim(spd.data->'payment'->>'due_date_payment'), ''), NULLIF(trim(spd.data->>'due date payment'), ''), NULLIF(trim(spd.data->'raw'->>'Due Date Payment'), ''), NULLIF(trim(spd.data->'raw'->>'due date payment'), '')) AS due,
-                 COALESCE(NULLIF(trim(spd.data->'payment'->>'payoff_date_deviation_days'), ''), NULLIF(trim(spd.data->'raw'->>'Payoff Date Deviation (Days) Payoff Date - Due Date'), ''), NULLIF(trim(spd.data->'raw'->>'Payoff Date - Due Date'), '')) AS dev_tex
-               FROM sap_processed_data spd
-               WHERE spd.contract_number = c.contract_id
-               ORDER BY spd.created_at DESC NULLS LAST
-               LIMIT 1
-             ) v
-             WHERE (v.dev_tex IS NOT NULL AND trim(v.dev_tex) <> '' AND v.dev_tex ~ '^-?[0-9]+$')
-                OR (length(trim(v.pay)) >= 6 AND length(trim(v.due)) >= 6)
-             LIMIT 1),
-          (SELECT (p.payoff_date::date - p.payment_due_date::date)
-             FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = c.contract_id AND p.payoff_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1)
-        ) AS payoff_date_deviation_days,
-        -- Trucking operations count (to drive icon status)
-        (SELECT COUNT(*) 
-           FROM trucking_operations t
-          WHERE t.contract_id = (SELECT id FROM contracts c2 WHERE c2.contract_id = c.contract_id ORDER BY created_at DESC LIMIT 1)
-        ) AS trucking_count
-      FROM contracts c
+      WITH latest_spd AS (
+        SELECT DISTINCT ON (contract_number) contract_number, data, created_at
+        FROM sap_processed_data
+        ORDER BY contract_number, created_at DESC NULLS LAST
+      ),
+      sto_agg AS (
+        SELECT x.contract_number,
+          STRING_AGG(DISTINCT x.effective_sto, ', ' ORDER BY x.effective_sto) AS sto_numbers,
+          SUM(x.sto_quantity_num) AS total_sto_quantity,
+          COUNT(DISTINCT x.effective_sto) AS sto_count
+        FROM (
+          SELECT spd.contract_number,
+            NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') AS effective_sto,
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', '0'), ',', ''), ' ', '') AS NUMERIC) AS sto_quantity_num
+          FROM sap_processed_data spd
+          WHERE ((spd.sto_number IS NOT NULL AND spd.sto_number::text != '') OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') IS NOT NULL)
+            AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+        ) x
+        WHERE x.effective_sto IS NOT NULL AND x.effective_sto != ''
+        GROUP BY x.contract_number
+      ),
+      base AS (
+        SELECT
+          c.contract_id,
+          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
+          MAX(c.buyer) AS buyer,
+          MAX(c.supplier) AS supplier,
+          MAX(c.group_name) AS group_name,
+          MAX(c.product) AS product,
+          MAX(c.quantity_ordered) AS quantity_ordered,
+          MAX(c.unit) AS unit,
+          MAX(c.contract_date) AS contract_date,
+          MAX(c.delivery_start_date) AS delivery_start_date,
+          MAX(c.delivery_end_date) AS delivery_end_date,
+          MAX(c.contract_value) AS contract_value,
+          MAX(c.unit_price) AS unit_price,
+          MAX(c.currency) AS currency,
+          MAX(c.status) AS status,
+          MAX(c.incoterm) AS incoterm,
+          MAX(c.transport_mode) AS transport_mode,
+          MAX(c.source_type) AS source_type,
+          MAX(c.contract_type) AS contract_type,
+          MAX(c.logistics_classification) AS logistics_classification,
+          MAX(c.po_classification) AS po_classification,
+          MAX(c.created_at) AS created_at,
+          STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') AS po_numbers,
+          MAX(c.sto_number) AS sto_number,
+          (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
+          (array_agg(s.sto_numbers ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS sto_numbers_agg,
+          (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
+          (array_agg(s.sto_count ORDER BY s.sto_count DESC NULLS LAST))[1] AS sto_count,
+          COUNT(DISTINCT c.po_number) FILTER (WHERE c.po_number IS NOT NULL) AS po_count
+        FROM contracts c
+        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
+        WHERE 1=1
+        GROUP BY c.contract_id
+      )
+      SELECT
+        base.contract_id,
+        base.id,
+        base.buyer,
+        base.supplier,
+        base.group_name,
+        base.product,
+        base.quantity_ordered,
+        base.unit,
+        base.contract_date,
+        base.delivery_start_date,
+        base.delivery_end_date,
+        base.contract_value,
+        base.unit_price,
+        base.currency,
+        base.status,
+        base.incoterm,
+        base.transport_mode,
+        base.source_type,
+        base.contract_type,
+        base.logistics_classification,
+        base.po_classification,
+        base.created_at,
+        base.po_numbers,
+        base.sto_number,
+        base.sto_numbers_agg AS sto_numbers,
+        base.total_sto_quantity,
+        (base.quantity_ordered - COALESCE(base.total_sto_quantity, 0))::numeric AS outstanding_quantity,
+        base.po_count,
+        base.sto_count,
+        COALESCE(base.latest_spd_data->'contract'->>'company_code', base.latest_spd_data->'raw'->>'Company Code', base.latest_spd_data->'raw'->>'company code', base.latest_spd_data->>'Company Code', base.latest_spd_data->>'company code') AS company_code,
+        COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag') AS b2b_flag,
+        COALESCE(base.latest_spd_data->'contract'->>'contract_reference_po', base.latest_spd_data->>'CONTRACT REFF PO') AS contract_reference_po,
+        COALESCE(base.latest_spd_data->'raw'->>'Contract Ext No', base.latest_spd_data->>'Contract Ext No') AS contract_ext_no,
+        COALESCE(base.latest_spd_data->'contract'->>'ltc_spot', base.contract_type::text) AS lt_spot,
+        base.latest_spd_data->'contract'->>'status' AS import_status,
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'due_date_payment'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Due Date Payment'), ''), NULLIF(trim(base.latest_spd_data->>'due date payment'), '')) AS due_date_payment_raw,
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date'), ''), NULLIF(trim(base.latest_spd_data->>'dp date'), '')) AS dp_date_raw,
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date'), ''), NULLIF(trim(base.latest_spd_data->>'payoff date'), '')) AS payoff_date_raw,
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date_deviation_days'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date Deviation (Days) DP Date - Due Date'), '')) AS dp_date_deviation_raw,
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date_deviation_days'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date Deviation (Days) Payoff Date - Due Date'), '')) AS payoff_date_deviation_raw,
+        (SELECT p.payment_due_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS due_date_payment_fb,
+        (SELECT p.dp_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS dp_date_fb,
+        (SELECT p.payoff_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS payoff_date_fb,
+        (SELECT (p.dp_date::date - p.payment_due_date::date) FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id AND p.dp_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS dp_date_deviation_fb,
+        (SELECT (p.payoff_date::date - p.payment_due_date::date) FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id AND p.payoff_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS payoff_date_deviation_fb,
+        (SELECT COUNT(*) FROM trucking_operations t WHERE t.contract_id = base.id) AS trucking_count
+      FROM base
       WHERE 1=1
     `;
     const queryParams: any[] = [];
     let paramIndex = 1;
 
     if (contractIdFilter) {
-      queryText += ` AND c.contract_id = $${paramIndex}`;
+      queryText += ` AND base.contract_id = $${paramIndex}`;
       queryParams.push(contractIdFilter);
       paramIndex++;
     }
 
-    if (status) {
-      // Handle both ACTIVE/CLOSE and Open/Close
-      // Priority: Use SAP import status if available, otherwise use contracts table status
-      // Open = SAP status = 'Open'/'ACTIVE' OR (no SAP status AND contracts.status = 'ACTIVE')
-      // Close = SAP status = 'Close'/'CLOSE'/'COMPLETED'/'CLOSED' OR (no SAP status AND contracts.status IN ('CLOSE', 'COMPLETED', 'CLOSED'))
-      if (status === 'Open' || status === 'ACTIVE') {
+    const statusNorm = typeof status === 'string' ? status.trim() : '';
+    if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {
+      if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
         queryText += ` AND (
-          EXISTS (
-            SELECT 1 FROM sap_processed_data spd 
-            WHERE spd.contract_number = c.contract_id 
-            AND (spd.data->'contract'->>'status' = 'Open' OR UPPER(spd.data->'contract'->>'status') = 'ACTIVE')
-            ORDER BY spd.created_at DESC LIMIT 1
-          )
-          OR (
-            NOT EXISTS (
-              SELECT 1 FROM sap_processed_data spd 
-              WHERE spd.contract_number = c.contract_id
-            )
-            AND c.status = 'ACTIVE'
-          )
+          (base.latest_spd_data->'contract'->>'status' = 'Open' OR UPPER(base.latest_spd_data->'contract'->>'status') = 'ACTIVE')
+          OR (base.latest_spd_data IS NULL AND base.status = 'ACTIVE')
         )`;
-        // No parameter to push for this case
-      } else if (status === 'Close' || status === 'CLOSE') {
-        // For Close, prioritize SAP import status, fallback to contracts table status
+      } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
         queryText += ` AND (
-          EXISTS (
-            SELECT 1 FROM sap_processed_data spd 
-            WHERE spd.contract_number = c.contract_id 
-            AND (
-              spd.data->'contract'->>'status' = 'Close' 
-              OR UPPER(spd.data->'contract'->>'status') IN ('CLOSE', 'COMPLETED', 'CLOSED')
-            )
-            ORDER BY spd.created_at DESC LIMIT 1
-          )
-          OR (
-            NOT EXISTS (
-              SELECT 1 FROM sap_processed_data spd 
-              WHERE spd.contract_number = c.contract_id
-            )
-            AND c.status IN ('CLOSE', 'COMPLETED', 'CLOSED')
-          )
+          (base.latest_spd_data->'contract'->>'status' = 'Close' OR UPPER(base.latest_spd_data->'contract'->>'status') IN ('CLOSE', 'COMPLETED', 'CLOSED'))
+          OR (base.latest_spd_data IS NULL AND base.status IN ('CLOSE', 'COMPLETED', 'CLOSED'))
         )`;
-        // No parameter to push for this case
       } else {
-        const statusValue = status as string;
-        queryText += ` AND (c.status = $${paramIndex} OR EXISTS (
-          SELECT 1 FROM sap_processed_data spd 
-          WHERE spd.contract_number = c.contract_id 
-          AND spd.data->'contract'->>'status' = $${paramIndex}
-          ORDER BY spd.created_at DESC LIMIT 1
-        ))`;
-        queryParams.push(statusValue);
+        queryText += ` AND (base.status = $${paramIndex} OR base.latest_spd_data->'contract'->>'status' = $${paramIndex})`;
+        queryParams.push(statusNorm);
         paramIndex++;
       }
     }
 
     if (supplier) {
-      queryText += ` AND c.supplier ILIKE $${paramIndex}`;
+      queryText += ` AND base.supplier ILIKE $${paramIndex}`;
       queryParams.push(`%${supplier}%`);
       paramIndex++;
     }
 
     if (buyer) {
-      queryText += ` AND c.buyer ILIKE $${paramIndex}`;
+      queryText += ` AND base.buyer ILIKE $${paramIndex}`;
       queryParams.push(`%${buyer}%`);
       paramIndex++;
     }
 
     if (dateFrom) {
-      queryText += ` AND c.contract_date >= $${paramIndex}`;
+      queryText += ` AND base.contract_date >= $${paramIndex}`;
       queryParams.push(dateFrom);
       paramIndex++;
     }
 
     if (dateTo) {
-      queryText += ` AND c.contract_date <= $${paramIndex}`;
+      queryText += ` AND base.contract_date <= $${paramIndex}`;
       queryParams.push(dateTo);
       paramIndex++;
     }
 
-    queryText += ` GROUP BY c.contract_id`;
-    
-    // Add filters for company_code and b2b_flag after GROUP BY (using HAVING)
     if (companyCode) {
-      queryText += ` HAVING EXISTS (
-        SELECT 1 FROM sap_processed_data spd 
-        WHERE spd.contract_number = c.contract_id 
-        AND (
-          COALESCE(spd.data->'contract'->>'company_code', '') = $${paramIndex}
-          OR COALESCE(spd.data->'raw'->>'Company Code', '') = $${paramIndex}
-          OR COALESCE(spd.data->'raw'->>'company code', '') = $${paramIndex}
-          OR COALESCE(spd.data->>'Company Code', '') = $${paramIndex}
-          OR COALESCE(spd.data->>'company code', '') = $${paramIndex}
-        )
-        ORDER BY spd.created_at DESC LIMIT 1
+      queryText += ` AND (
+        COALESCE(base.latest_spd_data->'contract'->>'company_code', base.latest_spd_data->'raw'->>'Company Code', base.latest_spd_data->'raw'->>'company code', base.latest_spd_data->>'Company Code', base.latest_spd_data->>'company code', '') = $${paramIndex}
       )`;
       queryParams.push(companyCode);
       paramIndex++;
     }
-    
+
     if (b2bFlag) {
-      queryText += ` HAVING EXISTS (
-        SELECT 1 FROM sap_processed_data spd 
-        WHERE spd.contract_number = c.contract_id 
-        AND (
-          COALESCE(spd.data->'contract'->>'contract_type', '') = $${paramIndex}
-          OR COALESCE(spd.data->>'B2B Flag', '') = $${paramIndex}
-        )
-        ORDER BY spd.created_at DESC LIMIT 1
+      queryText += ` AND (
+        COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag', '') = $${paramIndex}
       )`;
       queryParams.push(b2bFlag);
       paramIndex++;
     }
-    
-    // Filter for outstanding contracts (after aggregation)
+
     if (outstanding === 'true') {
-      queryText += ` HAVING COALESCE(MAX(c.quantity_ordered) - COALESCE((SELECT SUM(CAST(REPLACE(REPLACE(data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
-         FROM sap_processed_data 
-         WHERE contract_number = c.contract_id 
-         AND sto_number IS NOT NULL 
-         AND data->'contract'->>'sto_quantity' IS NOT NULL), 0), MAX(c.quantity_ordered)) > 0`;
+      queryText += ` AND (base.quantity_ordered - COALESCE(base.total_sto_quantity, 0)) > 0`;
     }
-    
-    queryText += ` ORDER BY MAX(c.created_at) DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+
+    queryText += ` ORDER BY base.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     queryParams.push(Number(limit), offset);
 
     const result = await query(queryText, queryParams);
 
-    // Fallback: when SAP doesn't return dp_date/payoff_date but we have deviation days, derive from due_date_payment + deviation
     const due = (d: unknown): Date | null => {
       if (d == null) return null;
       if (d instanceof Date) return d;
       if (typeof d === 'string') return new Date(d);
+      return null;
+    };
+    const parseDeviation = (s: unknown): number | null => {
+      if (s == null) return null;
+      if (typeof s === 'number' && Number.isInteger(s)) return s;
+      if (typeof s === 'string') {
+        const n = parseInt(s.trim(), 10);
+        return Number.isNaN(n) ? null : n;
+      }
       return null;
     };
     const addDays = (date: Date, days: number): Date => {
@@ -436,6 +218,11 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       return out;
     };
     for (const row of result.rows) {
+      row.due_date_payment = due(row.due_date_payment_raw) ?? due(row.due_date_payment_fb) ?? row.due_date_payment;
+      row.dp_date = due(row.dp_date_raw) ?? due(row.dp_date_fb) ?? row.dp_date;
+      row.payoff_date = due(row.payoff_date_raw) ?? due(row.payoff_date_fb) ?? row.payoff_date;
+      row.dp_date_deviation_days = parseDeviation(row.dp_date_deviation_raw) ?? row.dp_date_deviation_fb ?? row.dp_date_deviation_days;
+      row.payoff_date_deviation_days = parseDeviation(row.payoff_date_deviation_raw) ?? row.payoff_date_deviation_fb ?? row.payoff_date_deviation_days;
       const dueDate = due(row.due_date_payment);
       if (dueDate) {
         if (row.dp_date == null && typeof row.dp_date_deviation_days === 'number') {
@@ -445,6 +232,16 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           row.payoff_date = addDays(dueDate, row.payoff_date_deviation_days);
         }
       }
+      delete (row as any).due_date_payment_raw;
+      delete (row as any).dp_date_raw;
+      delete (row as any).payoff_date_raw;
+      delete (row as any).dp_date_deviation_raw;
+      delete (row as any).payoff_date_deviation_raw;
+      delete (row as any).due_date_payment_fb;
+      delete (row as any).dp_date_fb;
+      delete (row as any).payoff_date_fb;
+      delete (row as any).dp_date_deviation_fb;
+      delete (row as any).payoff_date_deviation_fb;
     }
 
     // Debug logging
@@ -478,8 +275,9 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         countParamIndex++;
       }
       
-      if (status) {
-        if (status === 'Open' || status === 'ACTIVE') {
+      const outStatusNorm = typeof status === 'string' ? status.trim() : '';
+      if (outStatusNorm && outStatusNorm !== 'All Status' && outStatusNorm.toLowerCase() !== 'all') {
+        if (outStatusNorm === 'Open' || outStatusNorm === 'ACTIVE') {
           countQuery += ` AND (
             EXISTS (
               SELECT 1 FROM sap_processed_data spd 
@@ -495,8 +293,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
               AND c.status = 'ACTIVE'
             )
           )`;
-          // No parameter to push for this case
-        } else if (status === 'Close' || status === 'CLOSE') {
+        } else if (outStatusNorm === 'Close' || outStatusNorm === 'CLOSE') {
           countQuery += ` AND (
             EXISTS (
               SELECT 1 FROM sap_processed_data spd 
@@ -515,20 +312,18 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
               AND c.status IN ('CLOSE', 'COMPLETED', 'CLOSED')
             )
           )`;
-          // No parameter to push for this case
         } else {
-          const statusValue = status as string;
           countQuery += ` AND (c.status = $${countParamIndex} OR EXISTS (
             SELECT 1 FROM sap_processed_data spd 
             WHERE spd.contract_number = c.contract_id 
             AND spd.data->'contract'->>'status' = $${countParamIndex}
             ORDER BY spd.created_at DESC LIMIT 1
           ))`;
-          countParams.push(statusValue);
+          countParams.push(outStatusNorm);
           countParamIndex++;
         }
       }
-      
+
       if (supplier) {
         countQuery += ` AND c.supplier ILIKE $${countParamIndex}`;
         countParams.push(`%${supplier}%`);
@@ -606,8 +401,9 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         countParamIndex++;
       }
       
-      if (status) {
-        if (status === 'Open' || status === 'ACTIVE') {
+      const countStatusNorm = typeof status === 'string' ? status.trim() : '';
+      if (countStatusNorm && countStatusNorm !== 'All Status' && countStatusNorm.toLowerCase() !== 'all') {
+        if (countStatusNorm === 'Open' || countStatusNorm === 'ACTIVE') {
           countQuery += ` AND (
             EXISTS (
               SELECT 1 FROM sap_processed_data spd 
@@ -623,8 +419,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
               AND c.status = 'ACTIVE'
             )
           )`;
-          // No parameter to push for this case
-        } else if (status === 'Close' || status === 'CLOSE') {
+        } else if (countStatusNorm === 'Close' || countStatusNorm === 'CLOSE') {
           countQuery += ` AND (
             EXISTS (
               SELECT 1 FROM sap_processed_data spd 
@@ -643,16 +438,14 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
               AND c.status IN ('CLOSE', 'COMPLETED', 'CLOSED')
             )
           )`;
-          // No parameter to push for this case
         } else {
-          const statusValue = status as string;
           countQuery += ` AND (c.status = $${countParamIndex} OR EXISTS (
             SELECT 1 FROM sap_processed_data spd 
             WHERE spd.contract_number = c.contract_id 
             AND spd.data->'contract'->>'status' = $${countParamIndex}
             ORDER BY spd.created_at DESC LIMIT 1
           ))`;
-          countParams.push(statusValue);
+          countParams.push(countStatusNorm);
           countParamIndex++;
         }
       }

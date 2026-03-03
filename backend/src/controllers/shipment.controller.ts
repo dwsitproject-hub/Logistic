@@ -7,17 +7,34 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
   try {
     const { status, vessel, port, dateFrom, dateTo, delayed, sto, contract, page = 1, limit = 10 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
+    const includeSapAggregates = Boolean(sto);
 
     // Query shipments grouped by STO number or Operation ID:
     // - SAP shipments are grouped by contracts.sto_number
     // - Manual shipments (no STO) are grouped by operation_id so that multiple contracts
     //   under the same operation appear as a single transaction in the UI
+    // Base query for shipments grouped by STO/operation/shipment
     let queryText = `
-      WITH shipment_base AS (
+      WITH latest_spd_contract AS (
+        SELECT DISTINCT ON (spd.contract_number)
+          spd.contract_number,
+          NULLIF(TRIM(COALESCE(
+            spd.sto_number::text,
+            spd.data->'raw'->>'STO No.',
+            spd.data->'raw'->>'STO Number',
+            spd.data->'shipment'->>'sto_no',
+            spd.data->'contract'->>'sto_no'
+          )), '') AS effective_sto,
+          spd.created_at
+        FROM sap_processed_data spd
+        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      ),
+      shipment_base AS (
         SELECT 
-          COALESCE(c.sto_number, s.operation_id, s.shipment_id) as sto_key,
+          COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id) as sto_key,
           (array_agg(s.id ORDER BY s.created_at DESC) FILTER (WHERE s.id IS NOT NULL))[1] as id,
-          MAX(c.sto_number) as sto_number,
+          MAX(COALESCE(c.sto_number::text, l.effective_sto)) as sto_number,
           MAX(s.shipment_id) as shipment_id,
           MAX(s.operation_id) as operation_id,
           MAX(s.vessel_name) as vessel_name,
@@ -81,11 +98,21 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
                   spd.data->>'CONTRACT REFF PO'
                 )
            FROM sap_processed_data spd
-           WHERE spd.sto_number = COALESCE(c.sto_number, s.shipment_id)
+           WHERE TRIM(spd.sto_number::text) = TRIM(COALESCE(c.sto_number::text, l.effective_sto, s.shipment_id))
            ORDER BY spd.created_at DESC NULLS LAST
-           LIMIT 1)) AS contract_reference_po
+           LIMIT 1)) AS contract_reference_po,
+          -- Get Contract Ext No from sap_processed_data
+          MAX((SELECT COALESCE(
+                  spd.data->'raw'->>'Contract Ext No',
+                  spd.data->>'Contract Ext No'
+                )
+           FROM sap_processed_data spd
+           WHERE TRIM(spd.sto_number::text) = TRIM(COALESCE(c.sto_number::text, l.effective_sto, s.shipment_id))
+           ORDER BY spd.created_at DESC NULLS LAST
+           LIMIT 1)) AS contract_ext_no
         FROM shipments s
         LEFT JOIN contracts c ON s.contract_id = c.id
+        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
         WHERE 1=1
     `;
     const queryParams: any[] = [];
@@ -126,7 +153,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     }
 
     if (sto) {
-      queryText += ` AND (c.sto_number = $${paramIndex} OR s.shipment_id = $${paramIndex})`;
+      queryText += ` AND (TRIM(COALESCE(c.sto_number::text, l.effective_sto, '')) = TRIM($${paramIndex}::text) OR s.shipment_id = $${paramIndex})`;
       queryParams.push(sto);
       paramIndex++;
     }
@@ -137,23 +164,90 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
-    queryText += `
-        GROUP BY COALESCE(c.sto_number, s.operation_id, s.shipment_id)
-      )
-      SELECT 
-        sb.*,
+    // Inject sap_processed_data aggregates only when filtering by a specific STO,
+    // to avoid a heavy scan for the default "all shipments" view.
+    const sapAggregatesSelect = includeSapAggregates
+      ? `
         -- Get STO quantity from sap_processed_data
-        COALESCE((SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
-         FROM sap_processed_data spd
-         WHERE spd.sto_number = sb.sto_key
-         AND spd.data->'contract'->>'sto_quantity' IS NOT NULL), 0) as sto_quantity,
+        COALESCE((
+          SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
+          FROM sap_processed_data spd
+          WHERE
+            (
+              spd.sto_number IS NOT NULL
+              AND TRIM(spd.sto_number::text) = TRIM(sb.sto_key::text)
+            )
+            OR (
+              spd.sto_number IS NULL
+              AND NULLIF(TRIM(COALESCE(
+                spd.data->'raw'->>'STO No.',
+                spd.data->'raw'->>'STO Number',
+                spd.data->'shipment'->>'sto_no',
+                spd.data->'contract'->>'sto_no'
+              )), '') = TRIM(sb.sto_key::text)
+            )
+            AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+        ), 0) as sto_quantity,
+        -- Get Quantity Receive from sap_processed_data (raw field)
+        COALESCE((
+          SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'raw'->>'Quantity Receive', ',', ''), ' ', '') AS NUMERIC))
+          FROM sap_processed_data spd
+          WHERE
+            (
+              spd.sto_number IS NOT NULL
+              AND TRIM(spd.sto_number::text) = TRIM(sb.sto_key::text)
+            )
+            OR (
+              spd.sto_number IS NULL
+              AND NULLIF(TRIM(COALESCE(
+                spd.data->'raw'->>'STO No.',
+                spd.data->'raw'->>'STO Number',
+                spd.data->'shipment'->>'sto_no',
+                spd.data->'contract'->>'sto_no'
+              )), '') = TRIM(sb.sto_key::text)
+            )
+            AND NULLIF(spd.data->'raw'->>'Quantity Receive', '') IS NOT NULL
+        ), 0) as quantity_receive,
+        -- Get Quantity Delivered from sap_processed_data (raw field)
+        COALESCE((
+          SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'raw'->>'Quantity Delivered', ',', ''), ' ', '') AS NUMERIC))
+          FROM sap_processed_data spd
+          WHERE
+            (
+              spd.sto_number IS NOT NULL
+              AND TRIM(spd.sto_number::text) = TRIM(sb.sto_key::text)
+            )
+            OR (
+              spd.sto_number IS NULL
+              AND NULLIF(TRIM(COALESCE(
+                spd.data->'raw'->>'STO No.',
+                spd.data->'raw'->>'STO Number',
+                spd.data->'shipment'->>'sto_no',
+                spd.data->'contract'->>'sto_no'
+              )), '') = TRIM(sb.sto_key::text)
+            )
+            AND NULLIF(spd.data->'raw'->>'Quantity Delivered', '') IS NOT NULL
+        ), 0) as quantity_delivered_sap,
         -- Get incoterm, B2B flag, source_type from latest sap_processed_data
         (SELECT COALESCE(
                   spd.data->'contract'->>'incoterm',
                   spd.data->>'Incoterm'
                 )
            FROM sap_processed_data spd
-           WHERE spd.sto_number = sb.sto_key
+           WHERE
+             (
+               spd.sto_number IS NOT NULL
+               AND TRIM(spd.sto_number::text) = TRIM(sb.sto_key::text)
+             )
+             OR (
+               spd.sto_number IS NULL
+               AND NULLIF(TRIM(COALESCE(
+                 spd.data->'raw'->>'STO No.',
+                 spd.data->'raw'->>'STO Number',
+                 spd.data->'shipment'->>'sto_no',
+                 spd.data->'contract'->>'sto_no'
+               )), '') = TRIM(sb.sto_key::text)
+             )
            ORDER BY spd.created_at DESC NULLS LAST
            LIMIT 1) AS incoterm,
         (SELECT COALESCE(
@@ -162,7 +256,20 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
                   spd.data->>'Contract Type'
                 )
            FROM sap_processed_data spd
-           WHERE spd.sto_number = sb.sto_key
+           WHERE
+             (
+               spd.sto_number IS NOT NULL
+               AND TRIM(spd.sto_number::text) = TRIM(sb.sto_key::text)
+             )
+             OR (
+               spd.sto_number IS NULL
+               AND NULLIF(TRIM(COALESCE(
+                 spd.data->'raw'->>'STO No.',
+                 spd.data->'raw'->>'STO Number',
+                 spd.data->'shipment'->>'sto_no',
+                 spd.data->'contract'->>'sto_no'
+               )), '') = TRIM(sb.sto_key::text)
+             )
            ORDER BY spd.created_at DESC NULLS LAST
            LIMIT 1) AS b2b_flag,
         (SELECT COALESCE(
@@ -170,9 +277,36 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
                   spd.data->>'Source'
                 )
            FROM sap_processed_data spd
-           WHERE spd.sto_number = sb.sto_key
+           WHERE
+             (
+               spd.sto_number IS NOT NULL
+               AND TRIM(spd.sto_number::text) = TRIM(sb.sto_key::text)
+             )
+             OR (
+               spd.sto_number IS NULL
+               AND NULLIF(TRIM(COALESCE(
+                 spd.data->'raw'->>'STO No.',
+                 spd.data->'raw'->>'STO Number',
+                 spd.data->'shipment'->>'sto_no',
+                 spd.data->'contract'->>'sto_no'
+               )), '') = TRIM(sb.sto_key::text)
+             )
            ORDER BY spd.created_at DESC NULLS LAST
-           LIMIT 1) AS source_type
+           LIMIT 1) AS source_type`
+      : `
+        0::numeric as sto_quantity,
+        0::numeric as quantity_receive,
+        0::numeric as quantity_delivered_sap,
+        NULL::text as incoterm,
+        NULL::text as b2b_flag,
+        NULL::text as source_type`;
+
+    queryText += `
+        GROUP BY COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id)
+      )
+      SELECT 
+        sb.*,
+${sapAggregatesSelect}
       FROM shipment_base sb
       ORDER BY sb.created_at DESC
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
@@ -180,11 +314,42 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
 
     const result = await query(queryText, queryParams);
 
+    // When grouping by STO, display STO No from sto_key when contracts.sto_number is empty,
+    // but only if sto_key looks like a real STO number (numeric), not an operation ID or manual code.
+    for (const row of result.rows) {
+      const currentStoNumber = row.sto_number;
+      const stoKeyStr = row.sto_key != null ? String(row.sto_key).trim() : '';
+
+      if (
+        (currentStoNumber == null || String(currentStoNumber).trim() === '') &&
+        stoKeyStr &&
+        /^\d+$/.test(stoKeyStr) // treat only purely numeric values as valid STO numbers
+      ) {
+        row.sto_number = stoKeyStr;
+      }
+    }
+
     // Get total count (grouped by STO)
     let countQuery = `
-      SELECT COUNT(DISTINCT COALESCE(c.sto_number, s.operation_id, s.shipment_id)) as count 
+      WITH latest_spd_contract AS (
+        SELECT DISTINCT ON (spd.contract_number)
+          spd.contract_number,
+          NULLIF(TRIM(COALESCE(
+            spd.sto_number::text,
+            spd.data->'raw'->>'STO No.',
+            spd.data->'raw'->>'STO Number',
+            spd.data->'shipment'->>'sto_no',
+            spd.data->'contract'->>'sto_no'
+          )), '') AS effective_sto,
+          spd.created_at
+        FROM sap_processed_data spd
+        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      )
+      SELECT COUNT(DISTINCT COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id)) as count 
       FROM shipments s
       LEFT JOIN contracts c ON s.contract_id = c.id
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       WHERE 1=1
     `;
     const countParams: any[] = [];
@@ -225,7 +390,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     }
 
     if (sto) {
-      countQuery += ` AND (c.sto_number = $${countParamIndex} OR s.shipment_id = $${countParamIndex})`;
+      countQuery += ` AND (TRIM(COALESCE(c.sto_number::text, l.effective_sto, '')) = TRIM($${countParamIndex}::text) OR s.shipment_id = $${countParamIndex})`;
       countParams.push(sto);
       countParamIndex++;
     }
@@ -1292,14 +1457,7 @@ export const getContractDetailsForSto = async (req: AuthRequest, res: Response) 
       });
     }
 
-    const contractList = contractNumbers ? String(contractNumbers).split(',').map(c => c.trim()) : [];
-
-    if (contractList.length === 0) {
-      return res.json({
-        success: true,
-        data: [],
-      });
-    }
+    const contractList = contractNumbers ? String(contractNumbers).split(',').map(c => c.trim()).filter(Boolean) : [];
 
     // Ensure user_sto_contract_assignments table exists (it is created in updateStoQtyAssigned,
     // but that endpoint may not have been called yet on a fresh database)
@@ -1315,42 +1473,78 @@ export const getContractDetailsForSto = async (req: AuthRequest, res: Response) 
       )
     `);
 
-    // Get contract details with STO quantity assigned from user_sto_contract_assignments table (user input)
-    // Fallback to sap_processed_data if not found
-    const placeholders = contractList.map((_, i) => `$${i + 2}`).join(', ');
+    // Get ALL contract numbers linked to this STO: column sto_number OR STO in raw/shipment/contract JSON
+    const sapResult = await query(
+      `SELECT DISTINCT contract_number FROM sap_processed_data
+       WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
+         AND (
+           TRIM(COALESCE(sto_number::text, '')) = TRIM($1::text)
+           OR NULLIF(TRIM(COALESCE(data->'raw'->>'STO No.', data->'raw'->>'STO Number', data->'shipment'->>'sto_no', data->'contract'->>'sto_no', data->>'STO No.', data->>'STO Number')), '') = TRIM($1::text)
+         )`,
+      [sto]
+    );
+    const sapContractNumbers = (sapResult.rows || []).map((r: { contract_number: string }) => r.contract_number);
+    const allContractNumbers = [...new Set([...contractList, ...sapContractNumbers])].filter(Boolean);
+
+    if (allContractNumbers.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+      });
+    }
+
+    // Build one row per contract: use unnest so we include contracts that exist only in sap_processed_data (not in contracts table)
     const queryText = `
+      WITH ac AS (SELECT unnest($2::text[]) AS contract_number)
       SELECT 
-        c.contract_id as contract_number,
-        MAX(c.quantity_ordered) as contract_qty,
-        COALESCE(MAX(c.quantity_ordered) - COALESCE((
+        ac.contract_number as contract_number,
+        COALESCE(MAX(c.quantity_ordered), 0) as contract_qty,
+        COALESCE(MAX(c.quantity_ordered), 0) - COALESCE((
           SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
           FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
+          WHERE spd.contract_number = ac.contract_number
           AND spd.sto_number IS NOT NULL
           AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-        ), 0), MAX(c.quantity_ordered)) as outstanding_qty,
+        ), 0) as outstanding_qty,
         COALESCE(
           (SELECT sto_qty_assigned FROM user_sto_contract_assignments 
-           WHERE sto_number = $1 AND contract_number = c.contract_id 
+           WHERE sto_number = $1 AND contract_number = ac.contract_number 
            LIMIT 1),
           (SELECT CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC)
            FROM sap_processed_data spd
-           WHERE spd.contract_number = c.contract_id
+           WHERE spd.contract_number = ac.contract_number
            AND spd.sto_number = $1
            AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
            ORDER BY spd.created_at DESC
            LIMIT 1),
           0
         ) as sto_qty_assigned,
-        STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') as po_number,
-        MAX(c.delivery_start_date) as delivery_start_date,
-        MAX(c.delivery_end_date) as delivery_end_date
-      FROM contracts c
-      WHERE c.contract_id IN (${placeholders})
-      GROUP BY c.contract_id
+        (SELECT STRING_AGG(DISTINCT c2.po_number, ', ' ORDER BY c2.po_number) FILTER (WHERE c2.po_number IS NOT NULL AND c2.po_number != '')
+         FROM contracts c2 WHERE c2.contract_id = ac.contract_number) as po_number,
+        (SELECT MAX(c2.delivery_start_date) FROM contracts c2 WHERE c2.contract_id = ac.contract_number) as delivery_start_date,
+        (SELECT MAX(c2.delivery_end_date) FROM contracts c2 WHERE c2.contract_id = ac.contract_number) as delivery_end_date,
+        COALESCE(
+          (SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'raw'->>'Quantity Delivered', ',', ''), ' ', '') AS NUMERIC))
+           FROM sap_processed_data spd
+           WHERE spd.contract_number = ac.contract_number
+           AND spd.sto_number = $1
+           AND NULLIF(spd.data->'raw'->>'Quantity Delivered', '') IS NOT NULL),
+          0
+        ) as quantity_delivered,
+        COALESCE(
+          (SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'raw'->>'Quantity Receive', ',', ''), ' ', '') AS NUMERIC))
+           FROM sap_processed_data spd
+           WHERE spd.contract_number = ac.contract_number
+           AND spd.sto_number = $1
+           AND NULLIF(spd.data->'raw'->>'Quantity Receive', '') IS NOT NULL),
+          0
+        ) as quantity_receive
+      FROM ac
+      LEFT JOIN contracts c ON c.contract_id = ac.contract_number
+      GROUP BY ac.contract_number
     `;
 
-    const result = await query(queryText, [sto, ...contractList]);
+    const result = await query(queryText, [sto, allContractNumbers]);
 
     return res.json({
       success: true,
@@ -1448,8 +1642,15 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       portOfLoading,
       portOfDischarge,
       quantityShipped,
-      shipmentDate,
-      arrivalDate
+      eta_arrival,
+      eta_berthed,
+      eta_loading_start,
+      eta_loading_complete,
+      eta_sailed,
+      eta_discharge_arrival,
+      eta_discharge_berthed,
+      eta_discharge_start,
+      eta_discharge_complete
     } = req.body;
 
     // Validate required fields - Contract Numbers are required, STO Number is optional
@@ -1493,31 +1694,37 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
 
     // Create shipment for each contract
     // All shipments will share the same operation_id (one transaction)
-    // If STO is not provided (manual shipment), use operation_id as the grouping key
+    // If STO is not provided (manual shipment), operation_id is used as the grouping key in list queries.
     const shipmentIds = [];
     const timestamp = Date.now().toString()
     
     for (const contract of contractCheck.rows) {
       // Generate shipment_id:
       // - If STO is provided, use "<STO>-<CONTRACT_ID>" so all contracts under an STO can be grouped
-      // - If STO is NOT provided (manual shipment), use "<OPERATION_ID>-<CONTRACT_ID>" to group by operation
+      // - If STO is NOT provided (manual shipment), generate an internal unique id (do NOT mirror operation_id),
+      //   and keep STO empty until it is updated from SAP.
       const shipmentId = hasStoNumber
         ? `${stoNumber}-${contract.contract_id}`
-        : `${operationId || `OP-${contractNumbers[0]}-${timestamp.slice(-8)}`}-${contract.contract_id}`;
+        : `MNL-${timestamp.slice(-8)}-${contract.contract_id}`;
       
       const result = await query(`
         INSERT INTO shipments (
           shipment_id, operation_id, contract_id, vessel_name, vessel_code, voyage_no, vessel_owner,
           vessel_draft, vessel_capacity, vessel_hull_type, charter_type,
-          port_of_loading, port_of_discharge, quantity_shipped, 
-          shipment_date, arrival_date, status
+          port_of_loading, port_of_discharge, quantity_shipped,
+          eta_arrival, eta_berthed, eta_loading_start, eta_loading_complete, eta_sailed,
+          eta_discharge_arrival, eta_discharge_berthed, eta_discharge_start, eta_discharge_complete,
+          status
         ) VALUES (
           $1, $2, $3::uuid, $4, $5, $6, $7, $8::numeric, $9::numeric, $10, $11,
-          $12, $13, $14::numeric, $15::date, $16::date, 'PLANNED'
+          $12, $13, $14::numeric,
+          $15::date, $16::date, $17::date, $18::date, $19::date,
+          $20::date, $21::date, $22::date, $23::date,
+          'PLANNED'
         ) RETURNING id
       `, [
         shipmentId,
-        operationId || null, // Same operation_id for all contracts in this transaction
+        operationId || null,
         contract.id,
         vesselName || null,
         vesselCode || null,
@@ -1530,8 +1737,15 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
         portOfLoading || null,
         portOfDischarge || null,
         quantityShipped ? parseFloat(String(quantityShipped)) : null,
-        shipmentDate || null,
-        arrivalDate || null
+        eta_arrival || null,
+        eta_berthed || null,
+        eta_loading_start || null,
+        eta_loading_complete || null,
+        eta_sailed || null,
+        eta_discharge_arrival || null,
+        eta_discharge_berthed || null,
+        eta_discharge_start || null,
+        eta_discharge_complete || null
       ]);
 
       shipmentIds.push(result.rows[0].id);
