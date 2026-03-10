@@ -205,7 +205,7 @@ CREATE TABLE contracts (
     delivery_end_date DATE,
     contract_value DECIMAL(15, 2),
     currency VARCHAR(10) DEFAULT 'USD',
-    status VARCHAR(50) DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'COMPLETED', 'CANCELLED')),
+    status VARCHAR(50) DEFAULT 'Open' CHECK (status IN ('Open', 'Close', 'Cancelled', 'ACTIVE', 'COMPLETED', 'CANCELLED')),
     sap_contract_id VARCHAR(100),
     created_by UUID REFERENCES users(id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

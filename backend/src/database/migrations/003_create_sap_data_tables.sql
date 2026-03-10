@@ -107,9 +107,20 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+DROP TRIGGER IF EXISTS update_sap_data_imports_updated_at ON sap_data_imports;
 CREATE TRIGGER update_sap_data_imports_updated_at BEFORE UPDATE ON sap_data_imports FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_sap_raw_data_updated_at ON sap_raw_data;
 CREATE TRIGGER update_sap_raw_data_updated_at BEFORE UPDATE ON sap_raw_data FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_sap_processed_data_updated_at ON sap_processed_data;
 CREATE TRIGGER update_sap_processed_data_updated_at BEFORE UPDATE ON sap_processed_data FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_user_data_inputs_updated_at ON user_data_inputs;
 CREATE TRIGGER update_user_data_inputs_updated_at BEFORE UPDATE ON user_data_inputs FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_sap_field_mappings_updated_at ON sap_field_mappings;
 CREATE TRIGGER update_sap_field_mappings_updated_at BEFORE UPDATE ON sap_field_mappings FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_data_validation_rules_updated_at ON data_validation_rules;
 CREATE TRIGGER update_data_validation_rules_updated_at BEFORE UPDATE ON data_validation_rules FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

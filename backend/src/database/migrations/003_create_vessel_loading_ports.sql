@@ -1,7 +1,7 @@
 -- Create vessel_loading_ports table for detailed vessel loading information
 -- This table supports multiple loading ports per shipment
 
-CREATE TABLE vessel_loading_ports (
+CREATE TABLE IF NOT EXISTS vessel_loading_ports (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     shipment_id UUID REFERENCES shipments(id) ON DELETE CASCADE,
     port_name VARCHAR(255) NOT NULL,
@@ -31,10 +31,11 @@ CREATE TABLE vessel_loading_ports (
 );
 
 -- Create indexes for better performance
-CREATE INDEX idx_vessel_loading_ports_shipment_id ON vessel_loading_ports(shipment_id);
-CREATE INDEX idx_vessel_loading_ports_port_sequence ON vessel_loading_ports(shipment_id, port_sequence);
+CREATE INDEX IF NOT EXISTS idx_vessel_loading_ports_shipment_id ON vessel_loading_ports(shipment_id);
+CREATE INDEX IF NOT EXISTS idx_vessel_loading_ports_port_sequence ON vessel_loading_ports(shipment_id, port_sequence);
 
 -- Add update timestamp trigger
+DROP TRIGGER IF EXISTS update_vessel_loading_ports_updated_at ON vessel_loading_ports;
 CREATE TRIGGER update_vessel_loading_ports_updated_at BEFORE UPDATE ON vessel_loading_ports
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 

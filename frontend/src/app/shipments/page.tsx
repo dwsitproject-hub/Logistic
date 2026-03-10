@@ -85,6 +85,17 @@ interface Shipment {
   eta_vessel_complete_discharge?: string
   quantity_receive?: number
   quantity_delivered_sap?: number
+  // Basic ETA loading dates at shipment level
+  eta_arrival?: string
+  eta_berthed?: string
+  eta_loading_start?: string
+  eta_loading_complete?: string
+  eta_sailed?: string
+  // Basic ETA discharge dates at shipment level
+  eta_discharge_arrival?: string
+  eta_discharge_berthed?: string
+  eta_discharge_start?: string
+  eta_discharge_complete?: string
   // Contract details (for expanded view)
   contract_details?: Array<{
     contract_number: string
@@ -150,6 +161,8 @@ function ShipmentsPageContent() {
   const [editedData, setEditedData] = useState<Partial<Shipment>>({})
   const [statusFilter, setStatusFilter] = useState<string>('ALL')
   const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
+  const [etaLoadingFilter, setEtaLoadingFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
+  const [etaDischargeFilter, setEtaDischargeFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
   const [vesselFilter, setVesselFilter] = useState('')
   const [saving, setSaving] = useState(false)
   
@@ -230,7 +243,6 @@ function ShipmentsPageContent() {
     charterType: '',
     portOfLoading: '',
     portOfDischarge: '',
-    quantityShipped: '',
     etaVesselArrivalAtLoadingPort: '',
     etaVesselBerthedAtLoadingPort: '',
     etaVesselStartLoading: '',
@@ -241,6 +253,7 @@ function ShipmentsPageContent() {
     etaVesselStartDischarging: '',
     etaVesselCompleteDischarge: ''
   })
+  const [contractQtyAssigned, setContractQtyAssigned] = useState<Record<string, string>>({})
   const [contractSuggestions, setContractSuggestions] = useState<any[]>([])
   const [contractSearchTerm, setContractSearchTerm] = useState('')
   const [showContractSuggestions, setShowContractSuggestions] = useState(false)
@@ -251,6 +264,14 @@ function ShipmentsPageContent() {
     contractData: any
     message: string
   } }>({})
+
+  // Master Vessel / Master Loading Port suggestions for Add Shipment
+  const [vesselSuggestions, setVesselSuggestions] = useState<Array<{ vessel_code: string; vessel_name: string; vessel_capacity_mt: number | null; vessel_owner: string | null; hull_type: string | null }>>([])
+  const [showVesselSuggestions, setShowVesselSuggestions] = useState(false)
+  const [portSuggestions, setPortSuggestions] = useState<Array<{ port: string; region: string | null }>>([])
+  const [showPortSuggestions, setShowPortSuggestions] = useState(false)
+  const vesselSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const portSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Compact/Expand view state
   const [expandedShipmentIds, setExpandedShipmentIds] = useState<Set<string>>(() => new Set())
@@ -287,6 +308,182 @@ function ShipmentsPageContent() {
   const [editedShipmentInfo, setEditedShipmentInfo] = useState<any>(null)
   const [editingPortId, setEditingPortId] = useState<string | null>(null)
   const [editedPortData, setEditedPortData] = useState<Partial<VesselLoadingPort> | null>(null)
+
+  // ---- ETA Loading Status buckets (grouped by STO / Operation ID) ----
+  const etaLoadingBuckets = useMemo(() => {
+    const buckets = {
+      MORE_THAN_7D: new Set<string>(),
+      D_MINUS_2: new Set<string>(),
+      D: new Set<string>(),
+      DELAY: new Set<string>(),
+      NO_ETA: new Set<string>(),
+    }
+
+    const today = new Date()
+    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+    const msPerDay = 24 * 60 * 60 * 1000
+
+    const toDayDiff = (value: any): number | null => {
+      if (!value) return null
+      const d = new Date(value)
+      if (Number.isNaN(d.getTime())) return null
+      const dMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+      return Math.floor((dMidnight.getTime() - todayMidnight.getTime()) / msPerDay)
+    }
+
+    const groupDiffs: Map<string, number[]> = new Map()
+
+    for (const s of shipments) {
+      if (s.status === 'COMPLETED') continue
+      const rawSto = (s as any).sto_number
+      const rawOp = (s as any).operation_id
+      const sto = rawSto && String(rawSto).trim()
+      const opId = rawOp && String(rawOp).trim()
+      const key = sto || opId || s.shipment_id || s.id
+      if (!key) continue
+
+      const diffs: number[] = groupDiffs.get(key) ?? []
+
+      const etaCandidates = [
+        s.eta_arrival,
+        s.eta_berthed,
+        s.eta_loading_start,
+        s.eta_loading_complete,
+        s.eta_sailed,
+      ]
+
+      for (const v of etaCandidates) {
+        const diff = toDayDiff(v)
+        if (diff !== null) diffs.push(diff)
+      }
+
+      if (diffs.length > 0) {
+        groupDiffs.set(key, diffs)
+      } else if (!groupDiffs.has(key)) {
+        // Track groups that currently have no ETA values at all
+        groupDiffs.set(key, [])
+      }
+    }
+
+    for (const [key, diffs] of groupDiffs.entries()) {
+      if (diffs.length === 0) {
+        buckets.NO_ETA.add(key)
+        continue
+      }
+      const hasDelay = diffs.some((d) => d < 0)
+      const hasToday = diffs.some((d) => d === 0)
+      const hasDMinus2 = diffs.some((d) => d > 0 && d <= 2)
+      const hasMoreThan7 = diffs.some((d) => d > 7)
+
+      if (hasDelay) {
+        buckets.DELAY.add(key)
+      } else if (hasToday) {
+        buckets.D.add(key)
+      } else if (hasDMinus2) {
+        buckets.D_MINUS_2.add(key)
+      } else if (hasMoreThan7) {
+        buckets.MORE_THAN_7D.add(key)
+      }
+    }
+
+    return {
+      counts: {
+        moreThan7D: buckets.MORE_THAN_7D.size,
+        dMinus2: buckets.D_MINUS_2.size,
+        d: buckets.D.size,
+        delay: buckets.DELAY.size,
+        noEta: buckets.NO_ETA.size,
+      },
+      keysByFilter: buckets,
+    }
+  }, [shipments])
+
+  // ---- ETA Discharge Status buckets (grouped by STO / Operation ID) ----
+  const etaDischargeBuckets = useMemo(() => {
+    const buckets = {
+      MORE_THAN_7D: new Set<string>(),
+      D_MINUS_2: new Set<string>(),
+      D: new Set<string>(),
+      DELAY: new Set<string>(),
+      NO_ETA: new Set<string>(),
+    }
+
+    const today = new Date()
+    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+    const msPerDay = 24 * 60 * 60 * 1000
+
+    const toDayDiff = (value: any): number | null => {
+      if (!value) return null
+      const d = new Date(value)
+      if (Number.isNaN(d.getTime())) return null
+      const dMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+      return Math.floor((dMidnight.getTime() - todayMidnight.getTime()) / msPerDay)
+    }
+
+    const groupDiffs: Map<string, number[]> = new Map()
+
+    for (const s of shipments) {
+      if (s.status === 'COMPLETED') continue
+      const rawSto = (s as any).sto_number
+      const rawOp = (s as any).operation_id
+      const sto = rawSto && String(rawSto).trim()
+      const opId = rawOp && String(rawOp).trim()
+      const key = sto || opId || s.shipment_id || s.id
+      if (!key) continue
+
+      const diffs: number[] = groupDiffs.get(key) ?? []
+
+      const etaCandidates = [
+        s.eta_discharge_arrival,
+        s.eta_discharge_berthed,
+        s.eta_discharge_start,
+        s.eta_discharge_complete,
+      ]
+
+      for (const v of etaCandidates) {
+        const diff = toDayDiff(v)
+        if (diff !== null) diffs.push(diff)
+      }
+
+      if (diffs.length > 0) {
+        groupDiffs.set(key, diffs)
+      } else if (!groupDiffs.has(key)) {
+        groupDiffs.set(key, [])
+      }
+    }
+
+    for (const [key, diffs] of groupDiffs.entries()) {
+      if (diffs.length === 0) {
+        buckets.NO_ETA.add(key)
+        continue
+      }
+      const hasDelay = diffs.some((d) => d < 0)
+      const hasToday = diffs.some((d) => d === 0)
+      const hasDMinus2 = diffs.some((d) => d > 0 && d <= 2)
+      const hasMoreThan7 = diffs.some((d) => d > 7)
+
+      if (hasDelay) {
+        buckets.DELAY.add(key)
+      } else if (hasToday) {
+        buckets.D.add(key)
+      } else if (hasDMinus2) {
+        buckets.D_MINUS_2.add(key)
+      } else if (hasMoreThan7) {
+        buckets.MORE_THAN_7D.add(key)
+      }
+    }
+
+    return {
+      counts: {
+        moreThan7D: buckets.MORE_THAN_7D.size,
+        dMinus2: buckets.D_MINUS_2.size,
+        d: buckets.D.size,
+        delay: buckets.DELAY.size,
+        noEta: buckets.NO_ETA.size,
+      },
+      keysByFilter: buckets,
+    }
+  }, [shipments])
 
   useEffect(() => {
     // Read URL parameters
@@ -362,6 +559,8 @@ function ShipmentsPageContent() {
   const handleEdit = (shipment: Shipment) => {
     setEditingId(shipment.id)
     setEditedData({ ...shipment })
+    // Ensure contract details are loaded so we can validate sto_qty_assigned vs vessel capacity
+    fetchContractDetails(shipment)
     // Initialize contract details editing state
     if (contractDetailsMap[shipment.id] && contractDetailsMap[shipment.id].length > 0) {
       const initialValues: { [key: string]: number } = {}
@@ -387,6 +586,31 @@ function ShipmentsPageContent() {
 
       // Prepare shipment payload
       const payload: Partial<Shipment> = { ...editedData }
+      
+      // Validate: sum of "Contract Qty assign to STO" <= Vessel Capacity (MT)
+      const capacityForCheck =
+        payload.vessel_capacity !== undefined && payload.vessel_capacity !== null
+          ? Number(payload.vessel_capacity)
+          : currentShipment.vessel_capacity != null
+            ? Number(currentShipment.vessel_capacity)
+            : null
+
+      if (capacityForCheck != null && !Number.isNaN(capacityForCheck)) {
+        const details = contractDetailsMap[shipmentId] || []
+        if (details.length > 0) {
+          const sumAssigned = details.reduce((sum, d) => {
+            const key = `${shipmentId}-${d.contract_number}`
+            const v = editedContractDetails[key] ?? d.sto_qty_assigned ?? 0
+            const n = Number(v) || 0
+            return sum + n
+          }, 0)
+          if (sumAssigned > capacityForCheck) {
+            alert(`Sum of "Contract Qty assign to STO" (${formatNumber(sumAssigned)} MT) cannot exceed Vessel Capacity (${formatNumber(capacityForCheck)} MT).`)
+            setSaving(false)
+            return
+          }
+        }
+      }
 
       const actualValue = typeof payload.actual_vessel_qty_receive === 'number'
         ? payload.actual_vessel_qty_receive
@@ -1026,7 +1250,51 @@ function ShipmentsPageContent() {
       if (lateIndicatorFilter === 'LATE' && indicator.text !== 'Late') return false
       if (lateIndicatorFilter === 'NA' && indicator.text !== '-') return false
     }
-    
+
+    // ETA Loading Status filter (grouped by STO / Operation ID)
+    if (etaLoadingFilter !== 'ALL') {
+      const rawSto = (shipment as any).sto_number
+      const rawOp = (shipment as any).operation_id
+      const sto = rawSto && String(rawSto).trim()
+      const opId = rawOp && String(rawOp).trim()
+      const key = sto || opId || shipment.shipment_id || shipment.id
+      const bucketSets = etaLoadingBuckets.keysByFilter
+      const targetSet =
+        etaLoadingFilter === 'MORE_THAN_7D'
+          ? bucketSets.MORE_THAN_7D
+          : etaLoadingFilter === 'D_MINUS_2'
+            ? bucketSets.D_MINUS_2
+            : etaLoadingFilter === 'D'
+              ? bucketSets.D
+              : etaLoadingFilter === 'DELAY'
+                ? bucketSets.DELAY
+                : bucketSets.NO_ETA
+
+      if (!key || !targetSet.has(key)) return false
+    }
+
+    // ETA Discharge Status filter (grouped by STO / Operation ID)
+    if (etaDischargeFilter !== 'ALL') {
+      const rawSto = (shipment as any).sto_number
+      const rawOp = (shipment as any).operation_id
+      const sto = rawSto && String(rawSto).trim()
+      const opId = rawOp && String(rawOp).trim()
+      const key = sto || opId || shipment.shipment_id || shipment.id
+      const bucketSets = etaDischargeBuckets.keysByFilter
+      const targetSet =
+        etaDischargeFilter === 'MORE_THAN_7D'
+          ? bucketSets.MORE_THAN_7D
+          : etaDischargeFilter === 'D_MINUS_2'
+            ? bucketSets.D_MINUS_2
+            : etaDischargeFilter === 'D'
+              ? bucketSets.D
+              : etaDischargeFilter === 'DELAY'
+                ? bucketSets.DELAY
+                : bucketSets.NO_ETA
+
+      if (!key || !targetSet.has(key)) return false
+    }
+
     return matchesSearch && matchesViewOption && passesColumnFilters(shipment)
   })
 
@@ -1392,6 +1660,18 @@ function ShipmentsPageContent() {
       )
     },
     {
+      id: 'quantity_receive',
+      label: 'Quantity Received (MT)',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => (s.quantity_receive ?? 0),
+      render: (s) => (
+        <span className="text-sm break-words">
+          {formatNumber(s.quantity_receive ?? 0)} MT
+        </span>
+      )
+    },
+    {
       id: 'incoterm',
       label: 'Incoterm',
       defaultVisible: true,
@@ -1424,18 +1704,6 @@ function ShipmentsPageContent() {
       render: (s) => <span className="text-sm break-words">{s.port_of_discharge || s.plant_site || '-'}</span>
     },
     {
-      id: 'quantity_shipped',
-      label: 'Quantity Received',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (s) => s.quantity_receive || s.total_quantity_delivered || s.quantity_delivered || s.total_quantity_shipped || s.quantity_shipped || 0,
-      render: (s) => (
-        <span className="text-sm break-words">
-          {formatNumber(s.quantity_receive ?? s.total_quantity_delivered ?? s.quantity_delivered ?? s.total_quantity_shipped ?? s.quantity_shipped)} MT
-        </span>
-      )
-    },
-    {
       id: 'voyage_no',
       label: 'Voyage No',
       defaultVisible: false,
@@ -1454,7 +1722,7 @@ function ShipmentsPageContent() {
     {
       id: 'quantity_delivered',
       label: 'Quantity Delivered',
-      defaultVisible: false,
+      defaultVisible: true,
       sortable: true,
       getSortValue: (s) => s.quantity_delivered_sap || s.total_quantity_delivered || s.quantity_delivered || 0,
       render: (s) => (
@@ -1550,7 +1818,16 @@ function ShipmentsPageContent() {
       setVisibleColumnIds(new Set(defaultVisibleColumnIds))
     } else {
       // Ensure required columns are always included
-      const required = ['late_indicator', 'operation_id', 'shipment_id', 'status']
+      const required = [
+        'late_indicator',
+        'operation_id',
+        'shipment_id',
+        'status',
+        // Key operational quantities should never "disappear" due to stored user preferences
+        'sto_quantity',
+        'quantity_receive',
+        'quantity_delivered',
+      ]
       const current = Array.from(visibleColumnIds)
       const missing = required.filter(id => !current.includes(id))
       if (missing.length > 0) {
@@ -2228,6 +2505,7 @@ function ShipmentsPageContent() {
         ...prev,
         contractNumbers: [...prev.contractNumbers, contractId]
       }))
+      setContractQtyAssigned(prev => ({ ...prev, [contractId]: prev[contractId] ?? '' }))
     }
     setContractSearchTerm('')
     setShowContractSuggestions(false)
@@ -2245,6 +2523,7 @@ function ShipmentsPageContent() {
         ...prev,
         contractNumbers: [...prev.contractNumbers, contractId]
       }))
+      setContractQtyAssigned(prev => ({ ...prev, [contractId]: prev[contractId] ?? '' }))
     }
     setContractSearchTerm('')
     setShowContractSuggestions(false)
@@ -2255,12 +2534,118 @@ function ShipmentsPageContent() {
       ...prev,
       contractNumbers: prev.contractNumbers.filter(id => id !== contractId)
     }))
+    setContractQtyAssigned(prev => {
+      const next = { ...prev }
+      delete next[contractId]
+      return next
+    })
     // Remove validation state
     setContractValidations(prev => {
       const next = { ...prev }
       delete next[contractId]
       return next
     })
+  }
+
+  // --- Master Vessel / Loading Port helpers for NEW shipment ---
+  const fetchVesselSuggestions = async (search: string) => {
+    if (!search || search.trim().length < 2) {
+      setVesselSuggestions([])
+      return
+    }
+    try {
+      const res = await api.get('/master-vessels', { params: { search: search.trim(), limit: 20 } })
+      const items = res.data?.data?.items ?? []
+      setVesselSuggestions(items)
+      setShowVesselSuggestions(true)
+    } catch {
+      setVesselSuggestions([])
+    }
+  }
+
+  const fetchPortSuggestions = async (search: string) => {
+    if (!search || search.trim().length < 2) {
+      setPortSuggestions([])
+      return
+    }
+    try {
+      const res = await api.get('/master-loading-ports', { params: { search: search.trim(), limit: 20 } })
+      const items = res.data?.data?.items ?? []
+      setPortSuggestions(items)
+      setShowPortSuggestions(true)
+    } catch {
+      setPortSuggestions([])
+    }
+  }
+
+  const handleVesselNameChange = (value: string) => {
+    setNewShipment(prev => ({ ...prev, vesselName: value }))
+    if (vesselSearchTimeoutRef.current) clearTimeout(vesselSearchTimeoutRef.current)
+    vesselSearchTimeoutRef.current = setTimeout(() => fetchVesselSuggestions(value), 300)
+  }
+
+  const handleSelectVessel = (v: { vessel_code: string; vessel_name: string; vessel_capacity_mt: number | null; vessel_owner: string | null; hull_type: string | null }) => {
+    setNewShipment(prev => ({
+      ...prev,
+      vesselName: v.vessel_name,
+      vesselCode: v.vessel_code ?? '',
+      vesselOwner: v.vessel_owner ?? '',
+      vesselCapacity: v.vessel_capacity_mt != null ? String(v.vessel_capacity_mt) : '',
+      vesselHullType: v.hull_type ?? ''
+    }))
+    setShowVesselSuggestions(false)
+    setVesselSuggestions([])
+  }
+
+  const handlePortOfLoadingChange = (value: string) => {
+    setNewShipment(prev => ({ ...prev, portOfLoading: value }))
+    if (portSearchTimeoutRef.current) clearTimeout(portSearchTimeoutRef.current)
+    portSearchTimeoutRef.current = setTimeout(() => fetchPortSuggestions(value), 300)
+  }
+
+  const handleSelectPort = (p: { port: string }) => {
+    setNewShipment(prev => ({ ...prev, portOfLoading: p.port }))
+    setShowPortSuggestions(false)
+    setPortSuggestions([])
+  }
+
+  const vesselCapacityNum = newShipment.vesselCapacity ? parseFloat(String(newShipment.vesselCapacity)) : null
+  const contractQtyAssignedSum = useMemo(() => {
+    return Object.values(contractQtyAssigned).reduce((sum, v) => sum + (parseFloat(String(v)) || 0), 0)
+  }, [contractQtyAssigned])
+  const contractQtyAssignedExceedsCapacity =
+    vesselCapacityNum != null && !Number.isNaN(vesselCapacityNum) && contractQtyAssignedSum > vesselCapacityNum
+
+  // --- Master Vessel / Loading Port helpers for EDITED shipment row ---
+  const handleEditVesselNameChange = (value: string) => {
+    setEditedData(prev => ({ ...prev, vessel_name: value }))
+    if (vesselSearchTimeoutRef.current) clearTimeout(vesselSearchTimeoutRef.current)
+    vesselSearchTimeoutRef.current = setTimeout(() => fetchVesselSuggestions(value), 300)
+  }
+
+  const handleSelectVesselForEdit = (v: { vessel_code: string; vessel_name: string; vessel_capacity_mt: number | null; vessel_owner: string | null; hull_type: string | null }) => {
+    setEditedData(prev => ({
+      ...prev,
+      vessel_name: v.vessel_name,
+      vessel_code: v.vessel_code ?? '',
+      vessel_owner: v.vessel_owner ?? '',
+      vessel_capacity: v.vessel_capacity_mt != null ? Number(v.vessel_capacity_mt) : null,
+      vessel_hull_type: v.hull_type ?? '',
+    }))
+    setShowVesselSuggestions(false)
+    setVesselSuggestions([])
+  }
+
+  const handleEditPortOfLoadingChange = (value: string) => {
+    setEditedData(prev => ({ ...prev, port_of_loading: value }))
+    if (portSearchTimeoutRef.current) clearTimeout(portSearchTimeoutRef.current)
+    portSearchTimeoutRef.current = setTimeout(() => fetchPortSuggestions(value), 300)
+  }
+
+  const handleSelectPortForEdit = (p: { port: string }) => {
+    setEditedData(prev => ({ ...prev, port_of_loading: p.port }))
+    setShowPortSuggestions(false)
+    setPortSuggestions([])
   }
 
   const handleCreateShipment = async () => {
@@ -2279,6 +2664,16 @@ function ShipmentsPageContent() {
       return
     }
 
+    if (contractQtyAssignedExceedsCapacity) {
+      alert('Sum of "Contract Qty assign to STO" cannot exceed Vessel Capacity (MT).')
+      return
+    }
+
+    if (contractQtyAssignedExceedsCapacity) {
+      alert('Sum of "Contract Qty assign to STO" cannot exceed Vessel Capacity (MT).')
+      return
+    }
+
     // Don't validate STO number - it should remain empty for manual shipments
     // STO will be filled from SAP Data later
 
@@ -2292,6 +2687,7 @@ function ShipmentsPageContent() {
         ...newShipment,
         operationId,
         stoNumber: '', // Ensure STO Number remains empty - will be filled from SAP Data later
+        contractQtyAssigned,
         eta_arrival: newShipment.etaVesselArrivalAtLoadingPort || null,
         eta_berthed: newShipment.etaVesselBerthedAtLoadingPort || null,
         eta_loading_start: newShipment.etaVesselStartLoading || null,
@@ -2321,7 +2717,6 @@ function ShipmentsPageContent() {
           charterType: '',
           portOfLoading: '',
           portOfDischarge: '',
-          quantityShipped: '',
           etaVesselArrivalAtLoadingPort: '',
           etaVesselBerthedAtLoadingPort: '',
           etaVesselStartLoading: '',
@@ -2332,6 +2727,7 @@ function ShipmentsPageContent() {
           etaVesselStartDischarging: '',
           etaVesselCompleteDischarge: ''
         })
+        setContractQtyAssigned({})
         setStoValidation(null)
         setContractValidations({})
         await fetchShipments() // Refresh the list
@@ -2373,7 +2769,7 @@ function ShipmentsPageContent() {
       b2b_flag: '100px',
       port_of_loading: '160px',
       port_of_discharge: '160px',
-      quantity_shipped: '140px',
+      quantity_receive: '140px',
       voyage_no: '120px',
       vessel_code: '120px',
       quantity_delivered: '140px'
@@ -2563,7 +2959,7 @@ function ShipmentsPageContent() {
             <CardTitle>Status Distribution</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto pb-4 px-4">
+            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto py-4 px-4">
               {[
                 { status: 'PLANNED', label: 'Planned', color: 'bg-blue-100', textColor: 'text-blue-800', badgeColor: 'bg-blue-600' },
                 { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600' },
@@ -2581,7 +2977,7 @@ function ShipmentsPageContent() {
                       {/* Status Circle */}
                       <div className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg hover:shadow-xl transition-shadow`}>
                         {/* Count Badge */}
-                        <div className={`absolute -top-2 -right-2 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-7 h-7 md:w-8 md:h-8 flex items-center justify-center shadow-lg z-10`}>
+                        <div className={`absolute -top-3 -right-3 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10`}>
                           {count}
                         </div>
                         {/* Status Label */}
@@ -2599,6 +2995,132 @@ function ShipmentsPageContent() {
                       </div>
                     )}
                   </div>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ETA Loading Status */}
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>ETA Loading Status</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              {[
+                {
+                  key: 'MORE_THAN_7D' as const,
+                  label: 'ETA Loading &gt; 7D',
+                  count: etaLoadingBuckets.counts.moreThan7D,
+                  color: 'bg-sky-50',
+                },
+                {
+                  key: 'D_MINUS_2' as const,
+                  label: 'ETA Loading D-2',
+                  count: etaLoadingBuckets.counts.dMinus2,
+                  color: 'bg-amber-50',
+                },
+                {
+                  key: 'D' as const,
+                  label: 'ETA Loading D',
+                  count: etaLoadingBuckets.counts.d,
+                  color: 'bg-emerald-50',
+                },
+                {
+                  key: 'DELAY' as const,
+                  label: 'ETA Loading Delay',
+                  count: etaLoadingBuckets.counts.delay,
+                  color: 'bg-rose-50',
+                },
+                {
+                  key: 'NO_ETA' as const,
+                  label: 'No ETA',
+                  count: etaLoadingBuckets.counts.noEta,
+                  color: 'bg-gray-50',
+                },
+              ].map((bucket) => {
+                const isActive = etaLoadingFilter === bucket.key
+                return (
+                  <button
+                    key={bucket.key}
+                    type="button"
+                    onClick={() => setEtaLoadingFilter((prev) => (prev === bucket.key ? 'ALL' : bucket.key))}
+                    className={`flex flex-col items-start justify-between rounded-xl border px-3 py-3 text-left shadow-sm hover:shadow-md transition-shadow ${bucket.color} ${
+                      isActive ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-200'
+                    }`}
+                  >
+                    <div className="text-xs text-gray-600 mb-1">{bucket.label}</div>
+                    <div className="text-2xl font-semibold text-gray-900">{bucket.count}</div>
+                    {isActive && (
+                      <div className="mt-1 text-[11px] text-blue-700">
+                        Click again to clear filter
+                      </div>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ETA Discharge Status */}
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>ETA Discharge Status</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              {[
+                {
+                  key: 'MORE_THAN_7D' as const,
+                  label: 'ETA Discharge > 7D',
+                  count: etaDischargeBuckets.counts.moreThan7D,
+                  color: 'bg-sky-50',
+                },
+                {
+                  key: 'D_MINUS_2' as const,
+                  label: 'ETA Discharge D-2',
+                  count: etaDischargeBuckets.counts.dMinus2,
+                  color: 'bg-amber-50',
+                },
+                {
+                  key: 'D' as const,
+                  label: 'ETA Discharge D',
+                  count: etaDischargeBuckets.counts.d,
+                  color: 'bg-emerald-50',
+                },
+                {
+                  key: 'DELAY' as const,
+                  label: 'ETA Discharge Delay',
+                  count: etaDischargeBuckets.counts.delay,
+                  color: 'bg-rose-50',
+                },
+                {
+                  key: 'NO_ETA' as const,
+                  label: 'No ETA',
+                  count: etaDischargeBuckets.counts.noEta,
+                  color: 'bg-gray-50',
+                },
+              ].map((bucket) => {
+                const isActive = etaDischargeFilter === bucket.key
+                return (
+                  <button
+                    key={bucket.key}
+                    type="button"
+                    onClick={() => setEtaDischargeFilter((prev) => (prev === bucket.key ? 'ALL' : bucket.key))}
+                    className={`flex flex-col items-start justify-between rounded-xl border px-3 py-3 text-left shadow-sm hover:shadow-md transition-shadow ${bucket.color} ${
+                      isActive ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-200'
+                    }`}
+                  >
+                    <div className="text-xs text-gray-600 mb-1">{bucket.label}</div>
+                    <div className="text-2xl font-semibold text-gray-900">{bucket.count}</div>
+                    {isActive && (
+                      <div className="mt-1 text-[11px] text-blue-700">
+                        Click again to clear filter
+                      </div>
+                    )}
+                  </button>
                 )
               })}
             </div>
@@ -2966,12 +3488,94 @@ function ShipmentsPageContent() {
                                   {visibleColumns.map(col => (
                                     <div key={col.id} className="min-w-0">
                                       {col.id === 'vessel_name' && isEditing ? (
+                                        <div className="relative">
+                                          <Input
+                                            value={editedData.vessel_name ?? shipment.vessel_name ?? ''}
+                                            onChange={(e) => handleEditVesselNameChange(e.target.value)}
+                                            onFocus={() => (editedData.vessel_name ?? shipment.vessel_name ?? '').trim().length >= 2 && setShowVesselSuggestions(true)}
+                                            onBlur={() => setTimeout(() => setShowVesselSuggestions(false), 200)}
+                                            className="h-8 text-sm"
+                                            placeholder="Type to search vessel (Master Vessel)"
+                                          />
+                                          {showVesselSuggestions && vesselSuggestions.length > 0 && (
+                                            <div className="absolute z-20 mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-52 overflow-y-auto">
+                                              {vesselSuggestions.map((v) => (
+                                                <div
+                                                  key={v.vessel_code}
+                                                  className="px-2 py-1.5 hover:bg-gray-100 cursor-pointer border-b last:border-b-0"
+                                                  onMouseDown={() => handleSelectVesselForEdit(v)}
+                                                >
+                                                  <div className="text-xs font-medium truncate">{v.vessel_name}</div>
+                                                  <div className="text-[11px] text-gray-500 truncate">
+                                                    {v.vessel_code} {v.vessel_owner ? `• ${v.vessel_owner}` : ''}
+                                                  </div>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : col.id === 'vessel_code' && isEditing ? (
                                         <Input
-                                          value={editedData.vessel_name ?? shipment.vessel_name ?? ''}
-                                          onChange={(e) => handleFieldChange('vessel_name', e.target.value)}
-                                          className="h-8 text-sm"
-                                          placeholder="Vessel Name"
+                                          value={editedData.vessel_code ?? shipment.vessel_code ?? ''}
+                                          disabled
+                                          className="h-8 text-sm bg-gray-100 cursor-not-allowed"
+                                          placeholder="Filled from Master Vessel"
                                         />
+                                      ) : col.id === 'vessel_owner' && isEditing ? (
+                                        <Input
+                                          value={editedData.vessel_owner ?? shipment.vessel_owner ?? ''}
+                                          disabled
+                                          className="h-8 text-sm bg-gray-100 cursor-not-allowed"
+                                          placeholder="Filled from Master Vessel"
+                                        />
+                                      ) : col.id === 'vessel_capacity' && isEditing ? (
+                                        <Input
+                                          type="number"
+                                          value={
+                                            editedData.vessel_capacity != null
+                                              ? String(editedData.vessel_capacity)
+                                              : shipment.vessel_capacity != null
+                                                ? String(shipment.vessel_capacity)
+                                                : ''
+                                          }
+                                          disabled
+                                          className="h-8 text-sm bg-gray-100 cursor-not-allowed"
+                                          placeholder="Filled from Master Vessel"
+                                        />
+                                      ) : col.id === 'vessel_hull_type' && isEditing ? (
+                                        <Input
+                                          value={editedData.vessel_hull_type ?? shipment.vessel_hull_type ?? ''}
+                                          disabled
+                                          className="h-8 text-sm bg-gray-100 cursor-not-allowed"
+                                          placeholder="Filled from Master Vessel"
+                                        />
+                                      ) : col.id === 'port_of_loading' && isEditing ? (
+                                        <div className="relative">
+                                          <Input
+                                            value={editedData.port_of_loading ?? shipment.port_of_loading ?? ''}
+                                            onChange={(e) => handleEditPortOfLoadingChange(e.target.value)}
+                                            onFocus={() => (editedData.port_of_loading ?? shipment.port_of_loading ?? '').trim().length >= 2 && setShowPortSuggestions(true)}
+                                            onBlur={() => setTimeout(() => setShowPortSuggestions(false), 200)}
+                                            className="h-8 text-sm"
+                                            placeholder="Type to search port (Master Loading Port)"
+                                          />
+                                          {showPortSuggestions && portSuggestions.length > 0 && (
+                                            <div className="absolute z-20 mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-52 overflow-y-auto">
+                                              {portSuggestions.map((p, idx) => (
+                                                <div
+                                                  key={p.port + (p.region || '') + idx}
+                                                  className="px-2 py-1.5 hover:bg-gray-100 cursor-pointer border-b last:border-b-0"
+                                                  onMouseDown={() => handleSelectPortForEdit(p)}
+                                                >
+                                                  <div className="text-xs font-medium truncate">{p.port}</div>
+                                                  {p.region && (
+                                                    <div className="text-[11px] text-gray-500 truncate">{p.region}</div>
+                                                  )}
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
                                       ) : col.id === 'status' && isEditing ? (
                                         <select
                                           value={editedData.status ?? shipment.status ?? ''}
@@ -3787,6 +4391,60 @@ function ShipmentsPageContent() {
                           </div>
                         </div>
                       </div>
+
+                      <div className="mt-4 pt-4 border-t">
+                        <h6 className="font-semibold text-sm mb-3 text-gray-700">Quality at Discharge Loc 1</h6>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+                          <div>
+                            <div className="text-gray-500">Quality at Discharge Port FFA</div>
+                            <div className="font-medium">
+                              {shipmentInfo.quality_at_discharge_loc_1_ffa !== null && shipmentInfo.quality_at_discharge_loc_1_ffa !== undefined
+                                ? formatNumber(shipmentInfo.quality_at_discharge_loc_1_ffa)
+                                : '-'}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-gray-500">Quality at Discharge Port M&I</div>
+                            <div className="font-medium">
+                              {shipmentInfo.quality_at_discharge_loc_1_mi !== null && shipmentInfo.quality_at_discharge_loc_1_mi !== undefined
+                                ? formatNumber(shipmentInfo.quality_at_discharge_loc_1_mi)
+                                : '-'}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-gray-500">Quality at Discharge Port DOBI</div>
+                            <div className="font-medium">
+                              {shipmentInfo.quality_at_discharge_loc_1_dobi !== null && shipmentInfo.quality_at_discharge_loc_1_dobi !== undefined
+                                ? formatNumber(shipmentInfo.quality_at_discharge_loc_1_dobi)
+                                : '-'}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-gray-500">Quality at Discharge Port RED</div>
+                            <div className="font-medium">
+                              {shipmentInfo.quality_at_discharge_loc_1_red !== null && shipmentInfo.quality_at_discharge_loc_1_red !== undefined
+                                ? formatNumber(shipmentInfo.quality_at_discharge_loc_1_red)
+                                : '-'}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-gray-500">Quality at Discharge Port D&S</div>
+                            <div className="font-medium">
+                              {shipmentInfo.quality_at_discharge_loc_1_ds !== null && shipmentInfo.quality_at_discharge_loc_1_ds !== undefined
+                                ? formatNumber(shipmentInfo.quality_at_discharge_loc_1_ds)
+                                : '-'}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-gray-500">Quality at Discharge Port Stone</div>
+                            <div className="font-medium">
+                              {shipmentInfo.quality_at_discharge_loc_1_stone !== null && shipmentInfo.quality_at_discharge_loc_1_stone !== undefined
+                                ? formatNumber(shipmentInfo.quality_at_discharge_loc_1_stone)
+                                : '-'}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   ) : (
                     <div className="border rounded-md p-4 bg-gray-50 mb-4">
@@ -4456,26 +5114,43 @@ function ShipmentsPageContent() {
                 )}
               </div>
 
-              {/* Vessel Information */}
+              {/* Vessel Information - Vessel Name from Master Vessel with type-to-search; Code, Owner, Capacity, Hull Type auto-filled and read-only */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
+                <div className="relative">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Vessel Name
                   </label>
                   <Input
                     value={newShipment.vesselName}
-                    onChange={(e) => setNewShipment(prev => ({ ...prev, vesselName: e.target.value }))}
-                    placeholder="Enter vessel name"
+                    onChange={(e) => handleVesselNameChange(e.target.value)}
+                    onFocus={() => newShipment.vesselName.trim().length >= 2 && setShowVesselSuggestions(true)}
+                    onBlur={() => setTimeout(() => setShowVesselSuggestions(false), 200)}
+                    placeholder="Type to search vessel name (from Master Vessel)"
                   />
+                  {showVesselSuggestions && vesselSuggestions.length > 0 && (
+                    <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-52 overflow-y-auto">
+                      {vesselSuggestions.map((v) => (
+                        <div
+                          key={v.vessel_code}
+                          className="px-3 py-2 hover:bg-gray-100 cursor-pointer border-b last:border-b-0"
+                          onMouseDown={() => handleSelectVessel(v)}
+                        >
+                          <div className="font-medium text-sm">{v.vessel_name}</div>
+                          <div className="text-xs text-gray-500">{v.vessel_code} {v.vessel_owner ? ` • ${v.vessel_owner}` : ''}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Vessel Code
+                    Vessel Code <span className="text-gray-500 text-xs">(from Master Vessel)</span>
                   </label>
                   <Input
                     value={newShipment.vesselCode}
-                    onChange={(e) => setNewShipment(prev => ({ ...prev, vesselCode: e.target.value }))}
-                    placeholder="Enter vessel code"
+                    disabled
+                    placeholder="Filled when vessel is selected"
+                    className="bg-gray-100 cursor-not-allowed"
                   />
                 </div>
                 <div>
@@ -4490,12 +5165,13 @@ function ShipmentsPageContent() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Vessel Owner
+                    Vessel Owner <span className="text-gray-500 text-xs">(from Master Vessel)</span>
                   </label>
                   <Input
                     value={newShipment.vesselOwner}
-                    onChange={(e) => setNewShipment(prev => ({ ...prev, vesselOwner: e.target.value }))}
-                    placeholder="Enter vessel owner"
+                    disabled
+                    placeholder="Filled when vessel is selected"
+                    className="bg-gray-100 cursor-not-allowed"
                   />
                 </div>
                 <div>
@@ -4512,24 +5188,26 @@ function ShipmentsPageContent() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Vessel Capacity (MT)
+                    Vessel Capacity (MT) <span className="text-gray-500 text-xs">(from Master Vessel)</span>
                   </label>
                   <Input
                     type="number"
                     step="0.01"
                     value={newShipment.vesselCapacity}
-                    onChange={(e) => setNewShipment(prev => ({ ...prev, vesselCapacity: e.target.value }))}
-                    placeholder="Enter vessel capacity"
+                    disabled
+                    placeholder="Filled when vessel is selected"
+                    className="bg-gray-100 cursor-not-allowed"
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Hull Type
+                    Hull Type <span className="text-gray-500 text-xs">(from Master Vessel)</span>
                   </label>
                   <Input
                     value={newShipment.vesselHullType}
-                    onChange={(e) => setNewShipment(prev => ({ ...prev, vesselHullType: e.target.value }))}
-                    placeholder="Enter hull type"
+                    disabled
+                    placeholder="Filled when vessel is selected"
+                    className="bg-gray-100 cursor-not-allowed"
                   />
                 </div>
                 <div>
@@ -4544,17 +5222,33 @@ function ShipmentsPageContent() {
                 </div>
               </div>
 
-              {/* Port Information */}
+              {/* Port Information - Port of Loading from Master Loading Port with type-to-search */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
+                <div className="relative">
                   <label className="block text-sm font-medium text-gray-500 mb-2">
                     Port of Loading (Optional)
                   </label>
                   <Input
                     value={newShipment.portOfLoading}
-                    onChange={(e) => setNewShipment(prev => ({ ...prev, portOfLoading: e.target.value }))}
-                    placeholder="Enter loading port"
+                    onChange={(e) => handlePortOfLoadingChange(e.target.value)}
+                    onFocus={() => newShipment.portOfLoading.trim().length >= 2 && setShowPortSuggestions(true)}
+                    onBlur={() => setTimeout(() => setShowPortSuggestions(false), 200)}
+                    placeholder="Type to search port (from Master Loading Port)"
                   />
+                  {showPortSuggestions && portSuggestions.length > 0 && (
+                    <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-52 overflow-y-auto">
+                      {portSuggestions.map((p, idx) => (
+                        <div
+                          key={p.port + (p.region || '') + idx}
+                          className="px-3 py-2 hover:bg-gray-100 cursor-pointer border-b last:border-b-0"
+                          onMouseDown={() => handleSelectPort(p)}
+                        >
+                          <div className="font-medium text-sm">{p.port}</div>
+                          {p.region && <div className="text-xs text-gray-500">{p.region}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-500 mb-2">
@@ -4568,15 +5262,42 @@ function ShipmentsPageContent() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Quantity Shipped (MT)
+                    Contract Qty assign to STO (MT)
                   </label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={newShipment.quantityShipped}
-                    onChange={(e) => setNewShipment(prev => ({ ...prev, quantityShipped: e.target.value }))}
-                    placeholder="Enter quantity shipped"
-                  />
+                  <div className={`rounded-md border p-3 ${contractQtyAssignedExceedsCapacity ? 'border-red-400 bg-red-50' : 'border-gray-200 bg-gray-50'}`}>
+                    {newShipment.contractNumbers.length === 0 ? (
+                      <div className="text-sm text-gray-500">Add contract numbers above to assign quantities.</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {newShipment.contractNumbers.map((contractId) => (
+                          <div key={contractId} className="flex items-center justify-between gap-3">
+                            <div className="text-sm font-medium text-gray-700 truncate">{contractId}</div>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={contractQtyAssigned[contractId] ?? ''}
+                              onChange={(e) => setContractQtyAssigned(prev => ({ ...prev, [contractId]: e.target.value }))}
+                              className="h-8 text-sm w-40 bg-white"
+                              placeholder="0"
+                            />
+                          </div>
+                        ))}
+                        <div className="flex items-center justify-between text-sm pt-2 border-t">
+                          <div className="text-gray-600">Total assigned</div>
+                          <div className={`font-semibold ${contractQtyAssignedExceedsCapacity ? 'text-red-700' : 'text-gray-900'}`}>{formatNumber(contractQtyAssignedSum)} MT</div>
+                        </div>
+                        {vesselCapacityNum != null && !Number.isNaN(vesselCapacityNum) && (
+                          <div className="flex items-center justify-between text-xs text-gray-600">
+                            <div>Vessel Capacity</div>
+                            <div>{formatNumber(vesselCapacityNum)} MT</div>
+                          </div>
+                        )}
+                        {contractQtyAssignedExceedsCapacity && (
+                          <div className="text-xs text-red-700">Total assigned cannot exceed Vessel Capacity (MT).</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -4633,7 +5354,7 @@ function ShipmentsPageContent() {
                 </Button>
                 <Button
                   onClick={handleCreateShipment}
-                  disabled={saving || stoValidation?.exists || newShipment.contractNumbers.some(id => !contractValidations[id]?.exists)}
+                  disabled={saving || contractQtyAssignedExceedsCapacity || stoValidation?.exists || newShipment.contractNumbers.some(id => !contractValidations[id]?.exists)}
                   className="bg-blue-600 hover:bg-blue-700"
                 >
                   {saving ? (

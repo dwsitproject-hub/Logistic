@@ -52,6 +52,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { name: 'Suppliers', href: '/supplier', icon: Users, roles: ['ALL'] },
     { name: 'Customer 360', href: '/customer-360-company', icon: Users, roles: ['ALL'] },
     { name: 'Master Product Configuration', href: '/master-product-configuration', icon: Layers, roles: ['ALL'] },
+    { name: 'Master Vessel', href: '/master-vessel', icon: Layers, roles: ['ALL'] },
+    { name: 'Master Loading Port', href: '/master-loading-port', icon: Layers, roles: ['ALL'] },
     { name: 'Finance', href: '/finance', icon: DollarSign, roles: ['FINANCE', 'MANAGEMENT', 'ADMIN'] },
     { name: 'Documents', href: '/documents', icon: FolderOpen, roles: ['ALL'] },
     { name: 'SAP Data', href: '/sap-imports', icon: Database, roles: ['ADMIN', 'SUPPORT', 'MANAGEMENT'] },

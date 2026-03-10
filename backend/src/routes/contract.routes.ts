@@ -1,6 +1,7 @@
 import express from 'express';
 import {
   getContracts,
+  getUnassignedCounts,
   getContract,
   getContractStoInformation,
   getContractActivityLog,
@@ -45,6 +46,7 @@ router.use(authenticateToken);
  *         description: Contracts retrieved successfully
  */
 router.get('/', getContracts);
+router.get('/unassigned-counts', getUnassignedCounts);
 
 /**
  * @swagger

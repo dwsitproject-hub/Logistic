@@ -126,6 +126,7 @@ CREATE INDEX IF NOT EXISTS idx_vessel_master_code ON vessel_master(vessel_code);
 CREATE INDEX IF NOT EXISTS idx_vessel_master_name ON vessel_master(vessel_name);
 
 -- Add trigger
+DROP TRIGGER IF EXISTS update_vessel_master_updated_at ON vessel_master;
 CREATE TRIGGER update_vessel_master_updated_at BEFORE UPDATE ON vessel_master
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
@@ -159,6 +160,7 @@ CREATE INDEX IF NOT EXISTS idx_trucking_shipment_id ON trucking_operations(shipm
 CREATE INDEX IF NOT EXISTS idx_trucking_contract_id ON trucking_operations(contract_id);
 
 -- Add trigger
+DROP TRIGGER IF EXISTS update_trucking_operations_updated_at ON trucking_operations;
 CREATE TRIGGER update_trucking_operations_updated_at BEFORE UPDATE ON trucking_operations
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
@@ -182,6 +184,7 @@ CREATE TABLE IF NOT EXISTS surveyors (
 CREATE INDEX IF NOT EXISTS idx_surveyors_shipment_id ON surveyors(shipment_id);
 
 -- Add trigger
+DROP TRIGGER IF EXISTS update_surveyors_updated_at ON surveyors;
 CREATE TRIGGER update_surveyors_updated_at BEFORE UPDATE ON surveyors
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
@@ -217,6 +220,7 @@ CREATE TABLE IF NOT EXISTS loading_ports (
 CREATE INDEX IF NOT EXISTS idx_loading_ports_shipment_id ON loading_ports(shipment_id);
 
 -- Add trigger
+DROP TRIGGER IF EXISTS update_loading_ports_updated_at ON loading_ports;
 CREATE TRIGGER update_loading_ports_updated_at BEFORE UPDATE ON loading_ports
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 

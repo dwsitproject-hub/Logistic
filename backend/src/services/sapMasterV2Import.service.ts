@@ -183,14 +183,18 @@ export class SapMasterV2ImportService {
               await client.query(
                 `UPDATE sap_processed_data
                    SET data = $1,
-                       supplier_name = $2,
-                       product = $3,
-                       vessel_name = $4,
-                       incoterm = $5,
-                       transport_mode = $6
-                 WHERE id = $7`,
+                       import_id = $2,
+                       raw_data_id = $3,
+                       supplier_name = $4,
+                       product = $5,
+                       vessel_name = $6,
+                       incoterm = $7,
+                       transport_mode = $8
+                 WHERE id = $9`,
                 [
                   JSON.stringify(parsedData),
+                  importId,
+                  rawDataId,
                   supplierName,
                   product,
                   vesselName,
@@ -444,9 +448,13 @@ export class SapMasterV2ImportService {
       const fieldName = field.headerName;
       
       // Store in raw object with proper field name
-      if (fieldName && fieldName.trim() !== '') {
+        if (fieldName && fieldName.trim() !== '') {
         parsed.raw[fieldName] = value;
-        
+        // Raw aliases so backend (shipment.controller) finds expected keys from sap_processed_data.data.raw
+        const lower = fieldName.trim().toLowerCase();
+        if (lower === 'quantity delivery' || lower === 'qty deliver') parsed.raw['Quantity Delivered'] = value;
+        if (lower === 'quantity receive' || lower === 'qty receive') parsed.raw['Quantity Receive'] = value;
+
         // Categorize by type - STO should go to shipment first
         const normalizedFieldName = this.normalizeFieldName(fieldName);
         
@@ -493,14 +501,14 @@ export class SapMasterV2ImportService {
     const shipmentFields = [
       'vessel', 'voyage', 'loading port', 'discharge port', 'eta', 'ata',
       'berthed', 'sailed', 'arrival', 'quantity at', 'sto', 'shipment',
-      'qty deliver', 'quantity delivery', 'qty receive', 'last receive',
+      'qty deliver', 'quantity delivery', 'qty receive', 'quantity receive', 'last receive',
       'sto item' // New field
     ];
     return shipmentFields.some(sf => fieldName.toLowerCase().includes(sf));
   }
   
   private static isQualityField(fieldName: string): boolean {
-    const qualityFields = ['ffa', 'm&i', 'dobi', 'iv', 'color', 'd&s', 'stone'];
+    const qualityFields = ['ffa', 'm&i', 'm & i', 'dobi', 'iv', 'color', 'red', 'd&s', 'd& s', 'stone'];
     return qualityFields.some(qf => fieldName.toLowerCase().includes(qf));
   }
   
@@ -828,7 +836,9 @@ export class SapMasterV2ImportService {
       'quality at loading port 1 ffa': 'ffa',
       'loading loc 1 ffa': 'ffa',
       'quality at loading loc 1 m&i': 'moisture',
+      'quality at loading loc 1 m & i': 'moisture',
       'quality at loading location 1 m&i': 'moisture',
+      'quality at loading location 1 m & i': 'moisture',
       'quality at loading port 1 m&i': 'moisture',
       'loading loc 1 m&i': 'moisture',
       'quality at loading loc 1 dobi': 'dobi',

@@ -56,6 +56,8 @@ interface Contract {
   payoff_date_deviation_days?: number
   trucking_count?: number
   contract_ext_no?: string
+  shipment_count?: number
+  document_count?: number
 }
 
 interface DocumentItem {
@@ -110,6 +112,7 @@ function ContractsPageContent() {
   const [dateTo, setDateTo] = useState('')
   const [availableCompanyCodes, setAvailableCompanyCodes] = useState<string[]>([])
   const [availableB2bFlags, setAvailableB2bFlags] = useState<string[]>([])
+  const [transportModeFilter, setTransportModeFilter] = useState<string>('ALL')
   const [uploadingId, setUploadingId] = useState<string>('')
   const [docsLoading, setDocsLoading] = useState<boolean>(false)
   const [selectedContractDocs, setSelectedContractDocs] = useState<DocumentItem[]>([])
@@ -126,11 +129,15 @@ function ContractsPageContent() {
   const [totalPages, setTotalPages] = useState(1)
   const [totalContracts, setTotalContracts] = useState(0)
   const contractsPerPage = 100
+  const [unassignedSeaContracts, setUnassignedSeaContracts] = useState(0)
+  const [unassignedLandContracts, setUnassignedLandContracts] = useState(0)
+  const [unassignedFilter, setUnassignedFilter] = useState<'sea' | 'land' | null>(null)
 
   type ColumnFilter =
     | { type: 'text'; value: string; exact?: boolean; emptyOnly?: boolean }
     | { type: 'number'; min?: string; max?: string; emptyOnly?: boolean }
     | { type: 'date'; from?: string; to?: string; emptyOnly?: boolean }
+    | { type: 'multi'; values: string[]; includeBlank?: boolean; emptyOnly?: boolean }
 
   const [columnFilters, setColumnFilters] = useState<Record<string, ColumnFilter>>({})
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
@@ -181,7 +188,7 @@ function ContractsPageContent() {
     setCurrentPage(1)
     fetchContracts(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authReady, searchParams, statusFilter, companyCodeFilter, b2bFlagFilter, dateFrom, dateTo])
+  }, [authReady, searchParams, statusFilter, companyCodeFilter, b2bFlagFilter, dateFrom, dateTo, transportModeFilter, unassignedFilter])
 
   // When user types (or clears) search, refetch so contract_id filter is applied and we find a contract even with "All Status"
   const isFirstSearchRender = useRef(true)
@@ -245,18 +252,17 @@ function ContractsPageContent() {
         }
       }
       if (statusFilter && statusFilter !== 'All Status') {
-        // Map frontend status to backend status
-        const statusMap: { [key: string]: string } = {
-          'Open': 'ACTIVE',
-          'Close': 'CLOSE'
-        }
-        params.append('status', statusMap[statusFilter] || statusFilter)
+        // Status is aligned with SAP (Open/Close/Cancelled)
+        params.append('status', statusFilter)
       }
       if (companyCodeFilter && companyCodeFilter !== 'ALL') {
         params.append('companyCode', companyCodeFilter)
       }
       if (b2bFlagFilter && b2bFlagFilter !== 'ALL') {
         params.append('b2bFlag', b2bFlagFilter)
+      }
+      if (transportModeFilter && transportModeFilter !== 'ALL') {
+        params.append('transportMode', transportModeFilter)
       }
       if (dateFrom) {
         params.append('dateFrom', dateFrom)
@@ -270,7 +276,10 @@ function ContractsPageContent() {
       if (outstandingParam === 'true') {
         params.append('outstanding', 'true')
       }
-      
+      if (unassignedFilter) {
+        params.append('unassigned', unassignedFilter)
+      }
+
       const response = await api.get(`/contracts?${params.toString()}`)
       const loadedContracts: Contract[] = response.data?.data?.contracts || []
       console.log('Contracts loaded:', loadedContracts.length)
@@ -334,6 +343,23 @@ function ContractsPageContent() {
     fetchFilterOptions()
   }, [authReady])
 
+  // Dashboard cards: SEA without shipments, LAND without trucking (from dedicated API)
+  useEffect(() => {
+    if (!authReady) return
+    const fetchUnassignedCounts = async () => {
+      try {
+        const res = await api.get<{ success: boolean; data: { seaWithoutShipments: number; landWithoutTrucking: number } }>('/contracts/unassigned-counts')
+        if (res.data?.success && res.data?.data) {
+          setUnassignedSeaContracts(res.data.data.seaWithoutShipments ?? 0)
+          setUnassignedLandContracts(res.data.data.landWithoutTrucking ?? 0)
+        }
+      } catch (err) {
+        console.error('Failed to fetch unassigned counts:', err)
+      }
+    }
+    fetchUnassignedCounts()
+  }, [authReady])
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'Close':
@@ -341,10 +367,13 @@ function ContractsPageContent() {
       case 'Completed':
       case 'COMPLETED':
         return 'bg-blue-100 text-blue-800'
-      case 'ACTIVE':
+      case 'Open':
+      case 'OPEN':
+      case 'ACTIVE': // backward compatibility
         return 'bg-green-100 text-green-800'
       case 'COMPLETED':
         return 'bg-blue-100 text-blue-800'
+      case 'Cancelled':
       case 'CANCELLED':
         return 'bg-red-100 text-red-800'
       default:
@@ -352,14 +381,23 @@ function ContractsPageContent() {
     }
   }
   const getShippingIconColor = (c: Contract) => {
-    if (!c.sto_count || c.sto_count === 0) return 'text-gray-400'
-    if (c.outstanding_quantity && c.outstanding_quantity > 0) return 'text-green-600'
-    return 'text-blue-600'
+    const hasShipping = !!(c.sto_count && c.sto_count > 0)
+    if (!hasShipping) return 'text-gray-400'
+    const statusRaw = getContractStatusRaw(c)
+    const isCompleted = ['COMPLETED', 'CLOSE', 'CLOSED'].includes(statusRaw)
+    return isCompleted ? 'text-blue-600' : 'text-green-600'
   }
   const getTruckingIconColor = (c: Contract) => {
-    if (!c.trucking_count || c.trucking_count === 0) return 'text-gray-400'
-    if (c.outstanding_quantity && c.outstanding_quantity > 0) return 'text-green-600'
-    return 'text-blue-600'
+    const hasTrucking = !!(c.trucking_count && c.trucking_count > 0)
+    if (!hasTrucking) return 'text-gray-400'
+    const statusRaw = getContractStatusRaw(c)
+    const isCompleted = ['COMPLETED', 'CLOSE', 'CLOSED'].includes(statusRaw)
+    return isCompleted ? 'text-blue-600' : 'text-green-600'
+  }
+
+  const getDocumentIconColor = (c: Contract) => {
+    if (!c.document_count || c.document_count === 0) return 'text-gray-400'
+    return 'text-green-600'
   }
 
   const formatDate = (dateStr: string) => {
@@ -607,6 +645,7 @@ function ContractsPageContent() {
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
     if (colId === 'contract_qty' || colId === 'outstanding_qty' || colId === 'contract_aging') return 'number'
     if (colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'created_at') return 'date'
+    if (colId === 'product' || colId === 'status' || colId === 'company_code' || colId === 'lt_spot') return 'multi'
     return 'text'
   }
 
@@ -690,6 +729,23 @@ function ContractsPageContent() {
         const toTime = filter.to ? Date.parse(filter.to) : null
         if (fromTime !== null && !Number.isNaN(fromTime) && rawTime < fromTime) return false
         if (toTime !== null && !Number.isNaN(toTime) && rawTime > toTime + 24 * 60 * 60 * 1000 - 1) return false
+      }
+
+      if (filter.type === 'multi') {
+        const rawValue = getColumnRawValue(c, colId)
+        const isBlank = isEmptyValue(rawValue)
+        const selectedValues = filter.values || []
+        const includeBlank = Boolean(filter.includeBlank)
+
+        if (isBlank) {
+          if (!includeBlank) return false
+          continue
+        }
+
+        const normalized = String(rawValue ?? '').trim()
+        if (selectedValues.length > 0 && !selectedValues.includes(normalized)) {
+          return false
+        }
       }
     }
     return true
@@ -1000,15 +1056,13 @@ function ContractsPageContent() {
 
   const onSortHeaderClick = (col: CompactColumn) => {
     if (!col.sortable) return
-    setSortKey(prev => {
-      if (prev !== col.id) {
-        setSortDir('asc')
-        return col.id
+    setSortDir(prevDir => {
+      if (sortKey === col.id) {
+        return prevDir === 'asc' ? 'desc' : 'asc'
       }
-      // toggle dir
-      setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
-      return prev
+      return 'asc'
     })
+    setSortKey(col.id)
   }
 
   const sortedContracts = useMemo(() => {
@@ -1034,6 +1088,7 @@ function ContractsPageContent() {
     if (f.type === 'text') return Boolean(f.value && f.value.trim() !== '')
     if (f.type === 'number') return Boolean((f.min && f.min !== '') || (f.max && f.max !== ''))
     if (f.type === 'date') return Boolean((f.from && f.from !== '') || (f.to && f.to !== ''))
+    if (f.type === 'multi') return Boolean((f.values && f.values.length > 0) || f.includeBlank)
     return false
   }
 
@@ -1050,7 +1105,8 @@ function ContractsPageContent() {
       next.emptyOnly ||
       (next.type === 'text' && Boolean(next.value?.trim())) ||
       (next.type === 'number' && Boolean((next.min && next.min !== '') || (next.max && next.max !== ''))) ||
-      (next.type === 'date' && Boolean((next.from && next.from !== '') || (next.to && next.to !== '')))
+      (next.type === 'date' && Boolean((next.from && next.from !== '') || (next.to && next.to !== ''))) ||
+      (next.type === 'multi' && Boolean((next.values && next.values.length > 0) || next.includeBlank))
 
     setColumnFilters(prev => {
       const copy = { ...prev }
@@ -1115,7 +1171,7 @@ function ContractsPageContent() {
                 <div className="flex-1 relative">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                   <Input
-                    placeholder="Search by Contract ID, PO, Supplier, or Product..."
+                    placeholder="Search by Contract ID, Contract Ext No, PO, Supplier, or Product..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="pl-10"
@@ -1149,6 +1205,15 @@ function ContractsPageContent() {
                   {availableB2bFlags.map(flag => (
                     <option key={flag} value={flag}>{flag}</option>
                   ))}
+                </select>
+                <select
+                  value={transportModeFilter}
+                  onChange={(e) => setTransportModeFilter(e.target.value)}
+                  className="px-4 py-2 border rounded-lg"
+                >
+                  <option value="ALL">All Modes</option>
+                  <option value="SEA">SEA</option>
+                  <option value="LAND">LAND</option>
                 </select>
               </div>
               
@@ -1200,6 +1265,64 @@ function ContractsPageContent() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Assignment summary - clickable to filter list */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Card
+            className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'sea' ? 'ring-2 ring-blue-500 bg-blue-50/50' : ''}`}
+            onClick={() => setUnassignedFilter(prev => (prev === 'sea' ? null : 'sea'))}
+          >
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm text-gray-500">SEA contracts without shipments</div>
+                  <div className="text-2xl font-semibold text-gray-900 mt-1">
+                    {unassignedSeaContracts}
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1">Click to view list</div>
+                </div>
+                <Ship className="h-8 w-8 text-blue-500" />
+              </div>
+            </CardContent>
+          </Card>
+          <Card
+            className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'land' ? 'ring-2 ring-amber-500 bg-amber-50/50' : ''}`}
+            onClick={() => setUnassignedFilter(prev => (prev === 'land' ? null : 'land'))}
+          >
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm text-gray-500">LAND contracts without trucking</div>
+                  <div className="text-2xl font-semibold text-gray-900 mt-1">
+                    {unassignedLandContracts}
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1">Click to view list</div>
+                </div>
+                <Truck className="h-8 w-8 text-amber-500" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Active filter banner */}
+        {unassignedFilter && (
+          <div className="flex items-center justify-between gap-2 rounded-lg border bg-gray-50 px-4 py-2 text-sm">
+            <span className="text-gray-700">
+              {unassignedFilter === 'sea'
+                ? 'Showing SEA contracts without shipments'
+                : 'Showing LAND contracts without trucking'}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setUnassignedFilter(null)}
+              className="text-gray-600 hover:text-gray-900"
+            >
+              <X className="h-4 w-4 mr-1" />
+              Clear filter
+            </Button>
+          </div>
+        )}
 
         {/* Contracts List */}
         <Card>
@@ -1561,6 +1684,71 @@ function ContractsPageContent() {
                                     </div>
                                   )}
 
+                                  {/* Multi-select filter */}
+                                  {filterType === 'multi' && (
+                                    <div className="space-y-2 max-h-60 overflow-auto pr-1">
+                                      {(() => {
+                                        const rawValues = contracts.map(c => getColumnRawValue(c, col.id))
+                                        const nonBlankSet = new Set<string>()
+                                        let hasBlank = false
+                                        for (const v of rawValues) {
+                                          if (isEmptyValue(v)) {
+                                            hasBlank = true
+                                          } else {
+                                            nonBlankSet.add(String(v).trim())
+                                          }
+                                        }
+                                        const options = Array.from(nonBlankSet).sort((a, b) =>
+                                          a.localeCompare(b, undefined, { sensitivity: 'base' })
+                                        )
+                                        const currentMulti = current && current.type === 'multi' ? current : undefined
+                                        const selectedValues = currentMulti?.values || []
+                                        const includeBlank = currentMulti?.includeBlank ?? false
+
+                                        return (
+                                          <>
+                                            {options.map(value => (
+                                              <label
+                                                key={value}
+                                                className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer select-none"
+                                              >
+                                                <Checkbox
+                                                  checked={selectedValues.includes(value)}
+                                                  onCheckedChange={(checked) => {
+                                                    const nextValues = new Set(selectedValues)
+                                                    if (checked) nextValues.add(value)
+                                                    else nextValues.delete(value)
+                                                    setOrClearFilter(col.id, {
+                                                      type: 'multi',
+                                                      values: Array.from(nextValues),
+                                                      includeBlank,
+                                                    })
+                                                  }}
+                                                />
+                                                <span className="truncate">{value}</span>
+                                              </label>
+                                            ))}
+                                            {hasBlank && (
+                                              <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer select-none">
+                                                <Checkbox
+                                                  checked={includeBlank}
+                                                  onCheckedChange={(checked) => {
+                                                    setOrClearFilter(col.id, {
+                                                      type: 'multi',
+                                                      values: selectedValues,
+                                                      includeBlank: Boolean(checked),
+                                                    })
+                                                  }}
+                                                />
+                                                <span>(Blank)</span>
+                                              </label>
+                                            )}
+                                          </>
+                                        )
+                                      })()}
+                                    </div>
+                                  )}
+
                                   <div className="flex items-center justify-between mt-3 pt-2 border-t">
                                     <button
                                       type="button"
@@ -1637,7 +1825,7 @@ function ContractsPageContent() {
                                   </button>
                                   <button
                                     title="Documents"
-                                    className="p-1 text-gray-700"
+                                    className={`p-1 ${getDocumentIconColor(contract)}`}
                                     onClick={() => setSelectedContract(contract)}
                                   >
                                     <FileText className="h-5 w-5" />
@@ -1797,7 +1985,7 @@ function ContractsPageContent() {
                           </button>
                           <button
                             title="Documents"
-                            className="p-1 text-gray-700"
+                            className={`p-1 ${getDocumentIconColor(contract)}`}
                             onClick={() => setSelectedContract(contract)}
                           >
                             <FileText className="h-5 w-5" />
@@ -2015,9 +2203,96 @@ function ContractsPageContent() {
                     </div>
                   </div>
 
-                  {/* STO Information */}
+                  {/* Parties */}
                   <div>
-                    <h3 className="text-lg font-semibold mb-3">STO Information</h3>
+                    <h3 className="text-lg font-semibold mb-3">Parties</h3>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Buyer</div>
+                        <div className="font-medium mt-1">{selectedContract.buyer}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Supplier</div>
+                        <div className="font-medium mt-1">{selectedContract.supplier}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Product & Quantity */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Product & Quantity</h3>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Product</div>
+                        <div className="font-medium mt-1">{selectedContract.product}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Contract Quantity</div>
+                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.quantity_ordered)} {selectedContract.unit}</div>
+                      </div>
+                      <div className="p-3 bg-blue-50 rounded border-2 border-blue-200">
+                        <div className="text-gray-500">Total STO Quantity ({selectedContract.sto_count || 0} STO{selectedContract.sto_count > 1 ? 's' : ''})</div>
+                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.total_sto_quantity)} {selectedContract.unit}</div>
+                      </div>
+                      <div className={`p-3 rounded border-2 ${selectedContract.outstanding_quantity < 0 ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
+                        <div className={`font-semibold ${selectedContract.outstanding_quantity < 0 ? 'text-red-700' : 'text-blue-700'}`}>
+                          Outstanding Quantity
+                        </div>
+                        <div className={`font-bold text-xl mt-1 ${selectedContract.outstanding_quantity < 0 ? 'text-red-600' : 'text-blue-600'}`}>
+                          {formatNumber(selectedContract.outstanding_quantity)} {selectedContract.unit}
+                        </div>
+                        {selectedContract.outstanding_quantity < 0 && (
+                          <div className="text-xs text-red-500 mt-1">Overshipped</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Documents */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Documents</h3>
+                    {docsLoading ? (
+                      <div className="text-sm text-gray-500">Loading documents...</div>
+                    ) : selectedContractDocs.length === 0 ? (
+                      <div className="text-sm text-gray-500">No documents uploaded for this contract.</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {selectedContractDocs.map((doc) => {
+                          return (
+                            <div key={doc.id} className="flex items-center justify-between px-3 py-2 border rounded">
+                              <div>
+                                <div className="text-sm font-medium">{doc.file_name}</div>
+                                <div className="text-xs text-gray-500">
+                                  {(doc.document_type || 'FILE')} • {doc.created_at ? new Date(doc.created_at).toLocaleString() : ''}
+                                </div>
+                              </div>
+                              <Button 
+                                size="sm" 
+                                variant="outline"
+                                onClick={() => handleDownloadDocument(doc.id, doc.file_name)}
+                              >
+                                View
+                              </Button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Logistic Information */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Logistic Information</h3>
+                    <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Transport Mode</div>
+                        <div className="font-medium mt-1">{selectedContract.transport_mode || '-'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Incoterm</div>
+                        <div className="font-medium mt-1">{selectedContract.incoterm || '-'}</div>
+                      </div>
+                    </div>
                     {stoInfoLoading ? (
                       <div className="text-sm text-gray-500">Loading STO information...</div>
                     ) : stoInfo.length === 0 ? (
@@ -2090,98 +2365,6 @@ function ContractsPageContent() {
                         </table>
                       </div>
                     )}
-                  </div>
-
-                  {/* Documents */}
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Documents</h3>
-                    {docsLoading ? (
-                      <div className="text-sm text-gray-500">Loading documents...</div>
-                    ) : selectedContractDocs.length === 0 ? (
-                      <div className="text-sm text-gray-500">No documents uploaded for this contract.</div>
-                    ) : (
-                      <div className="space-y-2">
-                        {selectedContractDocs.map((doc) => {
-                          return (
-                            <div key={doc.id} className="flex items-center justify-between px-3 py-2 border rounded">
-                              <div>
-                                <div className="text-sm font-medium">{doc.file_name}</div>
-                                <div className="text-xs text-gray-500">
-                                  {(doc.document_type || 'FILE')} • {doc.created_at ? new Date(doc.created_at).toLocaleString() : ''}
-                                </div>
-                              </div>
-                              <Button 
-                                size="sm" 
-                                variant="outline"
-                                onClick={() => handleDownloadDocument(doc.id, doc.file_name)}
-                              >
-                                View
-                              </Button>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Parties */}
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Parties</h3>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Buyer</div>
-                        <div className="font-medium mt-1">{selectedContract.buyer}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Supplier</div>
-                        <div className="font-medium mt-1">{selectedContract.supplier}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Product & Quantity */}
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Product & Quantity</h3>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Product</div>
-                        <div className="font-medium mt-1">{selectedContract.product}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Contract Quantity</div>
-                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.quantity_ordered)} {selectedContract.unit}</div>
-                      </div>
-                      <div className="p-3 bg-blue-50 rounded border-2 border-blue-200">
-                        <div className="text-gray-500">Total STO Quantity ({selectedContract.sto_count || 0} STO{selectedContract.sto_count > 1 ? 's' : ''})</div>
-                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.total_sto_quantity)} {selectedContract.unit}</div>
-                      </div>
-                      <div className={`p-3 rounded border-2 ${selectedContract.outstanding_quantity < 0 ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
-                        <div className={`font-semibold ${selectedContract.outstanding_quantity < 0 ? 'text-red-700' : 'text-blue-700'}`}>
-                          Outstanding Quantity
-                        </div>
-                        <div className={`font-bold text-xl mt-1 ${selectedContract.outstanding_quantity < 0 ? 'text-red-600' : 'text-blue-600'}`}>
-                          {formatNumber(selectedContract.outstanding_quantity)} {selectedContract.unit}
-                        </div>
-                        {selectedContract.outstanding_quantity < 0 && (
-                          <div className="text-xs text-red-500 mt-1">Overshipped</div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Logistics */}
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Logistics</h3>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Transport Mode</div>
-                        <div className="font-medium mt-1">{selectedContract.transport_mode || '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Incoterm</div>
-                        <div className="font-medium mt-1">{selectedContract.incoterm || '-'}</div>
-                      </div>
-                    </div>
                   </div>
 
                   {/* Dates */}

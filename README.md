@@ -14,8 +14,10 @@ Web-based logistics management system for SAP-integrated contract, shipment, tru
 ```
 .
 ├── frontend/                      # Next.js app (runs on :3001)
-└── backend/                       # Express API (runs on :5001)
-    └── src/database/migrations/   # SQL migrations applied by `npm run db:migrate`
+├── backend/                       # Express API (runs on :5001)
+│   └── src/database/migrations/   # SQL migrations applied by `npm run db:migrate`
+├── docs/                          # Deployment, Docker, SAP import and ops docs
+└── docker-compose*.yml            # Docker setups (local dev, staging, production)
 ```
 
 ## Quick start (local dev)
@@ -358,13 +360,29 @@ npm run db:migrate
 
 ## Run with Docker
 
-To run the full stack (PostgreSQL, backend, frontend) in containers:
+**Local laptop development:** use **`docker-compose.dev.yml`** (live code mounts, dev Dockerfiles):
 
 ```bash
-docker-compose up -d --build
+docker compose -f docker-compose.dev.yml up -d --build
 ```
 
-Then open http://localhost:3001. Optional env vars and details: **[docs/DOCKER.md](docs/DOCKER.md)**.
+To run the full stack (PostgreSQL, backend, frontend) in containers on a single host with production-style images:
+
+```bash
+docker compose up -d --build
+```
+
+`docker compose` is the Docker Compose v2 syntax; if your system only has v1 installed you can use `docker-compose` instead.
+
+Then open http://localhost:3001. Optional env vars, overrides, and dev-focused setup: **[docs/DOCKER.md](docs/DOCKER.md)**.
+
+**Compose files in this repo:**
+
+- `docker-compose.yml` – single-host stack (Postgres + backend + frontend), good for local or simple servers.
+- `docker-compose.dev.yml` – development stack with live code mounts and dev Dockerfiles.
+- `docker-compose.backend.yml` – backend + Postgres on the backend server in the two-server staging/production topology.
+- `docker-compose.frontend.yml` – frontend on the frontend server in the two-server staging/production topology.
+- `docker-compose.aws.yml` – alternative Compose setup for AWS-style environments.
 
 ---
 
@@ -372,7 +390,25 @@ Then open http://localhost:3001. Optional env vars and details: **[docs/DOCKER.m
 
 For a **full step-by-step deployment guide** (database, backend, frontend, Nginx, PM2, SSL, firewall, troubleshooting), see **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
-Below is a minimal outline matching the AliCloud setup (frontend 172.28.92.56 / 8.215.6.189, backend 172.28.92.57):
+If you are using the **two‑server Docker staging/production setup** (AliCloud example: frontend 172.28.92.56 / 8.215.6.189, backend 172.28.92.57), follow section **“2. Staging deployment with Docker”** in `docs/DEPLOYMENT.md`. The typical update flow is:
+
+- **Backend server (172.28.92.57)**:
+
+  ```bash
+  cd /opt/klip
+  git pull
+  docker compose -f docker-compose.backend.yml up -d --build
+  ```
+
+- **Frontend server (172.28.92.56)**:
+
+  ```bash
+  cd /opt/klip
+  git pull
+  docker compose -f docker-compose.frontend.yml up -d --build
+  ```
+
+Below is a minimal outline for a non‑Docker deployment matching the same AliCloud topology (frontend 172.28.92.56 / 8.215.6.189, backend 172.28.92.57):
 
 - **Frontend server**
   - Private IP: `172.28.92.56`

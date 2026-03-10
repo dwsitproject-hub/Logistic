@@ -52,6 +52,17 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.port_of_loading) as port_of_loading,
           MAX(s.port_of_discharge) as port_of_discharge,
           MAX(s.port_of_discharge) as plant_site,
+          -- Basic ETA loading dates at shipment level (kept in sync with first loading port)
+          MAX(s.eta_arrival) as eta_arrival,
+          MAX(s.eta_berthed) as eta_berthed,
+          MAX(s.eta_loading_start) as eta_loading_start,
+          MAX(s.eta_loading_complete) as eta_loading_complete,
+          MAX(s.eta_sailed) as eta_sailed,
+          -- Basic ETA discharge dates at shipment level
+          MAX(s.eta_discharge_arrival) as eta_discharge_arrival,
+          MAX(s.eta_discharge_berthed) as eta_discharge_berthed,
+          MAX(s.eta_discharge_start) as eta_discharge_start,
+          MAX(s.eta_discharge_complete) as eta_discharge_complete,
           COALESCE(SUM(s.quantity_shipped), 0) as quantity_shipped,
           COALESCE(SUM(s.quantity_delivered), 0) as quantity_delivered,
           COALESCE(SUM(s.inbound_weight), 0) as inbound_weight,
@@ -188,9 +199,9 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
             )
             AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
         ), 0) as sto_quantity,
-        -- Get Quantity Receive from sap_processed_data (raw field)
+        -- Get Quantity Receive from sap_processed_data (raw field; accept Quantity Receive or Qty Receive)
         COALESCE((
-          SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'raw'->>'Quantity Receive', ',', ''), ' ', '') AS NUMERIC))
+          SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC))
           FROM sap_processed_data spd
           WHERE
             (
@@ -206,11 +217,11 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
                 spd.data->'contract'->>'sto_no'
               )), '') = TRIM(sb.sto_key::text)
             )
-            AND NULLIF(spd.data->'raw'->>'Quantity Receive', '') IS NOT NULL
+            AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
         ), 0) as quantity_receive,
-        -- Get Quantity Delivered from sap_processed_data (raw field)
+        -- Get Quantity Delivered from sap_processed_data (raw field; accept Quantity Delivered or Quantity Delivery)
         COALESCE((
-          SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'raw'->>'Quantity Delivered', ',', ''), ' ', '') AS NUMERIC))
+          SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC))
           FROM sap_processed_data spd
           WHERE
             (
@@ -226,8 +237,14 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
                 spd.data->'contract'->>'sto_no'
               )), '') = TRIM(sb.sto_key::text)
             )
-            AND NULLIF(spd.data->'raw'->>'Quantity Delivered', '') IS NOT NULL
+            AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
         ), 0) as quantity_delivered_sap,
+        -- Basic ETA loading dates at shipment level (used for ETA Loading Status buckets)
+        MAX(s.eta_arrival::date) as eta_arrival,
+        MAX(s.eta_berthed::date) as eta_berthed,
+        MAX(s.eta_loading_start::date) as eta_loading_start,
+        MAX(s.eta_loading_complete::date) as eta_loading_complete,
+        MAX(s.eta_sailed::date) as eta_sailed,
         -- Get incoterm, B2B flag, source_type from latest sap_processed_data
         (SELECT COALESCE(
                   spd.data->'contract'->>'incoterm',
@@ -905,7 +922,14 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           vlp1.quality_dobi as quality_at_loading_loc_1_dobi,
           vlp1.quality_red as quality_at_loading_loc_1_red,
           vlp1.quality_ds as quality_at_loading_loc_1_ds,
-          vlp1.quality_stone as quality_at_loading_loc_1_stone
+          vlp1.quality_stone as quality_at_loading_loc_1_stone,
+          -- Quality fields from discharge port
+          vlpd.quality_ffa as quality_at_discharge_loc_1_ffa,
+          vlpd.quality_mi as quality_at_discharge_loc_1_mi,
+          vlpd.quality_dobi as quality_at_discharge_loc_1_dobi,
+          vlpd.quality_red as quality_at_discharge_loc_1_red,
+          vlpd.quality_ds as quality_at_discharge_loc_1_ds,
+          vlpd.quality_stone as quality_at_discharge_loc_1_stone
          FROM shipments s
          LEFT JOIN contracts c ON s.contract_id = c.id
          LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false
@@ -1006,7 +1030,14 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           MAX(vlp1.quality_dobi) as quality_at_loading_loc_1_dobi,
           MAX(vlp1.quality_red) as quality_at_loading_loc_1_red,
           MAX(vlp1.quality_ds) as quality_at_loading_loc_1_ds,
-          MAX(vlp1.quality_stone) as quality_at_loading_loc_1_stone
+          MAX(vlp1.quality_stone) as quality_at_loading_loc_1_stone,
+          -- Quality fields from discharge port
+          MAX(vlpd.quality_ffa) as quality_at_discharge_loc_1_ffa,
+          MAX(vlpd.quality_mi) as quality_at_discharge_loc_1_mi,
+          MAX(vlpd.quality_dobi) as quality_at_discharge_loc_1_dobi,
+          MAX(vlpd.quality_red) as quality_at_discharge_loc_1_red,
+          MAX(vlpd.quality_ds) as quality_at_discharge_loc_1_ds,
+          MAX(vlpd.quality_stone) as quality_at_discharge_loc_1_stone
          FROM shipments s
          LEFT JOIN contracts c ON s.contract_id = c.id
          LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false
@@ -1387,7 +1418,8 @@ export const getContractSuggestions = async (req: AuthRequest, res: Response) =>
         sto_number,
         sto_quantity
       FROM contracts 
-      WHERE contract_id ILIKE $1 OR po_number ILIKE $1
+      WHERE UPPER(COALESCE(status, '')) IN ('OPEN', 'ACTIVE')
+        AND (contract_id ILIKE $1 OR po_number ILIKE $1)
       ORDER BY contract_id
       LIMIT 10
     `, [`%${q}%`]);
@@ -1605,19 +1637,19 @@ export const getContractDetailsForSto = async (req: AuthRequest, res: Response) 
         (SELECT MAX(c2.delivery_start_date) FROM contracts c2 WHERE c2.contract_id = ac.contract_number) as delivery_start_date,
         (SELECT MAX(c2.delivery_end_date) FROM contracts c2 WHERE c2.contract_id = ac.contract_number) as delivery_end_date,
         COALESCE(
-          (SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'raw'->>'Quantity Delivered', ',', ''), ' ', '') AS NUMERIC))
+          (SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC))
            FROM sap_processed_data spd
            WHERE spd.contract_number = ac.contract_number
            AND spd.sto_number = $1
-           AND NULLIF(spd.data->'raw'->>'Quantity Delivered', '') IS NOT NULL),
+           AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL),
           0
         ) as quantity_delivered,
         COALESCE(
-          (SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'raw'->>'Quantity Receive', ',', ''), ' ', '') AS NUMERIC))
+          (SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC))
            FROM sap_processed_data spd
            WHERE spd.contract_number = ac.contract_number
            AND spd.sto_number = $1
-           AND NULLIF(spd.data->'raw'->>'Quantity Receive', '') IS NOT NULL),
+           AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL),
           0
         ) as quantity_receive
       FROM ac
@@ -1712,6 +1744,7 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       operationId,
       stoNumber, 
       contractNumbers, 
+      contractQtyAssigned,
       vesselName, 
       vesselCode, 
       voyageNo, 
@@ -1779,6 +1812,23 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
     const shipmentIds = [];
     const timestamp = Date.now().toString()
     
+    // Validate assigned qty sum <= vessel capacity (if provided)
+    if (vesselCapacity != null && contractQtyAssigned && typeof contractQtyAssigned === 'object') {
+      const cap = parseFloat(String(vesselCapacity))
+      if (!Number.isNaN(cap)) {
+        const sumAssigned = Object.values(contractQtyAssigned as Record<string, any>).reduce((sum: number, v: any) => {
+          const n = parseFloat(String(v))
+          return sum + (Number.isNaN(n) ? 0 : n)
+        }, 0)
+        if (sumAssigned > cap) {
+          return res.status(400).json({
+            success: false,
+            error: { message: `Sum of "Contract Qty assign to STO" (${sumAssigned}) cannot exceed Vessel Capacity (${cap}).` },
+          });
+        }
+      }
+    }
+
     for (const contract of contractCheck.rows) {
       // Generate shipment_id:
       // - If STO is provided, use "<STO>-<CONTRACT_ID>" so all contracts under an STO can be grouped
@@ -1830,6 +1880,42 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       ]);
 
       shipmentIds.push(result.rows[0].id);
+    }
+
+    // Persist user contract qty assignment (keyed by STO if exists; else operationId; else shipment_id)
+    if (contractQtyAssigned && typeof contractQtyAssigned === 'object') {
+      const assignmentKey = (hasStoNumber && stoNumber && String(stoNumber).trim())
+        ? String(stoNumber).trim()
+        : (operationId && String(operationId).trim())
+          ? String(operationId).trim()
+          : `MNL-${timestamp.slice(-8)}`;
+
+      // Ensure table exists
+      await query(`
+        CREATE TABLE IF NOT EXISTS user_sto_contract_assignments (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          sto_number VARCHAR(255) NOT NULL,
+          contract_number VARCHAR(255) NOT NULL,
+          sto_qty_assigned NUMERIC(15, 2) NOT NULL DEFAULT 0,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(sto_number, contract_number)
+        )
+      `);
+
+      for (const [contractNumber, qty] of Object.entries(contractQtyAssigned as Record<string, any>)) {
+        if (!contractNumber) continue;
+        const n = parseFloat(String(qty));
+        await query(
+          `
+          INSERT INTO user_sto_contract_assignments (sto_number, contract_number, sto_qty_assigned)
+          VALUES ($1, $2, $3::numeric)
+          ON CONFLICT (sto_number, contract_number)
+          DO UPDATE SET sto_qty_assigned = EXCLUDED.sto_qty_assigned, updated_at = CURRENT_TIMESTAMP
+          `,
+          [assignmentKey, String(contractNumber).trim(), Number.isNaN(n) ? 0 : n]
+        );
+      }
     }
 
     // Update contracts with STO number (only if STO is explicitly provided)

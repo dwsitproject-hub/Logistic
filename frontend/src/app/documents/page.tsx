@@ -197,10 +197,15 @@ export default function DocumentsPage() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'ACTIVE':
+      case 'Open':
+      case 'OPEN':
+      case 'ACTIVE': // backward compatibility
         return 'bg-green-100 text-green-800'
+      case 'Close':
+      case 'CLOSE':
       case 'COMPLETED':
         return 'bg-blue-100 text-blue-800'
+      case 'Cancelled':
       case 'CANCELLED':
         return 'bg-red-100 text-red-800'
       default:

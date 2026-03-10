@@ -1,3 +1,7 @@
+// First thing: ensure Docker logs show we started (before any logger that might fail)
+if (typeof process !== 'undefined' && process.stdout && process.stdout.write) {
+  process.stdout.write('[klip-backend] Node process starting...\n');
+}
 import express, { Application } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -21,6 +25,8 @@ import documentRoutes from './routes/document.routes';
 import dashboardRoutes from './routes/dashboard.routes';
 import userRoutes from './routes/user.routes';
 import roleRoutes from './routes/role.routes';
+import masterVesselRoutes from './routes/masterVessel.routes';
+import masterLoadingPortRoutes from './routes/masterLoadingPort.routes';
 import auditRoutes from './routes/audit.routes';
 import sapRoutes from './routes/sap.routes';
 import excelImportRoutes from './routes/excelImport.routes';
@@ -98,6 +104,8 @@ app.use('/api/documents', documentRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/roles', roleRoutes);
+app.use('/api/master-vessels', masterVesselRoutes);
+app.use('/api/master-loading-ports', masterLoadingPortRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/sap', sapRoutes);
 app.use('/api/excel-import', excelImportRoutes);

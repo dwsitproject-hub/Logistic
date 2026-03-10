@@ -11,6 +11,27 @@ export interface DistributionResult {
 }
 
 export class SapDataDistributionService {
+  private static normalizeContractStatus(raw: any): string | null {
+    if (raw == null) return null;
+    const s = String(raw).trim();
+    if (!s) return null;
+    const u = s.toUpperCase();
+    if (u === 'ACTIVE' || u === 'OPEN') return 'Open';
+    if (u === 'CLOSE' || u === 'CLOSED' || u === 'COMPLETED' || u === 'COMPLETE') return 'Close';
+    if (u === 'CANCELLED' || u === 'CANCELED' || u === 'CANCEL') return 'Cancelled';
+    return s;
+  }
+
+  /** Persist status using legacy DB values so both old and new contracts_status_check pass. */
+  private static statusForDb(normalized: string | null): string {
+    if (!normalized) return 'ACTIVE';
+    switch (normalized) {
+      case 'Open': return 'ACTIVE';
+      case 'Close': return 'COMPLETED';
+      case 'Cancelled': return 'CANCELLED';
+      default: return normalized;
+    }
+  }
   
   /**
    * Resolve a contract id from available parsed data. Falls back to
@@ -274,6 +295,8 @@ export class SapDataDistributionService {
     const quantity = this.parseNumber(contractData.contract_quantity);
     const unitPrice = this.parseNumber(contractData.unit_price);
     const contractValue = (quantity && unitPrice) ? quantity * unitPrice : null;
+    const statusNorm = this.normalizeContractStatus(contractData.status) || 'Open';
+    const statusForDb = this.statusForDb(statusNorm);
 
     // Upsert: insert or update on conflict (contract_id unique) so re-upload of same contract updates instead of failing
     const result = await client.query(
@@ -327,7 +350,7 @@ export class SapDataDistributionService {
         this.parseDate(contractData.due_date_delivery_end),
         contractData.source,
         contractData.contract_type || contractData.ltc_spot,
-        'ACTIVE',
+        statusForDb,
         contractData.sto_no,
         this.parseNumber(contractData.sto_quantity),
         contractData.logistics_area_classification,
@@ -385,9 +408,13 @@ export class SapDataDistributionService {
     const arrivalDate = this.parseDate(shipmentData.arrival_date);
 
     const quantityShipped = this.parseNumber(shipmentData.quantity_at_loading_port_1_based_on_bast ?? shipmentData.quantity_shipped);
-    const actualVesselQtyReceive = this.parseNumber(shipmentData.actual_vessel_qty_receive ?? shipmentData.quantity_delivered);
+    // SAP MASTER v2 columns normalize to `quantity_delivery` and `quantity_receive`.
+    // Map those to shipment fields used throughout the app.
+    const quantityDelivery = this.parseNumber(shipmentData.quantity_delivery ?? shipmentData.quantity_delivered);
+    const quantityReceive = this.parseNumber(shipmentData.quantity_receive ?? shipmentData.actual_vessel_qty_receive ?? shipmentData.quantity_delivered);
+    const actualVesselQtyReceive = quantityReceive;
     const blQuantity = this.parseNumber(shipmentData.bl_quantity);
-    const quantityDelivered = actualVesselQtyReceive ?? this.parseNumber(shipmentData.quantity_delivered);
+    const quantityDelivered = quantityDelivery ?? actualVesselQtyReceive ?? this.parseNumber(shipmentData.quantity_delivered);
     let difference = this.parseNumber(shipmentData.difference_final_qty_vs_bl_qty);
     if (difference === null && actualVesselQtyReceive !== null && blQuantity !== null) {
       difference = actualVesselQtyReceive - blQuantity;
@@ -676,7 +703,7 @@ export class SapDataDistributionService {
         const normalizedKey = key.toLowerCase();
         if (normalizedKey.includes('ffa')) {
           mapped.quality_ffa = this.parseNumber(rawValue);
-        } else if (normalizedKey.includes('m_i') || normalizedKey.includes('mi')) {
+        } else if (normalizedKey.includes('m_i') || normalizedKey.includes('mi') || normalizedKey.includes('moisture')) {
           mapped.quality_mi = this.parseNumber(rawValue);
         } else if (normalizedKey.includes('dobi')) {
           mapped.quality_dobi = this.parseNumber(rawValue);

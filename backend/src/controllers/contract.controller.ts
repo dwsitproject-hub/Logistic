@@ -6,6 +6,8 @@ import logger from '../utils/logger';
 export const getContracts = async (req: AuthRequest, res: Response) => {
   try {
     const { status, supplier, buyer, dateFrom, dateTo, outstanding, companyCode, b2bFlag, page = 1, limit = 10 } = req.query;
+    const transportMode = (req.query as any).transportMode as string | undefined;
+    const unassigned = (req.query as any).unassigned as string | undefined; // 'sea' | 'land' -> filter to SEA without shipments or LAND without trucking
     // Allow filtering by a specific contract id (used by shipment details fallback)
     const contractIdFilter = (req.query as any).contract_id || (req.query as any).contractId || null;
     const offset = (Number(page) - 1) * Number(limit);
@@ -87,7 +89,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         base.currency,
         base.status,
         base.incoterm,
-        base.transport_mode,
+        COALESCE(NULLIF(TRIM(base.transport_mode), ''), base.latest_spd_data->'contract'->>'transport_mode', base.latest_spd_data->'contract'->>'sea_land', base.latest_spd_data->'raw'->>'Sea / Land', base.latest_spd_data->'raw'->>'Sea_Land', '') AS transport_mode,
         base.source_type,
         base.contract_type,
         base.logistics_classification,
@@ -116,7 +118,9 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         (SELECT p.payoff_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS payoff_date_fb,
         (SELECT (p.dp_date::date - p.payment_due_date::date) FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id AND p.dp_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS dp_date_deviation_fb,
         (SELECT (p.payoff_date::date - p.payment_due_date::date) FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id AND p.payoff_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS payoff_date_deviation_fb,
-        (SELECT COUNT(*) FROM trucking_operations t WHERE t.contract_id = base.id) AS trucking_count
+        (SELECT COUNT(*) FROM trucking_operations t WHERE t.contract_id = base.id) AS trucking_count,
+        (SELECT COUNT(*) FROM shipments s WHERE s.contract_id = base.id) AS shipment_count,
+        (SELECT COUNT(*) FROM documents d WHERE d.contract_id = base.id) AS document_count
       FROM base
       WHERE 1=1
     `;
@@ -172,6 +176,12 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
+    if (transportMode) {
+      queryText += ` AND UPPER(base.transport_mode) = $${paramIndex}`;
+      queryParams.push(String(transportMode).toUpperCase());
+      paramIndex++;
+    }
+
     if (companyCode) {
       queryText += ` AND (
         COALESCE(base.latest_spd_data->'contract'->>'company_code', base.latest_spd_data->'raw'->>'Company Code', base.latest_spd_data->'raw'->>'company code', base.latest_spd_data->>'Company Code', base.latest_spd_data->>'company code', '') = $${paramIndex}
@@ -195,6 +205,13 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     // Optional: delivered=true -> only contracts that have any STO quantity (delivered > 0)
     if ((req.query as any).delivered === 'true') {
       queryText += ` AND COALESCE(base.total_sto_quantity, 0) > 0`;
+    }
+
+    const effectiveTransportExpr = `UPPER(TRIM(COALESCE(NULLIF(TRIM(base.transport_mode), ''), base.latest_spd_data->'contract'->>'transport_mode', base.latest_spd_data->'contract'->>'sea_land', base.latest_spd_data->'raw'->>'Sea / Land', base.latest_spd_data->'raw'->>'Sea_Land', '')))`;
+    if (unassigned === 'sea') {
+      queryText += ` AND ${effectiveTransportExpr} LIKE 'SEA%' AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = base.id)`;
+    } else if (unassigned === 'land') {
+      queryText += ` AND ${effectiveTransportExpr} LIKE 'LAND%' AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = base.id)`;
     }
 
     queryText += ` ORDER BY base.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
@@ -341,6 +358,12 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         countParamIndex++;
       }
 
+      if (transportMode) {
+        countQuery += ` AND UPPER(c.transport_mode) = $${countParamIndex}`;
+        countParams.push(String(transportMode).toUpperCase());
+        countParamIndex++;
+      }
+
       if (dateFrom) {
         countQuery += ` AND c.contract_date >= $${countParamIndex}`;
         countParams.push(dateFrom);
@@ -351,6 +374,12 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         countQuery += ` AND c.contract_date <= $${countParamIndex}`;
         countParams.push(dateTo);
         countParamIndex++;
+      }
+
+      if (unassigned === 'sea') {
+        countQuery += ` AND UPPER(TRIM(COALESCE(NULLIF(TRIM(c.transport_mode), ''), (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), ''))) LIKE 'SEA%' AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = c.id)`;
+      } else if (unassigned === 'land') {
+        countQuery += ` AND UPPER(TRIM(COALESCE(NULLIF(TRIM(c.transport_mode), ''), (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), ''))) LIKE 'LAND%' AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = c.id)`;
       }
       
       countQuery += `
@@ -478,6 +507,12 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         countParams.push(dateTo);
         countParamIndex++;
       }
+
+      if (unassigned === 'sea') {
+        countQuery += ` AND UPPER(TRIM(COALESCE(NULLIF(TRIM(c.transport_mode), ''), (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), ''))) LIKE 'SEA%' AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = c.id)`;
+      } else if (unassigned === 'land') {
+        countQuery += ` AND UPPER(TRIM(COALESCE(NULLIF(TRIM(c.transport_mode), ''), (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), ''))) LIKE 'LAND%' AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = c.id)`;
+      }
       
       // For non-outstanding queries, we need GROUP BY if we have companyCode or b2bFlag filters
       if (companyCode || b2bFlag) {
@@ -536,6 +571,58 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     res.status(500).json({
       success: false,
       error: { message: 'Failed to fetch contracts' },
+    });
+  }
+};
+
+/** Get counts of SEA contracts without shipments and LAND contracts without trucking (for dashboard cards) */
+export const getUnassignedCounts = async (_req: AuthRequest, res: Response) => {
+  try {
+    const q = `
+      WITH latest_spd AS (
+        SELECT DISTINCT ON (contract_number) contract_number, data, created_at
+        FROM sap_processed_data
+        ORDER BY contract_number, created_at DESC NULLS LAST
+      ),
+      base AS (
+        SELECT
+          c.contract_id,
+          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
+          COALESCE(NULLIF(TRIM(MAX(c.transport_mode)), ''), (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'transport_mode', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'sea_land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea / Land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea_Land', '') AS effective_transport_mode
+        FROM contracts c
+        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        GROUP BY c.contract_id
+      ),
+      sea_no_ship AS (
+        SELECT 1
+        FROM base b
+        WHERE UPPER(TRIM(b.effective_transport_mode)) LIKE 'SEA%'
+          AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = b.id)
+      ),
+      land_no_truck AS (
+        SELECT 1
+        FROM base b
+        WHERE UPPER(TRIM(b.effective_transport_mode)) LIKE 'LAND%'
+          AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = b.id)
+      )
+      SELECT
+        (SELECT COUNT(*) FROM sea_no_ship) AS sea_without_shipments,
+        (SELECT COUNT(*) FROM land_no_truck) AS land_without_trucking
+    `;
+    const result = await query(q);
+    const row = result.rows[0] || { sea_without_shipments: 0, land_without_trucking: 0 };
+    res.json({
+      success: true,
+      data: {
+        seaWithoutShipments: parseInt(String(row.sea_without_shipments), 10) || 0,
+        landWithoutTrucking: parseInt(String(row.land_without_trucking), 10) || 0,
+      },
+    });
+  } catch (error) {
+    logger.error('Get unassigned counts error:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch unassigned counts' },
     });
   }
 };
