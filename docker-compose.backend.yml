@@ -37,6 +37,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-postgres123}
       JWT_SECRET: ${JWT_SECRET:-change-this-secret-in-production}
       JWT_EXPIRES_IN: 7d
+      # Gemini API key for AI-powered dashboard insights
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
     ports:
       - "${BACKEND_PORT:-5001}:5001"
     depends_on:
