@@ -7,7 +7,9 @@ import {
   getTopVessels,
   getShipmentsByStatus,
   getTruckingOperationsByStatus,
+  getPaymentsByStatus,
   getContractQuantityByProduct,
+  getContractQuantityByProductIncoterm,
   getContractQuantityByPlant,
   getContractQuantityByIncoterm,
   getPlantDetails,
@@ -15,7 +17,11 @@ import {
   getIncotermDetails,
   getFilterPlants,
   getFilterSuppliers,
-  getFilteredContracts
+  getFilterProducts,
+  getFilterGroups,
+  getFilteredContracts,
+  getDashboardAiInsight,
+  generateDashboardAiInsight,
 } from '../controllers/dashboard.controller';
 
 const router = express.Router();
@@ -24,6 +30,10 @@ router.use(authenticateToken);
 
 // Dashboard statistics
 router.get('/stats', getDashboardStats);
+
+// AI Insights
+router.get('/ai-insight', getDashboardAiInsight);
+router.post('/ai-insight', generateDashboardAiInsight);
 
 // Top performers
 router.get('/top-suppliers', getTopSuppliers);
@@ -35,9 +45,11 @@ router.get('/top-vessels', getTopVessels);
 router.get('/contracts', getFilteredContracts);
 router.get('/shipments', getShipmentsByStatus);
 router.get('/trucking-operations', getTruckingOperationsByStatus);
+router.get('/payments', getPaymentsByStatus);
 
 // New dashboard widgets
 router.get('/contract-quantity-by-product', getContractQuantityByProduct);
+router.get('/contract-quantity-by-product-incoterm', getContractQuantityByProductIncoterm);
 router.get('/contract-quantity-by-plant', getContractQuantityByPlant);
 router.get('/contract-quantity-by-incoterm', getContractQuantityByIncoterm);
 router.get('/plant-details', getPlantDetails);
@@ -47,6 +59,8 @@ router.get('/incoterm-details', getIncotermDetails);
 // Filter options
 router.get('/filter-options/plants', getFilterPlants);
 router.get('/filter-options/suppliers', getFilterSuppliers);
+router.get('/filter-options/products', getFilterProducts);
+router.get('/filter-options/groups', getFilterGroups);
 
 export default router;
 

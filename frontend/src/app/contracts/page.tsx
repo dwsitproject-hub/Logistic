@@ -11,6 +11,7 @@ import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Minus, Plus, Search, Fil
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
 import { Checkbox } from '@/components/ui/checkbox'
+import { formatKgFromMt, formatRupiah, toKgFromMt } from '@/lib/utils'
 
 interface Contract {
   id: string
@@ -58,6 +59,7 @@ interface Contract {
   contract_ext_no?: string
   shipment_count?: number
   document_count?: number
+  cargo_readiness_date?: string
 }
 
 interface DocumentItem {
@@ -132,6 +134,7 @@ function ContractsPageContent() {
   const [unassignedSeaContracts, setUnassignedSeaContracts] = useState(0)
   const [unassignedLandContracts, setUnassignedLandContracts] = useState(0)
   const [unassignedFilter, setUnassignedFilter] = useState<'sea' | 'land' | null>(null)
+  const [updatingContractId, setUpdatingContractId] = useState<string | null>(null)
 
   type ColumnFilter =
     | { type: 'text'; value: string; exact?: boolean; emptyOnly?: boolean }
@@ -421,12 +424,8 @@ function ContractsPageContent() {
     if (amount === null || amount === undefined || amount === '') return '-'
     const number = typeof amount === 'string' ? parseFloat(amount) : amount
     if (isNaN(number)) return '-'
-    if (number === 0) return `${currency} 0`
-    return `${currency} ${number.toLocaleString('en-US', { 
-      minimumFractionDigits: 0, 
-      maximumFractionDigits: 2,
-      useGrouping: true
-    })}`
+    // Display as Rupiah everywhere in UI
+    return formatRupiah(number)
   }
 
   const formatShortDate = (dateStr: string) => {
@@ -503,6 +502,29 @@ function ContractsPageContent() {
     } finally {
       setUploadingId('')
       e.target.value = ''
+    }
+  }
+
+  const handleUpdateContractField = async (contract: Contract, field: keyof Contract, value: string) => {
+    try {
+      setUpdatingContractId(contract.id)
+      const payload: any = {}
+      if (field === 'cargo_readiness_date') {
+        payload.cargo_readiness_date = value || null
+      } else {
+        payload[field] = value
+      }
+      const res = await api.put(`/contracts/${contract.id}`, payload)
+      if (res.data?.success && res.data.data) {
+        setContracts(prev =>
+          prev.map(c => (c.id === contract.id ? { ...c, ...res.data.data } : c))
+        )
+      }
+    } catch (error) {
+      console.error('Failed to update contract field', error)
+      alert('Failed to update contract. Please try again.')
+    } finally {
+      setUpdatingContractId(null)
     }
   }
 
@@ -910,31 +932,31 @@ function ContractsPageContent() {
     },
     {
       id: 'contract_qty',
-      label: 'Contract Qty',
+      label: 'Contract Qty (Kg)',
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => (typeof c.quantity_ordered === 'number' ? c.quantity_ordered : 0),
       render: (c) => (
         <span className="text-sm truncate">
-          {formatNumber(c.quantity_ordered)} {c.unit}
+          {formatNumber(c.quantity_ordered)} Kg
         </span>
       )
     },
     {
       id: 'outstanding_qty',
-      label: 'Outstanding Qty',
+      label: 'Outstanding Qty (Kg)',
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => (typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : 0),
       render: (c) => (
         <span className={`text-sm font-medium ${c.outstanding_quantity < 0 ? 'text-red-600' : 'text-gray-900'}`}>
-          {formatNumber(c.outstanding_quantity)} {c.unit}
+          {formatNumber(c.outstanding_quantity)} Kg
         </span>
       )
     },
     {
       id: 'delivery_start',
-      label: 'Delivery Start',
+      label: 'Due Date Delivery Start',
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.delivery_start_date || '',
@@ -942,11 +964,48 @@ function ContractsPageContent() {
     },
     {
       id: 'delivery_end',
-      label: 'Delivery End',
+      label: 'Due Date Delivery End',
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.delivery_end_date || '',
       render: (c) => <span className="text-sm">{formatShortDate(c.delivery_end_date)}</span>
+    },
+    {
+      id: 'cargo_readiness_date',
+      label: 'Contract Readiness Date',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => c.cargo_readiness_date || '',
+      render: (c) => {
+        const saving = updatingContractId === c.id
+        const value = c.cargo_readiness_date ? String(c.cargo_readiness_date).substring(0, 10) : ''
+        return (
+          <div className="flex items-center gap-1 w-full">
+            <input
+              type="date"
+              className="text-sm border rounded px-1 py-0.5 flex-1 min-w-[130px]"
+              value={value}
+              disabled={saving}
+              onChange={(e) => {
+                const next = e.target.value
+                setContracts(prev =>
+                  prev.map(row => (row.id === c.id ? { ...row, cargo_readiness_date: next } : row))
+                )
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={saving}
+              className="px-2 py-0 h-7 text-xs shrink-0"
+              onClick={() => handleUpdateContractField(c, 'cargo_readiness_date', value)}
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </Button>
+          </div>
+        )
+      }
     },
     {
       id: 'created_at',
@@ -1038,6 +1097,8 @@ function ContractsPageContent() {
       case 'delivery_start':
       case 'delivery_end':
         return 'minmax(130px, 0.9fr)'
+      case 'cargo_readiness_date':
+        return 'minmax(220px, 1.1fr)'
       default:
         return 'minmax(120px, 1fr)'
     }
@@ -1518,7 +1579,7 @@ function ContractsPageContent() {
                               onClick={() => onSortHeaderClick(col)}
                               title={col.sortable ? 'Sort' : undefined}
                             >
-                              <span className="truncate">{col.label}</span>
+                              <span className="whitespace-normal break-words">{col.label}</span>
                                   {col.sortable && activeSort && (
                                 sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                               )}
@@ -2169,8 +2230,12 @@ function ContractsPageContent() {
                         </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Source</div>
+                        <div className="text-gray-500">Source Type</div>
                         <div className="font-medium mt-1">{selectedContract.source_type || '-'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Contract Type</div>
+                        <div className="font-medium mt-1">{selectedContract.contract_type || '-'}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Group Name</div>
@@ -2228,56 +2293,24 @@ function ContractsPageContent() {
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Contract Quantity</div>
-                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.quantity_ordered)} {selectedContract.unit}</div>
+                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.quantity_ordered)} Kg</div>
                       </div>
                       <div className="p-3 bg-blue-50 rounded border-2 border-blue-200">
                         <div className="text-gray-500">Total STO Quantity ({selectedContract.sto_count || 0} STO{selectedContract.sto_count > 1 ? 's' : ''})</div>
-                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.total_sto_quantity)} {selectedContract.unit}</div>
+                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.total_sto_quantity)} Kg</div>
                       </div>
                       <div className={`p-3 rounded border-2 ${selectedContract.outstanding_quantity < 0 ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
                         <div className={`font-semibold ${selectedContract.outstanding_quantity < 0 ? 'text-red-700' : 'text-blue-700'}`}>
                           Outstanding Quantity
                         </div>
                         <div className={`font-bold text-xl mt-1 ${selectedContract.outstanding_quantity < 0 ? 'text-red-600' : 'text-blue-600'}`}>
-                          {formatNumber(selectedContract.outstanding_quantity)} {selectedContract.unit}
+                          {formatNumber(selectedContract.outstanding_quantity)} Kg
                         </div>
                         {selectedContract.outstanding_quantity < 0 && (
                           <div className="text-xs text-red-500 mt-1">Overshipped</div>
                         )}
                       </div>
                     </div>
-                  </div>
-
-                  {/* Documents */}
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Documents</h3>
-                    {docsLoading ? (
-                      <div className="text-sm text-gray-500">Loading documents...</div>
-                    ) : selectedContractDocs.length === 0 ? (
-                      <div className="text-sm text-gray-500">No documents uploaded for this contract.</div>
-                    ) : (
-                      <div className="space-y-2">
-                        {selectedContractDocs.map((doc) => {
-                          return (
-                            <div key={doc.id} className="flex items-center justify-between px-3 py-2 border rounded">
-                              <div>
-                                <div className="text-sm font-medium">{doc.file_name}</div>
-                                <div className="text-xs text-gray-500">
-                                  {(doc.document_type || 'FILE')} • {doc.created_at ? new Date(doc.created_at).toLocaleString() : ''}
-                                </div>
-                              </div>
-                              <Button 
-                                size="sm" 
-                                variant="outline"
-                                onClick={() => handleDownloadDocument(doc.id, doc.file_name)}
-                              >
-                                View
-                              </Button>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
                   </div>
 
                   {/* Logistic Information */}
@@ -2308,7 +2341,7 @@ function ContractsPageContent() {
                               <th className="text-left p-2 font-medium">Late Indicator</th>
                               <th className="text-left p-2 font-medium">Status</th>
                               <th className="text-left p-2 font-medium">STO Quantity</th>
-                              <th className="text-left p-2 font-medium">Quantity Delivered / Quantity Receive (MT)</th>
+                              <th className="text-left p-2 font-medium">Quantity Delivered / Quantity Receive (Kg)</th>
                               <th className="text-left p-2 font-medium">Vessel Name / Trucking Owner</th>
                               <th className="text-left p-2 font-medium">ETA Vessel Arrival at Loading Port / ETA Trucking Completion Date</th>
                             </tr>
@@ -2376,12 +2409,16 @@ function ContractsPageContent() {
                         <div className="font-medium mt-1">{formatDate(selectedContract.contract_date)}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Delivery Start</div>
+                        <div className="text-gray-500">Due Date Delivery Start</div>
                         <div className="font-medium mt-1">{formatDate(selectedContract.delivery_start_date)}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Delivery End</div>
+                        <div className="text-gray-500">Due Date Delivery End</div>
                         <div className="font-medium mt-1">{formatDate(selectedContract.delivery_end_date)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Cargo Readiness Date</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.cargo_readiness_date as any)}</div>
                       </div>
                     </div>
                   </div>
@@ -2433,19 +2470,36 @@ function ContractsPageContent() {
                     </div>
                   </div>
 
-                  {/* Additional Info */}
+                  {/* Documents */}
                   <div>
-                    <h3 className="text-lg font-semibold mb-3">Additional Information</h3>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Source Type</div>
-                        <div className="font-medium mt-1">{selectedContract.source_type || '-'}</div>
+                    <h3 className="text-lg font-semibold mb-3">Documents</h3>
+                    {docsLoading ? (
+                      <div className="text-sm text-gray-500">Loading documents...</div>
+                    ) : selectedContractDocs.length === 0 ? (
+                      <div className="text-sm text-gray-500">No documents uploaded for this contract.</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {selectedContractDocs.map((doc) => {
+                          return (
+                            <div key={doc.id} className="flex items-center justify-between px-3 py-2 border rounded">
+                              <div>
+                                <div className="text-sm font-medium">{doc.file_name}</div>
+                                <div className="text-xs text-gray-500">
+                                  {(doc.document_type || 'FILE')} • {doc.created_at ? new Date(doc.created_at).toLocaleString() : ''}
+                                </div>
+                              </div>
+                              <Button 
+                                size="sm" 
+                                variant="outline"
+                                onClick={() => handleDownloadDocument(doc.id, doc.file_name)}
+                              >
+                                View
+                              </Button>
+                            </div>
+                          )
+                        })}
                       </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Contract Type</div>
-                        <div className="font-medium mt-1">{selectedContract.contract_type || '-'}</div>
-                      </div>
-                    </div>
+                    )}
                   </div>
 
                   {/* Activity Log */}
@@ -2575,7 +2629,7 @@ function ContractsPageContent() {
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Loading Location</span><div className="font-medium mt-1">{stoDetailData.loading_location ?? '-'}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Unloading Location</span><div className="font-medium mt-1">{stoDetailData.unloading_location ?? '-'}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Contract Qty</span><div className="font-medium mt-1">{formatNumber(stoDetailData.contract_qty ?? stoDetailData.sto_quantity ?? 0)}</div></div>
-                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Quantity Receive (MT)</span><div className="font-medium mt-1">{formatNumber(stoDetailData.quantity_delivered ?? 0)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Quantity Receive (Kg)</span><div className="font-medium mt-1">{formatNumber(toKgFromMt(stoDetailData.quantity_delivered ?? 0))}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Due Date Delivery Start</span><div className="font-medium mt-1">{formatDate(stoDetailData.delivery_start_date)}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Due Date Delivery End</span><div className="font-medium mt-1">{formatDate(stoDetailData.delivery_end_date)}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Trucking Start Receive Date</span><div className="font-medium mt-1">{formatDate(stoDetailData.trucking_start_date)}</div></div>

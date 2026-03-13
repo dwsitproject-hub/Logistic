@@ -605,7 +605,7 @@ function ShipmentsPageContent() {
             return sum + n
           }, 0)
           if (sumAssigned > capacityForCheck) {
-            alert(`Sum of "Contract Qty assign to STO" (${formatNumber(sumAssigned)} MT) cannot exceed Vessel Capacity (${formatNumber(capacityForCheck)} MT).`)
+            alert(`Sum of "Contract Qty assign to STO" (${formatNumber(sumAssigned)} Kg) cannot exceed Vessel Capacity (${formatNumber(capacityForCheck)} Kg).`)
             setSaving(false)
             return
           }
@@ -997,12 +997,22 @@ function ShipmentsPageContent() {
     }
   }
 
+  const parseNumberLoose = (v: unknown) => {
+    if (v === null || v === undefined) return null
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null
+    const s = String(v).trim()
+    if (!s) return null
+    const cleaned = s.replace(/,/g, '').replace(/\s+/g, '')
+    const n = Number(cleaned)
+    return Number.isFinite(n) ? n : null
+  }
+
   const formatNumber = (num: number | string) => {
     if (num === null || num === undefined || num === '') return '-'
-    const number = typeof num === 'string' ? parseFloat(num) : num
-    if (isNaN(number)) return '-'
-    if (number === 0) return '0'
-    return number.toLocaleString('en-US', { 
+    const n = parseNumberLoose(num)
+    if (n === null) return '-'
+    if (n === 0) return '0'
+    return n.toLocaleString('en-US', { 
       minimumFractionDigits: 0, 
       maximumFractionDigits: 2,
       useGrouping: true
@@ -1655,19 +1665,19 @@ function ShipmentsPageContent() {
       getSortValue: (s) => s.sto_quantity || s.total_quantity_shipped || s.quantity_shipped || 0,
       render: (s) => (
         <span className="text-sm break-words">
-          {formatNumber(s.sto_quantity || s.total_quantity_shipped || s.quantity_shipped)} MT
+          {formatNumber(s.sto_quantity || s.total_quantity_shipped || s.quantity_shipped || '-')} Kg
         </span>
       )
     },
     {
       id: 'quantity_receive',
-      label: 'Quantity Received (MT)',
+      label: 'Quantity Received (Kg)',
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => (s.quantity_receive ?? 0),
       render: (s) => (
         <span className="text-sm break-words">
-          {formatNumber(s.quantity_receive ?? 0)} MT
+          {formatNumber(s.quantity_receive ?? '-')} Kg
         </span>
       )
     },
@@ -1727,7 +1737,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => s.quantity_delivered_sap || s.total_quantity_delivered || s.quantity_delivered || 0,
       render: (s) => (
         <span className="text-sm break-words">
-          {formatNumber(s.quantity_delivered_sap ?? s.total_quantity_delivered ?? s.quantity_delivered)} MT
+          {formatNumber(s.quantity_delivered_sap ?? s.total_quantity_delivered ?? s.quantity_delivered ?? '-')} Kg
         </span>
       )
     },
@@ -1775,7 +1785,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => s.vessel_capacity || 0,
       render: (s) => (
         <span className="text-sm break-words">
-          {s.vessel_capacity ? `${formatNumber(s.vessel_capacity)} MT` : '-'}
+          {s.vessel_capacity ? `${formatNumber(s.vessel_capacity)} Kg` : '-'}
         </span>
       )
     },
@@ -2665,12 +2675,12 @@ function ShipmentsPageContent() {
     }
 
     if (contractQtyAssignedExceedsCapacity) {
-      alert('Sum of "Contract Qty assign to STO" cannot exceed Vessel Capacity (MT).')
+      alert('Sum of "Contract Qty assign to STO" cannot exceed Vessel Capacity (Kg).')
       return
     }
 
     if (contractQtyAssignedExceedsCapacity) {
-      alert('Sum of "Contract Qty assign to STO" cannot exceed Vessel Capacity (MT).')
+      alert('Sum of "Contract Qty assign to STO" cannot exceed Vessel Capacity (Kg).')
       return
     }
 
@@ -3727,12 +3737,12 @@ function ShipmentsPageContent() {
                                               </div>
                                               <div>
                                                 <div className="text-gray-500">Contract Qty</div>
-                                                <div className="font-medium">{formatNumber(detail.contract_qty)} MT</div>
+                                                <div className="font-medium">{formatNumber(detail.contract_qty)} Kg</div>
                                               </div>
                                               <div>
                                                 <div className="text-gray-500">Outstanding Qty</div>
                                                 <div className={`font-medium ${detail.outstanding_qty < 0 ? 'text-red-600' : 'text-gray-900'}`}>
-                                                  {formatNumber(detail.outstanding_qty)} MT
+                                                  {formatNumber(detail.outstanding_qty)} Kg
                                                 </div>
                                               </div>
                                               <div>
@@ -3749,7 +3759,7 @@ function ShipmentsPageContent() {
                                                     className="h-8 text-sm w-32"
                                                   />
                                                     ) : (
-                                                      <div className="font-medium">{formatNumber(displayValue)} MT</div>
+                                                      <div className="font-medium">{formatNumber(displayValue)} Kg</div>
                                                   )}
                                                 </div>
                                               </div>
@@ -3919,12 +3929,12 @@ function ShipmentsPageContent() {
                                         </div>
                                         <div>
                                           <div className="text-gray-500">Contract Qty</div>
-                                          <div className="font-medium">{formatNumber(detail.contract_qty)} MT</div>
+                                          <div className="font-medium">{formatNumber(detail.contract_qty)} Kg</div>
                                         </div>
                                         <div>
                                           <div className="text-gray-500">Outstanding Qty</div>
                                           <div className={`font-medium ${detail.outstanding_qty < 0 ? 'text-red-600' : 'text-gray-900'}`}>
-                                            {formatNumber(detail.outstanding_qty)} MT
+                                            {formatNumber(detail.outstanding_qty)} Kg
                                           </div>
                                         </div>
                                         <div>
@@ -3941,7 +3951,7 @@ function ShipmentsPageContent() {
                                               className="h-8 text-sm w-32"
                                               disabled={savingStoQty[`${shipment.id}-${detail.contract_number}`]}
                                             />
-                                            <span className="text-sm text-gray-500">MT</span>
+                                            <span className="text-sm text-gray-500">Kg</span>
                                             {savingStoQty[`${shipment.id}-${detail.contract_number}`] && (
                                               <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                                             )}
@@ -3956,12 +3966,12 @@ function ShipmentsPageContent() {
                                           <div className="font-medium">{formatShortDate(detail.delivery_end_date || '')}</div>
                                         </div>
                                         <div>
-                                          <div className="text-gray-500">Quantity Delivered (MT)</div>
-                                          <div className="font-medium">{formatNumber(detail.quantity_delivered ?? 0)} MT</div>
+                                          <div className="text-gray-500">Quantity Delivered (Kg)</div>
+                                          <div className="font-medium">{formatNumber(detail.quantity_delivered ?? 0)} Kg</div>
                                         </div>
                                         <div>
-                                          <div className="text-gray-500">Quantity Receive (MT)</div>
-                                          <div className="font-medium">{formatNumber(detail.quantity_receive ?? 0)} MT</div>
+                                          <div className="text-gray-500">Quantity Receive (Kg)</div>
+                                          <div className="font-medium">{formatNumber(detail.quantity_receive ?? 0)} Kg</div>
                                         </div>
                                       </div>
                                     </div>
@@ -4077,7 +4087,7 @@ function ShipmentsPageContent() {
                               className="h-8 text-sm mt-1"
                             />
                           ) : (
-                            <div className="font-medium">{formatNumber(shipmentInfo.quantity_delivered)} MT</div>
+                            <div className="font-medium">{formatNumber(shipmentInfo.quantity_delivered)} Kg</div>
                           )}
                         </div>
                         <div>
@@ -4091,7 +4101,7 @@ function ShipmentsPageContent() {
                               className="h-8 text-sm mt-1"
                             />
                           ) : (
-                            <div className="font-medium">{formatNumber(shipmentInfo.actual_vessel_qty_receive)} MT</div>
+                            <div className="font-medium">{formatNumber(shipmentInfo.actual_vessel_qty_receive)} Kg</div>
                           )}
                         </div>
                         <div>
@@ -4159,7 +4169,7 @@ function ShipmentsPageContent() {
                               className="h-8 text-sm mt-1"
                             />
                           ) : (
-                            <div className="font-medium">{formatNumber(shipmentInfo.bl_quantity)} MT</div>
+                            <div className="font-medium">{formatNumber(shipmentInfo.bl_quantity)} Kg</div>
                           )}
                         </div>
                         <div>
@@ -4199,7 +4209,7 @@ function ShipmentsPageContent() {
                           <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_complete_discharge)}</div>
                         </div>
                         <div>
-                          <div className="text-gray-500">Loading Rate (MT/hour)</div>
+                          <div className="text-gray-500">Loading Rate (Kg/hour)</div>
                           <div className="font-semibold text-blue-700">
                             {shipmentInfo.loading_rate_mt_per_hour !== null && shipmentInfo.loading_rate_mt_per_hour !== undefined 
                               ? formatNumber(shipmentInfo.loading_rate_mt_per_hour) 
@@ -4476,8 +4486,8 @@ function ShipmentsPageContent() {
                     const sectionTitle = port.is_discharge_port
                       ? `Discharge Port ${dischargePortsList.indexOf(port) + 1} — ${port.port_name || 'Unnamed'}`
                       : `Loading Port ${port.port_sequence} — ${port.port_name || 'Unnamed'}`
-                    const quantityLabel = port.is_discharge_port ? 'Received Quantity (MT)' : 'Quantity at Loading Port (MT)'
-                    const rateLabel = port.is_discharge_port ? 'Discharge Rate (MT/hour)' : 'Loading Rate (MT/hour)'
+                    const quantityLabel = port.is_discharge_port ? 'Received Quantity (Kg)' : 'Quantity at Loading Port (Kg)'
+                    const rateLabel = port.is_discharge_port ? 'Discharge Rate (Kg/hour)' : 'Loading Rate (Kg/hour)'
 
                     // Compute loading rate for loading ports:
                     // (Quantity Receive) / (ATA Vessel Completed Loading - ATA Vessel Start Loading in hours)
@@ -4798,7 +4808,7 @@ function ShipmentsPageContent() {
                   />
                 </div>
                 <div>
-                  <div className="text-gray-500 mb-1">Quantity (MT)</div>
+                  <div className="text-gray-500 mb-1">Quantity (Kg)</div>
                   <Input
                     type="number"
                     value={newPort.quantity_at_loading_port as number}
@@ -4810,7 +4820,7 @@ function ShipmentsPageContent() {
                   />
                 </div>
                 <div>
-                  <div className="text-gray-500 mb-1">Loading Rate (MT/hour)</div>
+                  <div className="text-gray-500 mb-1">Loading Rate (Kg/hour)</div>
                   <Input
                     type="number"
                     step="0.01"
@@ -4976,7 +4986,7 @@ function ShipmentsPageContent() {
                   className="w-full bg-gray-100 cursor-not-allowed"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Operation ID will be automatically generated as: OP-{newShipment.contractNumbers[0] || '{ContractNumber}'}-{'{timestamp}'}
+                  Operation ID will be automatically generated as: OP-{(contractValidations[newShipment.contractNumbers[0]]?.contractData?.contract_ext_no || newShipment.contractNumbers[0]) || '{Contract Ext No}'}-{'{timestamp}'}
                 </p>
               </div>
 
@@ -4996,10 +5006,10 @@ function ShipmentsPageContent() {
                 </p>
               </div>
 
-              {/* Contract Numbers */}
+              {/* Contract Ext No */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Contract Numbers <span className="text-red-500">*</span>
+                  Contract Ext No <span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <div className="flex gap-2">
@@ -5013,7 +5023,7 @@ function ShipmentsPageContent() {
                           handleAddContractManually()
                         }
                       }}
-                      placeholder="Search or enter contract number and press Enter"
+                      placeholder="Search or enter Contract Ext No and press Enter"
                       className="flex-1"
                   />
                     <Button
@@ -5032,8 +5042,9 @@ function ShipmentsPageContent() {
                           className="px-4 py-2 hover:bg-gray-100 cursor-pointer border-b"
                           onClick={() => handleAddContract(contract)}
                         >
-                          <div className="font-medium">{contract.contract_id}</div>
+                          <div className="font-medium">{contract.contract_ext_no || contract.contract_id}</div>
                           <div className="text-sm text-gray-500">
+                            {contract.contract_ext_no ? <span className="text-gray-400">{contract.contract_id} • </span> : null}
                             {contract.supplier} • {contract.product}
                             {contract.sto_number && ` • STO: ${contract.sto_number}`}
                           </div>
@@ -5049,6 +5060,7 @@ function ShipmentsPageContent() {
                     {newShipment.contractNumbers.map((contractId) => {
                       const validation = contractValidations[contractId]
                       const data = validation?.contractData
+                      const label = (data?.contract_ext_no || contractId) as string
                       return (
                         <div key={contractId} className="border rounded-md px-2 py-2 bg-gray-50">
                           <div className="flex items-center gap-2">
@@ -5056,7 +5068,7 @@ function ShipmentsPageContent() {
                               variant={validation?.exists ? "default" : validation?.exists === false ? "destructive" : "secondary"}
                         className="flex items-center gap-1"
                       >
-                        {contractId}
+                        {label}
                               {validation?.checking && <Loader2 className="h-3 w-3 animate-spin" />}
                               {validation?.exists && <Check className="h-3 w-3" />}
                               {validation?.exists === false && !validation?.checking && <X className="h-3 w-3" />}
@@ -5065,6 +5077,7 @@ function ShipmentsPageContent() {
                           onClick={() => handleRemoveContract(contractId)}
                         />
                       </Badge>
+                            {data?.contract_ext_no ? <span className="text-[11px] text-gray-400 truncate">({contractId})</span> : null}
                             {validation?.message && (
                               <span className={`text-xs ${
                                 validation.exists ? 'text-green-600' : 'text-red-600'
@@ -5188,7 +5201,7 @@ function ShipmentsPageContent() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Vessel Capacity (MT) <span className="text-gray-500 text-xs">(from Master Vessel)</span>
+                    Vessel Capacity (Kg) <span className="text-gray-500 text-xs">(from Master Vessel)</span>
                   </label>
                   <Input
                     type="number"
@@ -5262,7 +5275,7 @@ function ShipmentsPageContent() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Contract Qty assign to STO (MT)
+                    Contract Qty assign to STO (Kg)
                   </label>
                   <div className={`rounded-md border p-3 ${contractQtyAssignedExceedsCapacity ? 'border-red-400 bg-red-50' : 'border-gray-200 bg-gray-50'}`}>
                     {newShipment.contractNumbers.length === 0 ? (
@@ -5284,16 +5297,16 @@ function ShipmentsPageContent() {
                         ))}
                         <div className="flex items-center justify-between text-sm pt-2 border-t">
                           <div className="text-gray-600">Total assigned</div>
-                          <div className={`font-semibold ${contractQtyAssignedExceedsCapacity ? 'text-red-700' : 'text-gray-900'}`}>{formatNumber(contractQtyAssignedSum)} MT</div>
+                          <div className={`font-semibold ${contractQtyAssignedExceedsCapacity ? 'text-red-700' : 'text-gray-900'}`}>{formatNumber(contractQtyAssignedSum)} Kg</div>
                         </div>
                         {vesselCapacityNum != null && !Number.isNaN(vesselCapacityNum) && (
                           <div className="flex items-center justify-between text-xs text-gray-600">
                             <div>Vessel Capacity</div>
-                            <div>{formatNumber(vesselCapacityNum)} MT</div>
+                            <div>{formatNumber(vesselCapacityNum)} Kg</div>
                           </div>
                         )}
                         {contractQtyAssignedExceedsCapacity && (
-                          <div className="text-xs text-red-700">Total assigned cannot exceed Vessel Capacity (MT).</div>
+                          <div className="text-xs text-red-700">Total assigned cannot exceed Vessel Capacity (Kg).</div>
                         )}
                       </div>
                     )}

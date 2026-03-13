@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo, useRef, useCallback, Suspense } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback, Suspense, memo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -61,6 +61,497 @@ interface DocumentItem {
   created_at?: string
 }
 
+const CreateTruckingOperationModal = memo(function CreateTruckingOperationModal({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean
+  onClose: () => void
+  onCreated: () => void
+}) {
+  const [creating, setCreating] = useState(false)
+  type DailyDeliverableDraft = { date: string; quantity: string }
+  const [newOperation, setNewOperation] = useState({
+    contract_number: '',
+    operation_id: '',
+    location: '',
+    loading_location: '',
+    unloading_location: '',
+    trucking_owner: '',
+    cargo_readiness_date: '',
+    eta_trucking_start_date: '',
+    eta_trucking_completion_date: '',
+    eta_delivery_start_date: '',
+    eta_delivery_end_date: '',
+    quantity_sent: '',
+    quantity_delivered: '',
+    gain_loss_percentage: '',
+    gain_loss_amount: '',
+    oa_budget: '',
+    oa_actual: '',
+    status: 'PLANNED',
+    daily_deliverables: [] as DailyDeliverableDraft[],
+  })
+
+  const [contractValidation, setContractValidation] = useState<{
+    checking: boolean
+    exists: boolean
+    contractData: any
+    message: string
+  }>({
+    checking: false,
+    exists: false,
+    contractData: null,
+    message: ''
+  })
+
+  const [contractSearchTerm, setContractSearchTerm] = useState('')
+  const [contractSuggestions, setContractSuggestions] = useState<any[]>([])
+  const [showContractSuggestions, setShowContractSuggestions] = useState(false)
+  const contractSuggestTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const validationTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+  const validateContractNumber = useCallback(async (contractNumber: string) => {
+    if (!contractNumber || contractNumber.trim() === '') {
+      setContractValidation({ checking: false, exists: false, contractData: null, message: '' })
+      return
+    }
+    setContractValidation(prev => ({ ...prev, checking: true }))
+    try {
+      const response = await api.get(`/trucking/validate/contract?contract_number=${encodeURIComponent(contractNumber)}`)
+      if (response.data.success) {
+        if (response.data.exists) {
+          setContractValidation({ checking: false, exists: true, contractData: response.data.data, message: 'Contract found' })
+        } else {
+          setContractValidation({ checking: false, exists: false, contractData: null, message: 'Contract number does not exist' })
+        }
+      }
+    } catch (error) {
+      console.error('Error validating contract:', error)
+      setContractValidation({ checking: false, exists: false, contractData: null, message: 'Error validating contract number' })
+    }
+  }, [])
+
+  const fetchContractSuggestions = useCallback(async (term: string) => {
+    const q = term.trim()
+    if (q.length < 2) {
+      setContractSuggestions([])
+      setShowContractSuggestions(false)
+      return
+    }
+    try {
+      const res = await api.get(`/trucking/contracts/suggestions?q=${encodeURIComponent(q)}`)
+      if (res.data?.success) {
+        setContractSuggestions(res.data.data || [])
+        setShowContractSuggestions(true)
+      }
+    } catch (e) {
+      console.error('Failed to fetch contract suggestions:', e)
+      setContractSuggestions([])
+      setShowContractSuggestions(false)
+    }
+  }, [])
+
+  const handleContractNumberChange = (value: string) => {
+    setNewOperation(prev => ({ ...prev, contract_number: value }))
+    setContractSearchTerm(value)
+    if (validationTimeoutRef.current) clearTimeout(validationTimeoutRef.current)
+    if (contractSuggestTimeoutRef.current) clearTimeout(contractSuggestTimeoutRef.current)
+    contractSuggestTimeoutRef.current = setTimeout(() => fetchContractSuggestions(value), 200)
+    validationTimeoutRef.current = setTimeout(() => validateContractNumber(value), 500)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (validationTimeoutRef.current) clearTimeout(validationTimeoutRef.current)
+      if (contractSuggestTimeoutRef.current) clearTimeout(contractSuggestTimeoutRef.current)
+    }
+  }, [])
+
+  const handleSelectContractSuggestion = async (c: any) => {
+    const label = c.contract_ext_no || c.contract_id
+    setNewOperation(prev => ({ ...prev, contract_number: String(label || '').trim() }))
+    setContractSearchTerm(String(label || '').trim())
+    setShowContractSuggestions(false)
+    setContractSuggestions([])
+    await validateContractNumber(String(label || '').trim())
+  }
+
+  const resetForm = () => {
+    setNewOperation({
+      contract_number: '',
+      operation_id: '',
+      location: '',
+      loading_location: '',
+      unloading_location: '',
+      trucking_owner: '',
+      cargo_readiness_date: '',
+      eta_trucking_start_date: '',
+      eta_trucking_completion_date: '',
+      eta_delivery_start_date: '',
+      eta_delivery_end_date: '',
+      quantity_sent: '',
+      quantity_delivered: '',
+      gain_loss_percentage: '',
+      gain_loss_amount: '',
+      oa_budget: '',
+      oa_actual: '',
+      status: 'PLANNED',
+      daily_deliverables: [],
+    })
+    setContractValidation({ checking: false, exists: false, contractData: null, message: '' })
+    setContractSearchTerm('')
+    setContractSuggestions([])
+    setShowContractSuggestions(false)
+  }
+
+  const handleCreateOperation = async () => {
+    if (!newOperation.contract_number || !contractValidation.exists) {
+      alert('Please enter a valid contract')
+      return
+    }
+
+    // Validate daily deliverables draft
+    const start = (newOperation.eta_trucking_start_date || '').trim()
+    const end = (newOperation.eta_trucking_completion_date || '').trim()
+    const maxQty = newOperation.quantity_delivered ? parseFloat(String(newOperation.quantity_delivered).replace(/,/g, '').trim()) : NaN
+    const rows = newOperation.daily_deliverables || []
+    if (rows.length > 0) {
+      if (!start || !end) {
+        alert('ETA Trucking Start Receive Date and ETA Trucking Last Receive Date are required when daily deliverables are provided.')
+        return
+      }
+      if (!Number.isFinite(maxQty)) {
+        alert('Quantity Delivered (Kg) is required when daily deliverables are provided.')
+        return
+      }
+      let sum = 0
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i]
+        const d = (r.date || '').trim()
+        const qn = r.quantity ? parseFloat(String(r.quantity).replace(/,/g, '').trim()) : NaN
+        if (!d) return alert(`Daily deliverables row ${i + 1}: Date is required`)
+        if (!Number.isFinite(qn) || qn < 0) return alert(`Daily deliverables row ${i + 1}: Quantity must be a valid number`)
+        if (d < start) return alert(`Daily deliverables row ${i + 1}: Date cannot be before ETA Trucking Start Receive Date`)
+        if (d > end) return alert(`Daily deliverables row ${i + 1}: Date cannot be after ETA Trucking Last Receive Date`)
+        if (qn > maxQty) return alert(`Daily deliverables row ${i + 1}: Quantity cannot exceed Quantity Delivered (Kg)`)
+        sum += qn
+        if (sum > maxQty) return alert('Sum of daily deliverables quantity cannot exceed Quantity Delivered (Kg)')
+      }
+    }
+
+    setCreating(true)
+    try {
+      const payload = {
+        ...newOperation,
+        quantity_sent: newOperation.quantity_sent ? parseFloat(newOperation.quantity_sent) : null,
+        quantity_delivered: newOperation.quantity_delivered ? parseFloat(newOperation.quantity_delivered) : null,
+        gain_loss_percentage: newOperation.gain_loss_percentage ? parseFloat(newOperation.gain_loss_percentage) : null,
+        gain_loss_amount: newOperation.gain_loss_amount ? parseFloat(newOperation.gain_loss_amount) : null,
+        oa_budget: newOperation.oa_budget ? parseFloat(newOperation.oa_budget) : null,
+        oa_actual: newOperation.oa_actual ? parseFloat(newOperation.oa_actual) : null,
+        daily_deliverables: (newOperation.daily_deliverables || [])
+          .filter((r) => (r.date || '').trim() !== '' && (r.quantity || '').trim() !== '')
+          .map((r) => ({
+            date: String(r.date).slice(0, 10),
+            quantity_delivered: parseFloat(String(r.quantity).replace(/,/g, '').trim()),
+          })),
+      }
+
+      const response = await api.post('/trucking', payload)
+      if (response.data.success) {
+        alert('Trucking operation created successfully!')
+        resetForm()
+        onClose()
+        onCreated()
+      }
+    } catch (error: any) {
+      console.error('Create trucking operation error:', error)
+      const errorMessage = error.response?.data?.error?.message || 'Failed to create trucking operation'
+      alert(errorMessage)
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  if (!open) return null
+
+  const maxQty = newOperation.quantity_delivered ? parseFloat(String(newOperation.quantity_delivered).replace(/,/g, '').trim()) : NaN
+  const sumQty = (newOperation.daily_deliverables || []).reduce((s, r) => {
+    const n = r.quantity ? parseFloat(String(r.quantity).replace(/,/g, '').trim()) : NaN
+    return s + (Number.isFinite(n) ? n : 0)
+  }, 0)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-semibold">Create New Trucking Operation</h3>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              resetForm()
+              onClose()
+            }}
+          >
+            <X className="h-5 w-5" />
+          </Button>
+        </div>
+
+        <div className="space-y-4">
+          {/* Contract Ext No with Validation */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Contract Ext No <span className="text-red-500">*</span>
+            </label>
+            <div className="relative">
+              <div className="flex gap-2">
+                <Input
+                  value={newOperation.contract_number}
+                  onChange={(e) => handleContractNumberChange(e.target.value)}
+                  onBlur={() => validateContractNumber(newOperation.contract_number)}
+                  onFocus={() => {
+                    if (contractSuggestions.length > 0) setShowContractSuggestions(true)
+                    if (contractSearchTerm.trim().length >= 2) fetchContractSuggestions(contractSearchTerm)
+                  }}
+                  className={`flex-1 ${
+                    contractValidation.exists
+                      ? 'border-green-500'
+                      : contractValidation.message && !contractValidation.checking
+                      ? 'border-red-500'
+                      : ''
+                  }`}
+                  placeholder="Enter Contract Ext No"
+                />
+                {contractValidation.checking && <Loader2 className="h-5 w-5 animate-spin text-gray-400 self-center" />}
+                {!contractValidation.checking && contractValidation.exists && <Check className="h-5 w-5 text-green-500 self-center" />}
+                {!contractValidation.checking && contractValidation.message && !contractValidation.exists && (
+                  <X className="h-5 w-5 text-red-500 self-center" />
+                )}
+              </div>
+
+              {showContractSuggestions && contractSuggestions.length > 0 && (
+                <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                  {contractSuggestions.map((c) => (
+                    <button
+                      key={c.contract_id}
+                      type="button"
+                      className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b last:border-b-0"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => handleSelectContractSuggestion(c)}
+                    >
+                      <div className="font-medium text-sm">{c.contract_ext_no || c.contract_id}</div>
+                      <div className="text-xs text-gray-500">
+                        {c.contract_ext_no ? <span className="text-gray-400">{c.contract_id} • </span> : null}
+                        {c.supplier} • {c.product}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {contractValidation.message && (
+              <p className={`text-xs mt-1 ${contractValidation.exists ? 'text-green-600' : 'text-red-600'}`}>
+                {contractValidation.message}
+              </p>
+            )}
+            {contractValidation.exists && contractValidation.contractData && (
+              <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-xs">
+                <div className="grid grid-cols-2 gap-2">
+                  {contractValidation.contractData.contract_ext_no ? (
+                    <div><span className="font-semibold">Contract Ext No:</span> {contractValidation.contractData.contract_ext_no}</div>
+                  ) : null}
+                  <div><span className="font-semibold">Contract ID:</span> {contractValidation.contractData.contract_id || '-'}</div>
+                  <div><span className="font-semibold">STO Number:</span> {contractValidation.contractData.sto_number || '-'}</div>
+                  <div><span className="font-semibold">Supplier:</span> {contractValidation.contractData.supplier || '-'}</div>
+                  <div><span className="font-semibold">Product:</span> {contractValidation.contractData.product || '-'}</div>
+                  <div><span className="font-semibold">Group:</span> {contractValidation.contractData.group_name || '-'}</div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Basic Information */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Operation ID (optional)</label>
+              <Input value={newOperation.operation_id} onChange={(e) => setNewOperation(prev => ({ ...prev, operation_id: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+              <select
+                value={newOperation.status}
+                onChange={(e) => setNewOperation(prev => ({ ...prev, status: e.target.value }))}
+                className="w-full h-10 px-3 border border-gray-300 rounded-md"
+              >
+                <option value="PLANNED">Planned</option>
+                <option value="IN_PROGRESS">In Progress</option>
+                <option value="LOADING">Loading</option>
+                <option value="IN_TRANSIT">In Transit</option>
+                <option value="UNLOADING">Unloading</option>
+                <option value="COMPLETED">Completed</option>
+                <option value="CANCELLED">Cancelled</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Locations */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Plant/Site</label>
+              <Input value={newOperation.location} onChange={(e) => setNewOperation(prev => ({ ...prev, location: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Loading Location</label>
+              <Input value={newOperation.loading_location} onChange={(e) => setNewOperation(prev => ({ ...prev, loading_location: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Unloading Location</label>
+              <Input value={newOperation.unloading_location} onChange={(e) => setNewOperation(prev => ({ ...prev, unloading_location: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Trucking Owner</label>
+              <Input value={newOperation.trucking_owner} onChange={(e) => setNewOperation(prev => ({ ...prev, trucking_owner: e.target.value }))} />
+            </div>
+          </div>
+
+          {/* Quantities */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Quantity Sent (Kg)</label>
+              <Input inputMode="decimal" value={newOperation.quantity_sent} onChange={(e) => setNewOperation(prev => ({ ...prev, quantity_sent: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Quantity Delivered (Kg)</label>
+              <Input inputMode="decimal" value={newOperation.quantity_delivered} onChange={(e) => setNewOperation(prev => ({ ...prev, quantity_delivered: e.target.value }))} />
+            </div>
+          </div>
+
+          {/* Date Information */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Cargo Readiness Date</label>
+              <Input type="date" value={newOperation.cargo_readiness_date} onChange={(e) => setNewOperation(prev => ({ ...prev, cargo_readiness_date: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">ETA Trucking Start Receive Date</label>
+              <Input type="date" value={newOperation.eta_trucking_start_date} onChange={(e) => setNewOperation(prev => ({ ...prev, eta_trucking_start_date: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">ETA Trucking Last Receive Date</label>
+              <Input type="date" value={newOperation.eta_trucking_completion_date} onChange={(e) => setNewOperation(prev => ({ ...prev, eta_trucking_completion_date: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">ETA Due Date Delivery Start</label>
+              <Input type="date" value={newOperation.eta_delivery_start_date} onChange={(e) => setNewOperation(prev => ({ ...prev, eta_delivery_start_date: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">ETA Due Date Deliver End</label>
+              <Input type="date" value={newOperation.eta_delivery_end_date} onChange={(e) => setNewOperation(prev => ({ ...prev, eta_delivery_end_date: e.target.value }))} />
+            </div>
+          </div>
+
+          {/* Daily planning deliverables */}
+          <div className="border rounded-lg p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="font-semibold text-sm text-gray-900">Daily planning deliverables</div>
+                <div className="text-xs text-gray-500 mt-0.5">
+                  Add daily delivered quantities (validated against Start/Last receive date and total Quantity Delivered).
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setNewOperation((prev) => ({ ...prev, daily_deliverables: [...(prev.daily_deliverables || []), { date: '', quantity: '' }] }))}
+              >
+                <Plus className="h-4 w-4 mr-1" />
+                Add day
+              </Button>
+            </div>
+
+            {(newOperation.daily_deliverables || []).length === 0 ? (
+              <div className="text-sm text-gray-500 mt-3">No daily deliverables added.</div>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {(newOperation.daily_deliverables || []).map((row, idx) => (
+                  <div key={idx} className="flex items-start gap-2">
+                    <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs text-gray-500">Date</label>
+                        <Input
+                          type="date"
+                          value={row.date}
+                          onChange={(e) => setNewOperation((prev) => ({
+                            ...prev,
+                            daily_deliverables: (prev.daily_deliverables || []).map((r, i) => (i === idx ? { ...r, date: e.target.value } : r)),
+                          }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500">Quantity Delivered (Kg)</label>
+                        <Input
+                          inputMode="decimal"
+                          value={row.quantity}
+                          onChange={(e) => setNewOperation((prev) => ({
+                            ...prev,
+                            daily_deliverables: (prev.daily_deliverables || []).map((r, i) => (i === idx ? { ...r, quantity: e.target.value } : r)),
+                          }))}
+                          placeholder="0"
+                        />
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setNewOperation((prev) => ({ ...prev, daily_deliverables: (prev.daily_deliverables || []).filter((_, i) => i !== idx) }))}
+                      className="mt-5 text-gray-500 hover:text-red-600"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+
+                <div className="pt-2 text-xs text-gray-600">
+                  {newOperation.eta_trucking_start_date && newOperation.eta_trucking_completion_date ? (
+                    <div>Allowed date range: {newOperation.eta_trucking_start_date} to {newOperation.eta_trucking_completion_date}</div>
+                  ) : (
+                    <div>Set Start/Last receive dates to validate date range.</div>
+                  )}
+                  <div className="mt-1">Sum qty: {sumQty}{Number.isFinite(maxQty) ? ` / ${maxQty}` : ''}</div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex justify-end gap-2 pt-4 border-t">
+            <Button variant="outline" onClick={() => { resetForm(); onClose(); }} disabled={creating}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateOperation} disabled={creating || !contractValidation.exists} className="bg-blue-600 hover:bg-blue-700">
+              {creating ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Operation
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+})
+
 function TruckingPageContent() {
   const searchParams = useSearchParams()
   const [truckingOperations, setTruckingOperations] = useState<TruckingOperation[]>([])
@@ -77,6 +568,8 @@ function TruckingPageContent() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [uploadingId, setUploadingId] = useState<string>('')
+  const [page, setPage] = useState<number>(1)
+  const [hasMore, setHasMore] = useState<boolean>(true)
   
   // Documents state
   const [selectedOperation, setSelectedOperation] = useState<TruckingOperation | null>(null)
@@ -84,38 +577,8 @@ function TruckingPageContent() {
   const [docsLoading, setDocsLoading] = useState(false)
   const [showDocs, setShowDocs] = useState(false)
 
-  // Create new trucking operation state
+  // Create new trucking operation modal
   const [showCreateForm, setShowCreateForm] = useState(false)
-  const [creating, setCreating] = useState(false)
-  const [newOperation, setNewOperation] = useState({
-    contract_number: '',
-    operation_id: '',
-    location: '',
-    loading_location: '',
-    unloading_location: '',
-    trucking_owner: '',
-    cargo_readiness_date: '',
-    trucking_start_date: '',
-    trucking_completion_date: '',
-    quantity_sent: '',
-    quantity_delivered: '',
-    gain_loss_percentage: '',
-    gain_loss_amount: '',
-    oa_budget: '',
-    oa_actual: '',
-    status: 'PLANNED'
-  })
-  const [contractValidation, setContractValidation] = useState<{
-    checking: boolean
-    exists: boolean
-    contractData: any
-    message: string
-  }>({
-    checking: false,
-    exists: false,
-    contractData: null,
-    message: ''
-  })
 
   // Compact/Expand view state
   const [expandedOperationIds, setExpandedOperationIds] = useState<Set<string>>(() => new Set())
@@ -159,13 +622,23 @@ function TruckingPageContent() {
     if (statusParam) {
       setStatusFilter(statusParam)
     }
-    fetchTruckingOperations()
+    setPage(1)
+    setTruckingOperations([])
+    setHasMore(true)
   }, [searchParams])
+
+  useEffect(() => {
+    fetchTruckingOperations()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, statusFilter, loadingLocationFilter, unloadingLocationFilter, dateFrom, dateTo, searchParams])
 
   const fetchTruckingOperations = async () => {
     try {
       const params = new URLSearchParams()
-      params.append('limit', '200') // Increased to show more records
+      // Note: this page currently does client-side Late Indicator filtering,
+      // so we need a sufficiently large limit to avoid misleading counts.
+      params.append('limit', '500')
+      params.append('page', String(page))
       if (statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
       }
@@ -191,7 +664,11 @@ function TruckingPageContent() {
       }
       
       const response = await api.get(`/trucking?${params.toString()}`)
-      setTruckingOperations(response.data.data.truckingOperations || [])
+      const items = response.data.data.truckingOperations || []
+      const next = page === 1 ? items : [...truckingOperations, ...items]
+      setTruckingOperations(next)
+      const totalPages = Number(response.data.data.pagination?.totalPages || 1)
+      setHasMore(page < totalPages)
     } catch (error) {
       console.error('Failed to fetch trucking operations:', error)
       alert('Failed to load trucking operations. Please refresh the page.')
@@ -239,157 +716,10 @@ function TruckingPageContent() {
     setEditedData(prev => ({ ...prev, [field]: value }))
   }
 
-  const validateContractNumber = useCallback(async (contractNumber: string) => {
-    if (!contractNumber || contractNumber.trim() === '') {
-      setContractValidation({
-        checking: false,
-        exists: false,
-        contractData: null,
-        message: ''
-      })
-      return
-    }
-
-    setContractValidation(prev => ({ ...prev, checking: true }))
-    try {
-      const response = await api.get(`/trucking/validate/contract?contract_number=${encodeURIComponent(contractNumber)}`)
-      if (response.data.success) {
-        if (response.data.exists) {
-          setContractValidation({
-            checking: false,
-            exists: true,
-            contractData: response.data.data,
-            message: 'Contract found'
-          })
-        } else {
-          setContractValidation({
-            checking: false,
-            exists: false,
-            contractData: null,
-            message: 'Contract number does not exist'
-          })
-        }
-      }
-    } catch (error) {
-      console.error('Error validating contract:', error)
-      setContractValidation({
-        checking: false,
-        exists: false,
-        contractData: null,
-        message: 'Error validating contract number'
-      })
-    }
-  }, [])
-
-  // Debounce contract number validation
-  const validationTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  
-  const handleContractNumberChange = (value: string) => {
-    setNewOperation(prev => ({ ...prev, contract_number: value }))
-    
-    // Clear previous timeout
-    if (validationTimeoutRef.current) {
-      clearTimeout(validationTimeoutRef.current)
-    }
-    
-    // Set new timeout for validation
-    validationTimeoutRef.current = setTimeout(() => {
-      validateContractNumber(value)
-    }, 500)
-  }
-
-  useEffect(() => {
-    return () => {
-      if (validationTimeoutRef.current) {
-        clearTimeout(validationTimeoutRef.current)
-      }
-    }
-  }, [])
-
-  const handleCreateOperation = async () => {
-    if (!newOperation.contract_number || !contractValidation.exists) {
-      alert('Please enter a valid contract number')
-      return
-    }
-
-    setCreating(true)
-    try {
-      const payload = {
-        ...newOperation,
-        quantity_sent: newOperation.quantity_sent ? parseFloat(newOperation.quantity_sent) : null,
-        quantity_delivered: newOperation.quantity_delivered ? parseFloat(newOperation.quantity_delivered) : null,
-        gain_loss_percentage: newOperation.gain_loss_percentage ? parseFloat(newOperation.gain_loss_percentage) : null,
-        gain_loss_amount: newOperation.gain_loss_amount ? parseFloat(newOperation.gain_loss_amount) : null,
-        oa_budget: newOperation.oa_budget ? parseFloat(newOperation.oa_budget) : null,
-        oa_actual: newOperation.oa_actual ? parseFloat(newOperation.oa_actual) : null
-      }
-
-      const response = await api.post('/trucking', payload)
-      
-      if (response.data.success) {
-        alert('Trucking operation created successfully!')
-        setShowCreateForm(false)
-        setNewOperation({
-          contract_number: '',
-          operation_id: '',
-          location: '',
-          loading_location: '',
-          unloading_location: '',
-          trucking_owner: '',
-          cargo_readiness_date: '',
-          trucking_start_date: '',
-          trucking_completion_date: '',
-          quantity_sent: '',
-          quantity_delivered: '',
-          gain_loss_percentage: '',
-          gain_loss_amount: '',
-          oa_budget: '',
-          oa_actual: '',
-          status: 'PLANNED'
-        })
-        setContractValidation({
-          checking: false,
-          exists: false,
-          contractData: null,
-          message: ''
-        })
-        fetchTruckingOperations()
-      }
-    } catch (error: any) {
-      console.error('Create trucking operation error:', error)
-      const errorMessage = error.response?.data?.error?.message || 'Failed to create trucking operation'
-      alert(errorMessage)
-    } finally {
-      setCreating(false)
-    }
-  }
-
-  const handleCancelCreate = () => {
-    setShowCreateForm(false)
-    setNewOperation({
-      contract_number: '',
-      operation_id: '',
-      location: '',
-      loading_location: '',
-      unloading_location: '',
-      trucking_owner: '',
-      cargo_readiness_date: '',
-      trucking_start_date: '',
-      trucking_completion_date: '',
-      quantity_sent: '',
-      quantity_delivered: '',
-      gain_loss_percentage: '',
-      gain_loss_amount: '',
-      oa_budget: '',
-      oa_actual: '',
-      status: 'PLANNED'
-    })
-    setContractValidation({
-      checking: false,
-      exists: false,
-      contractData: null,
-      message: ''
-    })
+  const handleCreated = () => {
+    setPage(1)
+    setTruckingOperations([])
+    setHasMore(true)
   }
 
   const downloadTemplate = async () => {
@@ -399,8 +729,8 @@ function TruckingPageContent() {
       'Trucking Start Receive Date (YYYY-MM-DD)','Trucking Last Receive Date (YYYY-MM-DD)',
       'ETA Trucking Start Receive Date (YYYY-MM-DD)','ETA Trucking Completion Date (YYYY-MM-DD)',
       'Due Date Delivery Start (YYYY-MM-DD)','Due Date Delivery End (YYYY-MM-DD)',
-      'Contract Qty (MT)','Late Indicator',
-      'Quantity Sent via Trucking (Based on Surat Jalan) (MT)','Quantity Delivered via Trucking (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Trucking OA Budget at Starting Location','Trucking OA Actual at Starting Location',
+      'Contract Qty (Kg)','Late Indicator',
+      'Quantity Sent via Trucking (Based on Surat Jalan) (Kg)','Quantity Delivered via Trucking (Kg)','Gain/Loss %','Gain/Loss Amount (Kg)','Trucking OA Budget at Starting Location','Trucking OA Actual at Starting Location',
       'Contract Number','STO Number','Supplier','Product','Group'
     ]
 
@@ -416,8 +746,8 @@ function TruckingPageContent() {
         t.trucking_start_date?.substring(0,10) || '', t.trucking_completion_date?.substring(0,10) || '',
         t.eta_trucking_start_date?.substring(0,10) || '', t.eta_trucking_completion_date?.substring(0,10) || '',
         t.delivery_start_date?.substring(0,10) || '', t.delivery_end_date?.substring(0,10) || '',
-        t.contract_qty ?? '', getLateIndicator(t).text,
-        t.quantity_sent ?? '', t.quantity_delivered ?? '', t.gain_loss_percentage ?? '', t.gain_loss_amount ?? '', t.oa_budget ?? '', t.oa_actual ?? '',
+        toKg(t.contract_qty ?? ''), getLateIndicator(t).text,
+        toKg(t.quantity_sent ?? ''), toKg(t.quantity_delivered ?? ''), t.gain_loss_percentage ?? '', toKg(t.gain_loss_amount ?? ''), t.oa_budget ?? '', t.oa_actual ?? '',
         t.contract_number || '', t.sto_number || '', t.supplier || '', t.product || '', t.group_name || ''
       ].join(','))
     }
@@ -534,7 +864,9 @@ function TruckingPageContent() {
 
   const formatNumber = (num: number | string) => {
     if (num === null || num === undefined || num === '') return '-'
-    const number = typeof num === 'string' ? parseFloat(num) : num
+    const raw = typeof num === 'string' ? num : String(num)
+    const cleaned = raw.replace(/,/g, '').replace(/\s+/g, '')
+    const number = typeof num === 'string' ? parseFloat(cleaned) : num
     if (isNaN(number)) return '-'
     if (number === 0) return '0'
     return number.toLocaleString('en-US', { 
@@ -542,6 +874,21 @@ function TruckingPageContent() {
       maximumFractionDigits: 2,
       useGrouping: true
     })
+  }
+
+  const toKg = (mt: number | string | null | undefined) => {
+    if (mt === null || mt === undefined || mt === '') return null
+    const raw = typeof mt === 'string' ? mt : String(mt)
+    const cleaned = raw.replace(/,/g, '').replace(/\s+/g, '')
+    const n = typeof mt === 'string' ? parseFloat(cleaned) : (mt as number)
+    if (!Number.isFinite(n)) return null
+    return n
+  }
+
+  const formatKg = (mt: number | string | null | undefined) => {
+    const n = toKg(mt)
+    if (n === null) return '-'
+    return `${formatNumber(n)} Kg`
   }
 
   const formatDate = (dateStr: string) => {
@@ -816,7 +1163,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.sto_quantity || 0,
       render: (o) => (
         <span className="text-sm break-words">
-          {formatNumber(o.sto_quantity || 0)} MT
+          {formatKg(o.sto_quantity || 0)}
         </span>
       )
     },
@@ -870,37 +1217,37 @@ function TruckingPageContent() {
     },
     {
       id: 'quantity_sent',
-      label: 'Qty Sent (MT)',
+      label: 'Qty Sent (Kg)',
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.quantity_sent || 0,
       render: (o) => (
         <span className="text-sm break-words">
-          {formatNumber(o.quantity_sent)} MT
+          {formatKg(o.quantity_sent)}
         </span>
       )
     },
     {
       id: 'quantity_delivered',
-      label: 'Quantity Delivery (MT)',
+      label: 'Quantity Delivery (Kg)',
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.quantity_delivered || 0,
       render: (o) => (
         <span className="text-sm break-words">
-          {formatNumber(o.quantity_delivered)} MT
+          {formatKg(o.quantity_delivered)}
         </span>
       )
     },
     {
       id: 'quantity_receive',
-      label: 'Quantity Receive (MT)',
+      label: 'Quantity Receive (Kg)',
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.quantity_receive || o.quantity_delivered || 0,
       render: (o) => (
         <span className="text-sm break-words">
-          {formatNumber(o.quantity_receive || o.quantity_delivered)} MT
+          {formatKg(o.quantity_receive || o.quantity_delivered)}
         </span>
       )
     },
@@ -918,13 +1265,13 @@ function TruckingPageContent() {
     },
     {
       id: 'gain_loss_amount',
-      label: 'Gain/Loss Amount (MT)',
+      label: 'Gain/Loss Amount (Kg)',
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.gain_loss_amount || 0,
       render: (o) => (
         <span className="text-sm break-words">
-          {formatNumber(o.gain_loss_amount)} MT
+          {formatKg(o.gain_loss_amount)}
         </span>
       )
     },
@@ -1044,7 +1391,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.contract_qty || 0,
       render: (o) => (
         <span className="text-sm break-words">
-          {formatNumber(o.contract_qty || 0)} MT
+          {formatKg(o.contract_qty || 0)}
         </span>
       )
     },
@@ -1497,7 +1844,11 @@ function TruckingPageContent() {
             </div>
           </CardHeader>
           <CardContent>
-            {loading ? (
+            {showCreateForm ? (
+              <div className="text-center py-8 text-gray-500">
+                Create form is open. Close it to view the trucking list.
+              </div>
+            ) : loading ? (
               <div className="text-center py-8">Loading trucking operations...</div>
             ) : sortedOperations.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
@@ -1945,12 +2296,12 @@ function TruckingPageContent() {
                                         <div className="font-medium">{operation.unloading_location || '-'}</div>
                                       </div>
                                       <div>
-                                        <div className="text-gray-500">Quantity Delivery (MT)</div>
-                                        <div className="font-medium">{formatNumber(operation.quantity_delivered)} MT</div>
+                                        <div className="text-gray-500">Quantity Delivery (Kg)</div>
+                                        <div className="font-medium">{formatKg(operation.quantity_delivered)}</div>
                                       </div>
                                       <div>
-                                        <div className="text-gray-500">Quantity Receive (MT)</div>
-                                        <div className="font-medium">{formatNumber(operation.quantity_receive || operation.quantity_delivered)} MT</div>
+                                        <div className="text-gray-500">Quantity Receive (Kg)</div>
+                                        <div className="font-medium">{formatKg(operation.quantity_receive || operation.quantity_delivered)}</div>
                                       </div>
                                     </div>
                                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3 pb-3 border-b">
@@ -1973,7 +2324,7 @@ function TruckingPageContent() {
                                     </div>
                                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3 pb-3 border-b">
                                       <div>
-                                        <div className="text-gray-500">Gain/Loss Amount (MT)</div>
+                                        <div className="text-gray-500">Gain/Loss Amount (Kg)</div>
                                         {isEditing ? (
                                           <Input
                                             type="number"
@@ -1983,7 +2334,7 @@ function TruckingPageContent() {
                                             className="h-8 text-sm mt-1"
                                           />
                                         ) : (
-                                          <div className="font-medium">{formatNumber(operation.gain_loss_amount)} MT</div>
+                                          <div className="font-medium">{formatKg(operation.gain_loss_amount)}</div>
                                         )}
                                       </div>
                                       <div>
@@ -2178,7 +2529,7 @@ function TruckingPageContent() {
                             )}
                           </div>
                           <div>
-                            <div className="text-gray-500 mb-1">Quantity Sent (MT)</div>
+                            <div className="text-gray-500 mb-1">Quantity Sent (Kg)</div>
                             {isEditing ? (
                               <Input
                                 type="number"
@@ -2192,7 +2543,7 @@ function TruckingPageContent() {
                             )}
                           </div>
                           <div>
-                            <div className="text-gray-500 mb-1">Quantity Delivered (MT)</div>
+                            <div className="text-gray-500 mb-1">Quantity Delivered (Kg)</div>
                             {isEditing ? (
                               <Input
                                 type="number"
@@ -2224,7 +2575,7 @@ function TruckingPageContent() {
                             )}
                           </div>
                           <div>
-                            <div className="text-gray-500 mb-1">Gain/Loss Amount (MT)</div>
+                            <div className="text-gray-500 mb-1">Gain/Loss Amount (Kg)</div>
                             {isEditing ? (
                               <Input
                                 type="number"
@@ -2348,6 +2699,19 @@ function TruckingPageContent() {
                   )
                 })}
               </div>
+
+                {hasMore && (
+                  <div className="flex justify-center pt-6">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={loading}
+                      onClick={() => setPage((p) => p + 1)}
+                    >
+                      {loading ? 'Loading…' : 'Load more'}
+                    </Button>
+                  </div>
+                )}
                 </>
             )}
           </CardContent>
@@ -2395,247 +2759,7 @@ function TruckingPageContent() {
         </div>
       )}
 
-      {/* Create New Trucking Operation Modal */}
-      {showCreateForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-semibold">Create New Trucking Operation</h3>
-              <Button variant="ghost" onClick={handleCancelCreate}>
-                <X className="h-5 w-5" />
-              </Button>
-            </div>
-
-            <div className="space-y-4">
-              {/* Contract Number with Validation */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Contract Number <span className="text-red-500">*</span>
-                </label>
-                <div className="flex gap-2">
-                  <Input
-                    value={newOperation.contract_number}
-                    onChange={(e) => handleContractNumberChange(e.target.value)}
-                    onBlur={() => validateContractNumber(newOperation.contract_number)}
-                    className={`flex-1 ${
-                      contractValidation.exists 
-                        ? 'border-green-500' 
-                        : contractValidation.message && !contractValidation.checking
-                        ? 'border-red-500'
-                        : ''
-                    }`}
-                    placeholder="Enter contract number"
-                  />
-                  {contractValidation.checking && (
-                    <Loader2 className="h-5 w-5 animate-spin text-gray-400 self-center" />
-                  )}
-                  {!contractValidation.checking && contractValidation.exists && (
-                    <Check className="h-5 w-5 text-green-500 self-center" />
-                  )}
-                  {!contractValidation.checking && contractValidation.message && !contractValidation.exists && (
-                    <X className="h-5 w-5 text-red-500 self-center" />
-                  )}
-                </div>
-                {contractValidation.message && (
-                  <p className={`text-xs mt-1 ${
-                    contractValidation.exists ? 'text-green-600' : 'text-red-600'
-                  }`}>
-                    {contractValidation.message}
-                  </p>
-                )}
-                {contractValidation.exists && contractValidation.contractData && (
-                  <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-xs">
-                    <div className="grid grid-cols-2 gap-2">
-                      <div><span className="font-semibold">STO Number:</span> {contractValidation.contractData.sto_number || '-'}</div>
-                      <div><span className="font-semibold">Supplier:</span> {contractValidation.contractData.supplier || '-'}</div>
-                      <div><span className="font-semibold">Product:</span> {contractValidation.contractData.product || '-'}</div>
-                      <div><span className="font-semibold">Group:</span> {contractValidation.contractData.group_name || '-'}</div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Basic Information */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Operation ID</label>
-                  <Input
-                    value={newOperation.operation_id}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, operation_id: e.target.value }))}
-                    placeholder="Auto-generated if empty"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-                  <select
-                    value={newOperation.status}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, status: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="PLANNED">PLANNED</option>
-                    <option value="IN_PROGRESS">IN_PROGRESS</option>
-                    <option value="LOADING">LOADING</option>
-                    <option value="IN_TRANSIT">IN_TRANSIT</option>
-                    <option value="UNLOADING">UNLOADING</option>
-                    <option value="COMPLETED">COMPLETED</option>
-                    <option value="CANCELLED">CANCELLED</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Location Information */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Location</label>
-                  <Input
-                    value={newOperation.location}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, location: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Truck Loading Location</label>
-                  <Input
-                    value={newOperation.loading_location}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, loading_location: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Truck Discharge Location</label>
-                  <Input
-                    value={newOperation.unloading_location}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, unloading_location: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Trucking Owner</label>
-                  <Input
-                    value={newOperation.trucking_owner}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, trucking_owner: e.target.value }))}
-                  />
-                </div>
-              </div>
-
-              {/* Quantity Information */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Quantity Sent (MT)</label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={newOperation.quantity_sent}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, quantity_sent: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Quantity Delivered (MT)</label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={newOperation.quantity_delivered}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, quantity_delivered: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Gain/Loss %</label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={newOperation.gain_loss_percentage}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, gain_loss_percentage: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Gain/Loss Amount (MT)</label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={newOperation.gain_loss_amount}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, gain_loss_amount: e.target.value }))}
-                  />
-                </div>
-              </div>
-
-              {/* OA Information */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Trucking OA Budget</label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={newOperation.oa_budget}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, oa_budget: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Trucking OA Actual</label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={newOperation.oa_actual}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, oa_actual: e.target.value }))}
-                  />
-                </div>
-              </div>
-
-              {/* Date Information */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Cargo Readiness Date</label>
-                  <Input
-                    type="date"
-                    value={newOperation.cargo_readiness_date}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, cargo_readiness_date: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Trucking Start Receive Date</label>
-                  <Input
-                    type="date"
-                    value={newOperation.trucking_start_date}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, trucking_start_date: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Trucking Last Receive Date</label>
-                  <Input
-                    type="date"
-                    value={newOperation.trucking_completion_date}
-                    onChange={(e) => setNewOperation(prev => ({ ...prev, trucking_completion_date: e.target.value }))}
-                  />
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex justify-end gap-2 pt-4 border-t">
-                <Button
-                  variant="outline"
-                  onClick={handleCancelCreate}
-                  disabled={creating}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleCreateOperation}
-                  disabled={creating || !contractValidation.exists}
-                  className="bg-blue-600 hover:bg-blue-700"
-                >
-                  {creating ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Creating...
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Create Operation
-                    </>
-                  )}
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <CreateTruckingOperationModal open={showCreateForm} onClose={() => setShowCreateForm(false)} onCreated={handleCreated} />
     </Layout>
   )
 }

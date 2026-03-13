@@ -24,6 +24,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Loader2, RefreshCw } from 'lucide-react'
 import api from '@/lib/api'
+import { formatRupiah } from '@/lib/utils'
 
 type PaymentStatus = 'PENDING' | 'PARTIAL' | 'PAID' | 'OVERDUE'
 
@@ -77,13 +78,9 @@ const statusColors: Record<string, string> = {
   OVERDUE: 'bg-red-100 text-red-800',
 }
 
-const formatAmount = (value: number | null | undefined, currency = 'USD') => {
+const formatAmount = (value: number | null | undefined) => {
   if (value === null || value === undefined) return '-'
-  return Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency,
-    minimumFractionDigits: 2,
-  }).format(value)
+  return formatRupiah(value)
 }
 
 const formatDate = (value: string | null) => {
@@ -241,7 +238,7 @@ export default function FinancePage() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-3xl font-semibold text-gray-900">
-                    {formatAmount(summary?.totals.totalAmount || 0, latestCurrency)}
+                    {formatAmount(summary?.totals.totalAmount || 0)}
                   </div>
                   <p className="text-sm text-gray-500 mt-2">{summary?.totals.totalRecords || 0} records</p>
                 </CardContent>
@@ -253,7 +250,7 @@ export default function FinancePage() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-3xl font-semibold text-yellow-600">
-                    {formatAmount(summary?.totals.pendingAmount || 0, latestCurrency)}
+                    {formatAmount(summary?.totals.pendingAmount || 0)}
                   </div>
                   <p className="text-sm text-gray-500 mt-2">Awaiting payment confirmation</p>
                 </CardContent>
@@ -265,7 +262,7 @@ export default function FinancePage() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-3xl font-semibold text-green-600">
-                    {formatAmount(summary?.totals.paidAmount || 0, latestCurrency)}
+                    {formatAmount(summary?.totals.paidAmount || 0)}
                   </div>
                   <p className="text-sm text-gray-500 mt-2">Completed payments</p>
                 </CardContent>
@@ -277,7 +274,7 @@ export default function FinancePage() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-3xl font-semibold text-red-600">
-                    {formatAmount(summary?.totals.overdueAmount || 0, latestCurrency)}
+                    {formatAmount(summary?.totals.overdueAmount || 0)}
                   </div>
                   <p className="text-sm text-gray-500 mt-2">Require immediate attention</p>
                 </CardContent>
@@ -329,7 +326,7 @@ export default function FinancePage() {
                         <p className="text-xs text-gray-500">{item.count} payments</p>
                       </div>
                       <span className="text-sm font-semibold text-gray-900">
-                        {formatAmount(item.amount || 0, latestCurrency)}
+                        {formatAmount(item.amount || 0)}
                       </span>
                     </div>
                   ))}
@@ -386,7 +383,7 @@ export default function FinancePage() {
                               <div className="text-sm text-gray-900">{payment.supplier || '-'}</div>
                             </TableCell>
                             <TableCell className="text-right font-semibold text-gray-900">
-                              {formatAmount(payment.payment_amount, payment.currency || latestCurrency)}
+                              {formatAmount(payment.payment_amount)}
                             </TableCell>
                             <TableCell>{formatDate(payment.due_date_payment ?? null)}</TableCell>
                             <TableCell>{formatDate(payment.dp_date ?? null)}</TableCell>

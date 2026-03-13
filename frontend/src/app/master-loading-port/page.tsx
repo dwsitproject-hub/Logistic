@@ -236,7 +236,7 @@ export default function MasterLoadingPortPage() {
           dwt: get('dwt') || null,
           siklus_pasang: get('siklus pasang') || null,
           loading_method: get('loading method') || null,
-          loading_rate_mt_per_hour: numOrNull(col(COL.P) || get('loading rate (mt/hour)')),
+          loading_rate_mt_per_hour: numOrNull(col(COL.P) || get('loading rate (mt/hour)') || get('loading rate (kg/hour)')),
           shipper: get('shipper') || null,
         }
       })
@@ -454,7 +454,7 @@ export default function MasterLoadingPortPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Loading Rate (MT/hour)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Loading Rate (Kg/hour)</label>
                   <Input
                     type="number"
                     value={form.loading_rate_mt_per_hour ?? ''}
@@ -520,7 +520,7 @@ export default function MasterLoadingPortPage() {
                       <th className="text-left px-3 py-2 font-medium">DWT</th>
                       <th className="text-left px-3 py-2 font-medium">Siklus Pasang</th>
                       <th className="text-left px-3 py-2 font-medium">Loading Method</th>
-                      <th className="text-left px-3 py-2 font-medium">Loading Rate (MT/hour)</th>
+                      <th className="text-left px-3 py-2 font-medium">Loading Rate (Kg/hour)</th>
                       <th className="text-left px-3 py-2 font-medium">Shipper</th>
                       <th className="text-right px-3 py-2 font-medium">Actions</th>
                     </tr>

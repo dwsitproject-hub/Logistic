@@ -1409,18 +1409,32 @@ export const getContractSuggestions = async (req: AuthRequest, res: Response) =>
     }
 
     const result = await query(`
+      WITH latest_spd AS (
+        SELECT DISTINCT ON (spd.contract_number)
+          spd.contract_number,
+          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no
+        FROM sap_processed_data spd
+        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      )
       SELECT 
-        contract_id,
-        po_number,
-        supplier,
-        product,
-        group_name,
-        sto_number,
-        sto_quantity
-      FROM contracts 
-      WHERE UPPER(COALESCE(status, '')) IN ('OPEN', 'ACTIVE')
-        AND (contract_id ILIKE $1 OR po_number ILIKE $1)
-      ORDER BY contract_id
+        c.contract_id,
+        l.contract_ext_no,
+        c.po_number,
+        c.supplier,
+        c.product,
+        c.group_name,
+        c.sto_number,
+        c.sto_quantity
+      FROM contracts c
+      LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+      WHERE UPPER(COALESCE(c.status, '')) IN ('OPEN', 'ACTIVE')
+        AND (
+          c.contract_id ILIKE $1
+          OR c.po_number ILIKE $1
+          OR COALESCE(l.contract_ext_no, '') ILIKE $1
+        )
+      ORDER BY COALESCE(l.contract_ext_no, c.contract_id)
       LIMIT 10
     `, [`%${q}%`]);
 
@@ -1449,10 +1463,30 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       });
     }
 
+    const raw = String(contract_number).trim();
     const result = await query(
-      `SELECT 
+      `
+      WITH latest_spd AS (
+        SELECT DISTINCT ON (spd.contract_number)
+          spd.contract_number,
+          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no
+        FROM sap_processed_data spd
+        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      ),
+      matched AS (
+        SELECT c.*
+        FROM contracts c
+        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        WHERE c.contract_id = $1
+           OR COALESCE(l.contract_ext_no, '') = $1
+        ORDER BY (c.contract_id = $1) DESC
+        LIMIT 1
+      )
+      SELECT 
         c.id,
         c.contract_id,
+        l.contract_ext_no,
         c.sto_number,
         c.supplier,
         c.buyer,
@@ -1492,10 +1526,11 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
           ORDER BY spd.created_at DESC NULLS LAST
           LIMIT 1
         ), ''), '0.00') as port_of_discharge
-       FROM contracts c
-       WHERE c.contract_id = $1
-       LIMIT 1`,
-      [contract_number]
+      FROM matched c
+      LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+      LIMIT 1
+      `,
+      [raw]
     );
 
     if (result.rows.length === 0) {
