@@ -27,6 +27,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: klip-backend
+    env_file:
+      - ./backend/.env
     environment:
       NODE_ENV: production
       PORT: 5001
