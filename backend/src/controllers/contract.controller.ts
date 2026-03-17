@@ -43,6 +43,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           MAX(c.supplier) AS supplier,
           MAX(c.group_name) AS group_name,
           MAX(c.product) AS product,
+          MAX(c.company_name) AS company_name,
           MAX(c.quantity_ordered) AS quantity_ordered,
           MAX(c.unit) AS unit,
           MAX(c.contract_date) AS contract_date,
@@ -66,7 +67,13 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           (array_agg(s.sto_numbers ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS sto_numbers_agg,
           (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
           (array_agg(s.sto_count ORDER BY s.sto_count DESC NULLS LAST))[1] AS sto_count,
-          COUNT(DISTINCT c.po_number) FILTER (WHERE c.po_number IS NOT NULL) AS po_count
+          COUNT(DISTINCT c.po_number) FILTER (WHERE c.po_number IS NOT NULL) AS po_count,
+          -- For Log Cycle calculation (LAND): earliest and latest trucking dates
+          (SELECT MIN(t.trucking_start_date) FROM trucking_operations t WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]) AS first_trucking_start_date,
+          (SELECT MAX(t.trucking_completion_date) FROM trucking_operations t WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]) AS last_trucking_completion_date,
+          -- For Log Cycle calculation (SEA): earliest ATA loading complete and latest ATA discharge complete
+          (SELECT MIN(s2.ata_loading_complete::date) FROM shipments s2 WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1] AND s2.ata_loading_complete IS NOT NULL) AS first_ata_vessel_completed_loading,
+          (SELECT MAX(s2.ata_discharge_complete::date) FROM shipments s2 WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1] AND s2.ata_discharge_complete IS NOT NULL) AS last_ata_vessel_complete_discharge
         FROM contracts c
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
@@ -77,6 +84,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         base.contract_id,
         base.id,
         base.buyer,
+        COALESCE(NULLIF(TRIM(base.company_name), ''), COALESCE(base.latest_spd_data->'raw'->>'Buyer', base.latest_spd_data->>'Buyer')) AS company_name,
         base.supplier,
         base.group_name,
         base.product,
@@ -122,7 +130,11 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         (SELECT (p.payoff_date::date - p.payment_due_date::date) FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id AND p.payoff_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS payoff_date_deviation_fb,
         (SELECT COUNT(*) FROM trucking_operations t WHERE t.contract_id = base.id) AS trucking_count,
         (SELECT COUNT(*) FROM shipments s WHERE s.contract_id = base.id) AS shipment_count,
-        (SELECT COUNT(*) FROM documents d WHERE d.contract_id = base.id) AS document_count
+        (SELECT COUNT(*) FROM documents d WHERE d.contract_id = base.id) AS document_count,
+        base.first_trucking_start_date,
+        base.last_trucking_completion_date,
+        base.first_ata_vessel_completed_loading,
+        base.last_ata_vessel_complete_discharge
       FROM base
       WHERE 1=1
     `;
@@ -241,6 +253,62 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       out.setUTCDate(out.getUTCDate() + days);
       return out;
     };
+    const diffInDays = (start: unknown, end: unknown): number | null => {
+      const s = due(start);
+      const e = due(end);
+      if (!s || !e) return null;
+      const msPerDay = 24 * 60 * 60 * 1000;
+      const sMid = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+      const eMid = new Date(e.getFullYear(), e.getMonth(), e.getDate());
+      return Math.round((eMid.getTime() - sMid.getTime()) / msPerDay);
+    };
+
+    // Apply B2B origin company name override (in-memory) so UI sees correct company_name even before backfill runs.
+    const b2bOriginIds: string[] = [];
+    for (const row of result.rows) {
+      const typeText = String(row.contract_type || row.b2b_flag || '').toUpperCase();
+      const refPo = String(row.contract_reference_po || '').trim();
+      if (typeText === 'B2B' && refPo === '') {
+        b2bOriginIds.push(String(row.contract_id));
+      }
+    }
+
+    let b2bOriginCompany: Record<string, string> = {};
+    if (b2bOriginIds.length > 0) {
+      const q = `
+        WITH latest_spd AS (
+          SELECT DISTINCT ON (contract_number) contract_number, data, created_at
+          FROM sap_processed_data
+          WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
+          ORDER BY contract_number, created_at DESC NULLS LAST
+        ),
+        origin AS (
+          SELECT unnest($1::text[]) AS origin_contract_id
+        ),
+        children AS (
+          SELECT
+            o.origin_contract_id,
+            c2.contract_date,
+            COALESCE(NULLIF(TRIM(c2.company_name), ''), l2.data->'raw'->>'Buyer', l2.data->>'Buyer', '') AS company_name
+          FROM origin o
+          JOIN contracts c2 ON 1=1
+          LEFT JOIN latest_spd l2 ON l2.contract_number = c2.contract_id
+          WHERE NULLIF(TRIM(COALESCE(l2.data->'contract'->>'contract_reference_po', l2.data->>'CONTRACT REFF PO')), '') = o.origin_contract_id
+        )
+        SELECT DISTINCT ON (origin_contract_id)
+          origin_contract_id,
+          company_name
+        FROM children
+        WHERE company_name != ''
+        ORDER BY origin_contract_id, contract_date DESC NULLS LAST
+      `;
+      const r = await query(q, [b2bOriginIds]);
+      b2bOriginCompany = (r.rows || []).reduce((acc: Record<string, string>, row: any) => {
+        acc[String(row.origin_contract_id)] = String(row.company_name);
+        return acc;
+      }, {});
+    }
+
     for (const row of result.rows) {
       row.due_date_payment = due(row.due_date_payment_raw) ?? due(row.due_date_payment_fb) ?? row.due_date_payment;
       row.dp_date = due(row.dp_date_raw) ?? due(row.dp_date_fb) ?? row.dp_date;
@@ -266,6 +334,95 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       delete (row as any).payoff_date_fb;
       delete (row as any).dp_date_deviation_fb;
       delete (row as any).payoff_date_deviation_fb;
+
+      // Compute Over/Under Delivery Status for UI
+      const statusText = String(row.status || row.import_status || '').toUpperCase();
+      const qtyOrdered = typeof row.quantity_ordered === 'number' ? row.quantity_ordered : Number(row.quantity_ordered) || 0;
+      const stoTotal = typeof row.total_sto_quantity === 'number' ? row.total_sto_quantity : Number(row.total_sto_quantity) || 0;
+      let overUnder: string = '-';
+      if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
+        if (stoTotal > qtyOrdered) {
+          overUnder = 'Over Delivery';
+        } else if (stoTotal < qtyOrdered) {
+          overUnder = 'Under Delivery';
+        } else {
+          overUnder = 'Passed';
+        }
+      }
+      (row as any).over_under_delivery_status = overUnder;
+
+      // Compute Log Cycle (days) based on transport mode and status
+      const transport = String(row.transport_mode || '').toUpperCase();
+      let logCycle: number | null = null;
+      const today = new Date();
+      const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+      const firstTruck = row.first_trucking_start_date;
+      const lastTruck = row.last_trucking_completion_date;
+      const firstAtaLoad = row.first_ata_vessel_completed_loading;
+      const lastAtaDischarge = row.last_ata_vessel_complete_discharge;
+
+      if (transport.startsWith('LAND')) {
+        if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
+          // Land + Close: earliest trucking start to latest trucking completion
+          const d = diffInDays(firstTruck, lastTruck);
+          if (d != null) logCycle = d;
+        } else if (statusText === 'OPEN' || statusText === 'ACTIVE') {
+          // Land + Open: earliest trucking start to today
+          const d = diffInDays(firstTruck, todayMid.toISOString());
+          if (d != null) logCycle = d;
+        }
+      } else if (transport.startsWith('SEA')) {
+        if (statusText === 'OPEN' || statusText === 'ACTIVE') {
+          // Sea + Open: earliest ATA loading complete to today
+          const d = diffInDays(firstAtaLoad, todayMid.toISOString());
+          if (d != null) logCycle = d;
+        } else if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
+          // Sea + Close: earliest ATA loading complete to latest ATA discharge complete
+          const d = diffInDays(firstAtaLoad, lastAtaDischarge);
+          if (d != null) logCycle = d;
+        }
+      }
+
+      (row as any).log_cycle_days = logCycle;
+
+      // Compute Trade Cycle (days): DP Date minus current date or latest receive/discharge
+      const dpDate = row.dp_date ? due(row.dp_date) : null;
+      let tradeCycle: number | null = null;
+      if (dpDate) {
+        if (statusText === 'OPEN' || statusText === 'ACTIVE') {
+          // Land or SEA + Open: Trade Cycle = DP Date - Current Date
+          const d = diffInDays(todayMid.toISOString(), dpDate);
+          if (d != null) tradeCycle = d;
+        } else if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
+          if (transport.startsWith('LAND')) {
+            // Land + Close: DP Date - latest Last Receive Date (trucking)
+            const d = diffInDays(lastTruck, dpDate);
+            if (d != null) tradeCycle = d;
+          } else if (transport.startsWith('SEA')) {
+            // SEA + Close: DP Date - latest ATA Vessel Complete Discharge
+            const d = diffInDays(lastAtaDischarge, dpDate);
+            if (d != null) tradeCycle = d;
+          }
+        }
+      }
+      (row as any).trade_cycle_days = tradeCycle;
+
+      // Clean helper fields from response
+      delete (row as any).first_trucking_start_date;
+      delete (row as any).last_trucking_completion_date;
+      delete (row as any).first_ata_vessel_completed_loading;
+      delete (row as any).last_ata_vessel_complete_discharge;
+
+      // B2B origin company name override
+      const typeText = String(row.contract_type || row.b2b_flag || '').toUpperCase();
+      const refPo = String(row.contract_reference_po || '').trim();
+      if (typeText === 'B2B' && refPo === '') {
+        const override = b2bOriginCompany[String(row.contract_id)];
+        if (override) {
+          (row as any).company_name = override;
+        }
+      }
     }
 
     // Debug logging
@@ -702,12 +859,27 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       return 'On Time';
     };
 
-    // Shipment STOs: group by sto_key (COALESCE(contract.sto_number, operation_id, shipment_id))
+    // Shipment STOs: group by effective STO (prefer contracts.sto_number, then latest SAP STO, then operation/shipment ids)
     const shipmentStosQuery = `
-      WITH shipment_base AS (
+      WITH latest_spd_contract AS (
+        SELECT DISTINCT ON (spd.contract_number)
+          spd.contract_number,
+          NULLIF(TRIM(COALESCE(
+            spd.sto_number::text,
+            spd.data->'raw'->>'STO No.',
+            spd.data->'raw'->>'STO Number',
+            spd.data->'shipment'->>'sto_no',
+            spd.data->'contract'->>'sto_no'
+          )), '') AS effective_sto,
+          spd.created_at
+        FROM sap_processed_data spd
+        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      ),
+      shipment_base AS (
         SELECT
-          COALESCE(c.sto_number, s.operation_id, s.shipment_id) AS sto_key,
-          MAX(c.sto_number) AS sto_number,
+          COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id) AS sto_key,
+          MAX(COALESCE(c.sto_number::text, l.effective_sto)) AS sto_number,
           MAX(s.operation_id) AS operation_id,
           MAX(s.status) AS status,
           COALESCE(SUM(s.quantity_delivered), 0) AS quantity_delivered,
@@ -717,8 +889,9 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           MAX((SELECT vlp.eta_vessel_arrival::date FROM vessel_loading_ports vlp WHERE vlp.shipment_id = s.id AND vlp.is_discharge_port = false ORDER BY vlp.port_sequence ASC LIMIT 1)) AS eta_loading_port
         FROM shipments s
         LEFT JOIN contracts c ON s.contract_id = c.id
+        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
         WHERE s.contract_id = $1
-        GROUP BY COALESCE(c.sto_number, s.operation_id, s.shipment_id)
+        GROUP BY COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id)
       )
       SELECT
         sb.sto_key,
@@ -738,10 +911,30 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
     `;
     const shipmentRows = await query(shipmentStosQuery, [id]);
 
-    // Trucking STOs: one row per trucking operation
+    // Trucking STOs: one row per trucking operation, but show SAP aggregated STO numbers when contracts.sto_number is empty/partial
     const truckingStosQuery = `
+      WITH sto_agg AS (
+        SELECT
+          x.contract_number,
+          STRING_AGG(DISTINCT x.effective_sto, ', ' ORDER BY x.effective_sto) AS sto_numbers
+        FROM (
+          SELECT
+            spd.contract_number,
+            NULLIF(TRIM(COALESCE(
+              spd.sto_number::text,
+              spd.data->'raw'->>'STO No.',
+              spd.data->'raw'->>'STO Number',
+              spd.data->'shipment'->>'sto_no',
+              spd.data->'contract'->>'sto_no'
+            )), '') AS effective_sto
+          FROM sap_processed_data spd
+          WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+        ) x
+        WHERE x.effective_sto IS NOT NULL AND x.effective_sto != ''
+        GROUP BY x.contract_number
+      )
       SELECT
-        COALESCE(c.sto_number, t.operation_id::text, t.id::text) AS sto_number,
+        COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers, t.operation_id::text, t.id::text) AS sto_number,
         t.operation_id,
         t.status,
         c.quantity_ordered AS sto_quantity,
@@ -751,6 +944,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         t.trucking_completion_date
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
+      LEFT JOIN sto_agg sa ON sa.contract_number = c.contract_id
       WHERE t.contract_id = $1
       ORDER BY t.created_at DESC
     `;
@@ -856,6 +1050,53 @@ export const getContractActivityLog = async (req: AuthRequest, res: Response) =>
   } catch (error) {
     logger.error('Get contract activity log error:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to load activity log' } });
+  }
+};
+
+/** Get B2B parties for an "origin" contract: contracts whose contract_reference_po points to this contract_id */
+export const getB2bPartiesForContract = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const contractCheck = await query('SELECT id, contract_id FROM contracts WHERE id = $1', [id]);
+    if (contractCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { message: 'Contract not found' } });
+    }
+    const originContractId = contractCheck.rows[0].contract_id;
+
+    const q = `
+      WITH latest_spd AS (
+        SELECT DISTINCT ON (contract_number) contract_number, data, created_at
+        FROM sap_processed_data
+        WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
+        ORDER BY contract_number, created_at DESC NULLS LAST
+      )
+      SELECT
+        c.contract_id,
+        c.contract_date,
+        STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') AS po_numbers,
+        COALESCE(l.data->'raw'->>'Contract Ext No', l.data->>'Contract Ext No') AS contract_ext_no,
+        COALESCE(NULLIF(TRIM(c.company_name), ''), l.data->'raw'->>'Buyer', l.data->>'Buyer') AS company_name,
+        c.supplier,
+        COALESCE(NULLIF(TRIM(c.incoterm), ''), l.data->'contract'->>'incoterm', l.data->>'Incoterm') AS incoterm,
+        COALESCE(
+          l.data->'raw'->>'Certification',
+          l.data->'raw'->>'certification',
+          l.data->>'Certification',
+          l.data->>'certification'
+        ) AS certification
+      FROM contracts c
+      LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+      WHERE NULLIF(TRIM(COALESCE(l.data->'contract'->>'contract_reference_po', l.data->>'CONTRACT REFF PO')), '') = $1
+      GROUP BY c.contract_id, c.contract_date, contract_ext_no, company_name, c.supplier, incoterm, certification
+      ORDER BY c.contract_date DESC NULLS LAST
+      LIMIT 200
+    `;
+    const result = await query(q, [originContractId]);
+
+    return res.json({ success: true, data: result.rows });
+  } catch (error) {
+    logger.error('Get B2B parties error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load B2B parties' } });
   }
 };
 

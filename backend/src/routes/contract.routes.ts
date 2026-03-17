@@ -5,6 +5,7 @@ import {
   getContract,
   getContractStoInformation,
   getContractActivityLog,
+  getB2bPartiesForContract,
   createContract,
   updateContract,
 } from '../controllers/contract.controller';
@@ -70,6 +71,7 @@ router.get('/unassigned-counts', getUnassignedCounts);
  */
 router.get('/:id/sto-information', getContractStoInformation);
 router.get('/:id/activity-log', getContractActivityLog);
+router.get('/:id/b2b-parties', getB2bPartiesForContract);
 router.get('/:id', getContract);
 
 /**

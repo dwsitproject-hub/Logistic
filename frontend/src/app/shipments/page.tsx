@@ -296,6 +296,8 @@ function ShipmentsPageContent() {
     delivery_end_date?: string | null
     quantity_delivered?: number
     quantity_receive?: number
+    contract_ext_no?: string | null
+    locked_from_sap?: boolean
   }> }>({})
   const [loadingContractDetails, setLoadingContractDetails] = useState<{ [shipmentId: string]: boolean }>({})
   const [savingStoQty, setSavingStoQty] = useState<{ [key: string]: boolean }>({})
@@ -1325,19 +1327,21 @@ function ShipmentsPageContent() {
         const stoNumber = String(stoForDetails)
         const response = await api.get(`/shipments/contracts/details?sto=${encodeURIComponent(stoNumber)}&contractNumbers=${contractNumbers.join(',')}`)
       
-      if (response.data.success && response.data.data.length > 0) {
-        const details = response.data.data.map((detail: any) => ({
-          contract_number: detail.contract_number,
-          contract_qty: detail.contract_qty || 0,
-          outstanding_qty: detail.outstanding_qty || 0,
-          sto_qty_assigned: detail.sto_qty_assigned || 0,
-          po_number: detail.po_number || '',
-          delivery_start_date: detail.delivery_start_date || null,
-          delivery_end_date: detail.delivery_end_date || null,
-          quantity_delivered: detail.quantity_delivered || 0,
-          quantity_receive: detail.quantity_receive || 0
-        }))
-        setContractDetailsMap(prev => ({ ...prev, [shipment.id]: details }))
+        if (response.data.success && response.data.data.length > 0) {
+          const details = response.data.data.map((detail: any) => ({
+            contract_number: detail.contract_number,
+            contract_qty: detail.contract_qty || 0,
+            outstanding_qty: detail.outstanding_qty || 0,
+            sto_qty_assigned: detail.sto_qty_assigned || 0,
+            po_number: detail.po_number || '',
+            delivery_start_date: detail.delivery_start_date || null,
+            delivery_end_date: detail.delivery_end_date || null,
+            quantity_delivered: detail.quantity_delivered || 0,
+            quantity_receive: detail.quantity_receive || 0,
+            contract_ext_no: detail.contract_ext_no || null,
+            locked_from_sap: Boolean(detail.locked_from_sap)
+          }))
+          setContractDetailsMap(prev => ({ ...prev, [shipment.id]: details }))
           return
         }
       }
@@ -1351,26 +1355,30 @@ function ShipmentsPageContent() {
               if (contractResponse.data.success && contractResponse.data.data.contracts.length > 0) {
                 const contract = contractResponse.data.data.contracts[0]
                 return {
-                contract_number: trimmed,
+                  contract_number: trimmed,
                   contract_qty: contract.quantity_ordered || 0,
                   outstanding_qty: contract.outstanding_quantity || 0,
-                sto_qty_assigned: 0,
+                  sto_qty_assigned: 0,
                   po_number: contract.po_numbers || contract.po_number || '',
                   delivery_start_date: contract.delivery_start_date || null,
-                  delivery_end_date: contract.delivery_end_date || null
+                  delivery_end_date: contract.delivery_end_date || null,
+                  contract_ext_no: contract.contract_ext_no || null,
+                  locked_from_sap: false
                 }
               }
             } catch (err) {
             console.error(`Error fetching contract ${trimmed}:`, err)
             }
             return {
-            contract_number: trimmed,
+              contract_number: trimmed,
               contract_qty: 0,
               outstanding_qty: 0,
               sto_qty_assigned: 0,
               po_number: '',
               delivery_start_date: null,
-              delivery_end_date: null
+              delivery_end_date: null,
+              contract_ext_no: null,
+              locked_from_sap: false
             }
           })
         )
@@ -1386,7 +1394,9 @@ function ShipmentsPageContent() {
         sto_qty_assigned: 0,
         po_number: '',
         delivery_start_date: null,
-        delivery_end_date: null
+        delivery_end_date: null,
+        contract_ext_no: null,
+        locked_from_sap: false
       }))
       setContractDetailsMap(prev => ({ ...prev, [shipment.id]: details }))
     } finally {
@@ -3725,6 +3735,7 @@ function ShipmentsPageContent() {
                                         {contractDetailsMap[shipment.id].map((detail, idx) => {
                                           const key = `${shipment.id}-${detail.contract_number}`
                                           const isEditing = editingId === shipment.id
+                                          const lockedFromSap = detail.locked_from_sap
                                           const displayValue = isEditing 
                                             ? (editedContractDetails[key] ?? detail.sto_qty_assigned ?? 0)
                                             : (detail.sto_qty_assigned ?? 0)
@@ -3734,6 +3745,10 @@ function ShipmentsPageContent() {
                                               <div>
                                                 <div className="text-gray-500">Contract Number</div>
                                                 <div className="font-medium">{detail.contract_number}</div>
+                                              </div>
+                                              <div>
+                                                <div className="text-gray-500">Contract Ext No</div>
+                                                <div className="font-medium">{detail.contract_ext_no || '-'}</div>
                                               </div>
                                               <div>
                                                 <div className="text-gray-500">Contract Qty</div>
@@ -3748,18 +3763,23 @@ function ShipmentsPageContent() {
                                               <div>
                                                 <div className="text-gray-500 mb-1">Contract Qty assign to STO</div>
                                                 <div className="flex items-center gap-2">
-                                                    {isEditing ? (
-                                                  <Input
-                                                    type="number"
-                                                        value={displayValue}
-                                                    onChange={(e) => {
-                                                      const newValue = parseFloat(e.target.value) || 0
-                                                          setEditedContractDetails(prev => ({ ...prev, [key]: newValue }))
-                                                    }}
-                                                    className="h-8 text-sm w-32"
-                                                  />
-                                                    ) : (
-                                                      <div className="font-medium">{formatNumber(displayValue)} Kg</div>
+                                                  {lockedFromSap ? (
+                                                    <div className="font-medium">
+                                                      {formatNumber(displayValue)} Kg{' '}
+                                                      <span className="text-xs text-gray-500">(from SAP)</span>
+                                                    </div>
+                                                  ) : isEditing ? (
+                                                    <Input
+                                                      type="number"
+                                                      value={displayValue}
+                                                      onChange={(e) => {
+                                                        const newValue = parseFloat(e.target.value) || 0
+                                                        setEditedContractDetails(prev => ({ ...prev, [key]: newValue }))
+                                                      }}
+                                                      className="h-8 text-sm w-32"
+                                                    />
+                                                  ) : (
+                                                    <div className="font-medium">{formatNumber(displayValue)} Kg</div>
                                                   )}
                                                 </div>
                                               </div>
@@ -3919,63 +3939,100 @@ function ShipmentsPageContent() {
                               {/* Contract Details */}
                               {contractDetailsMap[shipment.id] && contractDetailsMap[shipment.id].length > 0 ? (
                                 <div className="space-y-3">
-                                  <div className="text-sm font-semibold text-gray-700 mb-2">Contract Details ({shipment.contract_count} contracts)</div>
-                                  {contractDetailsMap[shipment.id].map((detail, idx) => (
-                                    <div key={idx} className="border rounded p-3 bg-gray-50">
-                                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                                        <div>
-                                          <div className="text-gray-500">Contract Number</div>
-                                          <div className="font-medium">{detail.contract_number}</div>
-                                        </div>
-                                        <div>
-                                          <div className="text-gray-500">Contract Qty</div>
-                                          <div className="font-medium">{formatNumber(detail.contract_qty)} Kg</div>
-                                        </div>
-                                        <div>
-                                          <div className="text-gray-500">Outstanding Qty</div>
-                                          <div className={`font-medium ${detail.outstanding_qty < 0 ? 'text-red-600' : 'text-gray-900'}`}>
-                                            {formatNumber(detail.outstanding_qty)} Kg
+                                  <div className="text-sm font-semibold text-gray-700 mb-2">
+                                    Contract Details ({shipment.contract_count} contracts)
+                                  </div>
+                                  {contractDetailsMap[shipment.id].map((detail, idx) => {
+                                    const lockedFromSap = detail.locked_from_sap
+                                    const key = `${shipment.id}-${detail.contract_number}`
+                                    const currentValue = detail.sto_qty_assigned || 0
+                                    return (
+                                      <div key={idx} className="border rounded p-3 bg-gray-50">
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                          <div>
+                                            <div className="text-gray-500">Contract Number</div>
+                                            <div className="font-medium">{detail.contract_number}</div>
                                           </div>
-                                        </div>
-                                        <div>
-                                          <div className="text-gray-500 mb-1">Contract Qty assign to STO</div>
-                                          <div className="flex items-center gap-2">
-                                            <Input
-                                              type="number"
-                                              value={detail.sto_qty_assigned || 0}
-                                              onChange={(e) => {
-                                                const newValue = parseFloat(e.target.value) || 0
-                                                const stoNumber = shipment.sto_number || shipment.shipment_id
-                                                handleUpdateStoQtyAssigned(shipment.id, detail.contract_number, stoNumber, newValue)
-                                              }}
-                                              className="h-8 text-sm w-32"
-                                              disabled={savingStoQty[`${shipment.id}-${detail.contract_number}`]}
-                                            />
-                                            <span className="text-sm text-gray-500">Kg</span>
-                                            {savingStoQty[`${shipment.id}-${detail.contract_number}`] && (
-                                              <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
-                                            )}
+                                          <div>
+                                            <div className="text-gray-500">Contract Ext No</div>
+                                            <div className="font-medium">{detail.contract_ext_no || '-'}</div>
                                           </div>
-                                        </div>
-                                        <div>
-                                          <div className="text-gray-500">Due Date Delivery Start</div>
-                                          <div className="font-medium">{formatShortDate(detail.delivery_start_date || '')}</div>
-                                        </div>
-                                        <div>
-                                          <div className="text-gray-500">Due Date Delivery End</div>
-                                          <div className="font-medium">{formatShortDate(detail.delivery_end_date || '')}</div>
-                                        </div>
-                                        <div>
-                                          <div className="text-gray-500">Quantity Delivered (Kg)</div>
-                                          <div className="font-medium">{formatNumber(detail.quantity_delivered ?? 0)} Kg</div>
-                                        </div>
-                                        <div>
-                                          <div className="text-gray-500">Quantity Receive (Kg)</div>
-                                          <div className="font-medium">{formatNumber(detail.quantity_receive ?? 0)} Kg</div>
+                                          <div>
+                                            <div className="text-gray-500">Contract Qty</div>
+                                            <div className="font-medium">{formatNumber(detail.contract_qty)} Kg</div>
+                                          </div>
+                                          <div>
+                                            <div className="text-gray-500">Outstanding Qty</div>
+                                            <div
+                                              className={`font-medium ${
+                                                detail.outstanding_qty < 0 ? 'text-red-600' : 'text-gray-900'
+                                              }`}
+                                            >
+                                              {formatNumber(detail.outstanding_qty)} Kg
+                                            </div>
+                                          </div>
+                                          <div>
+                                            <div className="text-gray-500 mb-1">Contract Qty assign to STO</div>
+                                            <div className="flex items-center gap-2">
+                                              {lockedFromSap ? (
+                                                <div className="font-medium">
+                                                  {formatNumber(currentValue)} Kg{' '}
+                                                  <span className="text-xs text-gray-500">(from SAP)</span>
+                                                </div>
+                                              ) : (
+                                                <>
+                                                  <Input
+                                                    type="number"
+                                                    value={currentValue}
+                                                    onChange={(e) => {
+                                                      const newValue = parseFloat(e.target.value) || 0
+                                                      const stoNumber = shipment.sto_number || shipment.shipment_id
+                                                      handleUpdateStoQtyAssigned(
+                                                        shipment.id,
+                                                        detail.contract_number,
+                                                        stoNumber,
+                                                        newValue
+                                                      )
+                                                    }}
+                                                    className="h-8 text-sm w-32"
+                                                    disabled={savingStoQty[key]}
+                                                  />
+                                                  <span className="text-sm text-gray-500">Kg</span>
+                                                  {savingStoQty[key] && (
+                                                    <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                                                  )}
+                                                </>
+                                              )}
+                                            </div>
+                                          </div>
+                                          <div>
+                                            <div className="text-gray-500">Due Date Delivery Start</div>
+                                            <div className="font-medium">
+                                              {formatShortDate(detail.delivery_start_date || '')}
+                                            </div>
+                                          </div>
+                                          <div>
+                                            <div className="text-gray-500">Due Date Delivery End</div>
+                                            <div className="font-medium">
+                                              {formatShortDate(detail.delivery_end_date || '')}
+                                            </div>
+                                          </div>
+                                          <div>
+                                            <div className="text-gray-500">Quantity Delivered (Kg)</div>
+                                            <div className="font-medium">
+                                              {formatNumber(detail.quantity_delivered ?? 0)} Kg
+                                            </div>
+                                          </div>
+                                          <div>
+                                            <div className="text-gray-500">Quantity Receive (Kg)</div>
+                                            <div className="font-medium">
+                                              {formatNumber(detail.quantity_receive ?? 0)} Kg
+                                            </div>
+                                          </div>
                                         </div>
                                       </div>
-                                    </div>
-                                  ))}
+                                    )
+                                  })}
                                 </div>
                               ) : (
                                 <div className="space-y-3">

@@ -60,6 +60,10 @@ interface Contract {
   shipment_count?: number
   document_count?: number
   cargo_readiness_date?: string
+  over_under_delivery_status?: string
+  log_cycle_days?: number | null
+  trade_cycle_days?: number | null
+  company_name?: string
 }
 
 interface DocumentItem {
@@ -88,6 +92,17 @@ interface StoInfoRow {
   eta_trucking_completion_date?: string | null
 }
 
+type B2bPartyRow = {
+  contract_id: string
+  contract_date?: string | null
+  po_numbers?: string | null
+  contract_ext_no?: string | null
+  company_name?: string | null
+  supplier?: string | null
+  incoterm?: string | null
+  certification?: string | null
+}
+
 function ContractsPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -108,11 +123,9 @@ function ContractsPageContent() {
   const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
   const isSyncingScroll = useRef(false)
   const [statusFilter, setStatusFilter] = useState<string>('All Status')
-  const [companyCodeFilter, setCompanyCodeFilter] = useState<string>('ALL')
   const [b2bFlagFilter, setB2bFlagFilter] = useState<string>('ALL')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
-  const [availableCompanyCodes, setAvailableCompanyCodes] = useState<string[]>([])
   const [availableB2bFlags, setAvailableB2bFlags] = useState<string[]>([])
   const [transportModeFilter, setTransportModeFilter] = useState<string>('ALL')
   const [uploadingId, setUploadingId] = useState<string>('')
@@ -127,6 +140,8 @@ function ContractsPageContent() {
   const [contractPaymentsLoading, setContractPaymentsLoading] = useState(false)
   const [activityLog, setActivityLog] = useState<Array<{ id: string; username: string; full_name?: string; action: string; entity_type: string; timestamp: string; before_data: Record<string, unknown> | null; after_data: Record<string, unknown> | null }>>([])
   const [activityLogLoading, setActivityLogLoading] = useState(false)
+  const [b2bParties, setB2bParties] = useState<B2bPartyRow[]>([])
+  const [b2bPartiesLoading, setB2bPartiesLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [totalContracts, setTotalContracts] = useState(0)
@@ -191,7 +206,7 @@ function ContractsPageContent() {
     setCurrentPage(1)
     fetchContracts(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authReady, searchParams, statusFilter, companyCodeFilter, b2bFlagFilter, dateFrom, dateTo, transportModeFilter, unassignedFilter])
+  }, [authReady, searchParams, statusFilter, b2bFlagFilter, dateFrom, dateTo, transportModeFilter, unassignedFilter])
 
   // When user types (or clears) search, refetch so contract_id filter is applied and we find a contract even with "All Status"
   const isFirstSearchRender = useRef(true)
@@ -258,9 +273,6 @@ function ContractsPageContent() {
         // Status is aligned with SAP (Open/Close/Cancelled)
         params.append('status', statusFilter)
       }
-      if (companyCodeFilter && companyCodeFilter !== 'ALL') {
-        params.append('companyCode', companyCodeFilter)
-      }
       if (b2bFlagFilter && b2bFlagFilter !== 'ALL') {
         params.append('b2bFlag', b2bFlagFilter)
       }
@@ -308,11 +320,9 @@ function ContractsPageContent() {
         setCurrentPage(response.data.data.pagination.page)
       }
       
-      // Extract unique company codes and B2B flags from contracts
+      // Extract unique B2B flags from contracts
       // Use fresh response data; state updates are async.
-      const companyCodes = [...new Set(loadedContracts.map(c => c.company_code).filter((v): v is string => typeof v === 'string' && v.length > 0))].sort()
       const b2bFlags = [...new Set(loadedContracts.map(c => c.b2b_flag).filter((v): v is string => typeof v === 'string' && v.length > 0))].sort()
-      if (companyCodes.length > 0) setAvailableCompanyCodes(companyCodes)
       if (b2bFlags.length > 0) setAvailableB2bFlags(b2bFlags)
     } catch (error) {
       console.error('Failed to fetch contracts:', error)
@@ -334,10 +344,7 @@ function ContractsPageContent() {
         const response = await api.get('/contracts?limit=10000')
         const allContracts: Contract[] = response.data.data.contracts || []
         
-        const companyCodes = [...new Set(allContracts.map((c) => c.company_code).filter((v): v is string => typeof v === 'string' && v.length > 0))].sort()
         const b2bFlags = [...new Set(allContracts.map((c) => c.b2b_flag).filter((v): v is string => typeof v === 'string' && v.length > 0))].sort()
-        
-        setAvailableCompanyCodes(companyCodes)
         setAvailableB2bFlags(b2bFlags)
       } catch (error) {
         console.error('Failed to fetch filter options:', error)
@@ -631,6 +638,33 @@ function ContractsPageContent() {
     return () => { cancelled = true }
   }, [selectedContract?.id])
 
+  // B2B Parties (child contracts linked by Contract Reff PO Ini)
+  useEffect(() => {
+    if (!selectedContract?.id) {
+      setB2bParties([])
+      return
+    }
+    const isOriginB2b =
+      String(selectedContract.contract_type || selectedContract.b2b_flag || '').toUpperCase() === 'B2B' &&
+      String(selectedContract.contract_reference_po || '').trim() === ''
+
+    if (!isOriginB2b) {
+      setB2bParties([])
+      return
+    }
+
+    let cancelled = false
+    setB2bPartiesLoading(true)
+    api.get(`/contracts/${selectedContract.id}/b2b-parties`)
+      .then((res) => {
+        if (cancelled) return
+        setB2bParties(Array.isArray(res.data?.data) ? res.data.data : [])
+      })
+      .catch(() => { if (!cancelled) setB2bParties([]) })
+      .finally(() => { if (!cancelled) setB2bPartiesLoading(false) })
+    return () => { cancelled = true }
+  }, [selectedContract?.id, selectedContract?.contract_type, selectedContract?.b2b_flag, selectedContract?.contract_reference_po])
+
   const openStoDetail = useCallback((row: StoInfoRow) => {
     if (!selectedContract?.contract_id) return
     setStoDetailRow(row)
@@ -667,7 +701,7 @@ function ContractsPageContent() {
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
     if (colId === 'contract_qty' || colId === 'outstanding_qty' || colId === 'contract_aging') return 'number'
     if (colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'created_at') return 'date'
-    if (colId === 'product' || colId === 'status' || colId === 'company_code' || colId === 'lt_spot') return 'multi'
+    if (colId === 'product' || colId === 'status' || colId === 'company_name' || colId === 'lt_spot') return 'multi'
     return 'text'
   }
 
@@ -681,8 +715,8 @@ function ContractsPageContent() {
         return (c.import_status || c.status || '')
       case 'contract_date':
         return c.contract_date || ''
-      case 'company_code':
-        return c.company_code || ''
+      case 'company_name':
+        return c.company_name || ''
       case 'lt_spot':
         return c.lt_spot || ''
       case 'po_number':
@@ -883,6 +917,45 @@ function ContractsPageContent() {
       )
     },
     {
+      id: 'log_cycle_days',
+      label: 'Log Cycle',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => c.log_cycle_days ?? 0,
+      render: (c) => (
+        <span className="text-xs font-semibold">
+          {c.log_cycle_days != null ? `${c.log_cycle_days} days` : '-'}
+        </span>
+      ),
+      className: 'whitespace-nowrap'
+    },
+    {
+      id: 'trade_cycle_days',
+      label: 'Trade Cycle',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => c.trade_cycle_days ?? 0,
+      render: (c) => (
+        <span className="text-xs font-semibold">
+          {c.trade_cycle_days != null ? `${c.trade_cycle_days} days` : '-'}
+        </span>
+      ),
+      className: 'whitespace-nowrap'
+    },
+    {
+      id: 'over_under_delivery_status',
+      label: 'Over/Under Delivery Status',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => c.over_under_delivery_status || '',
+      render: (c) => (
+        <span className="text-xs font-semibold">
+          {c.over_under_delivery_status || '-'}
+        </span>
+      ),
+      className: 'whitespace-nowrap'
+    },
+    {
       id: 'contract_date',
       label: 'Contract Date',
       defaultVisible: true,
@@ -891,12 +964,12 @@ function ContractsPageContent() {
       render: (c) => <span className="text-sm">{formatShortDate(c.contract_date)}</span>
     },
     {
-      id: 'company_code',
-      label: 'Company',
+      id: 'company_name',
+      label: 'Company Name',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (c) => c.company_code || '',
-      render: (c) => <span className="text-sm font-medium">{c.company_code || '-'}</span>
+      getSortValue: (c) => c.company_name || '',
+      render: (c) => <span className="text-sm font-medium">{c.company_name || '-'}</span>
     },
     {
       id: 'lt_spot',
@@ -1246,16 +1319,6 @@ function ContractsPageContent() {
                   <option value="All Status">All Status</option>
                   <option value="Open">Open</option>
                   <option value="Close">Close</option>
-                </select>
-                <select
-                  value={companyCodeFilter}
-                  onChange={(e) => setCompanyCodeFilter(e.target.value)}
-                  className="px-4 py-2 border rounded-lg"
-                >
-                  <option value="ALL">All Company Codes</option>
-                  {availableCompanyCodes.map(code => (
-                    <option key={code} value={code}>{code}</option>
-                  ))}
                 </select>
                 <select
                   value={b2bFlagFilter}
@@ -2242,16 +2305,12 @@ function ContractsPageContent() {
                         <div className="font-medium mt-1">{selectedContract.group_name || '-'}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Company Code</div>
-                        <div className="font-medium mt-1">{selectedContract.company_code || '-'}</div>
+                        <div className="text-gray-500">Company Name</div>
+                        <div className="font-medium mt-1">{selectedContract.company_name || '-'}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">B2B Flag</div>
                         <div className="font-medium mt-1">{selectedContract.b2b_flag || '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">CONTRACT REFF PO</div>
-                        <div className="font-medium mt-1">{selectedContract.contract_reference_po || '-'}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">LT/SPOT</div>
@@ -2283,6 +2342,46 @@ function ContractsPageContent() {
                     </div>
                   </div>
 
+                  {/* B2B Parties */}
+                  {(String(selectedContract.contract_type || selectedContract.b2b_flag || '').toUpperCase() === 'B2B' &&
+                    String(selectedContract.contract_reference_po || '').trim() === '') && (
+                    <div>
+                      <h3 className="text-lg font-semibold mb-3">B2B Parties</h3>
+                      {b2bPartiesLoading ? (
+                        <div className="text-sm text-gray-500">Loading B2B parties...</div>
+                      ) : b2bParties.length === 0 ? (
+                        <div className="text-sm text-gray-500">No B2B contracts linked to this origin contract.</div>
+                      ) : (
+                        <div className="overflow-x-auto border rounded">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-gray-100 border-b">
+                                <th className="text-left p-2 font-medium">PO Number</th>
+                                <th className="text-left p-2 font-medium">Contract Ext No</th>
+                                <th className="text-left p-2 font-medium">Company Name</th>
+                                <th className="text-left p-2 font-medium">Supplier</th>
+                                <th className="text-left p-2 font-medium">Incoterm</th>
+                                <th className="text-left p-2 font-medium">Certification</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {b2bParties.map((r) => (
+                                <tr key={r.contract_id} className="border-b last:border-0">
+                                  <td className="p-2">{r.po_numbers || '-'}</td>
+                                  <td className="p-2">{r.contract_ext_no || '-'}</td>
+                                  <td className="p-2">{r.company_name || '-'}</td>
+                                  <td className="p-2">{r.supplier || '-'}</td>
+                                  <td className="p-2">{r.incoterm || '-'}</td>
+                                  <td className="p-2">{r.certification || '-'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Product & Quantity */}
                   <div>
                     <h3 className="text-lg font-semibold mb-3">Product & Quantity</h3>
@@ -2310,6 +2409,12 @@ function ContractsPageContent() {
                           <div className="text-xs text-red-500 mt-1">Overshipped</div>
                         )}
                       </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Over/Under Delivery Status</div>
+                        <div className="font-semibold mt-1">
+                          {selectedContract.over_under_delivery_status || '-'}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -2324,6 +2429,18 @@ function ContractsPageContent() {
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Incoterm</div>
                         <div className="font-medium mt-1">{selectedContract.incoterm || '-'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Log Cycle</div>
+                        <div className="font-medium mt-1">
+                          {selectedContract.log_cycle_days != null ? `${selectedContract.log_cycle_days} days` : '-'}
+                        </div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Trade Cycle</div>
+                        <div className="font-medium mt-1">
+                          {selectedContract.trade_cycle_days != null ? `${selectedContract.trade_cycle_days} days` : '-'}
+                        </div>
                       </div>
                     </div>
                     {stoInfoLoading ? (

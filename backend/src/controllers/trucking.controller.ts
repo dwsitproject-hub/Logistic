@@ -132,7 +132,9 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
         t.updated_at,
         c.contract_id as contract_number,
         c.po_number,
-        c.sto_number,
+        -- Prefer showing all SAP STOs when contract has multiple
+        COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers) AS sto_number,
+        sa.sto_numbers AS sto_numbers,
         c.quantity_ordered as sto_quantity,
         c.quantity_ordered as contract_qty,
         c.delivery_start_date,
@@ -153,6 +155,21 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
       LEFT JOIN shipments s ON t.shipment_id = s.id
+      LEFT JOIN LATERAL (
+        SELECT STRING_AGG(DISTINCT x.effective_sto, ', ' ORDER BY x.effective_sto) AS sto_numbers
+        FROM (
+          SELECT NULLIF(TRIM(COALESCE(
+            spd.sto_number::text,
+            spd.data->'raw'->>'STO No.',
+            spd.data->'raw'->>'STO Number',
+            spd.data->'shipment'->>'sto_no',
+            spd.data->'contract'->>'sto_no'
+          )), '') AS effective_sto
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = c.contract_id
+        ) x
+        WHERE x.effective_sto IS NOT NULL AND x.effective_sto != ''
+      ) sa ON true
       WHERE 1=1
     `;
     const queryParams: any[] = [];

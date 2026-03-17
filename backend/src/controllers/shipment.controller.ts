@@ -1686,7 +1686,24 @@ export const getContractDetailsForSto = async (req: AuthRequest, res: Response) 
            AND spd.sto_number = $1
            AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL),
           0
-        ) as quantity_receive
+        ) as quantity_receive,
+        -- Contract Ext No from latest sap_processed_data for this contract
+        (SELECT COALESCE(
+                  spd.data->'raw'->>'Contract Ext No',
+                  spd.data->>'Contract Ext No'
+                )
+         FROM sap_processed_data spd
+         WHERE spd.contract_number = ac.contract_number
+         ORDER BY spd.created_at DESC NULLS LAST
+         LIMIT 1) AS contract_ext_no,
+        -- Lock flag: if STO quantity is present in sap_processed_data for this STO+contract, treat as non-editable
+        EXISTS (
+          SELECT 1
+          FROM sap_processed_data spd_lock
+          WHERE spd_lock.contract_number = ac.contract_number
+            AND spd_lock.sto_number = $1
+            AND spd_lock.data->'contract'->>'sto_quantity' IS NOT NULL
+        ) AS locked_from_sap
       FROM ac
       LEFT JOIN contracts c ON c.contract_id = ac.contract_number
       GROUP BY ac.contract_number
