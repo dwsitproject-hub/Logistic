@@ -264,17 +264,23 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     };
 
     // Apply B2B origin company name override (in-memory) so UI sees correct company_name even before backfill runs.
-    const b2bOriginIds: string[] = [];
+    const b2bOriginPoNumbers: string[] = [];
     for (const row of result.rows) {
       const typeText = String(row.contract_type || row.b2b_flag || '').toUpperCase();
       const refPo = String(row.contract_reference_po || '').trim();
       if (typeText === 'B2B' && refPo === '') {
-        b2bOriginIds.push(String(row.contract_id));
+        const originPo =
+          (row.po_numbers && String(row.po_numbers).split(',')[0].trim()) ||
+          (row.po_number && String(row.po_number).trim()) ||
+          '';
+        if (originPo) {
+          b2bOriginPoNumbers.push(originPo);
+        }
       }
     }
 
     let b2bOriginCompany: Record<string, string> = {};
-    if (b2bOriginIds.length > 0) {
+    if (b2bOriginPoNumbers.length > 0) {
       const q = `
         WITH latest_spd AS (
           SELECT DISTINCT ON (contract_number) contract_number, data, created_at
@@ -283,28 +289,28 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           ORDER BY contract_number, created_at DESC NULLS LAST
         ),
         origin AS (
-          SELECT unnest($1::text[]) AS origin_contract_id
+          SELECT unnest($1::text[]) AS origin_po_number
         ),
         children AS (
           SELECT
-            o.origin_contract_id,
+            o.origin_po_number,
             c2.contract_date,
             COALESCE(NULLIF(TRIM(c2.company_name), ''), l2.data->'raw'->>'Buyer', l2.data->>'Buyer', '') AS company_name
           FROM origin o
           JOIN contracts c2 ON 1=1
           LEFT JOIN latest_spd l2 ON l2.contract_number = c2.contract_id
-          WHERE NULLIF(TRIM(COALESCE(l2.data->'contract'->>'contract_reference_po', l2.data->>'CONTRACT REFF PO')), '') = o.origin_contract_id
+          WHERE NULLIF(TRIM(COALESCE(l2.data->'contract'->>'contract_reference_po', l2.data->>'CONTRACT REFF PO')), '') = o.origin_po_number
         )
-        SELECT DISTINCT ON (origin_contract_id)
-          origin_contract_id,
+        SELECT DISTINCT ON (origin_po_number)
+          origin_po_number,
           company_name
         FROM children
         WHERE company_name != ''
-        ORDER BY origin_contract_id, contract_date DESC NULLS LAST
+        ORDER BY origin_po_number, contract_date DESC NULLS LAST
       `;
-      const r = await query(q, [b2bOriginIds]);
+      const r = await query(q, [b2bOriginPoNumbers]);
       b2bOriginCompany = (r.rows || []).reduce((acc: Record<string, string>, row: any) => {
-        acc[String(row.origin_contract_id)] = String(row.company_name);
+        acc[String(row.origin_po_number)] = String(row.company_name);
         return acc;
       }, {});
     }
@@ -418,7 +424,11 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       const typeText = String(row.contract_type || row.b2b_flag || '').toUpperCase();
       const refPo = String(row.contract_reference_po || '').trim();
       if (typeText === 'B2B' && refPo === '') {
-        const override = b2bOriginCompany[String(row.contract_id)];
+        const originPo =
+          (row.po_numbers && String(row.po_numbers).split(',')[0].trim()) ||
+          (row.po_number && String(row.po_number).trim()) ||
+          '';
+        const override = originPo ? b2bOriginCompany[originPo] : undefined;
         if (override) {
           (row as any).company_name = override;
         }
@@ -1053,15 +1063,45 @@ export const getContractActivityLog = async (req: AuthRequest, res: Response) =>
   }
 };
 
-/** Get B2B parties for an "origin" contract: contracts whose contract_reference_po points to this contract_id */
+/** Get B2B parties for an "origin" contract: contracts whose Contract Reff PO Ini points to this contract's PO Number */
 export const getB2bPartiesForContract = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const contractCheck = await query('SELECT id, contract_id FROM contracts WHERE id = $1', [id]);
+    const contractCheck = await query(
+      `
+      WITH latest_spd AS (
+        SELECT DISTINCT ON (contract_number)
+          contract_number,
+          data,
+          created_at
+        FROM sap_processed_data
+        WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
+        ORDER BY contract_number, created_at DESC NULLS LAST
+      )
+      SELECT
+        c.id,
+        c.contract_id,
+        COALESCE(
+          NULLIF(TRIM(c.po_number), ''),
+          NULLIF(TRIM(l.data->'contract'->>'po_no'), ''),
+          NULLIF(TRIM(l.data->'raw'->>'PO No.'), ''),
+          NULLIF(TRIM(l.data->>'PO No.'), ''),
+          NULLIF(TRIM(l.data->>'PO Number'), '')
+        ) AS origin_po_number
+      FROM contracts c
+      LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+      WHERE c.id = $1
+      `,
+      [id]
+    );
     if (contractCheck.rows.length === 0) {
       return res.status(404).json({ success: false, error: { message: 'Contract not found' } });
     }
-    const originContractId = contractCheck.rows[0].contract_id;
+    const originPoNumber: string | null = contractCheck.rows[0].origin_po_number || null;
+    if (!originPoNumber) {
+      // Without a PO number, we cannot resolve B2B children by Contract Reff PO
+      return res.json({ success: true, data: [] });
+    }
 
     const q = `
       WITH latest_spd AS (
@@ -1072,26 +1112,31 @@ export const getB2bPartiesForContract = async (req: AuthRequest, res: Response) 
       )
       SELECT
         c.contract_id,
-        c.contract_date,
+        MAX(c.contract_date) AS contract_date,
         STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') AS po_numbers,
-        COALESCE(l.data->'raw'->>'Contract Ext No', l.data->>'Contract Ext No') AS contract_ext_no,
-        COALESCE(NULLIF(TRIM(c.company_name), ''), l.data->'raw'->>'Buyer', l.data->>'Buyer') AS company_name,
-        c.supplier,
-        COALESCE(NULLIF(TRIM(c.incoterm), ''), l.data->'contract'->>'incoterm', l.data->>'Incoterm') AS incoterm,
-        COALESCE(
+        MAX(COALESCE(l.data->'raw'->>'Contract Ext No', l.data->>'Contract Ext No')) AS contract_ext_no,
+        MAX(COALESCE(NULLIF(TRIM(c.company_name), ''), l.data->'raw'->>'Buyer', l.data->>'Buyer')) AS company_name,
+        MAX(c.supplier) AS supplier,
+        MAX(COALESCE(NULLIF(TRIM(c.incoterm), ''), l.data->'contract'->>'incoterm', l.data->>'Incoterm')) AS incoterm,
+        MAX(COALESCE(
           l.data->'raw'->>'Certification',
           l.data->'raw'->>'certification',
           l.data->>'Certification',
           l.data->>'certification'
-        ) AS certification
+        )) AS certification
       FROM contracts c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-      WHERE NULLIF(TRIM(COALESCE(l.data->'contract'->>'contract_reference_po', l.data->>'CONTRACT REFF PO')), '') = $1
-      GROUP BY c.contract_id, c.contract_date, contract_ext_no, company_name, c.supplier, incoterm, certification
-      ORDER BY c.contract_date DESC NULLS LAST
+      WHERE NULLIF(TRIM(COALESCE(
+        l.data->'contract'->>'contract_reference_po',
+        l.data->>'CONTRACT REFF PO',
+        l.data->>'Contract Reff PO Ini',
+        l.data->'raw'->>'Contract Reff PO Ini'
+      )), '') = $1
+      GROUP BY c.contract_id
+      ORDER BY MAX(c.contract_date) DESC NULLS LAST
       LIMIT 200
     `;
-    const result = await query(q, [originContractId]);
+    const result = await query(q, [originPoNumber]);
 
     return res.json({ success: true, data: result.rows });
   } catch (error) {

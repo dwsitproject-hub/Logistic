@@ -1,6 +1,6 @@
 -- Backfill company_name for B2B "origin" contracts:
 -- Origin contract: contract_type is B2B and contract_reference_po is empty.
--- Logic: find child contracts where child.contract_reference_po = origin.contract_id,
+-- Logic: find child contracts where child.contract_reference_po = origin PO Number,
 -- take the latest contract_date among children, and copy that child's company_name into origin.
 -- Safe to re-run.
 
@@ -16,7 +16,8 @@ WITH latest_spd AS (
 origin AS (
   SELECT
     c.id AS origin_id,
-    c.contract_id AS origin_contract_id
+    c.contract_id AS origin_contract_id,
+    COALESCE(c.po_number, l.data->'contract'->>'po_no', l.data->'raw'->>'PO No.', l.data->>'PO No.', l.data->>'PO Number') AS origin_po_number
   FROM contracts c
   LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
   WHERE
@@ -31,7 +32,8 @@ children AS (
   FROM origin o
   JOIN contracts c2 ON 1=1
   LEFT JOIN latest_spd l2 ON l2.contract_number = c2.contract_id
-  WHERE NULLIF(TRIM(COALESCE(l2.data->'contract'->>'contract_reference_po', l2.data->>'CONTRACT REFF PO')), '') = o.origin_contract_id
+  WHERE o.origin_po_number IS NOT NULL
+    AND NULLIF(TRIM(COALESCE(l2.data->'contract'->>'contract_reference_po', l2.data->>'CONTRACT REFF PO')), '') = o.origin_po_number
 ),
 latest_child AS (
   SELECT DISTINCT ON (origin_id)

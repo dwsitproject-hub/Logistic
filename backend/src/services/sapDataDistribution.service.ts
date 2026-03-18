@@ -11,6 +11,16 @@ export interface DistributionResult {
 }
 
 export class SapDataDistributionService {
+  private static toUuid(value: unknown): string | null {
+    if (value == null) return null;
+    const s = String(value).trim();
+    if (!s) return null;
+    // UUID v4-ish validation (accept any valid UUID)
+    const uuidRe =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return uuidRe.test(s) ? s : null;
+  }
+
   private static normalizeContractStatus(raw: any): string | null {
     if (raw == null) return null;
     const s = String(raw).trim();
@@ -371,6 +381,7 @@ export class SapDataDistributionService {
     vesselData: any,
     _userId?: string
   ): Promise<string> {
+    const contractUuid = this.toUuid(contractId);
     const shipmentIdFromSap = shipmentData.shipment_id || shipmentData.sto_no;
 
     const voyageNo = vesselData.voyage_no || shipmentData.voyage_no;
@@ -464,10 +475,10 @@ export class SapDataDistributionService {
       }
     }
 
-    if (!targetShipmentId && contractId && vesselName) {
+    if (!targetShipmentId && contractUuid && vesselName) {
       const existingForContract = await client.query(
         `SELECT id, vessel_name FROM shipments WHERE contract_id = $1`,
-        [contractId]
+        [contractUuid]
       );
 
       let bestId: string | null = null;
@@ -537,7 +548,7 @@ export class SapDataDistributionService {
           updated_at = CURRENT_TIMESTAMP
          WHERE id = $46`,
         [
-          contractId,
+          contractUuid,
           voyageNo,
           vesselCode,
           vesselOwner,
@@ -610,7 +621,7 @@ export class SapDataDistributionService {
         ) RETURNING id`,
         [
           shipmentIdFromSap,
-          contractId,
+          contractUuid,
           statusForInsert,
           voyageNo,
           vesselCode,
@@ -936,7 +947,8 @@ export class SapDataDistributionService {
     shipmentId: string | undefined,
     qualityData: any
   ): Promise<string | null> {
-    if (!shipmentId) return null;
+    const shipmentUuid = this.toUuid(shipmentId);
+    if (!shipmentUuid) return null;
     
     const data = qualityData.data;
     if (!data || Object.keys(data).length === 0) return null;
@@ -949,7 +961,7 @@ export class SapDataDistributionService {
         $7::numeric, $8::numeric, $9::numeric, $10::numeric
       ) RETURNING id`,
       [
-        shipmentId,
+        shipmentUuid,
         qualityData.location,
         this.parseNumber(data.ffa),
         this.parseNumber(data.m_i),
@@ -974,7 +986,9 @@ export class SapDataDistributionService {
     contractId: string | undefined,
     truckingData: any
   ): Promise<string | null> {
-    if (!shipmentId && !contractId) return null;
+    const shipmentUuid = this.toUuid(shipmentId);
+    const contractUuid = this.toUuid(contractId);
+    if (!shipmentUuid && !contractUuid) return null;
     
     const data = truckingData.data;
     if (!data || Object.keys(data).length === 0) return null;
@@ -1004,10 +1018,10 @@ export class SapDataDistributionService {
 
     // Try to find existing trucking operation by contract + similar trucking owner (>= 0.8)
     let targetTruckingId: string | null = null;
-    if (contractId && truckingOwner) {
+    if (contractUuid && truckingOwner) {
       const existingForContract = await client.query(
         `SELECT id, trucking_owner FROM trucking_operations WHERE contract_id = $1`,
-        [contractId]
+        [contractUuid]
       );
 
       let bestId: string | null = null;
@@ -1049,7 +1063,7 @@ export class SapDataDistributionService {
           updated_at = CURRENT_TIMESTAMP
          WHERE id = $15`,
         [
-          shipmentId,
+          shipmentUuid,
           truckingData.sequence,
           this.parseDate(data.cargo_readiness_at_starting_location),
           loadingLocation,
@@ -1081,8 +1095,8 @@ export class SapDataDistributionService {
         $14::date, $15::date, $16
       ) RETURNING id`,
       [
-        shipmentId,
-        contractId,
+        shipmentUuid,
+        contractUuid,
         truckingData.sequence,
         this.parseDate(data.cargo_readiness_at_starting_location),
         loadingLocation,
@@ -1111,13 +1125,14 @@ export class SapDataDistributionService {
     paymentData: any,
     contractId: string | undefined
   ): Promise<string> {
-    if (!contractId) {
+    const contractUuid = this.toUuid(contractId);
+    if (!contractUuid) {
       throw new Error('Contract ID is required for payment');
     }
 
     const contractRow = await client.query(
       `SELECT contract_value, quantity_ordered, unit_price FROM contracts WHERE id = $1 LIMIT 1`,
-      [contractId]
+      [contractUuid]
     );
     const amount =
       contractRow.rows[0]?.contract_value != null
@@ -1132,7 +1147,7 @@ export class SapDataDistributionService {
     // Check if payment exists for this contract
     const existing = await client.query(
       `SELECT id FROM payments WHERE contract_id = $1 ORDER BY created_at DESC LIMIT 1`,
-      [contractId]
+      [contractUuid]
     );
 
     if (existing.rows.length > 0) {
@@ -1168,7 +1183,7 @@ export class SapDataDistributionService {
           $1::uuid, $2::date, $3::date, $4::date, $5::date, $6::int, 'PENDING', $7::numeric
         ) RETURNING id`,
         [
-          contractId,
+          contractUuid,
           this.parseDate(paymentData.due_date_payment),
           this.parseDate(paymentData.dp_date),
           this.parseDate(paymentData.payoff_date),
