@@ -42,8 +42,18 @@ TRUNCATE TABLE contracts CASCADE;
 TRUNCATE TABLE audit_logs RESTART IDENTITY;
 TRUNCATE TABLE ai_insights RESTART IDENTITY;
 TRUNCATE TABLE alerts RESTART IDENTITY;
-TRUNCATE TABLE dashboard_ai_insights RESTART IDENTITY;
 TRUNCATE TABLE remarks RESTART IDENTITY;
+
+-- dashboard_ai_insights exists only on newer schema versions
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'dashboard_ai_insights'
+  ) THEN
+    TRUNCATE TABLE dashboard_ai_insights RESTART IDENTITY;
+  END IF;
+END $$;
 
 -- ---------------------------------------------------------------------------
 -- 4) STO assignment overrides (created at runtime; no FK to contracts)
