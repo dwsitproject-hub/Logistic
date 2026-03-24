@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -30,6 +30,8 @@ import {
   Sparkles
 } from 'lucide-react'
 import api from '@/lib/api'
+import { FieldHelp } from '@/components/FieldHelp'
+import { FIELD_HELP } from '@/lib/fieldHelpText'
 
 interface DashboardStats {
   contracts: {
@@ -39,6 +41,8 @@ interface DashboardStats {
     completed: number
     cancelled: number
     outstanding: number
+    openOutstandingLogistics: number
+    openOutstandingPayment: number
     totalQuantity: number
     deliveredQuantity: number
     outstandingQuantity: number
@@ -176,6 +180,7 @@ type DrilldownContractRow = {
   contract_ext_no?: string
   buyer?: string
   supplier?: string
+  group_name?: string
   product?: string
   quantity_ordered?: number
   unit?: string
@@ -186,6 +191,7 @@ type DrilldownContractRow = {
   delivery_start_date?: string
   delivery_end_date?: string
   contract_value?: number
+  payment_due_date?: string
   currency?: string
   status?: string
   delivered_quantity?: number
@@ -234,6 +240,8 @@ type DrilldownPaymentRow = {
   contract_ext_no?: string
   unit_price?: number
   contract_value?: number
+  group_name?: string
+  plant_site?: string
   invoice_number?: string
   invoice_date?: string
   payment_amount?: number
@@ -245,6 +253,91 @@ type DrilldownPaymentRow = {
   payment_date?: string
   dp_date_deviation_days?: number
   payoff_date_deviation_days?: number
+}
+type PaymentPlantSummaryRow = {
+  plant_site: string
+  contracts: number
+  total_contract_value: number
+}
+
+/** 0–1 similarity for merging plant/site labels (e.g. ≥0.6 → same bucket). */
+function plantSiteSimilarity(a: string, b: string): number {
+  const A = a.trim().replace(/\s+/g, ' ').toUpperCase()
+  const B = b.trim().replace(/\s+/g, ' ').toUpperCase()
+  if (!A || !B) return A === B ? 1 : 0
+  if (A === B) return 1
+  const longer = A.length >= B.length ? A : B
+  const shorter = A.length >= B.length ? B : A
+  if (longer.includes(shorter) && shorter.length >= 4) {
+    return Math.min(1, Math.max(0.62, shorter.length / longer.length))
+  }
+  const m = A.length
+  const n = B.length
+  const dp: number[] = Array.from({ length: n + 1 }, (_, j) => j)
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0]
+    dp[0] = i
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j]
+      dp[j] = A[i - 1] === B[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1])
+      prev = tmp
+    }
+  }
+  const dist = dp[n]
+  return 1 - dist / Math.max(m, n)
+}
+
+function mergePlantSiteSummaryRows(
+  rows: { plantSite: string; contracts: number; totalContractValue: number }[],
+  threshold = 0.6
+): { plantSite: string; contracts: number; totalContractValue: number }[] {
+  const blankAgg = rows
+    .filter((r) => !r.plantSite?.trim() || r.plantSite === 'Blank')
+    .reduce(
+      (acc, r) => ({
+        contracts: acc.contracts + r.contracts,
+        totalContractValue: acc.totalContractValue + r.totalContractValue,
+      }),
+      { contracts: 0, totalContractValue: 0 }
+    )
+  const others = rows.filter((r) => r.plantSite?.trim() && r.plantSite !== 'Blank')
+  const sorted = [...others].sort((a, b) => b.totalContractValue - a.totalContractValue)
+  const clusters: { label: string; contracts: number; totalContractValue: number }[] = []
+  for (const r of sorted) {
+    let idx = -1
+    for (let i = 0; i < clusters.length; i++) {
+      if (plantSiteSimilarity(r.plantSite, clusters[i].label) >= threshold) {
+        idx = i
+        break
+      }
+    }
+    if (idx >= 0) {
+      clusters[idx].contracts += r.contracts
+      clusters[idx].totalContractValue += r.totalContractValue
+      if (r.plantSite.length > clusters[idx].label.length) clusters[idx].label = r.plantSite
+    } else {
+      clusters.push({
+        label: r.plantSite,
+        contracts: r.contracts,
+        totalContractValue: r.totalContractValue,
+      })
+    }
+  }
+  const merged = clusters
+    .map((c) => ({
+      plantSite: c.label,
+      contracts: c.contracts,
+      totalContractValue: c.totalContractValue,
+    }))
+    .sort((a, b) => b.totalContractValue - a.totalContractValue)
+  if (blankAgg.contracts > 0) {
+    merged.push({
+      plantSite: 'Blank',
+      contracts: blankAgg.contracts,
+      totalContractValue: blankAgg.totalContractValue,
+    })
+  }
+  return merged.sort((a, b) => b.totalContractValue - a.totalContractValue)
 }
 
 // Searchable multi-select dropdown (type to filter, multiple selection with OR)
@@ -360,6 +453,8 @@ export default function DashboardPage() {
       completed: 0,
       cancelled: 0,
       outstanding: 0,
+      openOutstandingLogistics: 0,
+      openOutstandingPayment: 0,
       totalQuantity: 0,
       deliveredQuantity: 0,
       outstandingQuantity: 0,
@@ -381,9 +476,6 @@ export default function DashboardPage() {
   const [selectedPlant, setSelectedPlant] = useState<PlantQuantity | null>(null)
   const [plantDetails, setPlantDetails] = useState<PlantContractDetail[]>([])
   const [loadingDetails, setLoadingDetails] = useState(false)
-  const [selectedProduct, setSelectedProduct] = useState<ProductQuantity | null>(null)
-  const [productDetails, setProductDetails] = useState<PlantContractDetail[]>([])
-  const [loadingProductDetails, setLoadingProductDetails] = useState(false)
   // Click-through modals
   const [selectedSupplierName, setSelectedSupplierName] = useState<string | null>(null)
   const [supplierContracts, setSupplierContracts] = useState<PlantContractDetail[]>([])
@@ -404,6 +496,7 @@ export default function DashboardPage() {
   const [drilldownPage, setDrilldownPage] = useState<number>(1)
   const [drilldownPageSize] = useState<number>(100)
   const [drilldownQuery, setDrilldownQuery] = useState<Record<string, string>>({})
+  const [drilldownView, setDrilldownView] = useState<'details' | 'vendor-group'>('details')
 
   // Shipments drilldown (shipment list) for Shipment Performance card
   const [shipDrilldownTitle, setShipDrilldownTitle] = useState<string | null>(null)
@@ -434,6 +527,9 @@ export default function DashboardPage() {
   const [payDrilldownPage, setPayDrilldownPage] = useState<number>(1)
   const [payDrilldownPageSize] = useState<number>(100)
   const [payDrilldownQuery, setPayDrilldownQuery] = useState<Record<string, string>>({})
+  const [payDrilldownPlantSummary, setPayDrilldownPlantSummary] = useState<PaymentPlantSummaryRow[]>([])
+  const [payDrilldownView, setPayDrilldownView] = useState<'details' | 'vendor-group'>('details')
+  const [paySelectedPlantSite, setPaySelectedPlantSite] = useState<string | null>(null)
   
   // Filter states
   const [dateFrom, setDateFrom] = useState('')
@@ -447,6 +543,8 @@ export default function DashboardPage() {
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const [availableGroups, setAvailableGroups] = useState<string[]>([])
   const [showFilters, setShowFilters] = useState(false)
+  const [quantityUnit, setQuantityUnit] = useState<'kg' | 'mt'>('kg')
+  const [amountUnit, setAmountUnit] = useState<'rp' | 'billion-rp'>('rp')
   const [error, setError] = useState<string | null>(null)
   const [aiInsight, setAiInsight] = useState<DashboardAiInsight | null>(null)
   const [loadingAiInsight, setLoadingAiInsight] = useState(false)
@@ -627,13 +725,17 @@ export default function DashboardPage() {
 
   const formatRupiah = (v: unknown) => {
     const n = parseNumberLoose(v) ?? 0
-    // Display-only: keep decimals as per formatNumber()
+    if (amountUnit === 'billion-rp') {
+      // Per request: Billion mode divides by 1,000,000
+      return `${formatNumber(n / 1_000_000)} Billion Rp`
+    }
     return `Rp. ${formatNumber(n)}`
   }
 
   const formatKg = (mt: unknown) => {
     const n = parseNumberLoose(mt)
     if (n === null) return '-'
+    if (quantityUnit === 'mt') return `${formatNumber(n / 1_000)} MT`
     return `${formatNumber(n)} Kg`
   }
 
@@ -659,6 +761,144 @@ export default function DashboardPage() {
   }
 
   const money = (v: number) => formatRupiah(v)
+  const quantityUnitLabel = quantityUnit === 'kg' ? 'Kg' : 'MT'
+  const amountUnitLabel = amountUnit === 'rp' ? 'Rp' : 'Billion Rp'
+
+  const contractsByVendorGroup = useMemo(() => {
+    const grouped = new Map<string, {
+      groupName: string
+      count: number
+      qtyOrdered: number
+      qtyDelivered: number
+      qtyOutstanding: number
+      contractValue: number
+      nearestPaymentDueDate: string | null
+      openCount: number
+      closeCount: number
+      cancelledCount: number
+    }>()
+    drilldownContracts.forEach((c) => {
+      const groupName = (c.group_name || '').trim() || 'Ungrouped'
+      const key = groupName.toLowerCase()
+      const prev = grouped.get(key) || {
+        groupName,
+        count: 0,
+        qtyOrdered: 0,
+        qtyDelivered: 0,
+        qtyOutstanding: 0,
+        contractValue: 0,
+        nearestPaymentDueDate: null,
+        openCount: 0,
+        closeCount: 0,
+        cancelledCount: 0,
+      }
+      prev.count += 1
+      prev.qtyOrdered += Number(c.quantity_ordered || 0)
+      prev.qtyDelivered += Number(c.delivered_quantity || 0)
+      prev.qtyOutstanding += Number(c.outstanding_quantity || 0)
+      prev.contractValue += Number(c.contract_value || 0)
+      if (c.payment_due_date) {
+        const current = Date.parse(c.payment_due_date)
+        if (!Number.isNaN(current)) {
+          const nearest = prev.nearestPaymentDueDate ? Date.parse(prev.nearestPaymentDueDate) : Number.POSITIVE_INFINITY
+          if (Number.isNaN(nearest) || current < nearest) {
+            prev.nearestPaymentDueDate = c.payment_due_date
+          }
+        }
+      }
+      const status = (c.status || '').trim().toLowerCase()
+      if (status === 'open') prev.openCount += 1
+      else if (status === 'close') prev.closeCount += 1
+      else if (status === 'cancelled' || status === 'canceled') prev.cancelledCount += 1
+      grouped.set(key, prev)
+    })
+    return Array.from(grouped.values()).sort((a, b) => b.count - a.count || a.groupName.localeCompare(b.groupName))
+  }, [drilldownContracts])
+  const showOutstandingPaymentColumns =
+    drilldownQuery.outstandingPayment === 'true' ||
+    /outstanding payment/i.test(drilldownTitle || '')
+
+  const paymentPlantSiteSummary = useMemo(() => {
+    const perContract = new Map<string, { contractId: string; plantSite: string; contractValue: number }>()
+    payDrilldownRows.forEach((r) => {
+      const contractId = String(r.contract_id || '').trim()
+      if (!contractId) return
+      const key = contractId.toLowerCase()
+      const plantSite = (r.plant_site || '').trim() || 'Blank'
+      const contractValue = Number(r.contract_value || 0)
+      const prev = perContract.get(key)
+      if (!prev || contractValue > prev.contractValue) {
+        perContract.set(key, { contractId, plantSite, contractValue })
+      }
+    })
+
+    const grouped = new Map<string, { plantSite: string; contracts: number; totalContractValue: number }>()
+    perContract.forEach((c) => {
+      const gKey = c.plantSite.toLowerCase()
+      const prev = grouped.get(gKey) || { plantSite: c.plantSite, contracts: 0, totalContractValue: 0 }
+      prev.contracts += 1
+      prev.totalContractValue += c.contractValue
+      grouped.set(gKey, prev)
+    })
+    const fromPageRows = mergePlantSiteSummaryRows(Array.from(grouped.values()), 0.6)
+    if (payDrilldownPlantSummary.length === 0) return fromPageRows
+    const fromBackend = mergePlantSiteSummaryRows(
+      payDrilldownPlantSummary.map((r) => ({
+        plantSite: r.plant_site || 'Blank',
+        contracts: Number(r.contracts || 0),
+        totalContractValue: Number(r.total_contract_value || 0),
+      })),
+      0.6
+    )
+    return fromBackend.length > 0 ? fromBackend : fromPageRows
+  }, [payDrilldownRows, payDrilldownPlantSummary])
+
+  const paymentByVendorGroup = useMemo(() => {
+    const groups = new Map<string, {
+      groupName: string
+      totalContracts: number
+      totalContractValue: number
+      nearestDueDate: string | null
+      latestDueDate: string | null
+      contractSeen: Set<string>
+    }>()
+    payDrilldownRows.forEach((r) => {
+      const groupName = (r.group_name || '').trim() || 'Ungrouped'
+      const key = groupName.toLowerCase()
+      const row = groups.get(key) || {
+        groupName,
+        totalContracts: 0,
+        totalContractValue: 0,
+        nearestDueDate: null,
+        latestDueDate: null,
+        contractSeen: new Set<string>(),
+      }
+      const contractId = String(r.contract_id || '').trim()
+      if (contractId && !row.contractSeen.has(contractId)) {
+        row.contractSeen.add(contractId)
+        row.totalContracts += 1
+        row.totalContractValue += Number(r.contract_value || 0)
+      }
+      const due = (r.payment_due_date || '').trim()
+      const t = due ? Date.parse(due) : Number.NaN
+      if (!Number.isNaN(t)) {
+        const nearest = row.nearestDueDate ? Date.parse(row.nearestDueDate) : Number.POSITIVE_INFINITY
+        const latest = row.latestDueDate ? Date.parse(row.latestDueDate) : Number.NEGATIVE_INFINITY
+        if (Number.isNaN(nearest) || t < nearest) row.nearestDueDate = due
+        if (Number.isNaN(latest) || t > latest) row.latestDueDate = due
+      }
+      groups.set(key, row)
+    })
+    return Array.from(groups.values())
+      .map((g) => ({
+        groupName: g.groupName,
+        totalContracts: g.totalContracts,
+        totalContractValue: g.totalContractValue,
+        nearestDueDate: g.nearestDueDate,
+        latestDueDate: g.latestDueDate,
+      }))
+      .sort((a, b) => b.totalContractValue - a.totalContractValue)
+  }, [payDrilldownRows])
 
   const KpiTile = ({
     label,
@@ -794,6 +1034,166 @@ export default function DashboardPage() {
     )
   }
 
+  const OpenOverlapBars = ({
+    open,
+    logistic,
+    payment,
+  }: {
+    open: number
+    logistic: number
+    payment: number
+  }) => {
+    const totalOpen = Math.max(open, 1)
+    const rows = [
+      { key: 'logistic', label: 'Outstanding Logistics', value: logistic, color: 'bg-orange-500' },
+      { key: 'payment', label: 'Outstanding Payment', value: payment, color: 'bg-violet-500' },
+    ] as const
+
+    return (
+      <div className="rounded-md border bg-amber-50/40 p-3">
+        <div className="text-xs font-medium text-gray-700 mb-2">
+          Open overlap breakdown (not additive)
+        </div>
+        <div className="space-y-2">
+          {rows.map((r) => {
+            const pctOfOpen = Math.min(100, (r.value / totalOpen) * 100)
+            return (
+              <button
+                key={r.key}
+                type="button"
+                className="w-full text-left"
+                onClick={() =>
+                  openContractsDrilldown({
+                    title: r.key === 'logistic' ? 'Open contracts - Outstanding logistics' : 'Open contracts - Outstanding payment',
+                    extraParams: r.key === 'logistic'
+                      ? { contractStatus: 'Open', outstandingLogistics: 'true' }
+                      : { contractStatus: 'Open', outstandingPayment: 'true' },
+                  })
+                }
+              >
+                <div className="flex items-center justify-between text-[11px] text-gray-700 mb-1">
+                  <span>{r.label}</span>
+                  <span className="tabular-nums">
+                    {formatNumber(r.value)} ({pct(r.value, totalOpen)}% of open)
+                  </span>
+                </div>
+                <div className="h-2 rounded-full bg-white border overflow-hidden">
+                  <div className={`h-full ${r.color}`} style={{ width: `${pctOfOpen}%` }} />
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
+  const PaymentOverlapBars = ({
+    paid,
+    pending,
+    late,
+    portfolioTotal,
+    loading: barsLoading,
+  }: {
+    paid: number
+    pending: number
+    late: number
+    portfolioTotal: number
+    loading: boolean
+  }) => {
+    const combined = paid + pending + late
+    const portfolioDenom = !barsLoading && portfolioTotal > 0 ? portfolioTotal : Math.max(combined, 1)
+    const pctLabel =
+      !barsLoading && portfolioTotal > 0
+        ? '% of total contract value (contracts with payments)'
+        : '% of Paid + Pending + Late combined (fallback while loading)'
+    const rows = [
+      { key: 'paid', label: 'Paid', value: paid, color: 'bg-green-500', status: 'PAID_PAYMENT' },
+      { key: 'pending', label: 'Pending payment', value: pending, color: 'bg-amber-500', status: 'PENDING_PAYMENT' },
+      { key: 'late', label: 'Late payment', value: late, color: 'bg-red-500', status: 'LATE_PAYMENT' },
+    ] as const
+
+    return (
+      <div className="rounded-md border bg-purple-50/40 p-3">
+        <div className="text-xs font-medium text-gray-700 mb-2">
+          Payment overlap breakdown (not additive)
+        </div>
+        <p className="text-[10px] text-gray-500 mb-2 leading-snug">
+          Bar width and {pctLabel}. Categories overlap, so the three shares can add up to more than 100%.
+        </p>
+        <div className="space-y-2">
+          {rows.map((r) => {
+            const widthPct = Math.min(100, (r.value / portfolioDenom) * 100)
+            return (
+              <button
+                key={r.key}
+                type="button"
+                className="w-full text-left"
+                onClick={() => openPaymentsDrilldown({ title: r.label, extraParams: { status: r.status } })}
+              >
+                <div className="flex items-center justify-between text-[11px] text-gray-700 mb-1">
+                  <span>{r.label}</span>
+                  <span className="tabular-nums">
+                    {money(r.value)} ({pct(r.value, portfolioDenom)}%)
+                  </span>
+                </div>
+                <div className="h-2 rounded-full bg-white border overflow-hidden">
+                  <div className={`h-full ${r.color}`} style={{ width: `${widthPct}%` }} />
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
+  const QuantityOverlapBars = ({
+    outstandingDelivery,
+    outstandingPayment,
+  }: {
+    outstandingDelivery: number
+    outstandingPayment: number
+  }) => {
+    const base = Math.max(outstandingDelivery, 1)
+    const rows = [
+      { key: 'delivery', label: 'Outstanding Delivery', value: outstandingDelivery, color: 'bg-amber-500' },
+      { key: 'payment', label: 'Outstanding Payment', value: outstandingPayment, color: 'bg-violet-500' },
+    ] as const
+    return (
+      <div className="rounded-md border bg-blue-50/40 p-3">
+        <div className="text-xs font-medium text-gray-700 mb-2">Quantity overlap breakdown (not additive)</div>
+        <p className="text-[10px] text-gray-500 mb-2">Outstanding Payment can overlap with Outstanding Delivery.</p>
+        <div className="space-y-2">
+          {rows.map((r) => {
+            const widthPct = Math.min(100, (r.value / base) * 100)
+            return (
+              <button
+                key={r.key}
+                type="button"
+                className="w-full text-left"
+                onClick={() => {
+                  if (r.key === 'delivery') return openContractsDrilldown({ title: 'Contracts with outstanding delivery quantity', extraParams: { outstanding: 'true' } })
+                  return openContractsDrilldown({ title: 'Contracts with outstanding payment quantity', extraParams: { outstanding: 'true', outstandingPayment: 'true' } })
+                }}
+              >
+                <div className="flex items-center justify-between text-[11px] text-gray-700 mb-1">
+                  <span>{r.label}</span>
+                  <span className="tabular-nums">
+                    {formatKg(r.value)} ({pct(r.value, base)}% of outstanding delivery)
+                  </span>
+                </div>
+                <div className="h-2 rounded-full bg-white border overflow-hidden">
+                  <div className={`h-full ${r.color}`} style={{ width: `${widthPct}%` }} />
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
   const buildFilterQuery = () => {
     const params = new URLSearchParams()
     if (dateFrom) params.append('dateFrom', dateFrom)
@@ -835,6 +1235,7 @@ export default function DashboardPage() {
   }) => {
     setDrilldownTitle(opts.title)
     setDrilldownSubtitle(opts.subtitle || '')
+    setDrilldownView('details')
     const q: Record<string, string> = { ...(opts.extraParams || {}) }
     setDrilldownQuery(q)
     setDrilldownPage(1)
@@ -945,6 +1346,7 @@ export default function DashboardPage() {
       const res = await api.get(`/dashboard/payments?${params.toString()}`)
       setPayDrilldownRows(res.data.data || [])
       setPayDrilldownTotalCount(Number(res.data.meta?.totalCount) || 0)
+      setPayDrilldownPlantSummary(Array.isArray(res.data.meta?.plantSummary) ? res.data.meta.plantSummary : [])
     } catch (err: any) {
       console.error('Failed to load drilldown payments:', err)
       const msg = err?.response?.data?.error?.message || err?.message || 'Failed to load details'
@@ -963,6 +1365,8 @@ export default function DashboardPage() {
     setPayDrilldownSubtitle(opts.subtitle || '')
     const q: Record<string, string> = { ...(opts.extraParams || {}) }
     setPayDrilldownQuery(q)
+    setPaySelectedPlantSite(null)
+    setPayDrilldownView('details')
     setPayDrilldownPage(1)
     await fetchPaymentsDrilldownPage(1, q)
   }
@@ -974,6 +1378,9 @@ export default function DashboardPage() {
     setPayDrilldownTotalCount(0)
     setPayDrilldownPage(1)
     setPayDrilldownQuery({})
+    setPayDrilldownPlantSummary([])
+    setPaySelectedPlantSite(null)
+    setPayDrilldownView('details')
   }
 
   const closeContractsDrilldown = () => {
@@ -983,6 +1390,7 @@ export default function DashboardPage() {
     setDrilldownTotalCount(0)
     setDrilldownPage(1)
     setDrilldownQuery({})
+    setDrilldownView('details')
   }
 
   const fetchPlantDetails = async (plant: PlantQuantity) => {
@@ -1007,27 +1415,17 @@ export default function DashboardPage() {
     setPlantDetails([])
   }
 
-  const fetchProductDetails = async (product: ProductQuantity) => {
-    setSelectedProduct(product)
-    setLoadingProductDetails(true)
-    try {
-      const filterSuffix = buildFilterQuery()
-      const base = `/dashboard/product-details?product=${encodeURIComponent(product.product)}`
-      const sep = filterSuffix ? '&' : ''
-      const response = await api.get(`${base}${sep}${filterSuffix.replace('?', '')}`)
-      setProductDetails(response.data.data)
-    } catch (error) {
-      console.error('Failed to fetch product details:', error)
-      alert('Failed to load product details')
-    } finally {
-      setLoadingProductDetails(false)
-    }
-  }
-
-  const closeProductModal = () => {
-    setSelectedProduct(null)
-    setProductDetails([])
-  }
+  const openProductContracts = (opts: {
+    product: string
+    title: string
+    extraParams?: Record<string, string>
+  }) => openContractsDrilldown({
+    title: opts.title,
+    extraParams: {
+      product: opts.product,
+      ...(opts.extraParams || {}),
+    },
+  })
 
   // Incoterm-only widget removed (now integrated into Product breakdown)
 
@@ -1158,23 +1556,36 @@ export default function DashboardPage() {
               Welcome to KPN Logistics Intelligence Platform
             </p>
           </div>
-          <Button 
-            onClick={() => setShowFilters(!showFilters)}
-            variant="outline"
-            className="flex items-center gap-2"
-          >
-            <Filter className="h-4 w-4" />
-            {showFilters ? 'Hide Filters' : 'Show Filters'}
-          </Button>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1 rounded-md border bg-white p-1">
+              <Button size="sm" variant={quantityUnit === 'kg' ? 'default' : 'ghost'} onClick={() => setQuantityUnit('kg')}>Kg</Button>
+              <Button size="sm" variant={quantityUnit === 'mt' ? 'default' : 'ghost'} onClick={() => setQuantityUnit('mt')}>MT</Button>
+            </div>
+            <div className="flex items-center gap-1 rounded-md border bg-white p-1">
+              <Button size="sm" variant={amountUnit === 'rp' ? 'default' : 'ghost'} onClick={() => setAmountUnit('rp')}>Rp</Button>
+              <Button size="sm" variant={amountUnit === 'billion-rp' ? 'default' : 'ghost'} onClick={() => setAmountUnit('billion-rp')}>Billion Rp</Button>
+            </div>
+            <Button
+              onClick={() => setShowFilters(!showFilters)}
+              variant="outline"
+              className="flex items-center gap-2"
+            >
+              <Filter className="h-4 w-4" />
+              {showFilters ? 'Hide Filters' : 'Show Filters'}
+            </Button>
+          </div>
         </div>
 
         {/* AI Logistics Insight */}
-        <Card>
+        <Card data-tour="tour-ai-insight">
           <CardHeader className="flex flex-row items-center justify-between space-y-0">
             <div className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-purple-500" />
               <div>
-                <CardTitle className="text-lg">AI Logistics Insight</CardTitle>
+                <CardTitle className="text-lg flex items-center gap-2 flex-wrap">
+                  AI Logistics Insight
+                  <FieldHelp text={FIELD_HELP.aiInsight} />
+                </CardTitle>
                 <CardDescription>
                   Expert insight for palm oil downstream logistics, based on current dashboard filters.
                 </CardDescription>
@@ -1327,13 +1738,18 @@ export default function DashboardPage() {
         )}
 
         {/* Performance Cards (management-friendly) */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" data-tour="tour-dashboard-kpis">
           {/* Contract Performance */}
           <Card className="hover:shadow-lg transition-shadow">
             <CardHeader className="pb-3">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <CardTitle className="text-base">Contract Performance</CardTitle>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    Contract Performance
+                    <FieldHelp text={FIELD_HELP.dashboardKpiContracts} />
+                    <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                    <Badge variant="outline" className="text-[10px]">Amt: {amountUnitLabel}</Badge>
+                  </CardTitle>
                   <CardDescription>Health and closure progress</CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1356,8 +1772,8 @@ export default function DashboardPage() {
                 />
                 <KpiTile
                   label="Closure rate"
-                  value={loading ? '...' : `${pct(stats.contracts.closed, stats.contracts.total)}%`}
-                  sublabel={`${loading ? '...' : formatNumber(stats.contracts.closed)} closed`}
+                  value={loading ? '...' : formatNumber(stats.contracts.closed)}
+                  sublabel={`${loading ? '...' : pct(stats.contracts.closed, stats.contracts.total)}% of total`}
                 onClick={() => openContractsDrilldown({ title: 'Closed contracts', extraParams: { contractStatus: 'Close' } })}
                 />
                 <KpiTile
@@ -1368,7 +1784,6 @@ export default function DashboardPage() {
                 onClick={() => openContractsDrilldown({ title: 'Open contracts', extraParams: { contractStatus: 'Open' } })}
                 />
               </div>
-
               <StackedBar
                 segments={[
                   { label: 'Open', value: loading ? 0 : stats.contracts.outstanding, tone: 'good' },
@@ -1382,6 +1797,11 @@ export default function DashboardPage() {
                   return openContractsDrilldown({ title: 'All contracts' })
                 }}
               />
+              <OpenOverlapBars
+                open={loading ? 0 : stats.contracts.outstanding}
+                logistic={loading ? 0 : stats.contracts.openOutstandingLogistics}
+                payment={loading ? 0 : stats.contracts.openOutstandingPayment}
+              />
             </CardContent>
           </Card>
 
@@ -1390,7 +1810,11 @@ export default function DashboardPage() {
             <CardHeader className="pb-3">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <CardTitle className="text-base">Shipment Performance</CardTitle>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    Shipment Performance
+                    <FieldHelp text={FIELD_HELP.dashboardKpiShipments} />
+                    <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                  </CardTitle>
                   <CardDescription>Status mix and delay focus</CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1459,7 +1883,11 @@ export default function DashboardPage() {
             <CardHeader className="pb-3">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <CardTitle className="text-base">Trucking Performance</CardTitle>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    Trucking Performance
+                    <FieldHelp text={FIELD_HELP.dashboardKpiTrucking} />
+                    <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                  </CardTitle>
                   <CardDescription>Status mix and late risk</CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1526,7 +1954,11 @@ export default function DashboardPage() {
             <CardHeader className="pb-3">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <CardTitle className="text-base">Payment Performance</CardTitle>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    Payment Performance
+                    <FieldHelp text={FIELD_HELP.dashboardKpiFinance} />
+                    <Badge variant="outline" className="text-[10px]">Amt: {amountUnitLabel}</Badge>
+                  </CardTitle>
                   <CardDescription>Cash position and risk</CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1549,37 +1981,35 @@ export default function DashboardPage() {
                 />
                 <KpiTile
                   label="Paid rate"
-                  value={loading ? '...' : `${pct(stats.finance.paidAmount, stats.finance.totalAmount)}%`}
-                  sublabel={loading ? '...' : money(stats.finance.paidAmount)}
+                  value={loading ? '...' : money(stats.finance.paidAmount)}
+                  sublabel={`${loading ? '...' : pct(stats.finance.paidAmount, stats.finance.totalAmount)}% of total`}
                   tone="good"
-                  onClick={() => openPaymentsDrilldown({ title: 'Paid payments', extraParams: { status: 'PAID' } })}
+                  onClick={() => openPaymentsDrilldown({ title: 'Paid payments', extraParams: { status: 'PAID_PAYMENT' } })}
                 />
                 <KpiTile
-                  label="Overdue rate"
-                  value={loading ? '...' : `${pct(stats.finance.overdueAmount, stats.finance.totalAmount)}%`}
-                  sublabel={loading ? '...' : money(stats.finance.overdueAmount)}
+                  label="Pending payment"
+                  value={loading ? '...' : money(stats.finance.pendingAmount)}
+                  sublabel={`${loading ? '...' : formatNumber(stats.finance.pending)} contracts (payoff date blank)`}
+                  tone="warn"
+                  onClick={() => openPaymentsDrilldown({ title: 'Pending payment', extraParams: { status: 'PENDING_PAYMENT' } })}
+                />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-1 gap-2">
+                <KpiTile
+                  label="Late payment"
+                  value={loading ? '...' : money(stats.finance.overdueAmount)}
+                  sublabel={`${loading ? '...' : formatNumber(stats.finance.overdue)} contracts (unpaid overdue or paid late)`}
                   tone="bad"
-                  onClick={() => openPaymentsDrilldown({ title: 'Overdue payments', extraParams: { status: 'OVERDUE' } })}
+                  onClick={() => openPaymentsDrilldown({ title: 'Late payment', extraParams: { status: 'LATE_PAYMENT' } })}
                 />
               </div>
 
-              <StackedBar
-                segments={[
-                  { label: 'Paid', value: loading ? 0 : stats.finance.paidAmount, tone: 'good' },
-                  { label: 'Pending payment', value: loading ? 0 : stats.finance.pendingAmount, tone: 'warn' },
-                  { label: 'Overdue payment', value: loading ? 0 : stats.finance.overdueAmount, tone: 'bad' },
-                ]}
-                legendMdCols={3}
-                formatValue={money}
-                onSegmentClick={(label) => {
-                  const map: Record<string, string> = {
-                    Paid: 'PAID',
-                    'Pending payment': 'PENDING',
-                    'Overdue payment': 'OVERDUE',
-                  }
-                  const status = map[label]
-                  return openPaymentsDrilldown({ title: `${label}`, extraParams: { status } })
-                }}
+              <PaymentOverlapBars
+                paid={loading ? 0 : stats.finance.paidAmount}
+                pending={loading ? 0 : stats.finance.pendingAmount}
+                late={loading ? 0 : stats.finance.overdueAmount}
+                portfolioTotal={loading ? 0 : stats.finance.totalAmount}
+                loading={loading}
               />
             </CardContent>
           </Card>
@@ -1591,8 +2021,11 @@ export default function DashboardPage() {
             <CardHeader className="pb-3">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <CardTitle className="text-base">Quantity Performance</CardTitle>
-                  <CardDescription>Delivered vs outstanding across contracts</CardDescription>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    Quantity Performance
+                    <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                  </CardTitle>
+                  <CardDescription>Delivered vs outstanding delivery/payment across contracts</CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="p-2 rounded-lg bg-blue-100">
@@ -1605,7 +2038,7 @@ export default function DashboardPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
                 <KpiTile label="Total quantity" value={loading ? '...' : formatKg(stats.contracts.totalQuantity)} sublabel="Ordered" onClick={() => openContractsDrilldown({ title: 'All contracts (quantity basis)' })} />
                 <KpiTile
                   label="Delivered"
@@ -1624,18 +2057,30 @@ export default function DashboardPage() {
                   }
                 />
                 <KpiTile
-                  label="Outstanding"
+                  label="Outstanding Delivery"
                   value={loading ? '...' : formatKg(stats.contracts.outstandingQuantity)}
                   sublabel={
                     loading
                       ? '...'
-                      : `Paid ${formatKg(stats.contracts.outstandingPaidQuantity)} • Pending ${formatKg(stats.contracts.outstandingPendingQuantity)}`
+                      : `Paid ${formatKg(stats.contracts.outstandingPaidQuantity)} • Outstanding Payment ${formatKg(stats.contracts.outstandingPendingQuantity)}`
                   }
                   tone="warn"
                   onClick={() =>
                     openContractsDrilldown({
-                      title: 'Contracts with outstanding quantity',
+                      title: 'Contracts with outstanding delivery quantity',
                       extraParams: { outstanding: 'true' }
+                    })
+                  }
+                />
+                <KpiTile
+                  label="Outstanding Payment"
+                  value={loading ? '...' : formatKg(stats.contracts.outstandingPendingQuantity)}
+                  sublabel="Outstanding qty with blank payoff date"
+                  tone="warn"
+                  onClick={() =>
+                    openContractsDrilldown({
+                      title: 'Contracts with outstanding payment quantity',
+                      extraParams: { outstanding: 'true', outstandingPayment: 'true' }
                     })
                   }
                 />
@@ -1644,13 +2089,17 @@ export default function DashboardPage() {
               <StackedBar
                 segments={[
                   { label: 'Delivered', value: loading ? 0 : stats.contracts.deliveredQuantity, tone: 'good' },
-                  { label: 'Outstanding', value: loading ? 0 : stats.contracts.outstandingQuantity, tone: 'warn' },
+                  { label: 'Outstanding Delivery', value: loading ? 0 : stats.contracts.outstandingQuantity, tone: 'warn' },
                 ]}
                 onSegmentClick={(label) => {
                   if (label === 'Delivered') return openContractsDrilldown({ title: 'Contracts with delivered quantity', extraParams: { delivered: 'true' } })
-                  if (label === 'Outstanding') return openContractsDrilldown({ title: 'Contracts with outstanding quantity', extraParams: { outstanding: 'true' } })
+                  if (label === 'Outstanding Delivery') return openContractsDrilldown({ title: 'Contracts with outstanding delivery quantity', extraParams: { outstanding: 'true' } })
                   return openContractsDrilldown({ title: 'All contracts (quantity basis)' })
                 }}
+              />
+              <QuantityOverlapBars
+                outstandingDelivery={loading ? 0 : stats.contracts.outstandingQuantity}
+                outstandingPayment={loading ? 0 : stats.contracts.outstandingPendingQuantity}
               />
             </CardContent>
           </Card>
@@ -1662,7 +2111,11 @@ export default function DashboardPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-              <CardTitle className="text-lg">Contract Quantity by Product (Incoterm mix)</CardTitle>
+              <CardTitle className="text-lg flex items-center gap-2">
+                Contract Quantity by Product (Incoterm mix)
+                <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                <Badge variant="outline" className="text-[10px]">Amt: {amountUnitLabel}</Badge>
+              </CardTitle>
               <CardDescription>Top products with incoterm distribution</CardDescription>
               </div>
               <Layers className="h-5 w-5 text-gray-400" />
@@ -1721,7 +2174,7 @@ export default function DashboardPage() {
                           key={p.product}
                           type="button"
                           className="w-full text-left p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
-                          onClick={() => fetchProductDetails(p.summary)}
+                          onClick={() => openProductContracts({ product: p.product, title: `${p.product} contracts` })}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-start gap-3 min-w-0">
@@ -1744,16 +2197,56 @@ export default function DashboardPage() {
                           <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-gray-200">
                             <div className="text-xs">
                               <span className="text-gray-500">Total:</span>
-                              <span className="font-semibold text-gray-900 ml-1">{formatKg(p.summary.total_quantity)}</span>
+                              <button
+                                type="button"
+                                className="font-semibold text-gray-900 ml-1 hover:underline"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  openProductContracts({ product: p.product, title: `${p.product} — Total quantity` })
+                                }}
+                              >
+                                {formatKg(p.summary.total_quantity)}
+                              </button>
                             </div>
                             <div className="text-xs">
                               <span className="text-gray-500">Outstanding:</span>
-                              <span className="font-semibold text-orange-700 ml-1">{formatKg(p.summary.outstanding_quantity)}</span>
+                              <button
+                                type="button"
+                                className="font-semibold text-orange-700 ml-1 hover:underline"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  openProductContracts({ product: p.product, title: `${p.product} — Outstanding quantity`, extraParams: { outstanding: 'true' } })
+                                }}
+                              >
+                                {formatKg(p.summary.outstanding_quantity)}
+                              </button>
                             </div>
                             <div className="text-xs">
                               <span className="text-gray-500">Completed:</span>
-                              <span className="font-semibold text-green-700 ml-1">{formatKg(p.summary.completed_quantity)}</span>
+                              <button
+                                type="button"
+                                className="font-semibold text-green-700 ml-1 hover:underline"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  openProductContracts({ product: p.product, title: `${p.product} — Completed quantity`, extraParams: { delivered: 'true' } })
+                                }}
+                              >
+                                {formatKg(p.summary.completed_quantity)}
+                              </button>
                             </div>
+                          </div>
+                          <div className="mt-2 text-xs">
+                            <span className="text-gray-500">Total Value:</span>
+                            <button
+                              type="button"
+                              className="font-semibold text-purple-700 ml-1 hover:underline"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                openProductContracts({ product: p.product, title: `${p.product} — Total value` })
+                              }}
+                            >
+                              {formatRupiah(p.summary.total_contract_value)}
+                            </button>
                           </div>
 
                           <div className="mt-2">
@@ -1761,14 +2254,12 @@ export default function DashboardPage() {
                               segments={segments}
                               onSegmentClick={(label) => {
                                 if (label === 'Other') {
-                                  return openContractsDrilldown({
-                                    title: `${p.product} — Other incoterms`,
-                                    extraParams: { product: p.product },
-                                  })
+                                  return openProductContracts({ product: p.product, title: `${p.product} — Other incoterms` })
                                 }
-                                return openContractsDrilldown({
+                                return openProductContracts({
+                                  product: p.product,
                                   title: `${p.product} — ${label}`,
-                                  extraParams: { product: p.product, incoterm: label === 'Blank' ? 'Blank' : label },
+                                  extraParams: { incoterm: label === 'Blank' ? 'Blank' : label },
                                 })
                               }}
                               legendMdCols={3}
@@ -1790,7 +2281,11 @@ export default function DashboardPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle className="text-lg">Contract Quantity by Plant/Site</CardTitle>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  Contract Quantity by Plant/Site
+                  <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                  <Badge variant="outline" className="text-[10px]">Amt: {amountUnitLabel}</Badge>
+                </CardTitle>
                 <CardDescription>Total, outstanding, and delivered quantity per plant/site</CardDescription>
               </div>
               <MapPin className="h-5 w-5 text-gray-400" />
@@ -1863,7 +2358,10 @@ export default function DashboardPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle className="text-lg">Top 5 Suppliers</CardTitle>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  Top 5 Suppliers
+                  <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                </CardTitle>
                 <CardDescription>By total quantity</CardDescription>
               </div>
               <Users className="h-5 w-5 text-gray-400" />
@@ -1909,7 +2407,10 @@ export default function DashboardPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle className="text-lg">Top 5 Trucking Owners</CardTitle>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  Top 5 Trucking Owners
+                  <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                </CardTitle>
                 <CardDescription>By quantity sent</CardDescription>
               </div>
               <Truck className="h-5 w-5 text-gray-400" />
@@ -1955,7 +2456,10 @@ export default function DashboardPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle className="text-lg">Top 5 Vessels</CardTitle>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  Top 5 Vessels
+                  <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                </CardTitle>
                 <CardDescription>By quantity shipped</CardDescription>
               </div>
               <Ship className="h-5 w-5 text-gray-400" />
@@ -2000,104 +2504,6 @@ export default function DashboardPage() {
 
         {/* Status Breakdown section removed per latest dashboard requirements */}
       </div>
-
-      {/* Product Details Modal */}
-      {selectedProduct && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-xl font-semibold">{selectedProduct.product}</h2>
-                <p className="text-sm text-gray-500">
-                  {selectedProduct.contract_count} Contracts • {selectedProduct.supplier_count} Suppliers
-                </p>
-              </div>
-              <Button variant="ghost" onClick={closeProductModal} className="text-gray-500 hover:text-gray-700">
-                ✕
-              </Button>
-            </div>
-
-            {/* Summary Stats */}
-            <div className="grid grid-cols-4 gap-4 mb-6">
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <div className="text-sm text-gray-600">Total Quantity</div>
-                <div className="text-xl font-semibold text-blue-600">
-                  {formatKg(selectedProduct.total_quantity)}
-                </div>
-              </div>
-              <div className="bg-orange-50 p-4 rounded-lg">
-                <div className="text-sm text-gray-600">Outstanding</div>
-                <div className="text-xl font-semibold text-orange-600">
-                  {formatKg(selectedProduct.outstanding_quantity)}
-                </div>
-              </div>
-              <div className="bg-green-50 p-4 rounded-lg">
-                <div className="text-sm text-gray-600">Completed</div>
-                <div className="text-xl font-semibold text-green-600">
-                  {formatKg(selectedProduct.completed_quantity)}
-                </div>
-              </div>
-              <div className="bg-purple-50 p-4 rounded-lg">
-                <div className="text-sm text-gray-600">Total Value</div>
-                <div className="text-xl font-semibold text-purple-600">
-                  {formatRupiah(selectedProduct.total_contract_value)}
-                </div>
-              </div>
-            </div>
-
-            {/* Contract Details Table */}
-            <div className="border rounded-lg overflow-hidden">
-              <div className="bg-gray-50 px-4 py-3 border-b">
-                <h3 className="font-semibold">Contract Details</h3>
-              </div>
-              <div className="overflow-x-auto">
-                {loadingProductDetails ? (
-                  <div className="text-center py-8 text-gray-500">Loading details...</div>
-                ) : productDetails.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">No contract details available</div>
-                ) : (
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-100">
-                      <tr>
-                        <th className="px-4 py-3 text-left font-medium text-gray-600">Contract ID</th>
-                        <th className="px-4 py-3 text-left font-medium text-gray-600">STO Number</th>
-                        <th className="px-4 py-3 text-left font-medium text-gray-600">Supplier</th>
-                        <th className="px-4 py-3 text-right font-medium text-gray-600">Quantity Ordered (Kg)</th>
-                        <th className="px-4 py-3 text-right font-medium text-gray-600">Completed (Kg)</th>
-                        <th className="px-4 py-3 text-right font-medium text-gray-600">Outstanding (Kg)</th>
-                        <th className="px-4 py-3 text-center font-medium text-gray-600">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {productDetails.map((detail, idx) => (
-                        <tr key={idx} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 text-left">{detail.contract_id}</td>
-                          <td className="px-4 py-3 text-left">{detail.sto_number || '-'}</td>
-                          <td className="px-4 py-3 text-left">{detail.supplier}</td>
-                          <td className="px-4 py-3 text-right font-medium">
-                            {formatNumber(parseNumberLoose(detail.total_quantity) ?? 0)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-green-600 font-medium">
-                            {formatNumber(parseNumberLoose(detail.quantity_delivered) ?? 0)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-orange-600 font-medium">
-                            {formatNumber(parseNumberLoose(detail.quantity_shipped) ?? 0)}
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <Badge variant={detail.status === 'COMPLETED' ? 'default' : 'secondary'}>
-                              {detail.status}
-                            </Badge>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Incoterm Details Modal removed (incoterm mix shown per product) */}
 
@@ -2614,6 +3020,11 @@ export default function DashboardPage() {
                 {payDrilldownSubtitle ? (
                   <p className="text-sm text-gray-500 mt-1 truncate">{payDrilldownSubtitle}</p>
                 ) : null}
+                {paySelectedPlantSite ? (
+                  <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-md inline-block px-2 py-0.5 mt-1">
+                    Plant filter: {paySelectedPlantSite}
+                  </p>
+                ) : null}
                 <p className="text-sm text-gray-500 mt-1">
                   {loadingPayDrilldown
                     ? 'Loading...'
@@ -2627,21 +3038,90 @@ export default function DashboardPage() {
 
             <div className="border rounded-lg overflow-hidden">
               <div className="bg-gray-50 px-4 py-3 border-b flex items-center justify-between gap-4">
-                <h3 className="font-semibold">Payments</h3>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant={payDrilldownView === 'details' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setPayDrilldownView('details')}
+                  >
+                    Payment Details
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={payDrilldownView === 'vendor-group' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setPayDrilldownView('vendor-group')}
+                  >
+                    By Vendor Group
+                  </Button>
+                </div>
                 <Button variant="outline" size="sm" onClick={() => handleViewDetails('finance')}>
                   Open in Finance page
                 </Button>
               </div>
+              {!loadingPayDrilldown && paymentPlantSiteSummary.length > 0 && (
+                <div className="border-b bg-white px-4 py-3">
+                  <p className="text-xs font-medium text-gray-600 mb-1">
+                    Total contract value by Plant/Site
+                  </p>
+                  <p className="text-[10px] text-gray-500 mb-2 leading-snug">
+                    LAND → truck discharge (unloading); SEA → vessel discharge port. Similar names (≥60% match) are merged.
+                    Based on full filtered payment results.
+                  </p>
+                  <div className="mb-2 flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={paySelectedPlantSite ? 'outline' : 'default'}
+                      onClick={async () => {
+                        const q = { ...payDrilldownQuery }
+                        delete q.plantSite
+                        setPaySelectedPlantSite(null)
+                        setPayDrilldownQuery(q)
+                        setPayDrilldownPage(1)
+                        await fetchPaymentsDrilldownPage(1, q)
+                      }}
+                    >
+                      All Plant/Site
+                    </Button>
+                    {paySelectedPlantSite ? (
+                      <span className="text-xs text-gray-500">Filtered: {paySelectedPlantSite}</span>
+                    ) : null}
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {paymentPlantSiteSummary.map((s) => (
+                      <button
+                        key={s.plantSite}
+                        type="button"
+                        className={`rounded-md border bg-gray-50 px-3 py-2 text-left hover:bg-gray-100 ${paySelectedPlantSite === s.plantSite ? 'ring-2 ring-blue-500' : ''}`}
+                        onClick={async () => {
+                          const q = { ...payDrilldownQuery, plantSite: s.plantSite }
+                          setPaySelectedPlantSite(s.plantSite)
+                          setPayDrilldownQuery(q)
+                          setPayDrilldownPage(1)
+                          await fetchPaymentsDrilldownPage(1, q)
+                        }}
+                      >
+                        <div className="text-[11px] text-gray-500 truncate">{s.plantSite}</div>
+                        <div className="text-sm font-semibold tabular-nums">{money(s.totalContractValue)}</div>
+                        <div className="text-[11px] text-gray-500">{formatNumber(s.contracts)} contracts</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="overflow-x-auto">
                 {loadingPayDrilldown ? (
                   <div className="text-center py-10 text-gray-500">Loading details...</div>
                 ) : payDrilldownRows.length === 0 ? (
                   <div className="text-center py-10 text-gray-500">No payments found</div>
-                ) : (
-                  <table className="w-full text-sm">
+                ) : payDrilldownView === 'details' ? (
+                  <table className="w-full min-w-[1350px] text-sm">
                     <thead className="bg-gray-100">
                       <tr>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Contract</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Plant/Site</th>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">STO No</th>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Contract Ext No</th>
                         <th className="px-4 py-3 text-right font-medium text-gray-600">Unit Price</th>
@@ -2660,6 +3140,7 @@ export default function DashboardPage() {
                       {payDrilldownRows.map((p) => (
                         <tr key={p.id} className="hover:bg-gray-50">
                           <td className="px-4 py-3">{p.contract_id || '-'}</td>
+                          <td className="px-4 py-3">{p.plant_site || '-'}</td>
                           <td className="px-4 py-3">{p.sto_number || '-'}</td>
                           <td className="px-4 py-3">{p.contract_ext_no || '-'}</td>
                           <td className="px-4 py-3 text-right tabular-nums">{money(p.unit_price ?? 0)}</td>
@@ -2676,6 +3157,29 @@ export default function DashboardPage() {
                           <td className="px-4 py-3 text-center">
                             <Badge>{p.payment_status || '-'}</Badge>
                           </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Vendor Group</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Total Contracts</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Total Contract Value</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Nearest Due Date Payment</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Latest Due Date Payment</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {paymentByVendorGroup.map((g) => (
+                        <tr key={g.groupName} className="hover:bg-gray-50">
+                          <td className="px-4 py-3">{g.groupName}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(g.totalContracts)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{money(g.totalContractValue)}</td>
+                          <td className="px-4 py-3">{formatDate(g.nearestDueDate || undefined)}</td>
+                          <td className="px-4 py-3">{formatDate(g.latestDueDate || undefined)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -2733,7 +3237,7 @@ export default function DashboardPage() {
       {/* Universal Contracts Drilldown Modal (for performance cards) */}
       {drilldownTitle && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-5xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white w-[96vw] max-w-[96vw] rounded-lg shadow-lg p-4 md:p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between mb-4 gap-4">
               <div className="min-w-0">
                 <h2 className="text-xl font-semibold truncate">{drilldownTitle}</h2>
@@ -2753,7 +3257,24 @@ export default function DashboardPage() {
 
             <div className="border rounded-lg overflow-hidden">
               <div className="bg-gray-50 px-4 py-3 border-b flex items-center justify-between gap-4">
-                <h3 className="font-semibold">Contract Details</h3>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant={drilldownView === 'details' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setDrilldownView('details')}
+                  >
+                    Contract Details
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={drilldownView === 'vendor-group' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setDrilldownView('vendor-group')}
+                  >
+                    By Vendor Group
+                  </Button>
+                </div>
                 <Button variant="outline" size="sm" onClick={() => handleViewDetails('contracts')}>
                   Open in Contracts page
                 </Button>
@@ -2763,15 +3284,22 @@ export default function DashboardPage() {
                   <div className="text-center py-10 text-gray-500">Loading details...</div>
                 ) : drilldownContracts.length === 0 ? (
                   <div className="text-center py-10 text-gray-500">No contracts found</div>
-                ) : (
-                  <table className="w-full text-sm">
+                ) : drilldownView === 'details' ? (
+                  <table className="w-full min-w-[1400px] text-sm">
                     <thead className="bg-gray-100">
                       <tr>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Contract ID</th>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Contract Ext No</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Vendor Group</th>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Supplier</th>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Product</th>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Incoterm</th>
+                        {showOutstandingPaymentColumns && (
+                          <>
+                            <th className="px-4 py-3 text-right font-medium text-gray-600">Contract Value</th>
+                            <th className="px-4 py-3 text-left font-medium text-gray-600">Due Date Payment</th>
+                          </>
+                        )}
                         <th className="px-4 py-3 text-right font-medium text-gray-600">Qty Ordered (Kg)</th>
                         <th className="px-4 py-3 text-right font-medium text-gray-600">Delivered (Kg)</th>
                         <th className="px-4 py-3 text-right font-medium text-gray-600">Outstanding (Kg)</th>
@@ -2783,9 +3311,16 @@ export default function DashboardPage() {
                         <tr key={c.id} className="hover:bg-gray-50">
                           <td className="px-4 py-3">{c.contract_id}</td>
                           <td className="px-4 py-3">{c.contract_ext_no || '-'}</td>
+                          <td className="px-4 py-3">{c.group_name || '-'}</td>
                           <td className="px-4 py-3">{c.supplier || '-'}</td>
                           <td className="px-4 py-3">{c.product || '-'}</td>
                           <td className="px-4 py-3">{c.incoterm || '-'}</td>
+                          {showOutstandingPaymentColumns && (
+                            <>
+                              <td className="px-4 py-3 text-right tabular-nums">{money(c.contract_value ?? 0)}</td>
+                              <td className="px-4 py-3">{formatDate(c.payment_due_date)}</td>
+                            </>
+                          )}
                           <td className="px-4 py-3 text-right font-medium tabular-nums">
                             {formatNumber(c.quantity_ordered ?? 0)}
                           </td>
@@ -2800,6 +3335,47 @@ export default function DashboardPage() {
                               {c.status || '-'}
                             </span>
                           </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Vendor Group</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Contracts</th>
+                        {showOutstandingPaymentColumns && (
+                          <>
+                            <th className="px-4 py-3 text-right font-medium text-gray-600">Contract Value</th>
+                            <th className="px-4 py-3 text-left font-medium text-gray-600">Nearest Due Date Payment</th>
+                          </>
+                        )}
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Qty Ordered (Kg)</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Delivered (Kg)</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Outstanding (Kg)</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Open</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Close</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Cancelled</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {contractsByVendorGroup.map((g) => (
+                        <tr key={g.groupName} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 font-medium">{g.groupName}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(g.count)}</td>
+                          {showOutstandingPaymentColumns && (
+                            <>
+                              <td className="px-4 py-3 text-right tabular-nums">{money(g.contractValue)}</td>
+                              <td className="px-4 py-3">{formatDate(g.nearestPaymentDueDate || undefined)}</td>
+                            </>
+                          )}
+                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(g.qtyOrdered)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums text-green-700">{formatNumber(g.qtyDelivered)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums text-orange-700">{formatNumber(g.qtyOutstanding)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(g.openCount)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(g.closeCount)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(g.cancelledCount)}</td>
                         </tr>
                       ))}
                     </tbody>

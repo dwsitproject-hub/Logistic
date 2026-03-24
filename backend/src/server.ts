@@ -34,6 +34,7 @@ import sapMasterV2Routes from './routes/sapMasterV2.routes';
 import supplierRoutes from './routes/supplier.routes';
 import productRoutes from './routes/product.routes';
 import companyRoutes from './routes/company.routes';
+import activityRoutes from './routes/activity.routes';
 
 dotenv.config();
 
@@ -102,6 +103,7 @@ app.use('/api/trucking', truckingRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/activity', activityRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/master-vessels', masterVesselRoutes);

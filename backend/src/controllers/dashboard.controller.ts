@@ -11,6 +11,29 @@ const toFilterArray = (v: unknown): string[] => {
   return s ? [s] : [];
 };
 
+const plantSimilarity = (a: string, b: string): number => {
+  const A = a.trim().replace(/\s+/g, ' ').toUpperCase();
+  const B = b.trim().replace(/\s+/g, ' ').toUpperCase();
+  if (!A || !B) return A === B ? 1 : 0;
+  if (A === B) return 1;
+  const longer = A.length >= B.length ? A : B;
+  const shorter = A.length >= B.length ? B : A;
+  if (longer.includes(shorter) && shorter.length >= 4) return Math.min(1, Math.max(0.62, shorter.length / longer.length));
+  const m = A.length;
+  const n = B.length;
+  const dp = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      dp[j] = A[i - 1] === B[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
+      prev = tmp;
+    }
+  }
+  return 1 - dp[n] / Math.max(m, n);
+};
+
 // Helper function to build filter key (stable representation of filters for caching AI insights)
 const buildFilterKey = (req: AuthRequest): { key: string; params: Record<string, unknown> } => {
   const { dateFrom, dateTo, plant, supplier, product, groupName, incoterm } = req.query;
@@ -160,11 +183,63 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
       WHERE 1=1 ${contractFilter}
     `, params);
 
+    // Open contract breakdown:
+    // - outstanding_logistics: has shipment/trucking work not completed/cancelled yet
+    // - outstanding_payment: has at least one payment with blank payoff_date
+    const openBreakdownStats = await query(`
+      WITH latest_spd AS (
+        SELECT DISTINCT ON (spd.contract_number)
+          spd.contract_number,
+          spd.data
+        FROM sap_processed_data spd
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      ),
+      open_contracts AS (
+        SELECT c.id, c.contract_id
+        FROM contracts c
+        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        WHERE 1=1 ${contractFilter}
+          AND (
+            (l.data IS NOT NULL AND (
+              l.data->'contract'->>'status' = 'Open'
+              OR UPPER(l.data->'contract'->>'status') = 'ACTIVE'
+            ))
+            OR (l.data IS NULL AND UPPER(COALESCE(c.status, '')) IN ('OPEN', 'ACTIVE'))
+          )
+      )
+      SELECT
+        COUNT(*) FILTER (
+          WHERE EXISTS (
+            SELECT 1
+            FROM shipments s
+            WHERE s.contract_id = oc.id
+              AND UPPER(COALESCE(s.status, '')) NOT IN ('COMPLETED', 'CANCELLED', 'CANCELED')
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM trucking_operations t
+            WHERE t.contract_id = oc.id
+              AND UPPER(COALESCE(t.status, '')) NOT IN ('COMPLETED', 'CANCELLED', 'CANCELED')
+          )
+        ) AS open_outstanding_logistics,
+        COUNT(*) FILTER (
+          WHERE EXISTS (
+            SELECT 1
+            FROM payments p
+            WHERE p.contract_id = oc.id
+              AND (p.payoff_date IS NULL OR TRIM(p.payoff_date::text) = '')
+          )
+        ) AS open_outstanding_payment
+      FROM open_contracts oc
+    `, params);
+
     // Quantity statistics across all contracts
     // Total Quantity = sum of contract quantities
     // Quantity Delivered = sum of STO quantities from sap_processed_data
     // Outstanding Quantity = Total Quantity - Quantity Delivered
-    // Also break down delivered/outstanding by payment status (PAID vs PENDING/OVERDUE)
+    // Also break down delivered/outstanding by payoff status:
+    // - paid: has at least one non-empty payoff_date
+    // - outstanding payment: has at least one empty payoff_date
     const outstandingStats = await query(`
       WITH contract_qty AS (
         SELECT 
@@ -185,7 +260,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         SELECT
           p.contract_id,
           MAX(CASE WHEN p.payment_status = 'PAID' THEN 1 ELSE 0 END) AS has_paid,
-          MAX(CASE WHEN p.payment_status = 'PENDING' OR p.payment_status = 'OVERDUE' THEN 1 ELSE 0 END) AS has_pending_or_overdue
+          MAX(CASE WHEN p.payoff_date IS NULL THEN 1 ELSE 0 END) AS has_blank_payoff
         FROM payments p
         GROUP BY p.contract_id
       )
@@ -194,9 +269,9 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         COALESCE(SUM(q.delivered_quantity), 0) AS delivered_quantity,
         COALESCE(SUM(q.contract_quantity - q.delivered_quantity), 0) AS outstanding_quantity,
         COALESCE(SUM(CASE WHEN COALESCE(ps.has_paid, 0) = 1 THEN q.delivered_quantity ELSE 0 END), 0) AS delivered_paid_quantity,
-        COALESCE(SUM(CASE WHEN COALESCE(ps.has_pending_or_overdue, 0) = 1 THEN q.delivered_quantity ELSE 0 END), 0) AS delivered_pending_quantity,
+        COALESCE(SUM(CASE WHEN COALESCE(ps.has_blank_payoff, 0) = 1 THEN q.delivered_quantity ELSE 0 END), 0) AS delivered_pending_quantity,
         COALESCE(SUM(CASE WHEN COALESCE(ps.has_paid, 0) = 1 THEN (q.contract_quantity - q.delivered_quantity) ELSE 0 END), 0) AS outstanding_paid_quantity,
-        COALESCE(SUM(CASE WHEN COALESCE(ps.has_pending_or_overdue, 0) = 1 THEN (q.contract_quantity - q.delivered_quantity) ELSE 0 END), 0) AS outstanding_pending_quantity
+        COALESCE(SUM(CASE WHEN COALESCE(ps.has_blank_payoff, 0) = 1 THEN (q.contract_quantity - q.delivered_quantity) ELSE 0 END), 0) AS outstanding_pending_quantity
       FROM contract_qty q
       LEFT JOIN payment_status_per_contract ps ON ps.contract_id = q.contract_pk
     `, params);
@@ -286,20 +361,42 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
       FROM trucking_with_completion
     `, params);
 
-    // Get finance statistics (counts and amounts aligned with Finance page)
+    // Get finance statistics aligned to contract value and payoff behavior
     const financeStats = await query(`
-      SELECT 
-        COUNT(*) as total_payments,
-        COUNT(*) FILTER (WHERE p.payment_status = 'PENDING' AND (p.payment_due_date IS NULL OR p.payment_due_date >= CURRENT_DATE)) as pending_payments,
-        COUNT(*) FILTER (WHERE p.payment_status = 'PAID') as paid_payments,
-        COUNT(*) FILTER (WHERE p.payment_status = 'OVERDUE' OR (p.payment_status = 'PENDING' AND p.payment_due_date IS NOT NULL AND p.payment_due_date < CURRENT_DATE)) as overdue_payments,
-        COALESCE(SUM(p.payment_amount), 0) as total_amount,
-        COALESCE(SUM(p.payment_amount) FILTER (WHERE p.payment_status = 'PENDING' AND (p.payment_due_date IS NULL OR p.payment_due_date >= CURRENT_DATE)), 0) as pending_amount,
-        COALESCE(SUM(p.payment_amount) FILTER (WHERE p.payment_status = 'PAID'), 0) as paid_amount,
-        COALESCE(SUM(p.payment_amount) FILTER (WHERE p.payment_status = 'OVERDUE' OR (p.payment_status = 'PENDING' AND p.payment_due_date IS NOT NULL AND p.payment_due_date < CURRENT_DATE)), 0) as overdue_amount
-      FROM payments p
-      LEFT JOIN contracts c ON p.contract_id = c.id
-      WHERE 1=1 ${contractFilter}
+      WITH contract_payment AS (
+        SELECT
+          c.id AS contract_pk,
+          c.contract_id,
+          COALESCE(c.contract_value, 0) AS contract_value,
+          MAX(CASE WHEN p.payoff_date IS NULL THEN 1 ELSE 0 END) AS has_blank_payoff,
+          MAX(CASE WHEN p.payoff_date IS NOT NULL THEN 1 ELSE 0 END) AS has_paid,
+          MAX(CASE
+            WHEN p.payoff_date IS NULL
+                 AND p.payment_due_date IS NOT NULL
+                 AND p.payment_due_date::date < CURRENT_DATE
+              THEN 1
+            WHEN p.payoff_date IS NOT NULL
+                 AND p.payment_due_date IS NOT NULL
+                 AND p.payoff_date::date > p.payment_due_date::date
+              THEN 1
+            ELSE 0
+          END) AS has_late_payment
+        FROM contracts c
+        LEFT JOIN payments p ON p.contract_id = c.id
+        WHERE 1=1 ${contractFilter}
+        GROUP BY c.id, c.contract_id, c.contract_value
+        HAVING COUNT(p.id) > 0
+      )
+      SELECT
+        COUNT(*) AS total_payments,
+        COUNT(*) FILTER (WHERE has_blank_payoff = 1) AS pending_payments,
+        COUNT(*) FILTER (WHERE has_paid = 1) AS paid_payments,
+        COUNT(*) FILTER (WHERE has_late_payment = 1) AS late_payments,
+        COALESCE(SUM(contract_value), 0) AS total_amount,
+        COALESCE(SUM(contract_value) FILTER (WHERE has_blank_payoff = 1), 0) AS pending_amount,
+        COALESCE(SUM(contract_value) FILTER (WHERE has_paid = 1), 0) AS paid_amount,
+        COALESCE(SUM(contract_value) FILTER (WHERE has_late_payment = 1), 0) AS late_amount
+      FROM contract_payment
     `, params);
 
     const cr = contractsStats.rows[0] || {};
@@ -307,6 +404,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
     const sr = shipmentsStats.rows[0] || {};
     const tr = truckingStats.rows[0] || {};
     const fr = financeStats.rows[0] || {};
+    const obr = openBreakdownStats.rows[0] || {};
 
     const stats = {
       contracts: {
@@ -316,6 +414,8 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         completed: 0,
         cancelled: 0,
         outstanding: parseInt(cr.open_contracts) || 0,
+        openOutstandingLogistics: parseInt(obr.open_outstanding_logistics) || 0,
+        openOutstandingPayment: parseInt(obr.open_outstanding_payment) || 0,
         totalQuantity: parseFloat(or_.total_quantity) || 0,
         deliveredQuantity: parseFloat(or_.delivered_quantity) || 0,
         outstandingQuantity: parseFloat(or_.outstanding_quantity) || 0,
@@ -351,11 +451,11 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         total: parseInt(fr.total_payments) || 0,
         pending: parseInt(fr.pending_payments) || 0,
         paid: parseInt(fr.paid_payments) || 0,
-        overdue: parseInt(fr.overdue_payments) || 0,
+        overdue: parseInt(fr.late_payments) || 0,
         totalAmount: parseFloat(fr.total_amount) || 0,
         pendingAmount: parseFloat(fr.pending_amount) || 0,
         paidAmount: parseFloat(fr.paid_amount) || 0,
-        overdueAmount: parseFloat(fr.overdue_amount) || 0,
+        overdueAmount: parseFloat(fr.late_amount) || 0,
         revenue: parseFloat(fr.paid_amount) || 0
       }
     };
@@ -734,6 +834,7 @@ export const getContractsByStatus = async (req: AuthRequest, res: Response) => {
 export const getShipmentsByStatus = async (req: AuthRequest, res: Response) => {
   try {
     const { status, delayed } = req.query as { status?: string; delayed?: string };
+    const statusNorm = String(status || '').trim().toUpperCase();
     const limitRaw = req.query.limit ? parseInt(req.query.limit as string) : 100;
     const offsetRaw = req.query.offset ? parseInt(req.query.offset as string) : 0;
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 100;
@@ -823,10 +924,84 @@ export const getShipmentsByStatus = async (req: AuthRequest, res: Response) => {
       return copy;
     });
 
+    // Plant summary for full filtered payment scope (not page-limited)
+    const summaryParams: any[] = [...params];
+    let summaryParamIndex = params.length + 1;
+    let summaryStatusFilterSql = '';
+    if (statusNorm === 'PENDING_PAYMENT') {
+      summaryStatusFilterSql = ` AND (p.payoff_date IS NULL)`;
+    } else if (statusNorm === 'LATE_PAYMENT') {
+      summaryStatusFilterSql = ` AND (
+        (p.payoff_date IS NULL AND p.payment_due_date IS NOT NULL AND p.payment_due_date::date < CURRENT_DATE)
+        OR (p.payoff_date IS NOT NULL AND p.payment_due_date IS NOT NULL AND p.payoff_date::date > p.payment_due_date::date)
+      )`;
+    } else if (status) {
+      summaryStatusFilterSql = ` AND p.payment_status = $${summaryParamIndex}`;
+      summaryParams.push(status);
+      summaryParamIndex++;
+    }
+
+    const summaryResult = await query(`
+      WITH base AS (
+        SELECT
+          c.contract_id,
+          COALESCE(c.contract_value, 0) AS contract_value,
+          COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_site
+        FROM payments p
+        LEFT JOIN contracts c ON p.contract_id = c.id
+        LEFT JOIN LATERAL (
+          SELECT UPPER(TRIM(COALESCE(
+            NULLIF(TRIM(c.transport_mode), ''),
+            (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            ''
+          ))) AS tm_upper
+        ) tx ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(
+            CASE
+              WHEN tx.tm_upper LIKE 'LAND%' THEN (
+                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                FROM trucking_operations t
+                WHERE t.contract_id = c.id
+                ORDER BY t.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              WHEN tx.tm_upper LIKE 'SEA%' THEN (
+                SELECT NULLIF(TRIM(s.port_of_discharge), '')
+                FROM shipments s
+                WHERE s.contract_id = c.id
+                ORDER BY s.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              ELSE NULL
+            END,
+            NULLIF(TRIM(c.unloading_site), ''),
+            NULLIF(TRIM(c.loading_site), '')
+          ) AS plant_site
+        ) ps ON true
+        WHERE 1=1 ${contractFilter}${summaryStatusFilterSql}
+      ),
+      dedup AS (
+        SELECT contract_id, plant_site, MAX(contract_value) AS contract_value
+        FROM base
+        GROUP BY contract_id, plant_site
+      )
+      SELECT
+        plant_site,
+        COUNT(*)::int AS contracts,
+        COALESCE(SUM(contract_value), 0)::numeric AS total_contract_value
+      FROM dedup
+      GROUP BY plant_site
+      ORDER BY total_contract_value DESC
+    `, summaryParams);
+
     return res.json({
       success: true,
       data: rows,
-      meta: { totalCount, limit, offset },
+      meta: { totalCount, limit, offset, plantSummary: summaryResult.rows || [] },
     });
   } catch (error) {
     logger.error('Get shipments by status error:', error);
@@ -840,6 +1015,7 @@ export const getShipmentsByStatus = async (req: AuthRequest, res: Response) => {
 export const getTruckingOperationsByStatus = async (req: AuthRequest, res: Response) => {
   try {
     const { status } = req.query as { status?: string };
+    const statusNorm = String(status || '').trim().toUpperCase();
     const limitRaw = req.query.limit ? parseInt(req.query.limit as string) : 100;
     const offsetRaw = req.query.offset ? parseInt(req.query.offset as string) : 0;
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 100;
@@ -976,10 +1152,84 @@ export const getTruckingOperationsByStatus = async (req: AuthRequest, res: Respo
       return copy;
     });
 
+    // Plant summary for full filtered payment scope (not page-limited)
+    const summaryParams: any[] = [...params];
+    let summaryParamIndex = params.length + 1;
+    let summaryStatusFilterSql = '';
+    if (statusNorm === 'PENDING_PAYMENT') {
+      summaryStatusFilterSql = ` AND (p.payoff_date IS NULL)`;
+    } else if (statusNorm === 'LATE_PAYMENT') {
+      summaryStatusFilterSql = ` AND (
+        (p.payoff_date IS NULL AND p.payment_due_date IS NOT NULL AND p.payment_due_date::date < CURRENT_DATE)
+        OR (p.payoff_date IS NOT NULL AND p.payment_due_date IS NOT NULL AND p.payoff_date::date > p.payment_due_date::date)
+      )`;
+    } else if (status) {
+      summaryStatusFilterSql = ` AND p.payment_status = $${summaryParamIndex}`;
+      summaryParams.push(status);
+      summaryParamIndex++;
+    }
+
+    const summaryResult = await query(`
+      WITH base AS (
+        SELECT
+          c.contract_id,
+          COALESCE(c.contract_value, 0) AS contract_value,
+          COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_site
+        FROM payments p
+        LEFT JOIN contracts c ON p.contract_id = c.id
+        LEFT JOIN LATERAL (
+          SELECT UPPER(TRIM(COALESCE(
+            NULLIF(TRIM(c.transport_mode), ''),
+            (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            ''
+          ))) AS tm_upper
+        ) tx ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(
+            CASE
+              WHEN tx.tm_upper LIKE 'LAND%' THEN (
+                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                FROM trucking_operations t
+                WHERE t.contract_id = c.id
+                ORDER BY t.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              WHEN tx.tm_upper LIKE 'SEA%' THEN (
+                SELECT NULLIF(TRIM(s.port_of_discharge), '')
+                FROM shipments s
+                WHERE s.contract_id = c.id
+                ORDER BY s.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              ELSE NULL
+            END,
+            NULLIF(TRIM(c.unloading_site), ''),
+            NULLIF(TRIM(c.loading_site), '')
+          ) AS plant_site
+        ) ps ON true
+        WHERE 1=1 ${contractFilter}${summaryStatusFilterSql}
+      ),
+      dedup AS (
+        SELECT contract_id, plant_site, MAX(contract_value) AS contract_value
+        FROM base
+        GROUP BY contract_id, plant_site
+      )
+      SELECT
+        plant_site,
+        COUNT(*)::int AS contracts,
+        COALESCE(SUM(contract_value), 0)::numeric AS total_contract_value
+      FROM dedup
+      GROUP BY plant_site
+      ORDER BY total_contract_value DESC
+    `, summaryParams);
+
     return res.json({
       success: true,
       data: rows,
-      meta: { totalCount, limit, offset },
+      meta: { totalCount, limit, offset, plantSummary: summaryResult.rows || [] },
     });
   } catch (error) {
     logger.error('Get trucking operations by status error:', error);
@@ -992,7 +1242,7 @@ export const getTruckingOperationsByStatus = async (req: AuthRequest, res: Respo
 
 export const getPaymentsByStatus = async (req: AuthRequest, res: Response) => {
   try {
-    const { status } = req.query as { status?: string };
+    const { status, plantSite } = req.query as { status?: string; plantSite?: string };
     const limitRaw = req.query.limit ? parseInt(req.query.limit as string) : 100;
     const offsetRaw = req.query.offset ? parseInt(req.query.offset as string) : 0;
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 100;
@@ -1002,9 +1252,25 @@ export const getPaymentsByStatus = async (req: AuthRequest, res: Response) => {
     const finalParams: any[] = [...params];
     let paramIndex = params.length + 1;
 
-    const statusFilterSql = status ? ` AND p.payment_status = $${paramIndex}` : '';
-    if (status) {
+    let statusFilterSql = '';
+    const statusNorm = String(status || '').trim().toUpperCase();
+    if (statusNorm === 'PENDING_PAYMENT') {
+      statusFilterSql = ` AND (p.payoff_date IS NULL)`;
+    } else if (statusNorm === 'PAID_PAYMENT') {
+      statusFilterSql = ` AND (p.payoff_date IS NOT NULL)`;
+    } else if (statusNorm === 'LATE_PAYMENT') {
+      statusFilterSql = ` AND (
+        (p.payoff_date IS NULL AND p.payment_due_date IS NOT NULL AND p.payment_due_date::date < CURRENT_DATE)
+        OR (p.payoff_date IS NOT NULL AND p.payment_due_date IS NOT NULL AND p.payoff_date::date > p.payment_due_date::date)
+      )`;
+    } else if (status) {
+      statusFilterSql = ` AND p.payment_status = $${paramIndex}`;
       finalParams.push(status);
+      paramIndex++;
+    }
+    const plantSiteFilterSql = plantSite ? ` AND UPPER(COALESCE(plant_site, 'Blank')) = UPPER($${paramIndex})` : '';
+    if (plantSite) {
+      finalParams.push(String(plantSite));
       paramIndex++;
     }
 
@@ -1025,6 +1291,8 @@ export const getPaymentsByStatus = async (req: AuthRequest, res: Response) => {
           ) AS contract_ext_no,
           c.unit_price,
           c.contract_value,
+          c.group_name,
+          COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_site,
           p.invoice_number,
           p.invoice_date,
           p.payment_amount,
@@ -1045,14 +1313,77 @@ export const getPaymentsByStatus = async (req: AuthRequest, res: Response) => {
           END AS payoff_date_deviation_days
         FROM payments p
         LEFT JOIN contracts c ON p.contract_id = c.id
+        LEFT JOIN LATERAL (
+          SELECT UPPER(TRIM(COALESCE(
+            NULLIF(TRIM(c.transport_mode), ''),
+            (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            ''
+          ))) AS tm_upper
+        ) tx ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(
+            CASE
+              WHEN tx.tm_upper LIKE 'LAND%' THEN (
+                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                FROM trucking_operations t
+                WHERE t.contract_id = c.id
+                  AND COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), '')) IS NOT NULL
+                  AND TRIM(COALESCE(t.unloading_location, t.location, '')) <> ''
+                  AND UPPER(TRIM(COALESCE(t.unloading_location, t.location, ''))) <> 'N/A'
+                ORDER BY t.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              WHEN tx.tm_upper LIKE 'SEA%' THEN (
+                SELECT NULLIF(TRIM(s.port_of_discharge), '')
+                FROM shipments s
+                WHERE s.contract_id = c.id
+                  AND s.port_of_discharge IS NOT NULL
+                  AND TRIM(s.port_of_discharge) <> ''
+                  AND UPPER(TRIM(s.port_of_discharge)) <> 'N/A'
+                ORDER BY s.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              ELSE NULL
+            END,
+            (
+              SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+              FROM trucking_operations t
+              WHERE t.contract_id = c.id
+                AND COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), '')) IS NOT NULL
+                AND TRIM(COALESCE(t.unloading_location, t.location, '')) <> ''
+                AND UPPER(TRIM(COALESCE(t.unloading_location, t.location, ''))) <> 'N/A'
+              ORDER BY t.created_at DESC NULLS LAST
+              LIMIT 1
+            ),
+            (
+              SELECT NULLIF(TRIM(s.port_of_discharge), '')
+              FROM shipments s
+              WHERE s.contract_id = c.id
+                AND s.port_of_discharge IS NOT NULL
+                AND TRIM(s.port_of_discharge) <> ''
+                AND UPPER(TRIM(s.port_of_discharge)) <> 'N/A'
+              ORDER BY s.created_at DESC NULLS LAST
+              LIMIT 1
+            ),
+            NULLIF(TRIM(c.unloading_site), ''),
+            NULLIF(TRIM(c.loading_site), '')
+          ) AS plant_site
+        ) ps ON true
         WHERE 1=1 ${contractFilter}${statusFilterSql}
       ),
+      filtered AS (
+        SELECT * FROM base
+        WHERE 1=1 ${plantSiteFilterSql}
+      ),
       total AS (
-        SELECT COUNT(*)::int AS total_count FROM base
+        SELECT COUNT(*)::int AS total_count FROM filtered
       ),
       paged AS (
         SELECT *
-        FROM base
+        FROM filtered
         ORDER BY payment_due_date DESC NULLS LAST, invoice_date DESC NULLS LAST, id DESC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       )
@@ -1071,10 +1402,86 @@ export const getPaymentsByStatus = async (req: AuthRequest, res: Response) => {
       return copy;
     });
 
+    // Full-scope plant summary for this payment filter (not page-limited)
+    const summaryParams: any[] = [...params];
+    let summaryParamIndex = params.length + 1;
+    let summaryStatusFilterSql = '';
+    if (statusNorm === 'PENDING_PAYMENT') {
+      summaryStatusFilterSql = ` AND (p.payoff_date IS NULL)`;
+    } else if (statusNorm === 'PAID_PAYMENT') {
+      summaryStatusFilterSql = ` AND (p.payoff_date IS NOT NULL)`;
+    } else if (statusNorm === 'LATE_PAYMENT') {
+      summaryStatusFilterSql = ` AND (
+        (p.payoff_date IS NULL AND p.payment_due_date IS NOT NULL AND p.payment_due_date::date < CURRENT_DATE)
+        OR (p.payoff_date IS NOT NULL AND p.payment_due_date IS NOT NULL AND p.payoff_date::date > p.payment_due_date::date)
+      )`;
+    } else if (status) {
+      summaryStatusFilterSql = ` AND p.payment_status = $${summaryParamIndex}`;
+      summaryParams.push(status);
+      summaryParamIndex++;
+    }
+
+    const summaryResult = await query(`
+      WITH base AS (
+        SELECT
+          c.contract_id,
+          COALESCE(c.contract_value, 0) AS contract_value,
+          COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_site
+        FROM payments p
+        LEFT JOIN contracts c ON p.contract_id = c.id
+        LEFT JOIN LATERAL (
+          SELECT UPPER(TRIM(COALESCE(
+            NULLIF(TRIM(c.transport_mode), ''),
+            (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            ''
+          ))) AS tm_upper
+        ) tx ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(
+            CASE
+              WHEN tx.tm_upper LIKE 'LAND%' THEN (
+                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                FROM trucking_operations t
+                WHERE t.contract_id = c.id
+                ORDER BY t.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              WHEN tx.tm_upper LIKE 'SEA%' THEN (
+                SELECT NULLIF(TRIM(s.port_of_discharge), '')
+                FROM shipments s
+                WHERE s.contract_id = c.id
+                ORDER BY s.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              ELSE NULL
+            END,
+            NULLIF(TRIM(c.unloading_site), ''),
+            NULLIF(TRIM(c.loading_site), '')
+          ) AS plant_site
+        ) ps ON true
+        WHERE 1=1 ${contractFilter}${summaryStatusFilterSql}
+      ),
+      dedup AS (
+        SELECT contract_id, plant_site, MAX(contract_value) AS contract_value
+        FROM base
+        GROUP BY contract_id, plant_site
+      )
+      SELECT
+        plant_site,
+        COUNT(*)::int AS contracts,
+        COALESCE(SUM(contract_value), 0)::numeric AS total_contract_value
+      FROM dedup
+      GROUP BY plant_site
+      ORDER BY total_contract_value DESC
+    `, summaryParams);
+
     return res.json({
       success: true,
       data: rows,
-      meta: { totalCount, limit, offset },
+      meta: { totalCount, limit, offset, plantSummary: summaryResult.rows || [] },
     });
   } catch (error) {
     logger.error('Get payments by status error:', error);
@@ -1278,102 +1685,134 @@ export const getContractQuantityByIncoterm = async (req: AuthRequest, res: Respo
 // Updated to use actual shipped/delivered quantities from Shipments and Trucking
 export const getContractQuantityByPlant = async (req: AuthRequest, res: Response) => {
   try {
-    const { contractFilter, shipmentFilter, truckingFilter, params } = buildFilterConditions(req);
-
-    // Get quantities from Shipments (Sea transport) - using port_of_discharge as Plant/Site
-    const shipmentResult = await query(`
-      SELECT 
-        CASE 
-          WHEN s.port_of_discharge IS NULL OR s.port_of_discharge = '' THEN 'Blank'
-          ELSE s.port_of_discharge
-        END as plant_location,
-        COUNT(DISTINCT c.contract_id) as contract_count,
-        SUM(COALESCE(s.quantity_shipped, 0)) as total_quantity_shipped,
-        SUM(COALESCE(s.quantity_delivered, 0)) as total_quantity_delivered,
-        SUM(COALESCE(s.quantity_shipped, 0) + COALESCE(s.quantity_delivered, 0)) as total_quantity,
-        SUM(c.contract_value) as total_contract_value,
-        COUNT(DISTINCT c.supplier) as supplier_count
-      FROM shipments s
-      LEFT JOIN contracts c ON s.contract_id = c.id
-      WHERE 1=1 ${contractFilter} ${shipmentFilter}
-      GROUP BY 
-        CASE 
-          WHEN s.port_of_discharge IS NULL OR s.port_of_discharge = '' THEN 'Blank'
-          ELSE s.port_of_discharge
-        END
+    const { contractFilter, params } = buildFilterConditions(req);
+    const result = await query(`
+      WITH filtered_contracts AS (
+        SELECT
+          c.id AS contract_pk,
+          c.contract_id,
+          c.supplier,
+          COALESCE(c.quantity_ordered, 0) AS quantity_ordered,
+          COALESCE(c.contract_value, 0) AS contract_value,
+          COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_location
+        FROM contracts c
+        LEFT JOIN LATERAL (
+          SELECT UPPER(TRIM(COALESCE(
+            NULLIF(TRIM(c.transport_mode), ''),
+            (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            ''
+          ))) AS tm_upper
+        ) tx ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(
+            CASE
+              WHEN tx.tm_upper LIKE 'LAND%' THEN (
+                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                FROM trucking_operations t
+                WHERE t.contract_id = c.id
+                ORDER BY t.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              WHEN tx.tm_upper LIKE 'SEA%' THEN (
+                SELECT NULLIF(TRIM(s.port_of_discharge), '')
+                FROM shipments s
+                WHERE s.contract_id = c.id
+                ORDER BY s.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              ELSE NULL
+            END,
+            NULLIF(TRIM(c.unloading_site), ''),
+            NULLIF(TRIM(c.loading_site), '')
+          ) AS plant_site
+        ) ps ON true
+        WHERE 1=1 ${contractFilter}
+      ),
+      delivered_by_contract AS (
+        SELECT
+          spd.contract_number AS contract_id,
+          SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
+          ) AS completed_quantity
+        FROM sap_processed_data spd
+        WHERE spd.sto_number IS NOT NULL
+          AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+          AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
+        GROUP BY spd.contract_number
+      ),
+      per_contract AS (
+        SELECT
+          fc.contract_id,
+          fc.supplier,
+          fc.plant_location,
+          fc.quantity_ordered,
+          LEAST(fc.quantity_ordered, COALESCE(db.completed_quantity, 0)) AS completed_quantity,
+          fc.contract_value
+        FROM filtered_contracts fc
+        LEFT JOIN delivered_by_contract db ON db.contract_id = fc.contract_id
+      )
+      SELECT
+        plant_location,
+        COUNT(DISTINCT contract_id)::int AS contract_count,
+        COALESCE(SUM(quantity_ordered), 0)::numeric AS total_quantity,
+        COALESCE(SUM(completed_quantity), 0)::numeric AS total_quantity_delivered,
+        COALESCE(SUM(GREATEST(quantity_ordered - completed_quantity, 0)), 0)::numeric AS total_quantity_shipped,
+        COALESCE(SUM(contract_value), 0)::numeric AS total_contract_value,
+        COUNT(DISTINCT supplier)::int AS supplier_count
+      FROM per_contract
+      GROUP BY plant_location
+      ORDER BY total_quantity DESC
     `, params);
 
-    // Get quantities from Trucking (Land transport) - using truck_unloading_date location as Plant/Site
-    const truckingResult = await query(`
-      SELECT 
-        CASE 
-          WHEN t.location IS NULL OR t.location = '' THEN 'Blank'
-          ELSE t.location
-        END as plant_location,
-        COUNT(DISTINCT c.contract_id) as contract_count,
-        SUM(COALESCE(t.quantity_sent, 0)) as total_quantity_shipped,
-        SUM(COALESCE(t.quantity_delivered, 0)) as total_quantity_delivered,
-        SUM(COALESCE(t.quantity_sent, 0) + COALESCE(t.quantity_delivered, 0)) as total_quantity,
-        SUM(c.contract_value) as total_contract_value,
-        COUNT(DISTINCT c.supplier) as supplier_count
-      FROM trucking_operations t
-      LEFT JOIN contracts c ON t.contract_id = c.id
-      WHERE 1=1 ${contractFilter} ${truckingFilter}
-      GROUP BY 
-        CASE 
-          WHEN t.location IS NULL OR t.location = '' THEN 'Blank'
-          ELSE t.location
-        END
-    `, params);
-
-    // Aggregate by plant_location (combine Sea + Land)
-    type PlantAgg = {
-      plant_location: string;
-      contract_count: number;
-      total_quantity_shipped: number;
-      total_quantity_delivered: number;
-      total_quantity: number;
-      total_contract_value: number;
-      supplier_count: number;
-    };
-
-    const plantMap = new Map<string, PlantAgg>();
-
-    const addRow = (row: any) => {
-      const key = row.plant_location as string;
-      const existing = plantMap.get(key) || {
-        plant_location: key,
-        contract_count: 0,
-        total_quantity_shipped: 0,
-        total_quantity_delivered: 0,
-        total_quantity: 0,
-        total_contract_value: 0,
-        supplier_count: 0,
-      };
-
-      existing.contract_count += parseInt(row.contract_count) || 0;
-      existing.total_quantity_shipped += parseFloat(row.total_quantity_shipped) || 0;
-      existing.total_quantity_delivered += parseFloat(row.total_quantity_delivered) || 0;
-      existing.total_quantity += parseFloat(row.total_quantity) || 0;
-      existing.total_contract_value += parseFloat(row.total_contract_value) || 0;
-      existing.supplier_count += parseInt(row.supplier_count) || 0;
-
-      plantMap.set(key, existing);
-    };
-
-    shipmentResult.rows.forEach(addRow);
-    truckingResult.rows.forEach(addRow);
-
-    let combined = Array.from(plantMap.values()).map(p => ({
+    let combined = result.rows.map((p: any) => ({
       plant_location: p.plant_location,
-      contract_count: p.contract_count,
-      total_quantity: p.total_quantity,
-      total_quantity_shipped: p.total_quantity_shipped,
-      total_quantity_delivered: p.total_quantity_delivered,
-      // Derive avg_unit_price from totals where possible
+      contract_count: parseInt(p.contract_count, 10) || 0,
+      total_quantity: parseFloat(p.total_quantity) || 0,
+      total_quantity_shipped: parseFloat(p.total_quantity_shipped) || 0,
+      total_quantity_delivered: parseFloat(p.total_quantity_delivered) || 0,
+      avg_unit_price: (parseFloat(p.total_quantity) || 0) > 0 ? (parseFloat(p.total_contract_value) || 0) / (parseFloat(p.total_quantity) || 1) : 0,
+      total_contract_value: parseFloat(p.total_contract_value) || 0,
+      supplier_count: parseInt(p.supplier_count, 10) || 0,
+    }));
+
+    // Merge similar plant/site labels (>= 60% similarity)
+    const merged: typeof combined = [];
+    const blank = combined.filter((r) => !r.plant_location || r.plant_location === 'Blank')
+      .reduce((acc, r) => ({
+        plant_location: 'Blank',
+        contract_count: acc.contract_count + r.contract_count,
+        total_quantity: acc.total_quantity + r.total_quantity,
+        total_quantity_shipped: acc.total_quantity_shipped + r.total_quantity_shipped,
+        total_quantity_delivered: acc.total_quantity_delivered + r.total_quantity_delivered,
+        avg_unit_price: 0,
+        total_contract_value: acc.total_contract_value + r.total_contract_value,
+        supplier_count: acc.supplier_count + r.supplier_count,
+      }), { plant_location: 'Blank', contract_count: 0, total_quantity: 0, total_quantity_shipped: 0, total_quantity_delivered: 0, avg_unit_price: 0, total_contract_value: 0, supplier_count: 0 });
+    const nonBlank = combined.filter((r) => r.plant_location && r.plant_location !== 'Blank').sort((a, b) => b.total_contract_value - a.total_contract_value);
+    nonBlank.forEach((row) => {
+      const idx = merged.findIndex((m) => plantSimilarity(m.plant_location, row.plant_location) >= 0.6);
+      if (idx >= 0) {
+        merged[idx] = {
+          ...merged[idx],
+          plant_location: row.plant_location.length > merged[idx].plant_location.length ? row.plant_location : merged[idx].plant_location,
+          contract_count: merged[idx].contract_count + row.contract_count,
+          total_quantity: merged[idx].total_quantity + row.total_quantity,
+          total_quantity_shipped: merged[idx].total_quantity_shipped + row.total_quantity_shipped,
+          total_quantity_delivered: merged[idx].total_quantity_delivered + row.total_quantity_delivered,
+          total_contract_value: merged[idx].total_contract_value + row.total_contract_value,
+          supplier_count: merged[idx].supplier_count + row.supplier_count,
+        };
+      } else {
+        merged.push(row);
+      }
+    });
+    if (blank.contract_count > 0 || blank.total_contract_value > 0 || blank.total_quantity > 0) merged.push(blank);
+    combined = merged.map((p) => ({
+      ...p,
       avg_unit_price: p.total_quantity > 0 ? p.total_contract_value / p.total_quantity : 0,
-      total_contract_value: p.total_contract_value,
-      supplier_count: p.supplier_count,
     }));
 
     // Sort by total_quantity descending and limit to top 10
@@ -1720,6 +2159,8 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
       delayed,
       delivered,
       outstanding,
+      outstandingLogistics,
+      outstandingPayment,
       limit,
       offset,
     } = req.query as any;
@@ -1809,6 +2250,29 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
       whereExtra += ` AND (COALESCE(c.quantity_ordered, 0) - COALESCE(q.delivered_quantity, 0)) > 0`;
     }
 
+    // Open contract sub-breakdown filters used by Dashboard card
+    if (outstandingLogistics && String(outstandingLogistics).toLowerCase() === 'true') {
+      whereExtra += ` AND (
+        EXISTS (
+          SELECT 1 FROM shipments s
+          WHERE s.contract_id = c.id
+            AND UPPER(COALESCE(s.status, '')) NOT IN ('COMPLETED', 'CANCELLED', 'CANCELED')
+        )
+        OR EXISTS (
+          SELECT 1 FROM trucking_operations t
+          WHERE t.contract_id = c.id
+            AND UPPER(COALESCE(t.status, '')) NOT IN ('COMPLETED', 'CANCELLED', 'CANCELED')
+        )
+      )`;
+    }
+    if (outstandingPayment && String(outstandingPayment).toLowerCase() === 'true') {
+      whereExtra += ` AND EXISTS (
+        SELECT 1 FROM payments p
+        WHERE p.contract_id = c.id
+          AND (p.payoff_date IS NULL OR TRIM(p.payoff_date::text) = '')
+      )`;
+    }
+
     // Allow paging for dashboard drilldowns (default limit 100, max 500)
     const limitNumRaw = parseInt(String(limit ?? ''), 10);
     const limitNum = Number.isFinite(limitNumRaw)
@@ -1845,6 +2309,7 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
           c.contract_id,
           c.buyer,
           c.supplier,
+          c.group_name,
           c.product,
           c.quantity_ordered,
           c.unit,
@@ -1856,6 +2321,7 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
           c.delivery_end_date,
           COALESCE(l.data->'raw'->>'Contract Ext No', l.data->>'Contract Ext No') AS contract_ext_no,
           c.contract_value,
+          pinfo.payment_due_date,
           c.currency,
           -- Status displayed should match dashboard logic and Contracts page conventions
           CASE
@@ -1880,6 +2346,12 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
         FROM contracts c
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
         LEFT JOIN qty q ON q.contract_number = c.contract_id
+        LEFT JOIN LATERAL (
+          SELECT
+            MIN(p.payment_due_date) FILTER (WHERE p.payoff_date IS NULL) AS payment_due_date
+          FROM payments p
+          WHERE p.contract_id = c.id
+        ) pinfo ON true
         WHERE 1=1 ${contractFilter} ${whereExtra}
       )
       SELECT

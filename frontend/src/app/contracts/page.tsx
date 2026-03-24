@@ -12,6 +12,8 @@ import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
 import { Checkbox } from '@/components/ui/checkbox'
 import { formatKgFromMt, formatRupiah, toKgFromMt } from '@/lib/utils'
+import { FieldHelp } from '@/components/FieldHelp'
+import { FIELD_HELP } from '@/lib/fieldHelpText'
 
 interface Contract {
   id: string
@@ -831,6 +833,8 @@ function ContractsPageContent() {
   type CompactColumn = {
     id: string
     label: string
+    /** Shown on column header hover — how the value is calculated */
+    formulaHelp?: string
     defaultVisible: boolean
     sortable?: boolean
     getSortValue?: (c: Contract) => string | number
@@ -856,6 +860,7 @@ function ContractsPageContent() {
     {
       id: 'contract_aging',
       label: 'Contract Aging',
+      formulaHelp: FIELD_HELP.contractAging,
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => getContractAgingDays(c) ?? 0,
@@ -919,6 +924,7 @@ function ContractsPageContent() {
     {
       id: 'log_cycle_days',
       label: 'Log Cycle',
+      formulaHelp: FIELD_HELP.logCycle,
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.log_cycle_days ?? 0,
@@ -932,6 +938,7 @@ function ContractsPageContent() {
     {
       id: 'trade_cycle_days',
       label: 'Trade Cycle',
+      formulaHelp: FIELD_HELP.tradeCycle,
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.trade_cycle_days ?? 0,
@@ -945,6 +952,7 @@ function ContractsPageContent() {
     {
       id: 'over_under_delivery_status',
       label: 'Over/Under Delivery Status',
+      formulaHelp: FIELD_HELP.overUnderDelivery,
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.over_under_delivery_status || '',
@@ -966,6 +974,7 @@ function ContractsPageContent() {
     {
       id: 'company_name',
       label: 'Company Name',
+      formulaHelp: FIELD_HELP.companyName,
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.company_name || '',
@@ -1018,6 +1027,7 @@ function ContractsPageContent() {
     {
       id: 'outstanding_qty',
       label: 'Outstanding Qty (Kg)',
+      formulaHelp: FIELD_HELP.outstandingQty,
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => (typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : 0),
@@ -1647,6 +1657,11 @@ function ContractsPageContent() {
                                 sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                               )}
                             </button>
+                            {col.formulaHelp ? (
+                              <span className="shrink-0 inline-flex items-center">
+                                <FieldHelp text={col.formulaHelp} />
+                              </span>
+                            ) : null}
 
                                 <button
                                   type="button"
@@ -2305,7 +2320,10 @@ function ContractsPageContent() {
                         <div className="font-medium mt-1">{selectedContract.group_name || '-'}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Company Name</div>
+                        <div className="text-gray-500 flex items-center gap-1">
+                          Company Name
+                          <FieldHelp text={FIELD_HELP.companyName} />
+                        </div>
                         <div className="font-medium mt-1">{selectedContract.company_name || '-'}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
@@ -2346,7 +2364,10 @@ function ContractsPageContent() {
                   {(String(selectedContract.contract_type || selectedContract.b2b_flag || '').toUpperCase() === 'B2B' &&
                     String(selectedContract.contract_reference_po || '').trim() === '') && (
                     <div>
-                      <h3 className="text-lg font-semibold mb-3">B2B Parties</h3>
+                      <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                        B2B Parties
+                        <FieldHelp text={FIELD_HELP.b2bParties} />
+                      </h3>
                       {b2bPartiesLoading ? (
                         <div className="text-sm text-gray-500">Loading B2B parties...</div>
                       ) : b2bParties.length === 0 ? (
@@ -2399,8 +2420,9 @@ function ContractsPageContent() {
                         <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.total_sto_quantity)} Kg</div>
                       </div>
                       <div className={`p-3 rounded border-2 ${selectedContract.outstanding_quantity < 0 ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
-                        <div className={`font-semibold ${selectedContract.outstanding_quantity < 0 ? 'text-red-700' : 'text-blue-700'}`}>
+                        <div className={`font-semibold flex items-center gap-1 ${selectedContract.outstanding_quantity < 0 ? 'text-red-700' : 'text-blue-700'}`}>
                           Outstanding Quantity
+                          <FieldHelp text={FIELD_HELP.outstandingQty} />
                         </div>
                         <div className={`font-bold text-xl mt-1 ${selectedContract.outstanding_quantity < 0 ? 'text-red-600' : 'text-blue-600'}`}>
                           {formatNumber(selectedContract.outstanding_quantity)} Kg
@@ -2410,7 +2432,10 @@ function ContractsPageContent() {
                         )}
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Over/Under Delivery Status</div>
+                        <div className="text-gray-500 flex items-center gap-1">
+                          Over/Under Delivery Status
+                          <FieldHelp text={FIELD_HELP.overUnderDelivery} />
+                        </div>
                         <div className="font-semibold mt-1">
                           {selectedContract.over_under_delivery_status || '-'}
                         </div>
@@ -2431,13 +2456,19 @@ function ContractsPageContent() {
                         <div className="font-medium mt-1">{selectedContract.incoterm || '-'}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Log Cycle</div>
+                        <div className="text-gray-500 flex items-center gap-1">
+                          Log Cycle
+                          <FieldHelp text={FIELD_HELP.logCycle} />
+                        </div>
                         <div className="font-medium mt-1">
                           {selectedContract.log_cycle_days != null ? `${selectedContract.log_cycle_days} days` : '-'}
                         </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Trade Cycle</div>
+                        <div className="text-gray-500 flex items-center gap-1">
+                          Trade Cycle
+                          <FieldHelp text={FIELD_HELP.tradeCycle} />
+                        </div>
                         <div className="font-medium mt-1">
                           {selectedContract.trade_cycle_days != null ? `${selectedContract.trade_cycle_days} days` : '-'}
                         </div>
