@@ -11,6 +11,7 @@ import {
   getContractQuantityByProduct,
   getContractQuantityByProductIncoterm,
   getContractQuantityByPlant,
+  getContractQuantityByPlantIncoterm,
   getContractQuantityByIncoterm,
   getPlantDetails,
   getProductDetails,
@@ -51,6 +52,7 @@ router.get('/payments', getPaymentsByStatus);
 router.get('/contract-quantity-by-product', getContractQuantityByProduct);
 router.get('/contract-quantity-by-product-incoterm', getContractQuantityByProductIncoterm);
 router.get('/contract-quantity-by-plant', getContractQuantityByPlant);
+router.get('/contract-quantity-by-plant-incoterm', getContractQuantityByPlantIncoterm);
 router.get('/contract-quantity-by-incoterm', getContractQuantityByIncoterm);
 router.get('/plant-details', getPlantDetails);
 router.get('/product-details', getProductDetails);

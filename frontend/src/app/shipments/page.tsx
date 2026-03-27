@@ -10,6 +10,8 @@ import { Badge } from '@/components/ui/badge'
 import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, ChevronDown, ChevronUp, ChevronRight, ArrowDown, ArrowUp, Minus, SlidersHorizontal } from 'lucide-react'
 import api from '@/lib/api'
 import { Checkbox } from '@/components/ui/checkbox'
+import { FieldHelp } from '@/components/FieldHelp'
+import { FIELD_HELP } from '@/lib/fieldHelpText'
 // import * as XLSX from 'xlsx' // Temporarily disabled
 
 interface Shipment {
@@ -1520,6 +1522,7 @@ function ShipmentsPageContent() {
     label: string
     defaultVisible: boolean
     sortable?: boolean
+    formulaHelp?: string
     getSortValue?: (s: Shipment) => string | number
     render: (s: Shipment) => React.ReactNode
     className?: string
@@ -1530,6 +1533,7 @@ function ShipmentsPageContent() {
     {
       id: 'late_indicator',
       label: 'Late Indicator',
+      formulaHelp: FIELD_HELP.shipmentLateIndicator,
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => {
@@ -3296,6 +3300,7 @@ function ShipmentsPageContent() {
                                   title={col.sortable ? 'Sort' : undefined}
                                 >
                                   <span className="truncate">{col.label}</span>
+                                  {col.formulaHelp ? <FieldHelp text={col.formulaHelp} /> : null}
                                   {col.sortable && active && (
                                     sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                                   )}
@@ -4188,7 +4193,10 @@ function ShipmentsPageContent() {
                           )}
                         </div>
                         <div>
-                          <div className="text-gray-500">Vessel OA Actual</div>
+                          <div className="text-gray-500 flex items-center gap-1">
+                            Vessel OA Actual
+                            <FieldHelp text={FIELD_HELP.vesselOaActual} />
+                          </div>
                           {editingShipmentInfo ? (
                             <Input
                               type="number"
@@ -4202,7 +4210,10 @@ function ShipmentsPageContent() {
                           )}
                         </div>
                         <div>
-                          <div className="text-gray-500">Vessel OA Budget</div>
+                          <div className="text-gray-500 flex items-center gap-1">
+                            Vessel OA Budget
+                            <FieldHelp text={FIELD_HELP.vesselOaBudget} />
+                          </div>
                           {editingShipmentInfo ? (
                             <Input
                               type="number"

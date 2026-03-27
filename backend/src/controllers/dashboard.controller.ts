@@ -1527,7 +1527,6 @@ export const getContractQuantityByProduct = async (req: AuthRequest, res: Respon
         GROUP BY c.product
       ) product_data
       ORDER BY total_quantity DESC
-      LIMIT 10
     `, params);
 
     return res.json({
@@ -1575,6 +1574,13 @@ export const getContractQuantityByProductIncoterm = async (req: AuthRequest, res
           AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
         GROUP BY spd.contract_number
       ),
+      payment_status_per_contract AS (
+        SELECT
+          p.contract_id,
+          MAX(CASE WHEN p.payoff_date IS NULL THEN 1 ELSE 0 END) AS has_blank_payoff
+        FROM payments p
+        GROUP BY p.contract_id
+      ),
       agg AS (
         SELECT
           bc.product,
@@ -1584,18 +1590,19 @@ export const getContractQuantityByProductIncoterm = async (req: AuthRequest, res
           SUM(bc.quantity_ordered) AS total_quantity,
           SUM(COALESCE(db.delivered_quantity, 0)) AS completed_quantity,
           SUM(bc.quantity_ordered) - SUM(COALESCE(db.delivered_quantity, 0)) AS outstanding_quantity,
+          SUM(
+            CASE
+              WHEN COALESCE(ps.has_blank_payoff, 0) = 1
+              THEN (bc.quantity_ordered - COALESCE(db.delivered_quantity, 0))
+              ELSE 0
+            END
+          ) AS outstanding_payment_quantity,
           AVG(bc.unit_price) AS avg_unit_price,
           SUM(bc.contract_value) AS total_contract_value
         FROM base_contracts bc
         LEFT JOIN delivered_by_contract db ON db.contract_id = bc.contract_id
+        LEFT JOIN payment_status_per_contract ps ON ps.contract_id = bc.contract_pk
         GROUP BY bc.product, bc.incoterm
-      ),
-      top_products AS (
-        SELECT product
-        FROM agg
-        GROUP BY product
-        ORDER BY SUM(total_quantity) DESC
-        LIMIT 10
       )
       SELECT
         a.product,
@@ -1605,10 +1612,10 @@ export const getContractQuantityByProductIncoterm = async (req: AuthRequest, res
         a.total_quantity,
         a.completed_quantity,
         a.outstanding_quantity,
+        a.outstanding_payment_quantity,
         a.avg_unit_price,
         a.total_contract_value
       FROM agg a
-      WHERE a.product IN (SELECT product FROM top_products)
       ORDER BY a.product, a.total_quantity DESC NULLS LAST, a.incoterm
       `,
       params
@@ -1828,6 +1835,125 @@ export const getContractQuantityByPlant = async (req: AuthRequest, res: Response
     return res.status(500).json({
       success: false,
       error: { message: 'Failed to fetch contract quantity by plant' },
+    });
+  }
+};
+
+// Combined: breakdown each Plant/Site by Incoterm
+export const getContractQuantityByPlantIncoterm = async (req: AuthRequest, res: Response) => {
+  try {
+    const { contractFilter, params } = buildFilterConditions(req);
+
+    const result = await query(
+      `
+      WITH base_contracts AS (
+        SELECT
+          c.id AS contract_pk,
+          c.contract_id,
+          c.supplier,
+          COALESCE(c.quantity_ordered, 0) AS quantity_ordered,
+          COALESCE(NULLIF(TRIM(c.incoterm), ''), 'Blank') AS incoterm,
+          COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_location
+        FROM contracts c
+        LEFT JOIN LATERAL (
+          SELECT UPPER(TRIM(COALESCE(
+            NULLIF(TRIM(c.transport_mode), ''),
+            (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            ''
+          ))) AS tm_upper
+        ) tx ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(
+            CASE
+              WHEN tx.tm_upper LIKE 'LAND%' THEN (
+                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                FROM trucking_operations t
+                WHERE t.contract_id = c.id
+                ORDER BY t.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              WHEN tx.tm_upper LIKE 'SEA%' THEN (
+                SELECT NULLIF(TRIM(s.port_of_discharge), '')
+                FROM shipments s
+                WHERE s.contract_id = c.id
+                ORDER BY s.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              ELSE NULL
+            END,
+            NULLIF(TRIM(c.unloading_site), ''),
+            NULLIF(TRIM(c.loading_site), '')
+          ) AS plant_site
+        ) ps ON true
+        WHERE 1=1 ${contractFilter}
+      ),
+      delivered_by_contract AS (
+        SELECT
+          spd.contract_number AS contract_id,
+          SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
+          ) AS delivered_quantity
+        FROM sap_processed_data spd
+        WHERE spd.sto_number IS NOT NULL
+          AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+          AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
+        GROUP BY spd.contract_number
+      ),
+      payment_status_per_contract AS (
+        SELECT
+          p.contract_id,
+          MAX(CASE WHEN p.payoff_date IS NULL THEN 1 ELSE 0 END) AS has_blank_payoff
+        FROM payments p
+        GROUP BY p.contract_id
+      ),
+      agg AS (
+        SELECT
+          bc.plant_location,
+          bc.incoterm,
+          COUNT(DISTINCT bc.contract_id) AS contract_count,
+          COUNT(DISTINCT bc.supplier) AS supplier_count,
+          SUM(bc.quantity_ordered) AS total_quantity,
+          SUM(COALESCE(db.delivered_quantity, 0)) AS completed_quantity,
+          SUM(bc.quantity_ordered) - SUM(COALESCE(db.delivered_quantity, 0)) AS outstanding_quantity,
+          SUM(
+            CASE
+              WHEN COALESCE(ps.has_blank_payoff, 0) = 1
+              THEN (bc.quantity_ordered - COALESCE(db.delivered_quantity, 0))
+              ELSE 0
+            END
+          ) AS outstanding_payment_quantity
+        FROM base_contracts bc
+        LEFT JOIN delivered_by_contract db ON db.contract_id = bc.contract_id
+        LEFT JOIN payment_status_per_contract ps ON ps.contract_id = bc.contract_pk
+        GROUP BY bc.plant_location, bc.incoterm
+      )
+      SELECT
+        a.plant_location,
+        a.incoterm,
+        a.contract_count,
+        a.supplier_count,
+        a.total_quantity,
+        a.completed_quantity,
+        a.outstanding_quantity,
+        a.outstanding_payment_quantity
+      FROM agg a
+      ORDER BY a.plant_location, a.total_quantity DESC NULLS LAST, a.incoterm
+      `,
+      params
+    );
+
+    return res.json({
+      success: true,
+      data: result.rows,
+    });
+  } catch (error) {
+    logger.error('Get contract quantity by plant incoterm error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch contract quantity by plant incoterm' },
     });
   }
 };
@@ -2319,9 +2445,22 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
           c.contract_date,
           c.delivery_start_date,
           c.delivery_end_date,
+          c.cargo_readiness_date,
+          COALESCE(
+            NULLIF(TRIM(COALESCE(c.transport_mode, '')), ''),
+            l.data->'contract'->>'transport_mode',
+            l.data->'contract'->>'sea_land',
+            l.data->'raw'->>'Sea / Land',
+            l.data->'raw'->>'Sea_Land',
+            ''
+          ) AS transport_mode,
+          l.data AS latest_spd_data,
           COALESCE(l.data->'raw'->>'Contract Ext No', l.data->>'Contract Ext No') AS contract_ext_no,
           c.contract_value,
           pinfo.payment_due_date,
+          pinfo.payoff_date,
+          pinfo.last_trucking_completion_date,
+          pinfo.last_ata_vessel_complete_discharge,
           c.currency,
           -- Status displayed should match dashboard logic and Contracts page conventions
           CASE
@@ -2348,7 +2487,10 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
         LEFT JOIN qty q ON q.contract_number = c.contract_id
         LEFT JOIN LATERAL (
           SELECT
-            MIN(p.payment_due_date) FILTER (WHERE p.payoff_date IS NULL) AS payment_due_date
+            MIN(p.payment_due_date) FILTER (WHERE p.payoff_date IS NULL) AS payment_due_date,
+            MAX(p.payoff_date) AS payoff_date,
+            (SELECT MAX(t.trucking_completion_date) FROM trucking_operations t WHERE t.contract_id = c.id) AS last_trucking_completion_date,
+            (SELECT MAX(s.ata_discharge_complete::date) FROM shipments s WHERE s.contract_id = c.id AND s.ata_discharge_complete IS NOT NULL) AS last_ata_vessel_complete_discharge
           FROM payments p
           WHERE p.contract_id = c.id
         ) pinfo ON true
@@ -2369,6 +2511,125 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
     const row0 = result.rows?.[0] as any;
     const totalCount = Number(row0?.total_count) || 0;
     const rows = Array.isArray(row0?.rows) ? row0.rows : [];
+
+    const asDate = (d: unknown): Date | null => {
+      if (d == null) return null;
+      if (d instanceof Date) return d;
+      if (typeof d === 'string') {
+        const t = Date.parse(d);
+        if (Number.isNaN(t)) return null;
+        return new Date(t);
+      }
+      return null;
+    };
+    const parseFlexibleDate = (v: unknown): Date | null => {
+      if (v == null) return null;
+      if (v instanceof Date) return v;
+      const s = String(v).trim();
+      if (!s) return null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(`${s}T00:00:00`);
+      const mmddyy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+      if (mmddyy) {
+        const mm = Number(mmddyy[1]);
+        const dd = Number(mmddyy[2]);
+        const yy = Number(mmddyy[3]);
+        const fullYear = yy >= 70 ? 1900 + yy : 2000 + yy;
+        return new Date(Date.UTC(fullYear, mm - 1, dd));
+      }
+      const mmddyyyy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (mmddyyyy) {
+        const mm = Number(mmddyyyy[1]);
+        const dd = Number(mmddyyyy[2]);
+        const yyyy = Number(mmddyyyy[3]);
+        return new Date(Date.UTC(yyyy, mm - 1, dd));
+      }
+      const t = Date.parse(s);
+      if (!Number.isNaN(t)) return new Date(t);
+      return null;
+    };
+    const diffInDays = (start: unknown, end: unknown): number | null => {
+      const s = asDate(start);
+      const e = asDate(end);
+      if (!s || !e) return null;
+      const msPerDay = 24 * 60 * 60 * 1000;
+      const sMid = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+      const eMid = new Date(e.getFullYear(), e.getMonth(), e.getDate());
+      return Math.round((eMid.getTime() - sMid.getTime()) / msPerDay);
+    };
+
+    // Compute log_cycle_days + cash_cycle_days for drilldown weighted averages
+    const today = new Date();
+    const todayMidIso = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
+    for (const r of rows) {
+      const spd = (r as any).latest_spd_data || {};
+      const spdPayment = (spd && typeof spd === 'object') ? (spd as any).payment || {} : {};
+      const spdRaw = (spd && typeof spd === 'object') ? (spd as any).raw || {} : {};
+      const statusText = String(r.status || '').trim().toUpperCase();
+      const transport = String(r.transport_mode || '').toUpperCase();
+      const cargoReadyRaw =
+        r.cargo_readiness_date ||
+        spdPayment?.cargo_readiness_date ||
+        spdRaw?.['Cargo Readiness Date'] ||
+        spdRaw?.['Contract Readiness Date'] ||
+        null;
+      const cargoReady = cargoReadyRaw || r.contract_date || r.delivery_start_date || null;
+      const lastTruck = r.last_trucking_completion_date;
+      const lastAtaDischarge = r.last_ata_vessel_complete_discharge;
+      const payoffDate =
+        r.payoff_date ||
+        parseFlexibleDate(spdPayment?.payoff_date) ||
+        parseFlexibleDate(spdRaw?.['Payoff Date']) ||
+        null;
+      const dueDatePayment =
+        r.payment_due_date ||
+        parseFlexibleDate(spdPayment?.due_date_payment) ||
+        parseFlexibleDate(spdRaw?.['Due Date Payment']) ||
+        null;
+      const cashStartLand = lastTruck || cargoReady || r.contract_date || r.delivery_start_date || null;
+      const cashStartSea = lastAtaDischarge || cargoReady || r.contract_date || r.delivery_start_date || null;
+
+      let logCycle: number | null = null;
+      if (transport.startsWith('LAND')) {
+        if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
+          const d = diffInDays(cargoReady, lastTruck);
+          if (d != null) logCycle = d;
+        } else if (statusText === 'OPEN' || statusText === 'ACTIVE') {
+          const d = diffInDays(cargoReady, todayMidIso);
+          if (d != null) logCycle = d;
+        }
+      } else if (transport.startsWith('SEA')) {
+        if (statusText === 'OPEN' || statusText === 'ACTIVE') {
+          const d = diffInDays(cargoReady, todayMidIso);
+          if (d != null) logCycle = d;
+        } else if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
+          const d = diffInDays(cargoReady, lastAtaDischarge);
+          if (d != null) logCycle = d;
+        }
+      }
+      (r as any).log_cycle_days = logCycle;
+
+      let cashCycle: number | null = null;
+      if ((statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') && payoffDate) {
+        if (transport.startsWith('LAND')) {
+          const d = diffInDays(cashStartLand, payoffDate);
+          if (d != null) cashCycle = d;
+        } else if (transport.startsWith('SEA')) {
+          const d = diffInDays(cashStartSea, payoffDate);
+          if (d != null) cashCycle = d;
+        }
+      } else if (dueDatePayment) {
+        // Fallback for unpaid / open contracts: expected payment cycle to due date
+        if (transport.startsWith('LAND')) {
+          const d = diffInDays(cashStartLand, dueDatePayment);
+          if (d != null) cashCycle = d;
+        } else if (transport.startsWith('SEA')) {
+          const d = diffInDays(cashStartSea, dueDatePayment);
+          if (d != null) cashCycle = d;
+        }
+      }
+      (r as any).cash_cycle_days = cashCycle;
+      delete (r as any).latest_spd_data;
+    }
     return res.json({
       success: true,
       data: rows,

@@ -10,6 +10,8 @@ import { Badge } from '@/components/ui/badge'
 import { Search, Filter, X, Truck, Package, Save, Loader2, Download, Upload, Edit2, Plus, Minus, SlidersHorizontal, ChevronRight, ChevronDown, ArrowUp, ArrowDown, Check } from 'lucide-react'
 import api from '@/lib/api'
 import { Checkbox } from '@/components/ui/checkbox'
+import { FieldHelp } from '@/components/FieldHelp'
+import { FIELD_HELP } from '@/lib/fieldHelpText'
 
 interface TruckingOperation {
   id: string
@@ -1061,6 +1063,7 @@ function TruckingPageContent() {
     label: string
     defaultVisible: boolean
     sortable: boolean
+    formulaHelp?: string
     getSortValue?: (o: TruckingOperation) => string | number
     render: (o: TruckingOperation) => React.ReactNode
     className?: string
@@ -1071,6 +1074,7 @@ function TruckingPageContent() {
     {
       id: 'late_indicator',
       label: 'Late Indicator',
+      formulaHelp: FIELD_HELP.lateIndicator,
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => {
@@ -1254,6 +1258,7 @@ function TruckingPageContent() {
     {
       id: 'gain_loss_percentage',
       label: 'Gain/Loss %',
+      formulaHelp: FIELD_HELP.gainLossPct,
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.gain_loss_percentage || 0,
@@ -1266,6 +1271,7 @@ function TruckingPageContent() {
     {
       id: 'gain_loss_amount',
       label: 'Gain/Loss Amount (Kg)',
+      formulaHelp: FIELD_HELP.gainLossAmount,
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.gain_loss_amount || 0,
@@ -1278,6 +1284,7 @@ function TruckingPageContent() {
     {
       id: 'oa_budget',
       label: 'Trucking OA Budget',
+      formulaHelp: FIELD_HELP.truckingOaBudget,
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.oa_budget || 0,
@@ -1290,6 +1297,7 @@ function TruckingPageContent() {
     {
       id: 'oa_actual',
       label: 'Trucking OA Actual',
+      formulaHelp: FIELD_HELP.truckingOaActual,
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.oa_actual || 0,
@@ -1354,6 +1362,7 @@ function TruckingPageContent() {
     {
       id: 'eta_delivery_start_date',
       label: 'ETA Due Date Delivery Start',
+      formulaHelp: FIELD_HELP.etaVsDueDelivery,
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.eta_delivery_start_date || '',
@@ -1362,6 +1371,7 @@ function TruckingPageContent() {
     {
       id: 'eta_delivery_end_date',
       label: 'ETA Due Date Delivery End',
+      formulaHelp: FIELD_HELP.etaVsDueDelivery,
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.eta_delivery_end_date || '',
@@ -1370,6 +1380,7 @@ function TruckingPageContent() {
     {
       id: 'delivery_start_date',
       label: 'Due Date Delivery Start',
+      formulaHelp: FIELD_HELP.etaVsDueDelivery,
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.delivery_start_date || '',
@@ -1378,6 +1389,7 @@ function TruckingPageContent() {
     {
       id: 'delivery_end_date',
       label: 'Due Date Delivery End',
+      formulaHelp: FIELD_HELP.etaVsDueDelivery,
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.delivery_end_date || '',
@@ -1928,6 +1940,7 @@ function TruckingPageContent() {
                                   title={col.sortable ? 'Sort' : undefined}
                                 >
                                   <span className="truncate">{col.label}</span>
+                                  {col.formulaHelp ? <FieldHelp text={col.formulaHelp} /> : null}
                                   {col.sortable && active && (
                                     sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                                   )}

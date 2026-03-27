@@ -51,6 +51,8 @@ export default function RolesPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [selectedLevel, setSelectedLevel] = useState<string>('all')
+  const [selectedTransportType, setSelectedTransportType] = useState<string>('all')
 
   useEffect(() => {
     // Check if user is admin
@@ -73,7 +75,7 @@ export default function RolesPage() {
     if (selectedRoleId) {
       fetchRolePermissions(selectedRoleId)
     }
-  }, [selectedRoleId])
+  }, [selectedRoleId, selectedLevel, selectedTransportType])
 
   const fetchRoles = async () => {
     try {
@@ -94,7 +96,10 @@ export default function RolesPage() {
 
   const fetchRolePermissions = async (roleId: string) => {
     try {
-      const response = await api.get(`/roles/${roleId}`)
+      const params: Record<string, string> = {}
+      if (selectedLevel !== 'all') params.level = selectedLevel
+      if (selectedTransportType !== 'all') params.transportType = selectedTransportType
+      const response = await api.get(`/roles/${roleId}`, { params })
       const roleData = response.data.data
       setSelectedRole(roleData)
       setPermissions(roleData.permissions || [])
@@ -130,6 +135,11 @@ export default function RolesPage() {
 
       await api.put(`/roles/${selectedRoleId}/permissions`, {
         permissions: permissionsToSave,
+      }, {
+        params: {
+          ...(selectedLevel !== 'all' ? { level: selectedLevel } : {}),
+          ...(selectedTransportType !== 'all' ? { transportType: selectedTransportType } : {}),
+        }
       })
 
       setSuccess('Role permissions updated successfully')
@@ -256,6 +266,32 @@ export default function RolesPage() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="w-52">
+                <Select value={selectedLevel} onValueChange={setSelectedLevel}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="All Levels" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Levels</SelectItem>
+                    <SelectItem value="Dept Head">Dept Head</SelectItem>
+                    <SelectItem value="Section Head">Section Head</SelectItem>
+                    <SelectItem value="Staff">Staff</SelectItem>
+                    <SelectItem value="Admin">Admin</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="w-44">
+                <Select value={selectedTransportType} onValueChange={setSelectedTransportType}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="All Transport" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Transport</SelectItem>
+                    <SelectItem value="SEA">SEA</SelectItem>
+                    <SelectItem value="LAND">LAND</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <Button onClick={handleSave} disabled={saving}>
                 <Save className="h-4 w-4 mr-2" />
                 {saving ? 'Saving...' : 'Save Changes'}
@@ -266,6 +302,13 @@ export default function RolesPage() {
               <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
                 <h3 className="font-semibold text-blue-900">{selectedRole.display_name}</h3>
                 <p className="text-sm text-blue-700 mt-1">{selectedRole.description}</p>
+                <p className="text-xs text-blue-700 mt-2">
+                  Scope: <span className="font-medium">Role={selectedRole.role_name}</span>
+                  {' · '}
+                  <span className="font-medium">Level={selectedLevel === 'all' ? 'All' : selectedLevel}</span>
+                  {' · '}
+                  <span className="font-medium">Transport={selectedTransportType === 'all' ? 'All' : selectedTransportType}</span>
+                </p>
               </div>
             )}
           </CardContent>

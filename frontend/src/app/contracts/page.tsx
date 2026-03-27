@@ -65,6 +65,8 @@ interface Contract {
   over_under_delivery_status?: string
   log_cycle_days?: number | null
   trade_cycle_days?: number | null
+  cash_cycle_days?: number | null
+  payment_status?: string
   company_name?: string
 }
 
@@ -142,6 +144,11 @@ function ContractsPageContent() {
   const [contractPaymentsLoading, setContractPaymentsLoading] = useState(false)
   const [activityLog, setActivityLog] = useState<Array<{ id: string; username: string; full_name?: string; action: string; entity_type: string; timestamp: string; before_data: Record<string, unknown> | null; after_data: Record<string, unknown> | null }>>([])
   const [activityLogLoading, setActivityLogLoading] = useState(false)
+  const [detailLogTab, setDetailLogTab] = useState<'activity' | 'comments'>('activity')
+  const [contractRemarks, setContractRemarks] = useState<Array<{ id: string; text: string; category?: string | null; created_at: string; updated_at: string; username?: string; full_name?: string }>>([])
+  const [contractRemarksLoading, setContractRemarksLoading] = useState(false)
+  const [newRemarkText, setNewRemarkText] = useState<string>('')
+  const [newRemarkSaving, setNewRemarkSaving] = useState(false)
   const [b2bParties, setB2bParties] = useState<B2bPartyRow[]>([])
   const [b2bPartiesLoading, setB2bPartiesLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
@@ -640,6 +647,39 @@ function ContractsPageContent() {
     return () => { cancelled = true }
   }, [selectedContract?.id])
 
+  useEffect(() => {
+    if (!selectedContract?.id) {
+      setContractRemarks([])
+      setNewRemarkText('')
+      return
+    }
+    let cancelled = false
+    setContractRemarksLoading(true)
+    api.get(`/contracts/${selectedContract.id}/remarks`)
+      .then((res) => {
+        if (cancelled) return
+        setContractRemarks(Array.isArray(res.data?.data) ? res.data.data : [])
+      })
+      .catch(() => { if (!cancelled) setContractRemarks([]) })
+      .finally(() => { if (!cancelled) setContractRemarksLoading(false) })
+    return () => { cancelled = true }
+  }, [selectedContract?.id])
+
+  const saveNewRemark = useCallback(async () => {
+    if (!selectedContract?.id) return
+    const text = newRemarkText.trim()
+    if (!text) return
+    setNewRemarkSaving(true)
+    try {
+      await api.post(`/contracts/${selectedContract.id}/remarks`, { text })
+      setNewRemarkText('')
+      const res = await api.get(`/contracts/${selectedContract.id}/remarks`)
+      setContractRemarks(Array.isArray(res.data?.data) ? res.data.data : [])
+    } finally {
+      setNewRemarkSaving(false)
+    }
+  }, [newRemarkText, selectedContract?.id])
+
   // B2B Parties (child contracts linked by Contract Reff PO Ini)
   useEffect(() => {
     if (!selectedContract?.id) {
@@ -910,8 +950,8 @@ function ContractsPageContent() {
       render: (c) => <span className="text-sm truncate">{c.product || '-'}</span>
     },
     {
-      id: 'status',
-      label: 'Status',
+      id: 'delivery_status',
+      label: 'Delivery Status',
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => (c.import_status || c.status || ''),
@@ -920,6 +960,48 @@ function ContractsPageContent() {
           {c.import_status || c.status}
         </Badge>
       )
+    },
+    {
+      id: 'status_overall',
+      label: 'Status',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => {
+        const delivery = String(c.import_status || c.status || '').toUpperCase()
+        const paid = String(c.payment_status || '').toUpperCase() === 'PAID'
+        return delivery === 'CLOSE' && paid ? 'Close' : (c.import_status || c.status || '')
+      },
+      render: (c) => {
+        const delivery = String(c.import_status || c.status || '').toUpperCase()
+        const paid = String(c.payment_status || '').toUpperCase() === 'PAID'
+        const overall = delivery === 'CLOSE' && paid ? 'Close' : (c.import_status || c.status || '-')
+        return <span className="text-sm font-medium">{overall}</span>
+      }
+    },
+    {
+      id: 'unusual_status',
+      label: 'Unusual Status',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => {
+        const isUnusual =
+          (c.log_cycle_days != null && c.log_cycle_days >= 35) ||
+          (c.trade_cycle_days != null && c.trade_cycle_days >= 35) ||
+          (c.cash_cycle_days != null && c.cash_cycle_days >= 35)
+        return isUnusual ? 1 : 0
+      },
+      render: (c) => {
+        const isUnusual =
+          (c.log_cycle_days != null && c.log_cycle_days >= 35) ||
+          (c.trade_cycle_days != null && c.trade_cycle_days >= 35) ||
+          (c.cash_cycle_days != null && c.cash_cycle_days >= 35)
+        return isUnusual ? (
+          <Badge className="bg-red-100 text-red-800 hover:bg-red-100">Unusual</Badge>
+        ) : (
+          <Badge className="bg-gray-100 text-gray-700 hover:bg-gray-100">Normal</Badge>
+        )
+      },
+      className: 'whitespace-nowrap'
     },
     {
       id: 'log_cycle_days',
@@ -945,6 +1027,20 @@ function ContractsPageContent() {
       render: (c) => (
         <span className="text-xs font-semibold">
           {c.trade_cycle_days != null ? `${c.trade_cycle_days} days` : '-'}
+        </span>
+      ),
+      className: 'whitespace-nowrap'
+    },
+    {
+      id: 'cash_cycle_days',
+      label: 'Cash Cycle',
+      formulaHelp: FIELD_HELP.cashCycle,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => c.cash_cycle_days ?? 0,
+      render: (c) => (
+        <span className="text-xs font-semibold">
+          {c.cash_cycle_days != null ? `${c.cash_cycle_days} days` : '-'}
         </span>
       ),
       className: 'whitespace-nowrap'
@@ -1055,7 +1151,7 @@ function ContractsPageContent() {
     },
     {
       id: 'cargo_readiness_date',
-      label: 'Contract Readiness Date',
+      label: 'Cargo Readiness Date',
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.cargo_readiness_date || '',
@@ -2295,6 +2391,32 @@ function ContractsPageContent() {
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Status</div>
+                        <div className="font-medium mt-1">
+                          {(() => {
+                            const delivery = String(selectedContract.import_status || selectedContract.status || '').toUpperCase()
+                            const paid = String(selectedContract.payment_status || '').toUpperCase() === 'PAID'
+                            return delivery === 'CLOSE' && paid ? 'Close' : (selectedContract.import_status || selectedContract.status || '-')
+                          })()}
+                        </div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Unusual Flag</div>
+                        <div className="mt-1">
+                          {(() => {
+                            const isUnusual =
+                              (selectedContract.log_cycle_days != null && selectedContract.log_cycle_days >= 35) ||
+                              (selectedContract.trade_cycle_days != null && selectedContract.trade_cycle_days >= 35) ||
+                              (selectedContract.cash_cycle_days != null && selectedContract.cash_cycle_days >= 35)
+                            return isUnusual ? (
+                              <Badge className="bg-red-100 text-red-800 hover:bg-red-100">Unusual</Badge>
+                            ) : (
+                              <Badge className="bg-gray-100 text-gray-700 hover:bg-gray-100">Normal</Badge>
+                            )
+                          })()}
+                        </div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Delivery Status</div>
                         <div className="mt-1">
                           <Badge className={getStatusColor(selectedContract.import_status || selectedContract.status)}>
                             {selectedContract.import_status || selectedContract.status}
@@ -2333,6 +2455,33 @@ function ContractsPageContent() {
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">LT/SPOT</div>
                         <div className="font-medium mt-1">{selectedContract.lt_spot || '-'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500 flex items-center gap-1">
+                          Log Cycle
+                          <FieldHelp text={FIELD_HELP.logCycle} />
+                        </div>
+                        <div className="font-medium mt-1">
+                          {selectedContract.log_cycle_days != null ? `${selectedContract.log_cycle_days} days` : '-'}
+                        </div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500 flex items-center gap-1">
+                          Trade Cycle
+                          <FieldHelp text={FIELD_HELP.tradeCycle} />
+                        </div>
+                        <div className="font-medium mt-1">
+                          {selectedContract.trade_cycle_days != null ? `${selectedContract.trade_cycle_days} days` : '-'}
+                        </div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500 flex items-center gap-1">
+                          Cash Cycle
+                          <FieldHelp text={FIELD_HELP.cashCycle} />
+                        </div>
+                        <div className="font-medium mt-1">
+                          {selectedContract.cash_cycle_days != null ? `${selectedContract.cash_cycle_days} days` : '-'}
+                        </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded col-span-2">
                         <div className="text-gray-500">
@@ -2454,24 +2603,6 @@ function ContractsPageContent() {
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Incoterm</div>
                         <div className="font-medium mt-1">{selectedContract.incoterm || '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500 flex items-center gap-1">
-                          Log Cycle
-                          <FieldHelp text={FIELD_HELP.logCycle} />
-                        </div>
-                        <div className="font-medium mt-1">
-                          {selectedContract.log_cycle_days != null ? `${selectedContract.log_cycle_days} days` : '-'}
-                        </div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500 flex items-center gap-1">
-                          Trade Cycle
-                          <FieldHelp text={FIELD_HELP.tradeCycle} />
-                        </div>
-                        <div className="font-medium mt-1">
-                          {selectedContract.trade_cycle_days != null ? `${selectedContract.trade_cycle_days} days` : '-'}
-                        </div>
                       </div>
                     </div>
                     {stoInfoLoading ? (
@@ -2604,7 +2735,7 @@ function ContractsPageContent() {
                         <div className="font-medium mt-1">{selectedContract.payoff_date_deviation_days ?? '-'}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Status</div>
+                        <div className="text-gray-500">Payment Status</div>
                         <div className="font-medium mt-1">
                           {contractPaymentsLoading ? (
                             <span className="text-gray-400">Loading...</span>
@@ -2650,47 +2781,70 @@ function ContractsPageContent() {
                     )}
                   </div>
 
-                  {/* Activity Log */}
+                  {/* Activity Log / Comments */}
                   <div>
-                    <h3 className="text-lg font-semibold mb-3">Activity Log</h3>
-                    {activityLogLoading ? (
-                      <p className="text-sm text-gray-500 py-4">Loading activity...</p>
-                    ) : activityLog.length === 0 ? (
-                      <p className="text-sm text-gray-500 py-4">No activity recorded for this contract.</p>
-                    ) : (
-                      <div className="overflow-x-auto rounded border">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="bg-gray-50 border-b">
-                              <th className="text-left p-2 font-medium">User</th>
-                              <th className="text-left p-2 font-medium">Date &amp; Time</th>
-                              <th className="text-left p-2 font-medium">Action</th>
-                              <th className="text-left p-2 font-medium">Area</th>
-                              <th className="text-left p-2 font-medium">Old value</th>
-                              <th className="text-left p-2 font-medium">New value</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {activityLog.flatMap((log) => {
-                              const before = log.before_data && typeof log.before_data === 'object' ? log.before_data as Record<string, unknown> : {}
-                              const after = log.after_data && typeof log.after_data === 'object' ? log.after_data as Record<string, unknown> : {}
-                              const toStr = (v: unknown): string => {
-                                if (v == null) return ''
-                                if (typeof v === 'object') return JSON.stringify(v)
-                                return String(v)
-                              }
-                              const keys = new Set([...Object.keys(before), ...Object.keys(after)])
-                              const rows = Array.from(keys)
-                                .filter((k) => toStr(before[k]) !== toStr(after[k]))
-                                .map((k) => ({
-                                  key: k,
-                                  old: before[k] != null ? (typeof before[k] === 'object' ? JSON.stringify(before[k]) : String(before[k])) : '—',
-                                  new: after[k] != null ? (typeof after[k] === 'object' ? JSON.stringify(after[k]) : String(after[k])) : '—',
-                                }))
-                              const entityLabel = log.entity_type.replace(/_/g, ' ')
-                              const userLabel = log.username || log.full_name || '—'
-                              const timeLabel = log.timestamp ? new Date(log.timestamp).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '—'
-                              if (rows.length > 0) {
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <h3 className="text-lg font-semibold">Activity</h3>
+                      <div className="inline-flex rounded-md border overflow-hidden">
+                        <button
+                          type="button"
+                          className={`px-3 py-1.5 text-sm ${detailLogTab === 'activity' ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+                          onClick={() => setDetailLogTab('activity')}
+                        >
+                          Activity Log
+                        </button>
+                        <button
+                          type="button"
+                          className={`px-3 py-1.5 text-sm ${detailLogTab === 'comments' ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+                          onClick={() => setDetailLogTab('comments')}
+                        >
+                          Comments
+                        </button>
+                      </div>
+                    </div>
+
+                    {detailLogTab === 'activity' ? (
+                      activityLogLoading ? (
+                        <p className="text-sm text-gray-500 py-4">Loading activity...</p>
+                      ) : activityLog.length === 0 ? (
+                        <p className="text-sm text-gray-500 py-4">No activity recorded for this contract.</p>
+                      ) : (
+                        <div className="overflow-x-auto rounded border">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-gray-50 border-b">
+                                <th className="text-left p-2 font-medium">User</th>
+                                <th className="text-left p-2 font-medium">Date &amp; Time</th>
+                                <th className="text-left p-2 font-medium">Action</th>
+                                <th className="text-left p-2 font-medium">Area</th>
+                                <th className="text-left p-2 font-medium">Field</th>
+                                <th className="text-left p-2 font-medium">Old value</th>
+                                <th className="text-left p-2 font-medium">New value</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {activityLog.flatMap((log) => {
+                                const before = log.before_data && typeof log.before_data === 'object' ? log.before_data as Record<string, unknown> : {}
+                                const after = log.after_data && typeof log.after_data === 'object' ? log.after_data as Record<string, unknown> : {}
+                                const toStr = (v: unknown): string => {
+                                  if (v == null) return ''
+                                  if (typeof v === 'object') return JSON.stringify(v)
+                                  return String(v)
+                                }
+                                const keys = new Set([...Object.keys(before), ...Object.keys(after)])
+                                const rows = Array.from(keys)
+                                  .filter((k) => toStr(before[k]) !== toStr(after[k]))
+                                  .map((k) => ({
+                                    key: k,
+                                    old: before[k] != null ? (typeof before[k] === 'object' ? JSON.stringify(before[k]) : String(before[k])) : '—',
+                                    new: after[k] != null ? (typeof after[k] === 'object' ? JSON.stringify(after[k]) : String(after[k])) : '—',
+                                  }))
+                                const entityLabel = log.entity_type.replace(/_/g, ' ')
+                                const userLabel = log.username || log.full_name || '—'
+                                const timeLabel = log.timestamp ? new Date(log.timestamp).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '—'
+
+                                if (rows.length === 0) return []
+
                                 return rows.map((row, i) => (
                                   <tr key={`${log.id}-${row.key}-${i}`} className="border-b last:border-0">
                                     {i === 0 ? (
@@ -2701,24 +2855,57 @@ function ContractsPageContent() {
                                         <td className="p-2 align-top" rowSpan={rows.length}>{entityLabel}</td>
                                       </>
                                     ) : null}
-                                    <td className="p-2 align-top text-gray-600 max-w-[200px] truncate" title={row.old}>{row.old}</td>
-                                    <td className="p-2 align-top max-w-[200px] truncate" title={row.new}>{row.new}</td>
+                                    <td className="p-2 align-top text-gray-700 whitespace-nowrap">{row.key}</td>
+                                    <td className="p-2 align-top text-gray-600 max-w-[260px] truncate" title={row.old}>{row.old}</td>
+                                    <td className="p-2 align-top max-w-[260px] truncate" title={row.new}>{row.new}</td>
                                   </tr>
                                 ))
-                              }
-                              return [
-                                <tr key={log.id} className="border-b">
-                                  <td className="p-2">{userLabel}</td>
-                                  <td className="p-2 whitespace-nowrap">{timeLabel}</td>
-                                  <td className="p-2">{log.action}</td>
-                                  <td className="p-2">{entityLabel}</td>
-                                  <td className="p-2 text-gray-500">—</td>
-                                  <td className="p-2 text-gray-500">—</td>
-                                </tr>,
-                              ]
-                            })}
-                          </tbody>
-                        </table>
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )
+                    ) : (
+                      <div className="rounded border p-3">
+                        <div className="flex items-start gap-2">
+                          <textarea
+                            className="w-full min-h-[80px] border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-200"
+                            placeholder="Write a comment for this contract..."
+                            value={newRemarkText}
+                            onChange={(e) => setNewRemarkText(e.target.value)}
+                          />
+                          <Button
+                            type="button"
+                            onClick={saveNewRemark}
+                            disabled={newRemarkSaving || !newRemarkText.trim()}
+                          >
+                            {newRemarkSaving ? 'Saving...' : 'Post'}
+                          </Button>
+                        </div>
+
+                        <div className="mt-4">
+                          {contractRemarksLoading ? (
+                            <div className="text-sm text-gray-500 py-4">Loading comments...</div>
+                          ) : contractRemarks.length === 0 ? (
+                            <div className="text-sm text-gray-500 py-4">No comments yet.</div>
+                          ) : (
+                            <div className="space-y-3">
+                              {contractRemarks.map((r) => (
+                                <div key={r.id} className="border rounded p-3">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className="text-sm font-medium">
+                                      {r.full_name || r.username || '—'}
+                                    </div>
+                                    <div className="text-xs text-gray-500 whitespace-nowrap">
+                                      {r.created_at ? new Date(r.created_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                                    </div>
+                                  </div>
+                                  <div className="mt-2 text-sm text-gray-800 whitespace-pre-wrap break-words">{r.text}</div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>

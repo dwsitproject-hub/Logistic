@@ -1,6 +1,7 @@
 import * as cron from 'node-cron';
 import { ExcelImportService } from './excelImport.service';
 import logger from '../utils/logger';
+import { FinanceMaterializedViewService } from './financeMaterializedView.service';
 
 export interface ScheduledImport {
   id: string;
@@ -179,6 +180,11 @@ export class SchedulerService {
           processedRecords: result.processedRecords,
           failedRecords: result.failedRecords
         }
+      });
+
+      // Keep finance MV in sync with new SAP rows without blocking the scheduler.
+      setImmediate(() => {
+        FinanceMaterializedViewService.refreshContractPaymentDates().catch(() => {});
       });
       
     } catch (error) {

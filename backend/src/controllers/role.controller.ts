@@ -29,6 +29,8 @@ export const getAllRoles = async (_req: AuthRequest, res: Response): Promise<voi
 export const getRoleById = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
+    const level = req.query.level ? String(req.query.level) : null;
+    const transportType = req.query.transportType ? String(req.query.transportType).toUpperCase() : null;
 
     const roleResult = await query(
       `SELECT id, role_name, display_name, description, is_active, created_at, updated_at
@@ -50,9 +52,20 @@ export const getRoleById = async (req: AuthRequest, res: Response): Promise<void
       `SELECT p.id, p.permission_key, p.permission_name, p.description, p.category,
               rp.can_view, rp.can_create, rp.can_edit, rp.can_delete
        FROM permissions p
-       LEFT JOIN role_permissions rp ON p.id = rp.permission_id AND rp.role_id = $1
+       LEFT JOIN LATERAL (
+         SELECT rp.can_view, rp.can_create, rp.can_edit, rp.can_delete
+         FROM role_permissions rp
+         WHERE rp.role_id = $1
+           AND rp.permission_id = p.id
+           AND (rp.level IS NULL OR UPPER(TRIM(rp.level)) = UPPER(TRIM(COALESCE($2, rp.level))))
+           AND (rp.transport_type IS NULL OR UPPER(TRIM(rp.transport_type)) = UPPER(TRIM(COALESCE($3, rp.transport_type))))
+         ORDER BY
+           CASE WHEN rp.level IS NULL THEN 0 ELSE 1 END DESC,
+           CASE WHEN rp.transport_type IS NULL THEN 0 ELSE 1 END DESC
+         LIMIT 1
+       ) rp ON true
        ORDER BY p.category, p.permission_name`,
-      [id]
+      [id, level, transportType]
     );
 
     res.json({
@@ -109,7 +122,10 @@ export const getUserPermissions = async (req: AuthRequest, res: Response): Promi
     const userId = req.user?.id;
 
     // Get user's role
-    const userResult = await query('SELECT role FROM users WHERE id = $1', [userId]);
+    const userResult = await query(
+      'SELECT role, level, transport_type FROM users WHERE id = $1',
+      [userId]
+    );
 
     if (userResult.rows.length === 0) {
       res.status(404).json({
@@ -120,16 +136,30 @@ export const getUserPermissions = async (req: AuthRequest, res: Response): Promi
     }
 
     const userRole = userResult.rows[0].role;
+    const userLevel = userResult.rows[0].level || null;
+    const userTransportType = userResult.rows[0].transport_type || null;
 
     // Get role permissions
     const permissionsResult = await query(
-      `SELECT p.permission_key, p.permission_name, p.category,
-              rp.can_view, rp.can_create, rp.can_edit, rp.can_delete
+      `SELECT
+         p.permission_key, p.permission_name, p.category,
+         scoped.can_view, scoped.can_create, scoped.can_edit, scoped.can_delete
        FROM roles r
-       JOIN role_permissions rp ON r.id = rp.role_id
-       JOIN permissions p ON rp.permission_id = p.id
+       JOIN permissions p ON true
+       LEFT JOIN LATERAL (
+         SELECT rp.can_view, rp.can_create, rp.can_edit, rp.can_delete
+         FROM role_permissions rp
+         WHERE rp.role_id = r.id
+           AND rp.permission_id = p.id
+           AND (rp.level IS NULL OR UPPER(TRIM(rp.level)) = UPPER(TRIM(COALESCE($2, rp.level))))
+           AND (rp.transport_type IS NULL OR UPPER(TRIM(rp.transport_type)) = UPPER(TRIM(COALESCE($3, rp.transport_type))))
+         ORDER BY
+           CASE WHEN rp.level IS NULL THEN 0 ELSE 1 END DESC,
+           CASE WHEN rp.transport_type IS NULL THEN 0 ELSE 1 END DESC
+         LIMIT 1
+       ) scoped ON true
        WHERE r.role_name = $1 AND r.is_active = true`,
-      [userRole]
+      [userRole, userLevel, userTransportType]
     );
 
     // Format permissions for easy frontend use
@@ -166,6 +196,8 @@ export const updateRolePermissions = async (req: AuthRequest, res: Response): Pr
   try {
     const { id } = req.params;
     const { permissions } = req.body; // Array of {permission_id, can_view, can_create, can_edit, can_delete}
+    const level = req.query.level ? String(req.query.level) : null;
+    const transportType = req.query.transportType ? String(req.query.transportType).toUpperCase() : null;
 
     // Check if role exists
     const roleCheck = await query('SELECT role_name FROM roles WHERE id = $1', [id]);
@@ -178,15 +210,27 @@ export const updateRolePermissions = async (req: AuthRequest, res: Response): Pr
       return;
     }
 
-    // Delete existing permissions for this role
-    await query('DELETE FROM role_permissions WHERE role_id = $1', [id]);
+    // Delete existing scoped permissions for this role + scope
+    await query(
+      `DELETE FROM role_permissions
+       WHERE role_id = $1
+         AND (
+           ($2::text IS NULL AND level IS NULL)
+           OR UPPER(TRIM(COALESCE(level, ''))) = UPPER(TRIM(COALESCE($2::text, '')))
+         )
+         AND (
+           ($3::text IS NULL AND transport_type IS NULL)
+           OR UPPER(TRIM(COALESCE(transport_type, ''))) = UPPER(TRIM(COALESCE($3::text, '')))
+         )`,
+      [id, level, transportType]
+    );
 
     // Insert new permissions
     for (const perm of permissions) {
       if (perm.can_view || perm.can_create || perm.can_edit || perm.can_delete) {
         await query(
-          `INSERT INTO role_permissions (role_id, permission_id, can_view, can_create, can_edit, can_delete)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
+          `INSERT INTO role_permissions (role_id, permission_id, can_view, can_create, can_edit, can_delete, level, transport_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
             id,
             perm.permission_id,
@@ -194,6 +238,8 @@ export const updateRolePermissions = async (req: AuthRequest, res: Response): Pr
             perm.can_create || false,
             perm.can_edit || false,
             perm.can_delete || false,
+            level,
+            transportType,
           ]
         );
       }

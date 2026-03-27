@@ -9,7 +9,7 @@ export const getAllUsers = async (_req: AuthRequest, res: Response): Promise<voi
   try {
     const result = await query(
       `SELECT id, username, email, full_name, role, is_active, is_first_login, 
-              phone, department, created_at, updated_at, last_password_change
+              phone, department, level, transport_type, plant, created_at, updated_at, last_password_change
        FROM users 
        ORDER BY created_at DESC`
     );
@@ -34,7 +34,7 @@ export const getUserById = async (req: AuthRequest, res: Response): Promise<void
 
     const result = await query(
       `SELECT id, username, email, full_name, role, is_active, is_first_login,
-              phone, department, created_at, updated_at, last_password_change
+              phone, department, level, transport_type, plant, created_at, updated_at, last_password_change
        FROM users 
        WHERE id = $1`,
       [id]
@@ -64,10 +64,42 @@ export const getUserById = async (req: AuthRequest, res: Response): Promise<void
 // Create new user (Admin only)
 export const createUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { username, email, password, full_name, role, phone, department } = req.body;
+    const { username, email, password, full_name, role, phone, department, level, transport_type, plant } = req.body;
 
     // Validate role
     const validRoles = ['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT'];
+    const validLevels = ['Dept Head', 'Section Head', 'Staff', 'Admin'];
+    if (level != null && level !== '' && !validLevels.includes(level)) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'Invalid level' },
+      });
+      return;
+    }
+
+    const normRole = String(role || '').toUpperCase();
+    const normLevel = String(level || '').trim();
+    const requiresTransport = normRole === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(normLevel);
+    if (requiresTransport) {
+      const validTransport = ['SEA', 'LAND'];
+      if (!validTransport.includes(String(transport_type || '').toUpperCase())) {
+        res.status(400).json({
+          success: false,
+          error: { message: 'Transport Type is required for LOGISTICS with Section Head/Staff/Admin level' },
+        });
+        return;
+      }
+    }
+
+    const requiresPlant = ['LOGISTICS', 'TRADING'].includes(normRole);
+    if (requiresPlant && !String(plant || '').trim()) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'Plant is required for LOGISTICS and TRADING users' },
+      });
+      return;
+    }
+
     if (!validRoles.includes(role)) {
       res.status(400).json({
         success: false,
@@ -95,10 +127,21 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
 
     // Create user
     const result = await query(
-      `INSERT INTO users (username, email, password_hash, full_name, role, phone, department, is_first_login)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, true)
-       RETURNING id, username, email, full_name, role, is_active, is_first_login, phone, department, created_at`,
-      [username, email, password_hash, full_name, role, phone, department]
+      `INSERT INTO users (username, email, password_hash, full_name, role, phone, department, level, transport_type, plant, is_first_login)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true)
+       RETURNING id, username, email, full_name, role, is_active, is_first_login, phone, department, level, transport_type, plant, created_at`,
+      [
+        username,
+        email,
+        password_hash,
+        full_name,
+        role,
+        phone,
+        department,
+        level || null,
+        transport_type ? String(transport_type).toUpperCase() : null,
+        plant || null
+      ]
     );
 
     logger.info(`User created by ${req.user?.username}: ${username}`);
@@ -120,7 +163,7 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
 export const updateUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { username, email, full_name, role, phone, department, is_active } = req.body;
+    const { username, email, full_name, role, phone, department, level, transport_type, plant, is_active } = req.body;
 
     // Check if user exists
     const existingUser = await query('SELECT * FROM users WHERE id = $1', [id]);
@@ -143,6 +186,39 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
         });
         return;
       }
+    }
+
+    const nextRole = String(role || existingUser.rows[0].role || '').toUpperCase();
+    const nextLevel = String(level ?? existingUser.rows[0].level ?? '').trim();
+    const validLevels = ['Dept Head', 'Section Head', 'Staff', 'Admin'];
+    if (level != null && level !== '' && !validLevels.includes(String(level))) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'Invalid level' },
+      });
+      return;
+    }
+
+    const requiresTransport = nextRole === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(nextLevel);
+    if (requiresTransport) {
+      const t = String(transport_type ?? existingUser.rows[0].transport_type ?? '').toUpperCase();
+      if (!['SEA', 'LAND'].includes(t)) {
+        res.status(400).json({
+          success: false,
+          error: { message: 'Transport Type is required for LOGISTICS with Section Head/Staff/Admin level' },
+        });
+        return;
+      }
+    }
+
+    const requiresPlant = ['LOGISTICS', 'TRADING'].includes(nextRole);
+    const nextPlant = String(plant ?? existingUser.rows[0].plant ?? '').trim();
+    if (requiresPlant && !nextPlant) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'Plant is required for LOGISTICS and TRADING users' },
+      });
+      return;
     }
 
     // Check for duplicate username/email
@@ -170,11 +246,26 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
            role = COALESCE($4, role),
            phone = COALESCE($5, phone),
            department = COALESCE($6, department),
-           is_active = COALESCE($7, is_active),
+           level = COALESCE($7, level),
+           transport_type = COALESCE($8, transport_type),
+           plant = COALESCE($9, plant),
+           is_active = COALESCE($10, is_active),
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $8
-       RETURNING id, username, email, full_name, role, is_active, is_first_login, phone, department, updated_at`,
-      [username, email, full_name, role, phone, department, is_active, id]
+       WHERE id = $11
+       RETURNING id, username, email, full_name, role, is_active, is_first_login, phone, department, level, transport_type, plant, updated_at`,
+      [
+        username,
+        email,
+        full_name,
+        role,
+        phone,
+        department,
+        level ?? null,
+        transport_type ? String(transport_type).toUpperCase() : null,
+        plant ?? null,
+        is_active,
+        id
+      ]
     );
 
     logger.info(`User updated by ${req.user?.username}: ${username || existingUser.rows[0].username}`);

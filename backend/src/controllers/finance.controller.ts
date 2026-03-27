@@ -7,187 +7,181 @@ const toNumber = (value: any) => (value === null || value === undefined ? null :
 
 export const getPayments = async (req: AuthRequest, res: Response) => {
   try {
-    const { status, search, contract_id } = req.query as { status?: string; search?: string; contract_id?: string }
+    const {
+      status,
+      search,
+      contract_id,
+      page = '1',
+      limit = '100',
+      sortKey,
+      sortDir,
+      invoice_number,
+      supplier,
+      product,
+      currency,
+      due_from,
+      due_to,
+      dp_from,
+      dp_to,
+      payoff_from,
+      payoff_to,
+    } = req.query as Record<string, string | undefined>
 
-    await query(
-      `UPDATE payments p SET
-         payment_amount = COALESCE(c.contract_value, c.quantity_ordered * c.unit_price, 0)
-       FROM contracts c
-       WHERE c.id = p.contract_id
-         AND (p.payment_amount = 0 OR p.payment_amount IS NULL)
-         AND (c.contract_value IS NOT NULL OR (c.quantity_ordered IS NOT NULL AND c.unit_price IS NOT NULL))`
-    )
+    // Avoid doing writes on every read request (this can be slow and cause locks).
+    // We compute an effective payment amount in the SELECT instead.
+
+    const parsedLimit = Math.min(Math.max(Number(limit) || 100, 1), 500)
+    const parsedPage = Math.max(Number(page) || 1, 1)
+    const offset = (parsedPage - 1) * parsedLimit
 
     const params: any[] = []
-    const conditions: string[] = []
+    const where: string[] = []
 
-    if (status) {
-      const statusUpper = status.toUpperCase()
-      if (statusUpper === 'OVERDUE') {
-        conditions.push(`(p.payment_status = 'OVERDUE' OR (p.payment_status = 'PENDING' AND p.payment_due_date IS NOT NULL AND p.payment_due_date < CURRENT_DATE))`)
-      } else if (statusUpper === 'PENDING') {
-        conditions.push(`(p.payment_status = 'PENDING' AND (p.payment_due_date IS NULL OR p.payment_due_date >= CURRENT_DATE))`)
-      } else {
-        params.push(statusUpper)
-        conditions.push(`UPPER(p.payment_status) = $${params.length}`)
-      }
+    const pushLike = (value: string | undefined, expr: string) => {
+      if (!value) return
+      params.push(`%${value}%`.toLowerCase())
+      where.push(`LOWER(${expr}) LIKE $${params.length}`)
     }
 
     if (search) {
       params.push(`%${search}%`.toLowerCase())
-      conditions.push(
-        `(LOWER(p.invoice_number) LIKE $${params.length} OR LOWER(c.contract_id) LIKE $${params.length} OR LOWER(c.supplier) LIKE $${params.length})`
-      )
+      where.push(`(LOWER(p.invoice_number) LIKE $${params.length} OR LOWER(c.contract_id) LIKE $${params.length} OR LOWER(c.supplier) LIKE $${params.length} OR LOWER(c.product) LIKE $${params.length})`)
     }
-
     if (contract_id) {
       params.push(contract_id)
-      conditions.push(`c.contract_id = $${params.length}`)
+      where.push(`c.contract_id = $${params.length}`)
     }
 
-    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+    pushLike(invoice_number, 'p.invoice_number')
+    pushLike(supplier, 'c.supplier')
+    pushLike(product, 'c.product')
 
-    const result = await query(
-      `SELECT
-         p.id,
-         p.invoice_number,
-         p.invoice_date,
-         p.payment_amount,
-         p.currency,
-         p.payment_due_date,
-         p.payment_date,
-         p.payment_status,
-         p.payment_method,
-         p.bank_reference,
-         p.created_at,
-         p.updated_at,
-         c.contract_id,
-         c.supplier,
-         c.product
-       FROM payments p
-       LEFT JOIN contracts c ON c.id = p.contract_id
-       ${whereClause}
-       ORDER BY p.payment_due_date NULLS LAST, p.created_at DESC`,
-      params
+    if (currency) {
+      params.push(currency.toUpperCase())
+      where.push(`UPPER(COALESCE(p.currency, '')) = $${params.length}`)
+    }
+
+
+    const allowedSort: Record<string, string> = {
+      invoice_number: 'invoice_number',
+      contract_id: 'contract_id',
+      supplier: 'supplier',
+      product: 'product',
+      currency: 'currency',
+      payment_amount: 'payment_amount',
+      due_date_payment: 'due_date_payment',
+      dp_date: 'dp_date',
+      payoff_date: 'payoff_date',
+      payment_status: 'payment_status',
+      created_at: 'created_at',
+    }
+    const orderKey = sortKey && allowedSort[sortKey] ? allowedSort[sortKey] : 'due_date_payment'
+    const dir = String(sortDir || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC'
+
+    const baseWhere = where.length ? `WHERE ${where.join(' AND ')}` : ''
+
+    // Build a computed view so filters/sort apply across all records (fast + consistent).
+    // Note: dp_date & payoff_date are enriched from sap_processed_data per contract_id.
+    const computedCte = `
+      WITH computed AS (
+        SELECT
+          p.id,
+          p.invoice_number,
+          p.invoice_date,
+          COALESCE(NULLIF(p.payment_amount, 0), c.contract_value, (c.quantity_ordered * c.unit_price), p.payment_amount) AS payment_amount,
+          p.currency,
+          p.payment_due_date,
+          p.payment_date,
+          p.payment_method,
+          p.bank_reference,
+          p.created_at,
+          p.updated_at,
+          c.contract_id,
+          c.supplier,
+          c.product,
+          COALESCE(mv.due_date_payment, p.payment_due_date) AS due_date_payment,
+          mv.dp_date,
+          mv.payoff_date,
+          mv.dp_date_deviation_days,
+          mv.payoff_date_deviation_days,
+          (CASE
+            WHEN mv.dp_date IS NOT NULL AND mv.payoff_date IS NOT NULL THEN 'PAID'
+            WHEN mv.payoff_date IS NULL AND COALESCE(mv.due_date_payment, p.payment_due_date) IS NOT NULL AND COALESCE(mv.due_date_payment, p.payment_due_date) <= CURRENT_DATE AND mv.dp_date IS NOT NULL THEN 'PARTIAL'
+            WHEN mv.payoff_date IS NULL AND COALESCE(mv.due_date_payment, p.payment_due_date) IS NOT NULL AND COALESCE(mv.due_date_payment, p.payment_due_date) <= CURRENT_DATE AND mv.dp_date IS NULL THEN 'PENDING'
+            WHEN mv.payoff_date IS NULL AND COALESCE(mv.due_date_payment, p.payment_due_date) IS NOT NULL AND COALESCE(mv.due_date_payment, p.payment_due_date) > CURRENT_DATE THEN 'OVERDUE'
+            ELSE UPPER(COALESCE(p.payment_status, 'PENDING'))
+          END) AS payment_status
+        FROM payments p
+        LEFT JOIN contracts c ON c.id = p.contract_id
+        LEFT JOIN mv_contract_payment_dates mv ON mv.contract_id = c.contract_id
+        ${baseWhere}
+      )
+    `
+
+    // Column filters that depend on computed fields
+    const computedWhere: string[] = []
+    const computedParams: any[] = [...params]
+    const addComputed = (clause: string, value?: any) => {
+      if (value !== undefined) computedParams.push(value)
+      const idx = computedParams.length
+      computedWhere.push(clause.replace(/\$X/g, `$${idx}`))
+    }
+
+    if (status) {
+      addComputed(`UPPER(payment_status) = $X`, status.toUpperCase())
+    }
+
+    // Date filters are applied on computed fields below.
+    const applyRange = (from: string | undefined, to: string | undefined, col: string) => {
+      if (from) addComputed(`${col} >= $X::date`, from)
+      if (to) addComputed(`${col} <= $X::date`, to)
+    }
+    applyRange(due_from, due_to, 'due_date_payment')
+    applyRange(dp_from, dp_to, 'dp_date')
+    applyRange(payoff_from, payoff_to, 'payoff_date')
+
+    const computedWhereClause = computedWhere.length ? `WHERE ${computedWhere.join(' AND ')}` : ''
+
+    const countRes = await query(
+      `${computedCte} SELECT COUNT(*) AS total FROM computed ${computedWhereClause}`,
+      computedParams
+    )
+    const total = Number(countRes.rows[0]?.total || 0)
+
+    computedParams.push(parsedLimit)
+    computedParams.push(offset)
+
+    const listRes = await query(
+      `${computedCte}
+       SELECT
+         id, invoice_number, invoice_date, payment_amount, currency,
+         payment_due_date, payment_date, payment_status, payment_method, bank_reference,
+         created_at, updated_at, contract_id, supplier, product,
+         due_date_payment, dp_date, payoff_date,
+         dp_date_deviation_days,
+         payoff_date_deviation_days
+       FROM computed
+       ${computedWhereClause}
+       ORDER BY ${orderKey} ${dir} NULLS LAST
+       LIMIT $${computedParams.length - 1} OFFSET $${computedParams.length}`,
+      computedParams
     )
 
-    const payments = result.rows.map((row) => ({
+    const rows = listRes.rows.map((row) => ({
       ...row,
       payment_amount: toNumber(row.payment_amount),
-      due_date_payment: row.payment_due_date ?? null,
-      dp_date: row.dp_date ?? null,
-      payoff_date: row.payoff_date ?? null,
-      dp_date_deviation_days: null as number | null,
-      payoff_date_deviation_days: null as number | null,
     }))
 
-    const due = (d: unknown): Date | null => {
-      if (d == null) return null
-      if (d instanceof Date) return d
-      if (typeof d === 'string') return new Date(d)
-      return null
-    }
-    const addDays = (date: Date, days: number): Date => {
-      const out = new Date(date)
-      out.setUTCDate(out.getUTCDate() + days)
-      return out
-    }
-    const daysBetween = (from: Date | string | null, to: Date | string | null): number | null => {
-      const a = due(from)
-      const b = due(to)
-      if (!a || !b) return null
-      const ms = b.getTime() - a.getTime()
-      return Math.round(ms / (24 * 60 * 60 * 1000))
-    }
-
-    const contractIds = [...new Set(payments.map((r) => r.contract_id).filter(Boolean))] as string[]
-    if (contractIds.length > 0) {
-      try {
-        const contractsRes = await query(
-          `SELECT sub.contract_id, lat.due_date_payment, lat.dp_date, lat.payoff_date, lat.dp_date_deviation_days, lat.payoff_date_deviation_days
-           FROM (
-             SELECT c.contract_id, x.raw_due, x.raw_dp, x.raw_payoff, x.raw_dp_dev, x.raw_payoff_dev
-             FROM contracts c
-             LEFT JOIN LATERAL (
-               SELECT
-                 trim(COALESCE(NULLIF(trim(spd.data->'payment'->>'due_date_payment'), ''), NULLIF(trim(spd.data->'raw'->>'Due Date Payment'), ''), (SELECT e.v FROM jsonb_each_text(spd.data->'raw') AS e(k,v) WHERE lower(replace(trim(e.k), ' ', '')) = 'duedatepayment' AND trim(e.v) <> '' LIMIT 1))) AS raw_due,
-                 trim(COALESCE(NULLIF(trim(spd.data->'payment'->>'dp_date'), ''), NULLIF(trim(spd.data->'raw'->>'DP Date'), ''), (SELECT e.v FROM jsonb_each_text(spd.data->'raw') AS e(k,v) WHERE lower(replace(trim(e.k), ' ', '')) = 'dpdate' AND trim(e.v) <> '' LIMIT 1))) AS raw_dp,
-                 trim(COALESCE(NULLIF(trim(spd.data->'payment'->>'payoff_date'), ''), NULLIF(trim(spd.data->'raw'->>'Payoff Date'), ''), (SELECT e.v FROM jsonb_each_text(spd.data->'raw') AS e(k,v) WHERE lower(replace(trim(e.k), ' ', '')) = 'payoffdate' AND trim(e.v) <> '' LIMIT 1))) AS raw_payoff,
-                 trim(COALESCE(NULLIF(trim(spd.data->'payment'->>'dp_date_deviation_days'), ''), NULLIF(trim(spd.data->'raw'->>'DP Date Deviation (Days) DP Date - Due Date'), ''), NULLIF(trim(spd.data->'raw'->>'DP Date - Due Date'), ''), (SELECT e.v FROM jsonb_each_text(spd.data->'raw') AS e(k,v) WHERE lower(replace(trim(e.k), ' ', '')) IN ('dpdatedeviation(days)dpdate-duedate','dpdate-duedate') AND trim(e.v) <> '' LIMIT 1))) AS raw_dp_dev,
-                 trim(COALESCE(NULLIF(trim(spd.data->'payment'->>'payoff_date_deviation_days'), ''), NULLIF(trim(spd.data->'raw'->>'Payoff Date Deviation (Days) Payoff Date - Due Date'), ''), NULLIF(trim(spd.data->'raw'->>'Payoff Date - Due Date'), ''), (SELECT e.v FROM jsonb_each_text(spd.data->'raw') AS e(k,v) WHERE lower(replace(trim(e.k), ' ', '')) IN ('payoffdatedeviation(days)payoffdate-duedate','payoffdate-duedate') AND trim(e.v) <> '' LIMIT 1))) AS raw_payoff_dev
-               FROM sap_processed_data spd
-               WHERE spd.contract_number = c.contract_id
-               ORDER BY (CASE WHEN trim(COALESCE(spd.data->'raw'->>'Due Date Payment', spd.data->'payment'->>'due_date_payment', '')) <> '' THEN 0 ELSE 1 END), (CASE WHEN trim(COALESCE(spd.data->'raw'->>'DP Date', spd.data->'payment'->>'dp_date', '')) <> '' THEN 0 ELSE 1 END), (CASE WHEN trim(COALESCE(spd.data->'raw'->>'Payoff Date', spd.data->'payment'->>'payoff_date', '')) <> '' THEN 0 ELSE 1 END), spd.created_at DESC NULLS LAST
-               LIMIT 1
-             ) x ON true
-             WHERE c.contract_id = ANY($1::text[])
-           ) sub
-           CROSS JOIN LATERAL (
-             SELECT
-               (CASE WHEN sub.raw_due ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN sub.raw_due::date WHEN sub.raw_due ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(sub.raw_due, 'MM/DD/YY') WHEN sub.raw_due ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' THEN to_date(sub.raw_due, 'MM/DD/YYYY') ELSE (SELECT p2.payment_due_date FROM payments p2 INNER JOIN contracts c2 ON c2.id = p2.contract_id WHERE c2.contract_id = sub.contract_id ORDER BY p2.created_at DESC LIMIT 1) END) AS due_date_payment,
-               (CASE WHEN sub.raw_dp ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN sub.raw_dp::date WHEN sub.raw_dp ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(sub.raw_dp, 'MM/DD/YY') WHEN sub.raw_dp ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' THEN to_date(sub.raw_dp, 'MM/DD/YYYY') ELSE (SELECT p2.dp_date FROM payments p2 INNER JOIN contracts c2 ON c2.id = p2.contract_id WHERE c2.contract_id = sub.contract_id ORDER BY p2.created_at DESC LIMIT 1) END) AS dp_date,
-               (CASE WHEN sub.raw_payoff ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN sub.raw_payoff::date WHEN sub.raw_payoff ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(sub.raw_payoff, 'MM/DD/YY') WHEN sub.raw_payoff ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' THEN to_date(sub.raw_payoff, 'MM/DD/YYYY') ELSE (SELECT p2.payoff_date FROM payments p2 INNER JOIN contracts c2 ON c2.id = p2.contract_id WHERE c2.contract_id = sub.contract_id ORDER BY p2.created_at DESC LIMIT 1) END) AS payoff_date,
-               (CASE WHEN sub.raw_dp_dev ~ '^-?[0-9]+$' THEN sub.raw_dp_dev::int
-                 ELSE (CASE WHEN sub.raw_dp ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND sub.raw_due ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (sub.raw_dp::date - sub.raw_due::date) WHEN sub.raw_dp ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' AND sub.raw_due ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN (to_date(sub.raw_dp, 'MM/DD/YY') - to_date(sub.raw_due, 'MM/DD/YY')) WHEN sub.raw_dp ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' AND sub.raw_due ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' THEN (to_date(sub.raw_dp, 'MM/DD/YYYY') - to_date(sub.raw_due, 'MM/DD/YYYY')) ELSE NULL END) END) AS dp_date_deviation_days,
-               (CASE WHEN sub.raw_payoff_dev ~ '^-?[0-9]+$' THEN sub.raw_payoff_dev::int
-                 ELSE (CASE WHEN sub.raw_payoff ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND sub.raw_due ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (sub.raw_payoff::date - sub.raw_due::date) WHEN sub.raw_payoff ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' AND sub.raw_due ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN (to_date(sub.raw_payoff, 'MM/DD/YY') - to_date(sub.raw_due, 'MM/DD/YY')) WHEN sub.raw_payoff ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' AND sub.raw_due ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' THEN (to_date(sub.raw_payoff, 'MM/DD/YYYY') - to_date(sub.raw_due, 'MM/DD/YYYY')) ELSE NULL END) END) AS payoff_date_deviation_days
-           ) lat`,
-          [contractIds]
-        )
-        const byContract = new Map<string, typeof contractsRes.rows[0]>()
-        for (const r of contractsRes.rows) {
-          byContract.set(r.contract_id, r)
-        }
-        for (const row of payments) {
-          const contractId = row.contract_id
-          if (!contractId) continue
-          const info = byContract.get(contractId)
-          if (info) {
-            row.due_date_payment = info.due_date_payment ?? row.payment_due_date ?? null
-            row.dp_date = info.dp_date
-            row.payoff_date = info.payoff_date
-            row.dp_date_deviation_days = info.dp_date_deviation_days
-            row.payoff_date_deviation_days = info.payoff_date_deviation_days
-          } else {
-            row.due_date_payment = row.due_date_payment ?? row.payment_due_date ?? null
-          }
-          const dueDate = due(row.due_date_payment)
-          if (dueDate) {
-            if (row.dp_date == null && typeof row.dp_date_deviation_days === 'number') {
-              row.dp_date = addDays(dueDate, row.dp_date_deviation_days)
-            }
-            if (row.payoff_date == null && typeof row.payoff_date_deviation_days === 'number') {
-              row.payoff_date = addDays(dueDate, row.payoff_date_deviation_days)
-            }
-          }
-          if (row.dp_date_deviation_days == null && row.due_date_payment != null && row.dp_date != null) {
-            row.dp_date_deviation_days = daysBetween(row.due_date_payment, row.dp_date)
-          }
-          if (row.payoff_date_deviation_days == null && row.due_date_payment != null && row.payoff_date != null) {
-            row.payoff_date_deviation_days = daysBetween(row.due_date_payment, row.payoff_date)
-          }
-        }
-      } catch (err) {
-        logger.warn('Finance: could not enrich payments with contract dates', err)
-      }
-    }
-
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    for (const row of payments) {
-      const effectiveDue = row.due_date_payment ?? row.payment_due_date
-      if (row.payment_status === 'PENDING' && effectiveDue != null) {
-        const d = due(effectiveDue)
-        if (d) {
-          d.setHours(0, 0, 0, 0)
-          if (d.getTime() < today.getTime()) {
-            row.payment_status = 'OVERDUE'
-          }
-        }
-      }
-    }
-
-    return res.json({ success: true, data: payments })
+    return res.json({
+      success: true,
+      data: rows,
+      pagination: {
+        page: parsedPage,
+        limit: parsedLimit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / parsedLimit)),
+      },
+    })
   } catch (error) {
     logger.error('Get payments error:', error)
     return res.status(500).json({ success: false, error: { message: 'Failed to load payments' } })
@@ -310,53 +304,77 @@ export const updatePayment = async (req: AuthRequest, res: Response) => {
 
 export const getFinanceSummary = async (_req: AuthRequest, res: Response) => {
   try {
-    const [totals, statusBreakdown, monthly] = await Promise.all([
-      query(
-        `SELECT
-           COUNT(*) AS total_records,
-           COALESCE(SUM(payment_amount), 0) AS total_amount,
-           COALESCE(SUM(payment_amount) FILTER (WHERE payment_status = 'PENDING' AND (payment_due_date IS NULL OR payment_due_date >= CURRENT_DATE)), 0) AS pending_amount,
-           COALESCE(SUM(payment_amount) FILTER (WHERE payment_status = 'PARTIAL'), 0) AS partial_amount,
-           COALESCE(SUM(payment_amount) FILTER (WHERE payment_status = 'PAID'), 0) AS paid_amount,
-           COALESCE(SUM(payment_amount) FILTER (WHERE payment_status = 'OVERDUE' OR (payment_status = 'PENDING' AND payment_due_date IS NOT NULL AND payment_due_date < CURRENT_DATE)), 0) AS overdue_amount
-         FROM payments`
-      ),
-      query(
-        `SELECT
-           CASE WHEN payment_status = 'PENDING' AND payment_due_date IS NOT NULL AND payment_due_date < CURRENT_DATE THEN 'OVERDUE' ELSE payment_status END AS status,
-           COUNT(*) AS count,
-           COALESCE(SUM(payment_amount), 0) AS amount
-         FROM payments
-         GROUP BY (CASE WHEN payment_status = 'PENDING' AND payment_due_date IS NOT NULL AND payment_due_date < CURRENT_DATE THEN 'OVERDUE' ELSE payment_status END)`
-      ),
-      query(
-        `SELECT
-           TO_CHAR(payment_due_date, 'YYYY-MM') AS month,
-           COALESCE(SUM(payment_amount), 0) AS due_amount,
-           COALESCE(SUM(payment_amount) FILTER (WHERE payment_status = 'PAID'), 0) AS paid_amount
-         FROM payments
-         WHERE payment_due_date IS NOT NULL
-         GROUP BY TO_CHAR(payment_due_date, 'YYYY-MM')
-         ORDER BY month ASC
-         LIMIT 12`
-      ),
-    ])
+    // Summary must match the same computed status logic used in /finance/payments.
+    const computedCte = `
+      WITH computed AS (
+        SELECT
+          COALESCE(NULLIF(p.payment_amount, 0), c.contract_value, (c.quantity_ordered * c.unit_price), p.payment_amount) AS payment_amount,
+          COALESCE(mv.due_date_payment, p.payment_due_date) AS due_date_payment,
+          mv.dp_date,
+          mv.payoff_date,
+          (CASE
+            WHEN mv.dp_date IS NOT NULL AND mv.payoff_date IS NOT NULL THEN 'PAID'
+            WHEN mv.payoff_date IS NULL AND COALESCE(mv.due_date_payment, p.payment_due_date) IS NOT NULL AND COALESCE(mv.due_date_payment, p.payment_due_date) <= CURRENT_DATE AND mv.dp_date IS NOT NULL THEN 'PARTIAL'
+            WHEN mv.payoff_date IS NULL AND COALESCE(mv.due_date_payment, p.payment_due_date) IS NOT NULL AND COALESCE(mv.due_date_payment, p.payment_due_date) <= CURRENT_DATE AND mv.dp_date IS NULL THEN 'PENDING'
+            WHEN mv.payoff_date IS NULL AND COALESCE(mv.due_date_payment, p.payment_due_date) IS NOT NULL AND COALESCE(mv.due_date_payment, p.payment_due_date) > CURRENT_DATE THEN 'OVERDUE'
+            ELSE UPPER(COALESCE(p.payment_status, 'PENDING'))
+          END) AS payment_status
+        FROM payments p
+        LEFT JOIN contracts c ON c.id = p.contract_id
+        LEFT JOIN mv_contract_payment_dates mv ON mv.contract_id = c.contract_id
+      )
+    `
+
+    const totalsRes = await query(
+      `${computedCte}
+       SELECT
+         COUNT(*) AS total_records,
+         COALESCE(SUM(payment_amount), 0) AS total_amount,
+         COALESCE(SUM(payment_amount) FILTER (WHERE payment_status = 'PENDING'), 0) AS pending_amount,
+         COALESCE(SUM(payment_amount) FILTER (WHERE payment_status = 'PARTIAL'), 0) AS partial_amount,
+         COALESCE(SUM(payment_amount) FILTER (WHERE payment_status = 'PAID'), 0) AS paid_amount,
+         COALESCE(SUM(payment_amount) FILTER (WHERE payment_status = 'OVERDUE'), 0) AS overdue_amount
+       FROM computed`
+    )
+
+    const monthlyRes = await query(
+      `${computedCte}
+       SELECT
+         TO_CHAR(due_date_payment, 'YYYY-MM') AS month,
+         COALESCE(SUM(payment_amount), 0) AS due_amount,
+         COALESCE(SUM(payment_amount) FILTER (WHERE payment_status = 'PAID'), 0) AS paid_amount
+       FROM computed
+       WHERE due_date_payment IS NOT NULL
+       GROUP BY TO_CHAR(due_date_payment, 'YYYY-MM')
+       ORDER BY month ASC
+       LIMIT 12`
+    )
+
+    const statusBreakdownRes = await query(
+      `${computedCte}
+       SELECT
+         payment_status AS status,
+         COUNT(*) AS count,
+         COALESCE(SUM(payment_amount), 0) AS amount
+       FROM computed
+       GROUP BY payment_status`
+    )
 
     const summary = {
       totals: {
-        totalRecords: Number(totals.rows[0]?.total_records || 0),
-        totalAmount: toNumber(totals.rows[0]?.total_amount),
-        pendingAmount: toNumber(totals.rows[0]?.pending_amount),
-        partialAmount: toNumber(totals.rows[0]?.partial_amount),
-        paidAmount: toNumber(totals.rows[0]?.paid_amount),
-        overdueAmount: toNumber(totals.rows[0]?.overdue_amount),
+        totalRecords: Number(totalsRes.rows[0]?.total_records || 0),
+        totalAmount: toNumber(totalsRes.rows[0]?.total_amount),
+        pendingAmount: toNumber(totalsRes.rows[0]?.pending_amount),
+        partialAmount: toNumber(totalsRes.rows[0]?.partial_amount),
+        paidAmount: toNumber(totalsRes.rows[0]?.paid_amount),
+        overdueAmount: toNumber(totalsRes.rows[0]?.overdue_amount),
       },
-      byStatus: statusBreakdown.rows.map((row) => ({
+      byStatus: statusBreakdownRes.rows.map((row) => ({
         status: row.status,
         count: Number(row.count || 0),
         amount: toNumber(row.amount),
       })),
-      byMonth: monthly.rows.map((row) => ({
+      byMonth: monthlyRes.rows.map((row) => ({
         month: row.month,
         dueAmount: toNumber(row.due_amount),
         paidAmount: toNumber(row.paid_amount),

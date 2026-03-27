@@ -35,6 +35,7 @@ import supplierRoutes from './routes/supplier.routes';
 import productRoutes from './routes/product.routes';
 import companyRoutes from './routes/company.routes';
 import activityRoutes from './routes/activity.routes';
+import agentAiRoutes from './routes/agentAi.routes';
 
 dotenv.config();
 
@@ -104,6 +105,7 @@ app.use('/api/finance', financeRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/activity', activityRoutes);
+app.use('/api/agent-ai', agentAiRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/master-vessels', masterVesselRoutes);

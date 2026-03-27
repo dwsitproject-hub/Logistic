@@ -1,5 +1,6 @@
 import pool from '../database/connection';
 import logger from '../utils/logger';
+import { FinanceMaterializedViewService } from './financeMaterializedView.service';
 
 export interface SapDataRow {
   [key: string]: any;
@@ -151,6 +152,11 @@ export class SapImportService {
       );
       
       await client.query('COMMIT');
+
+      // Refresh finance materialized view in background (do not block import response).
+      setImmediate(() => {
+        FinanceMaterializedViewService.refreshContractPaymentDates().catch(() => {});
+      });
       
       logger.info(`SAP import completed: ${importId}`, {
         importId,

@@ -63,34 +63,64 @@ const applySqlFile = async (filePath: string, filename: string): Promise<void> =
   }
 };
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const withDbReady = async <T>(fn: () => Promise<T>): Promise<T> => {
+  // On container restarts, Postgres can be "healthy" but still briefly refuse connections.
+  // Retry for a short window to avoid failing the whole backend startup.
+  const maxAttempts = 20; // ~30s worst case with backoff below
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      const code = String(err?.code || '');
+      const msg = String(err?.message || '');
+      const transient =
+        code === 'ECONNREFUSED' ||
+        code === '57P03' || // cannot_connect_now
+        code === '53300' || // too_many_connections
+        msg.toLowerCase().includes('econnrefused');
+
+      if (!transient || attempt === maxAttempts) break;
+
+      const delay = Math.min(250 * Math.pow(1.35, attempt - 1), 2000);
+      logger.warn(`DB not ready yet (attempt ${attempt}/${maxAttempts}). Retrying in ${Math.round(delay)}ms...`);
+      await sleep(delay);
+    }
+  }
+  throw lastErr;
+};
+
 const migrate = async () => {
   try {
     logger.info('Starting database migration...');
 
     // Ensure pgcrypto exists early (needed by some migrations using gen_random_uuid())
-    await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
-    await ensureMigrationsTable();
+    await withDbReady(() => pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`));
+    await withDbReady(() => ensureMigrationsTable());
 
     const migrationsDir = path.join(__dirname, 'migrations');
     const migrationFiles = readSqlFiles(migrationsDir);
 
-    const applied = await getAppliedMigrationSet();
+    const applied = await withDbReady(() => getAppliedMigrationSet());
 
     // Backward compatibility: older DBs might already have the schema created
     // (via the previous schema.sql-only runner). If so, mark the initial migration as applied.
-    const hasUsers = await tableExists('users');
+    const hasUsers = await withDbReady(() => tableExists('users'));
     const initialMigration = migrationFiles.find((f) => f.startsWith('001_'));
     if (hasUsers && initialMigration && !applied.has(initialMigration)) {
       logger.info(
         `Detected existing schema (users table exists). Marking ${initialMigration} as applied.`
       );
-      await markApplied(initialMigration);
+      await withDbReady(() => markApplied(initialMigration));
       applied.add(initialMigration);
     }
 
     for (const filename of migrationFiles) {
       if (applied.has(filename)) continue;
-      await applySqlFile(path.join(migrationsDir, filename), filename);
+      await withDbReady(() => applySqlFile(path.join(migrationsDir, filename), filename));
     }
 
     logger.info('Database migration completed successfully!');

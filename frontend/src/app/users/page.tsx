@@ -54,6 +54,9 @@ interface User {
   email: string
   full_name: string
   role: string
+  level?: string
+  transport_type?: string
+  plant?: string
   is_active: boolean
   is_first_login: boolean
   phone?: string
@@ -90,6 +93,9 @@ export default function UsersPage() {
     password: '',
     full_name: '',
     role: 'TRADING',
+    level: 'Staff',
+    transport_type: '',
+    plant: '',
     phone: '',
     department: '',
   })
@@ -97,6 +103,8 @@ export default function UsersPage() {
   const [resetPassword, setResetPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [showResetPassword, setShowResetPassword] = useState(false)
+  const showTransportType = formData.role === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(formData.level)
+  const showPlant = ['LOGISTICS', 'TRADING'].includes(formData.role)
 
   useEffect(() => {
     // Check if user is admin
@@ -148,6 +156,9 @@ export default function UsersPage() {
         password: '',
         full_name: '',
         role: 'TRADING',
+        level: 'Staff',
+        transport_type: '',
+        plant: '',
         phone: '',
         department: '',
       })
@@ -170,6 +181,9 @@ export default function UsersPage() {
         email: formData.email,
         full_name: formData.full_name,
         role: formData.role,
+        level: formData.level,
+        transport_type: showTransportType ? formData.transport_type : null,
+        plant: showPlant ? formData.plant : null,
         phone: formData.phone,
         department: formData.department,
         is_active: selectedUser.is_active,
@@ -227,6 +241,9 @@ export default function UsersPage() {
       password: '',
       full_name: user.full_name,
       role: user.role,
+      level: user.level || 'Staff',
+      transport_type: user.transport_type || '',
+      plant: user.plant || '',
       phone: user.phone || '',
       department: user.department || '',
     })
@@ -332,6 +349,9 @@ export default function UsersPage() {
                     <TableHead>User</TableHead>
                     <TableHead>Email</TableHead>
                     <TableHead>Role</TableHead>
+                    <TableHead>Level</TableHead>
+                    <TableHead>Transport Type</TableHead>
+                    <TableHead>Plant</TableHead>
                     <TableHead>Department</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>First Login</TableHead>
@@ -341,7 +361,7 @@ export default function UsersPage() {
                 <TableBody>
                   {filteredUsers.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center text-gray-500 py-8">
+                      <TableCell colSpan={10} className="text-center text-gray-500 py-8">
                         No users found
                       </TableCell>
                     </TableRow>
@@ -359,6 +379,21 @@ export default function UsersPage() {
                           <Badge className={`${getRoleBadgeColor(user.role)} text-white`}>
                             {user.role}
                           </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-gray-600">
+                            {user.level || '-'}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-gray-600">
+                            {user.transport_type || '-'}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-gray-600">
+                            {user.plant || '-'}
+                          </span>
                         </TableCell>
                         <TableCell>
                           <span className="text-sm text-gray-600">
@@ -504,7 +539,14 @@ export default function UsersPage() {
                   <Label htmlFor="role">Role *</Label>
                   <Select
                     value={formData.role}
-                    onValueChange={(value) => setFormData({ ...formData, role: value })}
+                    onValueChange={(value) =>
+                      setFormData({
+                        ...formData,
+                        role: value,
+                        transport_type: value === 'LOGISTICS' ? formData.transport_type : '',
+                        plant: ['LOGISTICS', 'TRADING'].includes(value) ? formData.plant : '',
+                      })
+                    }
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -517,6 +559,63 @@ export default function UsersPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="level">Level *</Label>
+                    <Select
+                      value={formData.level}
+                      onValueChange={(value) =>
+                        setFormData({
+                          ...formData,
+                          level: value,
+                          transport_type:
+                            formData.role === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(value)
+                              ? formData.transport_type
+                              : '',
+                        })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Dept Head">Dept Head</SelectItem>
+                        <SelectItem value="Section Head">Section Head</SelectItem>
+                        <SelectItem value="Staff">Staff</SelectItem>
+                        <SelectItem value="Admin">Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="transport_type">Transport Type {showTransportType ? '*' : ''}</Label>
+                    <Select
+                      value={formData.transport_type || 'none'}
+                      onValueChange={(value) =>
+                        setFormData({ ...formData, transport_type: value === 'none' ? '' : value })
+                      }
+                      disabled={!showTransportType}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={showTransportType ? 'Select transport type' : '-'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">-</SelectItem>
+                        <SelectItem value="SEA">SEA</SelectItem>
+                        <SelectItem value="LAND">LAND</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="plant">Plant {showPlant ? '*' : ''}</Label>
+                    <Input
+                      id="plant"
+                      value={formData.plant}
+                      onChange={(e) => setFormData({ ...formData, plant: e.target.value })}
+                      disabled={!showPlant}
+                    />
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -596,7 +695,14 @@ export default function UsersPage() {
                   <Label htmlFor="edit_role">Role</Label>
                   <Select
                     value={formData.role}
-                    onValueChange={(value) => setFormData({ ...formData, role: value })}
+                    onValueChange={(value) =>
+                      setFormData({
+                        ...formData,
+                        role: value,
+                        transport_type: value === 'LOGISTICS' ? formData.transport_type : '',
+                        plant: ['LOGISTICS', 'TRADING'].includes(value) ? formData.plant : '',
+                      })
+                    }
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -609,6 +715,63 @@ export default function UsersPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_level">Level</Label>
+                    <Select
+                      value={formData.level}
+                      onValueChange={(value) =>
+                        setFormData({
+                          ...formData,
+                          level: value,
+                          transport_type:
+                            formData.role === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(value)
+                              ? formData.transport_type
+                              : '',
+                        })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Dept Head">Dept Head</SelectItem>
+                        <SelectItem value="Section Head">Section Head</SelectItem>
+                        <SelectItem value="Staff">Staff</SelectItem>
+                        <SelectItem value="Admin">Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_transport_type">Transport Type {showTransportType ? '*' : ''}</Label>
+                    <Select
+                      value={formData.transport_type || 'none'}
+                      onValueChange={(value) =>
+                        setFormData({ ...formData, transport_type: value === 'none' ? '' : value })
+                      }
+                      disabled={!showTransportType}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={showTransportType ? 'Select transport type' : '-'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">-</SelectItem>
+                        <SelectItem value="SEA">SEA</SelectItem>
+                        <SelectItem value="LAND">LAND</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_plant">Plant {showPlant ? '*' : ''}</Label>
+                    <Input
+                      id="edit_plant"
+                      value={formData.plant}
+                      onChange={(e) => setFormData({ ...formData, plant: e.target.value })}
+                      disabled={!showPlant}
+                    />
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">

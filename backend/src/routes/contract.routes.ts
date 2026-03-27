@@ -9,6 +9,7 @@ import {
   createContract,
   updateContract,
 } from '../controllers/contract.controller';
+import { createContractRemark, getContractRemarks } from '../controllers/remarks.controller';
 import { authenticateToken, authorize } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 
@@ -71,6 +72,8 @@ router.get('/unassigned-counts', getUnassignedCounts);
  */
 router.get('/:id/sto-information', getContractStoInformation);
 router.get('/:id/activity-log', getContractActivityLog);
+router.get('/:id/remarks', getContractRemarks);
+router.post('/:id/remarks', createContractRemark);
 router.get('/:id/b2b-parties', getB2bPartiesForContract);
 router.get('/:id', getContract);
 

@@ -363,56 +363,77 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       const today = new Date();
       const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
 
-      const firstTruck = row.first_trucking_start_date;
       const lastTruck = row.last_trucking_completion_date;
-      const firstAtaLoad = row.first_ata_vessel_completed_loading;
       const lastAtaDischarge = row.last_ata_vessel_complete_discharge;
+      const cargoReady = row.cargo_readiness_date;
 
       if (transport.startsWith('LAND')) {
         if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
-          // Land + Close: earliest trucking start to latest trucking completion
-          const d = diffInDays(firstTruck, lastTruck);
+          // Land + Close: Cargo Readiness Date -> latest trucking completion
+          const d = diffInDays(cargoReady, lastTruck);
           if (d != null) logCycle = d;
         } else if (statusText === 'OPEN' || statusText === 'ACTIVE') {
-          // Land + Open: earliest trucking start to today
-          const d = diffInDays(firstTruck, todayMid.toISOString());
+          // Land + Open: Cargo Readiness Date -> today
+          const d = diffInDays(cargoReady, todayMid.toISOString());
           if (d != null) logCycle = d;
         }
       } else if (transport.startsWith('SEA')) {
         if (statusText === 'OPEN' || statusText === 'ACTIVE') {
-          // Sea + Open: earliest ATA loading complete to today
-          const d = diffInDays(firstAtaLoad, todayMid.toISOString());
+          // Sea + Open: Cargo Readiness Date -> today
+          const d = diffInDays(cargoReady, todayMid.toISOString());
           if (d != null) logCycle = d;
         } else if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
-          // Sea + Close: earliest ATA loading complete to latest ATA discharge complete
-          const d = diffInDays(firstAtaLoad, lastAtaDischarge);
+          // Sea + Close: Cargo Readiness Date -> latest ATA vessel complete discharge
+          const d = diffInDays(cargoReady, lastAtaDischarge);
           if (d != null) logCycle = d;
         }
       }
 
       (row as any).log_cycle_days = logCycle;
 
-      // Compute Trade Cycle (days): DP Date minus current date or latest receive/discharge
-      const dpDate = row.dp_date ? due(row.dp_date) : null;
+      // Compute Trade Cycle (days)
+      // - Open: today -> Due Date Delivery End
+      // - Closed: latest receive/discharge -> Due Date Delivery End (Land/Sea)
+      const deliveryEnd = due(row.delivery_end_date);
+      const payoffDate = row.payoff_date ? due(row.payoff_date) : null;
       let tradeCycle: number | null = null;
-      if (dpDate) {
-        if (statusText === 'OPEN' || statusText === 'ACTIVE') {
-          // Land or SEA + Open: Trade Cycle = DP Date - Current Date
-          const d = diffInDays(todayMid.toISOString(), dpDate);
+      if (statusText === 'OPEN' || statusText === 'ACTIVE') {
+        if (deliveryEnd) {
+          const d = diffInDays(todayMid.toISOString(), deliveryEnd);
           if (d != null) tradeCycle = d;
-        } else if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
+        }
+      } else if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
+        if (deliveryEnd) {
           if (transport.startsWith('LAND')) {
-            // Land + Close: DP Date - latest Last Receive Date (trucking)
-            const d = diffInDays(lastTruck, dpDate);
+            const d = diffInDays(lastTruck, deliveryEnd);
             if (d != null) tradeCycle = d;
           } else if (transport.startsWith('SEA')) {
-            // SEA + Close: DP Date - latest ATA Vessel Complete Discharge
-            const d = diffInDays(lastAtaDischarge, dpDate);
+            const d = diffInDays(lastAtaDischarge, deliveryEnd);
             if (d != null) tradeCycle = d;
           }
         }
       }
       (row as any).trade_cycle_days = tradeCycle;
+
+      // Compute Cash Cycle (days)
+      // - Closed: latest receive/discharge -> Payoff Date (Land/Sea)
+      let cashCycle: number | null = null;
+      if ((statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') && payoffDate) {
+        if (transport.startsWith('LAND')) {
+          const d = diffInDays(lastTruck, payoffDate);
+          if (d != null) cashCycle = d;
+        } else if (transport.startsWith('SEA')) {
+          const d = diffInDays(lastAtaDischarge, payoffDate);
+          if (d != null) cashCycle = d;
+        }
+      }
+      (row as any).cash_cycle_days = cashCycle;
+
+      // Payment Status (summary)
+      // Treat a contract as PAID when Payoff Date exists (as per finance logic); otherwise PENDING if it has a due date.
+      const paymentStatus =
+        payoffDate ? 'PAID' : (due(row.due_date_payment) ? 'PENDING' : '-');
+      (row as any).payment_status = paymentStatus;
 
       // Clean helper fields from response
       delete (row as any).first_trucking_start_date;

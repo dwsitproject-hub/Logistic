@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ComponentType } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from './ui/button'
@@ -9,6 +9,7 @@ import { AppTourProvider, useAppTour } from './AppTourProvider'
 import { PageActivityFab } from './PageActivityFab'
 import {
   LayoutDashboard,
+  Presentation,
   FileText,
   Package,
   Truck,
@@ -22,7 +23,9 @@ import {
   Database,
   Layers,
   BookOpen,
+  Bot,
 } from 'lucide-react'
+import api from '@/lib/api'
 
 type UserLite = {
   id?: string
@@ -43,8 +46,8 @@ function LayoutChrome({
   children: React.ReactNode
   user: UserLite
   pathname: string
-  navigation: { name: string; href: string; icon: React.ComponentType<{ className?: string }>; roles: string[] }[]
-  filteredNavigation: { name: string; href: string; icon: React.ComponentType<{ className?: string }>; roles: string[] }[]
+  navigation: { name: string; href: string; icon: ComponentType<{ className?: string }>; roles: string[] }[]
+  filteredNavigation: { name: string; href: string; icon: ComponentType<{ className?: string }>; roles: string[] }[]
   sidebarOpen: boolean
   setSidebarOpen: (v: boolean | ((p: boolean) => boolean)) => void
   handleLogout: () => void
@@ -127,6 +130,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [user, setUser] = useState<UserLite | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [permByKey, setPermByKey] = useState<Record<string, { canView?: boolean }> | undefined>(undefined)
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -139,14 +143,43 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     }
   }, [router])
 
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    api
+      .get('/roles/my-permissions')
+      .then((res) => {
+        if (!cancelled) setPermByKey(res.data?.data?.permissions ?? {})
+      })
+      .catch(() => {
+        if (!cancelled) setPermByKey(undefined)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user])
+
   const handleLogout = () => {
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     router.push('/login')
   }
 
-  const navigation = [
-    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['ALL'] },
+  const navigation: {
+    name: string
+    href: string
+    icon: ComponentType<{ className?: string }>
+    roles: string[]
+    permissionKey?: string
+  }[] = [
+    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['ALL'], permissionKey: 'page.dashboard' },
+    {
+      name: 'Management Dashboard',
+      href: '/management-dashboard',
+      icon: Presentation,
+      roles: ['ALL'],
+      permissionKey: 'page.management_dashboard',
+    },
     { name: 'Contracts', href: '/contracts', icon: FileText, roles: ['ALL'] },
     { name: 'Shipments', href: '/shipments', icon: Package, roles: ['ALL'] },
     { name: 'Trucking', href: '/trucking', icon: Truck, roles: ['ALL'] },
@@ -157,15 +190,22 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { name: 'Master Vessel', href: '/master-vessel', icon: Layers, roles: ['ALL'] },
     { name: 'Master Loading Port', href: '/master-loading-port', icon: Layers, roles: ['ALL'] },
     { name: 'Finance', href: '/finance', icon: DollarSign, roles: ['FINANCE', 'MANAGEMENT', 'ADMIN'] },
+    { name: 'KLIP Agent AI', href: '/klip-agent-ai', icon: Bot, roles: ['ALL'] },
     { name: 'Documents', href: '/documents', icon: FolderOpen, roles: ['ALL'] },
     { name: 'SAP Data', href: '/sap-imports', icon: Database, roles: ['ADMIN', 'SUPPORT', 'MANAGEMENT'] },
     { name: 'Users', href: '/users', icon: Users, roles: ['ALL'] },
     { name: 'Audit Logs', href: '/audit', icon: Settings, roles: ['ADMIN', 'SUPPORT'] },
   ]
 
-  const filteredNavigation = navigation.filter(
-    (item) => item.roles.includes('ALL') || (user?.role != null && item.roles.includes(user.role))
-  )
+  const filteredNavigation = navigation.filter((item) => {
+    const roleOk = item.roles.includes('ALL') || (user?.role != null && item.roles.includes(user.role))
+    if (!roleOk) return false
+    if (item.permissionKey) {
+      if (permByKey === undefined) return true
+      return !!permByKey[item.permissionKey]?.canView
+    }
+    return true
+  })
 
   if (!user) {
     return <div className="flex items-center justify-center min-h-screen">Loading...</div>

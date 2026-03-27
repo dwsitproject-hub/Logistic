@@ -121,6 +121,9 @@ export const login = async (req: Request, res: Response): Promise<void> => {
           email: user.email,
           full_name: user.full_name,
           role: user.role,
+          level: user.level || null,
+          transport_type: user.transport_type || null,
+          plant: user.plant || null,
           is_active: user.is_active,
           is_first_login: user.is_first_login || false,
         },
@@ -140,7 +143,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 export const getProfile = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const result = await query(
-      'SELECT id, username, email, full_name, role, is_active, created_at FROM users WHERE id = $1',
+      'SELECT id, username, email, full_name, role, level, transport_type, plant, is_active, created_at FROM users WHERE id = $1',
       [req.user?.id]
     );
 
@@ -175,7 +178,7 @@ export const updateProfile = async (req: AuthRequest, res: Response): Promise<vo
            email = COALESCE($2, email),
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $3
-       RETURNING id, username, email, full_name, role, is_active`,
+       RETURNING id, username, email, full_name, role, level, transport_type, plant, is_active`,
       [full_name, email, req.user?.id]
     );
 

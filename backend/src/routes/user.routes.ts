@@ -38,6 +38,8 @@ router.post(
     body('password').isLength({ min: 6 }),
     body('full_name').notEmpty(),
     body('role').isIn(['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT']),
+    body('level').optional({ nullable: true }).isIn(['Dept Head', 'Section Head', 'Staff', 'Admin']),
+    body('transport_type').optional({ nullable: true }).isIn(['SEA', 'LAND', 'sea', 'land']),
   ],
   createUser
 );
@@ -48,6 +50,8 @@ router.put(
   [
     body('email').optional().isEmail(),
     body('role').optional().isIn(['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT']),
+    body('level').optional({ nullable: true }).isIn(['Dept Head', 'Section Head', 'Staff', 'Admin']),
+    body('transport_type').optional({ nullable: true }).isIn(['SEA', 'LAND', 'sea', 'land']),
   ],
   updateUser
 );
