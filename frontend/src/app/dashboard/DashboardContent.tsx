@@ -492,7 +492,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
   const [productIncotermRows, setProductIncotermRows] = useState<ProductIncotermRow[]>([])
   const [plantQuantities, setPlantQuantities] = useState<PlantQuantity[]>([])
   const [plantIncotermRows, setPlantIncotermRows] = useState<PlantIncotermRow[]>([])
-  const [loading, setLoading] = useState(true)
+  const [statsLoading, setStatsLoading] = useState(true)
+  const [widgetsLoading, setWidgetsLoading] = useState(true)
   const [selectedPlant, setSelectedPlant] = useState<PlantQuantity | null>(null)
   const [plantDetails, setPlantDetails] = useState<PlantContractDetail[]>([])
   const [loadingDetails, setLoadingDetails] = useState(false)
@@ -582,7 +583,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
   }, [dateFrom, dateTo, selectedPlantFilter, selectedSupplier, selectedProductFilter, selectedGroupFilter])
 
   const fetchDashboardData = async () => {
-    setLoading(true)
+    setStatsLoading(true)
+    setWidgetsLoading(true)
     setError(null)
 
     try {
@@ -598,11 +600,12 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       const queryString = params.toString()
       const urlSuffix = queryString ? `?${queryString}` : ''
 
-      // 1) Always fetch stats first so cards update even if a widget fails
+      // 1) Stats first — KPI row becomes interactive as soon as this returns (often under ~2s)
       const statsRes = await api.get(`/dashboard/stats${urlSuffix}`)
       setStats(statsRes.data.data)
+      setStatsLoading(false)
 
-      // 2) Fetch the rest in parallel, but don't block stats if one fails
+      // 2) Widgets load in parallel without blocking the KPI cards
       try {
         const widgetResults = await Promise.allSettled([
           api.get(`/dashboard/top-suppliers${urlSuffix}`),
@@ -651,12 +654,14 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
         }
       } catch (err) {
         console.error('Failed to fetch some dashboard widgets:', err)
+      } finally {
+        setWidgetsLoading(false)
       }
     } catch (err) {
       console.error('Failed to fetch dashboard stats:', err)
       setError('Failed to load dashboard data. Please try again.')
-    } finally {
-      setLoading(false)
+      setStatsLoading(false)
+      setWidgetsLoading(false)
     }
   }
 
@@ -1462,6 +1467,50 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
     await fetchContractsDrilldownPage(1, q)
   }
 
+  const openVendorGroupContracts = async (opts: {
+    groupName: string
+    titleSuffix: string
+    extraParams?: Record<string, string>
+  }) => {
+    const groupName = (opts.groupName || '').trim()
+    const isUngrouped = groupName.toLowerCase() === 'ungrouped'
+    const groupParam = isUngrouped ? '__UNGROUPED__' : groupName
+    await openContractsDrilldown({
+      title: `${groupName} — ${opts.titleSuffix}`,
+      subtitle: 'Filtered from Dashboard → By Vendor Group',
+      extraParams: {
+        // Inherit the current drilldown context (e.g. delivered/outstanding/contractStatus),
+        // then narrow down to the selected vendor group.
+        ...(drilldownQuery || {}),
+        groupName: groupParam,
+        ...(opts.extraParams || {}),
+      },
+    })
+  }
+
+  const openVendorGroupContractsFromCurrentPage = (opts: {
+    groupName: string
+    titleSuffix: string
+    predicate?: (c: any) => boolean
+  }) => {
+    const groupName = (opts.groupName || '').trim()
+    const normalizedGroup = groupName.toLowerCase() === 'ungrouped' ? 'ungrouped' : groupName
+    const subset = (drilldownContracts || []).filter((c: any) => {
+      const cg = ((c?.group_name || '').trim() || 'Ungrouped')
+      const sameGroup = cg.toLowerCase() === String(normalizedGroup).toLowerCase()
+      if (!sameGroup) return false
+      return opts.predicate ? !!opts.predicate(c) : true
+    })
+
+    setDrilldownTitle(`${groupName} — ${opts.titleSuffix}`)
+    setDrilldownSubtitle(`From current page (Page ${drilldownPage})`)
+    setDrilldownView('details')
+    setLoadingDrilldown(false)
+    setDrilldownContracts(subset)
+    setDrilldownTotalCount(subset.length)
+    setDrilldownQuery({ ...(drilldownQuery || {}) })
+  }
+
   const fetchShipmentsDrilldownPage = async (page: number, query: Record<string, string>) => {
     setLoadingShipDrilldown(true)
     setShipDrilldownRows([])
@@ -1958,7 +2007,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
         )}
 
         {/* Hint when filters exclude all data */}
-        {!loading && stats.contracts.total === 0 && stats.shipments.total === 0 && stats.trucking.total === 0 && stats.finance.total === 0 && (dateFrom || dateTo || selectedPlantFilter.length > 0 || selectedSupplier.length > 0 || selectedProductFilter.length > 0 || selectedGroupFilter.length > 0) && (
+        {!statsLoading && stats.contracts.total === 0 && stats.shipments.total === 0 && stats.trucking.total === 0 && stats.finance.total === 0 && (dateFrom || dateTo || selectedPlantFilter.length > 0 || selectedSupplier.length > 0 || selectedProductFilter.length > 0 || selectedGroupFilter.length > 0) && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 flex items-center justify-between gap-4">
             <p className="text-sm text-amber-800">
               No data matches your current filters. Try clearing filters to see all data.
@@ -1997,13 +2046,13 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
                 <KpiTile
                   label="Total quantity"
-                  value={loading ? '...' : formatKg(stats.contracts.totalQuantity)}
+                  value={statsLoading ? '...' : formatKg(stats.contracts.totalQuantity)}
                   onClick={() => openContractsDrilldown({ title: 'All contracts (quantity basis)' })}
                   wrapValue
                 />
                 <KpiTile
                   label="Delivered"
-                  value={loading ? '...' : formatKg(stats.contracts.deliveredQuantity)}
+                  value={statsLoading ? '...' : formatKg(stats.contracts.deliveredQuantity)}
                   tone="good"
                   onClick={() =>
                     openContractsDrilldown({
@@ -2015,7 +2064,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                 />
                 <KpiTile
                   label="Outstanding delivery"
-                  value={loading ? '...' : formatKg(stats.contracts.outstandingQuantity)}
+                  value={statsLoading ? '...' : formatKg(stats.contracts.outstandingQuantity)}
                   tone="warn"
                   onClick={() =>
                     openContractsDrilldown({
@@ -2027,7 +2076,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                 />
                 <KpiTile
                   label="Outstanding payment"
-                  value={loading ? '...' : formatKg(stats.contracts.outstandingPendingQuantity)}
+                  value={statsLoading ? '...' : formatKg(stats.contracts.outstandingPendingQuantity)}
                   tone="warn"
                   onClick={() =>
                     openContractsDrilldown({
@@ -2042,9 +2091,9 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <MiniBarChart
                 baseLabel="Comparison bars (OD and OP may overlap)."
                 items={[
-                  { key: 'delivered', label: 'Delivered', value: loading ? 0 : stats.contracts.deliveredQuantity, tone: 'good' },
-                  { key: 'od', label: 'Outstanding delivery', value: loading ? 0 : stats.contracts.outstandingQuantity, tone: 'warn' },
-                  { key: 'op', label: 'Outstanding payment', value: loading ? 0 : stats.contracts.outstandingPendingQuantity, tone: 'bad' },
+                  { key: 'delivered', label: 'Delivered', value: statsLoading ? 0 : stats.contracts.deliveredQuantity, tone: 'good' },
+                  { key: 'od', label: 'Outstanding delivery', value: statsLoading ? 0 : stats.contracts.outstandingQuantity, tone: 'warn' },
+                  { key: 'op', label: 'Outstanding payment', value: statsLoading ? 0 : stats.contracts.outstandingPendingQuantity, tone: 'bad' },
                 ]}
                 formatValue={(v) => formatKg(v)}
                 onItemClick={(key) => {
@@ -2083,21 +2132,21 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                 <KpiTile
                   label="Total shipments"
-                  value={loading ? '...' : formatNumber(stats.shipments.total)}
+                  value={statsLoading ? '...' : formatNumber(stats.shipments.total)}
                   sublabel="All shipments"
                   onClick={() => openShipmentsDrilldown({ title: 'All shipments' })}
                 />
                 <KpiTile
                   label="Completion rate"
-                  value={loading ? '...' : `${pct(stats.shipments.completed, stats.shipments.total)}%`}
-                  sublabel={`${loading ? '...' : formatNumber(stats.shipments.completed)} completed`}
+                  value={statsLoading ? '...' : `${pct(stats.shipments.completed, stats.shipments.total)}%`}
+                  sublabel={`${statsLoading ? '...' : formatNumber(stats.shipments.completed)} completed`}
                   tone="good"
                   onClick={() => openShipmentsDrilldown({ title: 'Completed shipments', extraParams: { status: 'COMPLETED' } })}
                 />
                 <KpiTile
                   label="Late / delayed rate"
-                  value={loading ? '...' : `${pct(stats.shipments.late, stats.shipments.total)}%`}
-                  sublabel={`${loading ? '...' : formatNumber(stats.shipments.late)} shipments`}
+                  value={statsLoading ? '...' : `${pct(stats.shipments.late, stats.shipments.total)}%`}
+                  sublabel={`${statsLoading ? '...' : formatNumber(stats.shipments.late)} shipments`}
                   tone="bad"
                   onClick={() => openShipmentsDrilldown({ title: 'Late shipments', extraParams: { delayed: 'true' } })}
                 />
@@ -2105,13 +2154,13 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
 
               <StackedBar
                 segments={[
-                  { label: 'Planned', value: loading ? 0 : stats.shipments.planned, tone: 'default' },
-                  { label: 'Loading', value: loading ? 0 : stats.shipments.loading, tone: 'warn' },
-                  { label: 'In transit', value: loading ? 0 : stats.shipments.inTransit, tone: 'default' },
-                  { label: 'Arrived', value: loading ? 0 : stats.shipments.arrived, tone: 'default' },
-                  { label: 'Unloading', value: loading ? 0 : stats.shipments.unloading, tone: 'warn' },
-                  { label: 'Completed', value: loading ? 0 : stats.shipments.completed, tone: 'good' },
-                  { label: 'Cancelled', value: loading ? 0 : stats.shipments.cancelled, tone: 'bad' },
+                  { label: 'Planned', value: statsLoading ? 0 : stats.shipments.planned, tone: 'default' },
+                  { label: 'Loading', value: statsLoading ? 0 : stats.shipments.loading, tone: 'warn' },
+                  { label: 'In transit', value: statsLoading ? 0 : stats.shipments.inTransit, tone: 'default' },
+                  { label: 'Arrived', value: statsLoading ? 0 : stats.shipments.arrived, tone: 'default' },
+                  { label: 'Unloading', value: statsLoading ? 0 : stats.shipments.unloading, tone: 'warn' },
+                  { label: 'Completed', value: statsLoading ? 0 : stats.shipments.completed, tone: 'good' },
+                  { label: 'Cancelled', value: statsLoading ? 0 : stats.shipments.cancelled, tone: 'bad' },
                 ]}
                 onSegmentClick={(label) => {
                   const map: Record<string, string> = {
@@ -2156,21 +2205,21 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                 <KpiTile
                   label="Total trucking ops"
-                  value={loading ? '...' : formatNumber(stats.trucking.total)}
+                  value={statsLoading ? '...' : formatNumber(stats.trucking.total)}
                   sublabel="All trucking operations"
                   onClick={() => openTruckingDrilldown({ title: 'All trucking operations' })}
                 />
                 <KpiTile
                   label="Completion rate"
-                  value={loading ? '...' : `${pct(stats.trucking.completed, stats.trucking.total)}%`}
-                  sublabel={`${loading ? '...' : formatNumber(stats.trucking.completed)} completed`}
+                  value={statsLoading ? '...' : `${pct(stats.trucking.completed, stats.trucking.total)}%`}
+                  sublabel={`${statsLoading ? '...' : formatNumber(stats.trucking.completed)} completed`}
                   tone="good"
                   onClick={() => openTruckingDrilldown({ title: 'Completed trucking operations', extraParams: { status: 'COMPLETED' } })}
                 />
                 <KpiTile
                   label="Late rate"
-                  value={loading ? '...' : `${pct(stats.trucking.late, stats.trucking.total)}%`}
-                  sublabel={`${loading ? '...' : formatNumber(stats.trucking.late)} ops`}
+                  value={statsLoading ? '...' : `${pct(stats.trucking.late, stats.trucking.total)}%`}
+                  sublabel={`${statsLoading ? '...' : formatNumber(stats.trucking.late)} ops`}
                   tone="bad"
                   onClick={() => openTruckingDrilldown({ title: 'Late trucking operations', extraParams: { status: 'LATE' } })}
                 />
@@ -2178,12 +2227,12 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
 
               <StackedBar
                 segments={[
-                  { label: 'Planned', value: loading ? 0 : stats.trucking.planned, tone: 'default' },
-                  { label: 'Loading', value: loading ? 0 : stats.trucking.loading, tone: 'warn' },
-                  { label: 'In transit', value: loading ? 0 : stats.trucking.inTransit, tone: 'default' },
-                  { label: 'Unloading', value: loading ? 0 : stats.trucking.unloading, tone: 'warn' },
-                  { label: 'Completed', value: loading ? 0 : stats.trucking.completed, tone: 'good' },
-                  { label: 'Cancelled', value: loading ? 0 : stats.trucking.cancelled, tone: 'bad' },
+                  { label: 'Planned', value: statsLoading ? 0 : stats.trucking.planned, tone: 'default' },
+                  { label: 'Loading', value: statsLoading ? 0 : stats.trucking.loading, tone: 'warn' },
+                  { label: 'In transit', value: statsLoading ? 0 : stats.trucking.inTransit, tone: 'default' },
+                  { label: 'Unloading', value: statsLoading ? 0 : stats.trucking.unloading, tone: 'warn' },
+                  { label: 'Completed', value: statsLoading ? 0 : stats.trucking.completed, tone: 'good' },
+                  { label: 'Cancelled', value: statsLoading ? 0 : stats.trucking.cancelled, tone: 'bad' },
                 ]}
                 onSegmentClick={(label) => {
                   const map: Record<string, string> = {
@@ -2227,21 +2276,21 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                 <KpiTile
                   label="Total payments"
-                  value={loading ? '...' : money(stats.finance.totalAmount)}
+                  value={statsLoading ? '...' : money(stats.finance.totalAmount)}
                   sublabel="All payments"
                   onClick={() => openPaymentsDrilldown({ title: 'All payments' })}
                 />
                 <KpiTile
                   label="Paid rate"
-                  value={loading ? '...' : money(stats.finance.paidAmount)}
-                  sublabel={`${loading ? '...' : pct(stats.finance.paidAmount, stats.finance.totalAmount)}% of total`}
+                  value={statsLoading ? '...' : money(stats.finance.paidAmount)}
+                  sublabel={`${statsLoading ? '...' : pct(stats.finance.paidAmount, stats.finance.totalAmount)}% of total`}
                   tone="good"
                   onClick={() => openPaymentsDrilldown({ title: 'Paid payments', extraParams: { status: 'PAID_PAYMENT' } })}
                 />
                 <KpiTile
                   label="Pending payment"
-                  value={loading ? '...' : money(stats.finance.pendingAmount)}
-                  sublabel={`${loading ? '...' : formatNumber(stats.finance.pending)} contracts (payoff date blank)`}
+                  value={statsLoading ? '...' : money(stats.finance.pendingAmount)}
+                  sublabel={`${statsLoading ? '...' : formatNumber(stats.finance.pending)} contracts (payoff date blank)`}
                   tone="warn"
                   onClick={() => openPaymentsDrilldown({ title: 'Pending payment', extraParams: { status: 'PENDING_PAYMENT' } })}
                 />
@@ -2249,19 +2298,19 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <div className="grid grid-cols-1 md:grid-cols-1 gap-2">
                 <KpiTile
                   label="Late payment"
-                  value={loading ? '...' : money(stats.finance.overdueAmount)}
-                  sublabel={`${loading ? '...' : formatNumber(stats.finance.overdue)} contracts (unpaid overdue or paid late)`}
+                  value={statsLoading ? '...' : money(stats.finance.overdueAmount)}
+                  sublabel={`${statsLoading ? '...' : formatNumber(stats.finance.overdue)} contracts (unpaid overdue or paid late)`}
                   tone="bad"
                   onClick={() => openPaymentsDrilldown({ title: 'Late payment', extraParams: { status: 'LATE_PAYMENT' } })}
                 />
               </div>
 
               <PaymentOverlapBars
-                paid={loading ? 0 : stats.finance.paidAmount}
-                pending={loading ? 0 : stats.finance.pendingAmount}
-                late={loading ? 0 : stats.finance.overdueAmount}
-                portfolioTotal={loading ? 0 : stats.finance.totalAmount}
-                loading={loading}
+                paid={statsLoading ? 0 : stats.finance.paidAmount}
+                pending={statsLoading ? 0 : stats.finance.pendingAmount}
+                late={statsLoading ? 0 : stats.finance.overdueAmount}
+                portfolioTotal={statsLoading ? 0 : stats.finance.totalAmount}
+                loading={statsLoading}
               />
             </CardContent>
           </Card>
@@ -2283,7 +2332,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
             </CardHeader>
             <CardContent>
               <div className="space-y-3 max-h-[560px] overflow-auto pr-1">
-                {loading ? (
+                {widgetsLoading ? (
                   <div className="text-center py-4 text-gray-500">Loading...</div>
                 ) : productIncotermRows.length === 0 ? (
                   <div className="text-center py-4 text-gray-500">No data available</div>
@@ -2490,7 +2539,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
             </CardHeader>
             <CardContent>
               <div className="space-y-3 max-h-[560px] overflow-auto pr-1">
-                {loading ? (
+                {widgetsLoading ? (
                   <div className="text-center py-4 text-gray-500">Loading...</div>
                 ) : productIncotermRows.length === 0 ? (
                   <div className="text-center py-4 text-gray-500">No data available</div>
@@ -2716,7 +2765,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {loading ? (
+                {widgetsLoading ? (
                   <div className="text-center py-4 text-gray-500">Loading...</div>
                 ) : plantQuantities.length === 0 ? (
                   <div className="text-center py-4 text-gray-500">No data available</div>
@@ -2904,7 +2953,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {loading ? (
+                {widgetsLoading ? (
                   <div className="text-center py-4 text-gray-500">Loading...</div>
                 ) : topSuppliers.length === 0 ? (
                   <div className="text-center py-4 text-gray-500">No data available</div>
@@ -2953,7 +3002,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {loading ? (
+                {widgetsLoading ? (
                   <div className="text-center py-4 text-gray-500">Loading...</div>
                 ) : topTruckingOwners.length === 0 ? (
                   <div className="text-center py-4 text-gray-500">No data available</div>
@@ -3002,7 +3051,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {loading ? (
+                {widgetsLoading ? (
                   <div className="text-center py-4 text-gray-500">Loading...</div>
                 ) : topVessels.length === 0 ? (
                   <div className="text-center py-4 text-gray-500">No data available</div>
@@ -3991,25 +4040,137 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       {sortedContractsByVendorGroup.map((g) => (
                         <tr key={g.groupName} className="hover:bg-gray-50">
                           <td className="px-4 py-3 font-medium">{g.groupName}</td>
-                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(g.count)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            <button
+                              type="button"
+                              className="w-full text-right hover:underline underline-offset-2"
+                              onClick={() =>
+                                openVendorGroupContractsFromCurrentPage({
+                                  groupName: g.groupName,
+                                  titleSuffix: 'Contracts',
+                                })
+                              }
+                              title="Show contracts"
+                            >
+                              {formatNumber(g.count)}
+                            </button>
+                          </td>
                           {showOutstandingPaymentColumns && (
                             <>
-                              <td className="px-4 py-3 text-right tabular-nums">{money(g.contractValue)}</td>
+                              <td className="px-4 py-3 text-right tabular-nums">
+                                <button
+                                  type="button"
+                                  className="w-full text-right hover:underline underline-offset-2"
+                                  onClick={() => openVendorGroupContracts({ groupName: g.groupName, titleSuffix: 'Contract Value' })}
+                                  title="Show contracts"
+                                >
+                                  {money(g.contractValue)}
+                                </button>
+                              </td>
                               <td className="px-4 py-3">{formatDate(g.nearestPaymentDueDate || undefined)}</td>
                             </>
                           )}
-                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(g.qtyOrdered)}</td>
-                          <td className="px-4 py-3 text-right tabular-nums text-green-700">{formatNumber(g.qtyDelivered)}</td>
-                          <td className="px-4 py-3 text-right tabular-nums text-orange-700">{formatNumber(g.qtyOutstanding)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            <button
+                              type="button"
+                              className="w-full text-right hover:underline underline-offset-2"
+                              onClick={() =>
+                                openVendorGroupContractsFromCurrentPage({
+                                  groupName: g.groupName,
+                                  titleSuffix: 'Qty Ordered (Kg)',
+                                })
+                              }
+                              title="Show contracts"
+                            >
+                              {formatNumber(g.qtyOrdered)}
+                            </button>
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums text-green-700">
+                            <button
+                              type="button"
+                              className="w-full text-right hover:underline underline-offset-2"
+                              onClick={() =>
+                                openVendorGroupContractsFromCurrentPage({
+                                  groupName: g.groupName,
+                                  titleSuffix: 'Delivered (Kg)',
+                                  predicate: (c) => Number(c?.delivered_quantity || 0) > 0,
+                                })
+                              }
+                              title="Show contracts with delivered quantity"
+                            >
+                              {formatNumber(g.qtyDelivered)}
+                            </button>
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums text-orange-700">
+                            <button
+                              type="button"
+                              className="w-full text-right hover:underline underline-offset-2"
+                              onClick={() =>
+                                openVendorGroupContractsFromCurrentPage({
+                                  groupName: g.groupName,
+                                  titleSuffix: 'Outstanding (Kg)',
+                                  predicate: (c) => Number(c?.outstanding_quantity || 0) > 0,
+                                })
+                              }
+                              title="Show contracts with outstanding quantity"
+                            >
+                              {formatNumber(g.qtyOutstanding)}
+                            </button>
+                          </td>
                           <td className="px-4 py-3 text-right tabular-nums">
                             {g.weightedAvgDeliveryDays != null ? formatNumber(Math.round(g.weightedAvgDeliveryDays * 10) / 10) : '-'}
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums">
                             {g.weightedAvgPaymentDays != null ? formatNumber(Math.round(g.weightedAvgPaymentDays * 10) / 10) : '-'}
                           </td>
-                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(g.openCount)}</td>
-                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(g.closeCount)}</td>
-                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(g.cancelledCount)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            <button
+                              type="button"
+                              className="w-full text-right hover:underline underline-offset-2"
+                              onClick={() =>
+                                openVendorGroupContractsFromCurrentPage({
+                                  groupName: g.groupName,
+                                  titleSuffix: 'Open Contracts',
+                                  predicate: (c) => String(c?.status || '').toLowerCase() === 'open',
+                                })
+                              }
+                              title="Show open contracts"
+                            >
+                              {formatNumber(g.openCount)}
+                            </button>
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            <button
+                              type="button"
+                              className="w-full text-right hover:underline underline-offset-2"
+                              onClick={() =>
+                                openVendorGroupContractsFromCurrentPage({
+                                  groupName: g.groupName,
+                                  titleSuffix: 'Close Contracts',
+                                  predicate: (c) => String(c?.status || '').toLowerCase() === 'close',
+                                })
+                              }
+                              title="Show closed contracts"
+                            >
+                              {formatNumber(g.closeCount)}
+                            </button>
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            <button
+                              type="button"
+                              className="w-full text-right hover:underline underline-offset-2"
+                              onClick={() =>
+                                openVendorGroupContractsFromCurrentPage({
+                                  groupName: g.groupName,
+                                  titleSuffix: 'Cancelled Contracts',
+                                  predicate: (c) => String(c?.status || '').toLowerCase() === 'cancelled',
+                                })
+                              }
+                              title="Show cancelled contracts"
+                            >
+                              {formatNumber(g.cancelledCount)}
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>

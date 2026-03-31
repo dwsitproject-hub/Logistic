@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
+import { scanFileWithClamdIfConfigured } from '../services/clamScan.service';
 
 export const ensureUploadDir = () => {
   const uploadDir = path.join(process.cwd(), 'uploads');
@@ -39,6 +40,32 @@ export const uploadDocumentHandler = async (req: Request, res: Response) => {
 
     if (!file) {
       return res.status(400).json({ success: false, error: { message: 'File is required' } });
+    }
+
+    try {
+      const scan = await scanFileWithClamdIfConfigured(file.path);
+      if (!scan.skipped && !scan.clean) {
+        try {
+          fs.unlinkSync(file.path);
+        } catch {
+          /* ignore */
+        }
+        return res.status(400).json({
+          success: false,
+          error: { message: 'File failed virus scan', detail: scan.reason },
+        });
+      }
+    } catch (scanErr) {
+      try {
+        fs.unlinkSync(file.path);
+      } catch {
+        /* ignore */
+      }
+      logger.error('ClamAV scan error', scanErr);
+      return res.status(503).json({
+        success: false,
+        error: { message: 'Virus scanner unavailable; upload rejected' },
+      });
     }
 
     const insert = await query(

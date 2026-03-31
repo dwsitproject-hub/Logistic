@@ -170,6 +170,43 @@ function ContractsPageContent() {
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
   const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
 
+  /** Column IDs handled by GET /contracts?columnFilters= (server); others stay client-only */
+  const SERVER_COLUMN_FILTER_IDS = useMemo(
+    () =>
+      new Set<string>([
+        'contract_id',
+        'contract_ext_no',
+        'product',
+        'supplier',
+        'buyer',
+        'group_name',
+        'transport_mode',
+        'incoterm',
+        'company_name',
+        'lt_spot',
+        'po_number',
+        'sto_number',
+        'b2b_flag',
+        'contract_date',
+        'delivery_start',
+        'delivery_end',
+        'cargo_readiness_date',
+        'created_at',
+        'contract_qty',
+        'outstanding_qty',
+        'delivery_status',
+      ]),
+    []
+  )
+
+  const clientOnlyColumnFilters = useMemo(() => {
+    const out: Record<string, ColumnFilter> = {}
+    for (const [k, v] of Object.entries(columnFilters)) {
+      if (!SERVER_COLUMN_FILTER_IDS.has(k)) out[k] = v
+    }
+    return out
+  }, [columnFilters, SERVER_COLUMN_FILTER_IDS])
+
   useEffect(() => {
     if (typeof window === 'undefined') return
     const onMouseDown = (e: MouseEvent) => {
@@ -217,7 +254,7 @@ function ContractsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authReady, searchParams, statusFilter, b2bFlagFilter, dateFrom, dateTo, transportModeFilter, unassignedFilter])
 
-  // When user types (or clears) search, refetch so contract_id filter is applied and we find a contract even with "All Status"
+  // Debounced refetch: global search runs on the server (full dataset), not only the current page
   const isFirstSearchRender = useRef(true)
   useEffect(() => {
     if (!authReady) return
@@ -232,6 +269,21 @@ function ContractsPageContent() {
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchTerm])
+
+  const isFirstColumnFilterRender = useRef(true)
+  useEffect(() => {
+    if (!authReady) return
+    if (isFirstColumnFilterRender.current) {
+      isFirstColumnFilterRender.current = false
+      return
+    }
+    const t = setTimeout(() => {
+      setCurrentPage(1)
+      fetchContracts(1)
+    }, 500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [columnFilters])
   
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) {
@@ -269,14 +321,12 @@ function ContractsPageContent() {
       params.append('page', page.toString())
       params.append('limit', contractsPerPage.toString())
       const searchTrim = searchTerm.trim()
-      if (searchTrim.length >= 3) {
-        // If purely numeric, treat as Contract ID (server-side filter)
-        if (/^\d+$/.test(searchTrim)) {
-          params.append('contract_id', searchTrim)
-        } else {
-          // Otherwise, use it as a supplier filter so we can find contracts by supplier across all pages
-          params.append('supplier', searchTrim)
-        }
+      if (searchTrim.length >= 2) {
+        params.append('search', searchTrim)
+      }
+      const cfKeys = Object.keys(columnFilters)
+      if (cfKeys.length > 0) {
+        params.append('columnFilters', JSON.stringify(columnFilters))
       }
       if (statusFilter && statusFilter !== 'All Status') {
         // Status is aligned with SAP (Open/Close/Cancelled)
@@ -790,8 +840,8 @@ function ContractsPageContent() {
     return s === '' || s === '-' || s.toLowerCase() === 'null' || s.toLowerCase() === 'undefined'
   }
 
-  const passesColumnFilters = (c: Contract) => {
-    for (const [colId, filter] of Object.entries(columnFilters)) {
+  const passesColumnFilters = (c: Contract, filters: Record<string, ColumnFilter>) => {
+    for (const [colId, filter] of Object.entries(filters)) {
       const raw = getColumnRawValue(c, colId)
       if (filter.emptyOnly) {
         if (!isEmptyValue(raw)) return false
@@ -849,26 +899,10 @@ function ContractsPageContent() {
     return true
   }
 
-  // Frontend filtering: search term + header column filters (backend still handles the top filter bar)
+  // Search + most column filters run on the server; only computed UI columns filter here
   const filteredContracts = useMemo(() => {
-    const q = searchTerm.trim().toLowerCase()
-    return contracts.filter(contract => {
-      const matchesSearch =
-        q === '' ||
-        contract.contract_id?.toLowerCase().includes(q) ||
-        contract.po_number?.toLowerCase().includes(q) ||
-        contract.po_numbers?.toLowerCase().includes(q) ||
-        contract.sto_number?.toLowerCase().includes(q) ||
-        contract.sto_numbers?.toLowerCase().includes(q) ||
-        contract.supplier?.toLowerCase().includes(q) ||
-        contract.product?.toLowerCase().includes(q) ||
-        contract.transport_mode?.toLowerCase().includes(q) ||
-        contract.contract_ext_no?.toLowerCase().includes(q)
-
-      if (!matchesSearch) return false
-      return passesColumnFilters(contract)
-    })
-  }, [contracts, searchTerm, columnFilters])
+    return contracts.filter((contract) => passesColumnFilters(contract, clientOnlyColumnFilters))
+  }, [contracts, clientOnlyColumnFilters])
 
   type CompactColumn = {
     id: string

@@ -122,19 +122,20 @@ app.use('/api/companies', companyRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// Start server
-app.listen(PORT, () => {
-  logger.info(`🚀 Server is running on port ${PORT}`);
-  logger.info(`📚 API Documentation available at http://localhost:${PORT}/api-docs`);
-  
-  // Initialize scheduler service
-  try {
-    SchedulerService.initialize();
-    logger.info('📅 Scheduler service initialized successfully');
-  } catch (error) {
-    logger.error('Failed to initialize scheduler service:', error);
-  }
-});
+// Start server (skipped in automated tests so Vitest can import `app` without binding a port)
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => {
+    logger.info(`🚀 Server is running on port ${PORT}`);
+    logger.info(`📚 API Documentation available at http://localhost:${PORT}/api-docs`);
+
+    try {
+      SchedulerService.initialize();
+      logger.info('📅 Scheduler service initialized successfully');
+    } catch (error) {
+      logger.error('Failed to initialize scheduler service:', error);
+    }
+  });
+}
 
 // Graceful shutdown
 process.on('SIGTERM', () => {

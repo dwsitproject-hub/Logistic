@@ -452,6 +452,83 @@ const tryDirectTopSuppliersOutstanding = async (question: string, year?: number 
   }
 }
 
+const tryDirectTopVendorsOutstanding = async (question: string, year?: number | null): Promise<DirectAnswer> => {
+  const q = question.trim().toLowerCase()
+  const asksTop = q.includes('top')
+  const asksOutstanding = q.includes('outstanding')
+  const asksVendorish =
+    q.includes('vendor') ||
+    q.includes('vendor group') ||
+    q.includes('group') ||
+    q.includes('supplier') // allow "vendor" questions to still work even if user says supplier/vender interchangeably
+
+  if (!(asksTop && asksOutstanding && asksVendorish)) return { matched: false }
+
+  // Prefer vendor group if it exists; otherwise fall back to supplier name.
+  const yearFilter = year ? ` AND EXTRACT(YEAR FROM c.contract_date) = $1 ` : ''
+  const res = await query(
+    `
+    WITH delivered_by_contract AS (
+      SELECT
+        spd.contract_number AS contract_id,
+        SUM(
+          CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
+        ) AS delivered_quantity
+      FROM sap_processed_data spd
+      WHERE spd.sto_number IS NOT NULL
+        AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+        AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
+      GROUP BY spd.contract_number
+    )
+    SELECT
+      COALESCE(NULLIF(TRIM(c.group_name), ''), NULLIF(TRIM(c.supplier), ''), 'Unknown') AS vendor,
+      COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM(COALESCE(db.delivered_quantity, 0)), 0)::numeric AS outstanding_quantity
+    FROM contracts c
+    LEFT JOIN delivered_by_contract db ON db.contract_id = c.contract_id
+    WHERE (c.group_name IS NOT NULL AND TRIM(c.group_name) <> '')
+       OR (c.supplier IS NOT NULL AND TRIM(c.supplier) <> '')
+      ${yearFilter}
+    GROUP BY COALESCE(NULLIF(TRIM(c.group_name), ''), NULLIF(TRIM(c.supplier), ''), 'Unknown')
+    ORDER BY outstanding_quantity DESC NULLS LAST
+    LIMIT 5
+    `,
+    year ? [year] : []
+  )
+
+  const rows = res.rows || []
+  if (rows.length === 0) {
+    return {
+      matched: true,
+      sourceLabel: 'deterministic.top_vendors_outstanding_quantity',
+      factText: `Direct metric from app data: no vendor rows found${year ? ` for ${year}` : ''}.`,
+      result: {
+        answer: `Top vendors by outstanding quantity${year ? ` for ${year}` : ''}: no data found.`,
+        report: `Top 5 vendors by outstanding quantity${year ? ` (${year})` : ''}\n(no rows)`,
+        insights:
+          'No matching vendors were found for this filter. If you expected results, check whether contracts have contract_date set and whether vendor group/supplier fields are populated.',
+        comparison: '',
+      },
+    }
+  }
+
+  const lines = rows.map(
+    (r: any, i: number) => `${i + 1}. ${r.vendor}: ${Number(r.outstanding_quantity || 0).toLocaleString('en-US')} Kg`
+  )
+
+  return {
+    matched: true,
+    sourceLabel: 'deterministic.top_vendors_outstanding_quantity',
+    factText: `Direct metric from app data: top vendors by outstanding quantity computed${year ? ` for ${year}` : ''}.`,
+    result: {
+      answer: `Top vendors by outstanding quantity${year ? ` for ${year}` : ''}:\n${lines.join('\n')}`,
+      report: `Top 5 vendors by outstanding quantity${year ? ` (${year})` : ''}\n${lines.join('\n')}`,
+      insights:
+        'Prioritize the top vendors for delivery follow-up and contract execution. If outstanding stays high, add an exception list by vendor with aging buckets and “next milestone date” to focus action.',
+      comparison: '',
+    },
+  }
+}
+
 const tryDirectOverduePayments = async (question: string, year?: number | null): Promise<DirectAnswer> => {
   const q = question.trim().toLowerCase()
   if (!(q.includes('overdue') && q.includes('payment'))) return { matched: false }
@@ -653,28 +730,40 @@ const saveMemory = async (args: {
 }
 
 const buildPrompt = (question: string, appData: unknown, uploadedText?: string) => `
-You are KLIP Agent AI for logistics + commercial analytics.
+You are KLIP Agent AI for logistics + commercial analytics. You must be accurate, evidence-based, and operationally useful.
 
 User question:
 ${question}
 
-Application data summary (from live database):
+Application data summary (live database; treat as the only source of exact values):
 ${JSON.stringify(appData, null, 2)}
 
 ${uploadedText ? `Uploaded user data excerpt:\n${uploadedText}\n` : 'No uploaded file text provided.\n'}
 
 Tasks:
-1) Answer the user question using the application data context.
-2) If user asks for report/dashboard output, provide a concise report format.
-3) Provide data analysis insights (risks, patterns, actionable recommendations).
+1) Answer the user question using ONLY the application data context and uploaded excerpt.
+2) If the question is asking for "what should we do" / improvements / root-cause, include logistics best-practice recommendations.
+3) If user asks for report/dashboard output, provide a concise report format.
 4) If uploaded data exists, compare uploaded data vs app data and describe key mismatches.
 
-Rules:
-- Do not invent exact values outside provided context.
-- If data is insufficient, clearly say what additional data is needed.
-- Keep output practical for operations and commercial teams.
+Hard rules (do not break these):
+- Do NOT invent exact values. If a value is not present in context, say "unknown" and explain what data is needed.
+- Prefer deterministic facts provided in context (e.g. "direct_fact") over narrative. Never contradict them.
+- "similar_memories" are NOT a data source. They may be used only as phrasing examples or to recall which metric/query to run next. Do not copy their numbers unless those numbers also appear in the application data summary.
+- Separate facts vs assumptions clearly.
+- Keep it practical for operations, finance, and management stakeholders.
 
-Return strict JSON:
+Output format requirements (put these headings INSIDE the strings you return):
+- In "answer", include:
+  - Answer (1-3 sentences)
+  - Evidence (what in the provided context supports it)
+  - Assumptions (only if needed)
+- In "insights", include:
+  - Risks / exceptions to watch
+  - Recommendations (each with rationale, how to implement in KLIP, risks/trade-offs, success KPIs)
+  - Next checks (exact missing data or next query to confirm)
+
+Return strict JSON ONLY:
 {
   "answer": "string",
   "report": "string",
@@ -750,6 +839,7 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
       tryDirectProductOutstandingAnswer(normalizedQuestion, requestedYear),
       tryDirectProductDeliveredAnswer(normalizedQuestion, requestedYear),
       tryDirectOutstandingPaymentAnswer(normalizedQuestion, requestedYear),
+      tryDirectTopVendorsOutstanding(normalizedQuestion, requestedYear),
       tryDirectTopSuppliersOutstanding(normalizedQuestion, requestedYear),
       tryDirectOverduePayments(normalizedQuestion, requestedYear),
       tryDirectIncotermBreakdown(normalizedQuestion, requestedYear),

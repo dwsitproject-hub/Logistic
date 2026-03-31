@@ -93,10 +93,22 @@ const buildFilterConditions = (req: AuthRequest): { contractFilter: string; ship
   }
 
   // Group Name filter (OR)
+  // Special token: "__UNGROUPED__" matches null/blank group_name.
   if (groups.length > 0) {
-    const placeholders = groups.map(() => `$${paramIndex++}`).join(', ');
-    contractFilter += ` AND c.group_name IN (${placeholders})`;
-    params.push(...groups);
+    const wantsUngrouped = groups.includes('__UNGROUPED__');
+    const nonBlank = groups.filter((g) => g !== '__UNGROUPED__');
+    const parts: string[] = [];
+    if (nonBlank.length > 0) {
+      const placeholders = nonBlank.map(() => `$${paramIndex++}`).join(', ');
+      parts.push(`c.group_name IN (${placeholders})`);
+      params.push(...nonBlank);
+    }
+    if (wantsUngrouped) {
+      parts.push(`(c.group_name IS NULL OR TRIM(c.group_name) = '')`);
+    }
+    if (parts.length > 0) {
+      contractFilter += ` AND (${parts.join(' OR ')})`;
+    }
   }
 
   // Incoterm filter (OR) - normalized: Blank for null/empty

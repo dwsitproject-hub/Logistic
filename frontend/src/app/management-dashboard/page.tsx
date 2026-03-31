@@ -35,7 +35,22 @@ export default function ManagementDashboardPage() {
   if (!ready) {
     return (
       <Layout>
-        <div className="flex items-center justify-center min-h-[50vh] text-gray-500 text-sm">Loading…</div>
+        <div className="space-y-6 max-w-6xl mx-auto px-4 py-8" aria-busy="true" aria-label="Loading management dashboard">
+          <div className="h-9 w-64 bg-gray-200 rounded-md animate-pulse" />
+          <div className="h-4 w-96 max-w-full bg-gray-100 rounded animate-pulse" />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="rounded-lg border border-gray-200 bg-white p-6 space-y-4 shadow-sm">
+                <div className="h-5 w-40 bg-gray-200 rounded animate-pulse" />
+                <div className="h-3 w-full bg-gray-100 rounded animate-pulse" />
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="h-16 bg-gray-50 rounded-lg animate-pulse" />
+                  <div className="h-16 bg-gray-50 rounded-lg animate-pulse" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </Layout>
     )
   }

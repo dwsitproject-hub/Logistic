@@ -9,6 +9,7 @@ const router = express.Router();
 router.use(authenticateToken);
 
 const uploadDir = ensureUploadDir();
+const ALLOWED_DOC_MIMES = new Set(['application/pdf', 'image/png', 'image/jpeg']);
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {
@@ -16,7 +17,14 @@ const storage = multer.diskStorage({
     cb(null, unique + '_' + file.originalname.replace(/\s+/g, '_'));
   },
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_DOC_MIMES.has(file.mimetype)) cb(null, true);
+    else cb(new Error(`Unsupported file type: ${file.mimetype}`));
+  },
+});
 
 // List documents (filter by contractId/shipmentId)
 router.get('/', listDocuments);

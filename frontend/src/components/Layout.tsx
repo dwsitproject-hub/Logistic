@@ -25,7 +25,12 @@ import {
   BookOpen,
   Bot,
 } from 'lucide-react'
-import api from '@/lib/api'
+import {
+  PermissionsProvider,
+  usePermissions,
+  canViewPermission,
+  isAdminRole,
+} from '@/components/PermissionsContext'
 
 type UserLite = {
   id?: string
@@ -125,12 +130,103 @@ function LayoutChrome({
   )
 }
 
-export default function Layout({ children }: { children: React.ReactNode }) {
+const NAV_ITEMS: {
+  name: string
+  href: string
+  icon: ComponentType<{ className?: string }>
+  roles: string[]
+  permissionKey: string
+}[] = [
+  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['ALL'], permissionKey: 'page.dashboard' },
+  {
+    name: 'Management Dashboard',
+    href: '/management-dashboard',
+    icon: Presentation,
+    roles: ['ALL'],
+    permissionKey: 'page.management_dashboard',
+  },
+  { name: 'Contracts', href: '/contracts', icon: FileText, roles: ['ALL'], permissionKey: 'page.contracts' },
+  { name: 'Shipments', href: '/shipments', icon: Package, roles: ['ALL'], permissionKey: 'page.shipments' },
+  { name: 'Trucking', href: '/trucking', icon: Truck, roles: ['ALL'], permissionKey: 'page.trucking' },
+  { name: 'Suppliers Dashboard', href: '/customer-360', icon: Users, roles: ['ALL'], permissionKey: 'page.customer_360' },
+  { name: 'Suppliers', href: '/supplier', icon: Users, roles: ['ALL'], permissionKey: 'page.suppliers' },
+  {
+    name: 'Customer 360',
+    href: '/customer-360-company',
+    icon: Users,
+    roles: ['ALL'],
+    permissionKey: 'page.customer_360_company',
+  },
+  {
+    name: 'Master Product Configuration',
+    href: '/master-product-configuration',
+    icon: Layers,
+    roles: ['ALL'],
+    permissionKey: 'page.master_product_configuration',
+  },
+  { name: 'Master Vessel', href: '/master-vessel', icon: Layers, roles: ['ALL'], permissionKey: 'page.master_vessels' },
+  {
+    name: 'Master Loading Port',
+    href: '/master-loading-port',
+    icon: Layers,
+    roles: ['ALL'],
+    permissionKey: 'page.master_loading_ports',
+  },
+  { name: 'Finance', href: '/finance', icon: DollarSign, roles: ['FINANCE', 'MANAGEMENT', 'ADMIN'], permissionKey: 'page.finance' },
+  { name: 'KLIP Agent AI', href: '/klip-agent-ai', icon: Bot, roles: ['ALL'], permissionKey: 'page.klip_agent_ai' },
+  { name: 'Documents', href: '/documents', icon: FolderOpen, roles: ['ALL'], permissionKey: 'page.documents' },
+  { name: 'SAP Data', href: '/sap-imports', icon: Database, roles: ['ADMIN', 'SUPPORT', 'MANAGEMENT'], permissionKey: 'page.sap' },
+  { name: 'Users', href: '/users', icon: Users, roles: ['ALL'], permissionKey: 'page.users' },
+  { name: 'Audit Logs', href: '/audit', icon: Settings, roles: ['ADMIN', 'SUPPORT'], permissionKey: 'page.audit' },
+]
+
+function LayoutWithPermissions({
+  user,
+  children,
+}: {
+  user: UserLite
+  children: React.ReactNode
+}) {
   const router = useRouter()
   const pathname = usePathname()
-  const [user, setUser] = useState<UserLite | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [permByKey, setPermByKey] = useState<Record<string, { canView?: boolean }> | undefined>(undefined)
+  const perms = usePermissions()
+
+  const handleLogout = () => {
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    router.push('/login')
+  }
+
+  const filteredNavigation = NAV_ITEMS.filter((item) => {
+    const roleOk = item.roles.includes('ALL') || (user.role != null && item.roles.includes(user.role))
+    if (!roleOk) return false
+    if (isAdminRole(user.role)) return true
+    return canViewPermission(perms, item.permissionKey)
+  })
+
+  return (
+    <TooltipProvider delayDuration={200}>
+      <AppTourProvider userId={user.id ?? null}>
+        <LayoutChrome
+          user={user}
+          pathname={pathname}
+          navigation={NAV_ITEMS}
+          filteredNavigation={filteredNavigation}
+          sidebarOpen={sidebarOpen}
+          setSidebarOpen={setSidebarOpen}
+          handleLogout={handleLogout}
+        >
+          {children}
+        </LayoutChrome>
+      </AppTourProvider>
+    </TooltipProvider>
+  )
+}
+
+export default function Layout({ children }: { children: React.ReactNode }) {
+  const router = useRouter()
+  const [user, setUser] = useState<UserLite | null>(null)
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -143,89 +239,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     }
   }, [router])
 
-  useEffect(() => {
-    if (!user) return
-    let cancelled = false
-    api
-      .get('/roles/my-permissions')
-      .then((res) => {
-        if (!cancelled) setPermByKey(res.data?.data?.permissions ?? {})
-      })
-      .catch(() => {
-        if (!cancelled) setPermByKey(undefined)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [user])
-
-  const handleLogout = () => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    router.push('/login')
-  }
-
-  const navigation: {
-    name: string
-    href: string
-    icon: ComponentType<{ className?: string }>
-    roles: string[]
-    permissionKey?: string
-  }[] = [
-    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['ALL'], permissionKey: 'page.dashboard' },
-    {
-      name: 'Management Dashboard',
-      href: '/management-dashboard',
-      icon: Presentation,
-      roles: ['ALL'],
-      permissionKey: 'page.management_dashboard',
-    },
-    { name: 'Contracts', href: '/contracts', icon: FileText, roles: ['ALL'] },
-    { name: 'Shipments', href: '/shipments', icon: Package, roles: ['ALL'] },
-    { name: 'Trucking', href: '/trucking', icon: Truck, roles: ['ALL'] },
-    { name: 'Suppliers Dashboard', href: '/customer-360', icon: Users, roles: ['ALL'] },
-    { name: 'Suppliers', href: '/supplier', icon: Users, roles: ['ALL'] },
-    { name: 'Customer 360', href: '/customer-360-company', icon: Users, roles: ['ALL'] },
-    { name: 'Master Product Configuration', href: '/master-product-configuration', icon: Layers, roles: ['ALL'] },
-    { name: 'Master Vessel', href: '/master-vessel', icon: Layers, roles: ['ALL'] },
-    { name: 'Master Loading Port', href: '/master-loading-port', icon: Layers, roles: ['ALL'] },
-    { name: 'Finance', href: '/finance', icon: DollarSign, roles: ['FINANCE', 'MANAGEMENT', 'ADMIN'] },
-    { name: 'KLIP Agent AI', href: '/klip-agent-ai', icon: Bot, roles: ['ALL'] },
-    { name: 'Documents', href: '/documents', icon: FolderOpen, roles: ['ALL'] },
-    { name: 'SAP Data', href: '/sap-imports', icon: Database, roles: ['ADMIN', 'SUPPORT', 'MANAGEMENT'] },
-    { name: 'Users', href: '/users', icon: Users, roles: ['ALL'] },
-    { name: 'Audit Logs', href: '/audit', icon: Settings, roles: ['ADMIN', 'SUPPORT'] },
-  ]
-
-  const filteredNavigation = navigation.filter((item) => {
-    const roleOk = item.roles.includes('ALL') || (user?.role != null && item.roles.includes(user.role))
-    if (!roleOk) return false
-    if (item.permissionKey) {
-      if (permByKey === undefined) return true
-      return !!permByKey[item.permissionKey]?.canView
-    }
-    return true
-  })
-
   if (!user) {
     return <div className="flex items-center justify-center min-h-screen">Loading...</div>
   }
 
   return (
-    <TooltipProvider delayDuration={200}>
-      <AppTourProvider userId={user.id ?? null}>
-        <LayoutChrome
-          user={user}
-          pathname={pathname}
-          navigation={navigation}
-          filteredNavigation={filteredNavigation}
-          sidebarOpen={sidebarOpen}
-          setSidebarOpen={setSidebarOpen}
-          handleLogout={handleLogout}
-        >
-          {children}
-        </LayoutChrome>
-      </AppTourProvider>
-    </TooltipProvider>
+    <PermissionsProvider userRole={user.role}>
+      <LayoutWithPermissions user={user}>{children}</LayoutWithPermissions>
+    </PermissionsProvider>
   )
 }

@@ -12,6 +12,12 @@ import api from '@/lib/api'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import {
+  usePermissions,
+  canCreatePermission,
+  canEditPermission,
+  canViewPermission,
+} from '@/components/PermissionsContext'
 // import * as XLSX from 'xlsx' // Temporarily disabled
 
 interface Shipment {
@@ -156,6 +162,12 @@ interface DocumentItem {
 
 function ShipmentsPageContent() {
   const searchParams = useSearchParams()
+  const perms = usePermissions()
+  const canAddShipment = canCreatePermission(perms, 'data.shipments')
+  const canEditShipment = canEditPermission(perms, 'data.shipments')
+  const canExportShipments = canViewPermission(perms, 'action.export_data')
+  const canBulkShipments = canCreatePermission(perms, 'action.bulk_operations')
+  const canImportShipments = canViewPermission(perms, 'action.import_excel')
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
@@ -2822,57 +2834,65 @@ function ShipmentsPageContent() {
               Manage and track all shipments - {filteredShipments.length} total
             </p>
           </div>
-          <div className="flex gap-2">
-            <Button
-              onClick={() => setShowAddShipment(true)}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Add New Shipment
-            </Button>
-            <Button
-              onClick={downloadTemplate}
-              variant="outline"
-              className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Download Template
-            </Button>
-            <Button
-              onClick={exportFilteredData}
-              variant="outline"
-              className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Export Data
-            </Button>
-            <>
-              <input
-                type="file"
-                accept=".csv"
-                onChange={handleBulkUpload}
-                className="hidden"
-                disabled={uploading}
-                id="bulk-upload-input"
-              />
+          <div className="flex flex-wrap gap-2">
+            {canAddShipment && (
               <Button
-                onClick={() => document.getElementById('bulk-upload-input')?.click()}
-                disabled={uploading}
+                onClick={() => setShowAddShipment(true)}
                 className="bg-blue-600 hover:bg-blue-700"
               >
-                {uploading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4 mr-2" />
-                    Bulk Update
-                  </>
-                )}
+                <Plus className="h-4 w-4 mr-2" />
+                Add New Shipment
               </Button>
-            </>
+            )}
+            {canImportShipments && (
+              <Button
+                onClick={downloadTemplate}
+                variant="outline"
+                className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download Template
+              </Button>
+            )}
+            {canExportShipments && (
+              <Button
+                onClick={exportFilteredData}
+                variant="outline"
+                className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export Data
+              </Button>
+            )}
+            {canBulkShipments && (
+              <>
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleBulkUpload}
+                  className="hidden"
+                  disabled={uploading}
+                  id="bulk-upload-input"
+                />
+                <Button
+                  onClick={() => document.getElementById('bulk-upload-input')?.click()}
+                  disabled={uploading}
+                  className="bg-blue-600 hover:bg-blue-700"
+                >
+                  {uploading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Uploading...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="h-4 w-4 mr-2" />
+                      Bulk Update
+                    </>
+                  )}
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
@@ -3654,6 +3674,7 @@ function ShipmentsPageContent() {
                                       </>
                                     ) : (
                                       <>
+                                        {canEditShipment && (
                                         <Button
                                           variant="outline"
                                           size="sm"
@@ -3663,6 +3684,7 @@ function ShipmentsPageContent() {
                                           <Edit2 className="h-4 w-4 mr-1" />
                                           Edit
                                         </Button>
+                                        )}
                                         <Button
                                           variant="outline"
                                           size="sm"
@@ -3879,10 +3901,12 @@ function ShipmentsPageContent() {
                                 </>
                               ) : (
                                 <>
+                                  {canEditShipment && (
                                   <Button variant="outline" size="sm" onClick={() => handleEdit(shipment)} className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100">
                                     <Edit2 className="h-4 w-4 mr-1" />
                                     Edit
                                   </Button>
+                                  )}
                                   <Button variant="outline" size="sm" onClick={() => handleViewLoadingPorts(shipment)} className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
                                     <Ship className="h-4 w-4 mr-1" />
                                     Ports

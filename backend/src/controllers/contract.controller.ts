@@ -2,6 +2,12 @@ import { Response } from 'express';
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
+import {
+  appendColumnFiltersBase,
+  appendGlobalSearchBase,
+  parseColumnFiltersQuery,
+} from '../utils/contractListFilters';
+import { CONTRACTS_LIST_OUTER_SQL } from './contractsListOuterSql';
 
 export const getContracts = async (req: AuthRequest, res: Response) => {
   try {
@@ -79,64 +85,10 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
         WHERE 1=1
         GROUP BY c.contract_id
-      )
-      SELECT
-        base.contract_id,
-        base.id,
-        base.buyer,
-        COALESCE(NULLIF(TRIM(base.company_name), ''), COALESCE(base.latest_spd_data->'raw'->>'Buyer', base.latest_spd_data->>'Buyer')) AS company_name,
-        base.supplier,
-        base.group_name,
-        base.product,
-        base.quantity_ordered,
-        base.unit,
-        base.contract_date,
-        base.delivery_start_date,
-        base.delivery_end_date,
-        base.contract_value,
-        base.unit_price,
-        base.currency,
-        base.status,
-        base.incoterm,
-        COALESCE(NULLIF(TRIM(base.transport_mode), ''), base.latest_spd_data->'contract'->>'transport_mode', base.latest_spd_data->'contract'->>'sea_land', base.latest_spd_data->'raw'->>'Sea / Land', base.latest_spd_data->'raw'->>'Sea_Land', '') AS transport_mode,
-        base.source_type,
-        base.contract_type,
-        base.logistics_classification,
-        base.po_classification,
-        base.cargo_readiness_date,
-        base.created_at,
-        base.po_numbers,
-        base.sto_number,
-        base.sto_numbers_agg AS sto_numbers,
-        base.total_sto_quantity,
-        (base.quantity_ordered - COALESCE(base.total_sto_quantity, 0))::numeric AS outstanding_quantity,
-        base.po_count,
-        base.sto_count,
-        COALESCE(base.latest_spd_data->'contract'->>'company_code', base.latest_spd_data->'raw'->>'Company Code', base.latest_spd_data->'raw'->>'company code', base.latest_spd_data->>'Company Code', base.latest_spd_data->>'company code') AS company_code,
-        COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag') AS b2b_flag,
-        COALESCE(base.latest_spd_data->'contract'->>'contract_reference_po', base.latest_spd_data->>'CONTRACT REFF PO') AS contract_reference_po,
-        COALESCE(base.latest_spd_data->'raw'->>'Contract Ext No', base.latest_spd_data->>'Contract Ext No') AS contract_ext_no,
-        COALESCE(base.latest_spd_data->'contract'->>'ltc_spot', base.contract_type::text) AS lt_spot,
-        base.latest_spd_data->'contract'->>'status' AS import_status,
-        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'due_date_payment'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Due Date Payment'), ''), NULLIF(trim(base.latest_spd_data->>'due date payment'), '')) AS due_date_payment_raw,
-        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date'), ''), NULLIF(trim(base.latest_spd_data->>'dp date'), '')) AS dp_date_raw,
-        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date'), ''), NULLIF(trim(base.latest_spd_data->>'payoff date'), '')) AS payoff_date_raw,
-        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date_deviation_days'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date Deviation (Days) DP Date - Due Date'), '')) AS dp_date_deviation_raw,
-        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date_deviation_days'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date Deviation (Days) Payoff Date - Due Date'), '')) AS payoff_date_deviation_raw,
-        (SELECT p.payment_due_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS due_date_payment_fb,
-        (SELECT p.dp_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS dp_date_fb,
-        (SELECT p.payoff_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS payoff_date_fb,
-        (SELECT (p.dp_date::date - p.payment_due_date::date) FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id AND p.dp_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS dp_date_deviation_fb,
-        (SELECT (p.payoff_date::date - p.payment_due_date::date) FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id AND p.payoff_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS payoff_date_deviation_fb,
-        (SELECT COUNT(*) FROM trucking_operations t WHERE t.contract_id = base.id) AS trucking_count,
-        (SELECT COUNT(*) FROM shipments s WHERE s.contract_id = base.id) AS shipment_count,
-        (SELECT COUNT(*) FROM documents d WHERE d.contract_id = base.id) AS document_count,
-        base.first_trucking_start_date,
-        base.last_trucking_completion_date,
-        base.first_ata_vessel_completed_loading,
-        base.last_ata_vessel_complete_discharge
-      FROM base
-      WHERE 1=1
+      ),
+      filtered AS (
+        SELECT * FROM base
+        WHERE 1=1
     `;
     const queryParams: any[] = [];
     let paramIndex = 1;
@@ -228,10 +180,39 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       queryText += ` AND ${effectiveTransportExpr} LIKE 'LAND%' AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = base.id)`;
     }
 
-    queryText += ` ORDER BY base.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
-    queryParams.push(Number(limit), offset);
+    const globalSearch =
+      typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';
+    const colFilters = parseColumnFiltersQuery((req.query as any).columnFilters);
 
-    const result = await query(queryText, queryParams);
+    const searchFrag = appendGlobalSearchBase(globalSearch, paramIndex);
+    queryText += searchFrag.sql;
+    queryParams.push(...searchFrag.params);
+    paramIndex = searchFrag.nextIndex;
+
+    const colFrag = appendColumnFiltersBase(colFilters, paramIndex);
+    queryText += colFrag.sql;
+    queryParams.push(...colFrag.params);
+    paramIndex = colFrag.nextIndex;
+
+    const limitParam = paramIndex;
+    const offsetParam = paramIndex + 1;
+    const filteredClosedAndPage = `
+      )
+      , page AS (
+        SELECT * FROM filtered
+        ORDER BY created_at DESC NULLS LAST
+        LIMIT $${limitParam} OFFSET $${offsetParam}
+      )
+`;
+    const listQuery = queryText + filteredClosedAndPage + CONTRACTS_LIST_OUTER_SQL;
+    const listParams = [...queryParams, Number(limit), offset];
+    const countQuery = `${queryText}) SELECT COUNT(*)::int AS count FROM filtered`;
+    const countParams = [...queryParams];
+
+    const [result, countResult] = await Promise.all([
+      query(listQuery, listParams),
+      query(countQuery, countParams),
+    ]);
 
     const due = (d: unknown): Date | null => {
       if (d == null) return null;
@@ -467,292 +448,17 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       } : null
     });
 
-    // Get total count (count distinct contract_ids)
-    let countQuery = ''
-    const countParams: any[] = [];
-    
-    if (outstanding === 'true') {
-      // For outstanding, we need to use a subquery with GROUP BY and HAVING
-      countQuery = `
-        SELECT COUNT(*) as count FROM (
-          SELECT c.contract_id
-          FROM contracts c
-          WHERE 1=1
-      `;
-      let countParamIndex = 1;
-
-      if (contractIdFilter) {
-        countQuery += ` AND c.contract_id = $${countParamIndex}`;
-        countParams.push(contractIdFilter);
-        countParamIndex++;
-      }
-      
-      const outStatusNorm = typeof status === 'string' ? status.trim() : '';
-      if (outStatusNorm && outStatusNorm !== 'All Status' && outStatusNorm.toLowerCase() !== 'all') {
-        if (outStatusNorm === 'Open' || outStatusNorm === 'ACTIVE') {
-          countQuery += ` AND (
-            EXISTS (
-              SELECT 1 FROM sap_processed_data spd 
-              WHERE spd.contract_number = c.contract_id 
-              AND (spd.data->'contract'->>'status' = 'Open' OR UPPER(spd.data->'contract'->>'status') = 'ACTIVE')
-              ORDER BY spd.created_at DESC LIMIT 1
-            )
-            OR (
-              NOT EXISTS (
-                SELECT 1 FROM sap_processed_data spd 
-                WHERE spd.contract_number = c.contract_id
-              )
-              AND c.status = 'ACTIVE'
-            )
-          )`;
-        } else if (outStatusNorm === 'Close' || outStatusNorm === 'CLOSE') {
-          countQuery += ` AND (
-            EXISTS (
-              SELECT 1 FROM sap_processed_data spd 
-              WHERE spd.contract_number = c.contract_id 
-              AND (
-                spd.data->'contract'->>'status' = 'Close' 
-                OR UPPER(spd.data->'contract'->>'status') IN ('CLOSE', 'COMPLETED', 'CLOSED')
-              )
-              ORDER BY spd.created_at DESC LIMIT 1
-            )
-            OR (
-              NOT EXISTS (
-                SELECT 1 FROM sap_processed_data spd 
-                WHERE spd.contract_number = c.contract_id
-              )
-              AND c.status IN ('CLOSE', 'COMPLETED', 'CLOSED')
-            )
-          )`;
-        } else {
-          countQuery += ` AND (c.status = $${countParamIndex} OR EXISTS (
-            SELECT 1 FROM sap_processed_data spd 
-            WHERE spd.contract_number = c.contract_id 
-            AND spd.data->'contract'->>'status' = $${countParamIndex}
-            ORDER BY spd.created_at DESC LIMIT 1
-          ))`;
-          countParams.push(outStatusNorm);
-          countParamIndex++;
-        }
-      }
-
-      if (supplier) {
-        countQuery += ` AND c.supplier ILIKE $${countParamIndex}`;
-        countParams.push(`%${supplier}%`);
-        countParamIndex++;
-      }
-
-      if (buyer) {
-        countQuery += ` AND c.buyer ILIKE $${countParamIndex}`;
-        countParams.push(`%${buyer}%`);
-        countParamIndex++;
-      }
-
-      if (transportMode) {
-        countQuery += ` AND UPPER(c.transport_mode) = $${countParamIndex}`;
-        countParams.push(String(transportMode).toUpperCase());
-        countParamIndex++;
-      }
-
-      if (dateFrom) {
-        countQuery += ` AND c.contract_date >= $${countParamIndex}`;
-        countParams.push(dateFrom);
-        countParamIndex++;
-      }
-
-      if (dateTo) {
-        countQuery += ` AND c.contract_date <= $${countParamIndex}`;
-        countParams.push(dateTo);
-        countParamIndex++;
-      }
-
-      if (unassigned === 'sea') {
-        countQuery += ` AND UPPER(TRIM(COALESCE(NULLIF(TRIM(c.transport_mode), ''), (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), ''))) LIKE 'SEA%' AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = c.id)`;
-      } else if (unassigned === 'land') {
-        countQuery += ` AND UPPER(TRIM(COALESCE(NULLIF(TRIM(c.transport_mode), ''), (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), ''))) LIKE 'LAND%' AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = c.id)`;
-      }
-      
-      countQuery += `
-          GROUP BY c.contract_id
-          HAVING COALESCE(MAX(c.quantity_ordered) - COALESCE((SELECT SUM(CAST(REPLACE(REPLACE(data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
-             FROM sap_processed_data 
-             WHERE contract_number = c.contract_id 
-             AND sto_number IS NOT NULL 
-             AND data->'contract'->>'sto_quantity' IS NOT NULL), 0), MAX(c.quantity_ordered)) > 0`;
-      
-      // Add company_code and b2b_flag filters for outstanding query
-      if (companyCode) {
-        countQuery += ` AND EXISTS (
-          SELECT 1 FROM sap_processed_data spd 
-          WHERE spd.contract_number = c.contract_id 
-          AND (
-            COALESCE(spd.data->'contract'->>'company_code', '') = $${countParamIndex}
-            OR COALESCE(spd.data->'raw'->>'Company Code', '') = $${countParamIndex}
-            OR COALESCE(spd.data->'raw'->>'company code', '') = $${countParamIndex}
-            OR COALESCE(spd.data->>'Company Code', '') = $${countParamIndex}
-            OR COALESCE(spd.data->>'company code', '') = $${countParamIndex}
-          )
-          ORDER BY spd.created_at DESC LIMIT 1
-        )`;
-        countParams.push(companyCode);
-        countParamIndex++;
-      }
-      
-      if (b2bFlag) {
-        countQuery += ` AND EXISTS (
-          SELECT 1 FROM sap_processed_data spd 
-          WHERE spd.contract_number = c.contract_id 
-          AND (
-            COALESCE(spd.data->'contract'->>'contract_type', '') = $${countParamIndex}
-            OR COALESCE(spd.data->>'B2B Flag', '') = $${countParamIndex}
-          )
-          ORDER BY spd.created_at DESC LIMIT 1
-        )`;
-        countParams.push(b2bFlag);
-        countParamIndex++;
-      }
-      
-      countQuery += `
-        ) AS outstanding_contracts
-      `;
-    } else {
-      countQuery = 'SELECT COUNT(DISTINCT c.contract_id) as count FROM contracts c WHERE 1=1';
-      let countParamIndex = 1;
-
-      if (contractIdFilter) {
-        countQuery += ` AND c.contract_id = $${countParamIndex}`;
-        countParams.push(contractIdFilter);
-        countParamIndex++;
-      }
-      
-      const countStatusNorm = typeof status === 'string' ? status.trim() : '';
-      if (countStatusNorm && countStatusNorm !== 'All Status' && countStatusNorm.toLowerCase() !== 'all') {
-        if (countStatusNorm === 'Open' || countStatusNorm === 'ACTIVE') {
-          countQuery += ` AND (
-            EXISTS (
-              SELECT 1 FROM sap_processed_data spd 
-              WHERE spd.contract_number = c.contract_id 
-              AND (spd.data->'contract'->>'status' = 'Open' OR UPPER(spd.data->'contract'->>'status') = 'ACTIVE')
-              ORDER BY spd.created_at DESC LIMIT 1
-            )
-            OR (
-              NOT EXISTS (
-                SELECT 1 FROM sap_processed_data spd 
-                WHERE spd.contract_number = c.contract_id
-              )
-              AND c.status = 'ACTIVE'
-            )
-          )`;
-        } else if (countStatusNorm === 'Close' || countStatusNorm === 'CLOSE') {
-          countQuery += ` AND (
-            EXISTS (
-              SELECT 1 FROM sap_processed_data spd 
-              WHERE spd.contract_number = c.contract_id 
-              AND (
-                spd.data->'contract'->>'status' = 'Close' 
-                OR UPPER(spd.data->'contract'->>'status') IN ('CLOSE', 'COMPLETED', 'CLOSED')
-              )
-              ORDER BY spd.created_at DESC LIMIT 1
-            )
-            OR (
-              NOT EXISTS (
-                SELECT 1 FROM sap_processed_data spd 
-                WHERE spd.contract_number = c.contract_id
-              )
-              AND c.status IN ('CLOSE', 'COMPLETED', 'CLOSED')
-            )
-          )`;
-        } else {
-          countQuery += ` AND (c.status = $${countParamIndex} OR EXISTS (
-            SELECT 1 FROM sap_processed_data spd 
-            WHERE spd.contract_number = c.contract_id 
-            AND spd.data->'contract'->>'status' = $${countParamIndex}
-            ORDER BY spd.created_at DESC LIMIT 1
-          ))`;
-          countParams.push(countStatusNorm);
-          countParamIndex++;
-        }
-      }
-
-      if (supplier) {
-        countQuery += ` AND c.supplier ILIKE $${countParamIndex}`;
-        countParams.push(`%${supplier}%`);
-        countParamIndex++;
-      }
-
-      if (buyer) {
-        countQuery += ` AND c.buyer ILIKE $${countParamIndex}`;
-        countParams.push(`%${buyer}%`);
-        countParamIndex++;
-      }
-
-      if (dateFrom) {
-        countQuery += ` AND c.contract_date >= $${countParamIndex}`;
-        countParams.push(dateFrom);
-        countParamIndex++;
-      }
-
-      if (dateTo) {
-        countQuery += ` AND c.contract_date <= $${countParamIndex}`;
-        countParams.push(dateTo);
-        countParamIndex++;
-      }
-
-      if (unassigned === 'sea') {
-        countQuery += ` AND UPPER(TRIM(COALESCE(NULLIF(TRIM(c.transport_mode), ''), (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), ''))) LIKE 'SEA%' AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = c.id)`;
-      } else if (unassigned === 'land') {
-        countQuery += ` AND UPPER(TRIM(COALESCE(NULLIF(TRIM(c.transport_mode), ''), (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC LIMIT 1), ''))) LIKE 'LAND%' AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = c.id)`;
-      }
-      
-      // For non-outstanding queries, we need GROUP BY if we have companyCode or b2bFlag filters
-      if (companyCode || b2bFlag) {
-        countQuery += ` GROUP BY c.contract_id`;
-      }
-      
-      // Add company_code and b2b_flag filters to count query
-      if (companyCode) {
-        countQuery += ` HAVING EXISTS (
-          SELECT 1 FROM sap_processed_data spd 
-          WHERE spd.contract_number = c.contract_id 
-          AND (
-            COALESCE(spd.data->'contract'->>'company_code', '') = $${countParamIndex}
-            OR COALESCE(spd.data->'raw'->>'Company Code', '') = $${countParamIndex}
-            OR COALESCE(spd.data->'raw'->>'company code', '') = $${countParamIndex}
-            OR COALESCE(spd.data->>'Company Code', '') = $${countParamIndex}
-            OR COALESCE(spd.data->>'company code', '') = $${countParamIndex}
-          )
-          ORDER BY spd.created_at DESC LIMIT 1
-        )`;
-        countParams.push(companyCode);
-        countParamIndex++;
-      }
-      
-      if (b2bFlag) {
-        countQuery += ` HAVING EXISTS (
-          SELECT 1 FROM sap_processed_data spd 
-          WHERE spd.contract_number = c.contract_id 
-          AND (
-            COALESCE(spd.data->'contract'->>'contract_type', '') = $${countParamIndex}
-            OR COALESCE(spd.data->>'B2B Flag', '') = $${countParamIndex}
-          )
-          ORDER BY spd.created_at DESC LIMIT 1
-        )`;
-        countParams.push(b2bFlag);
-        countParamIndex++;
-      }
-    }
-
-    const countResult = await query(countQuery, countParams);
+    const totalCount = Number(countResult.rows[0]?.count ?? 0);
 
     res.json({
       success: true,
       data: {
         contracts: result.rows,
         pagination: {
-          total: parseInt(countResult.rows[0].count),
+          total: totalCount,
           page: Number(page),
           limit: Number(limit),
-          totalPages: Math.ceil(parseInt(countResult.rows[0].count) / Number(limit)),
+          totalPages: Math.ceil(totalCount / Number(limit)),
         },
       },
     });
