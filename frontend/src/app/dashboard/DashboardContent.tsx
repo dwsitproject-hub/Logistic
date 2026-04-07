@@ -130,6 +130,25 @@ interface ProductIncotermRow {
   supplier_count: number
 }
 
+interface ProductIncotermPlantSourceRow extends ProductIncotermRow {
+  plant_site: string
+  source_type: string
+  lt_spot: string
+}
+
+/** Sort management breakdown rows: Incoterm → Plant/Site → Source Type → LT/SPOT (case-insensitive). */
+function compareProductBreakdownRows(a: ProductIncotermPlantSourceRow, b: ProductIncotermPlantSourceRow): number {
+  const norm = (v: string | undefined) => (v || 'Blank').trim() || 'Blank'
+  const cmp = (x: string, y: string) => x.localeCompare(y, undefined, { sensitivity: 'base', numeric: true })
+  let d = cmp(norm(a.incoterm), norm(b.incoterm))
+  if (d !== 0) return d
+  d = cmp(norm(a.plant_site), norm(b.plant_site))
+  if (d !== 0) return d
+  d = cmp(norm(a.source_type), norm(b.source_type))
+  if (d !== 0) return d
+  return cmp(norm(a.lt_spot), norm(b.lt_spot))
+}
+
 interface PlantQuantity {
   plant_location: string
   contract_count: number
@@ -199,6 +218,9 @@ type DrilldownContractRow = {
   quantity_ordered?: number
   unit?: string
   incoterm?: string
+  plant_site?: string
+  source_type?: string
+  lt_spot?: string
   loading_site?: string
   unloading_site?: string
   contract_date?: string
@@ -213,6 +235,12 @@ type DrilldownContractRow = {
   status?: string
   delivered_quantity?: number
   outstanding_quantity?: number
+  total_delay?: number | null
+  cargo_readiness_issue?: number | null
+  aging_os?: number | null
+  delivery_issue?: number | null
+  dp_date_deviation_days?: number | null
+  payoff_date_deviation_days?: number | null
   log_cycle_days?: number | null
   cash_cycle_days?: number | null
 }
@@ -463,6 +491,22 @@ function SearchableMultiSelect({
 }
 
 export function DashboardContent({ pageTitle }: { pageTitle: string }) {
+  const isManagementDashboard = String(pageTitle || '')
+    .toLowerCase()
+    .includes('management')
+
+  const todayIso = (() => {
+    const d = new Date()
+    const yyyy = d.getFullYear()
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    return `${yyyy}-${mm}-${dd}`
+  })()
+  const yearStartIso = (() => {
+    const d = new Date()
+    const yyyy = d.getFullYear()
+    return `${yyyy}-01-01`
+  })()
   const router = useRouter()
   const [stats, setStats] = useState<DashboardStats>({
     contracts: {
@@ -490,6 +534,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
   const [topTruckingOwners, setTopTruckingOwners] = useState<TopPerformer[]>([])
   const [topVessels, setTopVessels] = useState<TopPerformer[]>([])
   const [productIncotermRows, setProductIncotermRows] = useState<ProductIncotermRow[]>([])
+  const [productIncotermBreakdownRows, setProductIncotermBreakdownRows] = useState<ProductIncotermPlantSourceRow[]>([])
   const [plantQuantities, setPlantQuantities] = useState<PlantQuantity[]>([])
   const [plantIncotermRows, setPlantIncotermRows] = useState<PlantIncotermRow[]>([])
   const [statsLoading, setStatsLoading] = useState(true)
@@ -553,8 +598,9 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
   const [paySelectedPlantSite, setPaySelectedPlantSite] = useState<string | null>(null)
   
   // Filter states
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  // Default: Year-to-date to keep dashboard fast (user can Clear Filters for all-time).
+  const [dateFrom, setDateFrom] = useState(yearStartIso)
+  const [dateTo, setDateTo] = useState(todayIso)
   const [selectedPlantFilter, setSelectedPlantFilter] = useState<string[]>([])
   const [selectedSupplier, setSelectedSupplier] = useState<string[]>([])
   const [availablePlants, setAvailablePlants] = useState<string[]>([])
@@ -571,15 +617,28 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
   const [loadingAiInsight, setLoadingAiInsight] = useState(false)
   const [aiInsightError, setAiInsightError] = useState<string | null>(null)
 
+  // In dev, React StrictMode runs effects twice; guard to prevent duplicate network bursts.
+  const didInit = useRef(false)
+  const lastDashboardFetchKey = useRef<string>('')
   useEffect(() => {
-    fetchDashboardData()
-    fetchAiInsight(false)
+    if (didInit.current) return
+    didInit.current = true
+    // AI insight is non-critical; load on-demand.
     fetchFilterOptions()
   }, [])
 
   useEffect(() => {
+    const key = JSON.stringify({
+      dateFrom,
+      dateTo,
+      plants: selectedPlantFilter,
+      suppliers: selectedSupplier,
+      products: selectedProductFilter,
+      groups: selectedGroupFilter,
+    })
+    if (lastDashboardFetchKey.current === key) return
+    lastDashboardFetchKey.current = key
     fetchDashboardData()
-    fetchAiInsight(false)
   }, [dateFrom, dateTo, selectedPlantFilter, selectedSupplier, selectedProductFilter, selectedGroupFilter])
 
   const fetchDashboardData = async () => {
@@ -600,7 +659,61 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       const queryString = params.toString()
       const urlSuffix = queryString ? `?${queryString}` : ''
 
-      // 1) Stats first — KPI row becomes interactive as soon as this returns (often under ~2s)
+      // Management Dashboard: show only "Contract Quantity by Product (Incoterm mix)"
+      if (isManagementDashboard) {
+        setStatsLoading(false)
+        setStats((prev) => prev) // keep current stats state untouched
+        try {
+          const res = await api.get(`/dashboard/contract-quantity-by-product-incoterm-plant-source${urlSuffix}`)
+          const rows = (res.data.data || []) as ProductIncotermPlantSourceRow[]
+          setProductIncotermBreakdownRows(rows)
+          // Build the existing incoterm-mix dataset by collapsing the extra dimensions.
+          const keyToAgg = new Map<string, ProductIncotermRow>()
+          for (const r of rows) {
+            const k = `${r.product}||${r.incoterm}`
+            const cur = keyToAgg.get(k)
+            if (!cur) {
+              keyToAgg.set(k, {
+                product: r.product,
+                incoterm: r.incoterm,
+                contract_count: Number(r.contract_count) || 0,
+                total_quantity: Number(r.total_quantity) || 0,
+                completed_quantity: Number(r.completed_quantity) || 0,
+                outstanding_quantity: Number(r.outstanding_quantity) || 0,
+                outstanding_payment_quantity: Number(r.outstanding_payment_quantity) || 0,
+                avg_unit_price: Number(r.avg_unit_price) || 0,
+                total_contract_value: Number(r.total_contract_value) || 0,
+                supplier_count: Number(r.supplier_count) || 0,
+              })
+            } else {
+              cur.contract_count += Number(r.contract_count) || 0
+              cur.total_quantity += Number(r.total_quantity) || 0
+              cur.completed_quantity += Number(r.completed_quantity) || 0
+              cur.outstanding_quantity += Number(r.outstanding_quantity) || 0
+              cur.outstanding_payment_quantity += Number(r.outstanding_payment_quantity) || 0
+              cur.total_contract_value += Number(r.total_contract_value) || 0
+              cur.supplier_count += Number(r.supplier_count) || 0
+              // avg_unit_price recomputed later when rendering (using total_contract_value / total_quantity)
+              cur.avg_unit_price = 0
+            }
+          }
+          setProductIncotermRows(Array.from(keyToAgg.values()))
+        } catch (err: any) {
+          console.error('Management dashboard widget failed:', err)
+          const msg =
+            err?.response?.data?.error?.message ||
+            err?.message ||
+            'Failed to load management dashboard data. Check that the backend is running and you are logged in.'
+          setError(msg)
+          setProductIncotermBreakdownRows([])
+          setProductIncotermRows([])
+        } finally {
+          setWidgetsLoading(false)
+        }
+        return
+      }
+
+      // 1) Stats first — KPI row becomes interactive as soon as this returns
       const statsRes = await api.get(`/dashboard/stats${urlSuffix}`)
       setStats(statsRes.data.data)
       setStatsLoading(false)
@@ -1857,6 +1970,12 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
           </div>
         </div>
 
+        {error && (
+          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
+            {error}
+          </div>
+        )}
+
         {/* AI Logistics Insight */}
         <Card data-tour="tour-ai-insight">
           <CardHeader className="flex flex-row items-center justify-between space-y-0">
@@ -2007,7 +2126,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
         )}
 
         {/* Hint when filters exclude all data */}
-        {!statsLoading && stats.contracts.total === 0 && stats.shipments.total === 0 && stats.trucking.total === 0 && stats.finance.total === 0 && (dateFrom || dateTo || selectedPlantFilter.length > 0 || selectedSupplier.length > 0 || selectedProductFilter.length > 0 || selectedGroupFilter.length > 0) && (
+        {!isManagementDashboard && !statsLoading && stats.contracts.total === 0 && stats.shipments.total === 0 && stats.trucking.total === 0 && stats.finance.total === 0 && (dateFrom || dateTo || selectedPlantFilter.length > 0 || selectedSupplier.length > 0 || selectedProductFilter.length > 0 || selectedGroupFilter.length > 0) && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 flex items-center justify-between gap-4">
             <p className="text-sm text-amber-800">
               No data matches your current filters. Try clearing filters to see all data.
@@ -2018,6 +2137,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
           </div>
         )}
 
+        {!isManagementDashboard && (
+        <>
         {/* Performance Cards (management-friendly) */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" data-tour="tour-dashboard-kpis">
           {/* Quantity Performance (first slot — former Contract Performance) */}
@@ -2315,9 +2436,11 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
             </CardContent>
           </Card>
         </div>
+        </>
+        )}
 
         {/* New Dashboard Widgets */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className={`grid grid-cols-1 ${isManagementDashboard ? '' : 'lg:grid-cols-2'} gap-6`}>
           {/* Contract Quantity by Product Materials */}
           <Card className="hover:shadow-lg transition-shadow">
             <CardHeader className="flex flex-row items-center justify-between">
@@ -2326,7 +2449,19 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                   Contract Quantity by Product (Incoterm mix)
                   <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
                 </CardTitle>
-                <CardDescription>Top products with incoterm distribution</CardDescription>
+                <CardDescription>
+                  {isManagementDashboard ? (
+                    <span className="block space-y-1 text-left">
+                      <span className="block">Top products with incoterm distribution.</span>
+                      <span className="block text-muted-foreground text-[11px] leading-snug">
+                        Each product includes a full breakdown: Incoterm → Plant/Site → Source Type → LT/SPOT (same plant/site rules as the main Dashboard).
+                        Total Delay, Cargo Readiness Issue, Aging O/S, Delivery Issue, and DP/Payoff deviations are per contract — open any product or click a number in the breakdown to view them in the contracts list.
+                      </span>
+                    </span>
+                  ) : (
+                    'Top products with incoterm distribution'
+                  )}
+                </CardDescription>
               </div>
               <Layers className="h-5 w-5 text-gray-400" />
             </CardHeader>
@@ -2516,6 +2651,119 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                               formatValue={(v) => formatKg(v)}
                             />
                           </div>
+                          {isManagementDashboard && productIncotermBreakdownRows.length > 0 && (
+                            <div className="mt-2">
+                              <div
+                                className="rounded-lg border bg-gray-50 px-3 py-2"
+                                onClick={(e) => e.stopPropagation()}
+                                role="region"
+                                aria-label="Product breakdown by incoterm, plant, source type, and LT/SPOT"
+                              >
+                                <div className="text-xs font-medium text-gray-700 mb-2">
+                                  Breakdown: Incoterm → Plant/Site → Source Type → LT/SPOT
+                                </div>
+                                <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
+                                  <table className="w-full min-w-[900px] text-xs">
+                                    <thead className="text-gray-600">
+                                      <tr className="border-b">
+                                        <th className="py-2 pr-3 text-left font-medium">Incoterm</th>
+                                        <th className="py-2 pr-3 text-left font-medium">Plant/Site</th>
+                                        <th className="py-2 pr-3 text-left font-medium">Source Type</th>
+                                        <th className="py-2 pr-3 text-left font-medium">LT/SPOT</th>
+                                        <th className="py-2 pr-3 text-right font-medium">Contracts</th>
+                                        <th className="py-2 pr-3 text-right font-medium">Qty</th>
+                                        <th className="py-2 pr-3 text-right font-medium">Outstanding</th>
+                                        <th className="py-2 pr-3 text-right font-medium">Outstanding Payment</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y">
+                                      {productIncotermBreakdownRows
+                                        .filter((r) => (r.product || '') === p.product)
+                                        .slice()
+                                        .sort(compareProductBreakdownRows)
+                                        .map((r, i) => {
+                                          const incoterm = (r.incoterm || 'Blank').trim() || 'Blank'
+                                          const plantSite = (r.plant_site || 'Blank').trim() || 'Blank'
+                                          const sourceType = (r.source_type || 'Blank').trim() || 'Blank'
+                                          const ltSpot = (r.lt_spot || 'Blank').trim() || 'Blank'
+                                          const open = (extra?: Record<string, string>) =>
+                                            openProductContracts({
+                                              product: p.product,
+                                              title: `${p.product} — ${incoterm} — ${plantSite} — ${sourceType} — ${ltSpot}`,
+                                              extraParams: {
+                                                incoterm,
+                                                plantSite,
+                                                sourceType,
+                                                ltSpot,
+                                                ...(extra || {}),
+                                              },
+                                            })
+                                          return (
+                                          <tr key={`${r.product}-${r.incoterm}-${r.plant_site}-${r.source_type}-${r.lt_spot}-${i}`} className="hover:bg-white/60">
+                                            <td className="py-2 pr-3">{incoterm}</td>
+                                            <td className="py-2 pr-3">{plantSite}</td>
+                                            <td className="py-2 pr-3">{sourceType}</td>
+                                            <td className="py-2 pr-3">{ltSpot}</td>
+                                            <td className="py-2 pr-3 text-right tabular-nums">
+                                              <button
+                                                type="button"
+                                                className="font-semibold text-gray-900 hover:underline"
+                                                onClick={(e) => {
+                                                  e.stopPropagation()
+                                                  open()
+                                                }}
+                                              >
+                                                {formatNumber(Number(r.contract_count) || 0)}
+                                              </button>
+                                            </td>
+                                            <td className="py-2 pr-3 text-right tabular-nums">
+                                              <button
+                                                type="button"
+                                                className="font-semibold text-gray-900 hover:underline"
+                                                onClick={(e) => {
+                                                  e.stopPropagation()
+                                                  open()
+                                                }}
+                                              >
+                                                {formatKg(Number(r.total_quantity) || 0)}
+                                              </button>
+                                            </td>
+                                            <td className="py-2 pr-3 text-right tabular-nums text-orange-700">
+                                              <button
+                                                type="button"
+                                                className="font-semibold hover:underline"
+                                                onClick={(e) => {
+                                                  e.stopPropagation()
+                                                  open({ outstanding: 'true' })
+                                                }}
+                                              >
+                                                {formatKg(Number(r.outstanding_quantity) || 0)}
+                                              </button>
+                                            </td>
+                                            <td className="py-2 pr-3 text-right tabular-nums text-violet-700">
+                                              <button
+                                                type="button"
+                                                className="font-semibold hover:underline"
+                                                onClick={(e) => {
+                                                  e.stopPropagation()
+                                                  open({ outstanding: 'true', outstandingPayment: 'true' })
+                                                }}
+                                              >
+                                                {formatKg(Number(r.outstanding_payment_quantity) || 0)}
+                                              </button>
+                                            </td>
+                                          </tr>
+                                          )
+                                        })}
+                                    </tbody>
+                                  </table>
+                                  <div className="mt-1 text-[10px] text-gray-500">
+                                    Scroll to see all rows. Click any number to open the contracts list (includes delay, aging, and payment deviation columns).
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </button>
                       )
                     })
@@ -2525,6 +2773,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
             </CardContent>
           </Card>
 
+          {!isManagementDashboard && (
+          <>
           {/* Contract Amount by Product Materials */}
           <Card className="hover:shadow-lg transition-shadow">
             <CardHeader className="flex flex-row items-center justify-between">
@@ -2750,7 +3000,11 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
           </Card>
 
           {/* Incoterm mix is now integrated into Product card */}
+          </>
+          )}
 
+          {!isManagementDashboard && (
+          <>
           {/* Contract Quantity by Plant/Site */}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
@@ -2935,8 +3189,12 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               </div>
             </CardContent>
           </Card>
+          </>
+          )}
         </div>
 
+        {!isManagementDashboard && (
+        <>
         {/* Top Performers */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Top 5 Suppliers */}
@@ -3086,6 +3344,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
             </CardContent>
           </Card>
         </div>
+        </>
+        )}
 
         {/* Status Breakdown section removed per latest dashboard requirements */}
       </div>
@@ -3864,7 +4124,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                 ) : drilldownContracts.length === 0 ? (
                   <div className="text-center py-10 text-gray-500">No contracts found</div>
                 ) : drilldownView === 'details' ? (
-                  <table className="w-full min-w-[1400px] text-sm">
+                  <table className={`w-full text-sm ${isManagementDashboard ? 'min-w-[2200px]' : 'min-w-[1400px]'}`}>
                     <thead className="bg-gray-100">
                       <tr>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Contract ID</th>
@@ -3873,6 +4133,19 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Supplier</th>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Product</th>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Incoterm</th>
+                        {isManagementDashboard && (
+                          <>
+                            <th className="px-4 py-3 text-left font-medium text-gray-600">Plant/Site</th>
+                            <th className="px-4 py-3 text-left font-medium text-gray-600">Source Type</th>
+                            <th className="px-4 py-3 text-left font-medium text-gray-600">LT/SPOT</th>
+                            <th className="px-4 py-3 text-right font-medium text-gray-600">Total Delay</th>
+                            <th className="px-4 py-3 text-right font-medium text-gray-600">Cargo Readiness Issue</th>
+                            <th className="px-4 py-3 text-right font-medium text-gray-600">Aging O/S</th>
+                            <th className="px-4 py-3 text-right font-medium text-gray-600">Delivery Issue</th>
+                            <th className="px-4 py-3 text-right font-medium text-gray-600">DP Date Deviation (Days)</th>
+                            <th className="px-4 py-3 text-right font-medium text-gray-600">Payoff Date Deviation (Days)</th>
+                          </>
+                        )}
                         {showOutstandingPaymentColumns && (
                           <>
                             <th className="px-4 py-3 text-right font-medium text-gray-600">Contract Value</th>
@@ -3894,6 +4167,19 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                           <td className="px-4 py-3">{c.supplier || '-'}</td>
                           <td className="px-4 py-3">{c.product || '-'}</td>
                           <td className="px-4 py-3">{c.incoterm || '-'}</td>
+                          {isManagementDashboard && (
+                            <>
+                              <td className="px-4 py-3">{c.plant_site || '-'}</td>
+                              <td className="px-4 py-3">{c.source_type || '-'}</td>
+                              <td className="px-4 py-3">{c.lt_spot || '-'}</td>
+                              <td className="px-4 py-3 text-right tabular-nums">{c.total_delay ?? '-'}</td>
+                              <td className="px-4 py-3 text-right tabular-nums">{c.cargo_readiness_issue ?? '-'}</td>
+                              <td className="px-4 py-3 text-right tabular-nums">{c.aging_os ?? '-'}</td>
+                              <td className="px-4 py-3 text-right tabular-nums">{c.delivery_issue ?? '-'}</td>
+                              <td className="px-4 py-3 text-right tabular-nums">{c.dp_date_deviation_days ?? '-'}</td>
+                              <td className="px-4 py-3 text-right tabular-nums">{c.payoff_date_deviation_days ?? '-'}</td>
+                            </>
+                          )}
                           {showOutstandingPaymentColumns && (
                             <>
                               <td className="px-4 py-3 text-right tabular-nums">{money(c.contract_value ?? 0)}</td>

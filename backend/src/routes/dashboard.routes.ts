@@ -10,6 +10,7 @@ import {
   getPaymentsByStatus,
   getContractQuantityByProduct,
   getContractQuantityByProductIncoterm,
+  getContractQuantityByProductIncotermPlantSource,
   getContractQuantityByPlant,
   getContractQuantityByPlantIncoterm,
   getContractQuantityByIncoterm,
@@ -51,6 +52,7 @@ router.get('/payments', getPaymentsByStatus);
 // New dashboard widgets
 router.get('/contract-quantity-by-product', getContractQuantityByProduct);
 router.get('/contract-quantity-by-product-incoterm', getContractQuantityByProductIncoterm);
+router.get('/contract-quantity-by-product-incoterm-plant-source', getContractQuantityByProductIncotermPlantSource);
 router.get('/contract-quantity-by-plant', getContractQuantityByPlant);
 router.get('/contract-quantity-by-plant-incoterm', getContractQuantityByPlantIncoterm);
 router.get('/contract-quantity-by-incoterm', getContractQuantityByIncoterm);

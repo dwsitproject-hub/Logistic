@@ -37,7 +37,13 @@ export const CONTRACTS_LIST_OUTER_SQL = `
         base.sto_count,
         COALESCE(base.latest_spd_data->'contract'->>'company_code', base.latest_spd_data->'raw'->>'Company Code', base.latest_spd_data->'raw'->>'company code', base.latest_spd_data->>'Company Code', base.latest_spd_data->>'company code') AS company_code,
         COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag') AS b2b_flag,
-        COALESCE(base.latest_spd_data->'contract'->>'contract_reference_po', base.latest_spd_data->>'CONTRACT REFF PO') AS contract_reference_po,
+        COALESCE(
+          base.latest_spd_data->'contract'->>'contract_reference_po',
+          base.latest_spd_data->>'CONTRACT REFF PO',
+          base.latest_spd_data->>'Contract Reff PO Ini',
+          base.latest_spd_data->'raw'->>'Contract Reff PO Ini',
+          base.latest_spd_data->'raw'->>'CONTRACT REFF PO'
+        ) AS contract_reference_po,
         COALESCE(base.latest_spd_data->'raw'->>'Contract Ext No', base.latest_spd_data->>'Contract Ext No') AS contract_ext_no,
         COALESCE(base.latest_spd_data->'contract'->>'ltc_spot', base.contract_type::text) AS lt_spot,
         base.latest_spd_data->'contract'->>'status' AS import_status,

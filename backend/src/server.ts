@@ -34,6 +34,9 @@ import sapMasterV2Routes from './routes/sapMasterV2.routes';
 import supplierRoutes from './routes/supplier.routes';
 import productRoutes from './routes/product.routes';
 import companyRoutes from './routes/company.routes';
+import claimMutuRoutes from './routes/claimMutu.routes';
+import claimSusutRoutes from './routes/claimSusut.routes';
+import userPreferencesRoutes from './routes/userPreferences.routes';
 import activityRoutes from './routes/activity.routes';
 import agentAiRoutes from './routes/agentAi.routes';
 
@@ -117,6 +120,9 @@ app.use('/api/sap-master-v2', sapMasterV2Routes);
 app.use('/api/suppliers', supplierRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/companies', companyRoutes);
+app.use('/api/claim-mutu', claimMutuRoutes);
+app.use('/api/claim-susut', claimSusutRoutes);
+app.use('/api/user-preferences', userPreferencesRoutes);
 
 // Error handling
 app.use(notFoundHandler);

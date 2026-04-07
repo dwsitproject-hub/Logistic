@@ -70,6 +70,28 @@ interface Contract {
   company_name?: string
 }
 
+/** True when SAP B2B flag is set; do not use `contract_type || b2b_flag` (LT/SPOT lives in contract_type). */
+function isContractB2b(c: Pick<Contract, 'b2b_flag' | 'contract_type'>): boolean {
+  const contractType = String(c.contract_type || '').trim().toUpperCase()
+  const b2bFlag = String(c.b2b_flag || '').trim().toUpperCase()
+  return contractType === 'B2B' || b2bFlag === 'B2B'
+}
+
+/**
+ * B2B contracts: show Buyer in Parties the same as Company Name (display-only).
+ */
+function partiesBuyerDisplay(
+  c: Pick<Contract, 'buyer' | 'company_name' | 'b2b_flag' | 'contract_type'>,
+): string {
+  const isB2b = isContractB2b(c)
+  if (isB2b) {
+    const company = String(c.company_name || '').trim()
+    const buyer = String(c.buyer || '').trim()
+    return company || buyer || '-'
+  }
+  return String(c.buyer || '').trim() || '-'
+}
+
 interface DocumentItem {
   id: string
   document_type?: string
@@ -737,7 +759,7 @@ function ContractsPageContent() {
       return
     }
     const isOriginB2b =
-      String(selectedContract.contract_type || selectedContract.b2b_flag || '').toUpperCase() === 'B2B' &&
+      isContractB2b(selectedContract) &&
       String(selectedContract.contract_reference_po || '').trim() === ''
 
     if (!isOriginB2b) {
@@ -2153,7 +2175,7 @@ function ContractsPageContent() {
                                     </div>
                                     <div>
                                       <div className="text-gray-500">Buyer</div>
-                                      <div className="font-medium">{contract.buyer || '-'}</div>
+                                      <div className="font-medium">{partiesBuyerDisplay(contract)}</div>
                                     </div>
                                     <div>
                                       <div className="text-gray-500">Transport Mode</div>
@@ -2319,7 +2341,7 @@ function ContractsPageContent() {
                             </div>
                             <div>
                               <div className="text-gray-500">Buyer</div>
-                              <div className="font-medium">{contract.buyer || '-'}</div>
+                              <div className="font-medium">{partiesBuyerDisplay(contract)}</div>
                             </div>
                             <div>
                               <div className="text-gray-500">Transport Mode</div>
@@ -2534,7 +2556,7 @@ function ContractsPageContent() {
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Buyer</div>
-                        <div className="font-medium mt-1">{selectedContract.buyer}</div>
+                        <div className="font-medium mt-1">{partiesBuyerDisplay(selectedContract)}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Supplier</div>
@@ -2544,7 +2566,7 @@ function ContractsPageContent() {
                   </div>
 
                   {/* B2B Parties */}
-                  {(String(selectedContract.contract_type || selectedContract.b2b_flag || '').toUpperCase() === 'B2B' &&
+                  {(isContractB2b(selectedContract) &&
                     String(selectedContract.contract_reference_po || '').trim() === '') && (
                     <div>
                       <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">

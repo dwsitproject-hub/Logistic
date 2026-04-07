@@ -34,12 +34,80 @@ const plantSimilarity = (a: string, b: string): number => {
   return 1 - dp[n] / Math.max(m, n);
 };
 
+const ytdRange = () => {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return {
+    dateFrom: `${yyyy}-01-01`,
+    dateTo: `${yyyy}-${mm}-${dd}`,
+  };
+};
+
+const shouldPerfLog = () => {
+  const v = String(process.env.DASHBOARD_PERF_LOG || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+};
+
+/**
+ * Exclude B2B "child" contracts from dashboard aggregates:
+ * latest SAP row has B2B flag = B2B AND Contract Reff PO Ini (or mapped keys) is not blank.
+ * Requires alias `c` for `contracts` (e.g. `FROM contracts c`). No bind parameters.
+ */
+const DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL = `
+  AND COALESCE((
+    SELECT NOT (
+      UPPER(NULLIF(TRIM(COALESCE(
+        x.data->'contract'->>'contract_type',
+        x.data->>'B2B Flag',
+        x.data->'raw'->>'B2B Flag',
+        c.contract_type::text,
+        ''
+      )), '')) = 'B2B'
+      AND NULLIF(TRIM(COALESCE(
+        x.data->'contract'->>'contract_reference_po',
+        x.data->>'CONTRACT REFF PO',
+        x.data->>'Contract Reff PO Ini',
+        x.data->'raw'->>'Contract Reff PO Ini',
+        x.data->'raw'->>'CONTRACT REFF PO',
+        ''
+      )), '') IS NOT NULL
+    )
+    FROM sap_processed_data x
+    WHERE x.contract_number = c.contract_id
+    ORDER BY x.created_at DESC NULLS LAST
+    LIMIT 1
+  ), true)`;
+
+const perf = (req: AuthRequest, name: string) => {
+  const start = Date.now();
+  const marks: Array<{ label: string; ms: number }> = [];
+  const mark = (label: string) => {
+    marks.push({ label, ms: Date.now() - start });
+  };
+  const done = () => {
+    if (!shouldPerfLog()) return;
+    const totalMs = Date.now() - start;
+    logger.info('dashboard.perf', {
+      route: name,
+      totalMs,
+      marks,
+      userId: req.user?.id || null,
+    });
+  };
+  return { mark, done };
+};
+
 // Helper function to build filter key (stable representation of filters for caching AI insights)
 const buildFilterKey = (req: AuthRequest): { key: string; params: Record<string, unknown> } => {
   const { dateFrom, dateTo, plant, supplier, product, groupName, incoterm } = req.query;
+  const ytd = ytdRange();
+  const effDateFrom = dateFrom || ytd.dateFrom;
+  const effDateTo = dateTo || ytd.dateTo;
   const filters = {
-    dateFrom: dateFrom || null,
-    dateTo: dateTo || null,
+    dateFrom: effDateFrom || null,
+    dateTo: effDateTo || null,
     plant: toFilterArray(plant),
     supplier: toFilterArray(supplier),
     product: toFilterArray(product),
@@ -60,6 +128,11 @@ const buildFilterConditions = (req: AuthRequest): { contractFilter: string; ship
   let shipmentFilter = '';
   let truckingFilter = '';
 
+  // Default to YTD when client does not provide a date filter (dashboard performance baseline).
+  const ytd = ytdRange();
+  const effDateFrom = dateFrom || ytd.dateFrom;
+  const effDateTo = dateTo || ytd.dateTo;
+
   const plants = toFilterArray(plant);
   const suppliers = toFilterArray(supplier);
   const products = toFilterArray(product);
@@ -67,14 +140,14 @@ const buildFilterConditions = (req: AuthRequest): { contractFilter: string; ship
   const incoterms = toFilterArray(incoterm);
 
   // Contract date range filter
-  if (dateFrom) {
+  if (effDateFrom) {
     contractFilter += ` AND c.contract_date >= $${paramIndex}`;
-    params.push(dateFrom);
+    params.push(effDateFrom);
     paramIndex++;
   }
-  if (dateTo) {
+  if (effDateTo) {
     contractFilter += ` AND c.contract_date <= $${paramIndex}`;
-    params.push(dateTo);
+    params.push(effDateTo);
     paramIndex++;
   }
 
@@ -148,75 +221,45 @@ const buildFilterConditions = (req: AuthRequest): { contractFilter: string; ship
     )`;
   }
 
+  contractFilter += DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL;
+
   return { contractFilter, shipmentFilter, truckingFilter, params };
 };
 
 export const getDashboardStats = async (req: AuthRequest, res: Response) => {
   try {
+    const p = perf(req, 'GET /dashboard/stats');
     const { contractFilter, shipmentFilter, truckingFilter, params } = buildFilterConditions(req);
     
     // Get basic contract statistics (status derived from latest SAP data where available)
     const contractsStats = await query(`
-      WITH latest_spd AS (
-        SELECT DISTINCT ON (spd.contract_number)
-          spd.contract_number,
-          spd.data
-        FROM sap_processed_data spd
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      )
       SELECT 
         COUNT(DISTINCT c.contract_id) as total_contracts,
-        -- Open contracts (status = Open/ACTIVE from SAP, fallback to contracts.status)
+        -- Fast path: rely on contracts.status (kept in sync by SAP distribution).
         COUNT(DISTINCT c.contract_id) FILTER (
           WHERE
-            (
-              l.data->'contract'->>'status' = 'Open'
-              OR UPPER(l.data->'contract'->>'status') = 'ACTIVE'
-            )
-            OR (
-              l.data IS NULL
-              AND UPPER(COALESCE(c.status, '')) IN ('ACTIVE', 'OPEN')
-            )
+            UPPER(COALESCE(c.status, '')) IN ('ACTIVE', 'OPEN')
         ) as open_contracts,
-        -- Closed contracts (Close/CLOSED/COMPLETED/CANCELLED from SAP, fallback to contracts.status)
+        -- Closed contracts
         COUNT(DISTINCT c.contract_id) FILTER (
           WHERE
-            (
-              l.data->'contract'->>'status' = 'Close'
-              OR UPPER(l.data->'contract'->>'status') IN ('CLOSE', 'CLOSED', 'COMPLETED', 'CANCELLED')
-            )
-            OR (
-              l.data IS NULL
-              AND UPPER(COALESCE(c.status, '')) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'CANCELLED')
-            )
+            UPPER(COALESCE(c.status, '')) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'CANCELLED')
         ) as closed_contracts
       FROM contracts c
-      LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       WHERE 1=1 ${contractFilter}
     `, params);
+    p.mark('contractsStats');
 
     // Open contract breakdown:
     // - outstanding_logistics: has shipment/trucking work not completed/cancelled yet
     // - outstanding_payment: has at least one payment with blank payoff_date
     const openBreakdownStats = await query(`
-      WITH latest_spd AS (
-        SELECT DISTINCT ON (spd.contract_number)
-          spd.contract_number,
-          spd.data
-        FROM sap_processed_data spd
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      ),
-      open_contracts AS (
+      WITH open_contracts AS (
         SELECT c.id, c.contract_id
         FROM contracts c
-        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
         WHERE 1=1 ${contractFilter}
           AND (
-            (l.data IS NOT NULL AND (
-              l.data->'contract'->>'status' = 'Open'
-              OR UPPER(l.data->'contract'->>'status') = 'ACTIVE'
-            ))
-            OR (l.data IS NULL AND UPPER(COALESCE(c.status, '')) IN ('OPEN', 'ACTIVE'))
+            UPPER(COALESCE(c.status, '')) IN ('OPEN', 'ACTIVE')
           )
       )
       SELECT
@@ -244,6 +287,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         ) AS open_outstanding_payment
       FROM open_contracts oc
     `, params);
+    p.mark('openBreakdownStats');
 
     // Quantity statistics across all contracts
     // Total Quantity = sum of contract quantities
@@ -287,6 +331,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
       FROM contract_qty q
       LEFT JOIN payment_status_per_contract ps ON ps.contract_id = q.contract_pk
     `, params);
+    p.mark('outstandingStats');
 
     // Get shipment statistics by status
     const shipmentsStats = await query(`
@@ -318,12 +363,39 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
       LEFT JOIN contracts c ON s.contract_id = c.id
       WHERE 1=1 ${contractFilter} ${shipmentFilter}
     `, params);
+    p.mark('shipmentsStats');
 
     // Get trucking operations statistics by status
     // Late = same logic as Trucking page: delivery_end vs eta_completion OR effective_actual_completion (on time if delivery_end >= either; else late)
     // effective_actual = COALESCE(t.trucking_completion_date, SAP "Trucking Last Receive Date") to match Trucking page
     const truckingStats = await query(`
-      WITH trucking_with_completion AS (
+      WITH trucking_contracts AS (
+        SELECT DISTINCT c.contract_id
+        FROM trucking_operations t
+        LEFT JOIN contracts c ON t.contract_id = c.id
+        WHERE 1=1 ${contractFilter} ${truckingFilter}
+          AND c.contract_id IS NOT NULL
+      ),
+      latest_spd AS (
+        SELECT DISTINCT ON (spd.contract_number)
+          spd.contract_number,
+          COALESCE(spd.data->'raw'->>'Trucking Last Receive Date', spd.data->>'Trucking Last Receive Date') AS last_receive_raw
+        FROM sap_processed_data spd
+        JOIN trucking_contracts tc ON tc.contract_id = spd.contract_number
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      ),
+      latest_receive AS (
+        SELECT
+          contract_number,
+          CASE
+            WHEN last_receive_raw IS NULL OR length(trim(last_receive_raw)) < 6 THEN NULL
+            WHEN trim(last_receive_raw) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(last_receive_raw)::date
+            WHEN trim(last_receive_raw) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(last_receive_raw), 'MM/DD/YY')
+            ELSE NULL
+          END AS trucking_last_receive_date
+        FROM latest_spd
+      ),
+      trucking_with_completion AS (
         SELECT
           t.id,
           t.operation_id,
@@ -333,24 +405,11 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
           COALESCE(NULLIF(TRIM(c.sto_number::text), ''), NULLIF(TRIM(t.operation_id), ''), t.id::text) AS late_key,
           COALESCE(
             t.trucking_completion_date,
-            (
-              SELECT (CASE
-                WHEN trim(v.val) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(v.val)::date
-                WHEN trim(v.val) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(v.val), 'MM/DD/YY')
-                ELSE NULL
-              END)
-              FROM (
-                SELECT COALESCE(spd.data->'raw'->>'Trucking Last Receive Date', spd.data->>'Trucking Last Receive Date') AS val
-                FROM sap_processed_data spd
-                WHERE spd.contract_number = c.contract_id
-                ORDER BY spd.created_at DESC NULLS LAST
-                LIMIT 1
-              ) v
-              WHERE v.val IS NOT NULL AND length(trim(v.val)) >= 6
-            )
+            lr.trucking_last_receive_date
           ) AS effective_completion_date
         FROM trucking_operations t
         LEFT JOIN contracts c ON t.contract_id = c.id
+        LEFT JOIN latest_receive lr ON lr.contract_number = c.contract_id
         WHERE 1=1 ${contractFilter} ${truckingFilter}
       )
       SELECT 
@@ -372,6 +431,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         ) as late_trucking_operations
       FROM trucking_with_completion
     `, params);
+    p.mark('truckingStats');
 
     // Get finance statistics aligned to contract value and payoff behavior
     const financeStats = await query(`
@@ -410,6 +470,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         COALESCE(SUM(contract_value) FILTER (WHERE has_late_payment = 1), 0) AS late_amount
       FROM contract_payment
     `, params);
+    p.mark('financeStats');
 
     const cr = contractsStats.rows[0] || {};
     const or_ = outstandingStats.rows[0] || {};
@@ -472,6 +533,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
       }
     };
 
+    p.done();
     return res.json({
       success: true,
       data: stats,
@@ -1646,6 +1708,147 @@ export const getContractQuantityByProductIncoterm = async (req: AuthRequest, res
   }
 };
 
+// Management: breakdown Product -> Incoterm -> Plant/Site -> Source Type -> LT/SPOT
+export const getContractQuantityByProductIncotermPlantSource = async (req: AuthRequest, res: Response) => {
+  try {
+    const { contractFilter, params } = buildFilterConditions(req);
+
+    const result = await query(
+      `
+      WITH base_contracts AS (
+        SELECT
+          c.id AS contract_pk,
+          c.contract_id,
+          c.product,
+          COALESCE(NULLIF(TRIM(c.incoterm), ''), 'Blank') AS incoterm,
+          c.supplier,
+          COALESCE(c.quantity_ordered, 0) AS quantity_ordered,
+          c.unit_price,
+          c.contract_value,
+          COALESCE(NULLIF(TRIM(c.source_type), ''), 'Blank') AS source_type,
+          COALESCE(l.data->'contract'->>'ltc_spot', c.contract_type::text, 'Blank') AS lt_spot,
+          COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_site
+        FROM contracts c
+        LEFT JOIN LATERAL (
+          SELECT UPPER(TRIM(COALESCE(
+            NULLIF(TRIM(c.transport_mode), ''),
+            (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            ''
+          ))) AS tm_upper
+        ) tx ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(
+            CASE
+              WHEN tx.tm_upper LIKE 'LAND%' THEN (
+                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                FROM trucking_operations t
+                WHERE t.contract_id = c.id
+                ORDER BY t.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              WHEN tx.tm_upper LIKE 'SEA%' THEN (
+                SELECT NULLIF(TRIM(s.port_of_discharge), '')
+                FROM shipments s
+                WHERE s.contract_id = c.id
+                ORDER BY s.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              ELSE NULL
+            END,
+            NULLIF(TRIM(c.unloading_site), ''),
+            NULLIF(TRIM(c.loading_site), '')
+          ) AS plant_site
+        ) ps ON true
+        LEFT JOIN LATERAL (
+          SELECT DISTINCT ON (spd.contract_number)
+            spd.data
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = c.contract_id
+          ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+        ) l ON true
+        WHERE c.product IS NOT NULL AND TRIM(c.product) != '' ${contractFilter}
+      ),
+      delivered_by_contract AS (
+        SELECT
+          spd.contract_number AS contract_id,
+          SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
+          ) AS delivered_quantity
+        FROM sap_processed_data spd
+        WHERE spd.sto_number IS NOT NULL
+          AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+          AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
+        GROUP BY spd.contract_number
+      ),
+      payment_status_per_contract AS (
+        SELECT
+          p.contract_id,
+          MAX(CASE WHEN p.payoff_date IS NULL THEN 1 ELSE 0 END) AS has_blank_payoff
+        FROM payments p
+        GROUP BY p.contract_id
+      ),
+      agg AS (
+        SELECT
+          bc.product,
+          bc.incoterm,
+          bc.plant_site,
+          bc.source_type,
+          COALESCE(NULLIF(TRIM(bc.lt_spot), ''), 'Blank') AS lt_spot,
+          COUNT(DISTINCT bc.contract_id) AS contract_count,
+          COUNT(DISTINCT bc.supplier) AS supplier_count,
+          SUM(bc.quantity_ordered) AS total_quantity,
+          SUM(COALESCE(db.delivered_quantity, 0)) AS completed_quantity,
+          SUM(bc.quantity_ordered) - SUM(COALESCE(db.delivered_quantity, 0)) AS outstanding_quantity,
+          SUM(
+            CASE
+              WHEN COALESCE(ps.has_blank_payoff, 0) = 1
+              THEN (bc.quantity_ordered - COALESCE(db.delivered_quantity, 0))
+              ELSE 0
+            END
+          ) AS outstanding_payment_quantity,
+          AVG(bc.unit_price) AS avg_unit_price,
+          SUM(bc.contract_value) AS total_contract_value
+        FROM base_contracts bc
+        LEFT JOIN delivered_by_contract db ON db.contract_id = bc.contract_id
+        LEFT JOIN payment_status_per_contract ps ON ps.contract_id = bc.contract_pk
+        GROUP BY bc.product, bc.incoterm, bc.plant_site, bc.source_type, COALESCE(NULLIF(TRIM(bc.lt_spot), ''), 'Blank')
+      )
+      SELECT
+        a.product,
+        a.incoterm,
+        a.plant_site,
+        a.source_type,
+        a.lt_spot,
+        a.contract_count,
+        a.supplier_count,
+        a.total_quantity,
+        a.completed_quantity,
+        a.outstanding_quantity,
+        a.outstanding_payment_quantity,
+        a.avg_unit_price,
+        a.total_contract_value
+      FROM agg a
+      ORDER BY a.product, a.total_quantity DESC NULLS LAST, a.incoterm, a.plant_site, a.source_type, a.lt_spot
+      `,
+      params
+    );
+
+    return res.json({
+      success: true,
+      data: result.rows,
+    });
+  } catch (error) {
+    logger.error('Get contract quantity by product incoterm plant/source error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch contract quantity breakdown' },
+    });
+  }
+};
+
 // Get contract quantity by Incoterm (same logic pattern as product, but grouped by incoterm)
 export const getContractQuantityByIncoterm = async (req: AuthRequest, res: Response) => {
   try {
@@ -1998,8 +2201,9 @@ export const getPlantDetails = async (req: AuthRequest, res: Response) => {
           COALESCE(s.quantity_shipped, 0) + COALESCE(s.quantity_delivered, 0) as total_quantity,
           COALESCE(s.status, 'UNKNOWN') as status
         FROM shipments s
-        LEFT JOIN contracts c ON s.contract_id = c.id
-        WHERE s.port_of_discharge IS NULL OR s.port_of_discharge = ''
+        INNER JOIN contracts c ON s.contract_id = c.id
+        WHERE (s.port_of_discharge IS NULL OR s.port_of_discharge = '')
+        ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
         ORDER BY c.contract_id
       `);
 
@@ -2014,8 +2218,9 @@ export const getPlantDetails = async (req: AuthRequest, res: Response) => {
           COALESCE(t.quantity_sent, 0) + COALESCE(t.quantity_delivered, 0) as total_quantity,
           COALESCE(t.status, 'UNKNOWN') as status
         FROM trucking_operations t
-        LEFT JOIN contracts c ON t.contract_id = c.id
-        WHERE t.location IS NULL OR t.location = ''
+        INNER JOIN contracts c ON t.contract_id = c.id
+        WHERE (t.location IS NULL OR t.location = '')
+        ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
         ORDER BY c.contract_id
       `);
     } else {
@@ -2030,8 +2235,9 @@ export const getPlantDetails = async (req: AuthRequest, res: Response) => {
           COALESCE(s.quantity_shipped, 0) + COALESCE(s.quantity_delivered, 0) as total_quantity,
           COALESCE(s.status, 'UNKNOWN') as status
         FROM shipments s
-        LEFT JOIN contracts c ON s.contract_id = c.id
+        INNER JOIN contracts c ON s.contract_id = c.id
         WHERE s.port_of_discharge = $1
+        ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
         ORDER BY c.contract_id
       `, [plant]);
 
@@ -2046,8 +2252,9 @@ export const getPlantDetails = async (req: AuthRequest, res: Response) => {
           COALESCE(t.quantity_sent, 0) + COALESCE(t.quantity_delivered, 0) as total_quantity,
           COALESCE(t.status, 'UNKNOWN') as status
         FROM trucking_operations t
-        LEFT JOIN contracts c ON t.contract_id = c.id
+        INNER JOIN contracts c ON t.contract_id = c.id
         WHERE t.location = $1
+        ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
         ORDER BY c.contract_id
       `, [plant]);
     }
@@ -2104,6 +2311,7 @@ export const getProductDetails = async (req: AuthRequest, res: Response) => {
         c.status
       FROM contracts c
       WHERE c.product = $1
+      ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
       ORDER BY c.contract_id
     `, [product]);
 
@@ -2157,6 +2365,7 @@ export const getIncotermDetails = async (req: AuthRequest, res: Response) => {
         c.status
       FROM contracts c
       WHERE COALESCE(c.incoterm, 'Blank') = $1
+      ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
       ORDER BY c.contract_id
       `,
       [incoterm],
@@ -2188,6 +2397,8 @@ export const getFilterPlants = async (_req: AuthRequest, res: Response) => {
             ELSE s.port_of_discharge
           END as plant_location
         FROM shipments s
+        INNER JOIN contracts c ON c.id = s.contract_id
+        WHERE 1=1 ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
         UNION
         SELECT 
           CASE 
@@ -2195,6 +2406,8 @@ export const getFilterPlants = async (_req: AuthRequest, res: Response) => {
             ELSE t.location
           END as plant_location
         FROM trucking_operations t
+        INNER JOIN contracts c ON c.id = t.contract_id
+        WHERE 1=1 ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
       ) plants
       WHERE plant_location IS NOT NULL
       ORDER BY plant_location
@@ -2218,8 +2431,9 @@ export const getFilterSuppliers = async (_req: AuthRequest, res: Response) => {
   try {
     const result = await query(`
       SELECT DISTINCT supplier
-      FROM contracts
+      FROM contracts c
       WHERE supplier IS NOT NULL AND supplier != ''
+      ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
       ORDER BY supplier
     `);
 
@@ -2241,8 +2455,9 @@ export const getFilterProducts = async (_req: AuthRequest, res: Response) => {
   try {
     const result = await query(`
       SELECT DISTINCT product
-      FROM contracts
+      FROM contracts c
       WHERE product IS NOT NULL AND product != ''
+      ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
       ORDER BY product
     `);
 
@@ -2264,8 +2479,9 @@ export const getFilterGroups = async (_req: AuthRequest, res: Response) => {
   try {
     const result = await query(`
       SELECT DISTINCT group_name
-      FROM contracts
+      FROM contracts c
       WHERE group_name IS NOT NULL AND group_name != ''
+      ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
       ORDER BY group_name
     `);
 
@@ -2299,6 +2515,9 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
       outstanding,
       outstandingLogistics,
       outstandingPayment,
+      plantSite,
+      sourceType,
+      ltSpot,
       limit,
       offset,
     } = req.query as any;
@@ -2411,6 +2630,20 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
       )`;
     }
 
+    // Management dashboard breakdown filters (product/incoterm already supported via buildFilterConditions)
+    if (plantSite) {
+      extraParams.push(String(plantSite));
+      whereExtra += ` AND UPPER(COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank')) = UPPER($${extraParams.length})`;
+    }
+    if (sourceType) {
+      extraParams.push(String(sourceType));
+      whereExtra += ` AND UPPER(COALESCE(NULLIF(TRIM(c.source_type), ''), 'Blank')) = UPPER($${extraParams.length})`;
+    }
+    if (ltSpot) {
+      extraParams.push(String(ltSpot));
+      whereExtra += ` AND UPPER(COALESCE(NULLIF(TRIM(COALESCE(l.data->'contract'->>'ltc_spot', c.contract_type::text)), ''), 'Blank')) = UPPER($${extraParams.length})`;
+    }
+
     // Allow paging for dashboard drilldowns (default limit 100, max 500)
     const limitNumRaw = parseInt(String(limit ?? ''), 10);
     const limitNum = Number.isFinite(limitNumRaw)
@@ -2452,6 +2685,9 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
           c.quantity_ordered,
           c.unit,
           c.incoterm,
+          COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_site,
+          c.source_type,
+          COALESCE(l.data->'contract'->>'ltc_spot', c.contract_type::text) AS lt_spot,
           c.loading_site,
           c.unloading_site,
           c.contract_date,
@@ -2473,6 +2709,25 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
           pinfo.payoff_date,
           pinfo.last_trucking_completion_date,
           pinfo.last_ata_vessel_complete_discharge,
+          lr.trucking_last_receive_date,
+          pinfo.dp_date_deviation_days,
+          pinfo.payoff_date_deviation_days,
+          CASE
+            WHEN UPPER(COALESCE(NULLIF(TRIM(COALESCE(c.transport_mode, '')), ''), l.data->'contract'->>'transport_mode', l.data->'contract'->>'sea_land', l.data->'raw'->>'Sea / Land', l.data->'raw'->>'Sea_Land', '')) LIKE 'LAND%'
+              THEN (c.delivery_end_date::date - lr.trucking_last_receive_date::date)
+            WHEN UPPER(COALESCE(NULLIF(TRIM(COALESCE(c.transport_mode, '')), ''), l.data->'contract'->>'transport_mode', l.data->'contract'->>'sea_land', l.data->'raw'->>'Sea / Land', l.data->'raw'->>'Sea_Land', '')) LIKE 'SEA%'
+              THEN (c.delivery_end_date::date - pinfo.last_ata_vessel_complete_discharge::date)
+            ELSE NULL
+          END AS total_delay,
+          (c.delivery_end_date::date - c.cargo_readiness_date::date) AS cargo_readiness_issue,
+          (c.delivery_end_date::date - CURRENT_DATE) AS aging_os,
+          CASE
+            WHEN UPPER(COALESCE(NULLIF(TRIM(COALESCE(c.transport_mode, '')), ''), l.data->'contract'->>'transport_mode', l.data->'contract'->>'sea_land', l.data->'raw'->>'Sea / Land', l.data->'raw'->>'Sea_Land', '')) LIKE 'LAND%'
+              THEN (c.cargo_readiness_date::date - lr.trucking_last_receive_date::date)
+            WHEN UPPER(COALESCE(NULLIF(TRIM(COALESCE(c.transport_mode, '')), ''), l.data->'contract'->>'transport_mode', l.data->'contract'->>'sea_land', l.data->'raw'->>'Sea / Land', l.data->'raw'->>'Sea_Land', '')) LIKE 'SEA%'
+              THEN (c.cargo_readiness_date::date - pinfo.last_ata_vessel_complete_discharge::date)
+            ELSE NULL
+          END AS delivery_issue,
           c.currency,
           -- Status displayed should match dashboard logic and Contracts page conventions
           CASE
@@ -2498,9 +2753,65 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
         LEFT JOIN qty q ON q.contract_number = c.contract_id
         LEFT JOIN LATERAL (
+          SELECT UPPER(TRIM(COALESCE(
+            NULLIF(TRIM(c.transport_mode), ''),
+            l.data->'contract'->>'transport_mode',
+            l.data->'contract'->>'sea_land',
+            l.data->'raw'->>'Sea / Land',
+            l.data->'raw'->>'Sea_Land',
+            ''
+          ))) AS tm_upper
+        ) tx ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(
+            CASE
+              WHEN tx.tm_upper LIKE 'LAND%' THEN (
+                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                FROM trucking_operations t
+                WHERE t.contract_id = c.id
+                ORDER BY t.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              WHEN tx.tm_upper LIKE 'SEA%' THEN (
+                SELECT NULLIF(TRIM(s.port_of_discharge), '')
+                FROM shipments s
+                WHERE s.contract_id = c.id
+                ORDER BY s.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              ELSE NULL
+            END,
+            NULLIF(TRIM(c.unloading_site), ''),
+            NULLIF(TRIM(c.loading_site), '')
+          ) AS plant_site
+        ) ps ON true
+        LEFT JOIN LATERAL (
+          SELECT
+            CASE
+              WHEN last_receive_raw IS NULL OR length(trim(last_receive_raw)) < 6 THEN NULL
+              WHEN trim(last_receive_raw) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(last_receive_raw)::date
+              WHEN trim(last_receive_raw) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(last_receive_raw), 'MM/DD/YY')
+              WHEN trim(last_receive_raw) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' THEN to_date(trim(last_receive_raw), 'MM/DD/YYYY')
+              ELSE NULL
+            END AS trucking_last_receive_date
+          FROM (
+            SELECT COALESCE(l.data->'raw'->>'Trucking Last Receive Date', l.data->>'Trucking Last Receive Date') AS last_receive_raw
+          ) x
+        ) lr ON true
+        LEFT JOIN LATERAL (
           SELECT
             MIN(p.payment_due_date) FILTER (WHERE p.payoff_date IS NULL) AS payment_due_date,
             MAX(p.payoff_date) AS payoff_date,
+            (SELECT (p2.dp_date::date - p2.payment_due_date::date)
+             FROM payments p2
+             WHERE p2.contract_id = c.id AND p2.dp_date IS NOT NULL AND p2.payment_due_date IS NOT NULL
+             ORDER BY p2.created_at DESC NULLS LAST
+             LIMIT 1) AS dp_date_deviation_days,
+            (SELECT (p3.payoff_date::date - p3.payment_due_date::date)
+             FROM payments p3
+             WHERE p3.contract_id = c.id AND p3.payoff_date IS NOT NULL AND p3.payment_due_date IS NOT NULL
+             ORDER BY p3.created_at DESC NULLS LAST
+             LIMIT 1) AS payoff_date_deviation_days,
             (SELECT MAX(t.trucking_completion_date) FROM trucking_operations t WHERE t.contract_id = c.id) AS last_trucking_completion_date,
             (SELECT MAX(s.ata_discharge_complete::date) FROM shipments s WHERE s.contract_id = c.id AND s.ata_discharge_complete IS NOT NULL) AS last_ata_vessel_complete_discharge
           FROM payments p
