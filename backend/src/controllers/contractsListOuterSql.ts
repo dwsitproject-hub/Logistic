@@ -12,6 +12,8 @@ export const CONTRACTS_LIST_OUTER_SQL = `
         base.group_name,
         base.product,
         base.quantity_ordered,
+        base.quantity_delivery,
+        base.quantity_receive,
         base.unit,
         base.contract_date,
         base.delivery_start_date,
@@ -32,7 +34,17 @@ export const CONTRACTS_LIST_OUTER_SQL = `
         base.sto_number,
         base.sto_numbers_agg AS sto_numbers,
         base.total_sto_quantity,
-        (base.quantity_ordered - COALESCE(base.total_sto_quantity, 0))::numeric AS outstanding_quantity,
+        (
+          base.quantity_ordered
+          - COALESCE(
+              CASE
+                WHEN UPPER(TRIM(COALESCE(base.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN base.quantity_receive
+                WHEN UPPER(TRIM(COALESCE(base.incoterm, ''))) IN ('LCO', 'FOB') THEN base.quantity_delivery
+                ELSE base.total_sto_quantity
+              END,
+              0
+            )
+        )::numeric AS outstanding_quantity,
         base.po_count,
         base.sto_count,
         COALESCE(base.latest_spd_data->'contract'->>'company_code', base.latest_spd_data->'raw'->>'Company Code', base.latest_spd_data->'raw'->>'company code', base.latest_spd_data->>'Company Code', base.latest_spd_data->>'company code') AS company_code,

@@ -55,7 +55,16 @@ const BASE_COL_SQL: Record<string, string> = {
   cargo_readiness_date: 'base.cargo_readiness_date',
   created_at: 'base.created_at',
   contract_qty: 'base.quantity_ordered',
-  outstanding_qty: '(base.quantity_ordered - COALESCE(base.total_sto_quantity, 0))',
+  outstanding_qty: `(
+    base.quantity_ordered - COALESCE(
+      CASE
+        WHEN UPPER(TRIM(COALESCE(base.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN base.quantity_receive
+        WHEN UPPER(TRIM(COALESCE(base.incoterm, ''))) IN ('LCO', 'FOB') THEN base.quantity_delivery
+        ELSE base.total_sto_quantity
+      END,
+      0
+    )
+  )`,
   delivery_status: `COALESCE(base.latest_spd_data->'contract'->>'status', base.status::text, '')`,
 }
 

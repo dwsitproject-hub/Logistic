@@ -142,21 +142,43 @@ const getAppDataContext = async () => {
       WITH delivered_by_contract AS (
         SELECT
           spd.contract_number AS contract_id,
-          SUM(
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_receive,
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_delivery,
+          COALESCE(SUM(
             CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
-          ) AS delivered_quantity
+          ) FILTER (
+            WHERE spd.data->'contract'->>'sto_quantity' IS NOT NULL AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
+          ), 0)::numeric AS total_sto_quantity
         FROM sap_processed_data spd
-        WHERE spd.sto_number IS NOT NULL
-          AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-          AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
+        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         GROUP BY spd.contract_number
       )
       SELECT
         c.product,
         COUNT(DISTINCT c.contract_id)::int AS contract_count,
         COALESCE(SUM(c.quantity_ordered), 0)::numeric AS total_quantity,
-        COALESCE(SUM(COALESCE(db.delivered_quantity, 0)), 0)::numeric AS delivered_quantity,
-        COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM(COALESCE(db.delivered_quantity, 0)), 0)::numeric AS outstanding_quantity
+        COALESCE(SUM(
+          CASE
+            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(db.quantity_receive, 0)
+            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(db.quantity_delivery, 0)
+            ELSE COALESCE(db.total_sto_quantity, 0)
+          END
+        ), 0)::numeric AS delivered_quantity,
+        COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM(
+          CASE
+            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(db.quantity_receive, 0)
+            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(db.quantity_delivery, 0)
+            ELSE COALESCE(db.total_sto_quantity, 0)
+          END
+        ), 0)::numeric AS outstanding_quantity
       FROM contracts c
       LEFT JOIN delivered_by_contract db ON db.contract_id = c.contract_id
       WHERE c.product IS NOT NULL AND TRIM(c.product) <> ''

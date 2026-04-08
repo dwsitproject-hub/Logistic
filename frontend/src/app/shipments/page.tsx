@@ -165,11 +165,15 @@ function ShipmentsPageContent() {
   const perms = usePermissions()
   const canAddShipment = canCreatePermission(perms, 'data.shipments')
   const canEditShipment = canEditPermission(perms, 'data.shipments')
+  const canOpenAddShipmentModal = canAddShipment || canEditShipment
   const canExportShipments = canViewPermission(perms, 'action.export_data')
   const canBulkShipments = canCreatePermission(perms, 'action.bulk_operations')
   const canImportShipments = canViewPermission(perms, 'action.import_excel')
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [loading, setLoading] = useState(true)
+  const [page, setPage] = useState(1)
+  const [pageSize] = useState(50)
+  const [totalCount, setTotalCount] = useState(0)
   const [searchTerm, setSearchTerm] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editedData, setEditedData] = useState<Partial<Shipment>>({})
@@ -501,21 +505,25 @@ function ShipmentsPageContent() {
     }
   }, [shipments])
 
+  // Sync URL params -> local filter state
   useEffect(() => {
-    // Read URL parameters
     const statusParam = searchParams.get('status')
-    if (statusParam) {
-      setStatusFilter(statusParam)
-    }
-    // Note: 'delayed' param will be handled directly in fetchShipments
-    fetchShipments()
+    if (statusParam) setStatusFilter(statusParam)
+    setPage(1)
   }, [searchParams])
+
+  // Fetch data when filters/page change
+  useEffect(() => {
+    fetchShipments()
+  }, [statusFilter, dateFrom, dateTo, page])
 
   const fetchShipments = async () => {
     setLoading(true)
     try {
       const params = new URLSearchParams()
-      params.append('limit', '100')
+      params.append('limit', String(pageSize))
+      params.append('page', String(page))
+      params.append('compact', 'true')
       if (statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
       }
@@ -545,6 +553,7 @@ function ShipmentsPageContent() {
       // Check if response structure is correct
       if (response.data && response.data.success && response.data.data && response.data.data.shipments) {
         setShipments(response.data.data.shipments)
+        setTotalCount(Number(response.data.data.pagination?.total || 0))
       } else {
         console.error('Unexpected response structure:', response.data)
         setShipments([])
@@ -2831,19 +2840,26 @@ function ShipmentsPageContent() {
         <div>
             <h1 className="text-3xl font-bold">Shipments</h1>
             <p className="text-gray-600 mt-1">
-              Manage and track all shipments - {filteredShipments.length} total
+              Manage and track all shipments - {totalCount || filteredShipments.length} total
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {canAddShipment && (
-              <Button
-                onClick={() => setShowAddShipment(true)}
-                className="bg-blue-600 hover:bg-blue-700"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Add New Shipment
-              </Button>
-            )}
+            <Button
+              onClick={() => {
+                // Allow opening the modal immediately; permissions load async and may fail open for admin workflows.
+                if (perms.loaded && !canOpenAddShipmentModal) {
+                  alert(
+                    'You need Create or Edit permission on Shipments (data.shipments) to add a shipment. Ask an admin to update your role.'
+                  )
+                  return
+                }
+                setShowAddShipment(true)
+              }}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Add New Shipment
+            </Button>
             {canImportShipments && (
               <Button
                 onClick={downloadTemplate}
@@ -2864,6 +2880,27 @@ function ShipmentsPageContent() {
                 Export Data
               </Button>
             )}
+            <div className="flex items-center gap-2 ml-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1 || loading}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Prev
+              </Button>
+              <div className="text-sm text-gray-600 min-w-[110px] text-center">
+                Page {page}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={loading || (totalCount > 0 && page * pageSize >= totalCount)}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+              </Button>
+            </div>
             {canBulkShipments && (
               <>
                 <input

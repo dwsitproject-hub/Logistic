@@ -51,6 +51,11 @@ interface DashboardStats {
     deliveredPendingQuantity: number
     outstandingPaidQuantity: number
     outstandingPendingQuantity: number
+    outstandingPendingAmount: number
+    outstandingClaimMutuQty: number
+    outstandingClaimSusutQty: number
+    outstandingClaimMutuAmount: number
+    outstandingClaimSusutAmount: number
   }
   shipments: {
     total: number
@@ -112,6 +117,8 @@ interface ProductQuantity {
   completed_quantity: number
   outstanding_quantity: number
   outstanding_payment_quantity: number
+  outstanding_claim_mutu_qty?: number
+  outstanding_claim_susut_qty?: number
   avg_unit_price: number
   total_contract_value: number
   supplier_count: number
@@ -128,6 +135,8 @@ interface ProductIncotermRow {
   avg_unit_price: number
   total_contract_value: number
   supplier_count: number
+  outstanding_claim_mutu_qty?: number
+  outstanding_claim_susut_qty?: number
 }
 
 interface ProductIncotermPlantSourceRow extends ProductIncotermRow {
@@ -169,6 +178,8 @@ interface PlantIncotermRow {
   outstanding_quantity: number
   outstanding_payment_quantity: number
   supplier_count: number
+  outstanding_claim_mutu_qty?: number
+  outstanding_claim_susut_qty?: number
 }
 
 interface PlantContractDetail {
@@ -524,7 +535,12 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       deliveredPaidQuantity: 0,
       deliveredPendingQuantity: 0,
       outstandingPaidQuantity: 0,
-      outstandingPendingQuantity: 0
+      outstandingPendingQuantity: 0,
+      outstandingPendingAmount: 0,
+      outstandingClaimMutuQty: 0,
+      outstandingClaimSusutQty: 0,
+      outstandingClaimMutuAmount: 0,
+      outstandingClaimSusutAmount: 0,
     },
     shipments: { total: 0, planned: 0, inProgress: 0, loading: 0, inTransit: 0, arrived: 0, unloading: 0, completed: 0, cancelled: 0, late: 0 },
     trucking: { total: 0, planned: 0, inProgress: 0, loading: 0, inTransit: 0, unloading: 0, completed: 0, cancelled: 0, late: 0 },
@@ -563,6 +579,13 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
   const [drilldownPageSize] = useState<number>(100)
   const [drilldownQuery, setDrilldownQuery] = useState<Record<string, string>>({})
   const [drilldownView, setDrilldownView] = useState<'details' | 'vendor-group'>('details')
+
+  const [claimDrilldownKind, setClaimDrilldownKind] = useState<'mutu' | 'susut' | null>(null)
+  const [claimDrilldownRows, setClaimDrilldownRows] = useState<Record<string, unknown>[]>([])
+  const [loadingClaimDrilldown, setLoadingClaimDrilldown] = useState(false)
+  const [claimDrilldownTotalCount, setClaimDrilldownTotalCount] = useState(0)
+  const [claimDrilldownPage, setClaimDrilldownPage] = useState(1)
+  const [claimDrilldownPageSize] = useState(100)
 
   // Shipments drilldown (shipment list) for Shipment Performance card
   const [shipDrilldownTitle, setShipDrilldownTitle] = useState<string | null>(null)
@@ -859,9 +882,9 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
   const formatNumber = (num: number | string | null | undefined) => {
     const value = parseNumberLoose(num)
     if (value === null) return '0'
-    return value.toLocaleString('en-US', {
+    return Math.round(value).toLocaleString('en-US', {
       minimumFractionDigits: 0,
-      maximumFractionDigits: 2,
+      maximumFractionDigits: 0,
       useGrouping: true,
     })
   }
@@ -898,7 +921,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
 
   const pct = (num: number, den: number) => {
     if (!Number.isFinite(num) || !Number.isFinite(den) || den <= 0) return 0
-    return Math.round((num / den) * 1000) / 10 // 1 decimal
+    return Math.round((num / den) * 100)
   }
 
   const pctText = (num: number, den: number) => {
@@ -1153,6 +1176,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
     tone = 'default',
     onClick,
     wrapValue = false,
+    valueClassName,
   }: {
     label: string
     value: string
@@ -1160,6 +1184,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
     tone?: 'default' | 'good' | 'warn' | 'bad'
     onClick?: () => void
     wrapValue?: boolean
+    /** When set, overrides tone-based value color (e.g. per–outstanding-type colors). */
+    valueClassName?: string
   }) => {
     const toneClass =
       tone === 'good'
@@ -1169,6 +1195,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
           : tone === 'bad'
             ? 'text-red-700'
             : 'text-gray-900'
+    const valueColorClass = valueClassName ?? toneClass
 
     const body = (
       <div className="rounded-xl border bg-white px-3.5 py-3 hover:bg-gray-50 transition-colors min-w-0 overflow-hidden">
@@ -1176,7 +1203,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
         <div
           className={[
             'mt-0.5 text-[18px] font-semibold leading-tight tabular-nums tracking-tight',
-            toneClass,
+            valueColorClass,
             wrapValue ? 'whitespace-normal break-words' : 'truncate'
           ].join(' ')}
           title={value}
@@ -1217,6 +1244,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       breakdown?: {
         outstandingDelivery: number
         outstandingPayment: number
+        outstandingClaimMutu: number
+        outstandingClaimSusut: number
         completed: number
       }
     }>
@@ -1243,7 +1272,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               const w = total > 0 ? (v / total) * 100 : 0
               const clickable = !!onSegmentClick
               const breakdownSuffix = seg.breakdown
-                ? ` | OD ${fmt(seg.breakdown.outstandingDelivery)} / OP ${fmt(seg.breakdown.outstandingPayment)} / Done ${fmt(seg.breakdown.completed)}`
+                ? ` | OutDel ${fmt(seg.breakdown.outstandingDelivery)} / OutPay ${fmt(seg.breakdown.outstandingPayment)} / ClaimMutu ${fmt(seg.breakdown.outstandingClaimMutu)} / ClaimSusut ${fmt(seg.breakdown.outstandingClaimSusut)} / Done ${fmt(seg.breakdown.completed)}`
                 : ''
               const common = {
                 key: seg.label,
@@ -1269,11 +1298,13 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
           <div className="rounded-lg border bg-white overflow-hidden">
             <div className="overflow-x-auto">
               <div className="min-w-[860px]">
-                <div className="grid grid-cols-[minmax(160px,2fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(160px,1fr)] gap-3 px-3 py-2 text-[10px] font-semibold text-gray-600 bg-gray-50">
+                <div className="grid grid-cols-[minmax(160px,2fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)] gap-3 px-3 py-2 text-[10px] font-semibold text-gray-600 bg-gray-50">
                   <div>Incoterm</div>
                   <div className="text-right">Total</div>
-                  <div className="text-right">OD</div>
-                  <div className="text-right">OP</div>
+                  <div className="text-right">Out. Delivery</div>
+                  <div className="text-right">Out. Payment</div>
+                  <div className="text-right">Claim Mutu</div>
+                  <div className="text-right">Claim Susut</div>
                   <div className="text-right">Done</div>
                 </div>
                 <div className="divide-y">
@@ -1289,9 +1320,11 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                         : 'bg-blue-500'
                 const od = seg.breakdown ? seg.breakdown.outstandingDelivery : 0
                 const op = seg.breakdown ? seg.breakdown.outstandingPayment : 0
+                const cm = seg.breakdown ? seg.breakdown.outstandingClaimMutu : 0
+                const cs = seg.breakdown ? seg.breakdown.outstandingClaimSusut : 0
                 const done = seg.breakdown ? seg.breakdown.completed : 0
                 const row = (
-                  <div className={`grid grid-cols-[minmax(160px,2fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(160px,1fr)] gap-3 px-3 py-2.5 text-[11px] ${onSegmentClick ? 'hover:bg-gray-50' : ''}`}>
+                  <div className={`grid grid-cols-[minmax(160px,2fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)] gap-3 px-3 py-2.5 text-[11px] ${onSegmentClick ? 'hover:bg-gray-50' : ''}`}>
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`h-2 w-2 rounded-full ${dot} shrink-0`} />
                       <span className="text-gray-700 font-medium truncate">{seg.label}</span>
@@ -1305,6 +1338,12 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                     </div>
                     <div className="text-right tabular-nums text-violet-700 whitespace-nowrap truncate" title={fmt(op)}>
                       {fmt(op)}
+                    </div>
+                    <div className="text-right tabular-nums text-orange-700 whitespace-nowrap truncate" title={fmt(cm)}>
+                      {fmt(cm)}
+                    </div>
+                    <div className="text-right tabular-nums text-orange-700 whitespace-nowrap truncate" title={fmt(cs)}>
+                      {fmt(cs)}
                     </div>
                     <div className="text-right tabular-nums text-green-700 whitespace-nowrap truncate" title={fmt(done)}>
                       {fmt(done)}
@@ -1775,6 +1814,39 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
     setDrilldownView('details')
   }
 
+  const closeClaimDrilldown = () => {
+    setClaimDrilldownKind(null)
+    setClaimDrilldownRows([])
+    setClaimDrilldownTotalCount(0)
+    setClaimDrilldownPage(1)
+  }
+
+  const fetchClaimDrilldownPage = async (page: number, kind: 'mutu' | 'susut') => {
+    setLoadingClaimDrilldown(true)
+    setClaimDrilldownRows([])
+    try {
+      const path =
+        kind === 'mutu' ? '/dashboard/claim-mutu-outstanding' : '/dashboard/claim-susut-outstanding'
+      const params = new URLSearchParams()
+      params.set('limit', String(claimDrilldownPageSize))
+      params.set('offset', String((page - 1) * claimDrilldownPageSize))
+      const res = await api.get(`${path}?${params.toString()}`)
+      setClaimDrilldownRows(res.data.data || [])
+      setClaimDrilldownTotalCount(Number(res.data.meta?.totalCount) || 0)
+    } catch (err) {
+      console.error('Failed to load claim drilldown:', err)
+      alert('Failed to load details')
+    } finally {
+      setLoadingClaimDrilldown(false)
+    }
+  }
+
+  const openClaimDrilldown = async (kind: 'mutu' | 'susut') => {
+    setClaimDrilldownKind(kind)
+    setClaimDrilldownPage(1)
+    await fetchClaimDrilldownPage(1, kind)
+  }
+
   const fetchPlantDetails = async (plant: PlantQuantity) => {
     setSelectedPlant(plant)
     setLoadingDetails(true)
@@ -2151,7 +2223,9 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                     <FieldHelp text={FIELD_HELP.dashboardKpiQuantity} />
                     <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
                   </CardTitle>
-                  <CardDescription>Delivered vs outstanding delivery/payment across contracts</CardDescription>
+                  <CardDescription>
+                    Quantities for delivery; IDR amounts (contract value share) for outstanding payment and claims
+                  </CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="p-2 rounded-lg bg-blue-100">
@@ -2183,9 +2257,22 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                   }
                   wrapValue
                 />
+                <div className="hidden lg:block" />
+                <div className="hidden lg:block" />
+              </div>
+
+              <div className="rounded-lg border bg-slate-50/60 p-3">
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">Outstanding</div>
+                    <div className="text-xs text-slate-600">Items that still need action</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
                 <KpiTile
                   label="Outstanding delivery"
                   value={statsLoading ? '...' : formatKg(stats.contracts.outstandingQuantity)}
+                  valueClassName="text-orange-700"
                   tone="warn"
                   onClick={() =>
                     openContractsDrilldown({
@@ -2197,7 +2284,9 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                 />
                 <KpiTile
                   label="Outstanding payment"
-                  value={statsLoading ? '...' : formatKg(stats.contracts.outstandingPendingQuantity)}
+                  value={statsLoading ? '...' : formatRupiah(stats.contracts.outstandingPendingAmount ?? 0)}
+                  sublabel="IDR (share of contract value)"
+                  valueClassName="text-fuchsia-700"
                   tone="warn"
                   onClick={() =>
                     openContractsDrilldown({
@@ -2207,23 +2296,28 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                   }
                   wrapValue
                 />
+                <KpiTile
+                  label="Outstanding Claim Mutu"
+                  value={statsLoading ? '...' : formatRupiah(stats.contracts.outstandingClaimMutuAmount ?? 0)}
+                  sublabel="IDR after tax (latest import)"
+                  valueClassName="text-teal-700"
+                  tone="warn"
+                  onClick={() => openClaimDrilldown('mutu')}
+                  wrapValue
+                />
+                <KpiTile
+                  label="Outstanding Claim Susut"
+                  value={statsLoading ? '...' : formatRupiah(stats.contracts.outstandingClaimSusutAmount ?? 0)}
+                  sublabel="IDR after tax (latest import)"
+                  valueClassName="text-rose-700"
+                  tone="warn"
+                  onClick={() => openClaimDrilldown('susut')}
+                  wrapValue
+                />
+                </div>
               </div>
 
-              <MiniBarChart
-                baseLabel="Comparison bars (OD and OP may overlap)."
-                items={[
-                  { key: 'delivered', label: 'Delivered', value: statsLoading ? 0 : stats.contracts.deliveredQuantity, tone: 'good' },
-                  { key: 'od', label: 'Outstanding delivery', value: statsLoading ? 0 : stats.contracts.outstandingQuantity, tone: 'warn' },
-                  { key: 'op', label: 'Outstanding payment', value: statsLoading ? 0 : stats.contracts.outstandingPendingQuantity, tone: 'bad' },
-                ]}
-                formatValue={(v) => formatKg(v)}
-                onItemClick={(key) => {
-                  if (key === 'delivered') return openContractsDrilldown({ title: 'Contracts with delivered quantity', extraParams: { delivered: 'true' } })
-                  if (key === 'od') return openContractsDrilldown({ title: 'Contracts with outstanding delivery quantity', extraParams: { outstanding: 'true' } })
-                  if (key === 'op') return openContractsDrilldown({ title: 'Contracts with outstanding payment quantity', extraParams: { outstanding: 'true', outstandingPayment: 'true' } })
-                  return openContractsDrilldown({ title: 'All contracts (quantity basis)' })
-                }}
-              />
+              {/* Comparison bars removed (per management UX request). */}
             </CardContent>
           </Card>
 
@@ -2446,7 +2540,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
                 <CardTitle className="text-base flex items-center gap-2">
-                  Contract Quantity by Product (Incoterm mix)
+                  Contract Profiling (by Quantity)
                   <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
                 </CardTitle>
                 <CardDescription>
@@ -2489,6 +2583,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                         (s, x) => s + (Number(x.outstanding_payment_quantity) || 0),
                         0
                       )
+                      const outstanding_claim_mutu_qty = rows.reduce((s, x) => s + (Number(x.outstanding_claim_mutu_qty) || 0), 0)
+                      const outstanding_claim_susut_qty = rows.reduce((s, x) => s + (Number(x.outstanding_claim_susut_qty) || 0), 0)
                       const contract_count = rows.reduce((s, x) => s + (Number(x.contract_count) || 0), 0)
                       const supplier_count = rows.reduce((s, x) => s + (Number(x.supplier_count) || 0), 0)
                       const total_contract_value = rows.reduce((s, x) => s + (Number(x.total_contract_value) || 0), 0)
@@ -2503,6 +2599,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                           completed_quantity,
                           outstanding_quantity,
                           outstanding_payment_quantity,
+                          outstanding_claim_mutu_qty,
+                          outstanding_claim_susut_qty,
                           avg_unit_price: total_quantity > 0 ? total_contract_value / total_quantity : 0,
                           total_contract_value
                         } satisfies ProductQuantity
@@ -2532,6 +2630,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                           breakdown: {
                             outstandingDelivery: Number(r.outstanding_quantity) || 0,
                             outstandingPayment: Number(r.outstanding_payment_quantity) || 0,
+                            outstandingClaimMutu: Number(r.outstanding_claim_mutu_qty) || 0,
+                            outstandingClaimSusut: Number(r.outstanding_claim_susut_qty) || 0,
                             completed: Number(r.completed_quantity) || 0
                           }
                         })),
@@ -2544,6 +2644,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                 breakdown: {
                                   outstandingDelivery: otherOutstandingDelivery,
                                   outstandingPayment: otherOutstandingPayment,
+                                  outstandingClaimMutu: otherRows.reduce((s, x) => s + (Number(x.outstanding_claim_mutu_qty) || 0), 0),
+                                  outstandingClaimSusut: otherRows.reduce((s, x) => s + (Number(x.outstanding_claim_susut_qty) || 0), 0),
                                   completed: otherCompleted
                                 }
                               }
@@ -2576,7 +2678,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2 pt-2 border-t border-gray-200">
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mt-2 pt-2 border-t border-gray-200">
                             <div className="text-xs">
                               <span className="text-gray-500">Total:</span>
                               <button
@@ -2618,6 +2720,32 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                 }}
                               >
                                 {formatKg(p.summary.outstanding_payment_quantity)}
+                              </button>
+                            </div>
+                            <div className="text-xs">
+                              <span className="text-gray-500">Outstanding Claim Mutu:</span>
+                              <button
+                                type="button"
+                                className="font-semibold text-orange-700 ml-1 hover:underline"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  router.push('/trucking/claim-mutu')
+                                }}
+                              >
+                                {formatKg((p.summary as any).outstanding_claim_mutu_qty || 0)}
+                              </button>
+                            </div>
+                            <div className="text-xs">
+                              <span className="text-gray-500">Outstanding Claim Susut:</span>
+                              <button
+                                type="button"
+                                className="font-semibold text-orange-700 ml-1 hover:underline"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  router.push('/trucking/claim-susut')
+                                }}
+                              >
+                                {formatKg((p.summary as any).outstanding_claim_susut_qty || 0)}
                               </button>
                             </div>
                             <div className="text-xs">
@@ -2780,7 +2908,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
                 <CardTitle className="text-base flex items-center gap-2">
-                  Contract Amount by Product (Incoterm mix)
+                  Contract Profiling (by Amount)
                   <Badge variant="outline" className="text-[10px]">Amt: {amountUnitLabel}</Badge>
                 </CardTitle>
                 <CardDescription>Top products with incoterm distribution</CardDescription>
@@ -2869,6 +2997,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                             breakdown: {
                               outstandingDelivery: (Number(r.outstanding_quantity) || 0) * unitPrice,
                               outstandingPayment: (Number(r.outstanding_payment_quantity) || 0) * unitPrice,
+                              outstandingClaimMutu: 0,
+                              outstandingClaimSusut: 0,
                               completed: (Number(r.completed_quantity) || 0) * unitPrice
                             }
                           }
@@ -2882,6 +3012,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                 breakdown: {
                                   outstandingDelivery: otherOutstandingDelivery,
                                   outstandingPayment: otherOutstandingPayment,
+                                  outstandingClaimMutu: 0,
+                                  outstandingClaimSusut: 0,
                                   completed: otherCompleted
                                 }
                               }
@@ -3038,6 +3170,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       const completed_quantity = rows.reduce((s, x) => s + (Number(x.completed_quantity) || 0), 0)
                       const outstanding_quantity = rows.reduce((s, x) => s + (Number(x.outstanding_quantity) || 0), 0)
                       const outstanding_payment_quantity = rows.reduce((s, x) => s + (Number(x.outstanding_payment_quantity) || 0), 0)
+                      const outstanding_claim_mutu_qty = rows.reduce((s, x) => s + (Number(x.outstanding_claim_mutu_qty) || 0), 0)
+                      const outstanding_claim_susut_qty = rows.reduce((s, x) => s + (Number(x.outstanding_claim_susut_qty) || 0), 0)
                       const contract_count = rows.reduce((s, x) => s + (Number(x.contract_count) || 0), 0)
                       return {
                         plant: plantName,
@@ -3047,6 +3181,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                           completed_quantity,
                           outstanding_quantity,
                           outstanding_payment_quantity,
+                          outstanding_claim_mutu_qty,
+                          outstanding_claim_susut_qty,
                           contract_count,
                         },
                       }
@@ -3065,12 +3201,16 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                         },
                         { total: 0, completed: 0, outstanding: 0, outstandingPayment: 0 }
                       )
-                      const segments = top.map((r) => ({
+                      const tones: Array<'default' | 'good' | 'warn' | 'bad'> = ['default', 'good', 'warn', 'bad']
+                      const segments = top.map((r, i) => ({
                         label: (r.incoterm || 'Blank').trim() || 'Blank',
                         value: Number(r.total_quantity) || 0,
+                        tone: tones[i % tones.length],
                         breakdown: {
                           outstandingDelivery: Number(r.outstanding_quantity) || 0,
                           outstandingPayment: Number(r.outstanding_payment_quantity) || 0,
+                          outstandingClaimMutu: Number(r.outstanding_claim_mutu_qty) || 0,
+                          outstandingClaimSusut: Number(r.outstanding_claim_susut_qty) || 0,
                           completed: Number(r.completed_quantity) || 0,
                         },
                       }))
@@ -3078,9 +3218,12 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                         segments.push({
                           label: 'Other',
                           value: otherTotal.total,
+                          tone: 'default' as const,
                           breakdown: {
                             outstandingDelivery: otherTotal.outstanding,
                             outstandingPayment: otherTotal.outstandingPayment,
+                            outstandingClaimMutu: other.reduce((s, x) => s + (Number(x.outstanding_claim_mutu_qty) || 0), 0),
+                            outstandingClaimSusut: other.reduce((s, x) => s + (Number(x.outstanding_claim_susut_qty) || 0), 0),
                             completed: otherTotal.completed,
                           },
                         })
@@ -3109,7 +3252,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                             </div>
                           </div>
 
-                          <div className="mt-2 grid grid-cols-2 lg:grid-cols-4 gap-2">
+                          <div className="mt-2 grid grid-cols-2 lg:grid-cols-6 gap-2">
                             <div className="text-[11px]">
                               <span className="text-gray-500">Total:</span>
                               <button
@@ -3147,6 +3290,32 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                 }}
                               >
                                 {formatKg(p.summary.outstanding_payment_quantity)}
+                              </button>
+                            </div>
+                            <div className="text-[11px]">
+                              <span className="text-gray-500">Outstanding Claim Mutu:</span>
+                              <button
+                                type="button"
+                                className="font-semibold text-orange-700 ml-1 hover:underline"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  router.push('/trucking/claim-mutu')
+                                }}
+                              >
+                                {formatKg((p.summary as any).outstanding_claim_mutu_qty || 0)}
+                              </button>
+                            </div>
+                            <div className="text-[11px]">
+                              <span className="text-gray-500">Outstanding Claim Susut:</span>
+                              <button
+                                type="button"
+                                className="font-semibold text-orange-700 ml-1 hover:underline"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  router.push('/trucking/claim-susut')
+                                }}
+                              >
+                                {formatKg((p.summary as any).outstanding_claim_susut_qty || 0)}
                               </button>
                             </div>
                             <div className="text-[11px] lg:text-right">
@@ -3285,7 +3454,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       <div className="text-right">
                         <div className="font-semibold text-sm">{formatKg(owner.total_quantity_sent || 0)}</div>
                         <div className="text-xs text-gray-500">
-                          {owner.avg_gain_loss_percentage && typeof owner.avg_gain_loss_percentage === 'number' ? `${owner.avg_gain_loss_percentage.toFixed(1)}% GL` : '0% GL'}
+                          {owner.avg_gain_loss_percentage && typeof owner.avg_gain_loss_percentage === 'number' ? `${Math.round(owner.avg_gain_loss_percentage)}% GL` : '0% GL'}
                         </div>
                       </div>
                     </div>
@@ -4404,10 +4573,10 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                             </button>
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums">
-                            {g.weightedAvgDeliveryDays != null ? formatNumber(Math.round(g.weightedAvgDeliveryDays * 10) / 10) : '-'}
+                            {g.weightedAvgDeliveryDays != null ? formatNumber(Math.round(g.weightedAvgDeliveryDays)) : '-'}
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums">
-                            {g.weightedAvgPaymentDays != null ? formatNumber(Math.round(g.weightedAvgPaymentDays * 10) / 10) : '-'}
+                            {g.weightedAvgPaymentDays != null ? formatNumber(Math.round(g.weightedAvgPaymentDays)) : '-'}
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums">
                             <button
@@ -4500,6 +4669,157 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                         const next = drilldownPage + 1
                         setDrilldownPage(next)
                         fetchContractsDrilldownPage(next, drilldownQuery)
+                      }}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {claimDrilldownKind && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white w-[96vw] max-w-[96vw] rounded-lg shadow-lg p-4 md:p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between mb-4 gap-4">
+              <div className="min-w-0">
+                <h2 className="text-xl font-semibold truncate">
+                  {claimDrilldownKind === 'mutu' ? 'Outstanding Claim Mutu' : 'Outstanding Claim Susut'}
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  Latest import • OS days ≥ 0 • PO exists in contracts
+                </p>
+                <p className="text-sm text-gray-500 mt-1">
+                  {loadingClaimDrilldown
+                    ? 'Loading...'
+                    : `${claimDrilldownTotalCount.toLocaleString()} rows • Page ${claimDrilldownPage}`}
+                </p>
+              </div>
+              <Button variant="ghost" onClick={closeClaimDrilldown} className="text-gray-500 hover:text-gray-700">
+                ✕
+              </Button>
+            </div>
+
+            <div className="border rounded-lg overflow-hidden">
+              <div className="bg-gray-50 px-4 py-3 border-b flex items-center justify-between gap-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    router.push(claimDrilldownKind === 'mutu' ? '/trucking/claim-mutu' : '/trucking/claim-susut')
+                  }
+                >
+                  Open full Claim {claimDrilldownKind === 'mutu' ? 'Mutu' : 'Susut'} page
+                </Button>
+              </div>
+              <div className="overflow-x-auto">
+                {loadingClaimDrilldown ? (
+                  <div className="text-center py-10 text-gray-500">Loading details...</div>
+                ) : claimDrilldownRows.length === 0 ? (
+                  <div className="text-center py-10 text-gray-500">No rows found</div>
+                ) : claimDrilldownKind === 'mutu' ? (
+                  <table className="w-full text-sm min-w-[1100px]">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">PO</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Contract ext</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Vendor</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Product</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Qty claim (Kg)</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Amount IDR (after tax)</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">OS days</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">CR date</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {claimDrilldownRows.map((r) => (
+                        <tr key={String(r.id)} className="hover:bg-gray-50">
+                          <td className="px-4 py-3">{String(r.po_number ?? '-')}</td>
+                          <td className="px-4 py-3">{String(r.contract_ext_no ?? '-')}</td>
+                          <td className="px-4 py-3">{String(r.vendor_name ?? '-')}</td>
+                          <td className="px-4 py-3">{String(r.product ?? '-')}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(r.qty_claim_kg as number)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums text-teal-800 font-medium">
+                            {formatRupiah(r.amount_after_tax_idr)}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">{r.os_days != null ? String(r.os_days) : '-'}</td>
+                          <td className="px-4 py-3">{formatDate(String(r.cr_date ?? ''))}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <table className="w-full text-sm min-w-[1100px]">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">PO</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Contract ext</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Vendor</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Commodity</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Qty claim</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Amount IDR (after tax)</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">OS days</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">CR date</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {claimDrilldownRows.map((r) => (
+                        <tr key={String(r.id)} className="hover:bg-gray-50">
+                          <td className="px-4 py-3">{String(r.po_number ?? '-')}</td>
+                          <td className="px-4 py-3">{String(r.contract_ext_no ?? '-')}</td>
+                          <td className="px-4 py-3">{String(r.vendor_name ?? '-')}</td>
+                          <td className="px-4 py-3">{String(r.commodity ?? '-')}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(r.qty_claim as number)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums text-rose-800 font-medium">
+                            {formatRupiah(r.amount_after_tax_idr)}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">{r.os_days != null ? String(r.os_days) : '-'}</td>
+                          <td className="px-4 py-3">{formatDate(String(r.cr_date ?? ''))}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {!loadingClaimDrilldown && claimDrilldownTotalCount > claimDrilldownPageSize && (
+                <div className="flex items-center justify-between px-4 py-3 border-t bg-white">
+                  <div className="text-xs text-gray-600">
+                    Showing{' '}
+                    <span className="font-medium text-gray-900">
+                      {((claimDrilldownPage - 1) * claimDrilldownPageSize + 1).toLocaleString()}
+                    </span>
+                    {' '}to{' '}
+                    <span className="font-medium text-gray-900">
+                      {Math.min(claimDrilldownPage * claimDrilldownPageSize, claimDrilldownTotalCount).toLocaleString()}
+                    </span>
+                    {' '}of{' '}
+                    <span className="font-medium text-gray-900">{claimDrilldownTotalCount.toLocaleString()}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={claimDrilldownPage <= 1}
+                      onClick={() => {
+                        const next = Math.max(1, claimDrilldownPage - 1)
+                        setClaimDrilldownPage(next)
+                        fetchClaimDrilldownPage(next, claimDrilldownKind)
+                      }}
+                    >
+                      Prev
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={claimDrilldownPage * claimDrilldownPageSize >= claimDrilldownTotalCount}
+                      onClick={() => {
+                        const next = claimDrilldownPage + 1
+                        setClaimDrilldownPage(next)
+                        fetchClaimDrilldownPage(next, claimDrilldownKind)
                       }}
                     >
                       Next

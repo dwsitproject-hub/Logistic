@@ -3,7 +3,7 @@
 export const FIELD_HELP = {
   contractAging: `Days from today to Due Date Delivery End (or delivery window). Overdue shows in red when past the end date.`,
 
-  overUnderDelivery: `When contract status is Close: compares Total STO Quantity vs Contract Quantity — "Over Delivery", "Under Delivery", or "Passed" if equal. Open contracts show "-".`,
+  overUnderDelivery: `When contract status is Close: compares Outstanding Quantity vs 0 — "Over Delivery" when outstanding < 0, "Under Delivery" when outstanding > 0, or "Passed" when outstanding = 0. Open contracts show "-".`,
 
   logCycle: `Land: Cargo Readiness Date → latest Trucking Last Receive (Close) or today (Open). SEA: Cargo Readiness Date → latest ATA Vessel Complete Discharge (Close) or today (Open).`,
 

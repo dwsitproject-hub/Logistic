@@ -302,12 +302,44 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
           c.id AS contract_pk,
           c.contract_id,
           MAX(c.quantity_ordered) AS contract_quantity,
+          MAX(COALESCE(c.contract_value, 0)) AS contract_value,
+          MAX(COALESCE(c.incoterm, '')) AS incoterm,
           COALESCE((
-            SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
+            SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC))
             FROM sap_processed_data spd
-            WHERE spd.contract_number = c.contract_id 
-              AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-          ), 0) AS delivered_quantity
+            WHERE spd.contract_number = c.contract_id
+              AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
+          ), 0) AS quantity_delivery,
+          COALESCE((
+            SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC))
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = c.contract_id
+              AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
+          ), 0) AS quantity_receive,
+          -- “Delivered quantity” for dashboard = the basis that drives Outstanding Quantity by Incoterm rule
+          COALESCE(
+            CASE
+              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE((
+                SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC))
+                FROM sap_processed_data spd
+                WHERE spd.contract_number = c.contract_id
+                  AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
+              ), 0)
+              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('LCO', 'FOB') THEN COALESCE((
+                SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC))
+                FROM sap_processed_data spd
+                WHERE spd.contract_number = c.contract_id
+                  AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
+              ), 0)
+              ELSE COALESCE((
+                SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
+                FROM sap_processed_data spd
+                WHERE spd.contract_number = c.contract_id 
+                  AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+              ), 0)
+            END,
+            0
+          ) AS delivered_quantity
         FROM contracts c
         WHERE 1=1 ${contractFilter}
         GROUP BY c.id, c.contract_id
@@ -323,15 +355,71 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
       SELECT 
         COALESCE(SUM(q.contract_quantity), 0) AS total_quantity,
         COALESCE(SUM(q.delivered_quantity), 0) AS delivered_quantity,
-        COALESCE(SUM(q.contract_quantity - q.delivered_quantity), 0) AS outstanding_quantity,
+        -- Exclude over-delivery from outstanding totals (negative outstanding treated as 0)
+        COALESCE(SUM(GREATEST(q.contract_quantity - q.delivered_quantity, 0)), 0) AS outstanding_quantity,
         COALESCE(SUM(CASE WHEN COALESCE(ps.has_paid, 0) = 1 THEN q.delivered_quantity ELSE 0 END), 0) AS delivered_paid_quantity,
         COALESCE(SUM(CASE WHEN COALESCE(ps.has_blank_payoff, 0) = 1 THEN q.delivered_quantity ELSE 0 END), 0) AS delivered_pending_quantity,
-        COALESCE(SUM(CASE WHEN COALESCE(ps.has_paid, 0) = 1 THEN (q.contract_quantity - q.delivered_quantity) ELSE 0 END), 0) AS outstanding_paid_quantity,
-        COALESCE(SUM(CASE WHEN COALESCE(ps.has_blank_payoff, 0) = 1 THEN (q.contract_quantity - q.delivered_quantity) ELSE 0 END), 0) AS outstanding_pending_quantity
+        COALESCE(SUM(CASE WHEN COALESCE(ps.has_paid, 0) = 1 THEN GREATEST(q.contract_quantity - q.delivered_quantity, 0) ELSE 0 END), 0) AS outstanding_paid_quantity,
+        COALESCE(SUM(CASE WHEN COALESCE(ps.has_blank_payoff, 0) = 1 THEN GREATEST(q.contract_quantity - q.delivered_quantity, 0) ELSE 0 END), 0) AS outstanding_pending_quantity,
+        COALESCE(SUM(CASE
+          WHEN COALESCE(ps.has_blank_payoff, 0) = 1 AND q.contract_quantity > 0
+          THEN (GREATEST(q.contract_quantity - q.delivered_quantity, 0)::numeric / NULLIF(q.contract_quantity::numeric, 0)) * q.contract_value::numeric
+          ELSE 0
+        END), 0) AS outstanding_pending_amount
       FROM contract_qty q
       LEFT JOIN payment_status_per_contract ps ON ps.contract_id = q.contract_pk
     `, params);
     p.mark('outstandingStats');
+
+    // Outstanding claim quantities by PO number (latest Claim Mutu/Susut import).
+    // Join key: contracts.po_number = claim_*_rows.po_number (as requested).
+    //
+    // Note: we intentionally do NOT apply the dashboard contract date filters here.
+    // Applying contractFilter can exclude older contracts (YTD default) and zero out
+    // claims that still exist in Claim Mutu/Susut uploads. We still use PO as FK by
+    // restricting to POs that exist in `contracts`.
+    const claimOutstandingStats = await query(
+      `
+      WITH filtered_pos AS (
+        SELECT DISTINCT NULLIF(TRIM(c.po_number), '') AS po_number
+        FROM contracts c
+        WHERE NULLIF(TRIM(c.po_number), '') IS NOT NULL
+      ),
+      latest_mutu AS (
+        SELECT id FROM claim_mutu_imports ORDER BY uploaded_at DESC NULLS LAST LIMIT 1
+      ),
+      latest_susut AS (
+        SELECT id FROM claim_susut_imports ORDER BY uploaded_at DESC NULLS LAST LIMIT 1
+      ),
+      mutu AS (
+        SELECT
+          COALESCE(SUM(COALESCE(r.qty_claim_kg, 0)), 0)::numeric AS qty,
+          COALESCE(SUM(COALESCE(r.amount_after_tax_idr, 0)), 0)::numeric AS amount_idr
+        FROM claim_mutu_rows r
+        JOIN filtered_pos p ON p.po_number = NULLIF(TRIM(r.po_number), '')
+        WHERE r.import_id = (SELECT id FROM latest_mutu)
+          AND r.os_days IS NOT NULL
+          AND r.os_days >= 0
+      ),
+      susut AS (
+        SELECT
+          COALESCE(SUM(COALESCE(r.qty_claim, 0)), 0)::numeric AS qty,
+          COALESCE(SUM(COALESCE(r.amount_after_tax_idr, 0)), 0)::numeric AS amount_idr
+        FROM claim_susut_rows r
+        JOIN filtered_pos p ON p.po_number = NULLIF(TRIM(r.po_number), '')
+        WHERE r.import_id = (SELECT id FROM latest_susut)
+          AND r.os_days IS NOT NULL
+          AND r.os_days >= 0
+      )
+      SELECT
+        (SELECT qty FROM mutu) AS outstanding_claim_mutu_qty,
+        (SELECT amount_idr FROM mutu) AS outstanding_claim_mutu_amount_idr,
+        (SELECT qty FROM susut) AS outstanding_claim_susut_qty,
+        (SELECT amount_idr FROM susut) AS outstanding_claim_susut_amount_idr
+      `,
+      [],
+    );
+    p.mark('claimOutstandingStats');
 
     // Get shipment statistics by status
     const shipmentsStats = await query(`
@@ -478,6 +566,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
     const tr = truckingStats.rows[0] || {};
     const fr = financeStats.rows[0] || {};
     const obr = openBreakdownStats.rows[0] || {};
+    const cor = claimOutstandingStats.rows[0] || {};
 
     const stats = {
       contracts: {
@@ -495,7 +584,12 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         deliveredPaidQuantity: parseFloat(or_.delivered_paid_quantity) || 0,
         deliveredPendingQuantity: parseFloat(or_.delivered_pending_quantity) || 0,
         outstandingPaidQuantity: parseFloat(or_.outstanding_paid_quantity) || 0,
-        outstandingPendingQuantity: parseFloat(or_.outstanding_pending_quantity) || 0
+        outstandingPendingQuantity: parseFloat(or_.outstanding_pending_quantity) || 0,
+        outstandingPendingAmount: parseFloat(or_.outstanding_pending_amount) || 0,
+        outstandingClaimMutuQty: parseFloat(cor.outstanding_claim_mutu_qty) || 0,
+        outstandingClaimSusutQty: parseFloat(cor.outstanding_claim_susut_qty) || 0,
+        outstandingClaimMutuAmount: parseFloat(cor.outstanding_claim_mutu_amount_idr) || 0,
+        outstandingClaimSusutAmount: parseFloat(cor.outstanding_claim_susut_amount_idr) || 0,
       },
       shipments: {
         total: parseInt(sr.total_shipments) || 0,
@@ -547,6 +641,146 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
     return res.status(500).json({
       success: false,
       error: { message },
+    });
+  }
+};
+
+/** Paginated Claim Mutu rows included in dashboard “outstanding” (latest import, OS days ≥ 0, PO exists in contracts). */
+export const getClaimMutuOutstandingRows = async (req: AuthRequest, res: Response) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '100'), 10) || 100, 1), 500);
+    const offset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
+
+    const baseCte = `
+      WITH filtered_pos AS (
+        SELECT DISTINCT NULLIF(TRIM(c.po_number), '') AS po_number
+        FROM contracts c
+        WHERE NULLIF(TRIM(c.po_number), '') IS NOT NULL
+      ),
+      latest_mutu AS (
+        SELECT id FROM claim_mutu_imports ORDER BY uploaded_at DESC NULLS LAST LIMIT 1
+      )`;
+
+    const countRes = await query(
+      `${baseCte}
+      SELECT COUNT(*)::int AS c
+      FROM claim_mutu_rows r
+      JOIN filtered_pos p ON p.po_number = NULLIF(TRIM(r.po_number), '')
+      WHERE r.import_id = (SELECT id FROM latest_mutu)
+        AND r.os_days IS NOT NULL
+        AND r.os_days >= 0`,
+      []
+    );
+
+    const rowsRes = await query(
+      `${baseCte}
+      SELECT
+        r.id,
+        r.vendor_code,
+        r.vendor_name,
+        r.group_name,
+        r.po_number,
+        r.contract_ext_no,
+        r.product,
+        r.uom,
+        r.currency,
+        r.qty_claim_kg,
+        r.amount_after_tax_idr,
+        r.os_days,
+        r.cr_date,
+        r.crno
+      FROM claim_mutu_rows r
+      JOIN filtered_pos p ON p.po_number = NULLIF(TRIM(r.po_number), '')
+      WHERE r.import_id = (SELECT id FROM latest_mutu)
+        AND r.os_days IS NOT NULL
+        AND r.os_days >= 0
+      ORDER BY r.amount_after_tax_idr DESC NULLS LAST, r.po_number NULLS LAST
+      LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    return res.json({
+      success: true,
+      data: rowsRes.rows,
+      meta: { totalCount: Number(countRes.rows[0]?.c) || 0 },
+    });
+  } catch (error) {
+    logger.error('getClaimMutuOutstandingRows error:', error);
+    return res.status(500).json({
+      success: false,
+      error: {
+        message: error instanceof Error ? error.message : 'Failed to load claim mutu outstanding rows',
+      },
+    });
+  }
+};
+
+/** Paginated Claim Susut rows included in dashboard “outstanding” (latest import, OS days ≥ 0, PO exists in contracts). */
+export const getClaimSusutOutstandingRows = async (req: AuthRequest, res: Response) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '100'), 10) || 100, 1), 500);
+    const offset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
+
+    const baseCte = `
+      WITH filtered_pos AS (
+        SELECT DISTINCT NULLIF(TRIM(c.po_number), '') AS po_number
+        FROM contracts c
+        WHERE NULLIF(TRIM(c.po_number), '') IS NOT NULL
+      ),
+      latest_susut AS (
+        SELECT id FROM claim_susut_imports ORDER BY uploaded_at DESC NULLS LAST LIMIT 1
+      )`;
+
+    const countRes = await query(
+      `${baseCte}
+      SELECT COUNT(*)::int AS c
+      FROM claim_susut_rows r
+      JOIN filtered_pos p ON p.po_number = NULLIF(TRIM(r.po_number), '')
+      WHERE r.import_id = (SELECT id FROM latest_susut)
+        AND r.os_days IS NOT NULL
+        AND r.os_days >= 0`,
+      []
+    );
+
+    const rowsRes = await query(
+      `${baseCte}
+      SELECT
+        r.id,
+        r.vendor_code,
+        r.vendor_name,
+        r.po_number,
+        r.contract_ext_no,
+        r.commodity,
+        r.uom,
+        r.currency,
+        r.qty_claim,
+        r.amount_after_tax_idr,
+        r.os_days,
+        r.cr_date,
+        r.crno,
+        r.type
+      FROM claim_susut_rows r
+      JOIN filtered_pos p ON p.po_number = NULLIF(TRIM(r.po_number), '')
+      WHERE r.import_id = (SELECT id FROM latest_susut)
+        AND r.os_days IS NOT NULL
+        AND r.os_days >= 0
+      ORDER BY r.amount_after_tax_idr DESC NULLS LAST, r.po_number NULLS LAST
+      LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    return res.json({
+      success: true,
+      data: rowsRes.rows,
+      meta: { totalCount: Number(countRes.rows[0]?.c) || 0 },
+    });
+  } catch (error) {
+    logger.error('getClaimSusutOutstandingRows error:', error);
+    return res.status(500).json({
+      success: false,
+      error: {
+        message: error instanceof Error ? error.message : 'Failed to load claim susut outstanding rows',
+      },
     });
   }
 };
@@ -1586,17 +1820,39 @@ export const getContractQuantityByProduct = async (req: AuthRequest, res: Respon
           c.product,
           COUNT(DISTINCT c.contract_id) as contract_count,
           SUM(c.quantity_ordered) as total_quantity,
-          COALESCE((
-            SELECT SUM(CAST(REPLACE(REPLACE(s.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
-            FROM sap_processed_data s
-            WHERE s.product = c.product
-            AND s.sto_number IS NOT NULL 
-            AND s.data->'contract'->>'sto_quantity' IS NOT NULL
+          COALESCE(SUM(
+            CASE
+              WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(q.quantity_receive, 0)
+              WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(q.quantity_delivery, 0)
+              ELSE COALESCE(q.total_sto_quantity, 0)
+            END
           ), 0) as completed_quantity,
           AVG(c.unit_price) as avg_unit_price,
           SUM(c.contract_value) as total_contract_value,
           COUNT(DISTINCT c.supplier) as supplier_count
         FROM contracts c
+        LEFT JOIN (
+          SELECT
+            spd.contract_number,
+            COALESCE(SUM(
+              CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC)
+            ) FILTER (
+              WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
+            ), 0)::numeric AS quantity_receive,
+            COALESCE(SUM(
+              CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC)
+            ) FILTER (
+              WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
+            ), 0)::numeric AS quantity_delivery,
+            COALESCE(SUM(
+              CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC)
+            ) FILTER (
+              WHERE spd.data->'contract'->>'sto_quantity' IS NOT NULL AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
+            ), 0)::numeric AS total_sto_quantity
+          FROM sap_processed_data spd
+          WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+          GROUP BY spd.contract_number
+        ) q ON q.contract_number = c.contract_id
         WHERE c.product IS NOT NULL AND c.product != '' ${contractFilter}
         GROUP BY c.product
       ) product_data
@@ -1632,20 +1888,30 @@ export const getContractQuantityByProductIncoterm = async (req: AuthRequest, res
           c.supplier,
           c.quantity_ordered,
           c.unit_price,
-          c.contract_value
+          c.contract_value,
+          NULLIF(TRIM(c.po_number), '') AS po_number
         FROM contracts c
         WHERE c.product IS NOT NULL AND TRIM(c.product) != '' ${contractFilter}
       ),
       delivered_by_contract AS (
         SELECT
           spd.contract_number AS contract_id,
-          SUM(
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_receive,
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_delivery,
+          COALESCE(SUM(
             CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
-          ) AS delivered_quantity
+          ) FILTER (
+            WHERE spd.data->'contract'->>'sto_quantity' IS NOT NULL AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
+          ), 0)::numeric AS total_sto_quantity
         FROM sap_processed_data spd
-        WHERE spd.sto_number IS NOT NULL
-          AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-          AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
         GROUP BY spd.contract_number
       ),
       payment_status_per_contract AS (
@@ -1655,6 +1921,53 @@ export const getContractQuantityByProductIncoterm = async (req: AuthRequest, res
         FROM payments p
         GROUP BY p.contract_id
       ),
+      latest_mutu AS (
+        SELECT id FROM claim_mutu_imports ORDER BY uploaded_at DESC NULLS LAST LIMIT 1
+      ),
+      latest_susut AS (
+        SELECT id FROM claim_susut_imports ORDER BY uploaded_at DESC NULLS LAST LIMIT 1
+      ),
+      claim_mutu_po AS (
+        SELECT
+          NULLIF(TRIM(po_number), '') AS po_number,
+          COALESCE(SUM(COALESCE(qty_claim_kg, 0)), 0)::numeric AS qty
+        FROM claim_mutu_rows
+        WHERE import_id = (SELECT id FROM latest_mutu)
+          AND os_days IS NOT NULL
+          AND os_days >= 0
+          AND NULLIF(TRIM(po_number), '') IS NOT NULL
+        GROUP BY 1
+      ),
+      claim_susut_po AS (
+        SELECT
+          NULLIF(TRIM(po_number), '') AS po_number,
+          COALESCE(SUM(COALESCE(qty_claim, 0)), 0)::numeric AS qty
+        FROM claim_susut_rows
+        WHERE import_id = (SELECT id FROM latest_susut)
+          AND os_days IS NOT NULL
+          AND os_days >= 0
+          AND NULLIF(TRIM(po_number), '') IS NOT NULL
+        GROUP BY 1
+      ),
+      group_pos AS (
+        SELECT DISTINCT
+          bc.product,
+          bc.incoterm,
+          bc.po_number
+        FROM base_contracts bc
+        WHERE bc.po_number IS NOT NULL
+      ),
+      claims_by_group AS (
+        SELECT
+          gp.product,
+          gp.incoterm,
+          COALESCE(SUM(COALESCE(cm.qty, 0)), 0)::numeric AS outstanding_claim_mutu_qty,
+          COALESCE(SUM(COALESCE(cs.qty, 0)), 0)::numeric AS outstanding_claim_susut_qty
+        FROM group_pos gp
+        LEFT JOIN claim_mutu_po cm ON cm.po_number = gp.po_number
+        LEFT JOIN claim_susut_po cs ON cs.po_number = gp.po_number
+        GROUP BY gp.product, gp.incoterm
+      ),
       agg AS (
         SELECT
           bc.product,
@@ -1662,12 +1975,38 @@ export const getContractQuantityByProductIncoterm = async (req: AuthRequest, res
           COUNT(DISTINCT bc.contract_id) AS contract_count,
           COUNT(DISTINCT bc.supplier) AS supplier_count,
           SUM(bc.quantity_ordered) AS total_quantity,
-          SUM(COALESCE(db.delivered_quantity, 0)) AS completed_quantity,
-          SUM(bc.quantity_ordered) - SUM(COALESCE(db.delivered_quantity, 0)) AS outstanding_quantity,
+          SUM(
+            CASE
+              WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(db.quantity_receive, 0)
+              WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(db.quantity_delivery, 0)
+              ELSE COALESCE(db.total_sto_quantity, 0)
+            END
+          ) AS completed_quantity,
+          COALESCE(SUM(GREATEST(
+            bc.quantity_ordered - (
+              CASE
+                WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(db.quantity_receive, 0)
+                WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(db.quantity_delivery, 0)
+                ELSE COALESCE(db.total_sto_quantity, 0)
+              END
+            ),
+            0
+          )), 0) AS outstanding_quantity,
           SUM(
             CASE
               WHEN COALESCE(ps.has_blank_payoff, 0) = 1
-              THEN (bc.quantity_ordered - COALESCE(db.delivered_quantity, 0))
+              THEN (
+                GREATEST(
+                  bc.quantity_ordered - (
+                    CASE
+                      WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(db.quantity_receive, 0)
+                      WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(db.quantity_delivery, 0)
+                      ELSE COALESCE(db.total_sto_quantity, 0)
+                    END
+                  ),
+                  0
+                )
+              )
               ELSE 0
             END
           ) AS outstanding_payment_quantity,
@@ -1688,8 +2027,11 @@ export const getContractQuantityByProductIncoterm = async (req: AuthRequest, res
         a.outstanding_quantity,
         a.outstanding_payment_quantity,
         a.avg_unit_price,
-        a.total_contract_value
+        a.total_contract_value,
+        COALESCE(cg.outstanding_claim_mutu_qty, 0)::numeric AS outstanding_claim_mutu_qty,
+        COALESCE(cg.outstanding_claim_susut_qty, 0)::numeric AS outstanding_claim_susut_qty
       FROM agg a
+      LEFT JOIN claims_by_group cg ON cg.product = a.product AND cg.incoterm = a.incoterm
       ORDER BY a.product, a.total_quantity DESC NULLS LAST, a.incoterm
       `,
       params
@@ -1774,13 +2116,22 @@ export const getContractQuantityByProductIncotermPlantSource = async (req: AuthR
       delivered_by_contract AS (
         SELECT
           spd.contract_number AS contract_id,
-          SUM(
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_receive,
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_delivery,
+          COALESCE(SUM(
             CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
-          ) AS delivered_quantity
+          ) FILTER (
+            WHERE spd.data->'contract'->>'sto_quantity' IS NOT NULL AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
+          ), 0)::numeric AS total_sto_quantity
         FROM sap_processed_data spd
-        WHERE spd.sto_number IS NOT NULL
-          AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-          AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
         GROUP BY spd.contract_number
       ),
       payment_status_per_contract AS (
@@ -1800,12 +2151,38 @@ export const getContractQuantityByProductIncotermPlantSource = async (req: AuthR
           COUNT(DISTINCT bc.contract_id) AS contract_count,
           COUNT(DISTINCT bc.supplier) AS supplier_count,
           SUM(bc.quantity_ordered) AS total_quantity,
-          SUM(COALESCE(db.delivered_quantity, 0)) AS completed_quantity,
-          SUM(bc.quantity_ordered) - SUM(COALESCE(db.delivered_quantity, 0)) AS outstanding_quantity,
+          SUM(
+            CASE
+              WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(db.quantity_receive, 0)
+              WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(db.quantity_delivery, 0)
+              ELSE COALESCE(db.total_sto_quantity, 0)
+            END
+          ) AS completed_quantity,
+          COALESCE(SUM(GREATEST(
+            bc.quantity_ordered - (
+              CASE
+                WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(db.quantity_receive, 0)
+                WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(db.quantity_delivery, 0)
+                ELSE COALESCE(db.total_sto_quantity, 0)
+              END
+            ),
+            0
+          )), 0) AS outstanding_quantity,
           SUM(
             CASE
               WHEN COALESCE(ps.has_blank_payoff, 0) = 1
-              THEN (bc.quantity_ordered - COALESCE(db.delivered_quantity, 0))
+              THEN (
+                GREATEST(
+                  bc.quantity_ordered - (
+                    CASE
+                      WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(db.quantity_receive, 0)
+                      WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(db.quantity_delivery, 0)
+                      ELSE COALESCE(db.total_sto_quantity, 0)
+                    END
+                  ),
+                  0
+                )
+              )
               ELSE 0
             END
           ) AS outstanding_payment_quantity,
@@ -1916,6 +2293,7 @@ export const getContractQuantityByPlant = async (req: AuthRequest, res: Response
           c.supplier,
           COALESCE(c.quantity_ordered, 0) AS quantity_ordered,
           COALESCE(c.contract_value, 0) AS contract_value,
+          COALESCE(NULLIF(TRIM(c.incoterm), ''), '') AS incoterm,
           COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_location
         FROM contracts c
         LEFT JOIN LATERAL (
@@ -1956,13 +2334,22 @@ export const getContractQuantityByPlant = async (req: AuthRequest, res: Response
       delivered_by_contract AS (
         SELECT
           spd.contract_number AS contract_id,
-          SUM(
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_receive,
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_delivery,
+          COALESCE(SUM(
             CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
-          ) AS completed_quantity
+          ) FILTER (
+            WHERE spd.data->'contract'->>'sto_quantity' IS NOT NULL AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
+          ), 0)::numeric AS total_sto_quantity
         FROM sap_processed_data spd
-        WHERE spd.sto_number IS NOT NULL
-          AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-          AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
         GROUP BY spd.contract_number
       ),
       per_contract AS (
@@ -1971,7 +2358,17 @@ export const getContractQuantityByPlant = async (req: AuthRequest, res: Response
           fc.supplier,
           fc.plant_location,
           fc.quantity_ordered,
-          LEAST(fc.quantity_ordered, COALESCE(db.completed_quantity, 0)) AS completed_quantity,
+          LEAST(
+            fc.quantity_ordered,
+            COALESCE(
+              CASE
+                WHEN UPPER(TRIM(COALESCE(fc.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN db.quantity_receive
+                WHEN UPPER(TRIM(COALESCE(fc.incoterm, ''))) IN ('LCO', 'FOB') THEN db.quantity_delivery
+                ELSE db.total_sto_quantity
+              END,
+              0
+            )
+          ) AS completed_quantity,
           fc.contract_value
         FROM filtered_contracts fc
         LEFT JOIN delivered_by_contract db ON db.contract_id = fc.contract_id
@@ -2068,7 +2465,8 @@ export const getContractQuantityByPlantIncoterm = async (req: AuthRequest, res: 
           c.supplier,
           COALESCE(c.quantity_ordered, 0) AS quantity_ordered,
           COALESCE(NULLIF(TRIM(c.incoterm), ''), 'Blank') AS incoterm,
-          COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_location
+          COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_location,
+          NULLIF(TRIM(c.po_number), '') AS po_number
         FROM contracts c
         LEFT JOIN LATERAL (
           SELECT UPPER(TRIM(COALESCE(
@@ -2108,13 +2506,22 @@ export const getContractQuantityByPlantIncoterm = async (req: AuthRequest, res: 
       delivered_by_contract AS (
         SELECT
           spd.contract_number AS contract_id,
-          SUM(
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_receive,
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_delivery,
+          COALESCE(SUM(
             CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
-          ) AS delivered_quantity
+          ) FILTER (
+            WHERE spd.data->'contract'->>'sto_quantity' IS NOT NULL AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
+          ), 0)::numeric AS total_sto_quantity
         FROM sap_processed_data spd
-        WHERE spd.sto_number IS NOT NULL
-          AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-          AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
         GROUP BY spd.contract_number
       ),
       payment_status_per_contract AS (
@@ -2124,6 +2531,53 @@ export const getContractQuantityByPlantIncoterm = async (req: AuthRequest, res: 
         FROM payments p
         GROUP BY p.contract_id
       ),
+      latest_mutu AS (
+        SELECT id FROM claim_mutu_imports ORDER BY uploaded_at DESC NULLS LAST LIMIT 1
+      ),
+      latest_susut AS (
+        SELECT id FROM claim_susut_imports ORDER BY uploaded_at DESC NULLS LAST LIMIT 1
+      ),
+      claim_mutu_po AS (
+        SELECT
+          NULLIF(TRIM(po_number), '') AS po_number,
+          COALESCE(SUM(COALESCE(qty_claim_kg, 0)), 0)::numeric AS qty
+        FROM claim_mutu_rows
+        WHERE import_id = (SELECT id FROM latest_mutu)
+          AND os_days IS NOT NULL
+          AND os_days >= 0
+          AND NULLIF(TRIM(po_number), '') IS NOT NULL
+        GROUP BY 1
+      ),
+      claim_susut_po AS (
+        SELECT
+          NULLIF(TRIM(po_number), '') AS po_number,
+          COALESCE(SUM(COALESCE(qty_claim, 0)), 0)::numeric AS qty
+        FROM claim_susut_rows
+        WHERE import_id = (SELECT id FROM latest_susut)
+          AND os_days IS NOT NULL
+          AND os_days >= 0
+          AND NULLIF(TRIM(po_number), '') IS NOT NULL
+        GROUP BY 1
+      ),
+      group_pos AS (
+        SELECT DISTINCT
+          bc.plant_location,
+          bc.incoterm,
+          bc.po_number
+        FROM base_contracts bc
+        WHERE bc.po_number IS NOT NULL
+      ),
+      claims_by_group AS (
+        SELECT
+          gp.plant_location,
+          gp.incoterm,
+          COALESCE(SUM(COALESCE(cm.qty, 0)), 0)::numeric AS outstanding_claim_mutu_qty,
+          COALESCE(SUM(COALESCE(cs.qty, 0)), 0)::numeric AS outstanding_claim_susut_qty
+        FROM group_pos gp
+        LEFT JOIN claim_mutu_po cm ON cm.po_number = gp.po_number
+        LEFT JOIN claim_susut_po cs ON cs.po_number = gp.po_number
+        GROUP BY gp.plant_location, gp.incoterm
+      ),
       agg AS (
         SELECT
           bc.plant_location,
@@ -2131,12 +2585,38 @@ export const getContractQuantityByPlantIncoterm = async (req: AuthRequest, res: 
           COUNT(DISTINCT bc.contract_id) AS contract_count,
           COUNT(DISTINCT bc.supplier) AS supplier_count,
           SUM(bc.quantity_ordered) AS total_quantity,
-          SUM(COALESCE(db.delivered_quantity, 0)) AS completed_quantity,
-          SUM(bc.quantity_ordered) - SUM(COALESCE(db.delivered_quantity, 0)) AS outstanding_quantity,
+          SUM(
+            CASE
+              WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(db.quantity_receive, 0)
+              WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(db.quantity_delivery, 0)
+              ELSE COALESCE(db.total_sto_quantity, 0)
+            END
+          ) AS completed_quantity,
+          COALESCE(SUM(GREATEST(
+            bc.quantity_ordered - (
+              CASE
+                WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(db.quantity_receive, 0)
+                WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(db.quantity_delivery, 0)
+                ELSE COALESCE(db.total_sto_quantity, 0)
+              END
+            ),
+            0
+          )), 0) AS outstanding_quantity,
           SUM(
             CASE
               WHEN COALESCE(ps.has_blank_payoff, 0) = 1
-              THEN (bc.quantity_ordered - COALESCE(db.delivered_quantity, 0))
+              THEN (
+                GREATEST(
+                  bc.quantity_ordered - (
+                    CASE
+                      WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(db.quantity_receive, 0)
+                      WHEN UPPER(TRIM(COALESCE(bc.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(db.quantity_delivery, 0)
+                      ELSE COALESCE(db.total_sto_quantity, 0)
+                    END
+                  ),
+                  0
+                )
+              )
               ELSE 0
             END
           ) AS outstanding_payment_quantity
@@ -2153,8 +2633,11 @@ export const getContractQuantityByPlantIncoterm = async (req: AuthRequest, res: 
         a.total_quantity,
         a.completed_quantity,
         a.outstanding_quantity,
-        a.outstanding_payment_quantity
+        a.outstanding_payment_quantity,
+        COALESCE(cg.outstanding_claim_mutu_qty, 0)::numeric AS outstanding_claim_mutu_qty,
+        COALESCE(cg.outstanding_claim_susut_qty, 0)::numeric AS outstanding_claim_susut_qty
       FROM agg a
+      LEFT JOIN claims_by_group cg ON cg.plant_location = a.plant_location AND cg.incoterm = a.incoterm
       ORDER BY a.plant_location, a.total_quantity DESC NULLS LAST, a.incoterm
       `,
       params
@@ -2597,14 +3080,24 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
       )`;
     }
 
-    // Delivered / outstanding quantity filters (based on sap_processed_data STO quantity aggregation)
+    // Delivered / outstanding quantity filters (based on Incoterm rule: Receive vs Delivery; fallback STO qty)
     // delivered=true  -> delivered_quantity > 0
     // outstanding=true -> (quantity_ordered - delivered_quantity) > 0
+    const deliveredBasisExpr = `
+      COALESCE(
+        CASE
+          WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN q.quantity_receive
+          WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN q.quantity_delivery
+          ELSE q.sto_quantity
+        END,
+        0
+      )
+    `;
     if (delivered && String(delivered).toLowerCase() === 'true') {
-      whereExtra += ` AND COALESCE(q.delivered_quantity, 0) > 0`;
+      whereExtra += ` AND ${deliveredBasisExpr} > 0`;
     }
     if (outstanding && String(outstanding).toLowerCase() === 'true') {
-      whereExtra += ` AND (COALESCE(c.quantity_ordered, 0) - COALESCE(q.delivered_quantity, 0)) > 0`;
+      whereExtra += ` AND (COALESCE(c.quantity_ordered, 0) - ${deliveredBasisExpr}) > 0`;
     }
 
     // Open contract sub-breakdown filters used by Dashboard card
@@ -2669,9 +3162,22 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
       qty AS (
         SELECT
           spd.contract_number,
-          COALESCE(SUM(CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC)), 0) AS delivered_quantity
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
+          ), 0) AS quantity_receive,
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
+          ), 0) AS quantity_delivery,
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE spd.data->'contract'->>'sto_quantity' IS NOT NULL AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
+          ), 0) AS sto_quantity
         FROM sap_processed_data spd
-        WHERE spd.data->'contract'->>'sto_quantity' IS NOT NULL
         GROUP BY spd.contract_number
       ),
       base AS (
@@ -2720,6 +3226,11 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
             ELSE NULL
           END AS total_delay,
           (c.delivery_end_date::date - c.cargo_readiness_date::date) AS cargo_readiness_issue,
+          CASE
+            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(q.quantity_receive, 0)
+            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(q.quantity_delivery, 0)
+            ELSE COALESCE(q.sto_quantity, 0)
+          END AS delivered_quantity
           (c.delivery_end_date::date - CURRENT_DATE) AS aging_os,
           CASE
             WHEN UPPER(COALESCE(NULLIF(TRIM(COALESCE(c.transport_mode, '')), ''), l.data->'contract'->>'transport_mode', l.data->'contract'->>'sea_land', l.data->'raw'->>'Sea / Land', l.data->'raw'->>'Sea_Land', '')) LIKE 'LAND%'
@@ -2747,8 +3258,19 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
             WHEN l.data IS NULL AND UPPER(COALESCE(c.status, '')) IN ('CANCELLED','CANCELED','CANCEL') THEN 'Cancelled'
             ELSE COALESCE(c.status, '')
           END AS status,
-          COALESCE(q.delivered_quantity, 0) AS delivered_quantity,
-          (COALESCE(c.quantity_ordered, 0) - COALESCE(q.delivered_quantity, 0)) AS outstanding_quantity
+          CASE
+            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(q.quantity_receive, 0)
+            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(q.quantity_delivery, 0)
+            ELSE COALESCE(q.sto_quantity, 0)
+          END AS delivered_quantity,
+          (COALESCE(c.quantity_ordered, 0) - COALESCE(
+            CASE
+              WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN q.quantity_receive
+              WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN q.quantity_delivery
+              ELSE q.sto_quantity
+            END,
+            0
+          )) AS outstanding_quantity
         FROM contracts c
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
         LEFT JOIN qty q ON q.contract_number = c.contract_id

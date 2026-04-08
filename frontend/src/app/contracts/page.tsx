@@ -22,6 +22,8 @@ interface Contract {
   supplier: string
   product: string
   quantity_ordered: number
+  quantity_delivery?: number
+  quantity_receive?: number
   unit: string
   incoterm: string
   contract_date: string
@@ -2611,6 +2613,21 @@ function ContractsPageContent() {
                   {/* Product & Quantity */}
                   <div>
                     <h3 className="text-lg font-semibold mb-3">Product & Quantity</h3>
+                    {(() => {
+                      const inc = String(selectedContract.incoterm || '').trim().toUpperCase()
+                      const basis =
+                        inc === 'FRC' || inc === 'CIF' || inc === 'CFR'
+                          ? { label: 'Quantity Receive', hint: 'Incoterm FRC/CIF/CFR' }
+                          : inc === 'LCO' || inc === 'FOB'
+                            ? { label: 'Quantity Delivery', hint: 'Incoterm LCO/FOB' }
+                            : { label: 'STO Quantity', hint: 'Fallback (other incoterms)' }
+                      return (
+                        <div className="text-xs text-gray-600 mb-2">
+                          Outstanding Quantity basis: <span className="font-medium text-gray-800">{basis.label}</span>{' '}
+                          <span className="text-gray-500">({basis.hint})</span>
+                        </div>
+                      )
+                    })()}
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Product</div>
@@ -2619,6 +2636,14 @@ function ContractsPageContent() {
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Contract Quantity</div>
                         <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.quantity_ordered)} Kg</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Quantity Delivery</div>
+                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.quantity_delivery ?? 0)} Kg</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Quantity Receive</div>
+                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.quantity_receive ?? 0)} Kg</div>
                       </div>
                       <div className="p-3 bg-blue-50 rounded border-2 border-blue-200">
                         <div className="text-gray-500">Total STO Quantity ({selectedContract.sto_count || 0} STO{selectedContract.sto_count > 1 ? 's' : ''})</div>

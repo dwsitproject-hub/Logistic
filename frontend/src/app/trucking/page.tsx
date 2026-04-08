@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Truck, Package, Save, Loader2, Download, Upload, Edit2, Plus, Minus, SlidersHorizontal, ChevronRight, ChevronDown, ArrowUp, ArrowDown, Check } from 'lucide-react'
+import { Search, Filter, X, Truck, Package, Save, Loader2, Download, Upload, Edit2, Plus, Minus, SlidersHorizontal, ChevronRight, ChevronDown, ArrowUp, ArrowDown, Check, ArrowLeft, ArrowRight } from 'lucide-react'
 import api from '@/lib/api'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
@@ -50,6 +50,26 @@ interface TruckingOperation {
   product: string
   group_name: string
   contract_ext_no?: string
+  daily_deliverables?: Array<{ date: string; quantity_delivered: number }>
+}
+
+type TruckingCalendarRow = {
+  id: string
+  operation_id: string
+  contract_number: string
+  po_number?: string
+  supplier?: string
+  product?: string
+  group_name?: string
+  loading_location?: string
+  unloading_location?: string
+  trucking_owner?: string
+  eta_trucking_start_date?: string
+  eta_trucking_completion_date?: string
+  trucking_start_date?: string
+  trucking_completion_date?: string
+  quantity_delivered?: number
+  daily_deliverables?: Array<{ date: string; quantity_delivered: number }>
 }
 
 interface DocumentItem {
@@ -554,6 +574,143 @@ const CreateTruckingOperationModal = memo(function CreateTruckingOperationModal(
   )
 })
 
+function CalendarDeliverablesTable({
+  month,
+  rows,
+  loading,
+  savingKey,
+  editing,
+  editValue,
+  onEditStart,
+  onEditChange,
+  onEditCancel,
+  onEditCommit,
+}: {
+  month: Date
+  rows: TruckingCalendarRow[]
+  loading: boolean
+  savingKey: string | null
+  editing: { id: string; date: string } | null
+  editValue: string
+  onEditStart: (id: string, date: string, initial: string) => void
+  onEditChange: (v: string) => void
+  onEditCancel: () => void
+  onEditCommit: (id: string, date: string, value: string) => Promise<void>
+}) {
+  const yyyy = month.getFullYear()
+  const mm = month.getMonth()
+  const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
+  const days = Array.from({ length: daysInMonth }, (_, i) => i + 1)
+  const dayIso = (day: number) => {
+    const m = String(mm + 1).padStart(2, '0')
+    const d = String(day).padStart(2, '0')
+    return `${yyyy}-${m}-${d}`
+  }
+  const getQty = (r: TruckingCalendarRow, date: string) => {
+    const hit = (r.daily_deliverables || []).find((x) => (x?.date || '').slice(0, 10) === date)
+    return hit ? Number(hit.quantity_delivered || 0) : 0
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      {loading ? (
+        <div className="text-center py-10 text-gray-500">Loading…</div>
+      ) : rows.length === 0 ? (
+        <div className="text-center py-10 text-gray-500">No trucking operations in this month window</div>
+      ) : (
+        <table className="min-w-[1400px] w-full text-xs border-separate border-spacing-0">
+          <thead className="sticky top-0 z-10">
+            <tr className="bg-gray-100">
+              <th className="sticky left-0 z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">
+                Operation
+              </th>
+              <th className="sticky left-[220px] z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">
+                Contract / Supplier
+              </th>
+              <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Owner</th>
+              <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">ETA Start</th>
+              <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">ETA End</th>
+              <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">Qty Delivered</th>
+              {days.map((d) => (
+                <th key={d} className="px-2 py-2 text-right font-semibold text-gray-700 border-b border-gray-200 tabular-nums">
+                  {d}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="bg-white">
+            {rows.map((r) => {
+              const opLabel = r.operation_id || '-'
+              const contractLabel = r.contract_number || '-'
+              const supplierLabel = r.supplier || '-'
+              const etaStart = (r.eta_trucking_start_date || r.trucking_start_date || '').slice(0, 10) || '-'
+              const etaEnd = (r.eta_trucking_completion_date || r.trucking_completion_date || '').slice(0, 10) || '-'
+              const maxQty = Number(r.quantity_delivered || 0)
+              return (
+                <tr key={r.id} className="hover:bg-gray-50">
+                  <td className="sticky left-0 z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[220px] max-w-[220px]">
+                    <div className="font-semibold text-gray-900 truncate" title={opLabel}>{opLabel}</div>
+                    <div className="text-[10px] text-gray-500 truncate" title={`${r.loading_location || ''} → ${r.unloading_location || ''}`}>
+                      {(r.loading_location || '-')} → {(r.unloading_location || '-')}
+                    </div>
+                  </td>
+                  <td className="sticky left-[220px] z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[240px] max-w-[240px]">
+                    <div className="font-medium text-gray-900 truncate" title={contractLabel}>{contractLabel}</div>
+                    <div className="text-[10px] text-gray-500 truncate" title={supplierLabel}>{supplierLabel}</div>
+                  </td>
+                  <td className="px-3 py-2 border-b border-gray-100 text-gray-700">{r.trucking_owner || '-'}</td>
+                  <td className="px-3 py-2 border-b border-gray-100 text-gray-700 tabular-nums">{etaStart}</td>
+                  <td className="px-3 py-2 border-b border-gray-100 text-gray-700 tabular-nums">{etaEnd}</td>
+                  <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums font-semibold">{maxQty.toLocaleString('id-ID')}</td>
+                  {days.map((d) => {
+                    const date = dayIso(d)
+                    const qty = getQty(r, date)
+                    const key = `${r.id}:${date}`
+                    const isEditing = editing?.id === r.id && editing?.date === date
+                    const isSaving = savingKey === key
+                    return (
+                      <td
+                        key={date}
+                        className={`px-2 py-1.5 border-b border-gray-100 text-right tabular-nums ${isEditing ? 'bg-amber-50' : ''}`}
+                        onClick={() => {
+                          if (isSaving) return
+                          onEditStart(r.id, date, qty ? String(qty) : '')
+                        }}
+                      >
+                        {isEditing ? (
+                          <div className="flex items-center justify-end gap-1">
+                            <input
+                              autoFocus
+                              value={editValue}
+                              onChange={(e) => onEditChange(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Escape') onEditCancel()
+                                if (e.key === 'Enter') onEditCommit(r.id, date, editValue)
+                              }}
+                              onBlur={() => onEditCommit(r.id, date, editValue)}
+                              className="w-[64px] h-7 px-2 rounded border bg-white text-right text-xs"
+                              placeholder="0"
+                            />
+                            {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-500" /> : null}
+                          </div>
+                        ) : qty ? (
+                          <span className="font-medium text-slate-900">{qty.toLocaleString('id-ID')}</span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
+                    )
+                  })}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
 function TruckingPageContent() {
   const searchParams = useSearchParams()
   const [truckingOperations, setTruckingOperations] = useState<TruckingOperation[]>([])
@@ -572,6 +729,49 @@ function TruckingPageContent() {
   const [uploadingId, setUploadingId] = useState<string>('')
   const [page, setPage] = useState<number>(1)
   const [hasMore, setHasMore] = useState<boolean>(true)
+
+  // View tabs
+  const [activeTab, setActiveTab] = useState<'list' | 'calendar'>('list')
+
+  // Calendar tab state (Daily Planning Deliverables)
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const d = new Date()
+    return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
+  const [calendarRows, setCalendarRows] = useState<TruckingCalendarRow[]>([])
+  const [calendarLoading, setCalendarLoading] = useState(false)
+  const [calendarSavingKey, setCalendarSavingKey] = useState<string | null>(null)
+  const [calendarEditing, setCalendarEditing] = useState<{ id: string; date: string } | null>(null)
+  const [calendarEditValue, setCalendarEditValue] = useState<string>('')
+
+  const iso = (d: Date) => {
+    const yyyy = d.getFullYear()
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    return `${yyyy}-${mm}-${dd}`
+  }
+
+  const fetchCalendarRows = useCallback(async () => {
+    setCalendarLoading(true)
+    try {
+      const from = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)
+      const to = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 0)
+      const res = await api.get(`/trucking/daily-planning-deliverables?from=${encodeURIComponent(iso(from))}&to=${encodeURIComponent(iso(to))}`)
+      setCalendarRows((res.data?.data || []) as TruckingCalendarRow[])
+    } catch (e: any) {
+      const msg = e?.response?.data?.error?.message || e?.message || 'Failed to load calendar deliverables'
+      alert(msg)
+      setCalendarRows([])
+    } finally {
+      setCalendarLoading(false)
+    }
+  }, [calendarMonth])
+
+  useEffect(() => {
+    if (activeTab !== 'calendar') return
+    fetchCalendarRows()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, calendarMonth])
   
   // Documents state
   const [selectedOperation, setSelectedOperation] = useState<TruckingOperation | null>(null)
@@ -1653,6 +1853,31 @@ function TruckingPageContent() {
           </div>
         </div>
 
+        {/* Tabs */}
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-lg border bg-white p-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab('list')}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'list' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+            >
+              List
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('calendar')}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'calendar' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+            >
+              Calendar (Daily Planning Deliverables)
+            </button>
+          </div>
+          <div className="text-xs text-slate-500">
+            {activeTab === 'calendar' ? 'Click a cell to edit daily deliverables.' : null}
+          </div>
+        </div>
+
+        {activeTab === 'list' && (
+        <>
         {/* Filters */}
         <Card>
           <CardContent className="pt-6">
@@ -1734,6 +1959,102 @@ function TruckingPageContent() {
             </div>
           </CardContent>
         </Card>
+        </>
+        )}
+
+        {activeTab === 'calendar' && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  Daily Planning Deliverables — Calendar
+                  <Badge variant="outline" className="text-[10px]">Unit: Kg</Badge>
+                </CardTitle>
+                <div className="text-xs text-gray-600 mt-1">
+                  Shows operations that overlap the selected month (by ETA start/finish). Edit cells to update deliverables (same validation as Create New).
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
+                >
+                  <ArrowLeft className="h-4 w-4 mr-1" /> Prev
+                </Button>
+                <div className="px-3 py-1.5 rounded-md border bg-white text-sm font-medium tabular-nums">
+                  {calendarMonth.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1))}
+                >
+                  Next <ArrowRight className="h-4 w-4 ml-1" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const d = new Date()
+                    setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1))
+                  }}
+                >
+                  Today
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <CalendarDeliverablesTable
+                month={calendarMonth}
+                rows={calendarRows}
+                loading={calendarLoading}
+                savingKey={calendarSavingKey}
+                editing={calendarEditing}
+                editValue={calendarEditValue}
+                onEditStart={(id, date, initial) => {
+                  setCalendarEditing({ id, date })
+                  setCalendarEditValue(initial)
+                }}
+                onEditChange={setCalendarEditValue}
+                onEditCancel={() => {
+                  setCalendarEditing(null)
+                  setCalendarEditValue('')
+                }}
+                onEditCommit={async (id, date, rawValue) => {
+                  const key = `${id}:${date}`
+                  setCalendarSavingKey(key)
+                  try {
+                    const q = rawValue.trim() === '' ? null : Number(String(rawValue).replace(/,/g, ''))
+                    if (q != null && (!Number.isFinite(q) || q < 0)) {
+                      alert('Quantity must be a valid number (>= 0)')
+                      return
+                    }
+                    const row = calendarRows.find((r) => r.id === id)
+                    if (!row) return
+                    const existing = (row.daily_deliverables || []).slice()
+                    const next = existing.filter((x) => (x?.date || '').slice(0, 10) !== date)
+                    if (q != null && q !== 0) {
+                      next.push({ date, quantity_delivered: q })
+                      next.sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+                    }
+                    const res = await api.put(`/trucking/${id}/daily-planning-deliverables`, { daily_deliverables: next })
+                    if (res.data?.success) {
+                      setCalendarRows((prev) => prev.map((r) => (r.id === id ? { ...r, daily_deliverables: res.data.data.daily_deliverables || next } : r)))
+                      setCalendarEditing(null)
+                      setCalendarEditValue('')
+                    }
+                  } catch (e: any) {
+                    const msg = e?.response?.data?.error?.message || e?.message || 'Failed to update daily deliverables'
+                    alert(msg)
+                  } finally {
+                    setCalendarSavingKey(null)
+                  }
+                }}
+              />
+            </CardContent>
+          </Card>
+        )}
 
         {/* Status Distribution */}
         <Card>

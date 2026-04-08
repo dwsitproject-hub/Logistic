@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
+import { normalizeAndValidateDailyDeliverables } from '../utils/truckingDailyDeliverables';
 
 export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Response) => {
   try {
@@ -409,63 +410,15 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
     // Generate operation_id if not provided
     const finalOperationId = operation_id || `TRUCK-${Date.now()}`;
 
-    // Validate daily deliverables (if provided)
-    let dailyDeliverablesJson: any[] = [];
-    if (daily_deliverables != null) {
-      if (!Array.isArray(daily_deliverables)) {
-        return res.status(400).json({
-          success: false,
-          error: { message: 'daily_deliverables must be an array' },
-        });
-      }
-
-      const startRaw = (eta_trucking_start_date ?? trucking_start_date) as any;
-      const endRaw = (eta_trucking_completion_date ?? trucking_completion_date) as any;
-      const start = startRaw ? new Date(String(startRaw)) : null;
-      const end = endRaw ? new Date(String(endRaw)) : null;
-      if (!start || Number.isNaN(start.getTime()) || !end || Number.isNaN(end.getTime())) {
-        return res.status(400).json({
-          success: false,
-          error: { message: 'ETA Trucking Start/Last Receive Date are required when daily deliverables are provided' },
-        });
-      }
-
-      const maxQty = quantity_delivered != null && String(quantity_delivered).trim() !== '' ? Number(quantity_delivered) : null;
-      const sum = (daily_deliverables as any[]).reduce((acc, r) => acc + (Number(r?.quantity_delivered) || 0), 0);
-
-      for (const [idx, row] of (daily_deliverables as any[]).entries()) {
-        const d = String(row?.date || '').trim();
-        const q = row?.quantity_delivered;
-        const qn = Number(q);
-        if (!d) {
-          return res.status(400).json({ success: false, error: { message: `Daily deliverables row ${idx + 1}: date is required` } });
-        }
-        if (!Number.isFinite(qn) || qn < 0) {
-          return res.status(400).json({ success: false, error: { message: `Daily deliverables row ${idx + 1}: quantity must be a valid number` } });
-        }
-        const dt = new Date(d);
-        if (Number.isNaN(dt.getTime())) {
-          return res.status(400).json({ success: false, error: { message: `Daily deliverables row ${idx + 1}: invalid date` } });
-        }
-        // compare by yyyy-mm-dd string (safe for date-only inputs)
-        const ds = d.slice(0, 10);
-        const startS = String(startRaw).slice(0, 10);
-        const endS = String(endRaw).slice(0, 10);
-        if (ds < startS) {
-          return res.status(400).json({ success: false, error: { message: `Daily deliverables row ${idx + 1}: date cannot be before Trucking Start Receive Date` } });
-        }
-        if (ds > endS) {
-          return res.status(400).json({ success: false, error: { message: `Daily deliverables row ${idx + 1}: date cannot be after Trucking Last Receive Date` } });
-        }
-        if (maxQty != null && Number.isFinite(maxQty) && qn > maxQty) {
-          return res.status(400).json({ success: false, error: { message: `Daily deliverables row ${idx + 1}: quantity cannot exceed Quantity Delivered` } });
-        }
-        dailyDeliverablesJson.push({ date: ds, quantity_delivered: qn });
-      }
-
-      if (maxQty != null && Number.isFinite(maxQty) && sum > maxQty) {
-        return res.status(400).json({ success: false, error: { message: 'Sum of daily deliverables quantity cannot exceed Quantity Delivered' } });
-      }
+    // Validate daily deliverables (if provided) using shared rules (create + update + calendar).
+    const dd = normalizeAndValidateDailyDeliverables({
+      daily_deliverables,
+      startRaw: eta_trucking_start_date ?? trucking_start_date,
+      endRaw: eta_trucking_completion_date ?? trucking_completion_date,
+      maxQtyRaw: quantity_delivered,
+    });
+    if (!dd.ok) {
+      return res.status(400).json({ success: false, error: { message: dd.message } });
     }
 
     // Insert new trucking operation
@@ -509,7 +462,7 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         oa_budget || null,
         oa_actual || null,
         status || 'PLANNED',
-        JSON.stringify(dailyDeliverablesJson)
+        JSON.stringify(dd.rows)
       ]
     );
 
@@ -603,6 +556,20 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
     const { id } = req.params;
     const updateData = req.body;
 
+    // Load current record so we can validate daily_deliverables with the same rules as create.
+    const currentRes = await query(
+      `SELECT id, eta_trucking_start_date, eta_trucking_completion_date, trucking_start_date, trucking_completion_date, quantity_delivered, daily_deliverables
+       FROM trucking_operations WHERE id = $1 LIMIT 1`,
+      [id],
+    );
+    if (currentRes.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Trucking operation not found' },
+      });
+    }
+    const cur = currentRes.rows[0];
+
     // Build dynamic update query
     const updateFields = [];
     const updateValues = [];
@@ -616,7 +583,8 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
       'eta_trucking_start_date', 'eta_trucking_completion_date',
       'eta_delivery_start_date', 'eta_delivery_end_date',
       'quantity_sent', 'quantity_delivered', 'gain_loss_percentage',
-      'gain_loss_amount', 'oa_budget', 'oa_actual', 'status'
+      'gain_loss_amount', 'oa_budget', 'oa_actual', 'status',
+      'daily_deliverables'
     ];
 
     // Date fields that need casting
@@ -629,6 +597,25 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
 
     for (const [key, value] of Object.entries(updateData)) {
       if (allowedFields.includes(key)) {
+        if (key === 'daily_deliverables') {
+          // Validate against merged record state (updates override current).
+          const dd2 = normalizeAndValidateDailyDeliverables({
+            daily_deliverables: value,
+            startRaw:
+              (updateData.eta_trucking_start_date ?? updateData.trucking_start_date ?? cur.eta_trucking_start_date ?? cur.trucking_start_date),
+            endRaw:
+              (updateData.eta_trucking_completion_date ?? updateData.trucking_completion_date ?? cur.eta_trucking_completion_date ?? cur.trucking_completion_date),
+            maxQtyRaw: updateData.quantity_delivered ?? cur.quantity_delivered,
+          });
+          if (!dd2.ok) {
+            return res.status(400).json({ success: false, error: { message: dd2.message } });
+          }
+          updateFields.push(`daily_deliverables = $${paramIndex}::jsonb`);
+          updateValues.push(JSON.stringify(dd2.rows));
+          paramIndex++;
+          continue;
+        }
+
         if (dateFields.includes(key) && value) {
           // Cast date fields explicitly
           updateFields.push(`${key} = $${paramIndex}::date`);
@@ -681,5 +668,91 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
       success: false,
       error: { message: 'Failed to update trucking operation' },
     });
+  }
+};
+
+export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res: Response) => {
+  try {
+    const from = String((req.query as any).from || '').slice(0, 10);
+    const to = String((req.query as any).to || '').slice(0, 10);
+    if (!from || !to) {
+      return res.status(400).json({ success: false, error: { message: 'from and to are required (YYYY-MM-DD)' } });
+    }
+
+    const result = await query(
+      `
+      SELECT
+        t.id,
+        t.operation_id,
+        c.contract_id AS contract_number,
+        c.po_number,
+        c.supplier,
+        c.product,
+        c.group_name,
+        t.loading_location,
+        t.unloading_location,
+        t.trucking_owner,
+        t.eta_trucking_start_date,
+        t.eta_trucking_completion_date,
+        t.trucking_start_date,
+        t.trucking_completion_date,
+        t.quantity_delivered,
+        t.daily_deliverables,
+        t.updated_at
+      FROM trucking_operations t
+      LEFT JOIN contracts c ON t.contract_id = c.id
+      WHERE
+        -- overlap with requested window using ETA (fallback to actual trucking dates)
+        COALESCE(t.eta_trucking_start_date, t.trucking_start_date) <= $2::date
+        AND COALESCE(t.eta_trucking_completion_date, t.trucking_completion_date) >= $1::date
+      ORDER BY COALESCE(t.eta_trucking_start_date, t.trucking_start_date) ASC NULLS LAST, t.operation_id ASC
+      `,
+      [from, to],
+    );
+
+    return res.json({ success: true, data: result.rows });
+  } catch (error) {
+    logger.error('Get trucking daily deliverables calendar error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load daily planning deliverables' } });
+  }
+};
+
+export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { daily_deliverables } = req.body || {};
+
+    const currentRes = await query(
+      `SELECT id, eta_trucking_start_date, eta_trucking_completion_date, trucking_start_date, trucking_completion_date, quantity_delivered
+       FROM trucking_operations WHERE id = $1 LIMIT 1`,
+      [id],
+    );
+    if (currentRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { message: 'Trucking operation not found' } });
+    }
+    const cur = currentRes.rows[0];
+
+    const dd = normalizeAndValidateDailyDeliverables({
+      daily_deliverables,
+      startRaw: cur.eta_trucking_start_date ?? cur.trucking_start_date,
+      endRaw: cur.eta_trucking_completion_date ?? cur.trucking_completion_date,
+      maxQtyRaw: cur.quantity_delivered,
+    });
+    if (!dd.ok) {
+      return res.status(400).json({ success: false, error: { message: dd.message } });
+    }
+
+    const upd = await query(
+      `UPDATE trucking_operations
+       SET daily_deliverables = $2::jsonb, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING *`,
+      [id, JSON.stringify(dd.rows)],
+    );
+
+    return res.json({ success: true, data: upd.rows[0], message: 'Daily planning deliverables updated successfully' });
+  } catch (error) {
+    logger.error('Update trucking daily deliverables error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to update daily planning deliverables' } });
   }
 };

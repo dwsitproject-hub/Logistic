@@ -24,6 +24,8 @@ import {
   getFilteredContracts,
   getDashboardAiInsight,
   generateDashboardAiInsight,
+  getClaimMutuOutstandingRows,
+  getClaimSusutOutstandingRows,
 } from '../controllers/dashboard.controller';
 
 const router = express.Router();
@@ -32,6 +34,8 @@ router.use(authenticateToken);
 
 // Dashboard statistics
 router.get('/stats', getDashboardStats);
+router.get('/claim-mutu-outstanding', getClaimMutuOutstandingRows);
+router.get('/claim-susut-outstanding', getClaimSusutOutstandingRows);
 
 // AI Insights
 router.get('/ai-insight', getDashboardAiInsight);

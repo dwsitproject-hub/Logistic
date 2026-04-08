@@ -1,5 +1,6 @@
 import { PoolClient } from 'pg';
 import logger from '../utils/logger';
+import { deriveShipmentStatusFromAta } from '../utils/shipmentStatus';
 
 export interface DistributionResult {
   contractId?: string;
@@ -455,8 +456,24 @@ export class SapDataDistributionService {
     const dischargeDurationDays = this.parseInteger(shipmentData.discharge_duration_days);
     const totalLeadTimeDays = this.parseInteger(shipmentData.total_lead_time_days);
 
-    const shipmentStatus = shipmentData.status ? String(shipmentData.status).trim().toUpperCase() : null;
-    const statusForInsert = shipmentStatus || 'PLANNED';
+    // Auto-derive SEA shipment status from ATA milestones (management rules).
+    // Prefer loading port 1 + discharge port ATA timestamps, fallback to shipment-level fields.
+    const ataArrivalLoading = this.parseDate(shipmentData.ata_vessel_arrival_at_loading_port_1 ?? shipmentData.ata_arrival);
+    const ataBerthedLoading = this.parseDate(shipmentData.ata_vessel_berthed_at_loading_port_1 ?? shipmentData.ata_berthed);
+    const ataSailedLoading = this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_1 ?? shipmentData.ata_vessel_sailed_from_loading_port ?? shipmentData.ata_sailed);
+    const ataDischargeBerthed = this.parseDate(shipmentData.ata_vessel_berthed_at_discharge_port ?? shipmentData.ata_discharge_berthed);
+
+    const statusForInsert = deriveShipmentStatusFromAta({
+      ata_arrival_at_loading_port: ataArrivalLoading,
+      ata_berthed_at_loading_port: ataBerthedLoading,
+      ata_start_loading: ataLoadingStart,
+      ata_completed_loading: ataLoadingComplete,
+      ata_sailed_from_loading_port: ataSailedLoading,
+      ata_arrive_at_discharge_port: ataDischargeArrival,
+      ata_berthed_at_discharge_port: ataDischargeBerthed,
+      ata_start_discharging: ataDischargeStart,
+      ata_complete_discharge: ataDischargeComplete,
+    });
 
     // Strategy:
     // 1) Prefer direct match by shipment_id from SAP.
@@ -545,8 +562,9 @@ export class SapDataDistributionService {
           ata_discharge_start = COALESCE($43::date, ata_discharge_start),
           eta_discharge_complete = COALESCE($44::date, eta_discharge_complete),
           ata_discharge_complete = COALESCE($45::date, ata_discharge_complete),
+          status = $46,
           updated_at = CURRENT_TIMESTAMP
-         WHERE id = $46`,
+         WHERE id = $47`,
         [
           contractUuid,
           voyageNo,
@@ -593,6 +611,7 @@ export class SapDataDistributionService {
           ataDischargeStart,
           etaDischargeComplete,
           ataDischargeComplete,
+          statusForInsert,
           id
         ]
       );

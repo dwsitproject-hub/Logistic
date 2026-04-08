@@ -1,7 +1,7 @@
 import express from 'express';
 import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
-import { getTruckingOperations, getTruckingOperationById, createTruckingOperation, validateContractNumber, updateTruckingOperation, getLandOpenContractSuggestions } from '../controllers/trucking.controller';
+import { getTruckingOperations, getTruckingOperationById, createTruckingOperation, validateContractNumber, updateTruckingOperation, getLandOpenContractSuggestions, getTruckingDailyDeliverablesCalendar, updateTruckingDailyDeliverables } from '../controllers/trucking.controller';
 
 const router = express.Router();
 
@@ -21,6 +21,10 @@ router.get('/:id', getTruckingOperationById);
 
 // Create trucking operation
 router.post('/', auditLog('CREATE', 'TRUCKING_OPERATION'), createTruckingOperation);
+
+// Calendar view: daily planning deliverables
+router.get('/daily-planning-deliverables', getTruckingDailyDeliverablesCalendar);
+router.put('/:id/daily-planning-deliverables', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyDeliverables);
 
 // Update trucking operation
 router.put('/:id', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingOperation);

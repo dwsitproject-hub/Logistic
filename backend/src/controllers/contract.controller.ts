@@ -25,6 +25,23 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         FROM sap_processed_data
         ORDER BY contract_number, created_at DESC NULLS LAST
       ),
+      qty_move AS (
+        SELECT
+          spd.contract_number,
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_delivery,
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_receive
+        FROM sap_processed_data spd
+        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+        GROUP BY spd.contract_number
+      ),
       sto_agg AS (
         SELECT x.contract_number,
           STRING_AGG(DISTINCT x.effective_sto, ', ' ORDER BY x.effective_sto) AS sto_numbers,
@@ -73,6 +90,8 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           (array_agg(s.sto_numbers ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS sto_numbers_agg,
           (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
           (array_agg(s.sto_count ORDER BY s.sto_count DESC NULLS LAST))[1] AS sto_count,
+          (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery,
+          (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
           COUNT(DISTINCT c.po_number) FILTER (WHERE c.po_number IS NOT NULL) AS po_count,
           -- For Log Cycle calculation (LAND): earliest and latest trucking dates
           (SELECT MIN(t.trucking_start_date) FROM trucking_operations t WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]) AS first_trucking_start_date,
@@ -83,6 +102,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         FROM contracts c
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
+        LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
         WHERE 1=1
         GROUP BY c.contract_id
       ),
@@ -165,7 +185,16 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     }
 
     if (outstanding === 'true') {
-      queryText += ` AND (base.quantity_ordered - COALESCE(base.total_sto_quantity, 0)) > 0`;
+      queryText += ` AND (
+        base.quantity_ordered - COALESCE(
+          CASE
+            WHEN UPPER(TRIM(COALESCE(base.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN base.quantity_receive
+            WHEN UPPER(TRIM(COALESCE(base.incoterm, ''))) IN ('LCO', 'FOB') THEN base.quantity_delivery
+            ELSE base.total_sto_quantity
+          END,
+          0
+        )
+      ) > 0`;
     }
 
     // Optional: delivered=true -> only contracts that have any STO quantity (delivered > 0)
@@ -324,13 +353,14 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
 
       // Compute Over/Under Delivery Status for UI
       const statusText = String(row.status || row.import_status || '').toUpperCase();
-      const qtyOrdered = typeof row.quantity_ordered === 'number' ? row.quantity_ordered : Number(row.quantity_ordered) || 0;
-      const stoTotal = typeof row.total_sto_quantity === 'number' ? row.total_sto_quantity : Number(row.total_sto_quantity) || 0;
+      const outQty = typeof row.outstanding_quantity === 'number' ? row.outstanding_quantity : Number(row.outstanding_quantity) || 0;
       let overUnder: string = '-';
       if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
-        if (stoTotal > qtyOrdered) {
+        // New rule: when Close, compare Outstanding vs 0.
+        // outstanding < 0 => over delivery, outstanding > 0 => under delivery, outstanding = 0 => passed
+        if (outQty < 0) {
           overUnder = 'Over Delivery';
-        } else if (stoTotal < qtyOrdered) {
+        } else if (outQty > 0) {
           overUnder = 'Under Delivery';
         } else {
           overUnder = 'Passed';
