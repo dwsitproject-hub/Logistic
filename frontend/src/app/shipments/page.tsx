@@ -194,6 +194,9 @@ function ShipmentsPageContent() {
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
   const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
 
+  const [viewOption, setViewOption] = useState<'all' | 'sto' | 'contract' | 'vessel' | 'port_loading' | 'port_discharge'>('all')
+  const [viewFilterValue, setViewFilterValue] = useState('')
+
   useEffect(() => {
     if (typeof window === 'undefined') return
     const onMouseDown = (e: MouseEvent) => {
@@ -329,7 +332,7 @@ function ShipmentsPageContent() {
   const [editingPortId, setEditingPortId] = useState<string | null>(null)
   const [editedPortData, setEditedPortData] = useState<Partial<VesselLoadingPort> | null>(null)
 
-  // ---- ETA Loading Status buckets (grouped by STO / Operation ID) ----
+  // ---- ETA Loading Status buckets (counts for toolbar chips; scoped to current result page only) ----
   const etaLoadingBuckets = useMemo(() => {
     const buckets = {
       MORE_THAN_7D: new Set<string>(),
@@ -418,7 +421,7 @@ function ShipmentsPageContent() {
     }
   }, [shipments])
 
-  // ---- ETA Discharge Status buckets (grouped by STO / Operation ID) ----
+  // ---- ETA Discharge Status buckets (counts for toolbar chips; scoped to current result page only) ----
   const etaDischargeBuckets = useMemo(() => {
     const buckets = {
       MORE_THAN_7D: new Set<string>(),
@@ -512,23 +515,109 @@ function ShipmentsPageContent() {
     setPage(1)
   }, [searchParams])
 
-  // Fetch data when filters/page change
   useEffect(() => {
     fetchShipments()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, dateFrom, dateTo, page])
 
-  const fetchShipments = async () => {
+  const isFirstLateIndicatorEffect = useRef(true)
+  useEffect(() => {
+    if (isFirstLateIndicatorEffect.current) {
+      isFirstLateIndicatorEffect.current = false
+      return
+    }
+    setPage(1)
+    fetchShipments(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lateIndicatorFilter])
+
+  const isFirstSearchRender = useRef(true)
+  useEffect(() => {
+    if (isFirstSearchRender.current) {
+      isFirstSearchRender.current = false
+      return
+    }
+    const t = setTimeout(() => {
+      setPage(1)
+      fetchShipments(1)
+    }, 500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchTerm])
+
+  const isFirstColumnFilterRender = useRef(true)
+  useEffect(() => {
+    if (isFirstColumnFilterRender.current) {
+      isFirstColumnFilterRender.current = false
+      return
+    }
+    const t = setTimeout(() => {
+      setPage(1)
+      fetchShipments(1)
+    }, 500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [columnFilters])
+
+  const isFirstViewFilterRender = useRef(true)
+  useEffect(() => {
+    if (isFirstViewFilterRender.current) {
+      isFirstViewFilterRender.current = false
+      return
+    }
+    const t = setTimeout(() => {
+      setPage(1)
+      fetchShipments(1)
+    }, 500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewOption, viewFilterValue])
+
+  const isFirstEtaBucketEffect = useRef(true)
+  useEffect(() => {
+    if (isFirstEtaBucketEffect.current) {
+      isFirstEtaBucketEffect.current = false
+      return
+    }
+    setPage(1)
+    fetchShipments(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [etaLoadingFilter, etaDischargeFilter])
+
+  const fetchShipments = async (forcedPage?: number) => {
     setLoading(true)
     try {
+      const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
       params.append('limit', String(pageSize))
-      params.append('page', String(page))
+      params.append('page', String(effectivePage))
       params.append('compact', 'true')
       if (statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
       }
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
+      const searchTrim = searchTerm.trim()
+      if (searchTrim.length >= 2) {
+        params.append('search', searchTrim)
+      }
+      const cfKeys = Object.keys(columnFilters)
+      if (cfKeys.length > 0) {
+        params.append('columnFilters', JSON.stringify(columnFilters))
+      }
+      if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
+        params.append('lateIndicator', lateIndicatorFilter)
+      }
+      if (viewOption !== 'all' && viewFilterValue.trim().length > 0) {
+        params.append('viewOption', viewOption)
+        params.append('viewQuery', viewFilterValue.trim())
+      }
+      if (etaLoadingFilter !== 'ALL') {
+        params.append('etaLoading', etaLoadingFilter)
+      }
+      if (etaDischargeFilter !== 'ALL') {
+        params.append('etaDischarge', etaDischargeFilter)
+      }
       
       // Check for delayed parameter from URL
       const delayedParam = searchParams.get('delayed')
@@ -1050,12 +1139,9 @@ function ShipmentsPageContent() {
   }
 
   const handleFilterChange = () => {
-    fetchShipments()
+    setPage(1)
+    fetchShipments(1)
   }
-
-  // View options state
-  const [viewOption, setViewOption] = useState<'all' | 'sto' | 'contract' | 'vessel' | 'port_loading' | 'port_discharge'>('all')
-  const [viewFilterValue, setViewFilterValue] = useState('')
 
   // Helper function to calculate late indicator for shipments
   const getLateIndicator = (shipment: Shipment): { color: string; text: string } => {
@@ -1160,54 +1246,6 @@ function ShipmentsPageContent() {
     }
   }
 
-  const isEmptyValue = (v: unknown) => {
-    if (v === null || v === undefined) return true
-    const s = String(v).trim()
-    return s === '' || s === '-' || s.toLowerCase() === 'null' || s.toLowerCase() === 'undefined'
-  }
-
-  const passesColumnFilters = (s: Shipment) => {
-    for (const [colId, filter] of Object.entries(columnFilters)) {
-      const raw = getColumnRawValue(s, colId)
-      if (filter.emptyOnly) {
-        if (!isEmptyValue(raw)) return false
-        continue
-      }
-
-      if (filter.type === 'text') {
-        const needle = (filter.value || '').trim().toLowerCase()
-        if (!needle) continue
-        const hay = String(raw ?? '').toLowerCase()
-        if (filter.exact) {
-          if (hay.trim() !== needle) return false
-        } else {
-          if (!hay.includes(needle)) return false
-        }
-      }
-
-      if (filter.type === 'number') {
-        const n = typeof raw === 'number' ? raw : Number(String(raw ?? '').replace(/,/g, ''))
-        if (Number.isNaN(n)) return false
-        const min = filter.min !== undefined && filter.min !== '' ? Number(filter.min) : null
-        const max = filter.max !== undefined && filter.max !== '' ? Number(filter.max) : null
-        if (min !== null && !Number.isNaN(min) && n < min) return false
-        if (max !== null && !Number.isNaN(max) && n > max) return false
-      }
-
-      if (filter.type === 'date') {
-        const rawStr = String(raw ?? '').trim()
-        if (!rawStr) return false
-        const rawTime = Date.parse(rawStr)
-        if (Number.isNaN(rawTime)) return false
-        const fromTime = filter.from ? Date.parse(filter.from) : null
-        const toTime = filter.to ? Date.parse(filter.to) : null
-        if (fromTime !== null && !Number.isNaN(fromTime) && rawTime < fromTime) return false
-        if (toTime !== null && !Number.isNaN(toTime) && rawTime > toTime + 24 * 60 * 60 * 1000 - 1) return false
-      }
-    }
-    return true
-  }
-
   const isColumnFilterActive = (colId: string) => {
     const f = columnFilters[colId]
     if (!f) return false
@@ -1244,94 +1282,8 @@ function ShipmentsPageContent() {
     })
   }
 
-  const filteredShipments = shipments.filter(shipment => {
-    // Search filter - works with STO No, Shipment ID, Contract Numbers, PO No, Vessel Name, Supplier, and Port/Plant
-    const term = searchTerm.trim().toLowerCase()
-    const matchesSearch =
-      term === '' ||
-      shipment.sto_number?.toLowerCase().includes(term) ||
-      shipment.shipment_id?.toLowerCase().includes(term) ||
-      shipment.contract_numbers?.toLowerCase().includes(term) ||
-      shipment.po_numbers?.toLowerCase().includes(term) ||
-      shipment.vessel_name?.toLowerCase().includes(term) ||
-      shipment.contract_number?.toLowerCase().includes(term) ||
-      shipment.supplier?.toLowerCase().includes(term) ||
-      shipment.plant_site?.toLowerCase().includes(term) ||
-      shipment.port_of_discharge?.toLowerCase().includes(term)
-    
-    // View option filter
-    let matchesViewOption = true
-    if (viewOption !== 'all' && viewFilterValue) {
-      const filterLower = viewFilterValue.toLowerCase()
-      if (viewOption === 'sto') {
-        matchesViewOption = shipment.sto_number?.toLowerCase().includes(filterLower) || false
-      } else if (viewOption === 'contract') {
-        matchesViewOption = shipment.contract_numbers?.toLowerCase().includes(filterLower) || 
-                           shipment.contract_number?.toLowerCase().includes(filterLower) || false
-      } else if (viewOption === 'vessel') {
-        matchesViewOption = shipment.vessel_name?.toLowerCase().includes(filterLower) || false
-      } else if (viewOption === 'port_loading') {
-        matchesViewOption = shipment.port_of_loading?.toLowerCase().includes(filterLower) || false
-      } else if (viewOption === 'port_discharge') {
-        matchesViewOption = shipment.port_of_discharge?.toLowerCase().includes(filterLower) || 
-                           shipment.plant_site?.toLowerCase().includes(filterLower) || false
-      }
-    }
-    
-    // Filter by Late Indicator
-    if (lateIndicatorFilter !== 'ALL') {
-      const indicator = getLateIndicator(shipment)
-      if (lateIndicatorFilter === 'ON_TIME' && indicator.text !== 'On Time') return false
-      if (lateIndicatorFilter === 'LATE' && indicator.text !== 'Late') return false
-      if (lateIndicatorFilter === 'NA' && indicator.text !== '-') return false
-    }
-
-    // ETA Loading Status filter (grouped by STO / Operation ID)
-    if (etaLoadingFilter !== 'ALL') {
-      const rawSto = (shipment as any).sto_number
-      const rawOp = (shipment as any).operation_id
-      const sto = rawSto && String(rawSto).trim()
-      const opId = rawOp && String(rawOp).trim()
-      const key = sto || opId || shipment.shipment_id || shipment.id
-      const bucketSets = etaLoadingBuckets.keysByFilter
-      const targetSet =
-        etaLoadingFilter === 'MORE_THAN_7D'
-          ? bucketSets.MORE_THAN_7D
-          : etaLoadingFilter === 'D_MINUS_2'
-            ? bucketSets.D_MINUS_2
-            : etaLoadingFilter === 'D'
-              ? bucketSets.D
-              : etaLoadingFilter === 'DELAY'
-                ? bucketSets.DELAY
-                : bucketSets.NO_ETA
-
-      if (!key || !targetSet.has(key)) return false
-    }
-
-    // ETA Discharge Status filter (grouped by STO / Operation ID)
-    if (etaDischargeFilter !== 'ALL') {
-      const rawSto = (shipment as any).sto_number
-      const rawOp = (shipment as any).operation_id
-      const sto = rawSto && String(rawSto).trim()
-      const opId = rawOp && String(rawOp).trim()
-      const key = sto || opId || shipment.shipment_id || shipment.id
-      const bucketSets = etaDischargeBuckets.keysByFilter
-      const targetSet =
-        etaDischargeFilter === 'MORE_THAN_7D'
-          ? bucketSets.MORE_THAN_7D
-          : etaDischargeFilter === 'D_MINUS_2'
-            ? bucketSets.D_MINUS_2
-            : etaDischargeFilter === 'D'
-              ? bucketSets.D
-              : etaDischargeFilter === 'DELAY'
-                ? bucketSets.DELAY
-                : bucketSets.NO_ETA
-
-      if (!key || !targetSet.has(key)) return false
-    }
-
-    return matchesSearch && matchesViewOption && passesColumnFilters(shipment)
-  })
+  // Search, columns, view-by, late indicator, and ETA toolbar buckets are applied on the server (full DB).
+  const filteredShipments = shipments
 
   // Fetch contract details for a shipment
   const fetchContractDetails = async (shipment: Shipment) => {
@@ -2880,27 +2832,6 @@ function ShipmentsPageContent() {
                 Export Data
               </Button>
             )}
-            <div className="flex items-center gap-2 ml-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page <= 1 || loading}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-              >
-                Prev
-              </Button>
-              <div className="text-sm text-gray-600 min-w-[110px] text-center">
-                Page {page}
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={loading || (totalCount > 0 && page * pageSize >= totalCount)}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                Next
-              </Button>
-            </div>
             {canBulkShipments && (
               <>
                 <input
@@ -2932,107 +2863,6 @@ function ShipmentsPageContent() {
             )}
           </div>
         </div>
-
-        {/* Filters */}
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex gap-4 items-center">
-              <div className="flex-1 relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                <Input
-                  placeholder="Search by Shipment ID, Contract Numbers, PO No, or Vessel Name..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="ALL">All Status</option>
-                <option value="PLANNED">Planned</option>
-                <option value="IN_TRANSIT">In Transit</option>
-                <option value="ARRIVED">Arrived</option>
-                <option value="UNLOADING">Unloading</option>
-                <option value="COMPLETED">Completed</option>
-                <option value="CANCELLED">Cancelled</option>
-              </select>
-              <select
-                value={lateIndicatorFilter}
-                onChange={(e) => setLateIndicatorFilter(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="ALL">All Late Indicator</option>
-                <option value="ON_TIME">On Time</option>
-                <option value="LATE">Late</option>
-                <option value="NA">N/A</option>
-              </select>
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-600">View by:</span>
-                <select
-                  value={viewOption}
-                  onChange={(e) => {
-                    setViewOption(e.target.value as 'all' | 'sto' | 'contract' | 'vessel' | 'port_loading' | 'port_discharge')
-                    setViewFilterValue('')
-                  }}
-                  className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="all">All</option>
-                  <option value="sto">STO Number</option>
-                  <option value="contract">Contract Numbers</option>
-                  <option value="vessel">Vessel Name</option>
-                  <option value="port_loading">Port of Loading</option>
-                  <option value="port_discharge">Port of Discharge</option>
-                </select>
-                {viewOption !== 'all' && (
-              <Input
-                    placeholder={`Filter by ${
-                      viewOption === 'sto' ? 'STO Number' 
-                      : viewOption === 'contract' ? 'Contract Numbers' 
-                      : viewOption === 'vessel' ? 'Vessel Name'
-                      : viewOption === 'port_loading' ? 'Port of Loading'
-                      : 'Port of Discharge'
-                    }...`}
-                    value={viewFilterValue}
-                    onChange={(e) => setViewFilterValue(e.target.value)}
-                className="w-48"
-              />
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-600">Shipment Date:</span>
-                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-40" />
-                <span className="text-gray-500">to</span>
-                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-40" />
-              </div>
-              <Button onClick={handleFilterChange} variant="outline" size="sm">
-                <Filter className="h-4 w-4 mr-1" />
-                Apply
-              </Button>
-              {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || viewFilterValue || dateFrom || dateTo) && (
-                <Button 
-                  onClick={() => {
-                    setStatusFilter('ALL')
-                    setLateIndicatorFilter('ALL')
-                    setViewOption('all')
-                    setViewFilterValue('')
-                    setDateFrom('')
-                    setDateTo('')
-                    handleFilterChange()
-                  }}
-                  variant="ghost"
-                  size="sm"
-                  className="text-gray-500"
-                >
-                  <X className="h-4 w-4 mr-1" />
-                  Clear
-                </Button>
-              )}
-            </div>
-          </CardContent>
-        </Card>
 
         {/* Status Distribution */}
         <Card>
@@ -3208,17 +3038,120 @@ function ShipmentsPageContent() {
           </CardContent>
         </Card>
 
+        {/* Search & filters (below ETA buckets) */}
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:gap-4 xl:items-center">
+              <div className="flex-1 min-w-[200px] relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                <Input
+                  placeholder="Search by Shipment ID, Contract Numbers, PO No, or Vessel Name..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto"
+              >
+                <option value="ALL">All Status</option>
+                <option value="PLANNED">Planned</option>
+                <option value="IN_TRANSIT">In Transit</option>
+                <option value="ARRIVED">Arrived</option>
+                <option value="UNLOADING">Unloading</option>
+                <option value="COMPLETED">Completed</option>
+                <option value="CANCELLED">Cancelled</option>
+              </select>
+              <select
+                value={lateIndicatorFilter}
+                onChange={(e) => setLateIndicatorFilter(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto"
+              >
+                <option value="ALL">All Late Indicator</option>
+                <option value="ON_TIME">On Time</option>
+                <option value="LATE">Late</option>
+                <option value="NA">N/A</option>
+              </select>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm text-gray-600">View by:</span>
+                <select
+                  value={viewOption}
+                  onChange={(e) => {
+                    setViewOption(e.target.value as 'all' | 'sto' | 'contract' | 'vessel' | 'port_loading' | 'port_discharge')
+                    setViewFilterValue('')
+                  }}
+                  className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">All</option>
+                  <option value="sto">STO Number</option>
+                  <option value="contract">Contract Numbers</option>
+                  <option value="vessel">Vessel Name</option>
+                  <option value="port_loading">Port of Loading</option>
+                  <option value="port_discharge">Port of Discharge</option>
+                </select>
+                {viewOption !== 'all' && (
+                  <Input
+                    placeholder={`Filter by ${
+                      viewOption === 'sto' ? 'STO Number'
+                        : viewOption === 'contract' ? 'Contract Numbers'
+                          : viewOption === 'vessel' ? 'Vessel Name'
+                            : viewOption === 'port_loading' ? 'Port of Loading'
+                              : 'Port of Discharge'
+                    }...`}
+                    value={viewFilterValue}
+                    onChange={(e) => setViewFilterValue(e.target.value)}
+                    className="w-full sm:w-48"
+                  />
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm text-gray-600">Shipment Date:</span>
+                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-40" />
+                <span className="text-gray-500">to</span>
+                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-40" />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button onClick={handleFilterChange} variant="outline" size="sm">
+                  <Filter className="h-4 w-4 mr-1" />
+                  Apply
+                </Button>
+                {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || viewFilterValue || dateFrom || dateTo) && (
+                  <Button
+                    onClick={() => {
+                      setStatusFilter('ALL')
+                      setLateIndicatorFilter('ALL')
+                      setViewOption('all')
+                      setViewFilterValue('')
+                      setDateFrom('')
+                      setDateTo('')
+                      handleFilterChange()
+                    }}
+                    variant="ghost"
+                    size="sm"
+                    className="text-gray-500"
+                  >
+                    <X className="h-4 w-4 mr-1" />
+                    Clear
+                  </Button>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Shipments List */}
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-3">
                 <CardTitle>All Shipments</CardTitle>
                 <Badge variant="outline" className="hidden md:inline-flex">
                   Default view: Compact
                 </Badge>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <div className="relative">
                   <Button
                     variant="outline"
@@ -3278,6 +3211,27 @@ function ShipmentsPageContent() {
                     </>
                   )}
                 </Button>
+                <div className="flex items-center gap-1 border-l border-gray-200 pl-2 ml-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page <= 1 || loading}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  >
+                    Prev
+                  </Button>
+                  <div className="text-sm text-gray-600 min-w-[72px] text-center px-1">
+                    Page {page}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={loading || (totalCount > 0 && page * pageSize >= totalCount)}
+                    onClick={() => setPage((p) => p + 1)}
+                  >
+                    Next
+                  </Button>
+                </div>
               </div>
             </div>
           </CardHeader>

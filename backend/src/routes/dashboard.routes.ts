@@ -2,6 +2,7 @@ import express from 'express';
 import { authenticateToken } from '../middleware/auth';
 import { 
   getDashboardStats, 
+  getDashboardOverview,
   getTopSuppliers, 
   getTopTruckingOwners, 
   getTopVessels,
@@ -34,6 +35,8 @@ router.use(authenticateToken);
 
 // Dashboard statistics
 router.get('/stats', getDashboardStats);
+// Consolidated endpoint for initial dashboard load (widgets + filter options)
+router.get('/overview', getDashboardOverview);
 router.get('/claim-mutu-outstanding', getClaimMutuOutstandingRows);
 router.get('/claim-susut-outstanding', getClaimSusutOutstandingRows);
 

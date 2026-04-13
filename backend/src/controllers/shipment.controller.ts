@@ -3,12 +3,29 @@ import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import { deriveShipmentStatusFromAta, deriveShipmentStatusFromEta } from '../utils/shipmentStatus';
+import {
+  appendShipmentColumnFilters,
+  appendShipmentEtaBucketFilters,
+  appendShipmentGlobalSearch,
+  appendShipmentLateIndicatorFilter,
+  appendShipmentViewOptionFilter,
+  normalizeShipmentEtaBucketParam,
+  parseColumnFiltersQuery,
+} from '../utils/shipmentListFilters';
 
 export const getShipments = async (req: AuthRequest, res: Response) => {
+  let debugSql: { text: string; params: any[] } | null = null;
   try {
     const { status, vessel, port, dateFrom, dateTo, delayed, sto, contract, page = 1, limit = 10 } = req.query;
+    const globalSearch =
+      typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';
+    const colFilters = parseColumnFiltersQuery((req.query as any).columnFilters);
+    const lateIndicatorParam = (req.query as any).lateIndicator as string | undefined;
+    const viewOptionParam = (req.query as any).viewOption as string | undefined;
+    const viewQueryParam = (req.query as any).viewQuery as string | undefined;
+    const etaLoadingBucket = normalizeShipmentEtaBucketParam((req.query as any).etaLoading);
+    const etaDischargeBucket = normalizeShipmentEtaBucketParam((req.query as any).etaDischarge);
     const offset = (Number(page) - 1) * Number(limit);
-    const includeSapAggregates = Boolean(sto);
     const compact = String((req.query as any).compact || '').toLowerCase() === 'true';
 
     // Query shipments grouped by STO number or Operation ID:
@@ -163,6 +180,8 @@ ${contractMetaSelect}
         LEFT JOIN contracts c ON s.contract_id = c.id
         LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
         WHERE 1=1
+          -- Shipments module is SEA-only: exclude LAND contracts leaking into STO groups
+          AND UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) = 'SEA'
     `;
     const queryParams: any[] = [];
     let paramIndex = 1;
@@ -213,161 +232,117 @@ ${contractMetaSelect}
       paramIndex++;
     }
 
-    // Inject sap_processed_data aggregates only when filtering by a specific STO,
-    // to avoid a heavy scan for the default "all shipments" view.
-    const sapAggregatesSelect = includeSapAggregates
-      ? `
-        -- Get STO quantity from sap_processed_data
-        COALESCE((
-          SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
-          FROM sap_processed_data spd
-          WHERE
-            (
-              spd.sto_number IS NOT NULL
-              AND TRIM(spd.sto_number::text) = TRIM(sb.sto_key::text)
-            )
-            OR (
-              spd.sto_number IS NULL
-              AND NULLIF(TRIM(COALESCE(
-                spd.data->'raw'->>'STO No.',
-                spd.data->'raw'->>'STO Number',
-                spd.data->'shipment'->>'sto_no',
-                spd.data->'contract'->>'sto_no'
-              )), '') = TRIM(sb.sto_key::text)
-            )
-            AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-        ), 0) as sto_quantity,
-        -- Get Quantity Receive from sap_processed_data (raw field; accept Quantity Receive or Qty Receive)
-        COALESCE((
-          SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC))
-          FROM sap_processed_data spd
-          WHERE
-            (
-              spd.sto_number IS NOT NULL
-              AND TRIM(spd.sto_number::text) = TRIM(sb.sto_key::text)
-            )
-            OR (
-              spd.sto_number IS NULL
-              AND NULLIF(TRIM(COALESCE(
-                spd.data->'raw'->>'STO No.',
-                spd.data->'raw'->>'STO Number',
-                spd.data->'shipment'->>'sto_no',
-                spd.data->'contract'->>'sto_no'
-              )), '') = TRIM(sb.sto_key::text)
-            )
-            AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
-        ), 0) as quantity_receive,
-        -- Get Quantity Delivered from sap_processed_data (raw field; accept Quantity Delivered or Quantity Delivery)
-        COALESCE((
-          SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC))
-          FROM sap_processed_data spd
-          WHERE
-            (
-              spd.sto_number IS NOT NULL
-              AND TRIM(spd.sto_number::text) = TRIM(sb.sto_key::text)
-            )
-            OR (
-              spd.sto_number IS NULL
-              AND NULLIF(TRIM(COALESCE(
-                spd.data->'raw'->>'STO No.',
-                spd.data->'raw'->>'STO Number',
-                spd.data->'shipment'->>'sto_no',
-                spd.data->'contract'->>'sto_no'
-              )), '') = TRIM(sb.sto_key::text)
-            )
-            AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
-        ), 0) as quantity_delivered_sap,
-        -- Basic ETA loading dates at shipment level (used for ETA Loading Status buckets)
-        MAX(s.eta_arrival::date) as eta_arrival,
-        MAX(s.eta_berthed::date) as eta_berthed,
-        MAX(s.eta_loading_start::date) as eta_loading_start,
-        MAX(s.eta_loading_complete::date) as eta_loading_complete,
-        MAX(s.eta_sailed::date) as eta_sailed,
-        -- Get incoterm, B2B flag, source_type from latest sap_processed_data
-        (SELECT COALESCE(
-                  spd.data->'contract'->>'incoterm',
-                  spd.data->>'Incoterm'
-                )
-           FROM sap_processed_data spd
-           WHERE
-             (
-               spd.sto_number IS NOT NULL
-               AND TRIM(spd.sto_number::text) = TRIM(sb.sto_key::text)
-             )
-             OR (
-               spd.sto_number IS NULL
-               AND NULLIF(TRIM(COALESCE(
-                 spd.data->'raw'->>'STO No.',
-                 spd.data->'raw'->>'STO Number',
-                 spd.data->'shipment'->>'sto_no',
-                 spd.data->'contract'->>'sto_no'
-               )), '') = TRIM(sb.sto_key::text)
-             )
-           ORDER BY spd.created_at DESC NULLS LAST
-           LIMIT 1) AS incoterm,
-        (SELECT COALESCE(
-                  spd.data->'contract'->>'contract_type',
-                  spd.data->>'B2B Flag',
-                  spd.data->>'Contract Type'
-                )
-           FROM sap_processed_data spd
-           WHERE
-             (
-               spd.sto_number IS NOT NULL
-               AND TRIM(spd.sto_number::text) = TRIM(sb.sto_key::text)
-             )
-             OR (
-               spd.sto_number IS NULL
-               AND NULLIF(TRIM(COALESCE(
-                 spd.data->'raw'->>'STO No.',
-                 spd.data->'raw'->>'STO Number',
-                 spd.data->'shipment'->>'sto_no',
-                 spd.data->'contract'->>'sto_no'
-               )), '') = TRIM(sb.sto_key::text)
-             )
-           ORDER BY spd.created_at DESC NULLS LAST
-           LIMIT 1) AS b2b_flag,
-        (SELECT COALESCE(
-                  spd.data->'contract'->>'source_type',
-                  spd.data->>'Source'
-                )
-           FROM sap_processed_data spd
-           WHERE
-             (
-               spd.sto_number IS NOT NULL
-               AND TRIM(spd.sto_number::text) = TRIM(sb.sto_key::text)
-             )
-             OR (
-               spd.sto_number IS NULL
-               AND NULLIF(TRIM(COALESCE(
-                 spd.data->'raw'->>'STO No.',
-                 spd.data->'raw'->>'STO Number',
-                 spd.data->'shipment'->>'sto_no',
-                 spd.data->'contract'->>'sto_no'
-               )), '') = TRIM(sb.sto_key::text)
-             )
-           ORDER BY spd.created_at DESC NULLS LAST
-           LIMIT 1) AS source_type`
-      : `
-        0::numeric as sto_quantity,
-        0::numeric as quantity_receive,
-        0::numeric as quantity_delivered_sap,
-        NULL::text as incoterm,
-        NULL::text as b2b_flag,
-        NULL::text as source_type`;
+    const innerParams = [...queryParams];
+    const outerFilterStartIndex = paramIndex;
+
+    // NOTE: We intentionally avoid per-row correlated subqueries into sap_processed_data here.
+    // Those are extremely slow when sap_processed_data is large, causing the shipments page to hang.
 
     queryText += `
         GROUP BY COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id)
+      )`;
+
+    const shipmentBaseCteSql = queryText;
+
+    let fp = outerFilterStartIndex;
+    const gSearch = appendShipmentGlobalSearch(globalSearch, fp);
+    fp = gSearch.nextIndex;
+    const cCol = appendShipmentColumnFilters(colFilters, fp);
+    fp = cCol.nextIndex;
+    const li = appendShipmentLateIndicatorFilter(lateIndicatorParam, fp);
+    fp = li.nextIndex;
+    const vo = appendShipmentViewOptionFilter(viewOptionParam, viewQueryParam, fp);
+    fp = vo.nextIndex;
+    const etaBuckets = appendShipmentEtaBucketFilters(etaLoadingBucket, etaDischargeBucket);
+
+    const outerSql = `${gSearch.sql}${cCol.sql}${li.sql}${vo.sql}${etaBuckets.sql}`;
+    const outerParams = [...gSearch.params, ...cCol.params, ...li.params, ...vo.params];
+
+    queryText = `${shipmentBaseCteSql},
+      shipment_page AS (
+        SELECT
+          sb.*
+        FROM shipment_base sb
+        WHERE 1=1 ${outerSql}
+        ORDER BY sb.created_at DESC
+        LIMIT $${fp} OFFSET $${fp + 1}
+      ),
+      spd_keyed AS (
+        SELECT
+          NULLIF(TRIM(COALESCE(
+            spd.sto_number::text,
+            spd.data->'raw'->>'STO No.',
+            spd.data->'raw'->>'STO Number',
+            spd.data->'shipment'->>'sto_no',
+            spd.data->'contract'->>'sto_no'
+          )), '') AS sto_key,
+          spd.created_at,
+          spd.data
+        FROM sap_processed_data spd
+        INNER JOIN (SELECT DISTINCT sto_key FROM shipment_page WHERE sto_key IS NOT NULL AND TRIM(sto_key::text) != '') k
+          ON NULLIF(TRIM(COALESCE(
+              spd.sto_number::text,
+              spd.data->'raw'->>'STO No.',
+              spd.data->'raw'->>'STO Number',
+              spd.data->'shipment'->>'sto_no',
+              spd.data->'contract'->>'sto_no'
+            )), '') = TRIM(k.sto_key::text)
+      ),
+      sap_agg AS (
+        SELECT
+          sk.sto_key,
+          COALESCE(SUM(
+            NULLIF(regexp_replace(COALESCE(
+              NULLIF(TRIM(sk.data->'contract'->>'sto_quantity'), ''),
+              NULLIF(TRIM(sk.data->'shipment'->>'sto_quantity'), ''),
+              NULLIF(TRIM(sk.data->'raw'->>'STO Quantity'), ''),
+              NULLIF(TRIM(sk.data->'raw'->>'sto quantity'), '')
+              , ''
+            ), '[^0-9\\.-]', '', 'g'), '')::numeric
+          ), 0) AS sto_quantity,
+          COALESCE(SUM(
+            NULLIF(regexp_replace(COALESCE(
+              NULLIF(TRIM(sk.data->'raw'->>'Quantity Receive'), ''),
+              NULLIF(TRIM(sk.data->'raw'->>'Qty Receive'), '')
+              , ''
+            ), '[^0-9\\.-]', '', 'g'), '')::numeric
+          ), 0) AS quantity_receive,
+          COALESCE(SUM(
+            NULLIF(regexp_replace(COALESCE(
+              NULLIF(TRIM(sk.data->'raw'->>'Quantity Delivered'), ''),
+              NULLIF(TRIM(sk.data->'raw'->>'Quantity Delivery'), '')
+              , ''
+            ), '[^0-9\\.-]', '', 'g'), '')::numeric
+          ), 0) AS quantity_delivered_sap
+        FROM spd_keyed sk
+        WHERE sk.sto_key IS NOT NULL
+        GROUP BY sk.sto_key
+      ),
+      sap_latest AS (
+        SELECT DISTINCT ON (sk.sto_key)
+          sk.sto_key,
+          COALESCE(sk.data->'contract'->>'incoterm', sk.data->>'Incoterm') AS incoterm,
+          COALESCE(sk.data->'contract'->>'contract_type', sk.data->>'B2B Flag', sk.data->>'Contract Type') AS b2b_flag,
+          COALESCE(sk.data->'contract'->>'source_type', sk.data->>'Source') AS source_type
+        FROM spd_keyed sk
+        WHERE sk.sto_key IS NOT NULL
+        ORDER BY sk.sto_key, sk.created_at DESC NULLS LAST
       )
       SELECT 
-        sb.*,
-${sapAggregatesSelect}
-      FROM shipment_base sb
-      ORDER BY sb.created_at DESC
-      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
-    queryParams.push(Number(limit), offset);
+        sp.*,
+        COALESCE(sa.sto_quantity, 0) AS sto_quantity,
+        COALESCE(sa.quantity_receive, 0) AS quantity_receive,
+        COALESCE(sa.quantity_delivered_sap, 0) AS quantity_delivered_sap,
+        sl.incoterm AS incoterm,
+        sl.b2b_flag AS b2b_flag,
+        sl.source_type AS source_type
+      FROM shipment_page sp
+      LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(sp.sto_key::text)
+      LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)`;
+    const mainParams = [...innerParams, ...outerParams, Number(limit), offset];
 
-    const result = await query(queryText, queryParams);
+    debugSql = { text: queryText, params: mainParams };
+    const result = await query(queryText, mainParams);
 
     // When grouping by STO, display STO No from sto_key when contracts.sto_number is empty,
     // but only if sto_key looks like a real STO number (numeric), not an operation ID or manual code.
@@ -414,77 +389,11 @@ ${sapAggregatesSelect}
       }
     }
 
-    // Get total count (grouped by STO)
-    let countQuery = `
-      WITH latest_spd_contract AS (
-        SELECT DISTINCT ON (spd.contract_number)
-          spd.contract_number,
-          NULLIF(TRIM(COALESCE(
-            spd.sto_number::text,
-            spd.data->'raw'->>'STO No.',
-            spd.data->'raw'->>'STO Number',
-            spd.data->'shipment'->>'sto_no',
-            spd.data->'contract'->>'sto_no'
-          )), '') AS effective_sto,
-          spd.created_at
-        FROM sap_processed_data spd
-        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      )
-      SELECT COUNT(DISTINCT COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id)) as count 
-      FROM shipments s
-      LEFT JOIN contracts c ON s.contract_id = c.id
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE 1=1
-    `;
-    const countParams: any[] = [];
-    let countParamIndex = 1;
-    
-    if (status) {
-      countQuery += ` AND s.status = $${countParamIndex}`;
-      countParams.push(status);
-      countParamIndex++;
-    }
-
-    if (vessel) {
-      countQuery += ` AND s.vessel_name ILIKE $${countParamIndex}`;
-      countParams.push(`%${vessel}%`);
-      countParamIndex++;
-    }
-
-    if (port) {
-      countQuery += ` AND (s.port_of_loading ILIKE $${countParamIndex} OR s.port_of_discharge ILIKE $${countParamIndex})`;
-      countParams.push(`%${port}%`, `%${port}%`);
-      countParamIndex += 2;
-    }
-
-    if (dateFrom) {
-      countQuery += ` AND s.shipment_date >= $${countParamIndex}`;
-      countParams.push(dateFrom);
-      countParamIndex++;
-    }
-
-    if (dateTo) {
-      countQuery += ` AND s.shipment_date <= $${countParamIndex}`;
-      countParams.push(dateTo);
-      countParamIndex++;
-    }
-
-    if (delayed === 'true') {
-      countQuery += ` AND s.is_delayed = true`;
-    }
-
-    if (sto) {
-      countQuery += ` AND (TRIM(COALESCE(c.sto_number::text, l.effective_sto, '')) = TRIM($${countParamIndex}::text) OR s.shipment_id = $${countParamIndex})`;
-      countParams.push(sto);
-      countParamIndex++;
-    }
-
-    if (contract) {
-      countQuery += ` AND c.contract_id = $${countParamIndex}`;
-      countParams.push(contract);
-      countParamIndex++;
-    }
+    const countQuery = `${shipmentBaseCteSql}
+      SELECT COUNT(*)::bigint AS count
+      FROM shipment_base sb
+      WHERE 1=1 ${outerSql}`;
+    const countParams = [...innerParams, ...outerParams];
 
     const countResult = await query(countQuery, countParams);
     const totalCount = parseInt(countResult.rows[0].count) || 0;
@@ -505,12 +414,21 @@ ${sapAggregatesSelect}
     logger.error('Get shipments error:', error);
     const errorMessage = error.message || 'Failed to fetch shipments';
     const errorDetail = error.detail || error.toString();
-    
+
+    const pos = typeof error.position === 'string' ? parseInt(error.position, 10) : (typeof error.position === 'number' ? error.position : null);
+    const sqlSnippet =
+      debugSql && typeof pos === 'number' && Number.isFinite(pos) && pos > 0
+        ? debugSql.text.slice(Math.max(0, pos - 120), Math.min(debugSql.text.length, pos + 120))
+        : null;
+
     logger.error('Error details:', {
       message: errorMessage,
       detail: errorDetail,
       code: error.code,
-      query: error.query
+      position: error.position,
+      sqlSnippet,
+      sqlLength: debugSql?.text?.length ?? null,
+      paramCount: debugSql?.params?.length ?? null,
     });
     
     return res.status(500).json({
@@ -1825,6 +1743,8 @@ export const getContractDetailsForSto = async (req: AuthRequest, res: Response) 
         ) AS locked_from_sap
       FROM ac
       LEFT JOIN contracts c ON c.contract_id = ac.contract_number
+      -- Shipments contract details must be SEA-only
+      WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) = 'SEA'
       GROUP BY ac.contract_number
     `;
 

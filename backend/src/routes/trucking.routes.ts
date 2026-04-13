@@ -16,15 +16,15 @@ router.get('/contracts/suggestions', getLandOpenContractSuggestions);
 // Validate contract number
 router.get('/validate/contract', validateContractNumber);
 
-// Get trucking operation by ID
-router.get('/:id', getTruckingOperationById);
-
 // Create trucking operation
 router.post('/', auditLog('CREATE', 'TRUCKING_OPERATION'), createTruckingOperation);
 
 // Calendar view: daily planning deliverables
 router.get('/daily-planning-deliverables', getTruckingDailyDeliverablesCalendar);
 router.put('/:id/daily-planning-deliverables', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyDeliverables);
+
+// Get trucking operation by ID
+router.get('/:id', getTruckingOperationById);
 
 // Update trucking operation
 router.put('/:id', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingOperation);

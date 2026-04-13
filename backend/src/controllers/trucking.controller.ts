@@ -3,6 +3,12 @@ import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import { normalizeAndValidateDailyDeliverables } from '../utils/truckingDailyDeliverables';
+import {
+  appendTruckingColumnFilters,
+  appendTruckingGlobalSearch,
+  appendTruckingLateIndicatorFilter,
+  parseColumnFiltersQuery,
+} from '../utils/truckingListFilters';
 
 export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Response) => {
   try {
@@ -60,6 +66,10 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
   try {
     const { status, location, loadingLocation, unloadingLocation, dateFrom, dateTo, sto, contract, page = 1, limit = 10 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
+    const globalSearch =
+      typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';
+    const colFilters = parseColumnFiltersQuery((req.query as any).columnFilters);
+    const lateIndicatorParam = (req.query as any).lateIndicator as string | undefined;
 
     let queryText = `
       SELECT 
@@ -224,56 +234,28 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
       paramIndex++;
     }
 
-    queryText += ` ORDER BY t.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
-    queryParams.push(Number(limit), offset);
+    const innerParams = [...queryParams];
+    const outerStart = paramIndex;
 
-    const result = await query(queryText, queryParams);
+    let fp = outerStart;
+    const gSearch = appendTruckingGlobalSearch(globalSearch, fp);
+    fp = gSearch.nextIndex;
+    const cCol = appendTruckingColumnFilters(colFilters, fp);
+    fp = cCol.nextIndex;
+    const li = appendTruckingLateIndicatorFilter(lateIndicatorParam, fp);
+    fp = li.nextIndex;
 
-    let countQuery = `
-      SELECT COUNT(*) as count
-      FROM trucking_operations t
-      LEFT JOIN contracts c ON t.contract_id = c.id
-      LEFT JOIN shipments s ON t.shipment_id = s.id
-      WHERE 1=1
-    `;
-    const countParams: any[] = [];
-    let countParamIndex = 1;
+    const outerSql = `${gSearch.sql}${cCol.sql}${li.sql}`;
+    const outerParams = [...gSearch.params, ...cCol.params, ...li.params];
 
-    if (status) {
-      countQuery += ` AND t.status = $${countParamIndex}`;
-      countParams.push(status);
-      countParamIndex++;
-    }
+    const preOuterQuery = queryText;
+    queryText = `${preOuterQuery}${outerSql} ORDER BY t.created_at DESC LIMIT $${fp} OFFSET $${fp + 1}`;
+    const mainParams = [...innerParams, ...outerParams, Number(limit), offset];
 
-    if (location) {
-      countQuery += ` AND t.location ILIKE $${countParamIndex}`;
-      countParams.push(`%${location}%`);
-      countParamIndex++;
-    }
+    const result = await query(queryText, mainParams);
 
-    if (dateFrom) {
-      countQuery += ` AND t.trucking_start_date >= $${countParamIndex}`;
-      countParams.push(dateFrom);
-      countParamIndex++;
-    }
-
-    if (dateTo) {
-      countQuery += ` AND t.trucking_start_date <= $${countParamIndex}`;
-      countParams.push(dateTo);
-      countParamIndex++;
-    }
-
-    if (sto) {
-      countQuery += ` AND c.sto_number = $${countParamIndex}`;
-      countParams.push(sto);
-      countParamIndex++;
-    }
-
-    if (contract) {
-      countQuery += ` AND c.contract_id = $${countParamIndex}`;
-      countParams.push(contract);
-      countParamIndex++;
-    }
+    const countQuery = `SELECT COUNT(*)::bigint AS count FROM (${preOuterQuery}${outerSql}) AS _trucking_filtered`;
+    const countParams = [...innerParams, ...outerParams];
 
     const countResult = await query(countQuery, countParams);
 

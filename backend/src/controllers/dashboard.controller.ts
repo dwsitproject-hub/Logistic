@@ -1088,6 +1088,451 @@ export const getTopVessels = async (req: AuthRequest, res: Response) => {
   }
 };
 
+export const getDashboardOverview = async (req: AuthRequest, res: Response) => {
+  try {
+    const includeManagement = String((req.query as any).includeManagement || '').toLowerCase() === 'true';
+    const { contractFilter, params } = buildFilterConditions(req);
+
+    // Consolidate the heavy widgets into ONE query so we scan sap_processed_data only once.
+    const widgetsCombined = await query(
+      `
+      WITH filtered_contracts AS (
+        SELECT
+          c.id AS contract_pk,
+          c.contract_id,
+          c.product,
+          COALESCE(NULLIF(TRIM(c.incoterm), ''), 'Blank') AS incoterm,
+          c.supplier,
+          COALESCE(c.quantity_ordered, 0) AS quantity_ordered,
+          c.unit_price,
+          COALESCE(c.contract_value, 0) AS contract_value,
+          COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_location
+        FROM contracts c
+        LEFT JOIN LATERAL (
+          SELECT UPPER(TRIM(COALESCE(
+            NULLIF(TRIM(c.transport_mode), ''),
+            (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd
+             WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+            ''
+          ))) AS tm_upper
+        ) tx ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(
+            CASE
+              WHEN tx.tm_upper LIKE 'LAND%' THEN (
+                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                FROM trucking_operations t
+                WHERE t.contract_id = c.id
+                ORDER BY t.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              WHEN tx.tm_upper LIKE 'SEA%' THEN (
+                SELECT NULLIF(TRIM(s.port_of_discharge), '')
+                FROM shipments s
+                WHERE s.contract_id = c.id
+                ORDER BY s.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+              ELSE NULL
+            END,
+            NULLIF(TRIM(c.unloading_site), ''),
+            NULLIF(TRIM(c.loading_site), '')
+          ) AS plant_site
+        ) ps ON true
+        WHERE c.product IS NOT NULL AND TRIM(c.product) != '' ${contractFilter}
+      ),
+      delivered_by_contract AS (
+        SELECT
+          spd.contract_number AS contract_id,
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_receive,
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
+          ), 0)::numeric AS quantity_delivery,
+          COALESCE(SUM(
+            CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
+          ) FILTER (
+            WHERE spd.data->'contract'->>'sto_quantity' IS NOT NULL AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
+          ), 0)::numeric AS total_sto_quantity
+        FROM sap_processed_data spd
+        GROUP BY spd.contract_number
+      ),
+      payment_status_per_contract AS (
+        SELECT
+          p.contract_id,
+          MAX(CASE WHEN p.payoff_date IS NULL THEN 1 ELSE 0 END) AS has_blank_payoff
+        FROM payments p
+        GROUP BY p.contract_id
+      ),
+      enriched AS (
+        SELECT
+          fc.*,
+          COALESCE(db.quantity_receive, 0) AS quantity_receive,
+          COALESCE(db.quantity_delivery, 0) AS quantity_delivery,
+          COALESCE(db.total_sto_quantity, 0) AS total_sto_quantity,
+          COALESCE(ps.has_blank_payoff, 0) AS has_blank_payoff
+        FROM filtered_contracts fc
+        LEFT JOIN delivered_by_contract db ON db.contract_id = fc.contract_id
+        LEFT JOIN payment_status_per_contract ps ON ps.contract_id = fc.contract_pk
+      ),
+      product_incoterm AS (
+        SELECT
+          e.product,
+          e.incoterm,
+          COUNT(DISTINCT e.contract_id) AS contract_count,
+          COUNT(DISTINCT e.supplier) AS supplier_count,
+          SUM(e.quantity_ordered) AS total_quantity,
+          SUM(
+            CASE
+              WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN e.quantity_receive
+              WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('LCO', 'FOB') THEN e.quantity_delivery
+              ELSE e.total_sto_quantity
+            END
+          ) AS completed_quantity,
+          COALESCE(SUM(GREATEST(
+            e.quantity_ordered - (
+              CASE
+                WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN e.quantity_receive
+                WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('LCO', 'FOB') THEN e.quantity_delivery
+                ELSE e.total_sto_quantity
+              END
+            ),
+            0
+          )), 0) AS outstanding_quantity,
+          SUM(
+            CASE
+              WHEN e.has_blank_payoff = 1
+              THEN GREATEST(
+                e.quantity_ordered - (
+                  CASE
+                    WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN e.quantity_receive
+                    WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('LCO', 'FOB') THEN e.quantity_delivery
+                    ELSE e.total_sto_quantity
+                  END
+                ),
+                0
+              )
+              ELSE 0
+            END
+          ) AS outstanding_payment_quantity,
+          AVG(e.unit_price) AS avg_unit_price,
+          SUM(e.contract_value) AS total_contract_value
+        FROM enriched e
+        GROUP BY e.product, e.incoterm
+      ),
+      plant_incoterm AS (
+        SELECT
+          e.plant_location,
+          e.incoterm,
+          COUNT(DISTINCT e.contract_id) AS contract_count,
+          COUNT(DISTINCT e.supplier) AS supplier_count,
+          SUM(e.quantity_ordered) AS total_quantity,
+          SUM(
+            CASE
+              WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN e.quantity_receive
+              WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('LCO', 'FOB') THEN e.quantity_delivery
+              ELSE e.total_sto_quantity
+            END
+          ) AS completed_quantity,
+          COALESCE(SUM(GREATEST(
+            e.quantity_ordered - (
+              CASE
+                WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN e.quantity_receive
+                WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('LCO', 'FOB') THEN e.quantity_delivery
+                ELSE e.total_sto_quantity
+              END
+            ),
+            0
+          )), 0) AS outstanding_quantity,
+          SUM(
+            CASE
+              WHEN e.has_blank_payoff = 1
+              THEN GREATEST(
+                e.quantity_ordered - (
+                  CASE
+                    WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN e.quantity_receive
+                    WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('LCO', 'FOB') THEN e.quantity_delivery
+                    ELSE e.total_sto_quantity
+                  END
+                ),
+                0
+              )
+              ELSE 0
+            END
+          ) AS outstanding_payment_quantity
+        FROM enriched e
+        GROUP BY e.plant_location, e.incoterm
+      ),
+      plant_qty AS (
+        SELECT
+          e.plant_location,
+          COUNT(DISTINCT e.contract_id)::int AS contract_count,
+          COALESCE(SUM(e.quantity_ordered), 0)::numeric AS total_quantity,
+          COALESCE(SUM(LEAST(
+            e.quantity_ordered,
+            CASE
+              WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN e.quantity_receive
+              WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('LCO', 'FOB') THEN e.quantity_delivery
+              ELSE e.total_sto_quantity
+            END
+          )), 0)::numeric AS total_quantity_delivered,
+          COALESCE(SUM(GREATEST(
+            e.quantity_ordered - LEAST(
+              e.quantity_ordered,
+              CASE
+                WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN e.quantity_receive
+                WHEN UPPER(TRIM(COALESCE(e.incoterm, ''))) IN ('LCO', 'FOB') THEN e.quantity_delivery
+                ELSE e.total_sto_quantity
+              END
+            ),
+            0
+          )), 0)::numeric AS total_quantity_shipped,
+          COALESCE(SUM(e.contract_value), 0)::numeric AS total_contract_value,
+          COUNT(DISTINCT e.supplier)::int AS supplier_count
+        FROM enriched e
+        GROUP BY e.plant_location
+        ORDER BY total_quantity DESC
+        LIMIT 10
+      )
+      SELECT
+        COALESCE(
+          (SELECT jsonb_agg(to_jsonb(x) ORDER BY x.product, x.total_quantity DESC NULLS LAST, x.incoterm) FROM product_incoterm x),
+          '[]'::jsonb
+        ) AS product_incoterm_rows,
+        COALESCE(
+          (SELECT jsonb_agg(to_jsonb(x) ORDER BY x.plant_location, x.total_quantity DESC NULLS LAST, x.incoterm) FROM plant_incoterm x),
+          '[]'::jsonb
+        ) AS plant_incoterm_rows,
+        COALESCE(
+          (SELECT jsonb_agg(to_jsonb(x) ORDER BY x.total_quantity DESC NULLS LAST) FROM plant_qty x),
+          '[]'::jsonb
+        ) AS plant_quantities
+      `,
+      params
+    );
+
+    const [
+      topSuppliers,
+      topTruckingOwners,
+      topVessels,
+      plantsOpt,
+      suppliersOpt,
+      productsOpt,
+      groupsOpt,
+      mgmtBreakdown,
+    ] = await Promise.all([
+      // top performers
+      query(
+        `
+        SELECT 
+          c.supplier,
+          COUNT(DISTINCT c.contract_id) as contract_count,
+          SUM(c.quantity_ordered) as total_quantity,
+          AVG(c.unit_price) as avg_unit_price,
+          SUM(c.contract_value) as total_contract_value
+        FROM contracts c
+        WHERE c.supplier IS NOT NULL AND c.supplier != '' ${contractFilter}
+        GROUP BY c.supplier
+        ORDER BY total_quantity DESC
+        LIMIT 5
+        `,
+        params
+      ),
+      query(
+        `
+        SELECT 
+          t.trucking_owner,
+          COUNT(*) as operation_count,
+          SUM(t.quantity_sent) as total_quantity_sent,
+          SUM(t.quantity_delivered) as total_quantity_delivered,
+          AVG(t.gain_loss_percentage) as avg_gain_loss_percentage,
+          SUM(t.oa_actual) as total_oa_actual
+        FROM trucking_operations t
+        LEFT JOIN contracts c ON t.contract_id = c.id
+        WHERE t.trucking_owner IS NOT NULL AND t.trucking_owner != '' ${contractFilter}
+        GROUP BY t.trucking_owner
+        ORDER BY total_quantity_sent DESC
+        LIMIT 5
+        `,
+        params
+      ),
+      query(
+        `
+        SELECT 
+          s.vessel_name,
+          COUNT(*) as shipment_count,
+          SUM(s.quantity_shipped) as total_quantity_shipped,
+          SUM(s.quantity_delivered) as total_quantity_delivered,
+          AVG(s.gain_loss_percentage) as avg_gain_loss_percentage,
+          COUNT(*) FILTER (WHERE s.is_delayed = true) as delayed_count
+        FROM shipments s
+        LEFT JOIN contracts c ON s.contract_id = c.id
+        WHERE s.vessel_name IS NOT NULL AND s.vessel_name != '' ${contractFilter}
+        GROUP BY s.vessel_name
+        ORDER BY total_quantity_shipped DESC
+        LIMIT 5
+        `,
+        params
+      ),
+      // filter options (unfiltered, fast)
+      query(
+        `
+        SELECT DISTINCT plant_location
+        FROM (
+          SELECT 
+            CASE 
+              WHEN s.port_of_discharge IS NULL OR s.port_of_discharge = '' THEN 'Blank'
+              ELSE s.port_of_discharge
+            END as plant_location
+          FROM shipments s
+          UNION
+          SELECT 
+            CASE 
+              WHEN t.location IS NULL OR t.location = '' THEN 'Blank'
+              ELSE t.location
+            END as plant_location
+          FROM trucking_operations t
+        ) plants
+        WHERE plant_location IS NOT NULL
+        ORDER BY plant_location
+        `
+      ),
+      query(
+        `
+        SELECT DISTINCT supplier
+        FROM contracts
+        WHERE supplier IS NOT NULL AND supplier != ''
+        ORDER BY supplier
+        `
+      ),
+      query(
+        `
+        SELECT DISTINCT product
+        FROM contracts
+        WHERE product IS NOT NULL AND product != ''
+        ORDER BY product
+        `
+      ),
+      query(
+        `
+        SELECT DISTINCT COALESCE(NULLIF(TRIM(group_name), ''), 'Blank') AS group_name
+        FROM contracts
+        WHERE group_name IS NOT NULL OR group_name = ''
+        ORDER BY group_name
+        `
+      ),
+      includeManagement
+        ? query(
+            `
+            WITH base_contracts AS (
+              SELECT
+                c.id AS contract_pk,
+                c.contract_id,
+                c.product,
+                COALESCE(NULLIF(TRIM(c.incoterm), ''), 'Blank') AS incoterm,
+                c.supplier,
+                COALESCE(c.quantity_ordered, 0) AS quantity_ordered,
+                c.unit_price,
+                c.contract_value,
+                COALESCE(NULLIF(TRIM(c.source_type), ''), 'Blank') AS source_type,
+                COALESCE(l.data->'contract'->>'ltc_spot', c.contract_type::text, 'Blank') AS lt_spot,
+                COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_site
+              FROM contracts c
+              LEFT JOIN LATERAL (
+                SELECT data FROM sap_processed_data spd
+                WHERE spd.contract_number = c.contract_id
+                ORDER BY spd.created_at DESC NULLS LAST
+                LIMIT 1
+              ) l ON true
+              LEFT JOIN LATERAL (
+                SELECT UPPER(TRIM(COALESCE(
+                  NULLIF(TRIM(c.transport_mode), ''),
+                  (SELECT spd.data->'contract'->>'transport_mode' FROM sap_processed_data spd
+                   WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+                  (SELECT spd.data->'raw'->>'Sea / Land' FROM sap_processed_data spd
+                   WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1),
+                  ''
+                ))) AS tm_upper
+              ) tx ON true
+              LEFT JOIN LATERAL (
+                SELECT COALESCE(
+                  CASE
+                    WHEN tx.tm_upper LIKE 'LAND%' THEN (
+                      SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                      FROM trucking_operations t
+                      WHERE t.contract_id = c.id
+                      ORDER BY t.created_at DESC NULLS LAST
+                      LIMIT 1
+                    )
+                    WHEN tx.tm_upper LIKE 'SEA%' THEN (
+                      SELECT NULLIF(TRIM(s.port_of_discharge), '')
+                      FROM shipments s
+                      WHERE s.contract_id = c.id
+                      ORDER BY s.created_at DESC NULLS LAST
+                      LIMIT 1
+                    )
+                    ELSE NULL
+                  END,
+                  NULLIF(TRIM(c.unloading_site), ''),
+                  NULLIF(TRIM(c.loading_site), '')
+                ) AS plant_site
+              ) ps ON true
+              WHERE c.product IS NOT NULL AND TRIM(c.product) != '' ${contractFilter}
+            )
+            SELECT
+              product,
+              incoterm,
+              plant_site,
+              source_type,
+              lt_spot,
+              COUNT(DISTINCT contract_id) AS contract_count,
+              COUNT(DISTINCT supplier) AS supplier_count,
+              SUM(quantity_ordered) AS total_quantity,
+              AVG(unit_price) AS avg_unit_price,
+              SUM(contract_value) AS total_contract_value
+            FROM base_contracts
+            GROUP BY product, incoterm, plant_site, source_type, lt_spot
+            ORDER BY product, total_quantity DESC NULLS LAST, incoterm, plant_site, source_type, lt_spot
+            `,
+            params
+          )
+        : Promise.resolve({ rows: [] } as any),
+    ]);
+
+    return res.json({
+      success: true,
+      data: {
+        topSuppliers: topSuppliers.rows,
+        topTruckingOwners: topTruckingOwners.rows,
+        topVessels: topVessels.rows,
+        productIncotermRows: (widgetsCombined.rows?.[0]?.product_incoterm_rows as any[]) || [],
+        plantIncotermRows: (widgetsCombined.rows?.[0]?.plant_incoterm_rows as any[]) || [],
+        plantQuantities: (widgetsCombined.rows?.[0]?.plant_quantities as any[]) || [],
+        filterOptions: {
+          plants: plantsOpt.rows.map((r: any) => r.plant_location),
+          suppliers: suppliersOpt.rows.map((r: any) => r.supplier),
+          products: productsOpt.rows.map((r: any) => r.product),
+          groups: groupsOpt.rows.map((r: any) => r.group_name),
+        },
+        management: includeManagement ? { productIncotermPlantSourceRows: mgmtBreakdown.rows } : undefined,
+      },
+    });
+  } catch (error) {
+    logger.error('Get dashboard overview error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch dashboard overview' },
+    });
+  }
+};
+
 export const getContractsByStatus = async (req: AuthRequest, res: Response) => {
   try {
     const { status } = req.query as { status?: string };

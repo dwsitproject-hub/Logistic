@@ -687,8 +687,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
         setStatsLoading(false)
         setStats((prev) => prev) // keep current stats state untouched
         try {
-          const res = await api.get(`/dashboard/contract-quantity-by-product-incoterm-plant-source${urlSuffix}`)
-          const rows = (res.data.data || []) as ProductIncotermPlantSourceRow[]
+          const res = await api.get(`/dashboard/overview${urlSuffix}${urlSuffix ? '&' : '?'}includeManagement=true`)
+          const rows = (res.data?.data?.management?.productIncotermPlantSourceRows || []) as ProductIncotermPlantSourceRow[]
           setProductIncotermBreakdownRows(rows)
           // Build the existing incoterm-mix dataset by collapsing the extra dimensions.
           const keyToAgg = new Map<string, ProductIncotermRow>()
@@ -741,55 +741,26 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       setStats(statsRes.data.data)
       setStatsLoading(false)
 
-      // 2) Widgets load in parallel without blocking the KPI cards
+      // 2) Consolidated widgets + filter options in a single call
       try {
-        const widgetResults = await Promise.allSettled([
-          api.get(`/dashboard/top-suppliers${urlSuffix}`),
-          api.get(`/dashboard/top-trucking-owners${urlSuffix}`),
-          api.get(`/dashboard/top-vessels${urlSuffix}`),
-          api.get(`/dashboard/contract-quantity-by-product-incoterm${urlSuffix}`),
-          api.get(`/dashboard/contract-quantity-by-plant-incoterm${urlSuffix}`),
-          api.get(`/dashboard/contract-quantity-by-plant${urlSuffix}`),
-          // keep slot for potential future widget
-          Promise.resolve({ data: { data: [] } })
-        ])
-
-        const [
-          suppliersRes,
-          truckingRes,
-          vesselsRes,
-          prodIncotermRes,
-          plantIncotermRes,
-          plantRes,
-          _unused
-        ] = widgetResults
-
-        if (suppliersRes.status === 'fulfilled') {
-          setTopSuppliers(suppliersRes.value.data.data)
-        }
-        if (truckingRes.status === 'fulfilled') {
-          setTopTruckingOwners(truckingRes.value.data.data)
-        }
-        if (vesselsRes.status === 'fulfilled') {
-          setTopVessels(vesselsRes.value.data.data)
-        }
-        if (prodIncotermRes.status === 'fulfilled') {
-          setProductIncotermRows(prodIncotermRes.value.data.data)
-        }
-        if (plantIncotermRes.status === 'fulfilled') {
-          setPlantIncotermRows(plantIncotermRes.value.data.data)
-        }
-        if (plantRes.status === 'fulfilled') {
-          setPlantQuantities(plantRes.value.data.data)
-        }
-        // Incoterm-only widget removed (now integrated into Product breakdown)
-
-        const rejected = widgetResults.filter(r => r.status === 'rejected')
-        if (rejected.length > 0) {
-          console.error('Some dashboard widgets failed to load', rejected)
+        const overviewRes = await api.get(`/dashboard/overview${urlSuffix}`)
+        const od = overviewRes.data?.data
+        if (od) {
+          setTopSuppliers(od.topSuppliers || [])
+          setTopTruckingOwners(od.topTruckingOwners || [])
+          setTopVessels(od.topVessels || [])
+          setProductIncotermRows(od.productIncotermRows || [])
+          setPlantIncotermRows(od.plantIncotermRows || [])
+          setPlantQuantities(od.plantQuantities || [])
+          if (od.filterOptions) {
+            setAvailablePlants(od.filterOptions.plants || [])
+            setAvailableSuppliers(od.filterOptions.suppliers || [])
+            setAvailableProducts(od.filterOptions.products || [])
+            setAvailableGroups(od.filterOptions.groups || [])
+          }
         }
       } catch (err) {
-        console.error('Failed to fetch some dashboard widgets:', err)
+        console.error('Failed to fetch dashboard overview:', err)
       } finally {
         setWidgetsLoading(false)
       }
@@ -803,16 +774,15 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
 
   const fetchFilterOptions = async () => {
     try {
-      const [plantsRes, suppliersRes, productsRes, groupsRes] = await Promise.all([
-        api.get('/dashboard/filter-options/plants'),
-        api.get('/dashboard/filter-options/suppliers'),
-        api.get('/dashboard/filter-options/products'),
-        api.get('/dashboard/filter-options/groups')
-      ])
-      setAvailablePlants(plantsRes.data.data)
-      setAvailableSuppliers(suppliersRes.data.data)
-      setAvailableProducts(productsRes.data.data)
-      setAvailableGroups(groupsRes.data.data)
+      // Prefer consolidated overview endpoint when available (faster, fewer requests)
+      const res = await api.get('/dashboard/overview')
+      const fo = res.data?.data?.filterOptions
+      if (fo) {
+        setAvailablePlants(fo.plants || [])
+        setAvailableSuppliers(fo.suppliers || [])
+        setAvailableProducts(fo.products || [])
+        setAvailableGroups(fo.groups || [])
+      }
     } catch (error) {
       console.error('Failed to fetch filter options:', error)
     }

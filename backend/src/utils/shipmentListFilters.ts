@@ -1,0 +1,386 @@
+/**
+ * Server-side global search + column filters on grouped shipment list (`shipment_base` alias `sb`).
+ */
+
+import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
+
+export { parseColumnFiltersQuery }
+
+/** Late indicator aligned with frontend `getLateIndicator` (shipments page). */
+function lateIndicatorExpr(alias: string): string {
+  return `(
+  CASE
+    WHEN ${alias}.delivery_end_date IS NULL THEN '-'
+    WHEN (${alias}.delivery_end_date::date) < CURRENT_DATE THEN 'Late'
+    WHEN ${alias}.ata_vessel_complete_discharge IS NULL AND ${alias}.eta_vessel_complete_discharge IS NULL THEN '-'
+    WHEN (${alias}.ata_vessel_complete_discharge IS NOT NULL AND (${alias}.delivery_end_date::date) < (${alias}.ata_vessel_complete_discharge::date))
+      OR (${alias}.eta_vessel_complete_discharge IS NOT NULL AND (${alias}.delivery_end_date::date) < (${alias}.eta_vessel_complete_discharge::date))
+    THEN 'Late'
+    ELSE 'On Time'
+  END
+)`;
+}
+
+const SB_COL: Record<string, string> = {
+  late_indicator: lateIndicatorExpr('sb'),
+  operation_id: 'sb.operation_id',
+  shipment_id: 'sb.shipment_id',
+  sto_number: 'sb.sto_number',
+  status: 'sb.status',
+  contract_numbers: 'sb.contract_numbers',
+  contract_number: 'sb.contract_numbers',
+  po_numbers: 'sb.po_numbers',
+  contract_reference_po: 'sb.contract_reference_po',
+  contract_ext_no: 'sb.contract_ext_no',
+  vessel_name: 'sb.vessel_name',
+  vessel_code: 'sb.vessel_code',
+  voyage_no: 'sb.voyage_no',
+  vessel_owner: 'sb.vessel_owner',
+  port_of_loading: 'sb.port_of_loading',
+  port_of_discharge: 'sb.port_of_discharge',
+  plant_site: 'sb.plant_site',
+  supplier: 'sb.supplier',
+  suppliers: 'sb.suppliers',
+  buyer: 'sb.buyer',
+  buyers: 'sb.buyers',
+  product: 'sb.product',
+  products: 'sb.products',
+  group_name: 'sb.group_name',
+  group_names: 'sb.group_names',
+  charter_type: 'sb.charter_type',
+  shipment_date: 'sb.shipment_date',
+  arrival_date: 'sb.arrival_date',
+  delivery_start: 'sb.delivery_start_date',
+  delivery_end: 'sb.delivery_end_date',
+  delivery_start_date: 'sb.delivery_start_date',
+  delivery_end_date: 'sb.delivery_end_date',
+  ata_vessel_completed_loading: 'sb.ata_vessel_completed_loading',
+  ata_vessel_complete_discharge: 'sb.ata_vessel_complete_discharge',
+  eta_vessel_complete_discharge: 'sb.eta_vessel_complete_discharge',
+  eta_discharge_complete: 'sb.eta_discharge_complete',
+  quantity_shipped: 'sb.quantity_shipped',
+  quantity_delivered: 'sb.quantity_delivered',
+  inbound_weight: 'sb.inbound_weight',
+  outbound_weight: 'sb.outbound_weight',
+  gain_loss_percentage: 'sb.gain_loss_percentage',
+  gain_loss_amount: 'sb.gain_loss_amount',
+  estimated_km: 'sb.estimated_km',
+  estimated_nautical_miles: 'sb.estimated_nautical_miles',
+  vessel_oa_budget: 'sb.vessel_oa_budget',
+  vessel_oa_actual: 'sb.vessel_oa_actual',
+  bl_quantity: 'sb.bl_quantity',
+  actual_vessel_qty_receive: 'sb.actual_vessel_qty_receive',
+  difference_final_qty_vs_bl_qty: 'sb.difference_final_qty_vs_bl_qty',
+  average_vessel_speed: 'sb.average_vessel_speed',
+  vessel_draft: 'sb.vessel_draft',
+  vessel_loa: 'sb.vessel_loa',
+  vessel_capacity: 'sb.vessel_capacity',
+  vessel_hull_type: 'sb.vessel_hull_type',
+  vessel_registration_year: 'sb.vessel_registration_year',
+  sla_days: 'sb.sla_days',
+  created_at: 'sb.created_at',
+}
+
+export function appendShipmentGlobalSearch(
+  searchTrim: string,
+  startIndex: number
+): { sql: string; params: any[]; nextIndex: number } {
+  if (!searchTrim || searchTrim.length < 2) {
+    return { sql: '', params: [], nextIndex: startIndex }
+  }
+  const p = startIndex
+  const sql = `
+    AND (
+      strpos(lower(COALESCE(sb.sto_number::text, '')), lower($${p}::text)) > 0
+      OR strpos(lower(COALESCE(sb.shipment_id::text, '')), lower($${p}::text)) > 0
+      OR strpos(lower(COALESCE(sb.operation_id::text, '')), lower($${p}::text)) > 0
+      OR strpos(lower(COALESCE(sb.contract_numbers::text, '')), lower($${p}::text)) > 0
+      OR strpos(lower(COALESCE(sb.po_numbers::text, '')), lower($${p}::text)) > 0
+      OR strpos(lower(COALESCE(sb.vessel_name::text, '')), lower($${p}::text)) > 0
+      OR strpos(lower(COALESCE(sb.supplier::text, '')), lower($${p}::text)) > 0
+      OR strpos(lower(COALESCE(sb.port_of_discharge::text, '')), lower($${p}::text)) > 0
+      OR strpos(lower(COALESCE(sb.plant_site::text, '')), lower($${p}::text)) > 0
+    )`
+  return { sql, params: [searchTrim], nextIndex: startIndex + 1 }
+}
+
+export function appendShipmentColumnFilters(
+  filters: ColumnFilterPayload,
+  startIndex: number
+): { sql: string; params: any[]; nextIndex: number } {
+  const parts: string[] = []
+  const params: any[] = []
+  let pi = startIndex
+
+  for (const [colId, raw] of Object.entries(filters)) {
+    const expr = SB_COL[colId]
+    if (!expr || !raw || typeof raw !== 'object') continue
+
+    const f = raw as ColumnFilterPayload[string]
+    if (f.emptyOnly) {
+      parts.push(` AND (${expr} IS NULL OR TRIM(${expr}::text) = '')`)
+      continue
+    }
+
+    if (f.type === 'text') {
+      const v = String(f.value ?? '').trim()
+      if (!v) continue
+      if (f.exact) {
+        parts.push(` AND LOWER(TRIM(${expr}::text)) = LOWER($${pi}::text)`)
+        params.push(v)
+        pi += 1
+      } else {
+        parts.push(` AND ${expr}::text ILIKE $${pi}`)
+        params.push(`%${v}%`)
+        pi += 1
+      }
+      continue
+    }
+
+    if (f.type === 'number') {
+      const minRaw = f.min !== undefined && f.min !== '' ? Number(f.min) : null
+      const maxRaw = f.max !== undefined && f.max !== '' ? Number(f.max) : null
+      if (minRaw !== null && !Number.isNaN(minRaw)) {
+        parts.push(` AND (${expr})::numeric >= $${pi}`)
+        params.push(minRaw)
+        pi += 1
+      }
+      if (maxRaw !== null && !Number.isNaN(maxRaw)) {
+        parts.push(` AND (${expr})::numeric <= $${pi}`)
+        params.push(maxRaw)
+        pi += 1
+      }
+      continue
+    }
+
+    if (f.type === 'date') {
+      if (f.from) {
+        parts.push(` AND (${expr})::date >= $${pi}::date`)
+        params.push(f.from)
+        pi += 1
+      }
+      if (f.to) {
+        parts.push(` AND (${expr})::date <= $${pi}::date`)
+        params.push(f.to)
+        pi += 1
+      }
+      continue
+    }
+  }
+
+  return { sql: parts.join(''), params, nextIndex: pi }
+}
+
+/** Toolbar late-indicator filter (matches `late_indicator` text). */
+export function appendShipmentLateIndicatorFilter(
+  lateIndicator: string | undefined,
+  startIndex: number
+): { sql: string; params: any[]; nextIndex: number } {
+  const v = String(lateIndicator ?? 'ALL').toUpperCase()
+  if (v === 'ALL' || !v) {
+    return { sql: '', params: [], nextIndex: startIndex }
+  }
+  const expr = lateIndicatorExpr('sb')
+  if (v === 'ON_TIME') {
+    return {
+      sql: ` AND ${expr} = $${startIndex}::text`,
+      params: ['On Time'],
+      nextIndex: startIndex + 1,
+    }
+  }
+  if (v === 'LATE') {
+    return {
+      sql: ` AND ${expr} = $${startIndex}::text`,
+      params: ['Late'],
+      nextIndex: startIndex + 1,
+    }
+  }
+  if (v === 'NA') {
+    return {
+      sql: ` AND ${expr} = $${startIndex}::text`,
+      params: ['-'],
+      nextIndex: startIndex + 1,
+    }
+  }
+  return { sql: '', params: [], nextIndex: startIndex }
+}
+
+/** View-by dropdown: narrow to one dimension (optional). */
+export function appendShipmentViewOptionFilter(
+  viewOption: string | undefined,
+  viewQuery: string | undefined,
+  startIndex: number
+): { sql: string; params: any[]; nextIndex: number } {
+  const mode = String(viewOption ?? 'all').toLowerCase()
+  const q = String(viewQuery ?? '').trim()
+  if (mode === 'all' || q.length < 1) {
+    return { sql: '', params: [], nextIndex: startIndex }
+  }
+  const p = startIndex
+  if (mode === 'sto') {
+    return {
+      sql: ` AND COALESCE(sb.sto_number::text, '') ILIKE $${p}`,
+      params: [`%${q}%`],
+      nextIndex: startIndex + 1,
+    }
+  }
+  if (mode === 'contract') {
+    return {
+      sql: ` AND COALESCE(sb.contract_numbers::text, '') ILIKE $${p}`,
+      params: [`%${q}%`],
+      nextIndex: startIndex + 1,
+    }
+  }
+  if (mode === 'vessel') {
+    return {
+      sql: ` AND COALESCE(sb.vessel_name::text, '') ILIKE $${p}`,
+      params: [`%${q}%`],
+      nextIndex: startIndex + 1,
+    }
+  }
+  if (mode === 'port_loading') {
+    return {
+      sql: ` AND COALESCE(sb.port_of_loading::text, '') ILIKE $${p}`,
+      params: [`%${q}%`],
+      nextIndex: startIndex + 1,
+    }
+  }
+  if (mode === 'port_discharge') {
+    const p2 = startIndex + 1
+    return {
+      sql: ` AND (COALESCE(sb.port_of_discharge::text, '') ILIKE $${p} OR COALESCE(sb.plant_site::text, '') ILIKE $${p2})`,
+      params: [`%${q}%`, `%${q}%`],
+      nextIndex: startIndex + 2,
+    }
+  }
+  return { sql: '', params: [], nextIndex: startIndex }
+}
+
+/** Whitelist for GET ?etaLoading= / ?etaDischarge= (mirrors shipments page toolbar). */
+const ETA_BUCKET_CODES = new Set(['MORE_THAN_7D', 'D_MINUS_2', 'D', 'DELAY', 'NO_ETA'])
+
+export function normalizeShipmentEtaBucketParam(raw: unknown): string | null {
+  const s = String(raw ?? '')
+    .trim()
+    .toUpperCase()
+  if (!s || s === 'ALL') return null
+  return ETA_BUCKET_CODES.has(s) ? s : null
+}
+
+/**
+ * Matches frontend ETA Loading / ETA Discharge bucket rules on grouped `shipment_base` (`sb`):
+ * - Uses calendar day diff: (eta::date - CURRENT_DATE), same as JS Date midnights on the server TZ.
+ * - Skips rows that would show as COMPLETED after ATA derivation (all 9 ATA milestones present on sb).
+ * - Priority: NO_ETA → DELAY → D → D_MINUS_2 → MORE_THAN_7D; else GAP (matches no toolbar bucket).
+ */
+export function appendShipmentEtaBucketFilters(
+  etaLoading: string | null,
+  etaDischarge: string | null
+): { sql: string; params: any[]; nextIndex: number } {
+  if (!etaLoading && !etaDischarge) {
+    return { sql: '', params: [], nextIndex: 0 }
+  }
+
+  const ataCompleted = `(
+    sb.ata_vessel_arrival_at_loading_port IS NOT NULL
+    AND sb.ata_vessel_berthed_at_loading_port IS NOT NULL
+    AND sb.ata_vessel_start_loading IS NOT NULL
+    AND sb.ata_vessel_completed_loading IS NOT NULL
+    AND sb.ata_vessel_sailed_from_loading_port IS NOT NULL
+    AND sb.ata_vessel_arrive_at_discharge_port IS NOT NULL
+    AND sb.ata_vessel_berthed_at_discharge_port IS NOT NULL
+    AND sb.ata_vessel_start_discharging IS NOT NULL
+    AND sb.ata_vessel_complete_discharge IS NOT NULL
+  )`
+
+  const loadingEtasAllNull = `(
+    sb.eta_arrival IS NULL
+    AND sb.eta_berthed IS NULL
+    AND sb.eta_loading_start IS NULL
+    AND sb.eta_loading_complete IS NULL
+    AND sb.eta_sailed IS NULL
+  )`
+
+  const dischargeEtasAllNull = `(
+    sb.eta_discharge_arrival IS NULL
+    AND sb.eta_discharge_berthed IS NULL
+    AND sb.eta_discharge_start IS NULL
+    AND sb.eta_discharge_complete IS NULL
+  )`
+
+  const mkDiff = (col: string) => `(${col}::date - CURRENT_DATE)`
+
+  const loadingCols = [
+    'sb.eta_arrival',
+    'sb.eta_berthed',
+    'sb.eta_loading_start',
+    'sb.eta_loading_complete',
+    'sb.eta_sailed',
+  ]
+  const dischargeCols = [
+    'sb.eta_discharge_arrival',
+    'sb.eta_discharge_berthed',
+    'sb.eta_discharge_start',
+    'sb.eta_discharge_complete',
+  ]
+
+  const anyLoading = (pred: (d: string) => string) =>
+    loadingCols
+      .map((c) => {
+        const d = mkDiff(c)
+        return `(${c} IS NOT NULL AND ${pred(d)})`
+      })
+      .join(' OR ')
+
+  const anyDischarge = (pred: (d: string) => string) =>
+    dischargeCols
+      .map((c) => {
+        const d = mkDiff(c)
+        return `(${c} IS NOT NULL AND ${pred(d)})`
+      })
+      .join(' OR ')
+
+  const loadingDelay = anyLoading((d) => `${d} < 0`)
+  const loadingToday = anyLoading((d) => `${d} = 0`)
+  const loadingDMinus2 = anyLoading((d) => `${d} >= 1 AND ${d} <= 2`)
+  const loadingM7 = anyLoading((d) => `${d} > 7`)
+
+  const dischargeDelay = anyDischarge((d) => `${d} < 0`)
+  const dischargeToday = anyDischarge((d) => `${d} = 0`)
+  const dischargeDMinus2 = anyDischarge((d) => `${d} >= 1 AND ${d} <= 2`)
+  const dischargeM7 = anyDischarge((d) => `${d} > 7`)
+
+  const loadingBucket = `
+    CASE
+      WHEN ${ataCompleted} THEN NULL
+      WHEN ${loadingEtasAllNull} THEN 'NO_ETA'
+      WHEN (${loadingDelay}) THEN 'DELAY'
+      WHEN (${loadingToday}) THEN 'D'
+      WHEN (${loadingDMinus2}) THEN 'D_MINUS_2'
+      WHEN (${loadingM7}) THEN 'MORE_THAN_7D'
+      ELSE 'GAP'
+    END
+  `
+
+  const dischargeBucket = `
+    CASE
+      WHEN ${ataCompleted} THEN NULL
+      WHEN ${dischargeEtasAllNull} THEN 'NO_ETA'
+      WHEN (${dischargeDelay}) THEN 'DELAY'
+      WHEN (${dischargeToday}) THEN 'D'
+      WHEN (${dischargeDMinus2}) THEN 'D_MINUS_2'
+      WHEN (${dischargeM7}) THEN 'MORE_THAN_7D'
+      ELSE 'GAP'
+    END
+  `
+
+  const parts: string[] = []
+  if (etaLoading) {
+    parts.push(` AND (${loadingBucket}) = '${etaLoading}'`)
+  }
+  if (etaDischarge) {
+    parts.push(` AND (${dischargeBucket}) = '${etaDischarge}'`)
+  }
+
+  return { sql: parts.join(''), params: [], nextIndex: 0 }
+}

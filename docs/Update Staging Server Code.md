@@ -16,6 +16,6 @@ Because `NEXT_PUBLIC_API_URL` is fixed at build time, you must rebuild the image
 
 ```bash
 cd /opt/klip
-git pull
+git pull 
 docker compose -f docker-compose.frontend.yml up -d --build
 ```

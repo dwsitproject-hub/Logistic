@@ -728,6 +728,8 @@ function TruckingPageContent() {
   const [dateTo, setDateTo] = useState('')
   const [uploadingId, setUploadingId] = useState<string>('')
   const [page, setPage] = useState<number>(1)
+  const pageSize = 50
+  const [totalCount, setTotalCount] = useState(0)
   const [hasMore, setHasMore] = useState<boolean>(true)
 
   // View tabs
@@ -834,13 +836,52 @@ function TruckingPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, statusFilter, loadingLocationFilter, unloadingLocationFilter, dateFrom, dateTo, searchParams])
 
-  const fetchTruckingOperations = async () => {
+  const isFirstLateIndicatorEffect = useRef(true)
+  useEffect(() => {
+    if (isFirstLateIndicatorEffect.current) {
+      isFirstLateIndicatorEffect.current = false
+      return
+    }
+    setPage(1)
+    fetchTruckingOperations(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lateIndicatorFilter])
+
+  const isFirstSearchRender = useRef(true)
+  useEffect(() => {
+    if (isFirstSearchRender.current) {
+      isFirstSearchRender.current = false
+      return
+    }
+    const t = setTimeout(() => {
+      setPage(1)
+      fetchTruckingOperations(1)
+    }, 500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchTerm])
+
+  const isFirstColumnFilterRender = useRef(true)
+  useEffect(() => {
+    if (isFirstColumnFilterRender.current) {
+      isFirstColumnFilterRender.current = false
+      return
+    }
+    const t = setTimeout(() => {
+      setPage(1)
+      fetchTruckingOperations(1)
+    }, 500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [columnFilters])
+
+  const fetchTruckingOperations = async (forcedPage?: number) => {
     try {
+      setLoading(true)
+      const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
-      // Note: this page currently does client-side Late Indicator filtering,
-      // so we need a sufficiently large limit to avoid misleading counts.
-      params.append('limit', '500')
-      params.append('page', String(page))
+      params.append('limit', String(pageSize))
+      params.append('page', String(effectivePage))
       if (statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
       }
@@ -852,6 +893,17 @@ function TruckingPageContent() {
       }
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
+      const searchTrim = searchTerm.trim()
+      if (searchTrim.length >= 2) {
+        params.append('search', searchTrim)
+      }
+      const cfKeys = Object.keys(columnFilters)
+      if (cfKeys.length > 0) {
+        params.append('columnFilters', JSON.stringify(columnFilters))
+      }
+      if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
+        params.append('lateIndicator', lateIndicatorFilter)
+      }
       
       // Check for STO parameter from URL
       const stoParam = searchParams.get('sto')
@@ -867,10 +919,11 @@ function TruckingPageContent() {
       
       const response = await api.get(`/trucking?${params.toString()}`)
       const items = response.data.data.truckingOperations || []
-      const next = page === 1 ? items : [...truckingOperations, ...items]
-      setTruckingOperations(next)
+      setTruckingOperations((prev) => (effectivePage === 1 ? items : [...prev, ...items]))
+      const total = Number(response.data.data.pagination?.total ?? 0)
       const totalPages = Number(response.data.data.pagination?.totalPages || 1)
-      setHasMore(page < totalPages)
+      setTotalCount(total)
+      setHasMore(effectivePage < totalPages)
     } catch (error) {
       console.error('Failed to fetch trucking operations:', error)
       alert('Failed to load trucking operations. Please refresh the page.')
@@ -1186,76 +1239,8 @@ function TruckingPageContent() {
     }
   }
 
-  const isEmptyValue = (v: unknown) => {
-    if (v === null || v === undefined) return true
-    const s = String(v).trim()
-    return s === '' || s === '-' || s.toLowerCase() === 'null' || s.toLowerCase() === 'undefined'
-  }
-
-  const passesColumnFilters = (o: TruckingOperation) => {
-    for (const [colId, filter] of Object.entries(columnFilters)) {
-      const raw = getColumnRawValue(o, colId)
-      if (filter.emptyOnly) {
-        if (!isEmptyValue(raw)) return false
-        continue
-      }
-
-      if (filter.type === 'text') {
-        const needle = (filter.value || '').trim().toLowerCase()
-        if (!needle) continue
-        const hay = String(raw ?? '').toLowerCase()
-        if (filter.exact) {
-          if (hay.trim() !== needle) return false
-        } else {
-          if (!hay.includes(needle)) return false
-        }
-      }
-
-      if (filter.type === 'number') {
-        const n = typeof raw === 'number' ? raw : Number(String(raw ?? '').replace(/,/g, ''))
-        if (Number.isNaN(n)) return false
-        const min = filter.min !== undefined && filter.min !== '' ? Number(filter.min) : null
-        const max = filter.max !== undefined && filter.max !== '' ? Number(filter.max) : null
-        if (min !== null && !Number.isNaN(min) && n < min) return false
-        if (max !== null && !Number.isNaN(max) && n > max) return false
-      }
-
-      if (filter.type === 'date') {
-        const rawStr = String(raw ?? '').trim()
-        if (!rawStr) return false
-        const rawTime = Date.parse(rawStr)
-        if (Number.isNaN(rawTime)) return false
-        const fromTime = filter.from ? Date.parse(filter.from) : null
-        const toTime = filter.to ? Date.parse(filter.to) : null
-        if (fromTime !== null && !Number.isNaN(fromTime) && rawTime < fromTime) return false
-        if (toTime !== null && !Number.isNaN(toTime) && rawTime > toTime + 24 * 60 * 60 * 1000 - 1) return false
-      }
-    }
-    return true
-  }
-
-  const filteredOperations = truckingOperations.filter(operation => {
-    const matchesSearch = searchTerm === '' || 
-      operation.operation_id?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      operation.contract_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      operation.sto_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      operation.loading_location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      operation.unloading_location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      operation.trucking_owner?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      operation.supplier?.toLowerCase().includes(searchTerm.toLowerCase())
-    
-    if (!matchesSearch) return false
-    
-    // Filter by Late Indicator
-    if (lateIndicatorFilter !== 'ALL') {
-      const indicator = getLateIndicator(operation)
-      if (lateIndicatorFilter === 'ON_TIME' && indicator.text !== 'On Time') return false
-      if (lateIndicatorFilter === 'LATE' && indicator.text !== 'Late') return false
-      if (lateIndicatorFilter === 'NA' && indicator.text !== '-') return false
-    }
-    
-    return passesColumnFilters(operation)
-  })
+  // Search, column filters, and late indicator are applied on the server across the full dataset.
+  const filteredOperations = truckingOperations
 
   // Compact columns definition
   interface CompactColumn {
@@ -1801,7 +1786,7 @@ function TruckingPageContent() {
           <div>
             <h1 className="text-3xl font-bold">Trucking Operations</h1>
             <p className="text-gray-600 mt-1">
-              Manage and track all trucking operations - {filteredOperations.length} total
+              Manage and track all trucking operations - {totalCount || filteredOperations.length} total
             </p>
           </div>
           <div className="flex gap-2">
