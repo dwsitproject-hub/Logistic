@@ -14,6 +14,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { formatKgFromMt, formatRupiah, toKgFromMt } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { formatDateDMY } from '@/lib/dateFormat'
 
 interface Contract {
   id: string
@@ -493,10 +494,7 @@ function ContractsPageContent() {
     return 'text-green-600'
   }
 
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleDateString()
-  }
+  const formatDate = (dateStr: string) => formatDateDMY(dateStr)
 
   const formatNumber = (num: number | string) => {
     if (num === null || num === undefined || num === '') return '-'
@@ -518,13 +516,7 @@ function ContractsPageContent() {
     return formatRupiah(number)
   }
 
-  const formatShortDate = (dateStr: string) => {
-    if (!dateStr) return '-'
-    const d = new Date(dateStr)
-    if (Number.isNaN(d.getTime())) return '-'
-    // Keep compact and consistent (MM/DD/YYYY)
-    return d.toLocaleDateString('en-US')
-  }
+  const formatShortDate = (dateStr: string) => formatDateDMY(dateStr)
 
   const getContractStatusRaw = (c: Contract) => {
     return (c.import_status || c.status || '').toUpperCase()

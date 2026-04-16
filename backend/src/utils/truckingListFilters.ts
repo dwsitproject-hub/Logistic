@@ -63,10 +63,12 @@ export function appendTruckingGlobalSearch(
     return { sql: '', params: [], nextIndex: startIndex }
   }
   const p = startIndex
+  const contractExtExpr = `(SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1)`
   const sql = `
     AND (
       strpos(lower(COALESCE(t.operation_id::text, '')), lower($${p}::text)) > 0
       OR strpos(lower(COALESCE(c.contract_id::text, '')), lower($${p}::text)) > 0
+      OR strpos(lower(COALESCE(${contractExtExpr}, '')), lower($${p}::text)) > 0
       OR strpos(lower(COALESCE(c.sto_number::text, '')), lower($${p}::text)) > 0
       OR strpos(lower(COALESCE(c.po_number::text, '')), lower($${p}::text)) > 0
       OR strpos(lower(COALESCE(t.loading_location::text, '')), lower($${p}::text)) > 0

@@ -12,6 +12,16 @@ import api from '@/lib/api'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
+import { format } from 'date-fns'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+
+/** Aligns with list `formatNumber` / `formatKg`: comma thousands, period decimals. */
+function formatTruckingQtyPlain(n: number): string {
+  if (!Number.isFinite(n)) return '—'
+  if (n === 0) return '0'
+  return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: true })
+}
 
 interface TruckingOperation {
   id: string
@@ -40,10 +50,7 @@ interface TruckingOperation {
   oa_actual: number
   estimated_km?: number
   status: string
-  eta_trucking_start_date?: string
-  eta_trucking_completion_date?: string
-  eta_delivery_start_date?: string
-  eta_delivery_end_date?: string
+  // ETA dates removed from UI (kept in DB/backend)
   created_at: string
   supplier: string
   buyer: string
@@ -57,18 +64,25 @@ type TruckingCalendarRow = {
   id: string
   operation_id: string
   contract_number: string
+  contract_ext_no?: string
+  sto_number?: string
   po_number?: string
   supplier?: string
   product?: string
   group_name?: string
+  source_type?: string
+  lt_spot?: string
+  outstanding_quantity?: number
   loading_location?: string
   unloading_location?: string
   trucking_owner?: string
-  eta_trucking_start_date?: string
-  eta_trucking_completion_date?: string
+  delivery_start_date?: string
+  delivery_end_date?: string
   trucking_start_date?: string
   trucking_completion_date?: string
+  quantity_sent?: number
   quantity_delivered?: number
+  quantity_receive?: number
   daily_deliverables?: Array<{ date: string; quantity_delivered: number }>
 }
 
@@ -102,10 +116,6 @@ const CreateTruckingOperationModal = memo(function CreateTruckingOperationModal(
     unloading_location: '',
     trucking_owner: '',
     cargo_readiness_date: '',
-    eta_trucking_start_date: '',
-    eta_trucking_completion_date: '',
-    eta_delivery_start_date: '',
-    eta_delivery_end_date: '',
     quantity_sent: '',
     quantity_delivered: '',
     gain_loss_percentage: '',
@@ -209,10 +219,6 @@ const CreateTruckingOperationModal = memo(function CreateTruckingOperationModal(
       unloading_location: '',
       trucking_owner: '',
       cargo_readiness_date: '',
-      eta_trucking_start_date: '',
-      eta_trucking_completion_date: '',
-      eta_delivery_start_date: '',
-      eta_delivery_end_date: '',
       quantity_sent: '',
       quantity_delivered: '',
       gain_loss_percentage: '',
@@ -235,13 +241,14 @@ const CreateTruckingOperationModal = memo(function CreateTruckingOperationModal(
     }
 
     // Validate daily deliverables draft
-    const start = (newOperation.eta_trucking_start_date || '').trim()
-    const end = (newOperation.eta_trucking_completion_date || '').trim()
+    // Use due delivery dates (contract) as the allowable window since trucking ETA dates are removed from UI.
+    const start = (contractValidation.contractData?.delivery_start_date || '').trim()
+    const end = (contractValidation.contractData?.delivery_end_date || '').trim()
     const maxQty = newOperation.quantity_delivered ? parseFloat(String(newOperation.quantity_delivered).replace(/,/g, '').trim()) : NaN
     const rows = newOperation.daily_deliverables || []
     if (rows.length > 0) {
       if (!start || !end) {
-        alert('ETA Trucking Start Receive Date and ETA Trucking Last Receive Date are required when daily deliverables are provided.')
+        alert('Due Date Delivery Start and Due Date Delivery End are required when daily deliverables are provided.')
         return
       }
       if (!Number.isFinite(maxQty)) {
@@ -255,8 +262,8 @@ const CreateTruckingOperationModal = memo(function CreateTruckingOperationModal(
         const qn = r.quantity ? parseFloat(String(r.quantity).replace(/,/g, '').trim()) : NaN
         if (!d) return alert(`Daily deliverables row ${i + 1}: Date is required`)
         if (!Number.isFinite(qn) || qn < 0) return alert(`Daily deliverables row ${i + 1}: Quantity must be a valid number`)
-        if (d < start) return alert(`Daily deliverables row ${i + 1}: Date cannot be before ETA Trucking Start Receive Date`)
-        if (d > end) return alert(`Daily deliverables row ${i + 1}: Date cannot be after ETA Trucking Last Receive Date`)
+        if (d < start) return alert(`Daily deliverables row ${i + 1}: Date cannot be before Due Date Delivery Start`)
+        if (d > end) return alert(`Daily deliverables row ${i + 1}: Date cannot be after Due Date Delivery End`)
         if (qn > maxQty) return alert(`Daily deliverables row ${i + 1}: Quantity cannot exceed Quantity Delivered (Kg)`)
         sum += qn
         if (sum > maxQty) return alert('Sum of daily deliverables quantity cannot exceed Quantity Delivered (Kg)')
@@ -457,20 +464,12 @@ const CreateTruckingOperationModal = memo(function CreateTruckingOperationModal(
               <Input type="date" value={newOperation.cargo_readiness_date} onChange={(e) => setNewOperation(prev => ({ ...prev, cargo_readiness_date: e.target.value }))} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">ETA Trucking Start Receive Date</label>
-              <Input type="date" value={newOperation.eta_trucking_start_date} onChange={(e) => setNewOperation(prev => ({ ...prev, eta_trucking_start_date: e.target.value }))} />
+              <label className="block text-sm font-medium text-gray-700 mb-1">Due Date Delivery Start</label>
+              <Input type="date" value={contractValidation.contractData?.delivery_start_date || ''} disabled />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">ETA Trucking Last Receive Date</label>
-              <Input type="date" value={newOperation.eta_trucking_completion_date} onChange={(e) => setNewOperation(prev => ({ ...prev, eta_trucking_completion_date: e.target.value }))} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">ETA Due Date Delivery Start</label>
-              <Input type="date" value={newOperation.eta_delivery_start_date} onChange={(e) => setNewOperation(prev => ({ ...prev, eta_delivery_start_date: e.target.value }))} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">ETA Due Date Deliver End</label>
-              <Input type="date" value={newOperation.eta_delivery_end_date} onChange={(e) => setNewOperation(prev => ({ ...prev, eta_delivery_end_date: e.target.value }))} />
+              <label className="block text-sm font-medium text-gray-700 mb-1">Due Date Delivery End</label>
+              <Input type="date" value={contractValidation.contractData?.delivery_end_date || ''} disabled />
             </div>
           </div>
 
@@ -538,10 +537,12 @@ const CreateTruckingOperationModal = memo(function CreateTruckingOperationModal(
                 ))}
 
                 <div className="pt-2 text-xs text-gray-600">
-                  {newOperation.eta_trucking_start_date && newOperation.eta_trucking_completion_date ? (
-                    <div>Allowed date range: {newOperation.eta_trucking_start_date} to {newOperation.eta_trucking_completion_date}</div>
+                  {contractValidation.contractData?.delivery_start_date && contractValidation.contractData?.delivery_end_date ? (
+                    <div>
+                      Allowed date range: {contractValidation.contractData.delivery_start_date} to {contractValidation.contractData.delivery_end_date}
+                    </div>
                   ) : (
-                    <div>Set Start/Last receive dates to validate date range.</div>
+                    <div>Due Date Delivery Start/End are required to validate date range.</div>
                   )}
                   <div className="mt-1">Sum qty: {sumQty}{Number.isFinite(maxQty) ? ` / ${maxQty}` : ''}</div>
                 </div>
@@ -581,6 +582,8 @@ function CalendarDeliverablesTable({
   savingKey,
   editing,
   editValue,
+  formatQty,
+  visibleMetaCols,
   onEditStart,
   onEditChange,
   onEditCancel,
@@ -592,6 +595,8 @@ function CalendarDeliverablesTable({
   savingKey: string | null
   editing: { id: string; date: string } | null
   editValue: string
+  formatQty: (n: number) => string
+  visibleMetaCols: Set<string>
   onEditStart: (id: string, date: string, initial: string) => void
   onEditChange: (v: string) => void
   onEditCancel: () => void
@@ -601,6 +606,14 @@ function CalendarDeliverablesTable({
   const mm = month.getMonth()
   const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1)
+  const operationColW = 220
+  const contractColW = 300
+  const opShown = visibleMetaCols.has('operation_id')
+  const contractShown = visibleMetaCols.has('contract_block')
+  const contractLeft = opShown ? operationColW : 0
+  const scrollTopRef = useRef<HTMLDivElement | null>(null)
+  const scrollBottomRef = useRef<HTMLDivElement | null>(null)
+  const isSyncing = useRef(false)
   const dayIso = (day: number) => {
     const m = String(mm + 1).padStart(2, '0')
     const d = String(day).padStart(2, '0')
@@ -611,26 +624,103 @@ function CalendarDeliverablesTable({
     return hit ? Number(hit.quantity_delivered || 0) : 0
   }
 
+  const sumPlannedQty = (r: TruckingCalendarRow) =>
+    (r.daily_deliverables || []).reduce((s, x) => s + Number(x?.quantity_delivered || 0), 0)
+
+  useEffect(() => {
+    const top = scrollTopRef.current
+    const bottom = scrollBottomRef.current
+    if (!top || !bottom) return
+    const onTop = () => {
+      if (isSyncing.current) return
+      isSyncing.current = true
+      bottom.scrollLeft = top.scrollLeft
+      isSyncing.current = false
+    }
+    const onBottom = () => {
+      if (isSyncing.current) return
+      isSyncing.current = true
+      top.scrollLeft = bottom.scrollLeft
+      isSyncing.current = false
+    }
+    top.addEventListener('scroll', onTop)
+    bottom.addEventListener('scroll', onBottom)
+    return () => {
+      top.removeEventListener('scroll', onTop)
+      bottom.removeEventListener('scroll', onBottom)
+    }
+  }, [rows.length, daysInMonth, opShown, contractShown, visibleMetaCols])
+
   return (
-    <div className="overflow-x-auto">
+    <div>
       {loading ? (
         <div className="text-center py-10 text-gray-500">Loading…</div>
       ) : rows.length === 0 ? (
         <div className="text-center py-10 text-gray-500">No trucking operations in this month window</div>
       ) : (
-        <table className="min-w-[1400px] w-full text-xs border-separate border-spacing-0">
+        <>
+        <div ref={scrollTopRef} className="overflow-x-auto border rounded-md bg-white">
+          <div className="h-3" style={{ width: `${2000 + daysInMonth * 48}px` }} />
+        </div>
+        <div ref={scrollBottomRef} className="overflow-x-auto mt-2">
+        <table className="min-w-[2000px] w-full text-xs border-separate border-spacing-0">
           <thead className="sticky top-0 z-10">
             <tr className="bg-gray-100">
-              <th className="sticky left-0 z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">
-                Operation
-              </th>
-              <th className="sticky left-[220px] z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">
-                Contract / Supplier
-              </th>
-              <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Owner</th>
-              <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">ETA Start</th>
-              <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">ETA End</th>
-              <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">Qty Delivered</th>
+              {opShown ? (
+                <th
+                  className="sticky z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200"
+                  style={{ left: 0, minWidth: operationColW, maxWidth: operationColW }}
+                >
+                  Operation ID
+                </th>
+              ) : null}
+              {contractShown ? (
+                <th
+                  className="sticky z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200"
+                  style={{ left: contractLeft, minWidth: contractColW }}
+                >
+                  Contract Ext No / STO / Supplier
+                </th>
+              ) : null}
+              {visibleMetaCols.has('owner') ? (
+                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Owner</th>
+              ) : null}
+              {visibleMetaCols.has('due_start') ? (
+                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Due Start</th>
+              ) : null}
+              {visibleMetaCols.has('due_end') ? (
+                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Due End</th>
+              ) : null}
+              {visibleMetaCols.has('source_type') ? (
+                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Source Type</th>
+              ) : null}
+              {visibleMetaCols.has('lt_spot') ? (
+                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">LT/SPOT</th>
+              ) : null}
+              {visibleMetaCols.has('product') ? (
+                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Product</th>
+              ) : null}
+              {visibleMetaCols.has('group_name') ? (
+                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Group Name</th>
+              ) : null}
+              {visibleMetaCols.has('supplier') ? (
+                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Supplier</th>
+              ) : null}
+              {visibleMetaCols.has('outstanding_quantity') ? (
+                <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">Outstanding Qty</th>
+              ) : null}
+              {visibleMetaCols.has('qty_sent') ? (
+                <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">Qty Sent</th>
+              ) : null}
+              {visibleMetaCols.has('qty_sent_planning') ? (
+                <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">QTY Sent (planning)</th>
+              ) : null}
+              {visibleMetaCols.has('qty_delivered') ? (
+                <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">Qty Delivered</th>
+              ) : null}
+              {visibleMetaCols.has('qty_received') ? (
+                <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">Qty Received</th>
+              ) : null}
               {days.map((d) => (
                 <th key={d} className="px-2 py-2 text-right font-semibold text-gray-700 border-b border-gray-200 tabular-nums">
                   {d}
@@ -641,27 +731,94 @@ function CalendarDeliverablesTable({
           <tbody className="bg-white">
             {rows.map((r) => {
               const opLabel = r.operation_id || '-'
-              const contractLabel = r.contract_number || '-'
+              const contractLabel = (r.contract_ext_no || r.contract_number || '-') as string
+              const stoLabel = r.sto_number || '-'
               const supplierLabel = r.supplier || '-'
-              const etaStart = (r.eta_trucking_start_date || r.trucking_start_date || '').slice(0, 10) || '-'
-              const etaEnd = (r.eta_trucking_completion_date || r.trucking_completion_date || '').slice(0, 10) || '-'
-              const maxQty = Number(r.quantity_delivered || 0)
+              const dueStart = r.delivery_start_date
+                ? formatDateDMY(r.delivery_start_date || '')
+                : '-'
+              const dueEnd = r.delivery_end_date
+                ? formatDateDMY(r.delivery_end_date || '')
+                : '-'
+              const qtySent = Number(r.quantity_sent || 0)
+              const qtyDel = Number(r.quantity_delivered || 0)
+              const qtyRecv = Number(r.quantity_receive ?? 0)
+              const plannedSum = sumPlannedQty(r)
+              const outQty = Number((r as any).outstanding_quantity ?? 0)
               return (
                 <tr key={r.id} className="hover:bg-gray-50">
-                  <td className="sticky left-0 z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[220px] max-w-[220px]">
-                    <div className="font-semibold text-gray-900 truncate" title={opLabel}>{opLabel}</div>
-                    <div className="text-[10px] text-gray-500 truncate" title={`${r.loading_location || ''} → ${r.unloading_location || ''}`}>
-                      {(r.loading_location || '-')} → {(r.unloading_location || '-')}
-                    </div>
-                  </td>
-                  <td className="sticky left-[220px] z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[240px] max-w-[240px]">
-                    <div className="font-medium text-gray-900 truncate" title={contractLabel}>{contractLabel}</div>
-                    <div className="text-[10px] text-gray-500 truncate" title={supplierLabel}>{supplierLabel}</div>
-                  </td>
-                  <td className="px-3 py-2 border-b border-gray-100 text-gray-700">{r.trucking_owner || '-'}</td>
-                  <td className="px-3 py-2 border-b border-gray-100 text-gray-700 tabular-nums">{etaStart}</td>
-                  <td className="px-3 py-2 border-b border-gray-100 text-gray-700 tabular-nums">{etaEnd}</td>
-                  <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums font-semibold">{maxQty.toLocaleString('id-ID')}</td>
+                  {opShown ? (
+                    <td
+                      className="sticky z-10 bg-white px-3 py-2 border-b border-gray-100 align-top"
+                      style={{ left: 0, minWidth: operationColW, maxWidth: operationColW }}
+                    >
+                      <div className="font-semibold text-gray-900 truncate" title={opLabel}>{opLabel}</div>
+                      <div className="text-[10px] text-gray-500 truncate" title={`${r.loading_location || ''} → ${r.unloading_location || ''}`}>
+                        {(r.loading_location || '-')} → {(r.unloading_location || '-')}
+                      </div>
+                    </td>
+                  ) : null}
+                  {contractShown ? (
+                    <td
+                      className="sticky z-10 bg-white px-3 py-2 border-b border-gray-100 align-top"
+                      style={{ left: contractLeft, minWidth: contractColW, maxWidth: 'min(360px,40vw)' }}
+                    >
+                      <div className="font-medium text-gray-900 whitespace-normal break-words leading-snug" title={contractLabel}>{contractLabel}</div>
+                      <div className="text-[10px] text-gray-500 whitespace-normal break-words mt-0.5" title={`STO: ${stoLabel}`}>STO: {stoLabel}</div>
+                      <div className="text-[10px] text-gray-500 whitespace-normal break-words" title={supplierLabel}>{supplierLabel}</div>
+                    </td>
+                  ) : null}
+                  {visibleMetaCols.has('owner') ? (
+                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 align-top">{r.trucking_owner || '-'}</td>
+                  ) : null}
+                  {visibleMetaCols.has('due_start') ? (
+                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 tabular-nums align-top">{dueStart}</td>
+                  ) : null}
+                  {visibleMetaCols.has('due_end') ? (
+                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 tabular-nums align-top">{dueEnd}</td>
+                  ) : null}
+                  {visibleMetaCols.has('source_type') ? (
+                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 align-top whitespace-nowrap">
+                      {(r as any).source_type || '—'}
+                    </td>
+                  ) : null}
+                  {visibleMetaCols.has('lt_spot') ? (
+                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 align-top whitespace-nowrap">
+                      {(r as any).lt_spot || '—'}
+                    </td>
+                  ) : null}
+                  {visibleMetaCols.has('product') ? (
+                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 align-top">
+                      {r.product || '—'}
+                    </td>
+                  ) : null}
+                  {visibleMetaCols.has('group_name') ? (
+                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 align-top">
+                      {r.group_name || '—'}
+                    </td>
+                  ) : null}
+                  {visibleMetaCols.has('supplier') ? (
+                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 align-top">
+                      {r.supplier || '—'}
+                    </td>
+                  ) : null}
+                  {visibleMetaCols.has('outstanding_quantity') ? (
+                    <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums align-top">
+                      {outQty ? formatQty(outQty) : '—'}
+                    </td>
+                  ) : null}
+                  {visibleMetaCols.has('qty_sent') ? (
+                    <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums align-top">{qtySent ? formatQty(qtySent) : '-'}</td>
+                  ) : null}
+                  {visibleMetaCols.has('qty_sent_planning') ? (
+                    <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums align-top">{plannedSum ? formatQty(plannedSum) : '—'}</td>
+                  ) : null}
+                  {visibleMetaCols.has('qty_delivered') ? (
+                    <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums font-semibold align-top">{qtyDel != null && Number.isFinite(qtyDel) ? formatQty(qtyDel) : '—'}</td>
+                  ) : null}
+                  {visibleMetaCols.has('qty_received') ? (
+                    <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums align-top">{qtyRecv != null && Number.isFinite(qtyRecv) ? formatQty(qtyRecv) : '—'}</td>
+                  ) : null}
                   {days.map((d) => {
                     const date = dayIso(d)
                     const qty = getQty(r, date)
@@ -694,7 +851,7 @@ function CalendarDeliverablesTable({
                             {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-500" /> : null}
                           </div>
                         ) : qty ? (
-                          <span className="font-medium text-slate-900">{qty.toLocaleString('id-ID')}</span>
+                          <span className="font-medium text-slate-900">{formatQty(qty)}</span>
                         ) : (
                           <span className="text-gray-300">—</span>
                         )}
@@ -706,6 +863,8 @@ function CalendarDeliverablesTable({
             })}
           </tbody>
         </table>
+        </div>
+        </>
       )}
     </div>
   )
@@ -724,13 +883,33 @@ function TruckingPageContent() {
   const [unloadingLocationFilter, setUnloadingLocationFilter] = useState('')
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  // Date filters: keep draft values so typing/selecting doesn't auto-refresh until Apply
+  const [dateFromDraft, setDateFromDraft] = useState(() => {
+    const now = new Date()
+    const yyyy = now.getFullYear()
+    return `${yyyy}-01-01`
+  })
+  const [dateToDraft, setDateToDraft] = useState(() => {
+    const now = new Date()
+    const yyyy = now.getFullYear()
+    return `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  })
+  const [dateFrom, setDateFrom] = useState(() => {
+    const now = new Date()
+    const yyyy = now.getFullYear()
+    return `${yyyy}-01-01`
+  })
+  const [dateTo, setDateTo] = useState(() => {
+    const now = new Date()
+    const yyyy = now.getFullYear()
+    return `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  })
   const [uploadingId, setUploadingId] = useState<string>('')
   const [page, setPage] = useState<number>(1)
   const pageSize = 50
   const [totalCount, setTotalCount] = useState(0)
   const [hasMore, setHasMore] = useState<boolean>(true)
+  const [truckingSummary, setTruckingSummary] = useState<any>(null)
 
   // View tabs
   const [activeTab, setActiveTab] = useState<'list' | 'calendar'>('list')
@@ -745,6 +924,54 @@ function TruckingPageContent() {
   const [calendarSavingKey, setCalendarSavingKey] = useState<string | null>(null)
   const [calendarEditing, setCalendarEditing] = useState<{ id: string; date: string } | null>(null)
   const [calendarEditValue, setCalendarEditValue] = useState<string>('')
+  const [planningUploadOpen, setPlanningUploadOpen] = useState(false)
+  const [planningUploading, setPlanningUploading] = useState(false)
+  const [planningUploadSummary, setPlanningUploadSummary] = useState<{
+    processedRows: number
+    succeededOperations: number
+    failedOperations: number
+    succeededRows: number
+    rowLevelIssues: number
+    operationLevelFailures: number
+    rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[]
+    operationFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string; operation_ids?: string[] }[]
+  } | null>(null)
+  const planningFileInputRef = useRef<HTMLInputElement | null>(null)
+  const [calendarColumnsOpen, setCalendarColumnsOpen] = useState(false)
+  const calendarColumnsRef = useRef<HTMLDivElement | null>(null)
+  const [calendarVisibleMetaCols, setCalendarVisibleMetaCols] = useState<Set<string>>(
+    () =>
+      new Set([
+        'operation_id',
+        'contract_block',
+        'owner',
+        'due_start',
+        'due_end',
+        'qty_sent',
+        'qty_sent_planning',
+        'qty_delivered',
+        'qty_received',
+        'source_type',
+        'lt_spot',
+        'product',
+        'group_name',
+        'supplier',
+        'outstanding_quantity',
+      ]),
+  )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onMouseDown = (e: MouseEvent) => {
+      if (!calendarColumnsOpen) return
+      const el = calendarColumnsRef.current
+      if (!el) return
+      if (e.target instanceof Node && el.contains(e.target)) return
+      setCalendarColumnsOpen(false)
+    }
+    window.addEventListener('mousedown', onMouseDown)
+    return () => window.removeEventListener('mousedown', onMouseDown)
+  }, [calendarColumnsOpen])
 
   const iso = (d: Date) => {
     const yyyy = d.getFullYear()
@@ -758,7 +985,19 @@ function TruckingPageContent() {
     try {
       const from = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)
       const to = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 0)
-      const res = await api.get(`/trucking/daily-planning-deliverables?from=${encodeURIComponent(iso(from))}&to=${encodeURIComponent(iso(to))}`)
+      const params = new URLSearchParams()
+      params.set('from', iso(from))
+      params.set('to', iso(to))
+      const searchTrim = searchTerm.trim()
+      if (searchTrim.length >= 2) params.set('search', searchTrim)
+      if (statusFilter && statusFilter !== 'ALL') params.set('status', statusFilter)
+      if (loadingLocationFilter.trim()) params.set('loadingLocation', loadingLocationFilter.trim())
+      if (unloadingLocationFilter.trim()) params.set('unloadingLocation', unloadingLocationFilter.trim())
+      if (dateFrom) params.set('dateFrom', dateFrom)
+      if (dateTo) params.set('dateTo', dateTo)
+      if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') params.set('lateIndicator', lateIndicatorFilter)
+
+      const res = await api.get(`/trucking/daily-planning-deliverables?${params.toString()}`)
       setCalendarRows((res.data?.data || []) as TruckingCalendarRow[])
     } catch (e: any) {
       const msg = e?.response?.data?.error?.message || e?.message || 'Failed to load calendar deliverables'
@@ -767,13 +1006,65 @@ function TruckingPageContent() {
     } finally {
       setCalendarLoading(false)
     }
-  }, [calendarMonth])
+  }, [
+    calendarMonth,
+    searchTerm,
+    statusFilter,
+    loadingLocationFilter,
+    unloadingLocationFilter,
+    dateFrom,
+    dateTo,
+    lateIndicatorFilter,
+  ])
 
   useEffect(() => {
     if (activeTab !== 'calendar') return
     fetchCalendarRows()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, calendarMonth])
+  }, [activeTab, fetchCalendarRows])
+
+  const downloadDailyPlanningTemplate = async () => {
+    try {
+      const res = await api.get('/trucking/daily-planning-deliverables/template', { responseType: 'blob' })
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv;charset=utf-8' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'daily_planning_deliverables_template.csv'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      alert(e?.response?.data?.error?.message || e?.message || 'Failed to download template')
+    }
+  }
+
+  const handleDailyPlanningFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setPlanningUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await api.post('/trucking/daily-planning-deliverables/bulk-upload', fd)
+      const data = res.data?.data
+      if (data) {
+        setPlanningUploadSummary(data)
+        setPlanningUploadOpen(true)
+      }
+      await fetchCalendarRows()
+    } catch (err: any) {
+      alert(err?.response?.data?.error?.message || err?.message || 'Upload failed')
+    } finally {
+      setPlanningUploading(false)
+    }
+  }
+
+  const planningYearOptions = useMemo(() => {
+    const y = new Date().getFullYear()
+    return Array.from({ length: 18 }, (_, i) => y - 8 + i)
+  }, [])
   
   // Documents state
   const [selectedOperation, setSelectedOperation] = useState<TruckingOperation | null>(null)
@@ -834,7 +1125,7 @@ function TruckingPageContent() {
   useEffect(() => {
     fetchTruckingOperations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFilter, loadingLocationFilter, unloadingLocationFilter, dateFrom, dateTo, searchParams])
+  }, [page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir])
 
   const isFirstLateIndicatorEffect = useRef(true)
   useEffect(() => {
@@ -882,6 +1173,8 @@ function TruckingPageContent() {
       const params = new URLSearchParams()
       params.append('limit', String(pageSize))
       params.append('page', String(effectivePage))
+      params.append('sortKey', sortKey)
+      params.append('sortDir', sortDir)
       if (statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
       }
@@ -920,6 +1213,7 @@ function TruckingPageContent() {
       const response = await api.get(`/trucking?${params.toString()}`)
       const items = response.data.data.truckingOperations || []
       setTruckingOperations((prev) => (effectivePage === 1 ? items : [...prev, ...items]))
+      setTruckingSummary(response.data.data.summary || null)
       const total = Number(response.data.data.pagination?.total ?? 0)
       const totalPages = Number(response.data.data.pagination?.totalPages || 1)
       setTotalCount(total)
@@ -927,6 +1221,7 @@ function TruckingPageContent() {
     } catch (error) {
       console.error('Failed to fetch trucking operations:', error)
       alert('Failed to load trucking operations. Please refresh the page.')
+      setTruckingSummary(null)
     } finally {
       setLoading(false)
     }
@@ -982,7 +1277,7 @@ function TruckingPageContent() {
       'Operation ID','Status','Location','Trucking Owner',
       'Cargo Readiness Date at Starting Location (YYYY-MM-DD)',
       'Trucking Start Receive Date (YYYY-MM-DD)','Trucking Last Receive Date (YYYY-MM-DD)',
-      'ETA Trucking Start Receive Date (YYYY-MM-DD)','ETA Trucking Completion Date (YYYY-MM-DD)',
+      // ETA trucking dates removed from UI
       'Due Date Delivery Start (YYYY-MM-DD)','Due Date Delivery End (YYYY-MM-DD)',
       'Contract Qty (Kg)','Late Indicator',
       'Quantity Sent via Trucking (Based on Surat Jalan) (Kg)','Quantity Delivered via Trucking (Kg)','Gain/Loss %','Gain/Loss Amount (Kg)','Trucking OA Budget at Starting Location','Trucking OA Actual at Starting Location',
@@ -999,7 +1294,7 @@ function TruckingPageContent() {
         t.operation_id, t.status, t.location, t.trucking_owner,
         t.cargo_readiness_date?.substring(0,10) || '',
         t.trucking_start_date?.substring(0,10) || '', t.trucking_completion_date?.substring(0,10) || '',
-        t.eta_trucking_start_date?.substring(0,10) || '', t.eta_trucking_completion_date?.substring(0,10) || '',
+        // ETA trucking dates removed from UI
         t.delivery_start_date?.substring(0,10) || '', t.delivery_end_date?.substring(0,10) || '',
         toKg(t.contract_qty ?? ''), getLateIndicator(t).text,
         toKg(t.quantity_sent ?? ''), toKg(t.quantity_delivered ?? ''), t.gain_loss_percentage ?? '', toKg(t.gain_loss_amount ?? ''), t.oa_budget ?? '', t.oa_actual ?? '',
@@ -1146,20 +1441,9 @@ function TruckingPageContent() {
     return `${formatNumber(n)} Kg`
   }
 
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleDateString()
-  }
+  const formatDate = (dateStr: string) => formatDateDMY(dateStr)
 
-  const formatShortDate = (dateStr: string) => {
-    if (!dateStr) return '-'
-    try {
-      const date = new Date(dateStr)
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    } catch {
-      return '-'
-    }
-  }
+  const formatShortDate = (dateStr: string) => formatDateDMY(dateStr)
 
   // Helper function to calculate late indicator
   const getLateIndicator = (operation: TruckingOperation): { color: string; text: string } => {
@@ -1168,20 +1452,15 @@ function TruckingPageContent() {
     }
     
     const deliveryEnd = new Date(operation.delivery_end_date).getTime()
-    const etaCompletion = operation.eta_trucking_completion_date ? new Date(operation.eta_trucking_completion_date).getTime() : null
     const actualCompletion = operation.trucking_completion_date ? new Date(operation.trucking_completion_date).getTime() : null
     
-    // If both completion dates are null, cannot determine
-    if (etaCompletion === null && actualCompletion === null) {
+    // If completion date is null, cannot determine
+    if (actualCompletion === null) {
       return { color: 'bg-gray-100 text-gray-800', text: '-' }
     }
     
-    // Green if delivery_end >= eta_completion OR delivery_end >= actual_completion
-    // Red if delivery_end < eta_completion AND delivery_end < actual_completion
-    // (Using AND for red to match user requirement: red only if both are late)
-    const isOnTime = 
-      (etaCompletion !== null && deliveryEnd >= etaCompletion) ||
-      (actualCompletion !== null && deliveryEnd >= actualCompletion)
+    // Green if delivery_end >= actual completion; red otherwise
+    const isOnTime = deliveryEnd >= actualCompletion
     
     if (isOnTime) {
       return { color: 'bg-green-100 text-green-800', text: 'On Time' }
@@ -1191,13 +1470,16 @@ function TruckingPageContent() {
   }
 
   const handleFilterChange = () => {
-    fetchTruckingOperations()
+    setDateFrom(dateFromDraft)
+    setDateTo(dateToDraft)
+    setPage(1)
+    fetchTruckingOperations(1)
   }
 
   // Excel-like filtering helpers
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
     if (colId === 'contract_qty' || colId === 'sto_quantity' || colId === 'quantity_sent' || colId === 'quantity_delivered' || colId === 'quantity_receive' || colId === 'oa_budget' || colId === 'oa_actual' || colId === 'estimated_km' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount') return 'number'
-    if (colId === 'cargo_readiness_date' || colId === 'trucking_start_date' || colId === 'trucking_completion_date' || colId === 'eta_trucking_start_date' || colId === 'eta_trucking_completion_date' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'created_at') return 'date'
+    if (colId === 'cargo_readiness_date' || colId === 'trucking_start_date' || colId === 'trucking_completion_date' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'created_at') return 'date'
     return 'text'
   }
 
@@ -1229,8 +1511,6 @@ function TruckingPageContent() {
       case 'cargo_readiness_date': return o.cargo_readiness_date || ''
       case 'trucking_start_date': return o.trucking_start_date || ''
       case 'trucking_completion_date': return o.trucking_completion_date || ''
-      case 'eta_trucking_start_date': return o.eta_trucking_start_date || ''
-      case 'eta_trucking_completion_date': return o.eta_trucking_completion_date || ''
       case 'delivery_start_date': return o.delivery_start_date || ''
       case 'delivery_end_date': return o.delivery_end_date || ''
       case 'created_at': return o.created_at || ''
@@ -1298,25 +1578,13 @@ function TruckingPageContent() {
     },
     {
       id: 'contract_number',
-      label: 'Contract Number',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.contract_number || '',
-      render: (o) => (
-        <span className="text-sm break-words block" title={o.contract_number || ''}>
-          {o.contract_number || '-'}
-        </span>
-      )
-    },
-    {
-      id: 'contract_ext_no',
       label: 'Contract Ext No',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (o) => o.contract_ext_no || '',
+      getSortValue: (o) => o.contract_ext_no || o.contract_number || '',
       render: (o) => (
-        <span className="text-sm break-words block" title={o.contract_ext_no || ''}>
-          {o.contract_ext_no || '-'}
+        <span className="text-sm break-words block" title={(o.contract_ext_no || o.contract_number || '') as string}>
+          {o.contract_ext_no || o.contract_number || '-'}
         </span>
       )
     },
@@ -1528,40 +1796,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.trucking_completion_date || '',
       render: (o) => <span className="text-sm">{formatShortDate(o.trucking_completion_date)}</span>
     },
-    {
-      id: 'eta_trucking_start_date',
-      label: 'ETA Trucking Start Receive Date',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.eta_trucking_start_date || '',
-      render: (o) => <span className="text-sm">{formatShortDate(o.eta_trucking_start_date || '')}</span>
-    },
-    {
-      id: 'eta_trucking_completion_date',
-      label: 'ETA Trucking Last Receive Date',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.eta_trucking_completion_date || '',
-      render: (o) => <span className="text-sm">{formatShortDate(o.eta_trucking_completion_date || '')}</span>
-    },
-    {
-      id: 'eta_delivery_start_date',
-      label: 'ETA Due Date Delivery Start',
-      formulaHelp: FIELD_HELP.etaVsDueDelivery,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.eta_delivery_start_date || '',
-      render: (o) => <span className="text-sm">{formatShortDate(o.eta_delivery_start_date || '')}</span>
-    },
-    {
-      id: 'eta_delivery_end_date',
-      label: 'ETA Due Date Delivery End',
-      formulaHelp: FIELD_HELP.etaVsDueDelivery,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.eta_delivery_end_date || '',
-      render: (o) => <span className="text-sm">{formatShortDate(o.eta_delivery_end_date || '')}</span>
-    },
+    // ETA date columns removed from UI
     {
       id: 'delivery_start_date',
       label: 'Due Date Delivery Start',
@@ -1611,7 +1846,9 @@ function TruckingPageContent() {
   ], [])
 
   const defaultVisibleColumnIds = useMemo(() => {
-    return compactColumns.filter(c => c.defaultVisible).map(c => c.id)
+    return compactColumns
+      .filter(c => c.defaultVisible && c.render)
+      .map(c => c.id)
   }, [compactColumns])
 
   useEffect(() => {
@@ -1730,8 +1967,7 @@ function TruckingPageContent() {
       'late_indicator': '130px',
       'operation_id': '180px',
       'status': '120px',
-      'contract_number': '140px',
-      'contract_ext_no': '140px',
+      'contract_number': '160px',
       'po_number': '120px',
       'sto_number': '120px',
       'sto_quantity': '130px',
@@ -1752,10 +1988,6 @@ function TruckingPageContent() {
       'cargo_readiness_date': '140px',
       'trucking_start_date': '180px',
       'trucking_completion_date': '200px',
-      'eta_trucking_start_date': '200px',
-      'eta_trucking_completion_date': '200px',
-      'eta_delivery_start_date': '200px',
-      'eta_delivery_end_date': '200px',
       'delivery_start_date': '180px',
       'delivery_end_date': '180px',
       'contract_qty': '130px',
@@ -1838,39 +2070,15 @@ function TruckingPageContent() {
           </div>
         </div>
 
-        {/* Tabs */}
-        <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-lg border bg-white p-1">
-            <button
-              type="button"
-              onClick={() => setActiveTab('list')}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'list' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-            >
-              List
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('calendar')}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'calendar' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-            >
-              Calendar (Daily Planning Deliverables)
-            </button>
-          </div>
-          <div className="text-xs text-slate-500">
-            {activeTab === 'calendar' ? 'Click a cell to edit daily deliverables.' : null}
-          </div>
-        </div>
-
-        {activeTab === 'list' && (
+        {/* Filters (list + daily planning) */}
         <>
-        {/* Filters */}
         <Card>
           <CardContent className="pt-6">
-            <div className="flex gap-4 items-center">
-              <div className="flex-1 relative">
+            <div className="flex flex-wrap gap-3 items-center">
+              <div className="flex-1 min-w-[280px] relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                 <Input
-                  placeholder="Search by Operation ID, Contract, Truck Loading/Discharge Location, Owner, or Supplier..."
+                  placeholder="Search by Operation ID, Contract, Contract Ext No, STO, Truck Loading/Discharge, Owner, or Supplier..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
@@ -1879,7 +2087,7 @@ function TruckingPageContent() {
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="shrink-0 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="ALL">All Status</option>
                 <option value="PLANNED">Planned</option>
@@ -1893,7 +2101,7 @@ function TruckingPageContent() {
               <select
                 value={lateIndicatorFilter}
                 onChange={(e) => setLateIndicatorFilter(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="shrink-0 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="ALL">All Late Indicator</option>
                 <option value="ON_TIME">On Time</option>
@@ -1904,38 +2112,44 @@ function TruckingPageContent() {
                 placeholder="Truck Loading Location"
                 value={loadingLocationFilter}
                 onChange={(e) => setLoadingLocationFilter(e.target.value)}
-                className="w-48"
+                className="shrink-0 w-48"
               />
               <Input
                 placeholder="Truck Discharge Location"
                 value={unloadingLocationFilter}
                 onChange={(e) => setUnloadingLocationFilter(e.target.value)}
-                className="w-48"
+                className="shrink-0 w-48"
               />
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-600">Start Date:</span>
-                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-40" />
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-sm text-gray-600">Contract Date:</span>
+                <Input type="date" value={dateFromDraft} onChange={(e) => setDateFromDraft(e.target.value)} className="w-40" />
                 <span className="text-gray-500">to</span>
-                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-40" />
+                <Input type="date" value={dateToDraft} onChange={(e) => setDateToDraft(e.target.value)} className="w-40" />
               </div>
-              <Button onClick={handleFilterChange} variant="outline" size="sm">
+              <Button onClick={handleFilterChange} variant="outline" size="sm" className="shrink-0">
                 <Filter className="h-4 w-4 mr-1" />
                 Apply
               </Button>
-              {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || loadingLocationFilter || unloadingLocationFilter || dateFrom || dateTo) && (
+              {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || loadingLocationFilter || unloadingLocationFilter || dateFromDraft || dateToDraft) && (
                 <Button 
                   onClick={() => {
                     setStatusFilter('ALL')
                     setLateIndicatorFilter('ALL')
                     setLoadingLocationFilter('')
                     setUnloadingLocationFilter('')
-                    setDateFrom('')
-                    setDateTo('')
-                    handleFilterChange()
+                    const now = new Date()
+                    const yyyy = now.getFullYear()
+                    const to = `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+                    setDateFromDraft(`${yyyy}-01-01`)
+                    setDateToDraft(to)
+                    setDateFrom(`${yyyy}-01-01`)
+                    setDateTo(to)
+                    setPage(1)
+                    fetchTruckingOperations(1)
                   }}
                   variant="ghost"
                   size="sm"
-                  className="text-gray-500"
+                  className="shrink-0 text-gray-500"
                 >
                   <X className="h-4 w-4 mr-1" />
                   Clear
@@ -1945,21 +2159,184 @@ function TruckingPageContent() {
           </CardContent>
         </Card>
         </>
-        )}
+
+        {/* Calendar is rendered in the main section below (replaces All Trucking Operations on that tab). */}
+
+        {/* Status Distribution */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Status Distribution</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto overflow-y-visible pt-4 pb-4 px-6">
+              {[
+                { status: 'PLANNED', label: 'Planned', color: 'bg-blue-100', textColor: 'text-blue-800', badgeColor: 'bg-blue-600' },
+                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600' },
+                { status: 'LOADING', label: 'Loading', color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600' },
+                { status: 'IN_TRANSIT', label: 'In Transit', color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600' },
+                { status: 'UNLOADING', label: 'Unloading', color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600' },
+                { status: 'COMPLETED', label: 'Completed', color: 'bg-green-100', textColor: 'text-green-800', badgeColor: 'bg-green-600' },
+                { status: 'CANCELLED', label: 'Cancelled', color: 'bg-red-100', textColor: 'text-red-800', badgeColor: 'bg-red-600' }
+              ].map((statusInfo, index, array) => {
+                const s = truckingSummary?.status
+                const count =
+                  statusInfo.status === 'PLANNED' ? Number(s?.planned ?? 0)
+                    : statusInfo.status === 'IN_PROGRESS' ? Number(s?.inProgress ?? 0)
+                      : statusInfo.status === 'LOADING' ? Number(s?.loading ?? 0)
+                        : statusInfo.status === 'IN_TRANSIT' ? Number(s?.inTransit ?? 0)
+                          : statusInfo.status === 'UNLOADING' ? Number(s?.unloading ?? 0)
+                            : statusInfo.status === 'COMPLETED' ? Number(s?.completed ?? 0)
+                              : statusInfo.status === 'CANCELLED' ? Number(s?.cancelled ?? 0)
+                                : 0
+                return (
+                  <div key={statusInfo.status} className="flex items-center flex-shrink-0">
+                    <div className="relative overflow-visible">
+                      {/* Status Circle */}
+                      <div className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg hover:shadow-xl transition-shadow`}>
+                        {/* Count Badge */}
+                        <div className={`absolute -top-2 -right-2 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-7 h-7 md:w-8 md:h-8 flex items-center justify-center shadow-lg z-10`}>
+                          {count}
+                        </div>
+                        {/* Status Label */}
+                        <span className={`text-xs md:text-sm font-semibold ${statusInfo.textColor} text-center px-2 leading-tight`}>
+                          {statusInfo.label}
+                        </span>
+                      </div>
+                    </div>
+                    {/* Arrow */}
+                    {index < array.length - 1 && (
+                      <div className="flex-shrink-0 mx-2 md:mx-3">
+                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-gray-400">
+                          <path d="M9 18L15 12L9 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* View: List vs Daily Planning Deliverables — above main table/calendar */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm font-medium text-gray-700">View</div>
+          <div className="inline-flex rounded-lg border bg-white p-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab('list')}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'list' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+            >
+              List
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('calendar')}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'calendar' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+            >
+              Daily Planning Deliverables
+            </button>
+          </div>
+          {activeTab === 'calendar' ? (
+            <div className="text-xs text-slate-500 w-full sm:w-auto sm:text-right">
+              Click a cell to edit daily deliverables.
+            </div>
+          ) : null}
+        </div>
 
         {activeTab === 'calendar' && (
+          <>
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle className="text-base flex items-center gap-2">
-                  Daily Planning Deliverables — Calendar
-                  <Badge variant="outline" className="text-[10px]">Unit: Kg</Badge>
-                </CardTitle>
-                <div className="text-xs text-gray-600 mt-1">
-                  Shows operations that overlap the selected month (by ETA start/finish). Edit cells to update deliverables (same validation as Create New).
+            <CardHeader className="space-y-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <CardTitle className="text-base flex flex-wrap items-center gap-2">
+                    Daily Planning Deliverables — Calendar
+                    <Badge variant="outline" className="text-[10px]">Unit: Kg</Badge>
+                  </CardTitle>
+                  <div className="text-xs text-gray-600 mt-1 max-w-xl">
+                    Shows operations that overlap the selected month (due delivery / trucking dates). Edit cells or upload CSV/Excel (Contract Ext No, date, quantity) — same validation as the website (due date range, quantity caps).
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative" ref={calendarColumnsRef}>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCalendarColumnsOpen((v) => !v)}
+                    >
+                      <SlidersHorizontal className="h-4 w-4 mr-1" />
+                      Columns
+                    </Button>
+                    {calendarColumnsOpen ? (
+                      <div className="absolute right-0 mt-2 w-72 rounded-md border bg-white shadow-md z-50 p-3">
+                        <div className="text-xs font-semibold text-gray-600 mb-2">Visible columns (Daily Planning)</div>
+                        <div className="space-y-2 max-h-72 overflow-auto pr-1">
+                          {[
+                            { id: 'operation_id', label: 'Operation ID' },
+                            { id: 'contract_block', label: 'Contract Ext No / STO / Supplier' },
+                            { id: 'owner', label: 'Owner' },
+                            { id: 'due_start', label: 'Due Start' },
+                            { id: 'due_end', label: 'Due End' },
+                            { id: 'qty_sent', label: 'Qty Sent' },
+                            { id: 'qty_sent_planning', label: 'Qty Sent (planning)' },
+                            { id: 'qty_delivered', label: 'Qty Delivered' },
+                            { id: 'qty_received', label: 'Qty Received' },
+                            { id: 'source_type', label: 'Source Type' },
+                            { id: 'lt_spot', label: 'LT/SPOT' },
+                            { id: 'product', label: 'Product' },
+                            { id: 'group_name', label: 'Group Name' },
+                            { id: 'supplier', label: 'Supplier' },
+                            { id: 'outstanding_quantity', label: 'Outstanding Quantity' },
+                          ].map((c) => (
+                            <label key={c.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                              <Checkbox
+                                checked={calendarVisibleMetaCols.has(c.id)}
+                                onCheckedChange={() => {
+                                  setCalendarVisibleMetaCols((prev) => {
+                                    const next = new Set(prev)
+                                    if (next.has(c.id)) next.delete(c.id)
+                                    else next.add(c.id)
+                                    return next
+                                  })
+                                }}
+                              />
+                              <span>{c.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                  <Button type="button" variant="outline" size="sm" onClick={downloadDailyPlanningTemplate}>
+                    <Download className="h-4 w-4 mr-1" />
+                    Template
+                  </Button>
+                  <input
+                    ref={planningFileInputRef}
+                    type="file"
+                    accept=".csv,.xlsx,.xls,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                    className="hidden"
+                    onChange={handleDailyPlanningFileChange}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={planningUploading}
+                    onClick={() => planningFileInputRef.current?.click()}
+                  >
+                    {planningUploading ? (
+                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    ) : (
+                      <Upload className="h-4 w-4 mr-1" />
+                    )}
+                    Upload
+                  </Button>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="outline"
                   size="sm"
@@ -1967,9 +2344,36 @@ function TruckingPageContent() {
                 >
                   <ArrowLeft className="h-4 w-4 mr-1" /> Prev
                 </Button>
-                <div className="px-3 py-1.5 rounded-md border bg-white text-sm font-medium tabular-nums">
-                  {calendarMonth.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}
-                </div>
+                <select
+                  className="h-9 rounded-md border border-input bg-background px-2 text-sm min-w-[140px]"
+                  value={calendarMonth.getMonth()}
+                  onChange={(e) => {
+                    const m = Number(e.target.value)
+                    setCalendarMonth(new Date(calendarMonth.getFullYear(), m, 1))
+                  }}
+                  aria-label="Month"
+                >
+                  {Array.from({ length: 12 }, (_, i) => (
+                    <option key={i} value={i}>
+                      {format(new Date(2000, i, 1), 'MMMM')}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="h-9 rounded-md border border-input bg-background px-2 text-sm min-w-[88px]"
+                  value={calendarMonth.getFullYear()}
+                  onChange={(e) => {
+                    const y = Number(e.target.value)
+                    setCalendarMonth(new Date(y, calendarMonth.getMonth(), 1))
+                  }}
+                  aria-label="Year"
+                >
+                  {planningYearOptions.map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
+                </select>
                 <Button
                   variant="outline"
                   size="sm"
@@ -1997,6 +2401,8 @@ function TruckingPageContent() {
                 savingKey={calendarSavingKey}
                 editing={calendarEditing}
                 editValue={calendarEditValue}
+                formatQty={formatTruckingQtyPlain}
+                visibleMetaCols={calendarVisibleMetaCols}
                 onEditStart={(id, date, initial) => {
                   setCalendarEditing({ id, date })
                   setCalendarEditValue(initial)
@@ -2039,56 +2445,77 @@ function TruckingPageContent() {
               />
             </CardContent>
           </Card>
+
+          <Dialog open={planningUploadOpen} onOpenChange={setPlanningUploadOpen}>
+            <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Daily planning upload result</DialogTitle>
+              </DialogHeader>
+              {planningUploadSummary ? (
+                <div className="space-y-4 text-sm">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    <div className="rounded-md border bg-slate-50 px-3 py-2">
+                      <div className="text-xs text-muted-foreground">Rows processed</div>
+                      <div className="text-lg font-semibold tabular-nums">{planningUploadSummary.processedRows}</div>
+                    </div>
+                    <div className="rounded-md border bg-green-50 px-3 py-2">
+                      <div className="text-xs text-muted-foreground">Operations succeeded</div>
+                      <div className="text-lg font-semibold tabular-nums text-green-800">{planningUploadSummary.succeededOperations}</div>
+                    </div>
+                    <div className="rounded-md border bg-red-50 px-3 py-2">
+                      <div className="text-xs text-muted-foreground">Operations failed</div>
+                      <div className="text-lg font-semibold tabular-nums text-red-800">{planningUploadSummary.failedOperations}</div>
+                    </div>
+                    <div className="rounded-md border bg-slate-50 px-3 py-2">
+                      <div className="text-xs text-muted-foreground">Rows applied (success)</div>
+                      <div className="text-lg font-semibold tabular-nums">{planningUploadSummary.succeededRows}</div>
+                    </div>
+                    <div className="rounded-md border bg-amber-50 px-3 py-2">
+                      <div className="text-xs text-muted-foreground">Row-level issues</div>
+                      <div className="text-lg font-semibold tabular-nums text-amber-900">{planningUploadSummary.rowLevelIssues}</div>
+                    </div>
+                  </div>
+                  {(planningUploadSummary.rowParseFailures?.length ?? 0) > 0 ? (
+                    <div>
+                      <div className="font-medium text-gray-900 mb-2">Row issues (file line #)</div>
+                      <ul className="max-h-40 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
+                        {planningUploadSummary.rowParseFailures.map((f, i) => (
+                          <li key={`rpf-${i}`} className="text-gray-800">
+                            <span className="font-mono">Line {f.rowNumber}</span>
+                            {f.contract_ext_no ? ` · ${f.contract_ext_no}` : ''}: {f.reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {(planningUploadSummary.operationFailures?.length ?? 0) > 0 ? (
+                    <div>
+                      <div className="font-medium text-gray-900 mb-2">Operation failures</div>
+                      <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-2 p-2">
+                        {planningUploadSummary.operationFailures.map((f, i) => (
+                          <li key={`of-${i}`} className="text-gray-800">
+                            <span className="font-semibold">{f.contract_ext_no}</span>
+                            {f.rowNumbers?.length ? (
+                              <span className="text-gray-600"> (rows {f.rowNumbers.join(', ')})</span>
+                            ) : null}
+                            {f.operation_ids?.length ? (
+                              <span className="text-gray-600"> · Operation IDs: {f.operation_ids.join(', ')}</span>
+                            ) : null}
+                            : {f.reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </DialogContent>
+          </Dialog>
+          </>
         )}
 
-        {/* Status Distribution */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Status Distribution</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto pb-4 px-4">
-              {[
-                { status: 'PLANNED', label: 'Planned', color: 'bg-blue-100', textColor: 'text-blue-800', badgeColor: 'bg-blue-600' },
-                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600' },
-                { status: 'LOADING', label: 'Loading', color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600' },
-                { status: 'IN_TRANSIT', label: 'In Transit', color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600' },
-                { status: 'UNLOADING', label: 'Unloading', color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600' },
-                { status: 'COMPLETED', label: 'Completed', color: 'bg-green-100', textColor: 'text-green-800', badgeColor: 'bg-green-600' },
-                { status: 'CANCELLED', label: 'Cancelled', color: 'bg-red-100', textColor: 'text-red-800', badgeColor: 'bg-red-600' }
-              ].map((statusInfo, index, array) => {
-                const count = filteredOperations.filter(op => op.status === statusInfo.status).length
-                return (
-                  <div key={statusInfo.status} className="flex items-center flex-shrink-0">
-                    <div className="relative">
-                      {/* Status Circle */}
-                      <div className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg hover:shadow-xl transition-shadow`}>
-                        {/* Count Badge */}
-                        <div className={`absolute -top-2 -right-2 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-7 h-7 md:w-8 md:h-8 flex items-center justify-center shadow-lg z-10`}>
-                          {count}
-                        </div>
-                        {/* Status Label */}
-                        <span className={`text-xs md:text-sm font-semibold ${statusInfo.textColor} text-center px-2 leading-tight`}>
-                          {statusInfo.label}
-                        </span>
-                      </div>
-                    </div>
-                    {/* Arrow */}
-                    {index < array.length - 1 && (
-                      <div className="flex-shrink-0 mx-2 md:mx-3">
-                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-gray-400">
-                          <path d="M9 18L15 12L9 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </CardContent>
-        </Card>
-
         {/* Trucking Operations List */}
+        {activeTab === 'list' && (
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -2241,6 +2668,8 @@ function TruckingPageContent() {
                                         setSortKey(col.id)
                                         setSortDir('asc')
                                       }
+                                      setPage(1)
+                                      fetchTruckingOperations(1)
                                     }
                                   }}
                                   title={col.sortable ? 'Sort' : undefined}
@@ -2476,34 +2905,6 @@ function TruckingPageContent() {
                                           <option value="COMPLETED">COMPLETED</option>
                                           <option value="CANCELLED">CANCELLED</option>
                                         </select>
-                                      ) : isEditing && col.id === 'eta_trucking_start_date' ? (
-                                        <Input
-                                          type="date"
-                                          className="h-8 text-sm"
-                                          value={(editedData.eta_trucking_start_date ?? operation.eta_trucking_start_date ?? '').split('T')[0]}
-                                          onChange={(e) => handleFieldChange('eta_trucking_start_date', e.target.value)}
-                                        />
-                                      ) : isEditing && col.id === 'eta_trucking_completion_date' ? (
-                                        <Input
-                                          type="date"
-                                          className="h-8 text-sm"
-                                          value={(editedData.eta_trucking_completion_date ?? operation.eta_trucking_completion_date ?? '').split('T')[0]}
-                                          onChange={(e) => handleFieldChange('eta_trucking_completion_date', e.target.value)}
-                                        />
-                                      ) : isEditing && col.id === 'eta_delivery_start_date' ? (
-                                        <Input
-                                          type="date"
-                                          className="h-8 text-sm"
-                                          value={(editedData.eta_delivery_start_date ?? operation.eta_delivery_start_date ?? '').split('T')[0]}
-                                          onChange={(e) => handleFieldChange('eta_delivery_start_date', e.target.value)}
-                                        />
-                                      ) : isEditing && col.id === 'eta_delivery_end_date' ? (
-                                        <Input
-                                          type="date"
-                                          className="h-8 text-sm"
-                                          value={(editedData.eta_delivery_end_date ?? operation.eta_delivery_end_date ?? '').split('T')[0]}
-                                          onChange={(e) => handleFieldChange('eta_delivery_end_date', e.target.value)}
-                                        />
                                       ) : (
                                         col.render(operation)
                                       )}
@@ -2937,7 +3338,7 @@ function TruckingPageContent() {
                           </div>
                         </div>
 
-                        {/* Dates (Editable) */}
+                        {/* Dates */}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm pt-3 border-t">
                           <div>
                             <div className="text-gray-500 mb-1">Cargo Readiness at Starting Location</div>
@@ -2957,62 +3358,16 @@ function TruckingPageContent() {
                             <div className="font-medium">{formatDate(operation.trucking_completion_date)}</div>
                           </div>
                           <div>
-                            <div className="text-gray-500 mb-1">ETA Trucking Start Receive Date</div>
-                            {isEditing ? (
-                              <Input
-                                type="date"
-                                value={currentData.eta_trucking_start_date ? currentData.eta_trucking_start_date.split('T')[0] : ''}
-                                onChange={(e) => handleFieldChange('eta_trucking_start_date', e.target.value)}
-                                className="h-8 text-sm"
-                              />
-                            ) : (
-                              <div className="font-medium">{formatDate(operation.eta_trucking_start_date || '')}</div>
-                            )}
+                            <div className="text-gray-500 mb-1">Due Date Delivery Start</div>
+                            <div className="font-medium">{formatDate(operation.delivery_start_date || '')}</div>
                           </div>
                           <div>
-                            <div className="text-gray-500 mb-1">ETA Trucking Last Receive Date</div>
-                            {isEditing ? (
-                              <Input
-                                type="date"
-                                value={currentData.eta_trucking_completion_date ? currentData.eta_trucking_completion_date.split('T')[0] : ''}
-                                onChange={(e) => handleFieldChange('eta_trucking_completion_date', e.target.value)}
-                                className="h-8 text-sm"
-                              />
-                            ) : (
-                              <div className="font-medium">{formatDate(operation.eta_trucking_completion_date || '')}</div>
-                            )}
+                            <div className="text-gray-500 mb-1">Due Date Delivery End</div>
+                            <div className="font-medium">{formatDate(operation.delivery_end_date || '')}</div>
                           </div>
                         </div>
 
-                        {/* ETA Due Date Delivery Fields */}
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm pt-3">
-                          <div>
-                            <div className="text-gray-500 mb-1">ETA Due Date Delivery Start</div>
-                            {isEditing ? (
-                              <Input
-                                type="date"
-                                value={currentData.eta_delivery_start_date ? currentData.eta_delivery_start_date.split('T')[0] : ''}
-                                onChange={(e) => handleFieldChange('eta_delivery_start_date', e.target.value)}
-                                className="h-8 text-sm"
-                              />
-                            ) : (
-                              <div className="font-medium">{formatDate(operation.eta_delivery_start_date || '')}</div>
-                            )}
-                          </div>
-                          <div>
-                            <div className="text-gray-500 mb-1">ETA Due Date Delivery End</div>
-                            {isEditing ? (
-                              <Input
-                                type="date"
-                                value={currentData.eta_delivery_end_date ? currentData.eta_delivery_end_date.split('T')[0] : ''}
-                                onChange={(e) => handleFieldChange('eta_delivery_end_date', e.target.value)}
-                                className="h-8 text-sm"
-                              />
-                            ) : (
-                              <div className="font-medium">{formatDate(operation.eta_delivery_end_date || '')}</div>
-                            )}
-                          </div>
-                        </div>
+                        {/* ETA fields removed */}
                       </div>
                     </div>
                   )
@@ -3035,6 +3390,7 @@ function TruckingPageContent() {
             )}
           </CardContent>
         </Card>
+        )}
       </div>
 
       {/* Documents Modal */}
@@ -3059,7 +3415,7 @@ function TruckingPageContent() {
                     <div>
                       <div className="text-sm font-medium">{doc.file_name}</div>
                       <div className="text-xs text-gray-500">
-                        {(doc.document_type || 'FILE')} • {doc.created_at ? new Date(doc.created_at).toLocaleString() : ''}
+                        {(doc.document_type || 'FILE')} • {doc.created_at ? formatDateTimeDMY(doc.created_at) : ''}
                       </div>
                     </div>
                     <Button 

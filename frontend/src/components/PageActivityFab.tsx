@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
-import { format } from 'date-fns'
+import { formatDateTimeDMY } from '@/lib/dateFormat'
 import { Activity, Loader2, X } from 'lucide-react'
 import api from '@/lib/api'
 import { pathToActivityPage } from '@/lib/pageActivityMap'
@@ -115,9 +115,7 @@ export function PageActivityFab() {
                         </div>
                       </div>
                       <div className="text-xs text-gray-400 whitespace-nowrap shrink-0">
-                        {row.timestamp
-                          ? format(new Date(row.timestamp), 'yyyy-MM-dd HH:mm')
-                          : ''}
+                        {row.timestamp ? formatDateTimeDMY(row.timestamp) : ''}
                       </div>
                     </div>
                   </li>

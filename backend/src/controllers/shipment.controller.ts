@@ -2,6 +2,8 @@ import { Response } from 'express';
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
+import * as XLSX from 'xlsx';
+import { normalizeAndValidateShipmentDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/shipmentDailyDeliverables';
 import { deriveShipmentStatusFromAta, deriveShipmentStatusFromEta } from '../utils/shipmentStatus';
 import {
   appendShipmentColumnFilters,
@@ -33,19 +35,9 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     // - Manual shipments (no STO) are grouped by operation_id so that multiple contracts
     //   under the same operation appear as a single transaction in the UI
     // Base query for shipments grouped by STO/operation/shipment
-    const ataSelect = compact
-      ? `
-          -- ATA (compact): use shipment-level columns only
-          MAX(s.ata_arrival) as ata_vessel_arrival_at_loading_port,
-          MAX(s.ata_berthed) as ata_vessel_berthed_at_loading_port,
-          MAX(s.ata_loading_start) as ata_vessel_start_loading,
-          MAX(s.ata_loading_complete) as ata_vessel_completed_loading,
-          MAX(s.ata_sailed) as ata_vessel_sailed_from_loading_port,
-          MAX(s.ata_discharge_arrival) as ata_vessel_arrive_at_discharge_port,
-          MAX(s.ata_discharge_berthed) as ata_vessel_berthed_at_discharge_port,
-          MAX(s.ata_discharge_start) as ata_vessel_start_discharging,
-          MAX(s.ata_discharge_complete) as ata_vessel_complete_discharge,`
-      : `
+    // IMPORTANT: status derivation depends on ATA ladder. Even in compact view, we must
+    // fallback to vessel_loading_ports so rows don't incorrectly stay PLANNED.
+    const ataSelect = `
           -- Get ATA dates from shipments or vessel_loading_ports
           MAX(COALESCE(s.ata_arrival, (SELECT vlp1.ata_vessel_arrival::date FROM vessel_loading_ports vlp1 WHERE vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false LIMIT 1))) as ata_vessel_arrival_at_loading_port,
           MAX(COALESCE(s.ata_berthed, (SELECT vlp1.ata_vessel_berthed::date FROM vessel_loading_ports vlp1 WHERE vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false LIMIT 1))) as ata_vessel_berthed_at_loading_port,
@@ -100,6 +92,19 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
             spd.data->'shipment'->>'sto_no',
             spd.data->'contract'->>'sto_no'
           )), '') AS effective_sto,
+          COALESCE(
+            spd.data->'contract'->>'contract_type',
+            spd.data->>'B2B Flag',
+            spd.data->'raw'->>'B2B Flag',
+            spd.data->>'Contract Type'
+          ) AS b2b_flag_raw,
+          COALESCE(
+            spd.data->'contract'->>'contract_reference_po',
+            spd.data->>'CONTRACT REFF PO',
+            spd.data->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'CONTRACT REFF PO'
+          ) AS contract_reference_po_raw,
           spd.created_at
         FROM sap_processed_data spd
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
@@ -182,6 +187,13 @@ ${contractMetaSelect}
         WHERE 1=1
           -- Shipments module is SEA-only: exclude LAND contracts leaking into STO groups
           AND UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) = 'SEA'
+          -- Match dashboard baseline: exclude B2B "child" contracts
+          -- (latest SAP row indicates B2B AND Contract Reference PO is not blank).
+          AND NOT (
+            l.contract_number IS NOT NULL
+            AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
+            AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
+          )
     `;
     const queryParams: any[] = [];
     let paramIndex = 1;
@@ -204,14 +216,16 @@ ${contractMetaSelect}
       paramIndex += 2;
     }
 
+    // Dashboard baseline filters by CONTRACT DATE (YTD). Keep Shipments page aligned:
+    // dateFrom/dateTo apply to contracts.contract_date (not shipment_date).
     if (dateFrom) {
-      queryText += ` AND s.shipment_date >= $${paramIndex}`;
+      queryText += ` AND c.contract_date >= $${paramIndex}`;
       queryParams.push(dateFrom);
       paramIndex++;
     }
 
     if (dateTo) {
-      queryText += ` AND s.shipment_date <= $${paramIndex}`;
+      queryText += ` AND c.contract_date <= $${paramIndex}`;
       queryParams.push(dateTo);
       paramIndex++;
     }
@@ -288,6 +302,22 @@ ${contractMetaSelect}
               spd.data->'contract'->>'sto_no'
             )), '') = TRIM(k.sto_key::text)
       ),
+      contract_ext_agg AS (
+        SELECT
+          q.sto_key,
+          STRING_AGG(DISTINCT q.v, ', ' ORDER BY q.v) AS contract_ext_no
+        FROM (
+          SELECT
+            sk.sto_key,
+            NULLIF(TRIM(COALESCE(
+              sk.data->'raw'->>'Contract Ext No',
+              sk.data->>'Contract Ext No'
+            )), '') AS v
+          FROM spd_keyed sk
+        ) q
+        WHERE q.v IS NOT NULL AND q.v != ''
+        GROUP BY q.sto_key
+      ),
       sap_agg AS (
         SELECT
           sk.sto_key,
@@ -335,10 +365,12 @@ ${contractMetaSelect}
         COALESCE(sa.quantity_delivered_sap, 0) AS quantity_delivered_sap,
         sl.incoterm AS incoterm,
         sl.b2b_flag AS b2b_flag,
-        sl.source_type AS source_type
+        sl.source_type AS source_type,
+        COALESCE(cex.contract_ext_no, sp.contract_ext_no) AS contract_ext_no_merged
       FROM shipment_page sp
       LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)`;
+      LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)
+      LEFT JOIN contract_ext_agg cex ON TRIM(cex.sto_key::text) = TRIM(sp.sto_key::text)`;
     const mainParams = [...innerParams, ...outerParams, Number(limit), offset];
 
     debugSql = { text: queryText, params: mainParams };
@@ -347,6 +379,17 @@ ${contractMetaSelect}
     // When grouping by STO, display STO No from sto_key when contracts.sto_number is empty,
     // but only if sto_key looks like a real STO number (numeric), not an operation ID or manual code.
     for (const row of result.rows) {
+      if (Object.prototype.hasOwnProperty.call(row, 'contract_ext_no_merged')) {
+        row.contract_ext_no = row.contract_ext_no_merged as string | null;
+        delete (row as { contract_ext_no_merged?: unknown }).contract_ext_no_merged;
+      }
+
+      // Preserve explicit cancellations.
+      if (String(row.status ?? '').trim().toUpperCase() === 'CANCELLED') {
+        row.status = 'CANCELLED';
+        continue;
+      }
+
       const currentStoNumber = row.sto_number;
       const stoKeyStr = row.sto_key != null ? String(row.sto_key).trim() : '';
 
@@ -390,18 +433,172 @@ ${contractMetaSelect}
     }
 
     const countQuery = `${shipmentBaseCteSql}
-      SELECT COUNT(*)::bigint AS count
-      FROM shipment_base sb
-      WHERE 1=1 ${outerSql}`;
+      , filtered AS (
+        SELECT sb.*
+        FROM shipment_base sb
+        WHERE 1=1 ${outerSql}
+      ),
+      enriched AS (
+        SELECT
+          f.*,
+          CASE
+            WHEN UPPER(TRIM(COALESCE(f.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
+            WHEN (
+              f.ata_vessel_arrival_at_loading_port IS NOT NULL AND
+              f.ata_vessel_berthed_at_loading_port IS NOT NULL AND
+              f.ata_vessel_start_loading IS NOT NULL AND
+              f.ata_vessel_completed_loading IS NOT NULL AND
+              f.ata_vessel_sailed_from_loading_port IS NOT NULL AND
+              f.ata_vessel_arrive_at_discharge_port IS NOT NULL AND
+              f.ata_vessel_berthed_at_discharge_port IS NOT NULL AND
+              f.ata_vessel_start_discharging IS NOT NULL AND
+              f.ata_vessel_complete_discharge IS NOT NULL
+            ) THEN 'COMPLETED'
+            ELSE (
+              CASE
+                WHEN NOT (
+                  f.eta_arrival IS NOT NULL OR f.eta_berthed IS NOT NULL OR f.eta_loading_start IS NOT NULL OR f.eta_loading_complete IS NOT NULL OR f.eta_sailed IS NOT NULL
+                  OR f.eta_discharge_arrival IS NOT NULL OR f.eta_discharge_berthed IS NOT NULL OR f.eta_discharge_start IS NOT NULL OR f.eta_vessel_complete_discharge IS NOT NULL
+                ) THEN 'PLANNED'
+                WHEN (
+                  f.eta_arrival IS NOT NULL AND f.eta_berthed IS NOT NULL AND f.eta_loading_start IS NOT NULL AND f.eta_loading_complete IS NOT NULL AND f.eta_sailed IS NOT NULL
+                  AND f.eta_discharge_arrival IS NOT NULL AND f.eta_discharge_berthed IS NOT NULL
+                ) THEN 'UNLOADING'
+                WHEN (
+                  f.eta_arrival IS NOT NULL AND f.eta_berthed IS NOT NULL AND f.eta_loading_start IS NOT NULL AND f.eta_loading_complete IS NOT NULL AND f.eta_sailed IS NOT NULL
+                  AND f.eta_discharge_arrival IS NOT NULL
+                ) THEN 'ARRIVED'
+                WHEN (
+                  f.eta_arrival IS NOT NULL AND f.eta_berthed IS NOT NULL AND f.eta_loading_start IS NOT NULL AND f.eta_loading_complete IS NOT NULL AND f.eta_sailed IS NOT NULL
+                ) THEN 'IN_TRANSIT'
+                WHEN (f.eta_arrival IS NOT NULL AND f.eta_loading_start IS NOT NULL) THEN 'LOADING'
+                WHEN (f.eta_arrival IS NOT NULL) THEN 'IN_PROGRESS'
+                ELSE 'PLANNED'
+              END
+            )
+          END AS effective_status,
+          -- ETA Loading buckets (per STO group / row in shipment_base)
+          (
+            f.eta_arrival IS NULL AND f.eta_berthed IS NULL AND f.eta_loading_start IS NULL AND f.eta_loading_complete IS NULL AND f.eta_sailed IS NULL
+          ) AS loading_no_eta,
+          (
+            (f.eta_arrival IS NOT NULL AND (f.eta_arrival::date - CURRENT_DATE) < 0) OR
+            (f.eta_berthed IS NOT NULL AND (f.eta_berthed::date - CURRENT_DATE) < 0) OR
+            (f.eta_loading_start IS NOT NULL AND (f.eta_loading_start::date - CURRENT_DATE) < 0) OR
+            (f.eta_loading_complete IS NOT NULL AND (f.eta_loading_complete::date - CURRENT_DATE) < 0) OR
+            (f.eta_sailed IS NOT NULL AND (f.eta_sailed::date - CURRENT_DATE) < 0)
+          ) AS loading_delay,
+          (
+            (f.eta_arrival IS NOT NULL AND (f.eta_arrival::date - CURRENT_DATE) = 0) OR
+            (f.eta_berthed IS NOT NULL AND (f.eta_berthed::date - CURRENT_DATE) = 0) OR
+            (f.eta_loading_start IS NOT NULL AND (f.eta_loading_start::date - CURRENT_DATE) = 0) OR
+            (f.eta_loading_complete IS NOT NULL AND (f.eta_loading_complete::date - CURRENT_DATE) = 0) OR
+            (f.eta_sailed IS NOT NULL AND (f.eta_sailed::date - CURRENT_DATE) = 0)
+          ) AS loading_d,
+          (
+            (f.eta_arrival IS NOT NULL AND (f.eta_arrival::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
+            (f.eta_berthed IS NOT NULL AND (f.eta_berthed::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
+            (f.eta_loading_start IS NOT NULL AND (f.eta_loading_start::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
+            (f.eta_loading_complete IS NOT NULL AND (f.eta_loading_complete::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
+            (f.eta_sailed IS NOT NULL AND (f.eta_sailed::date - CURRENT_DATE) BETWEEN 1 AND 2)
+          ) AS loading_d_minus_2,
+          (
+            (f.eta_arrival IS NOT NULL AND (f.eta_arrival::date - CURRENT_DATE) > 7) OR
+            (f.eta_berthed IS NOT NULL AND (f.eta_berthed::date - CURRENT_DATE) > 7) OR
+            (f.eta_loading_start IS NOT NULL AND (f.eta_loading_start::date - CURRENT_DATE) > 7) OR
+            (f.eta_loading_complete IS NOT NULL AND (f.eta_loading_complete::date - CURRENT_DATE) > 7) OR
+            (f.eta_sailed IS NOT NULL AND (f.eta_sailed::date - CURRENT_DATE) > 7)
+          ) AS loading_more_than_7d,
+          -- ETA Discharge buckets
+          (
+            f.eta_discharge_arrival IS NULL AND f.eta_discharge_berthed IS NULL AND f.eta_discharge_start IS NULL AND f.eta_vessel_complete_discharge IS NULL
+          ) AS discharge_no_eta,
+          (
+            (f.eta_discharge_arrival IS NOT NULL AND (f.eta_discharge_arrival::date - CURRENT_DATE) < 0) OR
+            (f.eta_discharge_berthed IS NOT NULL AND (f.eta_discharge_berthed::date - CURRENT_DATE) < 0) OR
+            (f.eta_discharge_start IS NOT NULL AND (f.eta_discharge_start::date - CURRENT_DATE) < 0) OR
+            (f.eta_vessel_complete_discharge IS NOT NULL AND (f.eta_vessel_complete_discharge::date - CURRENT_DATE) < 0)
+          ) AS discharge_delay,
+          (
+            (f.eta_discharge_arrival IS NOT NULL AND (f.eta_discharge_arrival::date - CURRENT_DATE) = 0) OR
+            (f.eta_discharge_berthed IS NOT NULL AND (f.eta_discharge_berthed::date - CURRENT_DATE) = 0) OR
+            (f.eta_discharge_start IS NOT NULL AND (f.eta_discharge_start::date - CURRENT_DATE) = 0) OR
+            (f.eta_vessel_complete_discharge IS NOT NULL AND (f.eta_vessel_complete_discharge::date - CURRENT_DATE) = 0)
+          ) AS discharge_d,
+          (
+            (f.eta_discharge_arrival IS NOT NULL AND (f.eta_discharge_arrival::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
+            (f.eta_discharge_berthed IS NOT NULL AND (f.eta_discharge_berthed::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
+            (f.eta_discharge_start IS NOT NULL AND (f.eta_discharge_start::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
+            (f.eta_vessel_complete_discharge IS NOT NULL AND (f.eta_vessel_complete_discharge::date - CURRENT_DATE) BETWEEN 1 AND 2)
+          ) AS discharge_d_minus_2,
+          (
+            (f.eta_discharge_arrival IS NOT NULL AND (f.eta_discharge_arrival::date - CURRENT_DATE) > 7) OR
+            (f.eta_discharge_berthed IS NOT NULL AND (f.eta_discharge_berthed::date - CURRENT_DATE) > 7) OR
+            (f.eta_discharge_start IS NOT NULL AND (f.eta_discharge_start::date - CURRENT_DATE) > 7) OR
+            (f.eta_vessel_complete_discharge IS NOT NULL AND (f.eta_vessel_complete_discharge::date - CURRENT_DATE) > 7)
+          ) AS discharge_more_than_7d
+        FROM filtered f
+      )
+      SELECT
+        COUNT(*)::bigint AS total_count,
+        COUNT(*) FILTER (WHERE effective_status = 'PLANNED')::bigint AS planned_count,
+        COUNT(*) FILTER (WHERE effective_status = 'IN_PROGRESS')::bigint AS in_progress_count,
+        COUNT(*) FILTER (WHERE effective_status = 'LOADING')::bigint AS loading_count,
+        COUNT(*) FILTER (WHERE effective_status = 'IN_TRANSIT')::bigint AS in_transit_count,
+        COUNT(*) FILTER (WHERE effective_status = 'ARRIVED')::bigint AS arrived_count,
+        COUNT(*) FILTER (WHERE effective_status = 'UNLOADING')::bigint AS unloading_count,
+        COUNT(*) FILTER (WHERE effective_status = 'COMPLETED')::bigint AS completed_count,
+        COUNT(*) FILTER (WHERE effective_status = 'CANCELLED')::bigint AS cancelled_count,
+        -- ETA Loading buckets
+        COUNT(*) FILTER (WHERE loading_no_eta)::bigint AS eta_loading_no_eta,
+        COUNT(*) FILTER (WHERE NOT loading_no_eta AND loading_delay)::bigint AS eta_loading_delay,
+        COUNT(*) FILTER (WHERE NOT loading_no_eta AND NOT loading_delay AND loading_d)::bigint AS eta_loading_d,
+        COUNT(*) FILTER (WHERE NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND loading_d_minus_2)::bigint AS eta_loading_d_minus_2,
+        COUNT(*) FILTER (WHERE NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND NOT loading_d_minus_2 AND loading_more_than_7d)::bigint AS eta_loading_more_than_7d,
+        -- ETA Discharge buckets
+        COUNT(*) FILTER (WHERE discharge_no_eta)::bigint AS eta_discharge_no_eta,
+        COUNT(*) FILTER (WHERE NOT discharge_no_eta AND discharge_delay)::bigint AS eta_discharge_delay,
+        COUNT(*) FILTER (WHERE NOT discharge_no_eta AND NOT discharge_delay AND discharge_d)::bigint AS eta_discharge_d,
+        COUNT(*) FILTER (WHERE NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND discharge_d_minus_2)::bigint AS eta_discharge_d_minus_2,
+        COUNT(*) FILTER (WHERE NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND NOT discharge_d_minus_2 AND discharge_more_than_7d)::bigint AS eta_discharge_more_than_7d
+      FROM enriched`;
     const countParams = [...innerParams, ...outerParams];
 
     const countResult = await query(countQuery, countParams);
-    const totalCount = parseInt(countResult.rows[0].count) || 0;
+    const totalCount = parseInt(countResult.rows[0]?.total_count) || 0;
+    const summaryRow = countResult.rows[0] || {};
 
     return res.json({
       success: true,
       data: {
         shipments: result.rows,
+        summary: {
+          total: totalCount,
+          status: {
+            planned: Number(summaryRow.planned_count || 0),
+            inProgress: Number(summaryRow.in_progress_count || 0),
+            loading: Number(summaryRow.loading_count || 0),
+            inTransit: Number(summaryRow.in_transit_count || 0),
+            arrived: Number(summaryRow.arrived_count || 0),
+            unloading: Number(summaryRow.unloading_count || 0),
+            completed: Number(summaryRow.completed_count || 0),
+            cancelled: Number(summaryRow.cancelled_count || 0),
+          },
+          etaLoading: {
+            moreThan7D: Number(summaryRow.eta_loading_more_than_7d || 0),
+            dMinus2: Number(summaryRow.eta_loading_d_minus_2 || 0),
+            d: Number(summaryRow.eta_loading_d || 0),
+            delay: Number(summaryRow.eta_loading_delay || 0),
+            noEta: Number(summaryRow.eta_loading_no_eta || 0),
+          },
+          etaDischarge: {
+            moreThan7D: Number(summaryRow.eta_discharge_more_than_7d || 0),
+            dMinus2: Number(summaryRow.eta_discharge_d_minus_2 || 0),
+            d: Number(summaryRow.eta_discharge_d || 0),
+            delay: Number(summaryRow.eta_discharge_delay || 0),
+            noEta: Number(summaryRow.eta_discharge_no_eta || 0),
+          },
+        },
         pagination: {
           total: totalCount,
           page: Number(page),
@@ -488,13 +685,8 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
 
     logger.info('Update shipment request:', { id, updateData });
 
-    // Validate required fields
-    if (!updateData.shipment_id) {
-      return res.status(400).json({
-        success: false,
-        error: { message: 'Shipment ID is required' },
-      });
-    }
+    // shipment_id is not required for updates.
+    // The route param (`id`) uniquely identifies the shipment (UUID) or the STO number to resolve to a shipment UUID.
 
     // Check if id is a UUID or STO number
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -925,17 +1117,17 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           COALESCE(vlpd.eta_vessel_berthed_at_discharge_port::date, s.eta_discharge_berthed) as eta_vessel_berthed_at_discharge_port,
           COALESCE(vlpd.eta_vessel_start_discharging::date, s.eta_discharge_start) as eta_vessel_start_discharging,
           COALESCE(vlpd.eta_vessel_complete_discharge::date, s.eta_discharge_complete) as eta_vessel_complete_discharge,
-          -- Calculate Loading Rate: Quantity Receive / (ATA Completed Loading - ATA Start Loading) in hours
+          -- Loading rate (kg/day): Quantity Receive / (ATA Completed Loading − ATA Start Loading) in days
           CASE 
             WHEN s.actual_vessel_qty_receive > 0 
               AND COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed) IS NOT NULL
               AND COALESCE(s.ata_loading_start, vlp1.ata_loading_start) IS NOT NULL
             THEN s.actual_vessel_qty_receive / NULLIF(
-              EXTRACT(EPOCH FROM (COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed) - COALESCE(s.ata_loading_start, vlp1.ata_loading_start))) / 3600.0,
+              EXTRACT(EPOCH FROM (COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed) - COALESCE(s.ata_loading_start, vlp1.ata_loading_start))) / 86400.0,
               0
             )
             ELSE NULL
-          END as loading_rate_mt_per_hour,
+          END as loading_rate_kg_per_day,
           -- Quality fields from first loading port
           vlp1.quality_ffa as quality_at_loading_loc_1_ffa,
           vlp1.quality_mi as quality_at_loading_loc_1_mi,
@@ -1033,17 +1225,17 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           MAX(vlpd.eta_vessel_berthed_at_discharge_port::date) as eta_vessel_berthed_at_discharge_port,
           MAX(vlpd.eta_vessel_start_discharging::date) as eta_vessel_start_discharging,
           MAX(vlpd.eta_vessel_complete_discharge::date) as eta_vessel_complete_discharge,
-          -- Calculate Loading Rate: Quantity Receive / (ATA Completed Loading - ATA Start Loading) in hours
+          -- Loading rate (kg/day): Quantity Receive / (ATA Completed Loading − ATA Start Loading) in days
           CASE 
             WHEN MAX(s.actual_vessel_qty_receive) > 0 
               AND MAX(COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed)) IS NOT NULL
               AND MAX(COALESCE(s.ata_loading_start, vlp1.ata_loading_start)) IS NOT NULL
             THEN MAX(s.actual_vessel_qty_receive) / NULLIF(
-              EXTRACT(EPOCH FROM (MAX(COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed)) - MAX(COALESCE(s.ata_loading_start, vlp1.ata_loading_start)))) / 3600.0,
+              EXTRACT(EPOCH FROM (MAX(COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed)) - MAX(COALESCE(s.ata_loading_start, vlp1.ata_loading_start)))) / 86400.0,
               0
             )
             ELSE NULL
-          END as loading_rate_mt_per_hour,
+          END as loading_rate_kg_per_day,
           -- Quality fields from first loading port
           MAX(vlp1.quality_ffa) as quality_at_loading_loc_1_ffa,
           MAX(vlp1.quality_mi) as quality_at_loading_loc_1_mi,
@@ -1254,14 +1446,14 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
     // Prefer explicit id from body, then fallback to route param (for PUT /:shipmentId/loading-ports/:portId)
     const id = bodyId || portId;
 
-    // Calculate loading rate if we have the required data
+    // Loading rate (kg/day): quantity_at_loading_port / (ATA completed − ATA start) in days
     let loading_rate = null;
-    if (ata_loading_completed && ata_loading_start && quantity_at_loading_port) {
-      const startTime = new Date(ata_loading_start);
-      const endTime = new Date(ata_loading_completed);
-      const hours = (endTime.getTime() - startTime.getTime()) / (1000 * 60 * 60);
-      if (hours > 0) {
-        loading_rate = parseFloat(quantity_at_loading_port) / hours;
+    if (ata_loading_completed_n && ata_loading_start_n && quantity_at_loading_port) {
+      const startTime = new Date(ata_loading_start_n);
+      const endTime = new Date(ata_loading_completed_n);
+      const days = (endTime.getTime() - startTime.getTime()) / (1000 * 60 * 60 * 24);
+      if (days > 0) {
+        loading_rate = parseFloat(String(quantity_at_loading_port)) / days;
       }
     }
 
@@ -1413,6 +1605,337 @@ export const deleteVesselLoadingPort = async (req: AuthRequest, res: Response) =
       success: false,
       error: { message: 'Failed to delete vessel loading port' },
     });
+  }
+};
+
+// =========================
+// Daily Planning Deliverables (SEA Shipments)
+// =========================
+
+const MAX_BULK_SHIPMENT_PLANNING_ROWS = 10000;
+
+function normalizePlanningHeader(v: unknown): string {
+  return String(v ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function findPlanningColumnIndex(headers: unknown[], candidates: string[]): number {
+  const norm = headers.map(normalizePlanningHeader);
+  const candNorm = candidates.map(normalizePlanningHeader);
+  for (let i = 0; i < norm.length; i++) {
+    const h = norm[i].replace(/\s/g, '_');
+    for (const c of candNorm) {
+      const cc = c.replace(/\s/g, '_');
+      if (norm[i] === c || h === cc) return i;
+    }
+  }
+  return -1;
+}
+
+function parsePlanningSheetToMatrix(buffer: Buffer): string[][] {
+  const wb = XLSX.read(buffer, { type: 'buffer' });
+  const name = wb.SheetNames[0];
+  if (!name) throw new Error('The file has no worksheets');
+  const ws = wb.Sheets[name];
+  const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false }) as unknown[][];
+  return matrix
+    .map((row) => row.map((c) => (c === null || c === undefined ? '' : String(c))))
+    .filter((row) => row.some((c) => String(c).trim() !== ''));
+}
+
+function toIsoDate10FromCell(raw: unknown): string | null {
+  if (raw === null || raw === undefined) return null;
+  if (raw instanceof Date && !Number.isNaN(raw.getTime())) return raw.toISOString().slice(0, 10);
+  // DD/MM/YYYY
+  const s0 = String(raw).trim();
+  const dmy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s0);
+  if (dmy) {
+    const dd = Number(dmy[1]);
+    const mm = Number(dmy[2]);
+    const yyyy = Number(dmy[3]);
+    if (dd >= 1 && dd <= 31 && mm >= 1 && mm <= 12) {
+      const d = new Date(Date.UTC(yyyy, mm - 1, dd));
+      return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+    }
+    return null;
+  }
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})/.exec(s0);
+  if (ymd) return s0.slice(0, 10);
+  const d = new Date(s0);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+export const downloadShipmentDailyPlanningDeliverablesTemplate = async (_req: AuthRequest, res: Response) => {
+  const header = 'contract_ext_no,date,quantity_delivered';
+  const example = 'EXT-12345,15/04/2026,1000';
+  const bom = '\ufeff';
+  const body = `${bom}${header}\n${example}\n`;
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="shipment_daily_planning_deliverables_template.csv"');
+  return res.status(200).send(body);
+};
+
+export const getShipmentDailyDeliverablesCalendar = async (req: AuthRequest, res: Response) => {
+  try {
+    const from = String((req.query as any).from || '').slice(0, 10);
+    const to = String((req.query as any).to || '').slice(0, 10);
+    if (!from || !to) {
+      return res.status(400).json({ success: false, error: { message: 'from and to are required (YYYY-MM-DD)' } });
+    }
+
+    const result = await query(
+      `
+      WITH latest_spd AS (
+        SELECT DISTINCT ON (spd.contract_number)
+          spd.contract_number,
+          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no,
+          spd.data AS data
+        FROM sap_processed_data spd
+        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      )
+      SELECT
+        s.id,
+        s.shipment_id,
+        c.contract_id AS contract_number,
+        COALESCE(NULLIF(TRIM(c.sto_number::text), ''), NULL) AS sto_number,
+        COALESCE(l.contract_ext_no, NULL) AS contract_ext_no,
+        c.supplier,
+        c.product,
+        c.group_name,
+        c.source_type,
+        COALESCE(l.data->'contract'->>'ltc_spot', c.contract_type::text) AS lt_spot,
+        c.delivery_start_date,
+        c.delivery_end_date,
+        s.bl_quantity,
+        s.quantity_shipped,
+        s.actual_vessel_qty_receive,
+        GREATEST(COALESCE(c.quantity_ordered, 0) - COALESCE(s.actual_vessel_qty_receive, s.bl_quantity, s.quantity_shipped, 0), 0) AS outstanding_quantity,
+        s.daily_deliverables,
+        s.updated_at
+      FROM shipments s
+      LEFT JOIN contracts c ON s.contract_id = c.id
+      LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+      WHERE
+        COALESCE(c.delivery_start_date, s.shipment_date, c.delivery_end_date, s.arrival_date) <= $2::date
+        AND COALESCE(c.delivery_end_date, s.arrival_date, c.delivery_start_date, s.shipment_date) >= $1::date
+      ORDER BY COALESCE(c.delivery_start_date, s.shipment_date) ASC NULLS LAST, s.shipment_id ASC
+      `,
+      [from, to],
+    );
+
+    return res.json({ success: true, data: result.rows });
+  } catch (error) {
+    logger.error('Get shipment daily deliverables calendar error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load shipment daily planning deliverables' } });
+  }
+};
+
+export const updateShipmentDailyDeliverables = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { daily_deliverables } = req.body || {};
+
+    const curRes = await query(
+      `SELECT s.id,
+              c.delivery_start_date,
+              c.delivery_end_date,
+              COALESCE(s.bl_quantity, s.quantity_shipped, s.actual_vessel_qty_receive) AS max_qty
+       FROM shipments s
+       LEFT JOIN contracts c ON s.contract_id = c.id
+       WHERE s.id = $1
+       LIMIT 1`,
+      [id],
+    );
+    if (curRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { message: 'Shipment not found' } });
+    }
+    const cur = curRes.rows[0];
+
+    const dd = normalizeAndValidateShipmentDailyDeliverables({
+      daily_deliverables,
+      startRaw: cur.delivery_start_date,
+      endRaw: cur.delivery_end_date,
+      maxQtyRaw: cur.max_qty,
+    });
+    if (!dd.ok) {
+      return res.status(400).json({ success: false, error: { message: dd.message } });
+    }
+
+    const upd = await query(
+      `UPDATE shipments
+       SET daily_deliverables = $2::jsonb, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING *`,
+      [id, JSON.stringify(dd.rows)],
+    );
+
+    return res.json({ success: true, data: upd.rows[0], message: 'Shipment daily planning deliverables updated successfully' });
+  } catch (error) {
+    logger.error('Update shipment daily deliverables error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to update shipment daily planning deliverables' } });
+  }
+};
+
+export const bulkUploadShipmentDailyDeliverables = async (req: AuthRequest, res: Response) => {
+  try {
+    const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+    if (!file?.buffer) {
+      return res.status(400).json({ success: false, error: { message: 'File is required (CSV or Excel)' } });
+    }
+
+    let matrix: string[][];
+    try {
+      matrix = parsePlanningSheetToMatrix(file.buffer);
+    } catch (e: any) {
+      return res.status(400).json({ success: false, error: { message: e?.message || 'Could not read spreadsheet' } });
+    }
+    if (matrix.length < 2) {
+      return res.status(400).json({ success: false, error: { message: 'File must include a header row and at least one data row' } });
+    }
+
+    const headerRow = matrix[0];
+    const extIdx = findPlanningColumnIndex(headerRow, ['contract_ext_no', 'contract ext no', 'ext no']);
+    const dateIdx = findPlanningColumnIndex(headerRow, ['date', 'tanggal']);
+    const qtyIdx = findPlanningColumnIndex(headerRow, ['quantity_delivered', 'quantity delivered', 'quantity', 'qty']);
+    if (extIdx < 0 || dateIdx < 0 || qtyIdx < 0) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Missing required columns. Expected headers: contract_ext_no, date, quantity_delivered' },
+      });
+    }
+
+    type ParsedLine = { lineNumber: number; contract_ext_no: string; dateRaw: unknown; qtyRaw: unknown };
+    const lines: ParsedLine[] = [];
+    const rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[] = [];
+
+    for (let rIdx = 1; rIdx < matrix.length; rIdx++) {
+      const row = matrix[rIdx];
+      const ext = String(row[extIdx] ?? '').trim();
+      const dateRaw = row[dateIdx];
+      const qtyCell = row[qtyIdx];
+      const emptyRow =
+        !ext &&
+        (dateRaw === undefined || dateRaw === null || String(dateRaw).trim() === '') &&
+        (qtyCell === undefined || qtyCell === null || String(qtyCell).trim() === '');
+      if (emptyRow) continue;
+
+      const lineNumber = rIdx + 1;
+      if (lines.length >= MAX_BULK_SHIPMENT_PLANNING_ROWS) {
+        rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext || '-', reason: `File exceeds maximum of ${MAX_BULK_SHIPMENT_PLANNING_ROWS} data rows` });
+        break;
+      }
+      if (!ext) {
+        rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: '-', reason: 'contract_ext_no is required' });
+        continue;
+      }
+      lines.push({ lineNumber, contract_ext_no: ext, dateRaw: dateRaw ?? '', qtyRaw: qtyCell });
+    }
+
+    const byExt = new Map<string, ParsedLine[]>();
+    for (const ln of lines) {
+      const k = ln.contract_ext_no.trim().toLowerCase();
+      const list = byExt.get(k) || [];
+      list.push(ln);
+      byExt.set(k, list);
+    }
+
+    const opFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string; shipment_ids?: string[] }[] = [];
+    let succeeded = 0;
+    let succeededRows = 0;
+
+    for (const [, group] of byExt.entries()) {
+      const ext = group[0].contract_ext_no.trim();
+      const rowNumbers = group.map((g) => g.lineNumber);
+      const dateToLast = new Map<string, number>();
+      let validLines = 0;
+
+      for (const g of group) {
+        const iso = toIsoDate10FromCell(g.dateRaw);
+        if (!iso) {
+          rowParseFailures.push({ rowNumber: g.lineNumber, contract_ext_no: ext, reason: 'date is missing or invalid (use DD/MM/YYYY or YYYY-MM-DD)' });
+          continue;
+        }
+        const qn = parseDailyDeliverableQuantity(g.qtyRaw);
+        if (qn === null || qn < 0) {
+          rowParseFailures.push({ rowNumber: g.lineNumber, contract_ext_no: ext, reason: 'quantity_delivered must be a valid non-negative number' });
+          continue;
+        }
+        dateToLast.set(iso, qn);
+        validLines += 1;
+      }
+      if (dateToLast.size === 0) continue;
+
+      const daily = Array.from(dateToLast.entries())
+        .map(([date, q]) => ({ date, quantity_delivered: q }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+
+      const shipRes = await query(
+        `SELECT s.id,
+                s.shipment_id,
+                c.delivery_start_date,
+                c.delivery_end_date,
+                COALESCE(s.bl_quantity, s.quantity_shipped, s.actual_vessel_qty_receive) AS max_qty
+         FROM shipments s
+         LEFT JOIN contracts c ON s.contract_id = c.id
+         LEFT JOIN LATERAL (
+           SELECT NULLIF(trim(COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No')), '') AS ext_no
+           FROM sap_processed_data spd
+           WHERE spd.contract_number = c.contract_id
+           ORDER BY spd.created_at DESC NULLS LAST
+           LIMIT 1
+         ) ext ON true
+         WHERE trim(upper(COALESCE(ext.ext_no, ''))) = trim(upper($1::text))`,
+        [ext],
+      );
+
+      if (shipRes.rows.length === 0) {
+        opFailures.push({ contract_ext_no: ext, rowNumbers, reason: 'No shipment found for this Contract Ext No' });
+        continue;
+      }
+      if (shipRes.rows.length > 1) {
+        opFailures.push({ contract_ext_no: ext, rowNumbers, reason: 'Multiple shipments share this Contract Ext No; cannot apply upload automatically', shipment_ids: shipRes.rows.map((r: any) => r.shipment_id) });
+        continue;
+      }
+
+      const cur = shipRes.rows[0];
+      const dd = normalizeAndValidateShipmentDailyDeliverables({
+        daily_deliverables: daily,
+        startRaw: cur.delivery_start_date,
+        endRaw: cur.delivery_end_date,
+        maxQtyRaw: cur.max_qty,
+      });
+      if (!dd.ok) {
+        opFailures.push({ contract_ext_no: ext, rowNumbers, reason: dd.message, shipment_ids: [cur.shipment_id] });
+        continue;
+      }
+
+      await query(
+        `UPDATE shipments SET daily_deliverables = $2::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [cur.id, JSON.stringify(dd.rows)],
+      );
+      succeeded += 1;
+      succeededRows += validLines;
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        processedRows: lines.length,
+        succeededOperations: succeeded,
+        failedOperations: opFailures.length,
+        succeededRows,
+        rowLevelIssues: rowParseFailures.length,
+        operationLevelFailures: opFailures.length,
+        rowParseFailures,
+        operationFailures: opFailures,
+      },
+    });
+  } catch (error) {
+    logger.error('Bulk upload shipment daily planning deliverables error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to process upload' } });
   }
 };
 

@@ -3,7 +3,11 @@ type DailyDeliverableInputRow = {
   quantity_delivered?: unknown;
 };
 
-/** Parses quantities from UI or CSV (allows thousands separators like `1,234.5`). */
+export type NormalizedDailyDeliverableRow = {
+  date: string; // YYYY-MM-DD
+  quantity_delivered: number;
+};
+
 export function parseDailyDeliverableQuantity(raw: unknown): number | null {
   if (raw === null || raw === undefined) return null;
   const s = String(raw).trim();
@@ -15,12 +19,7 @@ export function parseDailyDeliverableQuantity(raw: unknown): number | null {
   return n;
 }
 
-export type NormalizedDailyDeliverableRow = {
-  date: string; // YYYY-MM-DD
-  quantity_delivered: number;
-};
-
-export function normalizeAndValidateDailyDeliverables(args: {
+export function normalizeAndValidateShipmentDailyDeliverables(args: {
   daily_deliverables: unknown;
   startRaw: unknown;
   endRaw: unknown;
@@ -77,7 +76,6 @@ export function normalizeAndValidateDailyDeliverables(args: {
     if (qn === null || qn < 0) {
       return { ok: false, message: `Daily deliverables row ${idx + 1}: quantity must be a valid number` };
     }
-
     const dt = new Date(d);
     if (Number.isNaN(dt.getTime())) {
       return { ok: false, message: `Daily deliverables row ${idx + 1}: invalid date` };
@@ -91,7 +89,7 @@ export function normalizeAndValidateDailyDeliverables(args: {
       return { ok: false, message: `Daily deliverables row ${idx + 1}: date cannot be after Due Date Delivery End` };
     }
     if (maxQty != null && qn > maxQty) {
-      return { ok: false, message: `Daily deliverables row ${idx + 1}: quantity cannot exceed Quantity Delivered` };
+      return { ok: false, message: `Daily deliverables row ${idx + 1}: quantity cannot exceed B/L Quantity` };
     }
 
     sum += qn;
@@ -99,7 +97,7 @@ export function normalizeAndValidateDailyDeliverables(args: {
   }
 
   if (maxQty != null && sum > maxQty) {
-    return { ok: false, message: 'Sum of daily deliverables quantity cannot exceed Quantity Delivered' };
+    return { ok: false, message: 'Sum of daily deliverables quantity cannot exceed B/L Quantity' };
   }
 
   return { ok: true, rows };

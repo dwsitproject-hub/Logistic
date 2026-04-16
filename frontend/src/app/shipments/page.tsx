@@ -1,17 +1,21 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
+import { useEffect, useMemo, useRef, useState, Suspense, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, ChevronDown, ChevronUp, ChevronRight, ArrowDown, ArrowUp, Minus, SlidersHorizontal } from 'lucide-react'
+import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, ChevronDown, ChevronUp, ChevronRight, ArrowDown, ArrowUp, Minus, SlidersHorizontal, ArrowLeft, ArrowRight } from 'lucide-react'
 import api from '@/lib/api'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
+import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { format } from 'date-fns'
 import {
   usePermissions,
   canCreatePermission,
@@ -194,8 +198,48 @@ function ShipmentsPageContent() {
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
   const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
 
-  const [viewOption, setViewOption] = useState<'all' | 'sto' | 'contract' | 'vessel' | 'port_loading' | 'port_discharge'>('all')
+  const [viewOption, setViewOption] = useState<'all' | 'sto' | 'contract' | 'vessel' | 'port_loading' | 'port_discharge' | 'daily_planning'>('all')
   const [viewFilterValue, setViewFilterValue] = useState('')
+
+  // Daily Planning Deliverables (Shipments) calendar state
+  type ShipmentCalendarRow = {
+    id: string
+    shipment_id: string
+    sto_number?: string
+    contract_number?: string
+    contract_ext_no?: string
+    supplier?: string
+    product?: string
+    group_name?: string
+    source_type?: string
+    lt_spot?: string
+    delivery_start_date?: string
+    delivery_end_date?: string
+    bl_quantity?: number
+    quantity_shipped?: number
+    actual_vessel_qty_receive?: number
+    outstanding_quantity?: number
+    daily_deliverables?: Array<{ date: string; quantity_delivered: number }>
+  }
+
+  const [shipCalendarMonth, setShipCalendarMonth] = useState(() => {
+    const d = new Date()
+    return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
+  const [shipCalendarRows, setShipCalendarRows] = useState<ShipmentCalendarRow[]>([])
+  const [shipCalendarLoading, setShipCalendarLoading] = useState(false)
+  const [shipCalendarSavingKey, setShipCalendarSavingKey] = useState<string | null>(null)
+  const [shipCalendarEditing, setShipCalendarEditing] = useState<{ id: string; date: string } | null>(null)
+  const [shipCalendarEditValue, setShipCalendarEditValue] = useState('')
+  const shipPlanningFileInputRef = useRef<HTMLInputElement | null>(null)
+  const [shipPlanningUploading, setShipPlanningUploading] = useState(false)
+  const [shipPlanningUploadOpen, setShipPlanningUploadOpen] = useState(false)
+  const [shipPlanningUploadSummary, setShipPlanningUploadSummary] = useState<any>(null)
+
+  const shipPlanningYearOptions = useMemo(() => {
+    const y = new Date().getFullYear()
+    return Array.from({ length: 18 }, (_, i) => y - 8 + i)
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -210,9 +254,18 @@ function ShipmentsPageContent() {
     return () => window.removeEventListener('mousedown', onMouseDown)
   }, [openHeaderFilterId])
   const [uploading, setUploading] = useState(false)
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [dateFrom, setDateFrom] = useState(() => {
+    const now = new Date()
+    const yyyy = now.getFullYear()
+    return `${yyyy}-01-01`
+  })
+  const [dateTo, setDateTo] = useState(() => {
+    const now = new Date()
+    const yyyy = now.getFullYear()
+    return `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  })
   const [uploadingId, setUploadingId] = useState<string>('')
+  const [shipmentsSummary, setShipmentsSummary] = useState<any>(null)
   
   // Vessel loading ports state
   const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null)
@@ -643,9 +696,11 @@ function ShipmentsPageContent() {
       if (response.data && response.data.success && response.data.data && response.data.data.shipments) {
         setShipments(response.data.data.shipments)
         setTotalCount(Number(response.data.data.pagination?.total || 0))
+        setShipmentsSummary(response.data.data.summary || null)
       } else {
         console.error('Unexpected response structure:', response.data)
         setShipments([])
+        setShipmentsSummary(null)
         alert('Received unexpected response format from server. Please check console for details.')
       }
     } catch (error: any) {
@@ -665,8 +720,77 @@ function ShipmentsPageContent() {
       
       alert(`Failed to load shipments: ${errorMessage}\n\nPlease check the console for more details.`)
       setShipments([])
+      setShipmentsSummary(null)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const shipIso = (d: Date) => {
+    const yyyy = d.getFullYear()
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    return `${yyyy}-${mm}-${dd}`
+  }
+
+  const fetchShipmentCalendarRows = useCallback(async () => {
+    if (viewOption !== 'daily_planning') return
+    setShipCalendarLoading(true)
+    try {
+      const from = new Date(shipCalendarMonth.getFullYear(), shipCalendarMonth.getMonth(), 1)
+      const to = new Date(shipCalendarMonth.getFullYear(), shipCalendarMonth.getMonth() + 1, 0)
+      const params = new URLSearchParams()
+      params.set('from', shipIso(from))
+      params.set('to', shipIso(to))
+      const res = await api.get(`/shipments/daily-planning-deliverables?${params.toString()}`)
+      setShipCalendarRows((res.data?.data || []) as ShipmentCalendarRow[])
+    } catch (e: any) {
+      alert(e?.response?.data?.error?.message || e?.message || 'Failed to load shipment daily planning deliverables')
+      setShipCalendarRows([])
+    } finally {
+      setShipCalendarLoading(false)
+    }
+  }, [shipCalendarMonth, viewOption])
+
+  useEffect(() => {
+    if (viewOption !== 'daily_planning') return
+    fetchShipmentCalendarRows()
+  }, [viewOption, shipCalendarMonth, fetchShipmentCalendarRows])
+
+  const downloadShipmentPlanningTemplate = async () => {
+    try {
+      const res = await api.get('/shipments/daily-planning-deliverables/template', { responseType: 'blob' })
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv;charset=utf-8' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'shipment_daily_planning_deliverables_template.csv'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      alert(e?.response?.data?.error?.message || e?.message || 'Failed to download template')
+    }
+  }
+
+  const handleShipmentPlanningFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setShipPlanningUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await api.post('/shipments/daily-planning-deliverables/bulk-upload', fd)
+      if (res.data?.data) {
+        setShipPlanningUploadSummary(res.data.data)
+        setShipPlanningUploadOpen(true)
+      }
+      await fetchShipmentCalendarRows()
+    } catch (err: any) {
+      alert(err?.response?.data?.error?.message || err?.message || 'Upload failed')
+    } finally {
+      setShipPlanningUploading(false)
     }
   }
 
@@ -782,9 +906,9 @@ function ShipmentsPageContent() {
     const headers = [
       'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Voyage No','Vessel Owner','Vessel Draft (m)','Vessel LOA (m)','Vessel Capacity (MT)','Hull Type','Charter Type','Vessel OA Budget','Vessel OA Actual','Estimated KM','Estimated NM','Average Vessel Speed','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','B/L Quantity (MT)','Actual Vessel Qty Receive (MT)','Difference Final Qty BL QTY','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID',
       // Loading port groups (1..3)
-      'LP1 Port Name','LP1 Quantity (MT)','LP1 ETA Arrival','LP1 ATA Arrival','LP1 ETA Berthed','LP1 ATA Berthed','LP1 ETA Load Start','LP1 ATA Load Start','LP1 ETA Load Completed','LP1 ATA Load Completed','LP1 ETA Sailed','LP1 ATA Sailed','LP1 Loading Rate (MT/h)',
-      'LP2 Port Name','LP2 Quantity (MT)','LP2 ETA Arrival','LP2 ATA Arrival','LP2 ETA Berthed','LP2 ATA Berthed','LP2 ETA Load Start','LP2 ATA Load Start','LP2 ETA Load Completed','LP2 ATA Load Completed','LP2 ETA Sailed','LP2 ATA Sailed','LP2 Loading Rate (MT/h)',
-      'LP3 Port Name','LP3 Quantity (MT)','LP3 ETA Arrival','LP3 ATA Arrival','LP3 ETA Berthed','LP3 ATA Berthed','LP3 ETA Load Start','LP3 ATA Load Start','LP3 ETA Load Completed','LP3 ATA Load Completed','LP3 ETA Sailed','LP3 ATA Sailed','LP3 Loading Rate (MT/h)'
+      'LP1 Port Name','LP1 Quantity (MT)','LP1 ETA Arrival','LP1 ATA Arrival','LP1 ETA Berthed','LP1 ATA Berthed','LP1 ETA Load Start','LP1 ATA Load Start','LP1 ETA Load Completed','LP1 ATA Load Completed','LP1 ETA Sailed','LP1 ATA Sailed','LP1 Loading Rate (MT/day)',
+      'LP2 Port Name','LP2 Quantity (MT)','LP2 ETA Arrival','LP2 ATA Arrival','LP2 ETA Berthed','LP2 ATA Berthed','LP2 ETA Load Start','LP2 ATA Load Start','LP2 ETA Load Completed','LP2 ATA Load Completed','LP2 ETA Sailed','LP2 ATA Sailed','LP2 Loading Rate (MT/day)',
+      'LP3 Port Name','LP3 Quantity (MT)','LP3 ETA Arrival','LP3 ATA Arrival','LP3 ETA Berthed','LP3 ATA Berthed','LP3 ETA Load Start','LP3 ATA Load Start','LP3 ETA Load Completed','LP3 ATA Load Completed','LP3 ETA Sailed','LP3 ATA Sailed','LP3 Loading Rate (MT/day)'
     ]
 
     // Sample row with STO Number and Contract Numbers
@@ -823,9 +947,9 @@ function ShipmentsPageContent() {
     const headers = [
       'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Voyage No','Vessel Owner','Vessel Draft (m)','Vessel Capacity (MT)','Hull Type','Charter Type','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID',
       // Loading port groups (1..3)
-      'LP1 Port Name','LP1 Quantity (MT)','LP1 ETA Arrival','LP1 ATA Arrival','LP1 ETA Berthed','LP1 ATA Berthed','LP1 ETA Load Start','LP1 ATA Load Start','LP1 ETA Load Completed','LP1 ATA Load Completed','LP1 ETA Sailed','LP1 ATA Sailed','LP1 Loading Rate (MT/h)',
-      'LP2 Port Name','LP2 Quantity (MT)','LP2 ETA Arrival','LP2 ATA Arrival','LP2 ETA Berthed','LP2 ATA Berthed','LP2 ETA Load Start','LP2 ATA Load Start','LP2 ETA Load Completed','LP2 ATA Load Completed','LP2 ETA Sailed','LP2 ATA Sailed','LP2 Loading Rate (MT/h)',
-      'LP3 Port Name','LP3 Quantity (MT)','LP3 ETA Arrival','LP3 ATA Arrival','LP3 ETA Berthed','LP3 ATA Berthed','LP3 ETA Load Start','LP3 ATA Load Start','LP3 ETA Load Completed','LP3 ATA Load Completed','LP3 ETA Sailed','LP3 ATA Sailed','LP3 Loading Rate (MT/h)'
+      'LP1 Port Name','LP1 Quantity (MT)','LP1 ETA Arrival','LP1 ATA Arrival','LP1 ETA Berthed','LP1 ATA Berthed','LP1 ETA Load Start','LP1 ATA Load Start','LP1 ETA Load Completed','LP1 ATA Load Completed','LP1 ETA Sailed','LP1 ATA Sailed','LP1 Loading Rate (MT/day)',
+      'LP2 Port Name','LP2 Quantity (MT)','LP2 ETA Arrival','LP2 ATA Arrival','LP2 ETA Berthed','LP2 ATA Berthed','LP2 ETA Load Start','LP2 ATA Load Start','LP2 ETA Load Completed','LP2 ATA Load Completed','LP2 ETA Sailed','LP2 ATA Sailed','LP2 Loading Rate (MT/day)',
+      'LP3 Port Name','LP3 Quantity (MT)','LP3 ETA Arrival','LP3 ATA Arrival','LP3 ETA Berthed','LP3 ATA Berthed','LP3 ETA Load Start','LP3 ATA Load Start','LP3 ETA Load Completed','LP3 ATA Load Completed','LP3 ETA Sailed','LP3 ATA Sailed','LP3 Loading Rate (MT/day)'
     ]
 
     // Use the shipments that are currently displayed on the page (filtered by search and other filters)
@@ -1133,10 +1257,7 @@ function ShipmentsPageContent() {
     })
   }
 
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleDateString()
-  }
+  const formatDate = (dateStr: string) => formatDateDMY(dateStr)
 
   const handleFilterChange = () => {
     setPage(1)
@@ -1293,7 +1414,7 @@ function ShipmentsPageContent() {
 
     setLoadingContractDetails(prev => ({ ...prev, [shipment.id]: true }))
     try {
-      const contractNumbers = shipment.contract_numbers.split(', ').filter(c => c.trim())
+      const contractNumbers = shipment.contract_numbers.split(/,\s*/).filter(c => c.trim())
       const stoForDetails = (shipment.sto_number && String(shipment.sto_number).trim()) || (shipment as any).sto_key || shipment.shipment_id
       const hasSto = Boolean(stoForDetails && String(stoForDetails).trim() !== '')
       
@@ -1361,7 +1482,7 @@ function ShipmentsPageContent() {
     } catch (error) {
       console.error('Error fetching contract details:', error)
       // Fallback on error
-      const contractNumbers = shipment.contract_numbers.split(', ').filter(c => c.trim())
+      const contractNumbers = shipment.contract_numbers.split(/,\s*/).filter(c => c.trim())
       const details = contractNumbers.map((contractNumber) => ({
         contract_number: contractNumber.trim(),
         contract_qty: 0,
@@ -1430,15 +1551,7 @@ function ShipmentsPageContent() {
   const collapseAll = () => setExpandedShipmentIds(new Set())
   const expandAll = (ids: string[]) => setExpandedShipmentIds(new Set(ids))
 
-  const formatShortDate = (dateStr: string) => {
-    if (!dateStr) return '-'
-    try {
-      const d = new Date(dateStr)
-      return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`
-    } catch {
-      return '-'
-    }
-  }
+  const formatShortDate = (dateStr: string) => formatDateDMY(dateStr)
 
   // Column visibility and sorting
   const columnStorageKey = 'shipments.compact.visibleColumns'
@@ -2741,10 +2854,7 @@ function ShipmentsPageContent() {
     }
   }
 
-  const formatDateTime = (dateStr: string) => {
-    if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleString()
-  }
+  const formatDateTime = (dateStr: string) => formatDateTimeDMY(dateStr)
 
   const getColumnWidth = (colId: string): string => {
     const widths: { [key: string]: string } = {
@@ -2881,7 +2991,17 @@ function ShipmentsPageContent() {
                 { status: 'COMPLETED', label: 'Completed', color: 'bg-green-100', textColor: 'text-green-800', badgeColor: 'bg-green-600' },
                 { status: 'CANCELLED', label: 'Cancelled', color: 'bg-red-100', textColor: 'text-red-800', badgeColor: 'bg-red-600' }
               ].map((statusInfo, index, array) => {
-                const count = filteredShipments.filter(s => s.status === statusInfo.status).length
+                const summary = shipmentsSummary?.status
+                const count =
+                  statusInfo.status === 'PLANNED' ? Number(summary?.planned ?? 0)
+                    : statusInfo.status === 'IN_PROGRESS' ? Number(summary?.inProgress ?? 0)
+                      : statusInfo.status === 'LOADING' ? Number(summary?.loading ?? 0)
+                        : statusInfo.status === 'IN_TRANSIT' ? Number(summary?.inTransit ?? 0)
+                          : statusInfo.status === 'ARRIVED' ? Number(summary?.arrived ?? 0)
+                            : statusInfo.status === 'UNLOADING' ? Number(summary?.unloading ?? 0)
+                              : statusInfo.status === 'COMPLETED' ? Number(summary?.completed ?? 0)
+                                : statusInfo.status === 'CANCELLED' ? Number(summary?.cancelled ?? 0)
+                                  : 0
                 return (
                   <div key={statusInfo.status} className="flex items-center flex-shrink-0">
                     <div className="relative">
@@ -2923,31 +3043,31 @@ function ShipmentsPageContent() {
                 {
                   key: 'MORE_THAN_7D' as const,
                   label: 'ETA Loading &gt; 7D',
-                  count: etaLoadingBuckets.counts.moreThan7D,
+                  count: Number(shipmentsSummary?.etaLoading?.moreThan7D ?? etaLoadingBuckets.counts.moreThan7D),
                   color: 'bg-sky-50',
                 },
                 {
                   key: 'D_MINUS_2' as const,
                   label: 'ETA Loading D-2',
-                  count: etaLoadingBuckets.counts.dMinus2,
+                  count: Number(shipmentsSummary?.etaLoading?.dMinus2 ?? etaLoadingBuckets.counts.dMinus2),
                   color: 'bg-amber-50',
                 },
                 {
                   key: 'D' as const,
                   label: 'ETA Loading D',
-                  count: etaLoadingBuckets.counts.d,
+                  count: Number(shipmentsSummary?.etaLoading?.d ?? etaLoadingBuckets.counts.d),
                   color: 'bg-emerald-50',
                 },
                 {
                   key: 'DELAY' as const,
                   label: 'ETA Loading Delay',
-                  count: etaLoadingBuckets.counts.delay,
+                  count: Number(shipmentsSummary?.etaLoading?.delay ?? etaLoadingBuckets.counts.delay),
                   color: 'bg-rose-50',
                 },
                 {
                   key: 'NO_ETA' as const,
                   label: 'No ETA',
-                  count: etaLoadingBuckets.counts.noEta,
+                  count: Number(shipmentsSummary?.etaLoading?.noEta ?? etaLoadingBuckets.counts.noEta),
                   color: 'bg-gray-50',
                 },
               ].map((bucket) => {
@@ -2986,31 +3106,31 @@ function ShipmentsPageContent() {
                 {
                   key: 'MORE_THAN_7D' as const,
                   label: 'ETA Discharge > 7D',
-                  count: etaDischargeBuckets.counts.moreThan7D,
+                  count: Number(shipmentsSummary?.etaDischarge?.moreThan7D ?? etaDischargeBuckets.counts.moreThan7D),
                   color: 'bg-sky-50',
                 },
                 {
                   key: 'D_MINUS_2' as const,
                   label: 'ETA Discharge D-2',
-                  count: etaDischargeBuckets.counts.dMinus2,
+                  count: Number(shipmentsSummary?.etaDischarge?.dMinus2 ?? etaDischargeBuckets.counts.dMinus2),
                   color: 'bg-amber-50',
                 },
                 {
                   key: 'D' as const,
                   label: 'ETA Discharge D',
-                  count: etaDischargeBuckets.counts.d,
+                  count: Number(shipmentsSummary?.etaDischarge?.d ?? etaDischargeBuckets.counts.d),
                   color: 'bg-emerald-50',
                 },
                 {
                   key: 'DELAY' as const,
                   label: 'ETA Discharge Delay',
-                  count: etaDischargeBuckets.counts.delay,
+                  count: Number(shipmentsSummary?.etaDischarge?.delay ?? etaDischargeBuckets.counts.delay),
                   color: 'bg-rose-50',
                 },
                 {
                   key: 'NO_ETA' as const,
                   label: 'No ETA',
-                  count: etaDischargeBuckets.counts.noEta,
+                  count: Number(shipmentsSummary?.etaDischarge?.noEta ?? etaDischargeBuckets.counts.noEta),
                   color: 'bg-gray-50',
                 },
               ].map((bucket) => {
@@ -3037,6 +3157,31 @@ function ShipmentsPageContent() {
             </div>
           </CardContent>
         </Card>
+
+        {/* View: List vs Daily Planning Deliverables */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm font-medium text-gray-700">View</div>
+          <div className="inline-flex rounded-lg border bg-white p-1">
+            <button
+              type="button"
+              onClick={() => setViewOption('all')}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                viewOption !== 'daily_planning' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              List
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewOption('daily_planning')}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                viewOption === 'daily_planning' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              Daily Planning Deliverables
+            </button>
+          </div>
+        </div>
 
         {/* Search & filters (below ETA buckets) */}
         <Card>
@@ -3079,7 +3224,7 @@ function ShipmentsPageContent() {
                 <select
                   value={viewOption}
                   onChange={(e) => {
-                    setViewOption(e.target.value as 'all' | 'sto' | 'contract' | 'vessel' | 'port_loading' | 'port_discharge')
+                    setViewOption(e.target.value as 'all' | 'sto' | 'contract' | 'vessel' | 'port_loading' | 'port_discharge' | 'daily_planning')
                     setViewFilterValue('')
                   }}
                   className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -3090,8 +3235,9 @@ function ShipmentsPageContent() {
                   <option value="vessel">Vessel Name</option>
                   <option value="port_loading">Port of Loading</option>
                   <option value="port_discharge">Port of Discharge</option>
+                  <option value="daily_planning">Daily Planning Deliverables</option>
                 </select>
-                {viewOption !== 'all' && (
+                {viewOption !== 'all' && viewOption !== 'daily_planning' && (
                   <Input
                     placeholder={`Filter by ${
                       viewOption === 'sto' ? 'STO Number'
@@ -3107,7 +3253,7 @@ function ShipmentsPageContent() {
                 )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm text-gray-600">Shipment Date:</span>
+                <span className="text-sm text-gray-600">Contract Date:</span>
                 <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-40" />
                 <span className="text-gray-500">to</span>
                 <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-40" />
@@ -3124,8 +3270,11 @@ function ShipmentsPageContent() {
                       setLateIndicatorFilter('ALL')
                       setViewOption('all')
                       setViewFilterValue('')
-                      setDateFrom('')
-                      setDateTo('')
+                      const now = new Date()
+                      const yyyy = now.getFullYear()
+                      const to = `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+                      setDateFrom(`${yyyy}-01-01`)
+                      setDateTo(to)
                       handleFilterChange()
                     }}
                     variant="ghost"
@@ -3141,7 +3290,281 @@ function ShipmentsPageContent() {
           </CardContent>
         </Card>
 
+        {viewOption === 'daily_planning' && (
+          <>
+          <Card>
+            <CardHeader className="space-y-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <CardTitle className="text-base flex flex-wrap items-center gap-2">
+                    Daily Planning Deliverables — Calendar
+                    <Badge variant="outline" className="text-[10px]">Unit: Kg</Badge>
+                  </CardTitle>
+                  <div className="text-xs text-gray-600 mt-1 max-w-xl">
+                    SEA shipment daily planning deliverables. Upload CSV/Excel (Contract Ext No, date, quantity) — validation matches the website (due date range, B/L quantity caps).
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" variant="outline" size="sm" onClick={downloadShipmentPlanningTemplate}>
+                    <Download className="h-4 w-4 mr-1" />
+                    Template
+                  </Button>
+                  <input
+                    ref={shipPlanningFileInputRef}
+                    type="file"
+                    accept=".csv,.xlsx,.xls,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                    className="hidden"
+                    onChange={handleShipmentPlanningFileChange}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={shipPlanningUploading}
+                    onClick={() => shipPlanningFileInputRef.current?.click()}
+                  >
+                    {shipPlanningUploading ? (
+                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    ) : (
+                      <Upload className="h-4 w-4 mr-1" />
+                    )}
+                    Upload
+                  </Button>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShipCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
+                >
+                  <ArrowLeft className="h-4 w-4 mr-1" /> Prev
+                </Button>
+                <select
+                  className="h-9 rounded-md border border-input bg-background px-2 text-sm min-w-[140px]"
+                  value={shipCalendarMonth.getMonth()}
+                  onChange={(e) => setShipCalendarMonth(new Date(shipCalendarMonth.getFullYear(), Number(e.target.value), 1))}
+                >
+                  {Array.from({ length: 12 }, (_, i) => (
+                    <option key={i} value={i}>
+                      {format(new Date(2000, i, 1), 'MMMM')}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="h-9 rounded-md border border-input bg-background px-2 text-sm min-w-[88px]"
+                  value={shipCalendarMonth.getFullYear()}
+                  onChange={(e) => setShipCalendarMonth(new Date(Number(e.target.value), shipCalendarMonth.getMonth(), 1))}
+                >
+                  {shipPlanningYearOptions.map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShipCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1))}
+                >
+                  Next <ArrowRight className="h-4 w-4 ml-1" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const d = new Date()
+                    setShipCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1))
+                  }}
+                >
+                  Today
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                {shipCalendarLoading ? (
+                  <div className="text-center py-10 text-gray-500">Loading…</div>
+                ) : shipCalendarRows.length === 0 ? (
+                  <div className="text-center py-10 text-gray-500">No shipments in this month window</div>
+                ) : (
+                  <table className="min-w-[1400px] w-full text-xs border-separate border-spacing-0">
+                    <thead className="sticky top-0 z-10">
+                      <tr className="bg-gray-100">
+                        <th className="sticky left-0 z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200 min-w-[220px]">
+                          Shipment / STO
+                        </th>
+                        <th className="sticky left-[220px] z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200 min-w-[260px]">
+                          Contract Ext No / Supplier
+                        </th>
+                        <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Due Start</th>
+                        <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Due End</th>
+                        <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">B/L Qty</th>
+                        {Array.from({ length: new Date(shipCalendarMonth.getFullYear(), shipCalendarMonth.getMonth() + 1, 0).getDate() }, (_, i) => i + 1).map((d) => (
+                          <th key={d} className="px-2 py-2 text-right font-semibold text-gray-700 border-b border-gray-200 tabular-nums">{d}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white">
+                      {shipCalendarRows.map((r) => {
+                        const daysInMonth = new Date(shipCalendarMonth.getFullYear(), shipCalendarMonth.getMonth() + 1, 0).getDate()
+                        const dayIso = (day: number) => {
+                          const yyyy = shipCalendarMonth.getFullYear()
+                          const mm = String(shipCalendarMonth.getMonth() + 1).padStart(2, '0')
+                          const dd = String(day).padStart(2, '0')
+                          return `${yyyy}-${mm}-${dd}`
+                        }
+                        const getQty = (date: string) => {
+                          const hit = (r.daily_deliverables || []).find((x) => (x?.date || '').slice(0, 10) === date)
+                          return hit ? Number(hit.quantity_delivered || 0) : 0
+                        }
+                        const dueStart = r.delivery_start_date ? formatDateDMY(r.delivery_start_date) : '-'
+                        const dueEnd = r.delivery_end_date ? formatDateDMY(r.delivery_end_date) : '-'
+                        const blQty = Number(r.bl_quantity ?? r.quantity_shipped ?? 0)
+                        return (
+                          <tr key={r.id} className="hover:bg-gray-50">
+                            <td className="sticky left-0 z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[220px] align-top">
+                              <div className="font-semibold text-gray-900 truncate" title={r.shipment_id}>{r.shipment_id}</div>
+                              <div className="text-[10px] text-gray-500 truncate" title={r.sto_number || ''}>STO: {r.sto_number || '—'}</div>
+                            </td>
+                            <td className="sticky left-[220px] z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[260px] align-top">
+                              <div className="font-medium text-gray-900 whitespace-normal break-words" title={r.contract_ext_no || ''}>{r.contract_ext_no || '—'}</div>
+                              <div className="text-[10px] text-gray-500 whitespace-normal break-words" title={r.supplier || ''}>{r.supplier || '—'}</div>
+                            </td>
+                            <td className="px-3 py-2 border-b border-gray-100 tabular-nums">{dueStart}</td>
+                            <td className="px-3 py-2 border-b border-gray-100 tabular-nums">{dueEnd}</td>
+                            <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums">{blQty ? `${formatNumber(blQty)} Kg` : '—'}</td>
+                            {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
+                              const date = dayIso(d)
+                              const qty = getQty(date)
+                              const key = `${r.id}:${date}`
+                              const isEditing = shipCalendarEditing?.id === r.id && shipCalendarEditing?.date === date
+                              const isSaving = shipCalendarSavingKey === key
+                              return (
+                                <td
+                                  key={date}
+                                  className={`px-2 py-1.5 border-b border-gray-100 text-right tabular-nums ${isEditing ? 'bg-amber-50' : ''}`}
+                                  onClick={() => {
+                                    if (isSaving) return
+                                    setShipCalendarEditing({ id: r.id, date })
+                                    setShipCalendarEditValue(qty ? String(qty) : '')
+                                  }}
+                                >
+                                  {isEditing ? (
+                                    <div className="flex items-center justify-end gap-1">
+                                      <input
+                                        autoFocus
+                                        value={shipCalendarEditValue}
+                                        onChange={(e) => setShipCalendarEditValue(e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Escape') setShipCalendarEditing(null)
+                                          if (e.key === 'Enter') (async () => {
+                                            const rawValue = shipCalendarEditValue
+                                            const q = rawValue.trim() === '' ? null : Number(String(rawValue).replace(/,/g, ''))
+                                            if (q != null && (!Number.isFinite(q) || q < 0)) {
+                                              alert('Quantity must be a valid number (>= 0)')
+                                              return
+                                            }
+                                            const existing = (r.daily_deliverables || []).slice()
+                                            const next = existing.filter((x) => (x?.date || '').slice(0, 10) !== date)
+                                            if (q != null && q !== 0) {
+                                              next.push({ date, quantity_delivered: q })
+                                              next.sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+                                            }
+                                            setShipCalendarSavingKey(key)
+                                            try {
+                                              const res = await api.put(`/shipments/${r.id}/daily-planning-deliverables`, { daily_deliverables: next })
+                                              if (res.data?.success) {
+                                                setShipCalendarRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, daily_deliverables: res.data.data.daily_deliverables || next } : x)))
+                                                setShipCalendarEditing(null)
+                                                setShipCalendarEditValue('')
+                                              }
+                                            } catch (e2: any) {
+                                              alert(e2?.response?.data?.error?.message || e2?.message || 'Failed to update daily deliverables')
+                                            } finally {
+                                              setShipCalendarSavingKey(null)
+                                            }
+                                          })()
+                                        }}
+                                        onBlur={() => setShipCalendarEditing(null)}
+                                        className="w-[64px] h-7 px-2 rounded border bg-white text-right text-xs"
+                                        placeholder="0"
+                                      />
+                                      {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-500" /> : null}
+                                    </div>
+                                  ) : qty ? (
+                                    <span className="font-medium text-slate-900">{formatNumber(qty)}</span>
+                                  ) : (
+                                    <span className="text-gray-300">—</span>
+                                  )}
+                                </td>
+                              )
+                            })}
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Dialog open={shipPlanningUploadOpen} onOpenChange={setShipPlanningUploadOpen}>
+            <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Shipment daily planning upload result</DialogTitle>
+              </DialogHeader>
+              {shipPlanningUploadSummary ? (
+                <div className="space-y-3 text-sm">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    <div className="rounded-md border bg-slate-50 px-3 py-2">
+                      <div className="text-xs text-muted-foreground">Rows processed</div>
+                      <div className="text-lg font-semibold tabular-nums">{shipPlanningUploadSummary.processedRows}</div>
+                    </div>
+                    <div className="rounded-md border bg-green-50 px-3 py-2">
+                      <div className="text-xs text-muted-foreground">Succeeded</div>
+                      <div className="text-lg font-semibold tabular-nums text-green-800">{shipPlanningUploadSummary.succeededOperations}</div>
+                    </div>
+                    <div className="rounded-md border bg-red-50 px-3 py-2">
+                      <div className="text-xs text-muted-foreground">Failed</div>
+                      <div className="text-lg font-semibold tabular-nums text-red-800">{shipPlanningUploadSummary.failedOperations}</div>
+                    </div>
+                  </div>
+                  {(shipPlanningUploadSummary.rowParseFailures?.length ?? 0) > 0 ? (
+                    <div>
+                      <div className="font-medium text-gray-900 mb-2">Row issues</div>
+                      <ul className="max-h-40 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
+                        {shipPlanningUploadSummary.rowParseFailures.map((f: any, i: number) => (
+                          <li key={`spr-${i}`}>
+                            <span className="font-mono">Line {f.rowNumber}</span>{f.contract_ext_no ? ` · ${f.contract_ext_no}` : ''}: {f.reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {(shipPlanningUploadSummary.operationFailures?.length ?? 0) > 0 ? (
+                    <div>
+                      <div className="font-medium text-gray-900 mb-2">Failures</div>
+                      <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-2 p-2">
+                        {shipPlanningUploadSummary.operationFailures.map((f: any, i: number) => (
+                          <li key={`spf-${i}`}>
+                            <span className="font-semibold">{f.contract_ext_no}</span>
+                            {f.shipment_ids?.length ? <span className="text-gray-600"> · Shipments: {f.shipment_ids.join(', ')}</span> : null}
+                            {f.rowNumbers?.length ? <span className="text-gray-600"> (rows {f.rowNumbers.join(', ')})</span> : null}
+                            : {f.reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </DialogContent>
+          </Dialog>
+          </>
+        )}
+
         {/* Shipments List */}
+        {viewOption !== 'daily_planning' && (
         <Card>
           <CardHeader>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -4076,6 +4499,7 @@ function ShipmentsPageContent() {
               )}
           </CardContent>
         </Card>
+        )}
       </div>
 
       {/* Loading Ports Modal */}
@@ -4292,15 +4716,17 @@ function ShipmentsPageContent() {
                           <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_complete_discharge)}</div>
                         </div>
                         <div>
-                          <div className="text-gray-500">Loading Rate (Kg/hour)</div>
+                          <div className="text-gray-500">Loading Rate (Kg/day)</div>
                           <div className="font-semibold text-blue-700">
-                            {shipmentInfo.loading_rate_mt_per_hour !== null && shipmentInfo.loading_rate_mt_per_hour !== undefined 
-                              ? formatNumber(shipmentInfo.loading_rate_mt_per_hour) 
-                              : '-'}
+                            {shipmentInfo.loading_rate_kg_per_day !== null && shipmentInfo.loading_rate_kg_per_day !== undefined
+                              ? formatNumber(shipmentInfo.loading_rate_kg_per_day)
+                              : shipmentInfo.loading_rate_mt_per_hour !== null && shipmentInfo.loading_rate_mt_per_hour !== undefined
+                                ? formatNumber(shipmentInfo.loading_rate_mt_per_hour)
+                                : '-'}
                       </div>
-                          {shipmentInfo.loading_rate_mt_per_hour && (
+                          {(shipmentInfo.loading_rate_kg_per_day ?? shipmentInfo.loading_rate_mt_per_hour) && (
                             <div className="text-xs text-gray-500 mt-1">
-                              Formula: Quantity Receive / (ATA Completed - ATA Start) hours
+                              Formula: Quantity Receive / (ATA Completed Loading − ATA Start Loading) days
                     </div>
                   )}
                         </div>
@@ -4313,10 +4739,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Arrival at Loading Port</div>
                             {editingShipmentInfo ? (
-                              <Input
-                                type="date"
-                                value={editedShipmentInfo?.eta_vessel_arrival_at_loading_port ? String(editedShipmentInfo.eta_vessel_arrival_at_loading_port).split('T')[0] : ''}
-                                onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, eta_vessel_arrival_at_loading_port: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={editedShipmentInfo?.eta_vessel_arrival_at_loading_port}
+                                onChangeIso={(iso) => setEditedShipmentInfo({ ...editedShipmentInfo!, eta_vessel_arrival_at_loading_port: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4326,10 +4751,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Berthed at Loading Port</div>
                             {editingShipmentInfo ? (
-                              <Input
-                                type="date"
-                                value={editedShipmentInfo?.eta_vessel_berthed_at_loading_port ? String(editedShipmentInfo.eta_vessel_berthed_at_loading_port).split('T')[0] : ''}
-                                onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, eta_vessel_berthed_at_loading_port: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={editedShipmentInfo?.eta_vessel_berthed_at_loading_port}
+                                onChangeIso={(iso) => setEditedShipmentInfo({ ...editedShipmentInfo!, eta_vessel_berthed_at_loading_port: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4339,10 +4763,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Start Loading</div>
                             {editingShipmentInfo ? (
-                              <Input
-                                type="date"
-                                value={editedShipmentInfo?.eta_vessel_start_loading ? String(editedShipmentInfo.eta_vessel_start_loading).split('T')[0] : ''}
-                                onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, eta_vessel_start_loading: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={editedShipmentInfo?.eta_vessel_start_loading}
+                                onChangeIso={(iso) => setEditedShipmentInfo({ ...editedShipmentInfo!, eta_vessel_start_loading: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4352,10 +4775,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Completed Loading</div>
                             {editingShipmentInfo ? (
-                              <Input
-                                type="date"
-                                value={editedShipmentInfo?.eta_vessel_completed_loading ? String(editedShipmentInfo.eta_vessel_completed_loading).split('T')[0] : ''}
-                                onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, eta_vessel_completed_loading: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={editedShipmentInfo?.eta_vessel_completed_loading}
+                                onChangeIso={(iso) => setEditedShipmentInfo({ ...editedShipmentInfo!, eta_vessel_completed_loading: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4365,10 +4787,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Sailed from Loading Port</div>
                             {editingShipmentInfo ? (
-                              <Input
-                                type="date"
-                                value={editedShipmentInfo?.eta_vessel_sailed_from_loading_port ? String(editedShipmentInfo.eta_vessel_sailed_from_loading_port).split('T')[0] : ''}
-                                onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, eta_vessel_sailed_from_loading_port: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={editedShipmentInfo?.eta_vessel_sailed_from_loading_port}
+                                onChangeIso={(iso) => setEditedShipmentInfo({ ...editedShipmentInfo!, eta_vessel_sailed_from_loading_port: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4378,10 +4799,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Arrive at Discharge Port</div>
                             {editingShipmentInfo ? (
-                              <Input
-                                type="date"
-                                value={editedShipmentInfo?.eta_vessel_arrive_at_discharge_port ? String(editedShipmentInfo.eta_vessel_arrive_at_discharge_port).split('T')[0] : ''}
-                                onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, eta_vessel_arrive_at_discharge_port: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={editedShipmentInfo?.eta_vessel_arrive_at_discharge_port}
+                                onChangeIso={(iso) => setEditedShipmentInfo({ ...editedShipmentInfo!, eta_vessel_arrive_at_discharge_port: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4391,10 +4811,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Berthed at Discharge Port</div>
                             {editingShipmentInfo ? (
-                              <Input
-                                type="date"
-                                value={editedShipmentInfo?.eta_vessel_berthed_at_discharge_port ? String(editedShipmentInfo.eta_vessel_berthed_at_discharge_port).split('T')[0] : ''}
-                                onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, eta_vessel_berthed_at_discharge_port: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={editedShipmentInfo?.eta_vessel_berthed_at_discharge_port}
+                                onChangeIso={(iso) => setEditedShipmentInfo({ ...editedShipmentInfo!, eta_vessel_berthed_at_discharge_port: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4404,10 +4823,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Start Discharging</div>
                             {editingShipmentInfo ? (
-                              <Input
-                                type="date"
-                                value={editedShipmentInfo?.eta_vessel_start_discharging ? String(editedShipmentInfo.eta_vessel_start_discharging).split('T')[0] : ''}
-                                onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, eta_vessel_start_discharging: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={editedShipmentInfo?.eta_vessel_start_discharging}
+                                onChangeIso={(iso) => setEditedShipmentInfo({ ...editedShipmentInfo!, eta_vessel_start_discharging: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4417,10 +4835,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Complete Discharge</div>
                             {editingShipmentInfo ? (
-                              <Input
-                                type="date"
-                                value={editedShipmentInfo?.eta_vessel_complete_discharge ? String(editedShipmentInfo.eta_vessel_complete_discharge).split('T')[0] : ''}
-                                onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, eta_vessel_complete_discharge: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={editedShipmentInfo?.eta_vessel_complete_discharge}
+                                onChangeIso={(iso) => setEditedShipmentInfo({ ...editedShipmentInfo!, eta_vessel_complete_discharge: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4570,25 +4987,8 @@ function ShipmentsPageContent() {
                       ? `Discharge Port ${dischargePortsList.indexOf(port) + 1} — ${port.port_name || 'Unnamed'}`
                       : `Loading Port ${port.port_sequence} — ${port.port_name || 'Unnamed'}`
                     const quantityLabel = port.is_discharge_port ? 'Received Quantity (Kg)' : 'Quantity at Loading Port (Kg)'
-                    const rateLabel = port.is_discharge_port ? 'Discharge Rate (Kg/hour)' : 'Loading Rate (Kg/hour)'
+                    const rateLabel = port.is_discharge_port ? 'Discharge Rate (Kg/day)' : 'Loading Rate (Kg/day)'
 
-                    // Compute loading rate for loading ports:
-                    // (Quantity Receive) / (ATA Vessel Completed Loading - ATA Vessel Start Loading in hours)
-                    let computedLoadingRate: number | null = null
-                    if (!port.is_discharge_port) {
-                      const ataStart = shipmentInfo?.ata_vessel_start_loading
-                      const ataCompleted = shipmentInfo?.ata_vessel_completed_loading
-                      const quantityReceive = shipmentInfo?.actual_vessel_qty_receive
-
-                      if (ataStart && ataCompleted && quantityReceive) {
-                        const startDate = new Date(ataStart)
-                        const endDate = new Date(ataCompleted)
-                        const diffHours = (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60)
-                        if (diffHours > 0 && quantityReceive > 0) {
-                          computedLoadingRate = quantityReceive / diffHours
-                        }
-                      }
-                    }
                     // Determine quality label prefix based on port location
                     const qualityPrefix = port.is_discharge_port 
                       ? 'Quality at Discharge Port'
@@ -4611,6 +5011,23 @@ function ShipmentsPageContent() {
 
                     const isEditing = port.id && editingPortId === port.id
                     const displayData = isEditing && editedPortData ? editedPortData : port
+
+                    // Loading ports: quantity at this port / (ATA completed loading − ATA start loading) in days
+                    let computedLoadingRate: number | null = null
+                    if (!port.is_discharge_port) {
+                      const ataStart = displayData.ata_loading_start
+                      const ataCompleted = displayData.ata_loading_completed
+                      const quantityReceive = displayData.quantity_at_loading_port
+
+                      if (ataStart && ataCompleted && quantityReceive != null && quantityReceive > 0) {
+                        const startDate = new Date(ataStart)
+                        const endDate = new Date(ataCompleted)
+                        const diffDays = (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)
+                        if (diffDays > 0) {
+                          computedLoadingRate = quantityReceive / diffDays
+                        }
+                      }
+                    }
 
                     return (
                       <div key={port.id ?? `${port.port_name}-${port.port_sequence}-${port.is_discharge_port}`} className="mt-4">
@@ -4694,10 +5111,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Arrival at Loading Port</div>
                             {isEditing ? (
-                              <Input
-                                type="date"
-                                value={displayData.eta_vessel_arrival ? String(displayData.eta_vessel_arrival).split('T')[0] : ''}
-                                onChange={(e) => setEditedPortData({ ...editedPortData!, eta_vessel_arrival: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={displayData.eta_vessel_arrival}
+                                onChangeIso={(iso) => setEditedPortData({ ...editedPortData!, eta_vessel_arrival: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4707,10 +5123,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Berthed at Loading Port</div>
                             {isEditing ? (
-                              <Input
-                                type="date"
-                                value={displayData.eta_vessel_berthed_at_loading_port ? String(displayData.eta_vessel_berthed_at_loading_port).split('T')[0] : ''}
-                                onChange={(e) => setEditedPortData({ ...editedPortData!, eta_vessel_berthed_at_loading_port: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={displayData.eta_vessel_berthed_at_loading_port}
+                                onChangeIso={(iso) => setEditedPortData({ ...editedPortData!, eta_vessel_berthed_at_loading_port: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4720,10 +5135,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Start Loading</div>
                             {isEditing ? (
-                              <Input
-                                type="date"
-                                value={displayData.eta_loading_start ? String(displayData.eta_loading_start).split('T')[0] : ''}
-                                onChange={(e) => setEditedPortData({ ...editedPortData!, eta_loading_start: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={displayData.eta_loading_start}
+                                onChangeIso={(iso) => setEditedPortData({ ...editedPortData!, eta_loading_start: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4733,10 +5147,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Completed Loading</div>
                             {isEditing ? (
-                              <Input
-                                type="date"
-                                value={displayData.eta_loading_completed ? String(displayData.eta_loading_completed).split('T')[0] : ''}
-                                onChange={(e) => setEditedPortData({ ...editedPortData!, eta_loading_completed: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={displayData.eta_loading_completed}
+                                onChangeIso={(iso) => setEditedPortData({ ...editedPortData!, eta_loading_completed: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4746,10 +5159,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Sailed from Loading Port</div>
                             {isEditing ? (
-                              <Input
-                                type="date"
-                                value={displayData.eta_vessel_sailed ? String(displayData.eta_vessel_sailed).split('T')[0] : ''}
-                                onChange={(e) => setEditedPortData({ ...editedPortData!, eta_vessel_sailed: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={displayData.eta_vessel_sailed}
+                                onChangeIso={(iso) => setEditedPortData({ ...editedPortData!, eta_vessel_sailed: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4759,10 +5171,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Arrive at Discharge Port</div>
                             {isEditing ? (
-                              <Input
-                                type="date"
-                                value={displayData.eta_vessel_arrive_at_discharge_port ? String(displayData.eta_vessel_arrive_at_discharge_port).split('T')[0] : ''}
-                                onChange={(e) => setEditedPortData({ ...editedPortData!, eta_vessel_arrive_at_discharge_port: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={displayData.eta_vessel_arrive_at_discharge_port}
+                                onChangeIso={(iso) => setEditedPortData({ ...editedPortData!, eta_vessel_arrive_at_discharge_port: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4772,10 +5183,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Berthed at Discharge Port</div>
                             {isEditing ? (
-                              <Input
-                                type="date"
-                                value={displayData.eta_vessel_berthed_at_discharge_port ? String(displayData.eta_vessel_berthed_at_discharge_port || displayData.eta_vessel_berthed).split('T')[0] : ''}
-                                onChange={(e) => setEditedPortData({ ...editedPortData!, eta_vessel_berthed_at_discharge_port: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={displayData.eta_vessel_berthed_at_discharge_port || displayData.eta_vessel_berthed}
+                                onChangeIso={(iso) => setEditedPortData({ ...editedPortData!, eta_vessel_berthed_at_discharge_port: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4785,10 +5195,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Start Discharging</div>
                             {isEditing ? (
-                              <Input
-                                type="date"
-                                value={displayData.eta_vessel_start_discharging ? String(displayData.eta_vessel_start_discharging).split('T')[0] : ''}
-                                onChange={(e) => setEditedPortData({ ...editedPortData!, eta_vessel_start_discharging: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={displayData.eta_vessel_start_discharging}
+                                onChangeIso={(iso) => setEditedPortData({ ...editedPortData!, eta_vessel_start_discharging: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4798,10 +5207,9 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">ETA Vessel Complete Discharge</div>
                             {isEditing ? (
-                              <Input
-                                type="date"
-                                value={displayData.eta_vessel_complete_discharge ? String(displayData.eta_vessel_complete_discharge).split('T')[0] : ''}
-                                onChange={(e) => setEditedPortData({ ...editedPortData!, eta_vessel_complete_discharge: e.target.value })}
+                              <DateInputDdMmYyyy
+                                valueIso={displayData.eta_vessel_complete_discharge}
+                                onChangeIso={(iso) => setEditedPortData({ ...editedPortData!, eta_vessel_complete_discharge: iso })}
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
@@ -4819,7 +5227,7 @@ function ShipmentsPageContent() {
                             </div>
                             {!port.is_discharge_port && (
                               <div className="text-xs text-gray-500 mt-1">
-                                Formula: (ATA Vessel Completed Loading - ATA Vessel Start Loading) / Quantity Receive
+                                Formula: Quantity Receive / (ATA Completed Loading − ATA Start Loading) days
                               </div>
                             )}
                           </div>
@@ -4903,7 +5311,7 @@ function ShipmentsPageContent() {
                   />
                 </div>
                 <div>
-                  <div className="text-gray-500 mb-1">Loading Rate (Kg/hour)</div>
+                  <div className="text-gray-500 mb-1">Loading Rate (Kg/day)</div>
                   <Input
                     type="number"
                     step="0.01"
@@ -4932,17 +5340,9 @@ function ShipmentsPageContent() {
                 ].map(([label, key]) => (
                   <div key={key as string}>
                     <div className="text-gray-500 mb-1">{label}</div>
-                    <Input
-                      type="date"
-                      value={(
-                        (newPort as any)[key] 
-                          ? String((newPort as any)[key]).split('T')[0]
-                          : ''
-                      )}
-                      onChange={(e) => {
-                        const v = e.target.value
-                        setNewPort({ ...(newPort as any), [key]: v } as any)
-                      }}
+                    <DateInputDdMmYyyy
+                      valueIso={(newPort as any)[key]}
+                      onChangeIso={(iso) => setNewPort({ ...(newPort as any), [key]: iso } as any)}
                       className="h-8 text-sm"
                     />
                   </div>
@@ -5016,7 +5416,7 @@ function ShipmentsPageContent() {
                     <div>
                       <div className="text-sm font-medium">{doc.file_name}</div>
                       <div className="text-xs text-gray-500">
-                        {(doc.document_type || 'FILE')} • {doc.created_at ? new Date(doc.created_at).toLocaleString() : ''}
+                        {(doc.document_type || 'FILE')} • {doc.created_at ? formatDateTimeDMY(doc.created_at) : ''}
                       </div>
                     </div>
                     <Button 

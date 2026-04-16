@@ -27,6 +27,7 @@ import api from '@/lib/api'
 import { formatRupiah } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { formatDateDMY } from '@/lib/dateFormat'
 
 type PaymentStatus = 'PENDING' | 'PARTIAL' | 'PAID' | 'OVERDUE'
 
@@ -85,12 +86,7 @@ const formatAmount = (value: number | null | undefined) => {
   return formatRupiah(value)
 }
 
-const formatDate = (value: string | null) => {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '-'
-  return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-}
+const formatDate = (value: string | null) => formatDateDMY(value || '')
 
 export default function FinancePage() {
   const [payments, setPayments] = useState<Payment[]>([])

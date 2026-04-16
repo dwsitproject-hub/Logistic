@@ -421,36 +421,119 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
     );
     p.mark('claimOutstandingStats');
 
-    // Get shipment statistics by status
-    const shipmentsStats = await query(`
-      SELECT 
+    // Get shipment statistics by status.
+    // IMPORTANT: Use the same auto-status logic as Shipments update:
+    // - If ATA ladder reaches COMPLETED, status = COMPLETED
+    // - Else derive from ETA ladder
+    // - Preserve CANCELLED from stored status
+    const shipmentsStats = await query(
+      `
+      WITH ship_base AS (
+        -- Match Shipments page universe: group by STO (SAP) or operation_id (manual)
+        SELECT
+          COALESCE(NULLIF(TRIM(c.sto_number::text), ''), NULLIF(TRIM(s.operation_id), ''), NULLIF(TRIM(s.shipment_id), ''), s.id::text) AS ship_key,
+          MAX(NULLIF(TRIM(c.sto_number::text), '')) AS sto_number,
+          MAX(NULLIF(TRIM(s.operation_id), '')) AS operation_id,
+          MAX(NULLIF(TRIM(s.shipment_id), '')) AS shipment_id,
+          MAX(UPPER(TRIM(COALESCE(s.status, '')))) AS stored_status,
+          MAX(c.delivery_end_date) AS delivery_end_date,
+          -- ATA ladder with vessel_loading_ports fallback (loading port seq=1, discharge port is_discharge_port=true)
+          MAX(COALESCE(s.ata_arrival, (SELECT vlp1.ata_vessel_arrival::date FROM vessel_loading_ports vlp1 WHERE vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false LIMIT 1))) AS ata_arrival,
+          MAX(COALESCE(s.ata_berthed, (SELECT vlp1.ata_vessel_berthed::date FROM vessel_loading_ports vlp1 WHERE vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false LIMIT 1))) AS ata_berthed,
+          MAX(COALESCE(s.ata_loading_start, (SELECT vlp1.ata_loading_start::date FROM vessel_loading_ports vlp1 WHERE vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false LIMIT 1))) AS ata_loading_start,
+          MAX(COALESCE(s.ata_loading_complete, (SELECT vlp1.ata_loading_completed::date FROM vessel_loading_ports vlp1 WHERE vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false LIMIT 1))) AS ata_loading_complete,
+          MAX(COALESCE(s.ata_sailed, (SELECT vlp1.ata_vessel_sailed::date FROM vessel_loading_ports vlp1 WHERE vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false LIMIT 1))) AS ata_sailed,
+          MAX(COALESCE(s.ata_discharge_arrival, (SELECT vlpd.ata_vessel_arrival::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) AS ata_discharge_arrival,
+          MAX(COALESCE(s.ata_discharge_berthed, (SELECT vlpd.ata_vessel_berthed::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) AS ata_discharge_berthed,
+          MAX(COALESCE(s.ata_discharge_start, (SELECT vlpd.ata_loading_start::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) AS ata_discharge_start,
+          MAX(COALESCE(s.ata_discharge_complete, (SELECT vlpd.ata_loading_completed::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) AS ata_discharge_complete,
+          -- ETA ladder (use shipment-level; dashboard performance baseline)
+          MAX(s.eta_arrival) AS eta_arrival,
+          MAX(s.eta_berthed) AS eta_berthed,
+          MAX(s.eta_loading_start) AS eta_loading_start,
+          MAX(s.eta_loading_complete) AS eta_loading_complete,
+          MAX(s.eta_sailed) AS eta_sailed,
+          MAX(s.eta_discharge_arrival) AS eta_discharge_arrival,
+          MAX(s.eta_discharge_berthed) AS eta_discharge_berthed,
+          MAX(s.eta_discharge_start) AS eta_discharge_start,
+          MAX(COALESCE(
+            s.eta_discharge_complete,
+            (SELECT vlpd.eta_vessel_complete_discharge::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1)
+          )) AS eta_discharge_complete
+        FROM shipments s
+        LEFT JOIN contracts c ON s.contract_id = c.id
+        WHERE 1=1 ${contractFilter} ${shipmentFilter}
+        GROUP BY COALESCE(NULLIF(TRIM(c.sto_number::text), ''), NULLIF(TRIM(s.operation_id), ''), NULLIF(TRIM(s.shipment_id), ''), s.id::text)
+      ),
+      ship AS (
+        SELECT
+          sb.*,
+          CASE
+            WHEN sb.stored_status = 'CANCELLED' THEN 'CANCELLED'
+            WHEN (
+              sb.ata_arrival IS NOT NULL AND
+              sb.ata_berthed IS NOT NULL AND
+              sb.ata_loading_start IS NOT NULL AND
+              sb.ata_loading_complete IS NOT NULL AND
+              sb.ata_sailed IS NOT NULL AND
+              sb.ata_discharge_arrival IS NOT NULL AND
+              sb.ata_discharge_berthed IS NOT NULL AND
+              sb.ata_discharge_start IS NOT NULL AND
+              sb.ata_discharge_complete IS NOT NULL
+            ) THEN 'COMPLETED'
+            ELSE (
+              CASE
+                WHEN NOT (
+                  sb.eta_arrival IS NOT NULL OR sb.eta_berthed IS NOT NULL OR sb.eta_loading_start IS NOT NULL OR sb.eta_loading_complete IS NOT NULL OR sb.eta_sailed IS NOT NULL
+                  OR sb.eta_discharge_arrival IS NOT NULL OR sb.eta_discharge_berthed IS NOT NULL OR sb.eta_discharge_start IS NOT NULL OR sb.eta_discharge_complete IS NOT NULL
+                ) THEN 'PLANNED'
+                WHEN (
+                  sb.eta_arrival IS NOT NULL AND sb.eta_berthed IS NOT NULL AND sb.eta_loading_start IS NOT NULL AND sb.eta_loading_complete IS NOT NULL AND sb.eta_sailed IS NOT NULL
+                  AND sb.eta_discharge_arrival IS NOT NULL AND sb.eta_discharge_berthed IS NOT NULL
+                ) THEN 'UNLOADING'
+                WHEN (
+                  sb.eta_arrival IS NOT NULL AND sb.eta_berthed IS NOT NULL AND sb.eta_loading_start IS NOT NULL AND sb.eta_loading_complete IS NOT NULL AND sb.eta_sailed IS NOT NULL
+                  AND sb.eta_discharge_arrival IS NOT NULL
+                ) THEN 'ARRIVED'
+                WHEN (
+                  sb.eta_arrival IS NOT NULL AND sb.eta_berthed IS NOT NULL AND sb.eta_loading_start IS NOT NULL AND sb.eta_loading_complete IS NOT NULL AND sb.eta_sailed IS NOT NULL
+                ) THEN 'IN_TRANSIT'
+                WHEN (sb.eta_arrival IS NOT NULL AND sb.eta_loading_start IS NOT NULL) THEN 'LOADING'
+                WHEN (sb.eta_arrival IS NOT NULL) THEN 'IN_PROGRESS'
+                ELSE 'PLANNED'
+              END
+            )
+          END AS effective_status
+        FROM ship_base sb
+      )
+      SELECT
         COUNT(*) as total_shipments,
-        COUNT(*) FILTER (WHERE s.status = 'PLANNED') as planned_shipments,
-        COUNT(*) FILTER (WHERE s.status = 'IN_PROGRESS') as in_progress_shipments,
-        COUNT(*) FILTER (WHERE s.status = 'LOADING') as loading_shipments,
-        COUNT(*) FILTER (WHERE s.status = 'IN_TRANSIT') as in_transit_shipments,
-        COUNT(*) FILTER (WHERE s.status = 'ARRIVED') as arrived_shipments,
-        COUNT(*) FILTER (WHERE s.status = 'UNLOADING') as unloading_shipments,
-        COUNT(*) FILTER (WHERE s.status = 'COMPLETED') as completed_shipments,
-        COUNT(*) FILTER (WHERE s.status = 'CANCELLED') as cancelled_shipments,
+        COUNT(*) FILTER (WHERE effective_status = 'PLANNED') as planned_shipments,
+        COUNT(*) FILTER (WHERE effective_status = 'IN_PROGRESS') as in_progress_shipments,
+        COUNT(*) FILTER (WHERE effective_status = 'LOADING') as loading_shipments,
+        COUNT(*) FILTER (WHERE effective_status = 'IN_TRANSIT') as in_transit_shipments,
+        COUNT(*) FILTER (WHERE effective_status = 'ARRIVED') as arrived_shipments,
+        COUNT(*) FILTER (WHERE effective_status = 'UNLOADING') as unloading_shipments,
+        COUNT(*) FILTER (WHERE effective_status = 'COMPLETED') as completed_shipments,
+        COUNT(*) FILTER (WHERE effective_status = 'CANCELLED') as cancelled_shipments,
         COUNT(*) FILTER (
           WHERE
-            c.delivery_end_date IS NOT NULL
+            delivery_end_date IS NOT NULL
             AND (
-              c.delivery_end_date::date < CURRENT_DATE
+              delivery_end_date::date < CURRENT_DATE
               OR (
-                (s.ata_discharge_complete IS NOT NULL OR s.eta_discharge_complete IS NOT NULL)
+                (ata_discharge_complete IS NOT NULL OR eta_discharge_complete IS NOT NULL)
                 AND (
-                  (s.ata_discharge_complete IS NOT NULL AND c.delivery_end_date::date < s.ata_discharge_complete::date)
-                  OR (s.eta_discharge_complete IS NOT NULL AND c.delivery_end_date::date < s.eta_discharge_complete::date)
+                  (ata_discharge_complete IS NOT NULL AND delivery_end_date::date < ata_discharge_complete::date)
+                  OR (eta_discharge_complete IS NOT NULL AND delivery_end_date::date < eta_discharge_complete::date)
                 )
               )
             )
         ) as late_shipments
-      FROM shipments s
-      LEFT JOIN contracts c ON s.contract_id = c.id
-      WHERE 1=1 ${contractFilter} ${shipmentFilter}
-    `, params);
+      FROM ship
+      `,
+      params,
+    );
     p.mark('shipmentsStats');
 
     // Get trucking operations statistics by status
@@ -1597,67 +1680,125 @@ export const getShipmentsByStatus = async (req: AuthRequest, res: Response) => {
     const { contractFilter, shipmentFilter, params } = buildFilterConditions(req);
     let paramIndex = params.length + 1;
 
-    // Same "late" logic as dashboard stats and Shipments page: delivery_end_date vs today / ATA/ETA discharge
-    const lateCondition = `
-      c.delivery_end_date IS NOT NULL
-      AND (
-        c.delivery_end_date::date < CURRENT_DATE
-        OR (
-          (s.ata_discharge_complete IS NOT NULL OR s.eta_discharge_complete IS NOT NULL)
-          AND (
-            (s.ata_discharge_complete IS NOT NULL AND c.delivery_end_date::date < s.ata_discharge_complete::date)
-            OR (s.eta_discharge_complete IS NOT NULL AND c.delivery_end_date::date < s.eta_discharge_complete::date)
-          )
-        )
-      )
-    `;
-
-    const baseWhere: string[] = [`1=1 ${contractFilter} ${shipmentFilter}`];
     const finalParams: any[] = [...params];
 
-    if (status) {
-      baseWhere.push(`s.status = $${paramIndex}`);
-      finalParams.push(status);
+    const wantsStatus = Boolean(status && statusNorm);
+    const wantsStatusValue = statusNorm;
+    let baseFilterSql = '';
+    if (wantsStatus) {
+      baseFilterSql += ` AND status = $${paramIndex}`;
+      finalParams.push(wantsStatusValue);
       paramIndex++;
     }
-
     if (delayed === 'true') {
-      baseWhere.push(lateCondition);
+      baseFilterSql += ` AND late_indicator = 'Late'`;
     }
-
-    const whereSql = baseWhere.join(' AND ');
-
+    // NOTE: Drilldown must match the same universe/status logic as Shipment Performance stats:
+    // group by STO/operation and use vessel_loading_ports fallback for ATA ladder.
     const queryText = `
-      WITH base AS (
-        SELECT 
-          s.id,
-          s.shipment_id,
-          s.operation_id,
-          c.sto_number,
-          s.vessel_name,
-          s.status,
-          s.port_of_loading,
-          s.port_of_discharge,
-          s.is_delayed,
-          c.contract_id,
-          c.supplier,
-          c.product,
-          c.delivery_end_date,
-          CASE
-            WHEN c.delivery_end_date IS NULL THEN '-'
-            WHEN (${lateCondition}) THEN 'Late'
-            ELSE 'On Time'
-          END AS late_indicator
+      WITH ship_base AS (
+        SELECT
+          COALESCE(NULLIF(TRIM(c.sto_number::text), ''), NULLIF(TRIM(s.operation_id), ''), NULLIF(TRIM(s.shipment_id), ''), s.id::text) AS ship_key,
+          (array_agg(s.id ORDER BY s.created_at DESC) FILTER (WHERE s.id IS NOT NULL))[1] AS id,
+          MAX(NULLIF(TRIM(c.sto_number::text), '')) AS sto_number,
+          MAX(NULLIF(TRIM(s.operation_id), '')) AS operation_id,
+          MAX(NULLIF(TRIM(s.shipment_id), '')) AS shipment_id,
+          MAX(s.vessel_name) AS vessel_name,
+          MAX(s.port_of_loading) AS port_of_loading,
+          MAX(s.port_of_discharge) AS port_of_discharge,
+          MAX(c.contract_id) AS contract_id,
+          MAX(c.supplier) AS supplier,
+          MAX(c.product) AS product,
+          MAX(c.delivery_end_date) AS delivery_end_date,
+          MAX(UPPER(TRIM(COALESCE(s.status, '')))) AS stored_status,
+          MAX(COALESCE(s.ata_discharge_complete, (SELECT vlpd.ata_loading_completed::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) AS ata_discharge_complete,
+          MAX(COALESCE(
+            s.eta_discharge_complete,
+            (SELECT vlpd.eta_vessel_complete_discharge::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1)
+          )) AS eta_discharge_complete,
+          MAX(COALESCE(s.ata_arrival, (SELECT vlp1.ata_vessel_arrival::date FROM vessel_loading_ports vlp1 WHERE vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false LIMIT 1))) AS ata_arrival,
+          MAX(COALESCE(s.ata_berthed, (SELECT vlp1.ata_vessel_berthed::date FROM vessel_loading_ports vlp1 WHERE vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false LIMIT 1))) AS ata_berthed,
+          MAX(COALESCE(s.ata_loading_start, (SELECT vlp1.ata_loading_start::date FROM vessel_loading_ports vlp1 WHERE vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false LIMIT 1))) AS ata_loading_start,
+          MAX(COALESCE(s.ata_loading_complete, (SELECT vlp1.ata_loading_completed::date FROM vessel_loading_ports vlp1 WHERE vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false LIMIT 1))) AS ata_loading_complete,
+          MAX(COALESCE(s.ata_sailed, (SELECT vlp1.ata_vessel_sailed::date FROM vessel_loading_ports vlp1 WHERE vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false LIMIT 1))) AS ata_sailed,
+          MAX(COALESCE(s.ata_discharge_arrival, (SELECT vlpd.ata_vessel_arrival::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) AS ata_discharge_arrival,
+          MAX(COALESCE(s.ata_discharge_berthed, (SELECT vlpd.ata_vessel_berthed::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) AS ata_discharge_berthed,
+          MAX(COALESCE(s.ata_discharge_start, (SELECT vlpd.ata_loading_start::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) AS ata_discharge_start,
+          MAX(s.eta_arrival) AS eta_arrival,
+          MAX(s.eta_berthed) AS eta_berthed,
+          MAX(s.eta_loading_start) AS eta_loading_start,
+          MAX(s.eta_loading_complete) AS eta_loading_complete,
+          MAX(s.eta_sailed) AS eta_sailed,
+          MAX(s.eta_discharge_arrival) AS eta_discharge_arrival,
+          MAX(s.eta_discharge_berthed) AS eta_discharge_berthed,
+          MAX(s.eta_discharge_start) AS eta_discharge_start
         FROM shipments s
         LEFT JOIN contracts c ON s.contract_id = c.id
-        WHERE ${whereSql}
+        WHERE 1=1 ${contractFilter} ${shipmentFilter}
+        GROUP BY COALESCE(NULLIF(TRIM(c.sto_number::text), ''), NULLIF(TRIM(s.operation_id), ''), NULLIF(TRIM(s.shipment_id), ''), s.id::text)
+      ),
+      base AS (
+        SELECT
+          sb.*,
+          CASE
+            WHEN sb.stored_status = 'CANCELLED' THEN 'CANCELLED'
+            WHEN (
+              sb.ata_arrival IS NOT NULL AND
+              sb.ata_berthed IS NOT NULL AND
+              sb.ata_loading_start IS NOT NULL AND
+              sb.ata_loading_complete IS NOT NULL AND
+              sb.ata_sailed IS NOT NULL AND
+              sb.ata_discharge_arrival IS NOT NULL AND
+              sb.ata_discharge_berthed IS NOT NULL AND
+              sb.ata_discharge_start IS NOT NULL AND
+              sb.ata_discharge_complete IS NOT NULL
+            ) THEN 'COMPLETED'
+            ELSE (
+              CASE
+                WHEN NOT (
+                  sb.eta_arrival IS NOT NULL OR sb.eta_berthed IS NOT NULL OR sb.eta_loading_start IS NOT NULL OR sb.eta_loading_complete IS NOT NULL OR sb.eta_sailed IS NOT NULL
+                  OR sb.eta_discharge_arrival IS NOT NULL OR sb.eta_discharge_berthed IS NOT NULL OR sb.eta_discharge_start IS NOT NULL OR sb.eta_discharge_complete IS NOT NULL
+                ) THEN 'PLANNED'
+                WHEN (
+                  sb.eta_arrival IS NOT NULL AND sb.eta_berthed IS NOT NULL AND sb.eta_loading_start IS NOT NULL AND sb.eta_loading_complete IS NOT NULL AND sb.eta_sailed IS NOT NULL
+                  AND sb.eta_discharge_arrival IS NOT NULL AND sb.eta_discharge_berthed IS NOT NULL
+                ) THEN 'UNLOADING'
+                WHEN (
+                  sb.eta_arrival IS NOT NULL AND sb.eta_berthed IS NOT NULL AND sb.eta_loading_start IS NOT NULL AND sb.eta_loading_complete IS NOT NULL AND sb.eta_sailed IS NOT NULL
+                  AND sb.eta_discharge_arrival IS NOT NULL
+                ) THEN 'ARRIVED'
+                WHEN (
+                  sb.eta_arrival IS NOT NULL AND sb.eta_berthed IS NOT NULL AND sb.eta_loading_start IS NOT NULL AND sb.eta_loading_complete IS NOT NULL AND sb.eta_sailed IS NOT NULL
+                ) THEN 'IN_TRANSIT'
+                WHEN (sb.eta_arrival IS NOT NULL AND sb.eta_loading_start IS NOT NULL) THEN 'LOADING'
+                WHEN (sb.eta_arrival IS NOT NULL) THEN 'IN_PROGRESS'
+                ELSE 'PLANNED'
+              END
+            )
+          END AS status,
+          CASE
+            WHEN sb.delivery_end_date IS NULL THEN '-'
+            WHEN (
+              sb.delivery_end_date::date < CURRENT_DATE
+              OR (
+                (sb.ata_discharge_complete IS NOT NULL OR sb.eta_discharge_complete IS NOT NULL)
+                AND (
+                  (sb.ata_discharge_complete IS NOT NULL AND sb.delivery_end_date::date < sb.ata_discharge_complete::date)
+                  OR (sb.eta_discharge_complete IS NOT NULL AND sb.delivery_end_date::date < sb.eta_discharge_complete::date)
+                )
+              )
+            ) THEN 'Late'
+            ELSE 'On Time'
+          END AS late_indicator
+        FROM ship_base sb
       ),
       total AS (
-        SELECT COUNT(*)::int AS total_count FROM base
+        SELECT COUNT(*)::int AS total_count FROM base WHERE 1=1 ${baseFilterSql}
       ),
       paged AS (
         SELECT *
         FROM base
+        WHERE 1=1 ${baseFilterSql}
         ORDER BY delivery_end_date DESC NULLS LAST, id DESC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       )

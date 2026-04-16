@@ -24,6 +24,7 @@ import {
   Calendar
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { formatDateDMY } from '@/lib/dateFormat';
 
 interface SapDataRow {
   id: string;
@@ -315,11 +316,11 @@ export default function SapDataViewer() {
                           <TableCell>{row.shipment_id}</TableCell>
                           <TableCell>{row.trader_name}</TableCell>
                           <TableCell>{row.logistics_team}</TableCell>
-                          <TableCell>{row.estimated_date ? new Date(row.estimated_date).toLocaleDateString() : '-'}</TableCell>
-                          <TableCell>{row.actual_date ? new Date(row.actual_date).toLocaleDateString() : '-'}</TableCell>
+                          <TableCell>{row.estimated_date ? formatDateDMY(row.estimated_date) : '-'}</TableCell>
+                          <TableCell>{row.actual_date ? formatDateDMY(row.actual_date) : '-'}</TableCell>
                           <TableCell>{getStatusBadge(row.status)}</TableCell>
                           <TableCell>{getPriorityBadge(row.priority)}</TableCell>
-                          <TableCell>{new Date(row.import_date).toLocaleDateString()}</TableCell>
+                          <TableCell>{formatDateDMY(row.import_date)}</TableCell>
                           <TableCell>
                             <div className="flex gap-2">
                               <Button size="sm" variant="outline">
@@ -366,7 +367,7 @@ export default function SapDataViewer() {
                     {importHistory.map((import_) => (
                       <TableRow key={import_.id}>
                         <TableCell className="font-medium">
-                          {new Date(import_.import_date).toLocaleDateString()}
+                          {formatDateDMY(import_.import_date)}
                         </TableCell>
                         <TableCell>{getStatusBadge(import_.status)}</TableCell>
                         <TableCell>{import_.total_records}</TableCell>

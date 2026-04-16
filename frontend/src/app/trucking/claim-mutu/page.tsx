@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Upload, ArrowLeft, RefreshCw, ArrowUp, ArrowDown, Filter as FilterIcon } from 'lucide-react'
 import api from '@/lib/api'
+import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
 
 type ClaimMutuImport = {
   id: string
@@ -70,13 +71,9 @@ function num(n: number | undefined | null) {
   const v = Number(n || 0)
   return v.toLocaleString('id-ID', { maximumFractionDigits: 3 })
 }
-
 function formatDate(d?: string) {
   if (!d) return '-'
-  const t = Date.parse(d)
-  if (Number.isNaN(t)) return String(d)
-  const dt = new Date(t)
-  return dt.toLocaleDateString('id-ID')
+  return formatDateDMY(d)
 }
 
 export default function ClaimMutuPage() {
@@ -568,21 +565,8 @@ export default function ClaimMutuPage() {
                   <div className="mb-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
                     <div className="font-semibold text-slate-900">Data for selected import</div>
                     <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                      <span>
-                        {new Date(selectedImport.uploaded_at).toLocaleDateString('id-ID', {
-                          weekday: 'short',
-                          day: 'numeric',
-                          month: 'short',
-                          year: 'numeric',
-                        })}
-                      </span>
-                      <span className="text-slate-400">·</span>
                       <span className="tabular-nums">
-                        {new Date(selectedImport.uploaded_at).toLocaleTimeString('id-ID', {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                          second: '2-digit',
-                        })}
+                        {formatDateTimeDMY(selectedImport.uploaded_at)}
                       </span>
                       <span className="text-slate-400">·</span>
                       <span className="font-medium text-slate-900">

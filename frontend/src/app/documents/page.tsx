@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Download, FileText, Search, ChevronDown, ChevronRight } from 'lucide-react'
 import api from '@/lib/api'
+import { formatDateTimeDMY } from '@/lib/dateFormat'
 
 interface Contract {
   id: string
@@ -393,7 +394,7 @@ export default function DocumentsPage() {
                                         )}
                                         {doc.document_type || 'FILE'} • {formatFileSize(doc.file_size)} • {' '}
                                         {doc.upload_date || doc.created_at
-                                          ? new Date(doc.upload_date || doc.created_at!).toLocaleString()
+                                          ? formatDateTimeDMY(doc.upload_date || doc.created_at!)
                                           : ''}
                                       </div>
                                     </div>

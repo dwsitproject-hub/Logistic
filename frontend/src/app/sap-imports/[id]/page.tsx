@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import api from '@/lib/api';
+import { formatDateDMY, formatDateTimeDMY, formatTimeHMS } from '@/lib/dateFormat';
 
 interface ImportDetail {
   id: string;
@@ -205,7 +206,7 @@ export default function ImportDetailPage() {
     switch (fieldType) {
       case 'date':
         try {
-          return new Date(value).toLocaleDateString();
+          return formatDateDMY(String(value));
         } catch {
           return String(value);
         }
@@ -301,10 +302,10 @@ export default function ImportDetailPage() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {new Date(importData.import_date).toLocaleDateString()}
+                {formatDateDMY(importData.import_date)}
               </div>
               <div className="text-sm text-gray-500">
-                {new Date(importData.import_timestamp).toLocaleTimeString()}
+                {formatTimeHMS(importData.import_timestamp)}
               </div>
             </CardContent>
           </Card>
@@ -422,11 +423,11 @@ export default function ImportDetailPage() {
               </div>
               <div>
                 <div className="text-sm text-gray-500">Import Timestamp</div>
-                <div className="font-medium">{new Date(importData.import_timestamp).toLocaleString()}</div>
+                <div className="font-medium">{formatDateTimeDMY(importData.import_timestamp)}</div>
               </div>
               <div>
                 <div className="text-sm text-gray-500">Import Date</div>
-                <div className="font-medium">{new Date(importData.import_date).toLocaleDateString()}</div>
+                <div className="font-medium">{formatDateDMY(importData.import_date)}</div>
               </div>
               <div>
                 <div className="text-sm text-gray-500">Status</div>

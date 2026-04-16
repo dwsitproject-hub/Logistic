@@ -1,10 +1,15 @@
 import express from 'express';
+import multer from 'multer';
 import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import { 
   getShipments, 
   getShipmentById, 
   updateShipment,
+  getShipmentDailyDeliverablesCalendar,
+  updateShipmentDailyDeliverables,
+  downloadShipmentDailyPlanningDeliverablesTemplate,
+  bulkUploadShipmentDailyDeliverables,
   getVesselLoadingPorts,
   upsertVesselLoadingPort,
   deleteVesselLoadingPort,
@@ -20,6 +25,23 @@ const router = express.Router();
 
 router.use(authenticateToken);
 
+const shipmentPlanningUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok =
+      /\.(csv|xlsx|xls)$/i.test(file.originalname) ||
+      [
+        'text/csv',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/octet-stream',
+        'text/plain',
+      ].includes(file.mimetype);
+    cb(null, ok);
+  },
+});
+
 // New shipment creation routes - MUST BE BEFORE parameterized routes
 router.get('/contracts/suggestions', getContractSuggestions);
 router.get('/contracts/validate', validateContractNumber);
@@ -27,6 +49,17 @@ router.get('/contracts/details', getContractDetailsForSto);
 router.put('/contracts/sto-qty', auditLog('UPDATE', 'STO_QTY_ASSIGNED'), updateStoQtyAssigned);
 router.get('/check-sto/:stoNumber', checkStoExists);
 router.post('/', auditLog('CREATE', 'SHIPMENT'), createShipment);
+
+// Daily planning deliverables (SEA Shipments)
+router.get('/daily-planning-deliverables/template', downloadShipmentDailyPlanningDeliverablesTemplate);
+router.post(
+  '/daily-planning-deliverables/bulk-upload',
+  shipmentPlanningUpload.single('file'),
+  auditLog('UPDATE', 'SHIPMENT'),
+  bulkUploadShipmentDailyDeliverables,
+);
+router.get('/daily-planning-deliverables', getShipmentDailyDeliverablesCalendar);
+router.put('/:id/daily-planning-deliverables', auditLog('UPDATE', 'SHIPMENT'), updateShipmentDailyDeliverables);
 
 // Get all shipments
 router.get('/', getShipments);

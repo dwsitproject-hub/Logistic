@@ -1,11 +1,40 @@
 import express from 'express';
+import multer from 'multer';
 import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
-import { getTruckingOperations, getTruckingOperationById, createTruckingOperation, validateContractNumber, updateTruckingOperation, getLandOpenContractSuggestions, getTruckingDailyDeliverablesCalendar, updateTruckingDailyDeliverables } from '../controllers/trucking.controller';
+import {
+  getTruckingOperations,
+  getTruckingOperationById,
+  createTruckingOperation,
+  validateContractNumber,
+  updateTruckingOperation,
+  getLandOpenContractSuggestions,
+  getTruckingDailyDeliverablesCalendar,
+  updateTruckingDailyDeliverables,
+  downloadDailyPlanningDeliverablesTemplate,
+  bulkUploadDailyPlanningDeliverables,
+} from '../controllers/trucking.controller';
 
 const router = express.Router();
 
 router.use(authenticateToken);
+
+const planningUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok =
+      /\.(csv|xlsx|xls)$/i.test(file.originalname) ||
+      [
+        'text/csv',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/octet-stream',
+        'text/plain',
+      ].includes(file.mimetype);
+    cb(null, ok);
+  },
+});
 
 // Get all trucking operations
 router.get('/', getTruckingOperations);
@@ -19,7 +48,14 @@ router.get('/validate/contract', validateContractNumber);
 // Create trucking operation
 router.post('/', auditLog('CREATE', 'TRUCKING_OPERATION'), createTruckingOperation);
 
-// Calendar view: daily planning deliverables
+// Calendar view: daily planning deliverables (specific paths before generic GET)
+router.get('/daily-planning-deliverables/template', downloadDailyPlanningDeliverablesTemplate);
+router.post(
+  '/daily-planning-deliverables/bulk-upload',
+  planningUpload.single('file'),
+  auditLog('UPDATE', 'TRUCKING_OPERATION'),
+  bulkUploadDailyPlanningDeliverables,
+);
 router.get('/daily-planning-deliverables', getTruckingDailyDeliverablesCalendar);
 router.put('/:id/daily-planning-deliverables', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyDeliverables);
 

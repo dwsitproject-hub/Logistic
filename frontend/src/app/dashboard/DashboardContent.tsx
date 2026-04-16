@@ -33,6 +33,7 @@ import {
 import api from '@/lib/api'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { formatDateDMY } from '@/lib/dateFormat'
 
 interface DashboardStats {
   contracts: {
@@ -881,13 +882,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
     return `${formatNumber(n)} Kg`
   }
 
-  const formatDate = (dateStr?: string) => {
-    const s = (dateStr || '').trim()
-    if (!s) return '-'
-    const t = Date.parse(s)
-    if (Number.isNaN(t)) return s
-    return new Date(t).toLocaleDateString()
-  }
+  const formatDate = (dateStr?: string) => formatDateDMY(dateStr)
 
   const pct = (num: number, den: number) => {
     if (!Number.isFinite(num) || !Number.isFinite(den) || den <= 0) return 0
