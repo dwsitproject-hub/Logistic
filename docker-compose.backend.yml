@@ -1,7 +1,6 @@
 # Backend server stack: PostgreSQL + Backend API
-# Run on backend server (e.g. 172.28.92.57): docker-compose -f docker-compose.backend.yml up -d
+# Run on backend server (e.g. 172.28.92.57): docker compose -f docker-compose.backend.yml up -d
 # Optional .env: DB_NAME, DB_USER, DB_PASSWORD, POSTGRES_PORT, BACKEND_PORT, JWT_SECRET
-version: '3.8'
 
 services:
   postgres:
