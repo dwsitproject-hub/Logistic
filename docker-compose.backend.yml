@@ -45,7 +45,8 @@ services:
       NODE_ENV: production
       PORT: 5001
       # Override host-oriented DB settings from env_file — required for in-stack networking
-      DB_HOST: postgres
+      # Use container_name to avoid DNS edge cases on some hosts
+      DB_HOST: klip-postgres
       DB_PORT: "5432"
       # DB_NAME, DB_USER, DB_PASSWORD, JWT_SECRET: from env_file (backend/.env) unless you set them in /opt/klip/.env
       JWT_EXPIRES_IN: 7d
