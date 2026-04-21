@@ -32,6 +32,16 @@ describe('isSeaSapRowEligibleForShipmentCreation', () => {
     ).toBe(true);
   });
 
+  it('returns false when Port of Loading is placeholder 0.00', () => {
+    expect(
+      isSeaSapRowEligibleForShipmentCreation({
+        contract: {},
+        shipment: { vessel_loading_port_1: '0.00' },
+        raw: {},
+      })
+    ).toBe(false);
+  });
+
   it('returns true when Vessel Name is set', () => {
     expect(
       isSeaSapRowEligibleForShipmentCreation({

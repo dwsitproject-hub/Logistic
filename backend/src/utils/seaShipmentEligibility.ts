@@ -21,6 +21,8 @@ function hasMeaningfulText(v: unknown): boolean {
   if (!s) return false;
   const lower = s.toLowerCase();
   if (lower === 'null' || lower === 'n/a' || lower === '-' || lower === '—') return false;
+  // Some SAP exports use "0.00" placeholders for text columns (ports, vessel fields).
+  if (/^\s*0+(\.0+)?\s*$/.test(s)) return false;
   return true;
 }
 
