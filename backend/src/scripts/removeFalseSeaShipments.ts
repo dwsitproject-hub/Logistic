@@ -19,13 +19,11 @@ async function main() {
   const includeManual = process.argv.includes('--include-manual');
   const treatMissingSpdAsIneligible = process.argv.includes('--treat-missing-spd-as-ineligible');
 
-  const scriptIdx = process.argv.findIndex((a) =>
-    String(a).replace(/\\/g, '/').endsWith('/removeFalseSeaShipments.ts')
-  );
-  const keyArg =
-    scriptIdx >= 0
-      ? process.argv.slice(scriptIdx + 1).find((a) => a && !String(a).startsWith('--'))
-      : null;
+  // Accept an optional key anywhere after flags (works for both ts-node *.ts and node dist/*.js).
+  // Usage examples:
+  //   ts-node src/scripts/removeFalseSeaShipments.ts --dry-run 9254100591
+  //   node dist/scripts/removeFalseSeaShipments.js --dry-run 9254100591
+  const keyArg = process.argv.slice(2).find((a) => a && !String(a).startsWith('--')) ?? null;
 
   const client = await getClient();
   try {
