@@ -17,6 +17,7 @@ import { isSeaSapRowEligibleForShipmentCreation } from '../utils/seaShipmentElig
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
   const includeManual = process.argv.includes('--include-manual');
+  const treatMissingSpdAsIneligible = process.argv.includes('--treat-missing-spd-as-ineligible');
 
   const scriptIdx = process.argv.findIndex((a) =>
     String(a).replace(/\\/g, '/').endsWith('/removeFalseSeaShipments.ts')
@@ -99,6 +100,14 @@ async function main() {
       const spd = spdByContract.get(row.contract_number);
       if (spd == null) {
         skippedNoSpd++;
+        if (!treatMissingSpdAsIneligible) continue;
+        // No SAP row: optionally treat as ineligible so we can purge placeholder/migrated shipments.
+        const tm = String(row.transport_mode || '').toUpperCase();
+        if (!tm.startsWith('SEA')) {
+          skippedNotSea++;
+          continue;
+        }
+        contractUuidsToPurge.push(row.contract_uuid);
         continue;
       }
       const tm = String(row.transport_mode || '').toUpperCase();
@@ -131,6 +140,7 @@ async function main() {
         {
           dryRun,
           includeManual,
+          treatMissingSpdAsIneligible,
           contractsConsidered: contractRows.length,
           skipped_no_sap_processed_data: skippedNoSpd,
           skipped_not_sea_contract: skippedNotSea,
