@@ -74,8 +74,10 @@ export const CONTRACTS_LIST_OUTER_SQL = `
         (SELECT COUNT(*) FROM documents d WHERE d.contract_id = base.id) AS document_count,
         base.first_trucking_start_date,
         base.last_trucking_completion_date,
+        base.last_trucking_daily_deliverable_date,
         base.first_ata_vessel_completed_loading,
-        base.last_ata_vessel_complete_discharge
+        base.last_ata_vessel_complete_discharge,
+        base.last_eta_vessel_complete_discharge
       FROM page AS base
       ORDER BY base.contract_date DESC NULLS LAST, base.contract_id DESC
 `;

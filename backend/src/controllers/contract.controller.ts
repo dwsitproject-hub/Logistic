@@ -159,6 +159,14 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
             LEFT JOIN latest_receive lr ON lr.contract_number = (array_agg(c.contract_id ORDER BY c.created_at DESC))[1]
             WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
           ) AS last_trucking_completion_date,
+          -- For Trade/Cash Cycle calculation (LAND open): latest date in daily_deliverables JSONB
+          (
+            SELECT MAX((dd->>'date')::date)
+            FROM trucking_operations tdd
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(tdd.daily_deliverables, '[]'::jsonb)) AS dd
+            WHERE tdd.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+              AND (dd->>'date') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          ) AS last_trucking_daily_deliverable_date,
           -- For Log Cycle calculation (SEA): earliest ATA loading complete and latest ATA discharge complete
           (SELECT MIN(s2.ata_loading_complete::date) FROM shipments s2 WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1] AND s2.ata_loading_complete IS NOT NULL) AS first_ata_vessel_completed_loading,
           (
@@ -171,7 +179,14 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
             )
             FROM shipments s2
             WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_ata_vessel_complete_discharge
+          ) AS last_ata_vessel_complete_discharge,
+          -- For Trade/Cash Cycle calculation (SEA open): latest ETA vessel complete discharge
+          (
+            SELECT MAX(s2.eta_discharge_complete::date)
+            FROM shipments s2
+            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+              AND s2.eta_discharge_complete IS NOT NULL
+          ) AS last_eta_vessel_complete_discharge
         FROM contract_scope cs
         INNER JOIN contracts c ON c.contract_id = cs.contract_id
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
@@ -479,6 +494,8 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
 
       const lastTruck = row.last_trucking_completion_date;
       const lastAtaDischarge = row.last_ata_vessel_complete_discharge;
+      const lastTruckDeliverable = row.last_trucking_daily_deliverable_date;
+      const lastEtaDischarge = row.last_eta_vessel_complete_discharge;
       const cargoReady = row.cargo_readiness_date;
 
       if (transport.startsWith('LAND')) {
@@ -506,7 +523,10 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       (row as any).log_cycle_days = logCycle;
 
       // Compute Trade Cycle (days)
-      // - Closed: latest receive/discharge -> Due Date Delivery End (Land/Sea)
+      // - Closed: keep legacy behavior (as-is)
+      // - Open: per request
+      //   LAND -> latest date from daily_deliverables - Due Date Delivery End
+      //   SEA  -> ETA Vessel Complete Discharge - Due Date Delivery End
       const deliveryEnd = due(row.delivery_end_date);
       const payoffDate = row.payoff_date ? due(row.payoff_date) : null;
       let tradeCycle: number | null = null;
@@ -520,11 +540,24 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
             if (d != null) tradeCycle = d;
           }
         }
+      } else if (statusText === 'OPEN' || statusText === 'ACTIVE') {
+        if (deliveryEnd) {
+          if (transport.startsWith('LAND')) {
+            const d = diffInDays(deliveryEnd, lastTruckDeliverable);
+            if (d != null) tradeCycle = d;
+          } else if (transport.startsWith('SEA')) {
+            const d = diffInDays(deliveryEnd, lastEtaDischarge);
+            if (d != null) tradeCycle = d;
+          }
+        }
       }
       (row as any).trade_cycle_days = tradeCycle;
 
       // Compute Cash Cycle (days)
-      // - Closed: latest receive/discharge -> Payoff Date (Land/Sea)
+      // - Closed: keep legacy behavior (as-is)
+      // - Open: per request
+      //   LAND -> latest date from daily_deliverables - Payoff Date
+      //   SEA  -> ETA Vessel Complete Discharge - Payoff Date
       let cashCycle: number | null = null;
       if ((statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') && payoffDate) {
         if (transport.startsWith('LAND')) {
@@ -532,6 +565,14 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           if (d != null) cashCycle = d;
         } else if (transport.startsWith('SEA')) {
           const d = diffInDays(lastAtaDischarge, payoffDate);
+          if (d != null) cashCycle = d;
+        }
+      } else if ((statusText === 'OPEN' || statusText === 'ACTIVE') && payoffDate) {
+        if (transport.startsWith('LAND')) {
+          const d = diffInDays(payoffDate, lastTruckDeliverable);
+          if (d != null) cashCycle = d;
+        } else if (transport.startsWith('SEA')) {
+          const d = diffInDays(payoffDate, lastEtaDischarge);
           if (d != null) cashCycle = d;
         }
       }
@@ -546,8 +587,10 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       // Clean helper fields from response
       delete (row as any).first_trucking_start_date;
       delete (row as any).last_trucking_completion_date;
+      delete (row as any).last_trucking_daily_deliverable_date;
       delete (row as any).first_ata_vessel_completed_loading;
       delete (row as any).last_ata_vessel_complete_discharge;
+      delete (row as any).last_eta_vessel_complete_discharge;
 
       // B2B origin company name override
       const typeText = String(row.contract_type || row.b2b_flag || '').toUpperCase();
