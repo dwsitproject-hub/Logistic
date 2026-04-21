@@ -1,6 +1,7 @@
 import { PoolClient } from 'pg';
 import logger from '../utils/logger';
 import { isLandSapRowEligibleForTruckingCreation } from '../utils/landTruckingEligibility';
+import { isSeaSapRowEligibleForShipmentCreation } from '../utils/seaShipmentEligibility';
 import { deriveShipmentStatusFromAta } from '../utils/shipmentStatus';
 
 export interface DistributionResult {
@@ -185,6 +186,7 @@ export class SapDataDistributionService {
       const isLand = modeLabel === 'LAND';
       const isSea = modeLabel === 'SEA';
       const hasShipment = this.hasShipmentData(parsedData.shipment);
+      const seaEligible = isSeaSapRowEligibleForShipmentCreation(parsedData);
       const hasVesselLike =
         !!(
           parsedData.shipment?.vessel_name ||
@@ -216,8 +218,9 @@ export class SapDataDistributionService {
         assumedSea: assumeSea
       });
       
-      // 2a. Create or update shipment (only if SEA / LAND = "SEA")
-      if (seaLike && hasShipment) {
+      // 2a. SEA: create/update shipment only when SAP row has at least one shipping anchor field
+      // (STO No, ports, vessel, STO qty, qty delivery/receive, ATA milestones — see seaShipmentEligibility).
+      if (seaLike && hasShipment && seaEligible) {
         try {
           // Extract vessel data from shipment object (where it's actually stored)
           const vesselData = {
@@ -255,6 +258,11 @@ export class SapDataDistributionService {
           logger.error('Shipment data:', JSON.stringify(parsedData.shipment, null, 2));
           throw shipmentError;
         }
+      } else if (seaLike && hasShipment && !seaEligible) {
+        logger.info('Skipping SEA shipment upsert: not eligible by anchor fields', {
+          contractId: result.contractId,
+          sto_no: parsedData.shipment?.sto_no,
+        });
       } else if (isLand && isLandSapRowEligibleForTruckingCreation(parsedData)) {
         // 2b. LAND: create trucking only when SAP row has at least one trucking anchor field
         // (STO No, loading/discharge location, owner, STO qty, qty delivery/receive — see landTruckingEligibility).

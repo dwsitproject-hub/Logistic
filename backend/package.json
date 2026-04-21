@@ -12,6 +12,7 @@
     "backfill:operation-ids": "ts-node src/scripts/backfillOperationIdsMissingSto.ts",
     "migrate:sea-trucking-to-shipments": "ts-node src/scripts/migrateSeaTruckingToShipments.ts",
     "cleanup:false-land-trucking": "ts-node src/scripts/removeFalseLandTruckingOperations.ts",
+    "cleanup:false-sea-shipments": "ts-node src/scripts/removeFalseSeaShipments.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
