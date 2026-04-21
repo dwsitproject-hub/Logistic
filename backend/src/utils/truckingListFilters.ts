@@ -63,20 +63,21 @@ export function appendTruckingGlobalSearch(
     return { sql: '', params: [], nextIndex: startIndex }
   }
   const p = startIndex
+  const likeExpr = `$${p}::text`
   const contractExtExpr = `(SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1)`
   const sql = `
     AND (
-      strpos(lower(COALESCE(t.operation_id::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(c.contract_id::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(${contractExtExpr}, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(c.sto_number::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(c.po_number::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(t.loading_location::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(t.unloading_location::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(t.trucking_owner::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(c.supplier::text, '')), lower($${p}::text)) > 0
+      COALESCE(t.operation_id::text, '') ILIKE ${likeExpr}
+      OR COALESCE(c.contract_id::text, '') ILIKE ${likeExpr}
+      OR COALESCE(${contractExtExpr}, '') ILIKE ${likeExpr}
+      OR COALESCE(c.sto_number::text, '') ILIKE ${likeExpr}
+      OR COALESCE(c.po_number::text, '') ILIKE ${likeExpr}
+      OR COALESCE(t.loading_location::text, '') ILIKE ${likeExpr}
+      OR COALESCE(t.unloading_location::text, '') ILIKE ${likeExpr}
+      OR COALESCE(t.trucking_owner::text, '') ILIKE ${likeExpr}
+      OR COALESCE(c.supplier::text, '') ILIKE ${likeExpr}
     )`
-  return { sql, params: [searchTrim], nextIndex: startIndex + 1 }
+  return { sql, params: [`%${searchTrim}%`], nextIndex: startIndex + 1 }
 }
 
 export function appendTruckingColumnFilters(

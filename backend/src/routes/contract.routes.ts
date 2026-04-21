@@ -6,6 +6,7 @@ import {
   getContractStoInformation,
   getContractActivityLog,
   getB2bPartiesForContract,
+  getContractFilterIncoterms,
   createContract,
   updateContract,
 } from '../controllers/contract.controller';
@@ -48,6 +49,7 @@ router.use(authenticateToken);
  *         description: Contracts retrieved successfully
  */
 router.get('/', getContracts);
+router.get('/filter-options/incoterms', getContractFilterIncoterms);
 router.get('/unassigned-counts', getUnassignedCounts);
 
 /**

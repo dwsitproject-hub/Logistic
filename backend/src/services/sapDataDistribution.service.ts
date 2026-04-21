@@ -1,5 +1,6 @@
 import { PoolClient } from 'pg';
 import logger from '../utils/logger';
+import { isLandSapRowEligibleForTruckingCreation } from '../utils/landTruckingEligibility';
 import { deriveShipmentStatusFromAta } from '../utils/shipmentStatus';
 
 export interface DistributionResult {
@@ -42,6 +43,43 @@ export class SapDataDistributionService {
       case 'Cancelled': return 'CANCELLED';
       default: return normalized;
     }
+  }
+
+  /**
+   * Normalize SAP "Sea / Land" / transport_mode cell to SEA or LAND.
+   * Returns null for blank or ambiguous combined values (e.g. "SEA / LAND").
+   */
+  private static parseTransportModeLabel(raw: unknown): 'SEA' | 'LAND' | null {
+    if (raw == null) return null;
+    const s = String(raw).trim();
+    if (!s) return null;
+    const u = s.toUpperCase().replace(/\s+/g, ' ').trim();
+    if (/SEA.*LAND|LAND.*SEA/.test(u)) return null;
+    if (u === 'SEA' || u.startsWith('SEA ') || u.startsWith('SEA/')) return 'SEA';
+    if (u === 'LAND' || u.startsWith('LAND ') || u.startsWith('LAND/')) return 'LAND';
+    return null;
+  }
+
+  /** After upsert, contracts.transport_mode may still be SEA/LAND from a prior row (COALESCE keeps old value when the row is blank). */
+  private static async resolveTransportModeRaw(
+    client: PoolClient,
+    contractUuid: string | undefined,
+    parsedContract: any
+  ): Promise<string | null> {
+    let raw = parsedContract?.sea_land ?? parsedContract?.transport_mode ?? null;
+    if (raw != null && String(raw).trim() !== '') {
+      return String(raw).trim();
+    }
+    if (!contractUuid) return null;
+    const r = await client.query(
+      `SELECT transport_mode FROM contracts WHERE id = $1`,
+      [contractUuid]
+    );
+    const dbVal = r.rows[0]?.transport_mode;
+    if (dbVal != null && String(dbVal).trim() !== '') {
+      return String(dbVal).trim();
+    }
+    return null;
   }
   
   /**
@@ -137,10 +175,15 @@ export class SapDataDistributionService {
       }
       
       // 2. Route to Shipments or Trucking based on SEA / LAND field
-      // Get the sea_land value from contract data (normalized from "SEA / LAND" field)
-      const seaLandValue = parsedData.contract?.sea_land || parsedData.contract?.transport_mode || null;
-      const isLand = seaLandValue && seaLandValue.toString().toUpperCase().trim() === 'LAND';
-      const isSea = seaLandValue && seaLandValue.toString().toUpperCase().trim() === 'SEA';
+      // Prefer current row, then DB (upsert uses COALESCE — blank row keeps existing transport_mode)
+      const seaLandRaw = await this.resolveTransportModeRaw(
+        client,
+        result.contractId,
+        parsedData.contract
+      );
+      const modeLabel = this.parseTransportModeLabel(seaLandRaw);
+      const isLand = modeLabel === 'LAND';
+      const isSea = modeLabel === 'SEA';
       const hasShipment = this.hasShipmentData(parsedData.shipment);
       const hasVesselLike =
         !!(
@@ -151,18 +194,30 @@ export class SapDataDistributionService {
           parsedData.shipment?.vessel_loading_port_1 ||
           parsedData.shipment?.vessel_discharge_port
         );
-      const assumeSea = !isLand && !isSea && hasShipment && hasVesselLike;
+      const hasStoInShipment = !!(
+        parsedData.shipment?.sto_no ||
+        parsedData.shipment?.shipment_id
+      );
+      // If mode is still unknown, infer SEA when we have STO/shipment identifiers but no explicit LAND
+      const assumeSea =
+        !isLand &&
+        !isSea &&
+        hasShipment &&
+        (hasVesselLike || hasStoInShipment);
       
+      const seaLike = isSea || assumeSea;
+
       logger.info('Routing decision based on SEA / LAND:', {
-        sea_land: seaLandValue,
+        sea_land_raw: seaLandRaw,
+        modeLabel,
         isLand,
-        isSea: isSea || assumeSea,
+        isSea: seaLike,
         hasShipmentData: hasShipment,
         assumedSea: assumeSea
       });
       
       // 2a. Create or update shipment (only if SEA / LAND = "SEA")
-      if ((isSea || assumeSea) && hasShipment) {
+      if (seaLike && hasShipment) {
         try {
           // Extract vessel data from shipment object (where it's actually stored)
           const vesselData = {
@@ -200,9 +255,9 @@ export class SapDataDistributionService {
           logger.error('Shipment data:', JSON.stringify(parsedData.shipment, null, 2));
           throw shipmentError;
         }
-      } else if (isLand && this.hasShipmentData(parsedData.shipment)) {
-        // 2b. Create trucking operation (if SEA / LAND = "LAND")
-        // Convert shipment data to trucking operation format
+      } else if (isLand && isLandSapRowEligibleForTruckingCreation(parsedData)) {
+        // 2b. LAND: create trucking only when SAP row has at least one trucking anchor field
+        // (STO No, loading/discharge location, owner, STO qty, qty delivery/receive — see landTruckingEligibility).
         try {
           logger.info('Creating trucking operation from shipment data (LAND):', {
             sto_no: parsedData.shipment?.sto_no,
@@ -245,7 +300,7 @@ export class SapDataDistributionService {
       }
       
       // 3. Create quality surveys (multiple) - only for SEA shipments
-      if (isSea && parsedData.quality && parsedData.quality.length > 0) {
+      if (seaLike && parsedData.quality && parsedData.quality.length > 0) {
         for (const qualityData of parsedData.quality) {
           const surveyId = await this.createQualitySurvey(
             client,
@@ -256,9 +311,26 @@ export class SapDataDistributionService {
         }
       }
       
-      // 4. Create trucking operations (multiple) - only if explicitly in trucking array and not LAND routing
-      // Note: For LAND, we already created trucking operations above from shipment data
-      if (!isLand && parsedData.trucking && parsedData.trucking.length > 0) {
+      // 4. Create trucking operations (multiple) - supplementary legs linked to shipment when SEA
+      // Note: For LAND, we already created trucking operations above from shipment data (and !isLand skips this block)
+      // For SEA: only create trucking legs when a shipment exists to link (avoids STO activity landing only in trucking)
+      if (
+        seaLike &&
+        hasShipment &&
+        !result.shipmentId &&
+        parsedData.trucking &&
+        parsedData.trucking.length > 0
+      ) {
+        logger.warn(
+          'Skipping parsedData.trucking: SEA-like row has shipment data but no shipment id (check shipment upsert / contract link)'
+        );
+      }
+      if (
+        !isLand &&
+        parsedData.trucking &&
+        parsedData.trucking.length > 0 &&
+        (!seaLike || !!result.shipmentId)
+      ) {
         for (const truckingData of parsedData.trucking) {
           const truckingId = await this.createTruckingOperation(
             client,

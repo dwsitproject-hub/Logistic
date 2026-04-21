@@ -14,6 +14,7 @@ import { FieldHelp } from '@/components/FieldHelp'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
+import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { format } from 'date-fns'
 import {
@@ -178,6 +179,8 @@ function ShipmentsPageContent() {
   const [page, setPage] = useState(1)
   const [pageSize] = useState(50)
   const [totalCount, setTotalCount] = useState(0)
+  // Search should apply only on Enter / Apply (not per keystroke)
+  const [searchDraft, setSearchDraft] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editedData, setEditedData] = useState<Partial<Shipment>>({})
@@ -190,9 +193,9 @@ function ShipmentsPageContent() {
   
   // Excel-like column filtering
   type ColumnFilter =
-    | { type: 'text'; value: string; exact?: boolean; emptyOnly?: boolean }
-    | { type: 'number'; min?: string; max?: string; emptyOnly?: boolean }
-    | { type: 'date'; from?: string; to?: string; emptyOnly?: boolean }
+    | { type: 'text'; value: string; exact?: boolean; emptyOnly?: boolean; notBlankOnly?: boolean }
+    | { type: 'number'; min?: string; max?: string; emptyOnly?: boolean; notBlankOnly?: boolean }
+    | { type: 'date'; from?: string; to?: string; emptyOnly?: boolean; notBlankOnly?: boolean }
 
   const [columnFilters, setColumnFilters] = useState<Record<string, ColumnFilter>>({})
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
@@ -266,7 +269,8 @@ function ShipmentsPageContent() {
   })
   const [uploadingId, setUploadingId] = useState<string>('')
   const [shipmentsSummary, setShipmentsSummary] = useState<any>(null)
-  
+  const shipmentsSummaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // Vessel loading ports state
   const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null)
   const [loadingPorts, setLoadingPorts] = useState<VesselLoadingPort[]>([])
@@ -301,45 +305,9 @@ function ShipmentsPageContent() {
   const [docsLoading, setDocsLoading] = useState(false)
   const [showDocs, setShowDocs] = useState(false)
 
-  // Add new shipment state
   const [showAddShipment, setShowAddShipment] = useState(false)
-  const [newShipment, setNewShipment] = useState({
-    operationId: '',
-    stoNumber: '',
-    contractNumbers: [] as string[],
-    vesselName: '',
-    vesselCode: '',
-    voyageNo: '',
-    vesselOwner: '',
-    vesselDraft: '',
-    vesselCapacity: '',
-    vesselHullType: '',
-    charterType: '',
-    portOfLoading: '',
-    portOfDischarge: '',
-    etaVesselArrivalAtLoadingPort: '',
-    etaVesselBerthedAtLoadingPort: '',
-    etaVesselStartLoading: '',
-    etaVesselCompletedLoading: '',
-    etaVesselSailedFromLoadingPort: '',
-    etaVesselArriveAtDischargePort: '',
-    etaVesselBerthedAtDischargePort: '',
-    etaVesselStartDischarging: '',
-    etaVesselCompleteDischarge: ''
-  })
-  const [contractQtyAssigned, setContractQtyAssigned] = useState<Record<string, string>>({})
-  const [contractSuggestions, setContractSuggestions] = useState<any[]>([])
-  const [contractSearchTerm, setContractSearchTerm] = useState('')
-  const [showContractSuggestions, setShowContractSuggestions] = useState(false)
-  const [stoValidation, setStoValidation] = useState<{exists: boolean, message: string} | null>(null)
-  const [contractValidations, setContractValidations] = useState<{ [contractId: string]: {
-    checking: boolean
-    exists: boolean
-    contractData: any
-    message: string
-  } }>({})
 
-  // Master Vessel / Master Loading Port suggestions for Add Shipment
+  // Master Vessel / Master Loading Port suggestions (inline edit row + AddShipmentModal has its own)
   const [vesselSuggestions, setVesselSuggestions] = useState<Array<{ vessel_code: string; vessel_name: string; vessel_capacity_mt: number | null; vessel_owner: string | null; hull_type: string | null }>>([])
   const [showVesselSuggestions, setShowVesselSuggestions] = useState(false)
   const [portSuggestions, setPortSuggestions] = useState<Array<{ port: string; region: string | null }>>([])
@@ -584,33 +552,14 @@ function ShipmentsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lateIndicatorFilter])
 
-  const isFirstSearchRender = useRef(true)
-  useEffect(() => {
-    if (isFirstSearchRender.current) {
-      isFirstSearchRender.current = false
-      return
-    }
-    const t = setTimeout(() => {
-      setPage(1)
-      fetchShipments(1)
-    }, 500)
-    return () => clearTimeout(t)
+  const applySearch = useCallback(() => {
+    setPage(1)
+    setSearchTerm(searchDraft)
+    fetchShipments(1, searchDraft)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchTerm])
+  }, [searchDraft])
 
-  const isFirstColumnFilterRender = useRef(true)
-  useEffect(() => {
-    if (isFirstColumnFilterRender.current) {
-      isFirstColumnFilterRender.current = false
-      return
-    }
-    const t = setTimeout(() => {
-      setPage(1)
-      fetchShipments(1)
-    }, 500)
-    return () => clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [columnFilters])
+  // Column header filters apply only when user presses Enter inside the filter popover.
 
   const isFirstViewFilterRender = useRef(true)
   useEffect(() => {
@@ -637,7 +586,7 @@ function ShipmentsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [etaLoadingFilter, etaDischargeFilter])
 
-  const fetchShipments = async (forcedPage?: number) => {
+  const fetchShipments = async (forcedPage?: number, searchOverride?: string) => {
     setLoading(true)
     try {
       const effectivePage = forcedPage ?? page
@@ -650,7 +599,7 @@ function ShipmentsPageContent() {
       }
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
-      const searchTrim = searchTerm.trim()
+      const searchTrim = (searchOverride ?? searchTerm).trim()
       if (searchTrim.length >= 2) {
         params.append('search', searchTrim)
       }
@@ -689,14 +638,47 @@ function ShipmentsPageContent() {
       if (contractParam) {
         params.append('contract', contractParam)
       }
-      
+
+      // List path: skip heavy enriched summary SQL on the same round-trip; load summary after (debounced).
+      params.append('includeSummary', 'false')
+      // First paint: skip joining sap_processed_data (often the slowest part); hydrate rows right after.
+      params.append('skipSapJoin', 'true')
+
       const response = await api.get(`/shipments?${params.toString()}`)
-      
+
       // Check if response structure is correct
       if (response.data && response.data.success && response.data.data && response.data.data.shipments) {
         setShipments(response.data.data.shipments)
         setTotalCount(Number(response.data.data.pagination?.total || 0))
         setShipmentsSummary(response.data.data.summary || null)
+
+        const hydrateParams = new URLSearchParams(params.toString())
+        hydrateParams.delete('skipSapJoin')
+        void api
+          .get(`/shipments?${hydrateParams.toString()}`)
+          .then((res) => {
+            const rows = res.data?.data?.shipments
+            if (Array.isArray(rows) && rows.length > 0) setShipments(rows)
+          })
+          .catch(() => {
+            /* keep first-paint rows */
+          })
+
+        if (shipmentsSummaryTimerRef.current) clearTimeout(shipmentsSummaryTimerRef.current)
+        const summaryParams = new URLSearchParams(params.toString())
+        summaryParams.set('summaryOnly', 'true')
+        summaryParams.delete('includeSummary')
+        summaryParams.delete('skipSapJoin')
+        shipmentsSummaryTimerRef.current = setTimeout(() => {
+          void api
+            .get(`/shipments?${summaryParams.toString()}`)
+            .then((res) => {
+              if (res.data?.data?.summary) setShipmentsSummary(res.data.data.summary)
+            })
+            .catch(() => {
+              /* keep zeros / prior summary */
+            })
+        }, 450)
       } else {
         console.error('Unexpected response structure:', response.data)
         setShipments([])
@@ -2485,179 +2467,6 @@ function ShipmentsPageContent() {
     await fetchShipmentDocuments(shipment.id)
   }
 
-  // Add new shipment functions
-  const handleStoNumberChange = async (stoNumber: string) => {
-    setNewShipment(prev => ({ ...prev, stoNumber }))
-    
-    if (stoNumber.length >= 3) {
-      try {
-        const response = await api.get(`/shipments/check-sto/${stoNumber}`)
-        if (response.data.success) {
-          if (response.data.exists) {
-            setStoValidation({
-              exists: true,
-              message: `STO Number ${stoNumber} already exists with contracts: ${response.data.data.contract_numbers}`
-            })
-          } else {
-            setStoValidation({
-              exists: false,
-              message: `STO Number ${stoNumber} is available`
-            })
-          }
-        }
-      } catch (error) {
-        console.error('Error checking STO:', error)
-        setStoValidation(null)
-      }
-    } else {
-      setStoValidation(null)
-    }
-  }
-
-  const handleContractSearch = async (searchTerm: string) => {
-    setContractSearchTerm(searchTerm)
-    
-    if (searchTerm.length >= 2) {
-      try {
-        const response = await api.get(`/shipments/contracts/suggestions?q=${encodeURIComponent(searchTerm)}`)
-        if (response.data.success) {
-          setContractSuggestions(response.data.data)
-          setShowContractSuggestions(true)
-        }
-      } catch (error) {
-        console.error('Error fetching contract suggestions:', error)
-        setContractSuggestions([])
-      }
-    } else {
-      setContractSuggestions([])
-      setShowContractSuggestions(false)
-    }
-  }
-
-  const validateContractNumber = async (contractNumber: string) => {
-    if (!contractNumber || contractNumber.trim() === '') {
-      setContractValidations(prev => {
-        const next = { ...prev }
-        delete next[contractNumber]
-        return next
-      })
-      return
-    }
-
-    setContractValidations(prev => ({
-      ...prev,
-      [contractNumber]: {
-        checking: true,
-        exists: false,
-        contractData: null,
-        message: 'Validating...'
-      }
-    }))
-
-    try {
-      const response = await api.get(`/shipments/contracts/validate?contract_number=${encodeURIComponent(contractNumber)}`)
-      if (response.data.success) {
-        if (response.data.exists) {
-          setContractValidations(prev => ({
-            ...prev,
-            [contractNumber]: {
-              checking: false,
-              exists: true,
-              contractData: response.data.data,
-              message: 'Contract found'
-            }
-          }))
-          // Auto-fill contract information
-          autoFillContractInfo(response.data.data)
-        } else {
-          setContractValidations(prev => ({
-            ...prev,
-            [contractNumber]: {
-              checking: false,
-              exists: false,
-              contractData: null,
-              message: 'Contract number does not exist'
-            }
-          }))
-        }
-      }
-    } catch (error) {
-      console.error('Error validating contract:', error)
-      setContractValidations(prev => ({
-        ...prev,
-        [contractNumber]: {
-          checking: false,
-          exists: false,
-          contractData: null,
-          message: 'Error validating contract number'
-        }
-      }))
-    }
-  }
-
-  const autoFillContractInfo = (contractData: any) => {
-      setNewShipment(prev => ({
-        ...prev,
-      // Auto-fill port information if not already set
-      portOfLoading: prev.portOfLoading || contractData.port_of_loading || '',
-      portOfDischarge: prev.portOfDischarge || contractData.port_of_discharge || ''
-      // Note: STO number is NOT auto-filled - user must explicitly enter it if needed
-    }))
-  }
-
-  const handleAddContract = async (contract: any) => {
-    const contractId = contract.contract_id || contract
-    if (!newShipment.contractNumbers.includes(contractId)) {
-      // Validate contract before adding
-      await validateContractNumber(contractId)
-      
-      setNewShipment(prev => ({
-        ...prev,
-        contractNumbers: [...prev.contractNumbers, contractId]
-      }))
-      setContractQtyAssigned(prev => ({ ...prev, [contractId]: prev[contractId] ?? '' }))
-    }
-    setContractSearchTerm('')
-    setShowContractSuggestions(false)
-  }
-
-  const handleAddContractManually = async () => {
-    const contractId = contractSearchTerm.trim()
-    if (!contractId) return
-    
-    // Validate contract before adding
-    await validateContractNumber(contractId)
-    
-    if (!newShipment.contractNumbers.includes(contractId)) {
-      setNewShipment(prev => ({
-        ...prev,
-        contractNumbers: [...prev.contractNumbers, contractId]
-      }))
-      setContractQtyAssigned(prev => ({ ...prev, [contractId]: prev[contractId] ?? '' }))
-    }
-    setContractSearchTerm('')
-    setShowContractSuggestions(false)
-  }
-
-  const handleRemoveContract = (contractId: string) => {
-    setNewShipment(prev => ({
-      ...prev,
-      contractNumbers: prev.contractNumbers.filter(id => id !== contractId)
-    }))
-    setContractQtyAssigned(prev => {
-      const next = { ...prev }
-      delete next[contractId]
-      return next
-    })
-    // Remove validation state
-    setContractValidations(prev => {
-      const next = { ...prev }
-      delete next[contractId]
-      return next
-    })
-  }
-
-  // --- Master Vessel / Loading Port helpers for NEW shipment ---
   const fetchVesselSuggestions = async (search: string) => {
     if (!search || search.trim().length < 2) {
       setVesselSuggestions([])
@@ -2687,44 +2496,6 @@ function ShipmentsPageContent() {
       setPortSuggestions([])
     }
   }
-
-  const handleVesselNameChange = (value: string) => {
-    setNewShipment(prev => ({ ...prev, vesselName: value }))
-    if (vesselSearchTimeoutRef.current) clearTimeout(vesselSearchTimeoutRef.current)
-    vesselSearchTimeoutRef.current = setTimeout(() => fetchVesselSuggestions(value), 300)
-  }
-
-  const handleSelectVessel = (v: { vessel_code: string; vessel_name: string; vessel_capacity_mt: number | null; vessel_owner: string | null; hull_type: string | null }) => {
-    setNewShipment(prev => ({
-      ...prev,
-      vesselName: v.vessel_name,
-      vesselCode: v.vessel_code ?? '',
-      vesselOwner: v.vessel_owner ?? '',
-      vesselCapacity: v.vessel_capacity_mt != null ? String(v.vessel_capacity_mt) : '',
-      vesselHullType: v.hull_type ?? ''
-    }))
-    setShowVesselSuggestions(false)
-    setVesselSuggestions([])
-  }
-
-  const handlePortOfLoadingChange = (value: string) => {
-    setNewShipment(prev => ({ ...prev, portOfLoading: value }))
-    if (portSearchTimeoutRef.current) clearTimeout(portSearchTimeoutRef.current)
-    portSearchTimeoutRef.current = setTimeout(() => fetchPortSuggestions(value), 300)
-  }
-
-  const handleSelectPort = (p: { port: string }) => {
-    setNewShipment(prev => ({ ...prev, portOfLoading: p.port }))
-    setShowPortSuggestions(false)
-    setPortSuggestions([])
-  }
-
-  const vesselCapacityNum = newShipment.vesselCapacity ? parseFloat(String(newShipment.vesselCapacity)) : null
-  const contractQtyAssignedSum = useMemo(() => {
-    return Object.values(contractQtyAssigned).reduce((sum, v) => sum + (parseFloat(String(v)) || 0), 0)
-  }, [contractQtyAssigned])
-  const contractQtyAssignedExceedsCapacity =
-    vesselCapacityNum != null && !Number.isNaN(vesselCapacityNum) && contractQtyAssignedSum > vesselCapacityNum
 
   // --- Master Vessel / Loading Port helpers for EDITED shipment row ---
   const handleEditVesselNameChange = (value: string) => {
@@ -2756,102 +2527,6 @@ function ShipmentsPageContent() {
     setEditedData(prev => ({ ...prev, port_of_loading: p.port }))
     setShowPortSuggestions(false)
     setPortSuggestions([])
-  }
-
-  const handleCreateShipment = async () => {
-    if (newShipment.contractNumbers.length === 0) {
-      alert('Please add at least one Contract Number')
-      return
-    }
-
-    // Validate all contracts exist
-    const invalidContracts = newShipment.contractNumbers.filter(
-      contractId => !contractValidations[contractId]?.exists
-    )
-
-    if (invalidContracts.length > 0) {
-      alert(`The following contract numbers are invalid or do not exist: ${invalidContracts.join(', ')}`)
-      return
-    }
-
-    if (contractQtyAssignedExceedsCapacity) {
-      alert('Sum of "Contract Qty assign to STO" cannot exceed Vessel Capacity (Kg).')
-      return
-    }
-
-    if (contractQtyAssignedExceedsCapacity) {
-      alert('Sum of "Contract Qty assign to STO" cannot exceed Vessel Capacity (Kg).')
-      return
-    }
-
-    // Don't validate STO number - it should remain empty for manual shipments
-    // STO will be filled from SAP Data later
-
-    try {
-      setSaving(true)
-      
-      // Auto-generate Operation ID - one Operation ID for all contracts
-      const operationId = `OP-${newShipment.contractNumbers[0]}-${Date.now().toString().slice(-8)}`
-      
-      const shipmentData = {
-        ...newShipment,
-        operationId,
-        stoNumber: '', // Ensure STO Number remains empty - will be filled from SAP Data later
-        contractQtyAssigned,
-        eta_arrival: newShipment.etaVesselArrivalAtLoadingPort || null,
-        eta_berthed: newShipment.etaVesselBerthedAtLoadingPort || null,
-        eta_loading_start: newShipment.etaVesselStartLoading || null,
-        eta_loading_complete: newShipment.etaVesselCompletedLoading || null,
-        eta_sailed: newShipment.etaVesselSailedFromLoadingPort || null,
-        eta_discharge_arrival: newShipment.etaVesselArriveAtDischargePort || null,
-        eta_discharge_berthed: newShipment.etaVesselBerthedAtDischargePort || null,
-        eta_discharge_start: newShipment.etaVesselStartDischarging || null,
-        eta_discharge_complete: newShipment.etaVesselCompleteDischarge || null
-      }
-      const response = await api.post('/shipments', shipmentData)
-      
-      if (response.data.success) {
-        alert('Shipment created successfully!')
-        setShowAddShipment(false)
-        setNewShipment({
-          operationId: '',
-          stoNumber: '',
-          contractNumbers: [],
-          vesselName: '',
-          vesselCode: '',
-          voyageNo: '',
-          vesselOwner: '',
-          vesselDraft: '',
-          vesselCapacity: '',
-          vesselHullType: '',
-          charterType: '',
-          portOfLoading: '',
-          portOfDischarge: '',
-          etaVesselArrivalAtLoadingPort: '',
-          etaVesselBerthedAtLoadingPort: '',
-          etaVesselStartLoading: '',
-          etaVesselCompletedLoading: '',
-          etaVesselSailedFromLoadingPort: '',
-          etaVesselArriveAtDischargePort: '',
-          etaVesselBerthedAtDischargePort: '',
-          etaVesselStartDischarging: '',
-          etaVesselCompleteDischarge: ''
-        })
-        setContractQtyAssigned({})
-        setStoValidation(null)
-        setContractValidations({})
-        await fetchShipments() // Refresh the list
-      } else {
-        alert(response.data.error?.message || 'Failed to create shipment')
-      }
-    } catch (error: any) {
-      console.error('Error creating shipment:', error)
-      const errorMsg = error.response?.data?.error?.message || 'Failed to create shipment'
-      const errorDetails = error.response?.data?.error?.details
-      alert(errorMsg + (errorDetails ? `\n\nDetails: ${errorDetails}` : ''))
-    } finally {
-      setSaving(false)
-    }
   }
 
   const formatDateTime = (dateStr: string) => formatDateTimeDMY(dateStr)
@@ -3191,11 +2866,20 @@ function ShipmentsPageContent() {
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                 <Input
                   placeholder="Search by Shipment ID, Contract Numbers, PO No, or Vessel Name..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
+                  value={searchDraft}
+                  onChange={(e) => setSearchDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      applySearch()
+                    }
+                  }}
                   className="pl-10"
                 />
               </div>
+              <Button variant="outline" onClick={applySearch} disabled={loading}>
+                Apply
+              </Button>
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
@@ -3661,12 +3345,6 @@ function ShipmentsPageContent() {
           <CardContent>
             {loading ? (
               <div className="text-center py-8">Loading shipments...</div>
-            ) : sortedShipments.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-                <p>No shipments found</p>
-                {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
-              </div>
             ) : (
               <>
                 {/* Desktop compact table */}
@@ -3758,6 +3436,7 @@ function ShipmentsPageContent() {
                                   ref={headerFilterPopoverRef}
                                   className="absolute left-0 top-full mt-2 w-[280px] bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-30"
                                   onClick={(e) => e.stopPropagation()}
+                                  onMouseDown={(e) => e.stopPropagation()}
                                 >
                                   <div className="flex items-center justify-between mb-2">
                                     <div className="text-xs font-semibold text-gray-700 truncate">{col.label} Filter</div>
@@ -3782,12 +3461,20 @@ function ShipmentsPageContent() {
                                             value,
                                             exact: current?.type === 'text' ? Boolean(current.exact) : false,
                                             emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
+                                            notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
                                           })
+                                        }}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') {
+                                            e.preventDefault()
+                                            setPage(1)
+                                            fetchShipments(1)
+                                          }
                                         }}
                                         placeholder="Type to filter (contains)"
                                         className="h-8 text-sm"
                                       />
-                                      <div className="flex items-center justify-between gap-3">
+                                      <div className="flex flex-col gap-2">
                                         <label className="flex items-center gap-2 text-xs text-gray-700">
                                           <Checkbox
                                             checked={current?.type === 'text' ? Boolean(current.exact) : false}
@@ -3813,10 +3500,27 @@ function ShipmentsPageContent() {
                                                 value,
                                                 exact: current?.type === 'text' ? Boolean(current.exact) : false,
                                                 emptyOnly: Boolean(checked),
+                                                notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
                                               })
                                             }}
                                           />
                                           Only blanks
+                                        </label>
+                                        <label className="flex items-center gap-2 text-xs text-gray-700">
+                                          <Checkbox
+                                            checked={Boolean((current as any)?.notBlankOnly)}
+                                            onCheckedChange={(checked) => {
+                                              const value = current?.type === 'text' ? current.value : ''
+                                              setOrClearFilter(col.id, {
+                                                type: 'text',
+                                                value,
+                                                exact: current?.type === 'text' ? Boolean(current.exact) : false,
+                                                emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
+                                                notBlankOnly: Boolean(checked),
+                                              })
+                                            }}
+                                          />
+                                          Only not blanks
                                         </label>
                                       </div>
                                     </div>
@@ -3831,7 +3535,14 @@ function ShipmentsPageContent() {
                                           onChange={(e) => {
                                             const min = e.target.value
                                             const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly) })
+                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              e.preventDefault()
+                                              setPage(1)
+                                              fetchShipments(1)
+                                            }
                                           }}
                                           placeholder="Min"
                                           className="h-8 text-sm"
@@ -3841,7 +3552,14 @@ function ShipmentsPageContent() {
                                           onChange={(e) => {
                                             const max = e.target.value
                                             const min = current?.type === 'number' ? current.min : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly) })
+                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              e.preventDefault()
+                                              setPage(1)
+                                              fetchShipments(1)
+                                            }
                                           }}
                                           placeholder="Max"
                                           className="h-8 text-sm"
@@ -3853,10 +3571,21 @@ function ShipmentsPageContent() {
                                           onCheckedChange={(checked) => {
                                             const min = current?.type === 'number' ? current.min : ''
                                             const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(checked) })
+                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
                                           }}
                                         />
                                         Only blanks
+                                      </label>
+                                      <label className="flex items-center gap-2 text-xs text-gray-700">
+                                        <Checkbox
+                                          checked={Boolean((current as any)?.notBlankOnly)}
+                                          onCheckedChange={(checked) => {
+                                            const min = current?.type === 'number' ? current.min : ''
+                                            const max = current?.type === 'number' ? current.max : ''
+                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
+                                          }}
+                                        />
+                                        Only not blanks
                                       </label>
                                     </div>
                                   )}
@@ -3871,7 +3600,14 @@ function ShipmentsPageContent() {
                                           onChange={(e) => {
                                             const from = e.target.value
                                             const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly) })
+                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              e.preventDefault()
+                                              setPage(1)
+                                              fetchShipments(1)
+                                            }
                                           }}
                                           className="h-8 text-sm"
                                         />
@@ -3881,7 +3617,14 @@ function ShipmentsPageContent() {
                                           onChange={(e) => {
                                             const to = e.target.value
                                             const from = current?.type === 'date' ? current.from : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly) })
+                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              e.preventDefault()
+                                              setPage(1)
+                                              fetchShipments(1)
+                                            }
                                           }}
                                           className="h-8 text-sm"
                                         />
@@ -3892,10 +3635,21 @@ function ShipmentsPageContent() {
                                           onCheckedChange={(checked) => {
                                             const from = current?.type === 'date' ? current.from : ''
                                             const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(checked) })
+                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
                                           }}
                                         />
                                         Only blanks
+                                      </label>
+                                      <label className="flex items-center gap-2 text-xs text-gray-700">
+                                        <Checkbox
+                                          checked={Boolean((current as any)?.notBlankOnly)}
+                                          onCheckedChange={(checked) => {
+                                            const from = current?.type === 'date' ? current.from : ''
+                                            const to = current?.type === 'date' ? current.to : ''
+                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
+                                          }}
+                                        />
+                                        Only not blanks
                                       </label>
                                     </div>
                                   )}
@@ -3920,7 +3674,15 @@ function ShipmentsPageContent() {
 
                       {/* Rows */}
                       <div className="divide-y">
-                        {sortedShipments.map((shipment, idx) => {
+                        {sortedShipments.length === 0 ? (
+                          <div className="bg-white">
+                            <div className="px-4 py-10 text-center text-gray-500">
+                              <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />
+                              <p>No shipments found</p>
+                              {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
+                            </div>
+                          </div>
+                        ) : sortedShipments.map((shipment, idx) => {
                           const isEditing = editingId === shipment.id
                           return (
                             <div key={shipment.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
@@ -5435,441 +5197,13 @@ function ShipmentsPageContent() {
         </div>
       )}
 
-      {/* Add New Shipment Modal */}
-      {showAddShipment && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-xl font-semibold">Add New Shipment</h3>
-              <Button variant="ghost" onClick={() => setShowAddShipment(false)}>
-                <X className="h-5 w-5" />
-              </Button>
-            </div>
-
-            <div className="space-y-6">
-              {/* Form Instructions */}
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <p className="text-sm text-blue-800">
-                  <strong>Required:</strong> At least one Contract Number<br/>
-                  <strong>Optional:</strong> Port of Loading, Plant/Site (Discharge Port), and ETA fields.<br/>
-                  <strong>Note:</strong> Operation ID and STO Number are automatically generated and cannot be manually entered
-                </p>
-              </div>
-
-              {/* Operation ID */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Operation ID <span className="text-gray-500 text-xs">(Auto-generated)</span>
-                </label>
-                <Input
-                  value={newShipment.contractNumbers.length > 0 
-                    ? `OP-${newShipment.contractNumbers[0]}-${Date.now().toString().slice(-8)}`
-                    : 'Will be auto-generated when contract is added'}
-                  disabled
-                  className="w-full bg-gray-100 cursor-not-allowed"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Operation ID will be automatically generated as: OP-{(contractValidations[newShipment.contractNumbers[0]]?.contractData?.contract_ext_no || newShipment.contractNumbers[0]) || '{Contract Ext No}'}-{'{timestamp}'}
-                </p>
-              </div>
-
-              {/* STO Number - Read-only, only from SAP */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  STO Number <span className="text-gray-500 text-xs">(Will be filled from SAP Data)</span>
-                </label>
-                <Input
-                  value=""
-                  disabled
-                  placeholder="STO Number will remain empty and be filled from SAP Data later"
-                  className="w-full bg-gray-100 cursor-not-allowed"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  STO Number will remain empty for manual shipments and will be automatically filled when SAP Data is imported.
-                </p>
-              </div>
-
-              {/* Contract Ext No */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Contract Ext No <span className="text-red-500">*</span>
-                </label>
-                <div className="relative">
-                  <div className="flex gap-2">
-                  <Input
-                    value={contractSearchTerm}
-                    onChange={(e) => handleContractSearch(e.target.value)}
-                    onFocus={() => setShowContractSuggestions(true)}
-                      onKeyPress={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault()
-                          handleAddContractManually()
-                        }
-                      }}
-                      placeholder="Search or enter Contract Ext No and press Enter"
-                      className="flex-1"
-                  />
-                    <Button
-                      type="button"
-                      onClick={handleAddContractManually}
-                      variant="outline"
-                    >
-                      Add
-                    </Button>
-                  </div>
-                  {showContractSuggestions && contractSuggestions.length > 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-y-auto">
-                      {contractSuggestions.map((contract) => (
-                        <div
-                          key={contract.contract_id}
-                          className="px-4 py-2 hover:bg-gray-100 cursor-pointer border-b"
-                          onClick={() => handleAddContract(contract)}
-                        >
-                          <div className="font-medium">{contract.contract_ext_no || contract.contract_id}</div>
-                          <div className="text-sm text-gray-500">
-                            {contract.contract_ext_no ? <span className="text-gray-400">{contract.contract_id} • </span> : null}
-                            {contract.supplier} • {contract.product}
-                            {contract.sto_number && ` • STO: ${contract.sto_number}`}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                
-                {/* Selected Contracts with Validation Status + Details */}
-                {newShipment.contractNumbers.length > 0 && (
-                  <div className="mt-2 space-y-3">
-                    {newShipment.contractNumbers.map((contractId) => {
-                      const validation = contractValidations[contractId]
-                      const data = validation?.contractData
-                      const label = (data?.contract_ext_no || contractId) as string
-                      return (
-                        <div key={contractId} className="border rounded-md px-2 py-2 bg-gray-50">
-                          <div className="flex items-center gap-2">
-                      <Badge
-                              variant={validation?.exists ? "default" : validation?.exists === false ? "destructive" : "secondary"}
-                        className="flex items-center gap-1"
-                      >
-                        {label}
-                              {validation?.checking && <Loader2 className="h-3 w-3 animate-spin" />}
-                              {validation?.exists && <Check className="h-3 w-3" />}
-                              {validation?.exists === false && !validation?.checking && <X className="h-3 w-3" />}
-                        <X
-                          className="h-3 w-3 cursor-pointer"
-                          onClick={() => handleRemoveContract(contractId)}
-                        />
-                      </Badge>
-                            {data?.contract_ext_no ? <span className="text-[11px] text-gray-400 truncate">({contractId})</span> : null}
-                            {validation?.message && (
-                              <span className={`text-xs ${
-                                validation.exists ? 'text-green-600' : 'text-red-600'
-                              }`}>
-                                {validation.message}
-                              </span>
-                            )}
-                            {validation?.exists && data && (
-                              <div className="text-xs text-gray-500 truncate">
-                                {data.supplier} • {data.product} {data.transport_mode ? `• ${data.transport_mode}` : ''}
-                              </div>
-                            )}
-                          </div>
-
-                          {validation?.exists && data && (
-                            <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px] text-gray-700">
-                              <div>
-                                <div className="text-gray-500">Contract Qty</div>
-                                <div className="font-medium">
-                                  {formatNumber(data.quantity_ordered || 0)} {data.unit || ''}
-                                </div>
-                              </div>
-                              <div>
-                                <div className="text-gray-500">Outstanding Qty</div>
-                                <div className="font-medium">
-                                  {formatNumber(data.outstanding_quantity || 0)} {data.unit || ''}
-                                </div>
-                              </div>
-                              <div>
-                                <div className="text-gray-500">Due Date Delivery Start</div>
-                                <div className="font-medium">
-                                  {formatShortDate(data.delivery_start_date || '')}
-                                </div>
-                              </div>
-                              <div>
-                                <div className="text-gray-500">Due Date Delivery End</div>
-                                <div className="font-medium">
-                                  {formatShortDate(data.delivery_end_date || '')}
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Vessel Information - Vessel Name from Master Vessel with type-to-search; Code, Owner, Capacity, Hull Type auto-filled and read-only */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="relative">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Vessel Name
-                  </label>
-                  <Input
-                    value={newShipment.vesselName}
-                    onChange={(e) => handleVesselNameChange(e.target.value)}
-                    onFocus={() => newShipment.vesselName.trim().length >= 2 && setShowVesselSuggestions(true)}
-                    onBlur={() => setTimeout(() => setShowVesselSuggestions(false), 200)}
-                    placeholder="Type to search vessel name (from Master Vessel)"
-                  />
-                  {showVesselSuggestions && vesselSuggestions.length > 0 && (
-                    <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-52 overflow-y-auto">
-                      {vesselSuggestions.map((v) => (
-                        <div
-                          key={v.vessel_code}
-                          className="px-3 py-2 hover:bg-gray-100 cursor-pointer border-b last:border-b-0"
-                          onMouseDown={() => handleSelectVessel(v)}
-                        >
-                          <div className="font-medium text-sm">{v.vessel_name}</div>
-                          <div className="text-xs text-gray-500">{v.vessel_code} {v.vessel_owner ? ` • ${v.vessel_owner}` : ''}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Vessel Code <span className="text-gray-500 text-xs">(from Master Vessel)</span>
-                  </label>
-                  <Input
-                    value={newShipment.vesselCode}
-                    disabled
-                    placeholder="Filled when vessel is selected"
-                    className="bg-gray-100 cursor-not-allowed"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Voyage No
-                  </label>
-                  <Input
-                    value={newShipment.voyageNo}
-                    onChange={(e) => setNewShipment(prev => ({ ...prev, voyageNo: e.target.value }))}
-                    placeholder="Enter voyage number"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Vessel Owner <span className="text-gray-500 text-xs">(from Master Vessel)</span>
-                  </label>
-                  <Input
-                    value={newShipment.vesselOwner}
-                    disabled
-                    placeholder="Filled when vessel is selected"
-                    className="bg-gray-100 cursor-not-allowed"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Vessel Draft (m)
-                  </label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={newShipment.vesselDraft}
-                    onChange={(e) => setNewShipment(prev => ({ ...prev, vesselDraft: e.target.value }))}
-                    placeholder="Enter vessel draft"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Vessel Capacity (Kg) <span className="text-gray-500 text-xs">(from Master Vessel)</span>
-                  </label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={newShipment.vesselCapacity}
-                    disabled
-                    placeholder="Filled when vessel is selected"
-                    className="bg-gray-100 cursor-not-allowed"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Hull Type <span className="text-gray-500 text-xs">(from Master Vessel)</span>
-                  </label>
-                  <Input
-                    value={newShipment.vesselHullType}
-                    disabled
-                    placeholder="Filled when vessel is selected"
-                    className="bg-gray-100 cursor-not-allowed"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Charter Type
-                  </label>
-                  <Input
-                    value={newShipment.charterType}
-                    onChange={(e) => setNewShipment(prev => ({ ...prev, charterType: e.target.value }))}
-                    placeholder="Enter charter type"
-                  />
-                </div>
-              </div>
-
-              {/* Port Information - Port of Loading from Master Loading Port with type-to-search */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="relative">
-                  <label className="block text-sm font-medium text-gray-500 mb-2">
-                    Port of Loading (Optional)
-                  </label>
-                  <Input
-                    value={newShipment.portOfLoading}
-                    onChange={(e) => handlePortOfLoadingChange(e.target.value)}
-                    onFocus={() => newShipment.portOfLoading.trim().length >= 2 && setShowPortSuggestions(true)}
-                    onBlur={() => setTimeout(() => setShowPortSuggestions(false), 200)}
-                    placeholder="Type to search port (from Master Loading Port)"
-                  />
-                  {showPortSuggestions && portSuggestions.length > 0 && (
-                    <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-52 overflow-y-auto">
-                      {portSuggestions.map((p, idx) => (
-                        <div
-                          key={p.port + (p.region || '') + idx}
-                          className="px-3 py-2 hover:bg-gray-100 cursor-pointer border-b last:border-b-0"
-                          onMouseDown={() => handleSelectPort(p)}
-                        >
-                          <div className="font-medium text-sm">{p.port}</div>
-                          {p.region && <div className="text-xs text-gray-500">{p.region}</div>}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500 mb-2">
-                    Plant/Site (Discharge Port) (Optional)
-                  </label>
-                  <Input
-                    value={newShipment.portOfDischarge}
-                    onChange={(e) => setNewShipment(prev => ({ ...prev, portOfDischarge: e.target.value }))}
-                    placeholder="Enter discharge port"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Contract Qty assign to STO (Kg)
-                  </label>
-                  <div className={`rounded-md border p-3 ${contractQtyAssignedExceedsCapacity ? 'border-red-400 bg-red-50' : 'border-gray-200 bg-gray-50'}`}>
-                    {newShipment.contractNumbers.length === 0 ? (
-                      <div className="text-sm text-gray-500">Add contract numbers above to assign quantities.</div>
-                    ) : (
-                      <div className="space-y-2">
-                        {newShipment.contractNumbers.map((contractId) => (
-                          <div key={contractId} className="flex items-center justify-between gap-3">
-                            <div className="text-sm font-medium text-gray-700 truncate">{contractId}</div>
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={contractQtyAssigned[contractId] ?? ''}
-                              onChange={(e) => setContractQtyAssigned(prev => ({ ...prev, [contractId]: e.target.value }))}
-                              className="h-8 text-sm w-40 bg-white"
-                              placeholder="0"
-                            />
-                          </div>
-                        ))}
-                        <div className="flex items-center justify-between text-sm pt-2 border-t">
-                          <div className="text-gray-600">Total assigned</div>
-                          <div className={`font-semibold ${contractQtyAssignedExceedsCapacity ? 'text-red-700' : 'text-gray-900'}`}>{formatNumber(contractQtyAssignedSum)} Kg</div>
-                        </div>
-                        {vesselCapacityNum != null && !Number.isNaN(vesselCapacityNum) && (
-                          <div className="flex items-center justify-between text-xs text-gray-600">
-                            <div>Vessel Capacity</div>
-                            <div>{formatNumber(vesselCapacityNum)} Kg</div>
-                          </div>
-                        )}
-                        {contractQtyAssignedExceedsCapacity && (
-                          <div className="text-xs text-red-700">Total assigned cannot exceed Vessel Capacity (Kg).</div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* ETA fields (optional) */}
-              <div className="space-y-3 pt-2 border-t">
-                <div className="text-sm font-medium text-gray-600">ETA (Optional)</div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-sm text-gray-500 mb-1">ETA Vessel Arrival at Loading Port</label>
-                    <Input type="date" value={newShipment.etaVesselArrivalAtLoadingPort} onChange={(e) => setNewShipment(prev => ({ ...prev, etaVesselArrivalAtLoadingPort: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-500 mb-1">ETA Vessel Berthed at Loading Port</label>
-                    <Input type="date" value={newShipment.etaVesselBerthedAtLoadingPort} onChange={(e) => setNewShipment(prev => ({ ...prev, etaVesselBerthedAtLoadingPort: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-500 mb-1">ETA Vessel Start Loading</label>
-                    <Input type="date" value={newShipment.etaVesselStartLoading} onChange={(e) => setNewShipment(prev => ({ ...prev, etaVesselStartLoading: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-500 mb-1">ETA Vessel Completed Loading</label>
-                    <Input type="date" value={newShipment.etaVesselCompletedLoading} onChange={(e) => setNewShipment(prev => ({ ...prev, etaVesselCompletedLoading: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-500 mb-1">ETA Vessel Sailed from Loading Port</label>
-                    <Input type="date" value={newShipment.etaVesselSailedFromLoadingPort} onChange={(e) => setNewShipment(prev => ({ ...prev, etaVesselSailedFromLoadingPort: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-500 mb-1">ETA Vessel Arrive at Discharge Port</label>
-                    <Input type="date" value={newShipment.etaVesselArriveAtDischargePort} onChange={(e) => setNewShipment(prev => ({ ...prev, etaVesselArriveAtDischargePort: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-500 mb-1">ETA Vessel Berthed at Discharge Port</label>
-                    <Input type="date" value={newShipment.etaVesselBerthedAtDischargePort} onChange={(e) => setNewShipment(prev => ({ ...prev, etaVesselBerthedAtDischargePort: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-500 mb-1">ETA Vessel Start Discharging</label>
-                    <Input type="date" value={newShipment.etaVesselStartDischarging} onChange={(e) => setNewShipment(prev => ({ ...prev, etaVesselStartDischarging: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-500 mb-1">ETA Vessel Complete Discharge</label>
-                    <Input type="date" value={newShipment.etaVesselCompleteDischarge} onChange={(e) => setNewShipment(prev => ({ ...prev, etaVesselCompleteDischarge: e.target.value }))} />
-                  </div>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex justify-end gap-3 pt-4 border-t">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowAddShipment(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleCreateShipment}
-                  disabled={saving || contractQtyAssignedExceedsCapacity || stoValidation?.exists || newShipment.contractNumbers.some(id => !contractValidations[id]?.exists)}
-                  className="bg-blue-600 hover:bg-blue-700"
-                >
-                  {saving ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Creating...
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Create Shipment
-                    </>
-                  )}
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <AddShipmentModal
+        open={showAddShipment}
+        onClose={() => setShowAddShipment(false)}
+        onCreated={() => {
+          void fetchShipments(1)
+        }}
+      />
     </Layout>
   )
 }

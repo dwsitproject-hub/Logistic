@@ -53,6 +53,19 @@ export function normalizeAndValidateDailyDeliverables(args: {
     if (!s) return null;
     const ymd = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
     if (ymd) return s.slice(0, 10);
+    const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+    if (dmy) {
+      const dd = Number(dmy[1]);
+      const mm = Number(dmy[2]);
+      const yyyy = Number(dmy[3]);
+      if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+        const cal = new Date(yyyy, mm - 1, dd);
+        if (cal.getFullYear() === yyyy && cal.getMonth() === mm - 1 && cal.getDate() === dd) {
+          return `${yyyy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+        }
+      }
+      return null;
+    }
     const d = new Date(s);
     return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
   };
@@ -61,6 +74,12 @@ export function normalizeAndValidateDailyDeliverables(args: {
   const endS = toIsoDate10(endRaw);
   if (!startS || !endS) {
     return { ok: false, message: 'Due Date Delivery Start/End are required when daily deliverables are provided' };
+  }
+  if (startS > endS) {
+    return {
+      ok: false,
+      message: `Due Start (${startS}) must be on or before Due End (${endS}).`,
+    };
   }
 
   const rows: NormalizedDailyDeliverableRow[] = [];
@@ -78,17 +97,16 @@ export function normalizeAndValidateDailyDeliverables(args: {
       return { ok: false, message: `Daily deliverables row ${idx + 1}: quantity must be a valid number` };
     }
 
-    const dt = new Date(d);
-    if (Number.isNaN(dt.getTime())) {
+    const ds = toIsoDate10(d);
+    if (!ds) {
       return { ok: false, message: `Daily deliverables row ${idx + 1}: invalid date` };
     }
-
-    const ds = d.slice(0, 10);
-    if (ds < startS) {
-      return { ok: false, message: `Daily deliverables row ${idx + 1}: date cannot be before Due Date Delivery Start` };
-    }
-    if (ds > endS) {
-      return { ok: false, message: `Daily deliverables row ${idx + 1}: date cannot be after Due Date Delivery End` };
+    // Inclusive window: Due Start ≤ date ≤ Due End
+    if (ds < startS || ds > endS) {
+      return {
+        ok: false,
+        message: `Daily deliverables row ${idx + 1}: date ${ds} must satisfy Due Start (${startS}) ≤ date ≤ Due End (${endS}) (inclusive).`,
+      };
     }
     if (maxQty != null && qn > maxQty) {
       return { ok: false, message: `Daily deliverables row ${idx + 1}: quantity cannot exceed Quantity Delivered` };

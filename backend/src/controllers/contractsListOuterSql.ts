@@ -77,5 +77,5 @@ export const CONTRACTS_LIST_OUTER_SQL = `
         base.first_ata_vessel_completed_loading,
         base.last_ata_vessel_complete_discharge
       FROM page AS base
-      ORDER BY base.created_at DESC
+      ORDER BY base.contract_date DESC NULLS LAST, base.contract_id DESC
 `;

@@ -146,6 +146,13 @@ const NAV_ITEMS: {
     permissionKey: 'page.management_dashboard',
   },
   { name: 'Contracts', href: '/contracts', icon: FileText, roles: ['ALL'], permissionKey: 'page.contracts' },
+  {
+    name: 'Contract Performance',
+    href: '/contract-performance',
+    icon: FileText,
+    roles: ['ALL'],
+    permissionKey: 'page.contracts',
+  },
   { name: 'Shipments', href: '/shipments', icon: Package, roles: ['ALL'], permissionKey: 'page.shipments' },
   { name: 'Trucking', href: '/trucking', icon: Truck, roles: ['ALL'], permissionKey: 'page.trucking' },
   // Claim Mutu is a trucking-adjacent module, placed right after Trucking

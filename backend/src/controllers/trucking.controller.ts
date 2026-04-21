@@ -1,5 +1,4 @@
 import { Response } from 'express';
-import * as XLSX from 'xlsx';
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
@@ -10,6 +9,12 @@ import {
   appendTruckingLateIndicatorFilter,
   parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
+import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
+import {
+  allocateNextSyntheticSequenceDefault,
+  buildSyntheticOperationId,
+  formatDDMMYYYY,
+} from '../utils/operationId';
 
 export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Response) => {
   try {
@@ -63,8 +68,46 @@ export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Resp
   }
 };
 
+/**
+ * Persist OP-LAND-DDMMYYYYxxxx when operation_id was never set (SAP import / legacy rows).
+ * Uses a short deterministic suffix from md5(id) so list/calendar APIs show a real ID without a manual backfill run.
+ */
+async function ensureMissingTruckingOperationIds(): Promise<void> {
+  try {
+    await query(`
+      WITH ranked AS (
+        SELECT
+          t.id,
+          TO_CHAR(COALESCE(t.created_at, CURRENT_TIMESTAMP)::date, 'DDMMYYYY') AS dmy,
+          ROW_NUMBER() OVER (
+            PARTITION BY TO_CHAR(COALESCE(t.created_at, CURRENT_TIMESTAMP)::date, 'DDMMYYYY')
+            ORDER BY COALESCE(t.created_at, CURRENT_TIMESTAMP) NULLS LAST, t.id
+          ) AS rn
+        FROM trucking_operations t
+        WHERE t.operation_id IS NULL
+           OR TRIM(COALESCE(t.operation_id::text, '')) = ''
+           OR TRIM(t.operation_id::text) IN ('-', 'N/A', '—')
+      )
+      UPDATE trucking_operations t
+      SET
+        operation_id = 'OP-LAND-' || r.dmy || (
+          CASE
+            WHEN r.rn < 10000 THEN LPAD(r.rn::text, 4, '0')
+            ELSE r.rn::text
+          END
+        ),
+        updated_at = CURRENT_TIMESTAMP
+      FROM ranked r
+      WHERE t.id = r.id;
+    `);
+  } catch (e) {
+    logger.warn('ensureMissingTruckingOperationIds failed (non-fatal)', e);
+  }
+}
+
 export const getTruckingOperations = async (req: AuthRequest, res: Response) => {
   try {
+    await ensureMissingTruckingOperationIds();
     const { status, location, loadingLocation, unloadingLocation, dateFrom, dateTo, sto, contract, page = 1, limit = 10 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
     const globalSearch =
@@ -578,8 +621,15 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
 
     const contractId = contractResult.rows[0].id;
 
-    // Generate operation_id if not provided
-    const finalOperationId = operation_id || `TRUCK-${Date.now()}`;
+    let finalOperationId =
+      operation_id != null && String(operation_id).trim() !== ''
+        ? String(operation_id).trim()
+        : '';
+    if (!finalOperationId) {
+      const dmy = formatDDMMYYYY(new Date());
+      const seq = await allocateNextSyntheticSequenceDefault('trucking_operations', 'LAND', dmy);
+      finalOperationId = buildSyntheticOperationId('LAND', dmy, seq);
+    }
 
     // Validate daily deliverables (if provided) using shared rules (create + update + calendar).
     // ETA dates are hidden from UI; validate against due delivery dates from the contract (fallback to actual trucking dates).
@@ -854,6 +904,7 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
 
 export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res: Response) => {
   try {
+    await ensureMissingTruckingOperationIds();
     const from = String((req.query as any).from || '').slice(0, 10);
     const to = String((req.query as any).to || '').slice(0, 10);
     if (!from || !to) {
@@ -1084,6 +1135,10 @@ export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Res
       `SELECT t.id,
               c.delivery_start_date,
               c.delivery_end_date,
+              t.eta_delivery_start_date,
+              t.eta_delivery_end_date,
+              t.eta_trucking_start_date,
+              t.eta_trucking_completion_date,
               t.trucking_start_date,
               t.trucking_completion_date,
               COALESCE(
@@ -1114,12 +1169,33 @@ export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Res
     if (currentRes.rows.length === 0) {
       return res.status(404).json({ success: false, error: { message: 'Trucking operation not found' } });
     }
-    const cur = currentRes.rows[0];
+    const cur = currentRes.rows[0] as {
+      delivery_start_date?: string | null;
+      delivery_end_date?: string | null;
+      eta_delivery_start_date?: string | null;
+      eta_delivery_end_date?: string | null;
+      eta_trucking_start_date?: string | null;
+      eta_trucking_completion_date?: string | null;
+      trucking_start_date?: string | null;
+      trucking_completion_date?: string | null;
+      quantity_delivered?: unknown;
+    };
+
+    const startRaw =
+      cur.delivery_start_date ??
+      cur.eta_delivery_start_date ??
+      cur.eta_trucking_start_date ??
+      cur.trucking_start_date;
+    const endRaw =
+      cur.delivery_end_date ??
+      cur.eta_delivery_end_date ??
+      cur.eta_trucking_completion_date ??
+      cur.trucking_completion_date;
 
     const dd = normalizeAndValidateDailyDeliverables({
       daily_deliverables,
-      startRaw: cur.delivery_start_date ?? cur.trucking_start_date,
-      endRaw: cur.delivery_end_date ?? cur.trucking_completion_date,
+      startRaw,
+      endRaw,
       maxQtyRaw: cur.quantity_delivered,
     });
     if (!dd.ok) {
@@ -1163,50 +1239,6 @@ function findPlanningColumnIndex(headers: unknown[], candidates: string[]): numb
   return -1;
 }
 
-function parsePlanningSheetToMatrix(buffer: Buffer): string[][] {
-  const wb = XLSX.read(buffer, { type: 'buffer' });
-  const name = wb.SheetNames[0];
-  if (!name) {
-    throw new Error('The file has no worksheets');
-  }
-  const ws = wb.Sheets[name];
-  const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false }) as unknown[][];
-  return matrix
-    .map((row) => row.map((c) => (c === null || c === undefined ? '' : String(c))))
-    .filter((row) => row.some((c) => String(c).trim() !== ''));
-}
-
-function toIsoDate10FromCell(raw: unknown): string | null {
-  if (raw === null || raw === undefined) return null;
-  if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
-    return raw.toISOString().slice(0, 10);
-  }
-  // Excel serial date (days since 1899-12-30)
-  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 20000 && raw < 120000) {
-    const epoch = new Date(Date.UTC(1899, 11, 30));
-    const d = new Date(epoch.getTime() + Math.round(raw) * 86400000);
-    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-  }
-  const s = String(raw).trim();
-  if (!s) return null;
-  // DD/MM/YYYY (as used in templates / Indonesia UX)
-  const dmy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
-  if (dmy) {
-    const dd = Number(dmy[1]);
-    const mm = Number(dmy[2]);
-    const yyyy = Number(dmy[3]);
-    if (dd >= 1 && dd <= 31 && mm >= 1 && mm <= 12) {
-      const d = new Date(Date.UTC(yyyy, mm - 1, dd));
-      if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-    }
-    return null;
-  }
-  const ymd = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
-  if (ymd) return s.slice(0, 10);
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
-}
-
 /** Same resolved quantity_delivered subquery as single-operation update (SAP fallback). */
 function sqlResolvedQuantityDelivered(): string {
   return `COALESCE(
@@ -1247,7 +1279,7 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
       return res.status(400).json({ success: false, error: { message: 'File is required (CSV or Excel)' } });
     }
 
-    let matrix: string[][];
+    let matrix: unknown[][];
     try {
       matrix = parsePlanningSheetToMatrix(file.buffer);
     } catch (e: any) {
@@ -1343,7 +1375,7 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
     for (const [, group] of byContractExt.entries()) {
       const contractExtNo = group[0].contract_ext_no.trim();
       const rowNumbers = group.map((g) => g.lineNumber);
-      const dateToLastLine = new Map<string, { quantity_delivered: number }>();
+      const dateToLastLine = new Map<string, { quantity_delivered: number; lineNumber: number }>();
       let validRowLines = 0;
 
       for (const g of group) {
@@ -1365,7 +1397,7 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
           });
           continue;
         }
-        dateToLastLine.set(iso, { quantity_delivered: qn });
+        dateToLastLine.set(iso, { quantity_delivered: qn, lineNumber: g.lineNumber });
         validRowLines += 1;
       }
 
@@ -1373,10 +1405,11 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
         continue;
       }
 
-      const dailyDeliverables = Array.from(dateToLastLine.entries())
+      const dailyDeliverablesWithLine = Array.from(dateToLastLine.entries())
         .map(([date, v]) => ({
           date,
           quantity_delivered: v.quantity_delivered,
+          lineNumber: v.lineNumber,
         }))
         .sort((a, b) => a.date.localeCompare(b.date));
 
@@ -1385,6 +1418,10 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
                 t.operation_id,
                 c.delivery_start_date,
                 c.delivery_end_date,
+                t.eta_delivery_start_date,
+                t.eta_delivery_end_date,
+                t.eta_trucking_start_date,
+                t.eta_trucking_completion_date,
                 t.trucking_start_date,
                 t.trucking_completion_date,
                 ${qtySql} AS quantity_delivered
@@ -1424,11 +1461,66 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
         continue;
       }
 
-      const cur = opRes.rows[0];
+      const cur = opRes.rows[0] as {
+        id: string;
+        operation_id: string;
+        delivery_start_date?: string | null;
+        delivery_end_date?: string | null;
+        eta_delivery_start_date?: string | null;
+        eta_delivery_end_date?: string | null;
+        eta_trucking_start_date?: string | null;
+        eta_trucking_completion_date?: string | null;
+        trucking_start_date?: string | null;
+        trucking_completion_date?: string | null;
+        quantity_delivered?: unknown;
+      };
+      // Same “effective due window” idea as calendar overlap: prefer contract dates, then trucking ETAs, then actuals.
+      const startRaw =
+        cur.delivery_start_date ??
+        cur.eta_delivery_start_date ??
+        cur.eta_trucking_start_date ??
+        cur.trucking_start_date;
+      const endRaw =
+        cur.delivery_end_date ??
+        cur.eta_delivery_end_date ??
+        cur.eta_trucking_completion_date ??
+        cur.trucking_completion_date;
+      const startS = toIsoDate10FromCell(startRaw);
+      const endS = toIsoDate10FromCell(endRaw);
+      const inWindow =
+        startS && endS
+          ? dailyDeliverablesWithLine.filter((r) => {
+              const ok = r.date >= startS && r.date <= endS;
+              if (!ok) {
+                rowParseFailures.push({
+                  rowNumber: r.lineNumber,
+                  contract_ext_no: contractExtNo,
+                  reason: `date ${r.date} is outside Due Start (${startS}) … Due End (${endS}) and was skipped`,
+                });
+              }
+              return ok;
+            })
+          : dailyDeliverablesWithLine;
+
+      if (inWindow.length === 0) {
+        opFailures.push({
+          contract_ext_no: contractExtNo,
+          rowNumbers,
+          reason:
+            startS && endS
+              ? `All rows are outside Due Start (${startS}) … Due End (${endS}); nothing to upload`
+              : 'Due Start/Due End are required when daily deliverables are provided',
+          operation_ids: [cur.operation_id],
+        });
+        continue;
+      }
+
+      const dailyDeliverables = inWindow.map(({ date, quantity_delivered }) => ({ date, quantity_delivered }));
+
       const dd = normalizeAndValidateDailyDeliverables({
         daily_deliverables: dailyDeliverables,
-        startRaw: cur.delivery_start_date ?? cur.trucking_start_date,
-        endRaw: cur.delivery_end_date ?? cur.trucking_completion_date,
+        startRaw,
+        endRaw,
         maxQtyRaw: cur.quantity_delivered,
       });
 
@@ -1450,7 +1542,7 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
       );
 
       operationsSucceeded += 1;
-      rowsAccountedSuccess += validRowLines;
+      rowsAccountedSuccess += inWindow.length;
     }
 
     const processedRows = lines.length;

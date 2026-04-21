@@ -1,20 +1,26 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Minus, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal } from 'lucide-react'
-import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
+import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
+import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
+import {
+  ContractTruckingDetailModal,
+  ContractShipmentDetailModal,
+} from '@/components/contracts/ContractLogisticsDetailModals'
 import { Checkbox } from '@/components/ui/checkbox'
 import { formatKgFromMt, formatRupiah, toKgFromMt } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY } from '@/lib/dateFormat'
+import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 
 interface Contract {
   id: string
@@ -134,16 +140,19 @@ type B2bPartyRow = {
 
 function ContractsPageContent() {
   const searchParams = useSearchParams()
-  const router = useRouter()
+  const pathname = usePathname()
+  const isContractPerformance = pathname === '/contract-performance'
   const [contracts, setContracts] = useState<Contract[]>([])
   const [loading, setLoading] = useState(true)
   const [authReady, setAuthReady] = useState(false)
+  // Search should apply only on Enter / Apply (not per keystroke)
+  const [searchDraft, setSearchDraft] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null)
   // Default view: compact (1 line per contract)
   const [expandedContractIds, setExpandedContractIds] = useState<Set<string>>(() => new Set())
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
-  const [sortKey, setSortKey] = useState<string>('created_at')
+  const [sortKey, setSortKey] = useState<string>('contract_date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
   // Desktop table horizontal scroll sync (top + bottom)
@@ -153,10 +162,26 @@ function ContractsPageContent() {
   const isSyncingScroll = useRef(false)
   const [statusFilter, setStatusFilter] = useState<string>('All Status')
   const [b2bFlagFilter, setB2bFlagFilter] = useState<string>('ALL')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  /** Default YTD on first load so GET /contracts stays bounded (same as Contract Performance). */
+  const [dateFrom, setDateFrom] = useState(() => {
+    const d = new Date()
+    return `${d.getFullYear()}-01-01`
+  })
+  const [dateTo, setDateTo] = useState(() => {
+    const d = new Date()
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  })
   const [availableB2bFlags, setAvailableB2bFlags] = useState<string[]>([])
   const [transportModeFilter, setTransportModeFilter] = useState<string>('ALL')
+  const [perfTransportMode, setPerfTransportMode] = useState<'ALL' | 'SEA' | 'LAND'>('ALL')
+  const [lateOnTimeFilter, setLateOnTimeFilter] = useState<'ALL' | 'LATE' | 'ON_TIME'>('ALL')
+  const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
+  const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
+  const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
+  const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
   const [uploadingId, setUploadingId] = useState<string>('')
   const [docsLoading, setDocsLoading] = useState<boolean>(false)
   const [selectedContractDocs, setSelectedContractDocs] = useState<DocumentItem[]>([])
@@ -185,11 +210,19 @@ function ContractsPageContent() {
   const [unassignedFilter, setUnassignedFilter] = useState<'sea' | 'land' | null>(null)
   const [updatingContractId, setUpdatingContractId] = useState<string | null>(null)
 
+  type ContractLogisticsUi =
+    | { kind: 'truck-create'; contract: Contract }
+    | { kind: 'ship-create'; contractId: string }
+    | { kind: 'truck-detail'; contractId: string }
+    | { kind: 'ship-detail'; contractId: string }
+    | null
+  const [contractLogisticsUi, setContractLogisticsUi] = useState<ContractLogisticsUi>(null)
+
   type ColumnFilter =
-    | { type: 'text'; value: string; exact?: boolean; emptyOnly?: boolean }
-    | { type: 'number'; min?: string; max?: string; emptyOnly?: boolean }
-    | { type: 'date'; from?: string; to?: string; emptyOnly?: boolean }
-    | { type: 'multi'; values: string[]; includeBlank?: boolean; emptyOnly?: boolean }
+    | { type: 'text'; value: string; exact?: boolean; emptyOnly?: boolean; notBlankOnly?: boolean }
+    | { type: 'number'; min?: string; max?: string; emptyOnly?: boolean; notBlankOnly?: boolean }
+    | { type: 'date'; from?: string; to?: string; emptyOnly?: boolean; notBlankOnly?: boolean }
+    | { type: 'multi'; values: string[]; includeBlank?: boolean; emptyOnly?: boolean; notBlankOnly?: boolean }
 
   const [columnFilters, setColumnFilters] = useState<Record<string, ColumnFilter>>({})
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
@@ -277,38 +310,29 @@ function ContractsPageContent() {
     setCurrentPage(1)
     fetchContracts(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authReady, searchParams, statusFilter, b2bFlagFilter, dateFrom, dateTo, transportModeFilter, unassignedFilter])
+  }, [
+    authReady,
+    searchParams,
+    statusFilter,
+    b2bFlagFilter,
+    dateFrom,
+    dateTo,
+    transportModeFilter,
+    perfTransportMode,
+    unassignedFilter,
+    selectedIncoterms,
+    selectedPlantSites,
+  ])
 
   // Debounced refetch: global search runs on the server (full dataset), not only the current page
-  const isFirstSearchRender = useRef(true)
-  useEffect(() => {
-    if (!authReady) return
-    if (isFirstSearchRender.current) {
-      isFirstSearchRender.current = false
-      return
-    }
-    const t = setTimeout(() => {
-      setCurrentPage(1)
-      fetchContracts(1)
-    }, 500)
-    return () => clearTimeout(t)
+  const applySearch = useCallback(() => {
+    setCurrentPage(1)
+    setSearchTerm(searchDraft)
+    fetchContracts(1, searchDraft)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchTerm])
+  }, [searchDraft])
 
-  const isFirstColumnFilterRender = useRef(true)
-  useEffect(() => {
-    if (!authReady) return
-    if (isFirstColumnFilterRender.current) {
-      isFirstColumnFilterRender.current = false
-      return
-    }
-    const t = setTimeout(() => {
-      setCurrentPage(1)
-      fetchContracts(1)
-    }, 500)
-    return () => clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [columnFilters])
+  // Column header filters apply only when user presses Enter inside the filter popover.
   
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) {
@@ -335,33 +359,50 @@ function ContractsPageContent() {
   const expandedCount = expandedContractIds.size
   // NOTE: allVisibleIds/allExpanded are derived after filteredContracts is defined (below)
 
-  const columnStorageKey = 'contracts.compact.visibleColumns'
-  const sortStorageKey = 'contracts.compact.sort'
+  const columnStorageKey = isContractPerformance
+    ? 'contract-performance.compact.visibleColumns'
+    : 'contracts.compact.visibleColumns'
+  // Bumped so saved "created_at" default does not fight API order (newest contract_date first).
+  const sortStorageKey = isContractPerformance ? 'contract-performance.compact.sort' : 'contracts.compact.sort.v2'
 
-  const fetchContracts = async (page: number = currentPage) => {
+  const fetchContracts = async (page: number = currentPage, searchOverride?: string) => {
     try {
       if (!authReady) return
       setLoading(true)
       const params = new URLSearchParams()
       params.append('page', page.toString())
       params.append('limit', contractsPerPage.toString())
-      const searchTrim = searchTerm.trim()
+      const searchTrim = (searchOverride ?? searchTerm).trim()
       if (searchTrim.length >= 2) {
         params.append('search', searchTrim)
       }
-      const cfKeys = Object.keys(columnFilters)
+      const mergedColumnFilters: Record<string, any> = { ...columnFilters }
+      if (isContractPerformance) {
+        if (selectedIncoterms.length > 0) {
+          const includeBlank = selectedIncoterms.includes('Blank')
+          const values = selectedIncoterms.filter((v) => v !== 'Blank')
+          mergedColumnFilters.incoterm = { type: 'multi', values, includeBlank }
+        }
+      }
+      const cfKeys = Object.keys(mergedColumnFilters)
       if (cfKeys.length > 0) {
-        params.append('columnFilters', JSON.stringify(columnFilters))
+        params.append('columnFilters', JSON.stringify(mergedColumnFilters))
       }
       if (statusFilter && statusFilter !== 'All Status') {
         // Status is aligned with SAP (Open/Close/Cancelled)
         params.append('status', statusFilter)
       }
-      if (b2bFlagFilter && b2bFlagFilter !== 'ALL') {
-        params.append('b2bFlag', b2bFlagFilter)
-      }
-      if (transportModeFilter && transportModeFilter !== 'ALL') {
-        params.append('transportMode', transportModeFilter)
+      if (!isContractPerformance) {
+        if (b2bFlagFilter && b2bFlagFilter !== 'ALL') {
+          params.append('b2bFlag', b2bFlagFilter)
+        }
+        if (transportModeFilter && transportModeFilter !== 'ALL') {
+          params.append('transportMode', transportModeFilter)
+        }
+      } else {
+        if (perfTransportMode !== 'ALL') {
+          params.append('transportMode', perfTransportMode)
+        }
       }
       if (dateFrom) {
         params.append('dateFrom', dateFrom)
@@ -377,6 +418,9 @@ function ContractsPageContent() {
       }
       if (unassignedFilter) {
         params.append('unassigned', unassignedFilter)
+      }
+      if (isContractPerformance && selectedPlantSites.length > 0) {
+        selectedPlantSites.forEach((p) => params.append('plant', p))
       }
 
       const response = await api.get(`/contracts?${params.toString()}`)
@@ -437,6 +481,38 @@ function ContractsPageContent() {
     fetchFilterOptions()
   }, [authReady])
 
+  // Contract Performance: filter options (Incoterm + Plant/Site) use the same sources as Dashboard
+  useEffect(() => {
+    if (!authReady || !isContractPerformance) return
+    let cancelled = false
+    Promise.all([
+      api.get('/contracts/filter-options/incoterms'),
+      api.get('/dashboard/filter-options/plants'),
+    ])
+      .then(([incRes, plantRes]) => {
+        if (cancelled) return
+        const incs = (incRes.data?.data?.incoterms || []) as string[]
+        // Dashboard API returns { data: string[] } (array of plant names), not data.plants
+        const plantPayload = plantRes.data?.data
+        const plants = (Array.isArray(plantPayload)
+          ? plantPayload
+          : plantPayload && typeof plantPayload === 'object' && 'plants' in plantPayload
+            ? (plantPayload as { plants?: string[] }).plants
+            : []) as string[]
+        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
+        setAvailablePlantSites(Array.isArray(plants) ? plants : [])
+      })
+      .catch((e) => {
+        if (cancelled) return
+        console.error('Failed to fetch Contract Performance filter options:', e)
+        setAvailableIncoterms([])
+        setAvailablePlantSites([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [authReady, isContractPerformance])
+
   // Dashboard cards: SEA without shipments, LAND without trucking (from dedicated API)
   useEffect(() => {
     if (!authReady) return
@@ -474,23 +550,62 @@ function ContractsPageContent() {
         return 'bg-gray-100 text-gray-800'
     }
   }
+  const countGt0 = (v: unknown) => {
+    const n = typeof v === 'string' ? parseFloat(v) : Number(v)
+    return Number.isFinite(n) && n > 0
+  }
+
   const getShippingIconColor = (c: Contract) => {
-    const hasShipping = !!(c.sto_count && c.sto_count > 0)
+    const hasShipping =
+      countGt0(c.shipment_count) || countGt0(c.sto_count)
     if (!hasShipping) return 'text-gray-400'
     const statusRaw = getContractStatusRaw(c)
     const isCompleted = ['COMPLETED', 'CLOSE', 'CLOSED'].includes(statusRaw)
     return isCompleted ? 'text-blue-600' : 'text-green-600'
   }
   const getTruckingIconColor = (c: Contract) => {
-    const hasTrucking = !!(c.trucking_count && c.trucking_count > 0)
+    const hasTrucking = countGt0(c.trucking_count)
     if (!hasTrucking) return 'text-gray-400'
     const statusRaw = getContractStatusRaw(c)
     const isCompleted = ['COMPLETED', 'CLOSE', 'CLOSED'].includes(statusRaw)
     return isCompleted ? 'text-blue-600' : 'text-green-600'
   }
 
+  const transportIsLand = (c: Contract) => String(c.transport_mode || '').toUpperCase() === 'LAND'
+  const transportIsSea = (c: Contract) => String(c.transport_mode || '').toUpperCase() === 'SEA'
+
+  const handleTruckIconClick = (contract: Contract) => {
+    const hasTrucking = countGt0(contract.trucking_count)
+    if (!hasTrucking) {
+      if (!transportIsLand(contract)) {
+        alert(
+          'Trucking operations apply to LAND contracts only. Open the Trucking page from the menu if you need to work across transport modes.',
+        )
+        return
+      }
+      setContractLogisticsUi({ kind: 'truck-create', contract })
+      return
+    }
+    setContractLogisticsUi({ kind: 'truck-detail', contractId: contract.contract_id })
+  }
+
+  const handleShipIconClick = (contract: Contract) => {
+    const hasShipping = countGt0(contract.shipment_count) || countGt0(contract.sto_count)
+    if (!hasShipping) {
+      if (!transportIsSea(contract)) {
+        alert(
+          'Shipments apply to SEA contracts only. Open the Shipments page from the menu if you need to work across transport modes.',
+        )
+        return
+      }
+      setContractLogisticsUi({ kind: 'ship-create', contractId: contract.contract_id })
+      return
+    }
+    setContractLogisticsUi({ kind: 'ship-detail', contractId: contract.contract_id })
+  }
+
   const getDocumentIconColor = (c: Contract) => {
-    if (!c.document_count || c.document_count === 0) return 'text-gray-400'
+    if (!countGt0(c.document_count)) return 'text-gray-400'
     return 'text-green-600'
   }
 
@@ -517,6 +632,14 @@ function ContractsPageContent() {
   }
 
   const formatShortDate = (dateStr: string) => formatDateDMY(dateStr)
+
+  const formatMonthDeliveryEnd = useCallback((dateStr: string) => {
+    if (!dateStr) return '-'
+    const d = new Date(dateStr)
+    if (Number.isNaN(d.getTime())) return '-'
+    const mon = d.toLocaleString('en-US', { month: 'short' })
+    return `${mon}-${d.getFullYear()}`
+  }, [])
 
   const getContractStatusRaw = (c: Contract) => {
     return (c.import_status || c.status || '').toUpperCase()
@@ -545,7 +668,9 @@ function ContractsPageContent() {
 
   const handleFilterChange = () => {
     setCurrentPage(1)
-    fetchContracts(1)
+    // Single Apply: apply date range + current search draft together
+    setSearchTerm(searchDraft)
+    fetchContracts(1, searchDraft)
   }
 
   const handleUploadFileChange = async (contract: Contract, e: React.ChangeEvent<HTMLInputElement>) => {
@@ -809,7 +934,8 @@ function ContractsPageContent() {
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
     if (colId === 'contract_qty' || colId === 'outstanding_qty' || colId === 'contract_aging') return 'number'
     if (colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'created_at') return 'date'
-    if (colId === 'product' || colId === 'status' || colId === 'company_name' || colId === 'lt_spot') return 'multi'
+    if (colId === 'product' || colId === 'status' || colId === 'company_name' || colId === 'lt_spot' || colId === 'group_name' || colId === 'supplier') return 'multi'
+    if (colId === 'month_delivery_end') return 'text'
     return 'text'
   }
 
@@ -817,6 +943,10 @@ function ContractsPageContent() {
     switch (colId) {
       case 'contract_id':
         return c.contract_id || ''
+      case 'group_name':
+        return c.group_name || ''
+      case 'supplier':
+        return c.supplier || ''
       case 'product':
         return c.product || ''
       case 'status':
@@ -843,6 +973,8 @@ function ContractsPageContent() {
         return c.delivery_start_date || ''
       case 'delivery_end':
         return c.delivery_end_date || ''
+      case 'month_delivery_end':
+        return formatMonthDeliveryEnd(c.delivery_end_date) || ''
       case 'created_at':
         return c.created_at || ''
       default:
@@ -917,8 +1049,15 @@ function ContractsPageContent() {
 
   // Search + most column filters run on the server; only computed UI columns filter here
   const filteredContracts = useMemo(() => {
-    return contracts.filter((contract) => passesColumnFilters(contract, clientOnlyColumnFilters))
-  }, [contracts, clientOnlyColumnFilters])
+    const base = contracts.filter((contract) => passesColumnFilters(contract, clientOnlyColumnFilters))
+    if (!isContractPerformance || lateOnTimeFilter === 'ALL') return base
+    return base.filter((c) => {
+      const tc = typeof c.trade_cycle_days === 'number' ? c.trade_cycle_days : null
+      if (tc == null) return false
+      if (lateOnTimeFilter === 'LATE') return tc > 0
+      return tc <= 0
+    })
+  }, [contracts, clientOnlyColumnFilters, isContractPerformance, lateOnTimeFilter])
 
   type CompactColumn = {
     id: string
@@ -934,19 +1073,45 @@ function ContractsPageContent() {
   }
 
   const compactColumns: CompactColumn[] = useMemo(() => [
-    {
-      id: 'contract_id',
-      label: 'Contract',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (c) => c.contract_id || '',
-      render: (c) => (
-        <div className="min-w-0">
-          <div className="font-semibold truncate">{c.contract_id}</div>
-          <div className="text-xs text-gray-600 truncate">{c.supplier || '-'} • {c.product || '-'}</div>
-        </div>
-      )
-    },
+    ...(isContractPerformance
+      ? []
+      : ([
+          {
+            id: 'contract_id',
+            label: 'Contract',
+            defaultVisible: true,
+            sortable: true,
+            getSortValue: (c: Contract) => c.contract_id || '',
+            render: (c: Contract) => (
+              <div className="min-w-0">
+                <div className="font-semibold truncate">{c.contract_id}</div>
+                <div className="text-xs text-gray-600 truncate">
+                  {c.supplier || '-'} • {c.product || '-'}
+                </div>
+              </div>
+            ),
+          },
+        ] as CompactColumn[])),
+    ...(isContractPerformance
+      ? ([
+          {
+            id: 'group_name',
+            label: 'Group Name',
+            defaultVisible: true,
+            sortable: true,
+            getSortValue: (c: Contract) => c.group_name || '',
+            render: (c: Contract) => <span className="text-sm">{c.group_name || '-'}</span>,
+          },
+          {
+            id: 'supplier',
+            label: 'Supplier',
+            defaultVisible: true,
+            sortable: true,
+            getSortValue: (c: Contract) => c.supplier || '',
+            render: (c: Contract) => <span className="text-sm">{c.supplier || '-'}</span>,
+          },
+        ] as CompactColumn[])
+      : []),
     {
       id: 'contract_aging',
       label: 'Contract Aging',
@@ -1199,6 +1364,19 @@ function ContractsPageContent() {
       getSortValue: (c) => c.delivery_end_date || '',
       render: (c) => <span className="text-sm">{formatShortDate(c.delivery_end_date)}</span>
     },
+    ...(isContractPerformance
+      ? ([
+          {
+            id: 'month_delivery_end',
+            label: 'Month Delivery End',
+            defaultVisible: true,
+            sortable: true,
+            getSortValue: (c: Contract) => (c.delivery_end_date ? String(c.delivery_end_date).slice(0, 7) : ''),
+            render: (c: Contract) => <span className="text-sm">{formatMonthDeliveryEnd(c.delivery_end_date)}</span>,
+            className: 'whitespace-nowrap',
+          },
+        ] as CompactColumn[])
+      : []),
     {
       id: 'cargo_readiness_date',
       label: 'Cargo Readiness Date',
@@ -1244,11 +1422,21 @@ function ContractsPageContent() {
       getSortValue: (c) => c.created_at || '',
       render: (c) => <span className="text-sm">{formatShortDate(c.created_at)}</span>
     },
-  ], [getStatusColor]) // eslint-disable-line react-hooks/exhaustive-deps
+  ], [getStatusColor, isContractPerformance, formatMonthDeliveryEnd]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const defaultVisibleColumnIds = useMemo(() => {
+    if (isContractPerformance) {
+      return [
+        'month_delivery_end',
+        'supplier',
+        'group_name',
+        'contract_ext_no',
+        'trade_cycle_days',
+        'cash_cycle_days',
+      ]
+    }
     return compactColumns.filter(c => c.defaultVisible).map(c => c.id)
-  }, [compactColumns])
+  }, [compactColumns, isContractPerformance])
 
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => new Set(defaultVisibleColumnIds))
 
@@ -1288,8 +1476,8 @@ function ContractsPageContent() {
 
   const visibleColumns = useMemo(() => {
     const visible = compactColumns.filter(c => visibleColumnIds.has(c.id))
-    // Ensure Contract + Status are always visible
-    const mustHave = ['contract_id', 'status']
+    // Ensure required columns are always visible (Contracts page only).
+    const mustHave = isContractPerformance ? [] : ['contract_id', 'status']
     for (const id of mustHave) {
       if (!visible.some(v => v.id === id)) {
         const def = compactColumns.find(c => c.id === id)
@@ -1298,8 +1486,14 @@ function ContractsPageContent() {
     }
     // De-dupe
     const seen = new Set<string>()
-    return visible.filter(c => (seen.has(c.id) ? false : (seen.add(c.id), true)))
-  }, [compactColumns, visibleColumnIds])
+    const deduped = visible.filter(c => (seen.has(c.id) ? false : (seen.add(c.id), true)))
+
+    // Contract Performance: keep the default view order stable.
+    if (!isContractPerformance) return deduped
+    const order = new Map<string, number>()
+    defaultVisibleColumnIds.forEach((id, idx) => order.set(id, idx))
+    return [...deduped].sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999))
+  }, [compactColumns, visibleColumnIds, isContractPerformance, defaultVisibleColumnIds])
 
   const getColumnWidth = (id: string): string => {
     switch (id) {
@@ -1462,8 +1656,14 @@ function ContractsPageContent() {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                   <Input
                     placeholder="Search by Contract ID, Contract Ext No, PO, Supplier, or Product..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
+                    value={searchDraft}
+                    onChange={(e) => setSearchDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        applySearch()
+                      }
+                    }}
                     className="pl-10"
                   />
                 </div>
@@ -1476,26 +1676,74 @@ function ContractsPageContent() {
                   <option value="Open">Open</option>
                   <option value="Close">Close</option>
                 </select>
-                <select
-                  value={b2bFlagFilter}
-                  onChange={(e) => setB2bFlagFilter(e.target.value)}
-                  className="px-4 py-2 border rounded-lg"
-                >
-                  <option value="ALL">All B2B Flags</option>
-                  {availableB2bFlags.map(flag => (
-                    <option key={flag} value={flag}>{flag}</option>
-                  ))}
-                </select>
-                <select
-                  value={transportModeFilter}
-                  onChange={(e) => setTransportModeFilter(e.target.value)}
-                  className="px-4 py-2 border rounded-lg"
-                >
-                  <option value="ALL">All Modes</option>
-                  <option value="SEA">SEA</option>
-                  <option value="LAND">LAND</option>
-                </select>
+                {!isContractPerformance && (
+                  <select
+                    value={b2bFlagFilter}
+                    onChange={(e) => setB2bFlagFilter(e.target.value)}
+                    className="px-4 py-2 border rounded-lg"
+                  >
+                    <option value="ALL">All B2B Flags</option>
+                    {availableB2bFlags.map(flag => (
+                      <option key={flag} value={flag}>{flag}</option>
+                    ))}
+                  </select>
+                )}
+                {!isContractPerformance && (
+                  <select
+                    value={transportModeFilter}
+                    onChange={(e) => setTransportModeFilter(e.target.value)}
+                    className="px-4 py-2 border rounded-lg"
+                  >
+                    <option value="ALL">All Modes</option>
+                    <option value="SEA">SEA</option>
+                    <option value="LAND">LAND</option>
+                  </select>
+                )}
+                {isContractPerformance && (
+                  <select
+                    value={lateOnTimeFilter}
+                    onChange={(e) => setLateOnTimeFilter(e.target.value as any)}
+                    className="px-4 py-2 border rounded-lg"
+                    title="Late: Trade Cycle > 0. On Time: Trade Cycle ≤ 0."
+                  >
+                    <option value="ALL">Late/On Time: All</option>
+                    <option value="LATE">Late</option>
+                    <option value="ON_TIME">On Time</option>
+                  </select>
+                )}
+                {isContractPerformance && (
+                  <select
+                    value={perfTransportMode}
+                    onChange={(e) => setPerfTransportMode(e.target.value as any)}
+                    className="px-4 py-2 border rounded-lg"
+                  >
+                    <option value="ALL">Transport Mode: All</option>
+                    <option value="SEA">SEA</option>
+                    <option value="LAND">LAND</option>
+                  </select>
+                )}
               </div>
+
+              {isContractPerformance && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <SearchableMultiSelect
+                    label="Incoterm"
+                    options={availableIncoterms}
+                    selected={selectedIncoterms}
+                    onChange={setSelectedIncoterms}
+                    placeholder="Select incoterm(s)"
+                    emptyMessage="Loading incoterms..."
+                  />
+                  <SearchableMultiSelect
+                    label="Plant/Site"
+                    options={availablePlantSites}
+                    selected={selectedPlantSites}
+                    onChange={setSelectedPlantSites}
+                    placeholder="Select plant/site(s)"
+                    emptyMessage="Loading plants..."
+                  />
+                </div>
+              )}
               
               {/* Date Range Filter */}
               <div className="flex gap-4 items-center">
@@ -1546,62 +1794,66 @@ function ContractsPageContent() {
           </CardContent>
         </Card>
 
-        {/* Assignment summary - clickable to filter list */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card
-            className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'sea' ? 'ring-2 ring-blue-500 bg-blue-50/50' : ''}`}
-            onClick={() => setUnassignedFilter(prev => (prev === 'sea' ? null : 'sea'))}
-          >
-            <CardContent className="pt-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm text-gray-500">SEA contracts without shipments</div>
-                  <div className="text-2xl font-semibold text-gray-900 mt-1">
-                    {unassignedSeaContracts}
+        {!isContractPerformance && (
+          <>
+            {/* Assignment summary - clickable to filter list */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Card
+                className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'sea' ? 'ring-2 ring-blue-500 bg-blue-50/50' : ''}`}
+                onClick={() => setUnassignedFilter(prev => (prev === 'sea' ? null : 'sea'))}
+              >
+                <CardContent className="pt-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm text-gray-500">SEA contracts without shipments</div>
+                      <div className="text-2xl font-semibold text-gray-900 mt-1">
+                        {unassignedSeaContracts}
+                      </div>
+                      <div className="text-xs text-gray-400 mt-1">Click to view list</div>
+                    </div>
+                    <Ship className="h-8 w-8 text-blue-500" />
                   </div>
-                  <div className="text-xs text-gray-400 mt-1">Click to view list</div>
-                </div>
-                <Ship className="h-8 w-8 text-blue-500" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card
-            className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'land' ? 'ring-2 ring-amber-500 bg-amber-50/50' : ''}`}
-            onClick={() => setUnassignedFilter(prev => (prev === 'land' ? null : 'land'))}
-          >
-            <CardContent className="pt-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm text-gray-500">LAND contracts without trucking</div>
-                  <div className="text-2xl font-semibold text-gray-900 mt-1">
-                    {unassignedLandContracts}
+                </CardContent>
+              </Card>
+              <Card
+                className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'land' ? 'ring-2 ring-amber-500 bg-amber-50/50' : ''}`}
+                onClick={() => setUnassignedFilter(prev => (prev === 'land' ? null : 'land'))}
+              >
+                <CardContent className="pt-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm text-gray-500">LAND contracts without trucking</div>
+                      <div className="text-2xl font-semibold text-gray-900 mt-1">
+                        {unassignedLandContracts}
+                      </div>
+                      <div className="text-xs text-gray-400 mt-1">Click to view list</div>
+                    </div>
+                    <Truck className="h-8 w-8 text-amber-500" />
                   </div>
-                  <div className="text-xs text-gray-400 mt-1">Click to view list</div>
-                </div>
-                <Truck className="h-8 w-8 text-amber-500" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+                </CardContent>
+              </Card>
+            </div>
 
-        {/* Active filter banner */}
-        {unassignedFilter && (
-          <div className="flex items-center justify-between gap-2 rounded-lg border bg-gray-50 px-4 py-2 text-sm">
-            <span className="text-gray-700">
-              {unassignedFilter === 'sea'
-                ? 'Showing SEA contracts without shipments'
-                : 'Showing LAND contracts without trucking'}
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setUnassignedFilter(null)}
-              className="text-gray-600 hover:text-gray-900"
-            >
-              <X className="h-4 w-4 mr-1" />
-              Clear filter
-            </Button>
-          </div>
+            {/* Active filter banner */}
+            {unassignedFilter && (
+              <div className="flex items-center justify-between gap-2 rounded-lg border bg-gray-50 px-4 py-2 text-sm">
+                <span className="text-gray-700">
+                  {unassignedFilter === 'sea'
+                    ? 'Showing SEA contracts without shipments'
+                    : 'Showing LAND contracts without trucking'}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setUnassignedFilter(null)}
+                  className="text-gray-600 hover:text-gray-900"
+                >
+                  <X className="h-4 w-4 mr-1" />
+                  Clear filter
+                </Button>
+              </div>
+            )}
+          </>
         )}
 
         {/* Contracts List */}
@@ -1731,11 +1983,6 @@ function ContractsPageContent() {
           <CardContent>
             {loading ? (
               <div className="text-center py-8">Loading contracts...</div>
-            ) : filteredContracts.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <p>No contracts found</p>
-                {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
-              </div>
             ) : (
               <>
                 {/* Desktop compact table: ONE scroll container + clean rows */}
@@ -1827,6 +2074,7 @@ function ContractsPageContent() {
                                   ref={headerFilterPopoverRef}
                                   className="absolute left-0 top-full mt-2 w-[280px] bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-30"
                                   onClick={(e) => e.stopPropagation()}
+                                  onMouseDown={(e) => e.stopPropagation()}
                                 >
                                   <div className="flex items-center justify-between mb-2">
                                     <div className="text-xs font-semibold text-gray-700 truncate">{col.label} Filter</div>
@@ -1851,12 +2099,20 @@ function ContractsPageContent() {
                                             value,
                                             exact: current?.type === 'text' ? Boolean(current.exact) : false,
                                             emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
+                                            notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
                                           })
+                                        }}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') {
+                                            e.preventDefault()
+                                            setCurrentPage(1)
+                                            fetchContracts(1)
+                                          }
                                         }}
                                         placeholder="Type to filter (contains)"
                                         className="h-8 text-sm"
                                       />
-                                      <div className="flex items-center justify-between gap-3">
+                                      <div className="flex flex-col gap-2">
                                         <label className="flex items-center gap-2 text-xs text-gray-700">
                                           <Checkbox
                                             checked={current?.type === 'text' ? Boolean(current.exact) : false}
@@ -1882,10 +2138,27 @@ function ContractsPageContent() {
                                                 value,
                                                 exact: current?.type === 'text' ? Boolean(current.exact) : false,
                                                 emptyOnly: Boolean(checked),
+                                                notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
                                               })
                                             }}
                                           />
                                           Only blanks
+                                        </label>
+                                        <label className="flex items-center gap-2 text-xs text-gray-700">
+                                          <Checkbox
+                                            checked={Boolean((current as any)?.notBlankOnly)}
+                                            onCheckedChange={(checked) => {
+                                              const value = current?.type === 'text' ? current.value : ''
+                                              setOrClearFilter(col.id, {
+                                                type: 'text',
+                                                value,
+                                                exact: current?.type === 'text' ? Boolean(current.exact) : false,
+                                                emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
+                                                notBlankOnly: Boolean(checked),
+                                              })
+                                            }}
+                                          />
+                                          Only not blanks
                                         </label>
                                       </div>
                                     </div>
@@ -1895,22 +2168,36 @@ function ContractsPageContent() {
                                   {filterType === 'number' && (
                                     <div className="space-y-2">
                                       <div className="grid grid-cols-2 gap-2">
-                                        <Input
+                                      <Input
                                           value={(current?.type === 'number' && current.min) ? current.min : ''}
                                           onChange={(e) => {
                                             const min = e.target.value
                                             const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly) })
+                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              e.preventDefault()
+                                              setCurrentPage(1)
+                                              fetchContracts(1)
+                                            }
                                           }}
                                           placeholder="Min"
                                           className="h-8 text-sm"
                                         />
-                                        <Input
+                                      <Input
                                           value={(current?.type === 'number' && current.max) ? current.max : ''}
                                           onChange={(e) => {
                                             const max = e.target.value
                                             const min = current?.type === 'number' ? current.min : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly) })
+                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              e.preventDefault()
+                                              setCurrentPage(1)
+                                              fetchContracts(1)
+                                            }
                                           }}
                                           placeholder="Max"
                                           className="h-8 text-sm"
@@ -1922,10 +2209,21 @@ function ContractsPageContent() {
                                           onCheckedChange={(checked) => {
                                             const min = current?.type === 'number' ? current.min : ''
                                             const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(checked) })
+                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
                                           }}
                                         />
                                         Only blanks
+                                      </label>
+                                      <label className="flex items-center gap-2 text-xs text-gray-700">
+                                        <Checkbox
+                                          checked={Boolean((current as any)?.notBlankOnly)}
+                                          onCheckedChange={(checked) => {
+                                            const min = current?.type === 'number' ? current.min : ''
+                                            const max = current?.type === 'number' ? current.max : ''
+                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
+                                          }}
+                                        />
+                                        Only not blanks
                                       </label>
                                     </div>
                                   )}
@@ -1934,23 +2232,37 @@ function ContractsPageContent() {
                                   {filterType === 'date' && (
                                     <div className="space-y-2">
                                       <div className="grid grid-cols-2 gap-2">
-                                        <Input
+                                      <Input
                                           type="date"
                                           value={(current?.type === 'date' && current.from) ? current.from : ''}
                                           onChange={(e) => {
                                             const from = e.target.value
                                             const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly) })
+                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              e.preventDefault()
+                                              setCurrentPage(1)
+                                              fetchContracts(1)
+                                            }
                                           }}
                                           className="h-8 text-sm"
                                         />
-                                        <Input
+                                      <Input
                                           type="date"
                                           value={(current?.type === 'date' && current.to) ? current.to : ''}
                                           onChange={(e) => {
                                             const to = e.target.value
                                             const from = current?.type === 'date' ? current.from : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly) })
+                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              e.preventDefault()
+                                              setCurrentPage(1)
+                                              fetchContracts(1)
+                                            }
                                           }}
                                           className="h-8 text-sm"
                                         />
@@ -1961,10 +2273,21 @@ function ContractsPageContent() {
                                           onCheckedChange={(checked) => {
                                             const from = current?.type === 'date' ? current.from : ''
                                             const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(checked) })
+                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
                                           }}
                                         />
                                         Only blanks
+                                      </label>
+                                      <label className="flex items-center gap-2 text-xs text-gray-700">
+                                        <Checkbox
+                                          checked={Boolean((current as any)?.notBlankOnly)}
+                                          onCheckedChange={(checked) => {
+                                            const from = current?.type === 'date' ? current.from : ''
+                                            const to = current?.type === 'date' ? current.to : ''
+                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
+                                          }}
+                                        />
+                                        Only not blanks
                                       </label>
                                     </div>
                                   )}
@@ -2057,7 +2380,15 @@ function ContractsPageContent() {
 
                       {/* Rows */}
                       <div className="divide-y">
-                        {sortedContracts.map((contract, idx) => (
+                        {sortedContracts.length === 0 ? (
+                          <div className="bg-white">
+                            <div className="px-4 py-10 text-center text-gray-500">
+                              <p>No contracts found</p>
+                              {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
+                            </div>
+                          </div>
+                        ) : (
+                          sortedContracts.map((contract, idx) => (
                           <div key={contract.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                             <div className="px-3 py-2">
                               <div
@@ -2089,22 +2420,16 @@ function ContractsPageContent() {
                                   <button
                                     title="Trucking"
                                     className={`p-1 ${getTruckingIconColor(contract)}`}
-                                    onClick={() => {
-                                      const firstSto = contract.sto_numbers?.split(',')[0]?.trim() || contract.sto_number
-                                      if (firstSto) router.push(`/trucking?sto=${encodeURIComponent(firstSto)}`)
-                                      else router.push(`/trucking?contract=${encodeURIComponent(contract.contract_id)}`)
-                                    }}
+                                    type="button"
+                                    onClick={() => handleTruckIconClick(contract)}
                                   >
                                     <Truck className="h-5 w-5" />
                                   </button>
                                   <button
                                     title="Shipping"
                                     className={`p-1 ${getShippingIconColor(contract)}`}
-                                    onClick={() => {
-                                      const firstSto = contract.sto_numbers?.split(',')[0]?.trim() || contract.sto_number
-                                      if (firstSto) router.push(`/shipments?sto=${encodeURIComponent(firstSto)}`)
-                                      else router.push(`/shipments?contract=${encodeURIComponent(contract.contract_id)}`)
-                                    }}
+                                    type="button"
+                                    onClick={() => handleShipIconClick(contract)}
                                   >
                                     <Ship className="h-5 w-5" />
                                   </button>
@@ -2184,7 +2509,8 @@ function ContractsPageContent() {
                               )}
                             </div>
                           </div>
-                        ))}
+                        ))
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2248,23 +2574,17 @@ function ContractsPageContent() {
                           {/* Icons: Trucking, Shipping, Documents */}
                           <button
                             title="Trucking"
+                            type="button"
                             className={`p-1 ${getTruckingIconColor(contract)}`}
-                            onClick={() => {
-                              const firstSto = contract.sto_numbers?.split(',')[0]?.trim() || contract.sto_number
-                              if (firstSto) router.push(`/trucking?sto=${encodeURIComponent(firstSto)}`)
-                              else router.push(`/trucking?contract=${encodeURIComponent(contract.contract_id)}`)
-                            }}
+                            onClick={() => handleTruckIconClick(contract)}
                           >
                             <Truck className="h-5 w-5" />
                           </button>
                           <button
                             title="Shipping"
+                            type="button"
                             className={`p-1 ${getShippingIconColor(contract)}`}
-                            onClick={() => {
-                              const firstSto = contract.sto_numbers?.split(',')[0]?.trim() || contract.sto_number
-                              if (firstSto) router.push(`/shipments?sto=${encodeURIComponent(firstSto)}`)
-                              else router.push(`/shipments?contract=${encodeURIComponent(contract.contract_id)}`)
-                            }}
+                            onClick={() => handleShipIconClick(contract)}
                           >
                             <Ship className="h-5 w-5" />
                           </button>
@@ -2693,7 +3013,8 @@ function ContractsPageContent() {
                               <th className="text-left p-2 font-medium">Late Indicator</th>
                               <th className="text-left p-2 font-medium">Status</th>
                               <th className="text-left p-2 font-medium">STO Quantity</th>
-                              <th className="text-left p-2 font-medium">Quantity Delivered / Quantity Receive (Kg)</th>
+                              <th className="text-left p-2 font-medium">Quantity Delivered (Kg)</th>
+                              <th className="text-left p-2 font-medium">Quantity Received (Kg)</th>
                               <th className="text-left p-2 font-medium">Vessel Name / Trucking Owner</th>
                               <th className="text-left p-2 font-medium">ETA Vessel Arrival at Loading Port / ETA Trucking Completion Date</th>
                             </tr>
@@ -2732,9 +3053,10 @@ function ContractsPageContent() {
                                 <td className="p-2">{row.status}</td>
                                 <td className="p-2">{formatNumber(row.sto_quantity)}</td>
                                 <td className="p-2">
-                                  {row.type === 'shipment'
-                                    ? formatNumber(row.quantity_delivered ?? 0)
-                                    : formatNumber(row.quantity_receive ?? 0)}
+                                  {formatNumber(row.quantity_delivered ?? 0)}
+                                </td>
+                                <td className="p-2">
+                                  {formatNumber(row.quantity_receive ?? 0)}
                                 </td>
                                 <td className="p-2">
                                   {row.type === 'shipment' ? (row.vessel_name ?? '-') : (row.trucking_owner ?? '-')}
@@ -2768,6 +3090,12 @@ function ContractsPageContent() {
                         <div className="text-gray-500">Due Date Delivery End</div>
                         <div className="font-medium mt-1">{formatDate(selectedContract.delivery_end_date)}</div>
                       </div>
+                      {isContractPerformance && (
+                        <div className="p-3 bg-gray-50 rounded">
+                          <div className="text-gray-500">Month Delivery End</div>
+                          <div className="font-medium mt-1">{formatMonthDeliveryEnd(selectedContract.delivery_end_date)}</div>
+                        </div>
+                      )}
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Cargo Readiness Date</div>
                         <div className="font-medium mt-1">{formatDate(selectedContract.cargo_readiness_date as any)}</div>
@@ -3051,6 +3379,39 @@ function ContractsPageContent() {
             </Card>
           </div>
         )}
+
+        <CreateTruckingOperationModal
+          open={contractLogisticsUi?.kind === 'truck-create'}
+          onClose={() => setContractLogisticsUi(null)}
+          onCreated={() => {
+            setContractLogisticsUi(null)
+            void fetchContracts(currentPage)
+          }}
+          initialContractExtNo={
+            contractLogisticsUi?.kind === 'truck-create'
+              ? contractLogisticsUi.contract.contract_ext_no || contractLogisticsUi.contract.contract_id
+              : null
+          }
+        />
+        <AddShipmentModal
+          open={contractLogisticsUi?.kind === 'ship-create'}
+          onClose={() => setContractLogisticsUi(null)}
+          onCreated={() => {
+            setContractLogisticsUi(null)
+            void fetchContracts(currentPage)
+          }}
+          initialContractId={contractLogisticsUi?.kind === 'ship-create' ? contractLogisticsUi.contractId : null}
+        />
+        <ContractTruckingDetailModal
+          open={contractLogisticsUi?.kind === 'truck-detail'}
+          contractId={contractLogisticsUi?.kind === 'truck-detail' ? contractLogisticsUi.contractId : null}
+          onClose={() => setContractLogisticsUi(null)}
+        />
+        <ContractShipmentDetailModal
+          open={contractLogisticsUi?.kind === 'ship-detail'}
+          contractId={contractLogisticsUi?.kind === 'ship-detail' ? contractLogisticsUi.contractId : null}
+          onClose={() => setContractLogisticsUi(null)}
+        />
       </div>
     </Layout>
   )

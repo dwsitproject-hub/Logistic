@@ -13,6 +13,8 @@
     "start:frontend": "cd frontend && npm start",
     "start:backend": "cd backend && npm start",
     "install:all": "npm install && cd frontend && npm install && cd ../backend && npm install",
+    "backfill:operation-ids": "cd backend && npm run backfill:operation-ids",
+    "migrate:sea-trucking-to-shipments": "cd backend && npm run migrate:sea-trucking-to-shipments",
     "db:reset-test-data": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reset-test-data.ps1"
   },
   "keywords": [

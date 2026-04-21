@@ -89,19 +89,20 @@ export function appendShipmentGlobalSearch(
     return { sql: '', params: [], nextIndex: startIndex }
   }
   const p = startIndex
+  const likeExpr = `$${p}::text`
   const sql = `
     AND (
-      strpos(lower(COALESCE(sb.sto_number::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(sb.shipment_id::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(sb.operation_id::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(sb.contract_numbers::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(sb.po_numbers::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(sb.vessel_name::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(sb.supplier::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(sb.port_of_discharge::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(sb.plant_site::text, '')), lower($${p}::text)) > 0
+      COALESCE(sb.sto_number::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.shipment_id::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.operation_id::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.contract_numbers::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.po_numbers::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.vessel_name::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.supplier::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.port_of_discharge::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.plant_site::text, '') ILIKE ${likeExpr}
     )`
-  return { sql, params: [searchTrim], nextIndex: startIndex + 1 }
+  return { sql, params: [`%${searchTrim}%`], nextIndex: startIndex + 1 }
 }
 
 export function appendShipmentColumnFilters(
@@ -219,7 +220,12 @@ export function appendShipmentViewOptionFilter(
   const p = startIndex
   if (mode === 'sto') {
     return {
-      sql: ` AND COALESCE(sb.sto_number::text, '') ILIKE $${p}`,
+      // STO view should also match synthetic operation_id and shipment_id.
+      sql: ` AND (
+        COALESCE(sb.sto_number::text, '') ILIKE $${p}
+        OR COALESCE(sb.operation_id::text, '') ILIKE $${p}
+        OR COALESCE(sb.shipment_id::text, '') ILIKE $${p}
+      )`,
       params: [`%${q}%`],
       nextIndex: startIndex + 1,
     }

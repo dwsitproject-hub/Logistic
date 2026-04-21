@@ -9,6 +9,7 @@ export type ColumnFilterPayload = Record<
     value?: string
     exact?: boolean
     emptyOnly?: boolean
+    notBlankOnly?: boolean
     min?: string
     max?: string
     from?: string
@@ -76,19 +77,20 @@ export function appendGlobalSearchBase(
     return { sql: '', params: [], nextIndex: paramIndex }
   }
   const p = paramIndex
+  const likeExpr = `$${p}::text`
   const sql = `
     AND (
-      strpos(lower(base.contract_id::text), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(base.po_numbers, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(base.sto_number::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(base.sto_numbers_agg::text, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(base.supplier, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(base.product, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(base.buyer, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(base.group_name, '')), lower($${p}::text)) > 0
-      OR strpos(lower(COALESCE(base.latest_spd_data->'raw'->>'Contract Ext No', base.latest_spd_data->>'Contract Ext No', '')), lower($${p}::text)) > 0
+      base.contract_id::text ILIKE ${likeExpr}
+      OR COALESCE(base.po_numbers, '') ILIKE ${likeExpr}
+      OR COALESCE(base.sto_number::text, '') ILIKE ${likeExpr}
+      OR COALESCE(base.sto_numbers_agg::text, '') ILIKE ${likeExpr}
+      OR COALESCE(base.supplier, '') ILIKE ${likeExpr}
+      OR COALESCE(base.product, '') ILIKE ${likeExpr}
+      OR COALESCE(base.buyer, '') ILIKE ${likeExpr}
+      OR COALESCE(base.group_name, '') ILIKE ${likeExpr}
+      OR COALESCE(base.latest_spd_data->'raw'->>'Contract Ext No', base.latest_spd_data->>'Contract Ext No', '') ILIKE ${likeExpr}
     )`
-  return { sql, params: [searchTrim], nextIndex: paramIndex + 1 }
+  return { sql, params: [`%${searchTrim}%`], nextIndex: paramIndex + 1 }
 }
 
 export function appendColumnFiltersBase(
@@ -106,6 +108,10 @@ export function appendColumnFiltersBase(
     const f = raw as ColumnFilterPayload[string]
     if (f.emptyOnly) {
       parts.push(` AND (${expr} IS NULL OR TRIM(${expr}::text) = '')`)
+      continue
+    }
+    if (f.notBlankOnly) {
+      parts.push(` AND (${expr} IS NOT NULL AND TRIM(${expr}::text) != '')`)
       continue
     }
 
