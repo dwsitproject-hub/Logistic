@@ -68,6 +68,29 @@ export function isoDateStringToDdMmYyyy(iso: string | null | undefined): string 
 export function parseDdMmYyyyToIso(s: string): string | null {
   const t = s.trim()
   if (!t) return null
+  // Accept ISO date (or full ISO) pasted in.
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})/.exec(t)
+  if (ymd) {
+    const yyyy = Number(ymd[1])
+    const mm = Number(ymd[2])
+    const dd = Number(ymd[3])
+    const d = new Date(yyyy, mm - 1, dd)
+    if (d.getFullYear() !== yyyy || d.getMonth() !== mm - 1 || d.getDate() !== dd) return null
+    return `${yyyy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
+  }
+
+  // Accept digits-only DDMMYYYY (common from spreadsheets when copied as text)
+  const digitsOnly = t.replace(/[^\d]/g, '')
+  if (digitsOnly.length === 8) {
+    const dd = Number(digitsOnly.slice(0, 2))
+    const mm = Number(digitsOnly.slice(2, 4))
+    const yyyy = Number(digitsOnly.slice(4, 8))
+    if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return null
+    const d = new Date(yyyy, mm - 1, dd)
+    if (d.getFullYear() !== yyyy || d.getMonth() !== mm - 1 || d.getDate() !== dd) return null
+    return `${yyyy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
+  }
+
   const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(t)
   if (!dmy) return null
   const dd = Number(dmy[1])

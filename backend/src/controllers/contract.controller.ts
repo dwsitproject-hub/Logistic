@@ -15,6 +15,9 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const transportMode = (req.query as any).transportMode as string | undefined;
     const unassigned = (req.query as any).unassigned as string | undefined; // 'sea' | 'land' -> filter to SEA without shipments or LAND without trucking
     const plant = (req.query as any).plant as string | string[] | undefined;
+    const sortKeyRaw = String((req.query as any).sortKey || 'contract_date');
+    const sortDirRaw = String((req.query as any).sortDir || 'desc').toLowerCase();
+    const sortDir = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
     // Allow filtering by a specific contract id (used by shipment details fallback)
     const contractIdFilter = (req.query as any).contract_id || (req.query as any).contractId || null;
     const offset = (Number(page) - 1) * Number(limit);
@@ -182,10 +185,21 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           ) AS last_ata_vessel_complete_discharge,
           -- For Trade/Cash Cycle calculation (SEA open): latest ETA vessel complete discharge
           (
-            SELECT MAX(s2.eta_discharge_complete::date)
+            SELECT MAX(
+              COALESCE(
+                s2.eta_discharge_complete::date,
+                (
+                  SELECT vlpd.eta_vessel_complete_discharge::date
+                  FROM vessel_loading_ports vlpd
+                  WHERE vlpd.shipment_id = s2.id
+                    AND vlpd.is_discharge_port = true
+                  ORDER BY vlpd.updated_at DESC NULLS LAST, vlpd.created_at DESC NULLS LAST
+                  LIMIT 1
+                )
+              )
+            )
             FROM shipments s2
             WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-              AND s2.eta_discharge_complete IS NOT NULL
           ) AS last_eta_vessel_complete_discharge
         FROM contract_scope cs
         INNER JOIN contracts c ON c.contract_id = cs.contract_id
@@ -322,11 +336,34 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
 
     const limitParam = paramIndex;
     const offsetParam = paramIndex + 1;
+
+    const allowedSort: Record<string, string> = {
+      contract_date: 'contract_date',
+      contract_id: 'contract_id',
+      status: 'status',
+      supplier: 'supplier',
+      buyer: 'buyer',
+      product: 'product',
+      group_name: 'group_name',
+      company_name: 'company_name',
+      incoterm: 'incoterm',
+      transport_mode: 'transport_mode',
+      delivery_start_date: 'delivery_start_date',
+      delivery_end_date: 'delivery_end_date',
+      sto_count: 'sto_count',
+      total_sto_quantity: 'total_sto_quantity',
+      outstanding_qty: 'outstanding_qty',
+      created_at: 'created_at',
+      // computed (JS): log_cycle_days, trade_cycle_days, cash_cycle_days
+    };
+    const sortKey = allowedSort[sortKeyRaw] ? sortKeyRaw : 'contract_date';
+    const orderExpr = allowedSort[sortKey] || 'contract_date';
+
     const filteredClosedAndPage = `
       )
       , page AS (
         SELECT * FROM filtered
-        ORDER BY contract_date DESC NULLS LAST, contract_id DESC
+        ORDER BY ${orderExpr} ${sortDir} NULLS LAST, contract_date DESC NULLS LAST, contract_id DESC
         LIMIT $${limitParam} OFFSET $${offsetParam}
       )
 `;
@@ -335,10 +372,19 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const countQuery = `${queryText}) SELECT COUNT(*)::int AS count FROM filtered`;
     const countParams = [...queryParams];
 
-    const [result, countResult] = await Promise.all([
-      query(listQuery, listParams),
-      query(countQuery, countParams),
-    ]);
+    const cycleSortKeys = new Set(['log_cycle_days', 'trade_cycle_days', 'cash_cycle_days']);
+    const wantCycleSort = cycleSortKeys.has(sortKeyRaw);
+
+    const countResult = await query(countQuery, countParams);
+    const totalCount = Number(countResult.rows[0]?.count ?? 0);
+
+    let result: any;
+    if (!wantCycleSort) {
+      result = await query(listQuery, listParams);
+    } else {
+      const cap = Math.min(totalCount, 10000);
+      result = await query(listQuery, [...queryParams, cap, 0]);
+    }
 
     const due = (d: unknown): Date | null => {
       if (d == null) return null;
@@ -607,6 +653,20 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       }
     }
 
+    if (wantCycleSort) {
+      const dirMul = sortDir === 'ASC' ? 1 : -1;
+      const getNum = (r: any) => (typeof r?.[sortKeyRaw] === 'number' ? r[sortKeyRaw] : null);
+      const sorted = [...result.rows].sort((a, b) => {
+        const av = getNum(a);
+        const bv = getNum(b);
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        return (av - bv) * dirMul;
+      });
+      result.rows = sorted.slice(offset, offset + Number(limit));
+    }
+
     // Debug logging
     logger.info('Contracts query result:', { 
       rowsReturned: result.rows.length,
@@ -617,8 +677,6 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         total_sto_quantity: result.rows[0].total_sto_quantity
       } : null
     });
-
-    const totalCount = Number(countResult.rows[0]?.count ?? 0);
 
     res.json({
       success: true,

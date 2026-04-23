@@ -83,7 +83,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
   const timingsMs: Record<string, number> = {};
   const tReq0 = performance.now();
   try {
-    const { status, vessel, port, dateFrom, dateTo, delayed, sto, contract, page = 1, limit = 10 } = req.query;
+    const { status, vessel, port, dateFrom, dateTo, delayed, sto, contract, plant, page = 1, limit = 10 } = req.query;
     const globalSearch =
       typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';
     const colFilters = parseColumnFiltersQuery((req.query as any).columnFilters);
@@ -219,6 +219,14 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     if (contract) {
       coreWhereParts.push(`c.contract_id = $${cp}`);
       coreParams.push(contract);
+      cp += 1;
+    }
+    const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+    const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+    if (plants.length > 0) {
+      // Plant/Site filter (same options as Dashboard). Matches discharge port.
+      coreWhereParts.push(`NULLIF(TRIM(COALESCE(s.port_of_discharge::text, '')), '') = ANY($${cp}::text[])`);
+      coreParams.push(plants);
       cp += 1;
     }
 
@@ -1697,6 +1705,12 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
       port_name,
       port_sequence,
       quantity_at_loading_port,
+      quality_ffa,
+      quality_mi,
+      quality_dobi,
+      quality_red,
+      quality_ds,
+      quality_stone,
       eta_vessel_arrival,
       ata_vessel_arrival,
       eta_vessel_berthed,
@@ -1740,6 +1754,18 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
     const eta_vessel_start_discharging_n = toDateOrNull(eta_vessel_start_discharging);
     const eta_vessel_complete_discharge_n = toDateOrNull(eta_vessel_complete_discharge);
 
+    const toNumberOrNull = (v: unknown): number | null => {
+      if (v == null || v === '') return null;
+      const n = typeof v === 'number' ? v : parseFloat(String(v));
+      return Number.isFinite(n) ? n : null;
+    };
+    const quality_ffa_n = toNumberOrNull(quality_ffa);
+    const quality_mi_n = toNumberOrNull(quality_mi);
+    const quality_dobi_n = toNumberOrNull(quality_dobi);
+    const quality_red_n = toNumberOrNull(quality_red);
+    const quality_ds_n = toNumberOrNull(quality_ds);
+    const quality_stone_n = toNumberOrNull(quality_stone);
+
     // Prefer explicit id from body, then fallback to route param (for PUT /:shipmentId/loading-ports/:portId)
     const id = bodyId || portId;
 
@@ -1762,37 +1788,56 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
            port_name = $2,
            port_sequence = $3,
            quantity_at_loading_port = $4,
-           eta_vessel_arrival = $5,
-           ata_vessel_arrival = $6,
-           eta_vessel_berthed = $7,
-           ata_vessel_berthed = $8,
-           eta_loading_start = $9,
-           ata_loading_start = $10,
-           eta_loading_completed = $11,
-           ata_loading_completed = $12,
-           eta_vessel_sailed = $13,
-           ata_vessel_sailed = $14,
-           eta_vessel_berthed_at_loading_port = $15,
-           eta_vessel_arrive_at_discharge_port = $16,
-           eta_vessel_berthed_at_discharge_port = $17,
-           eta_vessel_start_discharging = $18,
-           eta_vessel_complete_discharge = $19,
-           loading_rate = $20,
+           quality_ffa = $5,
+           quality_mi = $6,
+           quality_dobi = $7,
+           quality_red = $8,
+           quality_ds = $9,
+           quality_stone = $10,
+           eta_vessel_arrival = $11,
+           ata_vessel_arrival = $12,
+           eta_vessel_berthed = $13,
+           ata_vessel_berthed = $14,
+           eta_loading_start = $15,
+           ata_loading_start = $16,
+           eta_loading_completed = $17,
+           ata_loading_completed = $18,
+           eta_vessel_sailed = $19,
+           ata_vessel_sailed = $20,
+           eta_vessel_berthed_at_loading_port = $21,
+           eta_vessel_arrive_at_discharge_port = $22,
+           eta_vessel_berthed_at_discharge_port = $23,
+           eta_vessel_start_discharging = $24,
+           eta_vessel_complete_discharge = $25,
+           loading_rate = $26,
            updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1 AND shipment_id = $21
+         WHERE id = $1 AND shipment_id = $27
          RETURNING *`,
         [
           id, port_name, port_sequence, quantity_at_loading_port,
-          eta_vessel_arrival_n, ata_vessel_arrival_n, eta_vessel_berthed_n, ata_vessel_berthed_n,
-          eta_loading_start_n, ata_loading_start_n, eta_loading_completed_n, ata_loading_completed_n,
-          eta_vessel_sailed_n, ata_vessel_sailed_n,
+          quality_ffa_n,
+          quality_mi_n,
+          quality_dobi_n,
+          quality_red_n,
+          quality_ds_n,
+          quality_stone_n,
+          eta_vessel_arrival_n,
+          ata_vessel_arrival_n,
+          eta_vessel_berthed_n,
+          ata_vessel_berthed_n,
+          eta_loading_start_n,
+          ata_loading_start_n,
+          eta_loading_completed_n,
+          ata_loading_completed_n,
+          eta_vessel_sailed_n,
+          ata_vessel_sailed_n,
           eta_vessel_berthed_at_loading_port_n,
           eta_vessel_arrive_at_discharge_port_n,
           eta_vessel_berthed_at_discharge_port_n,
           eta_vessel_start_discharging_n,
           eta_vessel_complete_discharge_n,
           loading_rate,
-          actualShipmentId
+          actualShipmentId,
         ]
       );
 
@@ -1824,6 +1869,7 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
       const result = await query(
         `INSERT INTO vessel_loading_ports 
          (shipment_id, port_name, port_sequence, quantity_at_loading_port,
+          quality_ffa, quality_mi, quality_dobi, quality_red, quality_ds, quality_stone,
           eta_vessel_arrival, ata_vessel_arrival, eta_vessel_berthed, ata_vessel_berthed,
           eta_loading_start, ata_loading_start, eta_loading_completed, ata_loading_completed,
           eta_vessel_sailed, ata_vessel_sailed,
@@ -1833,19 +1879,32 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
           eta_vessel_start_discharging,
           eta_vessel_complete_discharge,
           loading_rate)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
          RETURNING *`,
         [
           actualShipmentId, port_name, port_sequence, quantity_at_loading_port,
-          eta_vessel_arrival_n, ata_vessel_arrival_n, eta_vessel_berthed_n, ata_vessel_berthed_n,
-          eta_loading_start_n, ata_loading_start_n, eta_loading_completed_n, ata_loading_completed_n,
-          eta_vessel_sailed_n, ata_vessel_sailed_n,
+          quality_ffa_n,
+          quality_mi_n,
+          quality_dobi_n,
+          quality_red_n,
+          quality_ds_n,
+          quality_stone_n,
+          eta_vessel_arrival_n,
+          ata_vessel_arrival_n,
+          eta_vessel_berthed_n,
+          ata_vessel_berthed_n,
+          eta_loading_start_n,
+          ata_loading_start_n,
+          eta_loading_completed_n,
+          ata_loading_completed_n,
+          eta_vessel_sailed_n,
+          ata_vessel_sailed_n,
           eta_vessel_berthed_at_loading_port_n,
           eta_vessel_arrive_at_discharge_port_n,
           eta_vessel_berthed_at_discharge_port_n,
           eta_vessel_start_discharging_n,
           eta_vessel_complete_discharge_n,
-          loading_rate
+          loading_rate,
         ]
       );
 
@@ -1959,6 +2018,14 @@ export const getShipmentDailyDeliverablesCalendar = async (req: AuthRequest, res
         FROM sap_processed_data spd
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      ),
+      vlp_disc_first AS (
+        SELECT DISTINCT ON (shipment_id)
+          shipment_id,
+          ata_loading_completed::date AS ata_vessel_complete_discharge
+        FROM vessel_loading_ports
+        WHERE COALESCE(is_discharge_port, false) = true
+        ORDER BY shipment_id, port_sequence NULLS LAST, id
       )
       SELECT
         s.id,
@@ -1966,6 +2033,7 @@ export const getShipmentDailyDeliverablesCalendar = async (req: AuthRequest, res
         c.contract_id AS contract_number,
         COALESCE(NULLIF(TRIM(c.sto_number::text), ''), NULL) AS sto_number,
         COALESCE(l.contract_ext_no, NULL) AS contract_ext_no,
+        s.vessel_name,
         c.supplier,
         c.product,
         c.group_name,
@@ -1978,14 +2046,16 @@ export const getShipmentDailyDeliverablesCalendar = async (req: AuthRequest, res
         s.actual_vessel_qty_receive,
         GREATEST(COALESCE(c.quantity_ordered, 0) - COALESCE(s.actual_vessel_qty_receive, s.bl_quantity, s.quantity_shipped, 0), 0) AS outstanding_quantity,
         s.daily_deliverables,
+        COALESCE(s.ata_discharge_complete::date, vd.ata_vessel_complete_discharge) AS ata_vessel_complete_discharge,
         s.updated_at
       FROM shipments s
       LEFT JOIN contracts c ON s.contract_id = c.id
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+      LEFT JOIN vlp_disc_first vd ON vd.shipment_id = s.id
       WHERE
         COALESCE(c.delivery_start_date, s.shipment_date, c.delivery_end_date, s.arrival_date) <= $2::date
         AND COALESCE(c.delivery_end_date, s.arrival_date, c.delivery_start_date, s.shipment_date) >= $1::date
-      ORDER BY COALESCE(c.delivery_start_date, s.shipment_date) ASC NULLS LAST, s.shipment_id ASC
+      ORDER BY COALESCE(s.ata_discharge_complete::date, vd.ata_vessel_complete_discharge) ASC NULLS LAST, COALESCE(c.delivery_start_date, s.shipment_date) ASC NULLS LAST, s.shipment_id ASC
       `,
       [from, to],
     );

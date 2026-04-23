@@ -16,6 +16,7 @@ import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
 import { format } from 'date-fns'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
+import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 
 /** Aligns with list `formatNumber` / `formatKg`: comma thousands, period decimals. */
 function formatTruckingQtyPlain(n: number): string {
@@ -107,6 +108,8 @@ function CalendarDeliverablesTable({
   editValue,
   formatQty,
   visibleMetaCols,
+  metaOrderIds,
+  onReorderMetaCols,
   onEditStart,
   onEditChange,
   onEditCancel,
@@ -120,6 +123,8 @@ function CalendarDeliverablesTable({
   editValue: string
   formatQty: (n: number) => string
   visibleMetaCols: Set<string>
+  metaOrderIds: string[]
+  onReorderMetaCols: (dragId: string, dropId: string) => void
   onEditStart: (id: string, date: string, initial: string) => void
   onEditChange: (v: string) => void
   onEditCancel: () => void
@@ -134,6 +139,7 @@ function CalendarDeliverablesTable({
   const opShown = visibleMetaCols.has('operation_id')
   const contractShown = visibleMetaCols.has('contract_block')
   const contractLeft = opShown ? operationColW : 0
+  const [dragMetaColId, setDragMetaColId] = useState<string | null>(null)
   const scrollTopRef = useRef<HTMLDivElement | null>(null)
   const scrollBottomRef = useRef<HTMLDivElement | null>(null)
   const isSyncing = useRef(false)
@@ -149,6 +155,28 @@ function CalendarDeliverablesTable({
 
   const sumPlannedQty = (r: TruckingCalendarRow) =>
     (r.daily_deliverables || []).reduce((s, x) => s + Number(x?.quantity_delivered || 0), 0)
+
+  const orderedMetaCols = useMemo(() => {
+    const all = [
+      'owner',
+      'due_start',
+      'due_end',
+      'source_type',
+      'lt_spot',
+      'product',
+      'group_name',
+      'supplier',
+      'outstanding_quantity',
+      'qty_sent',
+      'qty_sent_planning',
+      'qty_delivered',
+      'qty_received',
+    ]
+    const base = metaOrderIds?.length ? metaOrderIds : all
+    const deduped = Array.from(new Set(base))
+    const healed = [...deduped, ...all.filter((x) => !deduped.includes(x))].filter((x) => all.includes(x))
+    return healed.filter((id) => visibleMetaCols.has(id))
+  }, [metaOrderIds, visibleMetaCols])
 
   useEffect(() => {
     const top = scrollTopRef.current
@@ -205,45 +233,49 @@ function CalendarDeliverablesTable({
                   Contract Ext No / STO / Supplier
                 </th>
               ) : null}
-              {visibleMetaCols.has('owner') ? (
-                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Owner</th>
-              ) : null}
-              {visibleMetaCols.has('due_start') ? (
-                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Due Start</th>
-              ) : null}
-              {visibleMetaCols.has('due_end') ? (
-                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Due End</th>
-              ) : null}
-              {visibleMetaCols.has('source_type') ? (
-                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Source Type</th>
-              ) : null}
-              {visibleMetaCols.has('lt_spot') ? (
-                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">LT/SPOT</th>
-              ) : null}
-              {visibleMetaCols.has('product') ? (
-                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Product</th>
-              ) : null}
-              {visibleMetaCols.has('group_name') ? (
-                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Group Name</th>
-              ) : null}
-              {visibleMetaCols.has('supplier') ? (
-                <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Supplier</th>
-              ) : null}
-              {visibleMetaCols.has('outstanding_quantity') ? (
-                <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">Outstanding Qty</th>
-              ) : null}
-              {visibleMetaCols.has('qty_sent') ? (
-                <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">Qty Sent</th>
-              ) : null}
-              {visibleMetaCols.has('qty_sent_planning') ? (
-                <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">QTY Sent (planning)</th>
-              ) : null}
-              {visibleMetaCols.has('qty_delivered') ? (
-                <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">Qty Delivered</th>
-              ) : null}
-              {visibleMetaCols.has('qty_received') ? (
-                <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">Qty Received</th>
-              ) : null}
+              {orderedMetaCols.map((id) => {
+                const label =
+                  id === 'owner' ? 'Owner'
+                    : id === 'due_start' ? 'Due Start'
+                      : id === 'due_end' ? 'Due End'
+                        : id === 'source_type' ? 'Source Type'
+                          : id === 'lt_spot' ? 'LT/SPOT'
+                            : id === 'product' ? 'Product'
+                              : id === 'group_name' ? 'Group Name'
+                                : id === 'supplier' ? 'Supplier'
+                                  : id === 'outstanding_quantity' ? 'Outstanding Qty'
+                                    : id === 'qty_sent' ? 'Qty Sent'
+                                      : id === 'qty_sent_planning' ? 'QTY Sent (planning)'
+                                        : id === 'qty_delivered' ? 'Qty Delivered'
+                                          : 'Qty Received'
+                const alignRight = new Set(['outstanding_quantity', 'qty_sent', 'qty_sent_planning', 'qty_delivered', 'qty_received']).has(id)
+                return (
+                  <th
+                    key={id}
+                    className={`px-3 py-2 font-semibold text-gray-700 border-b border-gray-200 cursor-move ${alignRight ? 'text-right' : 'text-left'} ${dragMetaColId === id ? 'opacity-60' : ''}`}
+                    draggable
+                    onDragStart={(e) => {
+                      setDragMetaColId(id)
+                      e.dataTransfer.setData('text/plain', id)
+                      e.dataTransfer.effectAllowed = 'move'
+                    }}
+                    onDragEnd={() => setDragMetaColId(null)}
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                      e.dataTransfer.dropEffect = 'move'
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      const dragged = e.dataTransfer.getData('text/plain')
+                      if (dragged) onReorderMetaCols(dragged, id)
+                      setDragMetaColId(null)
+                    }}
+                    title="Drag to reorder"
+                  >
+                    {label}
+                  </th>
+                )
+              })}
               {days.map((d) => (
                 <th key={d} className="px-2 py-2 text-right font-semibold text-gray-700 border-b border-gray-200 tabular-nums">
                   {d}
@@ -291,57 +323,49 @@ function CalendarDeliverablesTable({
                       <div className="text-[10px] text-gray-500 whitespace-normal break-words" title={supplierLabel}>{supplierLabel}</div>
                     </td>
                   ) : null}
-                  {visibleMetaCols.has('owner') ? (
-                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 align-top">{r.trucking_owner || '-'}</td>
-                  ) : null}
-                  {visibleMetaCols.has('due_start') ? (
-                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 tabular-nums align-top">{dueStart}</td>
-                  ) : null}
-                  {visibleMetaCols.has('due_end') ? (
-                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 tabular-nums align-top">{dueEnd}</td>
-                  ) : null}
-                  {visibleMetaCols.has('source_type') ? (
-                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 align-top whitespace-nowrap">
-                      {(r as any).source_type || '—'}
-                    </td>
-                  ) : null}
-                  {visibleMetaCols.has('lt_spot') ? (
-                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 align-top whitespace-nowrap">
-                      {(r as any).lt_spot || '—'}
-                    </td>
-                  ) : null}
-                  {visibleMetaCols.has('product') ? (
-                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 align-top">
-                      {r.product || '—'}
-                    </td>
-                  ) : null}
-                  {visibleMetaCols.has('group_name') ? (
-                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 align-top">
-                      {r.group_name || '—'}
-                    </td>
-                  ) : null}
-                  {visibleMetaCols.has('supplier') ? (
-                    <td className="px-3 py-2 border-b border-gray-100 text-gray-700 align-top">
-                      {r.supplier || '—'}
-                    </td>
-                  ) : null}
-                  {visibleMetaCols.has('outstanding_quantity') ? (
-                    <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums align-top">
-                      {outQty ? formatQty(outQty) : '—'}
-                    </td>
-                  ) : null}
-                  {visibleMetaCols.has('qty_sent') ? (
-                    <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums align-top">{qtySent ? formatQty(qtySent) : '-'}</td>
-                  ) : null}
-                  {visibleMetaCols.has('qty_sent_planning') ? (
-                    <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums align-top">{plannedSum ? formatQty(plannedSum) : '—'}</td>
-                  ) : null}
-                  {visibleMetaCols.has('qty_delivered') ? (
-                    <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums font-semibold align-top">{qtyDel != null && Number.isFinite(qtyDel) ? formatQty(qtyDel) : '—'}</td>
-                  ) : null}
-                  {visibleMetaCols.has('qty_received') ? (
-                    <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums align-top">{qtyRecv != null && Number.isFinite(qtyRecv) ? formatQty(qtyRecv) : '—'}</td>
-                  ) : null}
+                  {orderedMetaCols.map((id) => {
+                    const alignRight = new Set(['outstanding_quantity', 'qty_sent', 'qty_sent_planning', 'qty_delivered', 'qty_received']).has(id)
+                    const val = (() => {
+                      switch (id) {
+                        case 'owner':
+                          return r.trucking_owner || '-'
+                        case 'due_start':
+                          return dueStart
+                        case 'due_end':
+                          return dueEnd
+                        case 'source_type':
+                          return (r as any).source_type || '—'
+                        case 'lt_spot':
+                          return (r as any).lt_spot || '—'
+                        case 'product':
+                          return r.product || '—'
+                        case 'group_name':
+                          return r.group_name || '—'
+                        case 'supplier':
+                          return r.supplier || '—'
+                        case 'outstanding_quantity':
+                          return outQty ? formatQty(outQty) : '—'
+                        case 'qty_sent':
+                          return qtySent ? formatQty(qtySent) : '-'
+                        case 'qty_sent_planning':
+                          return plannedSum ? formatQty(plannedSum) : '—'
+                        case 'qty_delivered':
+                          return qtyDel != null && Number.isFinite(qtyDel) ? formatQty(qtyDel) : '—'
+                        case 'qty_received':
+                          return qtyRecv != null && Number.isFinite(qtyRecv) ? formatQty(qtyRecv) : '—'
+                        default:
+                          return '-'
+                      }
+                    })()
+                    return (
+                      <td
+                        key={id}
+                        className={`px-3 py-2 border-b border-gray-100 text-gray-700 align-top ${alignRight ? 'text-right tabular-nums' : ''}`}
+                      >
+                        {val}
+                      </td>
+                    )
+                  })}
                   {days.map((d) => {
                     const date = dayIso(d)
                     const qty = getQty(r, date)
@@ -366,6 +390,17 @@ function CalendarDeliverablesTable({
                               onKeyDown={(e) => {
                                 if (e.key === 'Escape') onEditCancel()
                                 if (e.key === 'Enter') onEditCommit(r.id, date, editValue)
+                                if (e.key === 'Tab') {
+                                  e.preventDefault()
+                                  void (async () => {
+                                    await onEditCommit(r.id, date, editValue)
+                                    const nextDay = d + 1
+                                    if (nextDay > daysInMonth) return
+                                    const nextDate = dayIso(nextDay)
+                                    const nextQty = getQty(r, nextDate)
+                                    onEditStart(r.id, nextDate, nextQty ? String(nextQty) : '')
+                                  })()
+                                }
                               }}
                               onBlur={() => onEditCommit(r.id, date, editValue)}
                               className="w-[64px] h-7 px-2 rounded border bg-white text-right text-xs"
@@ -406,6 +441,8 @@ function TruckingPageContent() {
   const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
   const [loadingLocationFilter, setLoadingLocationFilter] = useState('')
   const [unloadingLocationFilter, setUnloadingLocationFilter] = useState('')
+  const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
+  const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   // Date filters: keep draft values so typing/selecting doesn't auto-refresh until Apply
@@ -464,6 +501,7 @@ function TruckingPageContent() {
   const planningFileInputRef = useRef<HTMLInputElement | null>(null)
   const [calendarColumnsOpen, setCalendarColumnsOpen] = useState(false)
   const calendarColumnsRef = useRef<HTMLDivElement | null>(null)
+  const truckingDailyPlanningPrefKey = 'trucking.daily_planning.view.v1'
   const [calendarVisibleMetaCols, setCalendarVisibleMetaCols] = useState<Set<string>>(
     () =>
       new Set([
@@ -484,6 +522,90 @@ function TruckingPageContent() {
         'outstanding_quantity',
       ]),
   )
+  const [calendarMetaOrderIds, setCalendarMetaOrderIds] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return []
+    try {
+      const raw = localStorage.getItem('trucking.daily_planning.metaOrder.v1')
+      const parsed = raw ? JSON.parse(raw) : null
+      return Array.isArray(parsed) ? parsed.map(String) : []
+    } catch {
+      return []
+    }
+  })
+  const calendarDailyPlanningSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    // Load per-user saved daily planning view (best effort).
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(truckingDailyPlanningPrefKey)}`)
+        const value = res.data?.data?.value
+        if (cancelled) return
+        const cols = Array.isArray(value?.visibleMetaCols) ? value.visibleMetaCols : Array.isArray(value?.visible) ? value.visible : null
+        const order = Array.isArray(value?.metaOrderIds) ? value.metaOrderIds : Array.isArray(value?.metaOrder) ? value.metaOrder : null
+        if (Array.isArray(cols) && cols.length > 0) setCalendarVisibleMetaCols(new Set(cols.map((x: any) => String(x))))
+        if (Array.isArray(order) && order.length > 0) setCalendarMetaOrderIds(order.map((x: any) => String(x)))
+      } catch {
+        // ignore
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('trucking.daily_planning.metaOrder.v1', JSON.stringify(calendarMetaOrderIds))
+    } catch {}
+  }, [calendarMetaOrderIds])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (calendarDailyPlanningSaveTimerRef.current) clearTimeout(calendarDailyPlanningSaveTimerRef.current)
+    calendarDailyPlanningSaveTimerRef.current = setTimeout(() => {
+      void api
+        .post('/user-preferences/me', {
+          key: truckingDailyPlanningPrefKey,
+          value: { visibleMetaCols: Array.from(calendarVisibleMetaCols), metaOrderIds: calendarMetaOrderIds },
+        })
+        .catch(() => null)
+    }, 600)
+    return () => {
+      if (calendarDailyPlanningSaveTimerRef.current) clearTimeout(calendarDailyPlanningSaveTimerRef.current)
+    }
+  }, [calendarMetaOrderIds, calendarVisibleMetaCols])
+
+  const reorderCalendarMetaCols = (dragId: string, dropId: string) => {
+    if (dragId === dropId) return
+    setCalendarMetaOrderIds((prev) => {
+      const base = prev.length > 0 ? [...prev] : []
+      const ids = base.length > 0
+        ? base
+        : [
+            'owner',
+            'due_start',
+            'due_end',
+            'source_type',
+            'lt_spot',
+            'product',
+            'group_name',
+            'supplier',
+            'outstanding_quantity',
+            'qty_sent',
+            'qty_sent_planning',
+            'qty_delivered',
+            'qty_received',
+          ]
+      const from = ids.indexOf(dragId)
+      const to = ids.indexOf(dropId)
+      if (from < 0 || to < 0) return ids
+      ids.splice(from, 1)
+      ids.splice(to, 0, dragId)
+      return ids
+    })
+  }
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -606,6 +728,21 @@ function TruckingPageContent() {
   const [sortKey, setSortKey] = useState<string>('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => new Set())
+  const columnOrderStorageKey = 'trucking.compact.columnOrder'
+  const userViewPrefKey = 'trucking.compact.view.v1'
+  const [columnOrderIds, setColumnOrderIds] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return []
+    try {
+      const raw = localStorage.getItem(columnOrderStorageKey)
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        return Array.isArray(parsed) ? parsed.map(String) : []
+      }
+    } catch {}
+    return []
+  })
+  const [dragColId, setDragColId] = useState<string | null>(null)
+  const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Desktop table horizontal scroll sync
   const topScrollRef = useRef<HTMLDivElement | null>(null)
@@ -650,7 +787,31 @@ function TruckingPageContent() {
   useEffect(() => {
     fetchTruckingOperations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir])
+  }, [page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir, selectedPlantSites])
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .get('/dashboard/filter-options/plants')
+      .then((res) => {
+        if (cancelled) return
+        const plantPayload = res.data?.data
+        const plants = (Array.isArray(plantPayload)
+          ? plantPayload
+          : plantPayload && typeof plantPayload === 'object' && 'plants' in plantPayload
+            ? (plantPayload as { plants?: string[] }).plants
+            : []) as string[]
+        setAvailablePlantSites(Array.isArray(plants) ? plants : [])
+      })
+      .catch((e) => {
+        if (cancelled) return
+        console.error('Failed to fetch plant/site options:', e)
+        setAvailablePlantSites([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const isFirstLateIndicatorEffect = useRef(true)
   useEffect(() => {
@@ -716,6 +877,9 @@ function TruckingPageContent() {
       const contractParam = searchParams.get('contract')
       if (contractParam) {
         params.append('contract', contractParam)
+      }
+      if (selectedPlantSites.length > 0) {
+        selectedPlantSites.forEach((p) => params.append('plant', p))
       }
       
       const response = await api.get(`/trucking?${params.toString()}`)
@@ -1365,20 +1529,88 @@ function TruckingPageContent() {
     }
   }, [defaultVisibleColumnIds, visibleColumnIds.size])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (columnOrderIds.length > 0) {
+      try {
+        localStorage.setItem(columnOrderStorageKey, JSON.stringify(columnOrderIds))
+      } catch {}
+    }
+  }, [columnOrderIds])
+
+  useEffect(() => {
+    // Initialize / heal column order with any missing ids.
+    const allIds = compactColumns.map((c) => c.id)
+    setColumnOrderIds((prev) => {
+      const base = prev.length > 0 ? prev : allIds
+      const deduped = Array.from(new Set(base))
+      const missing = allIds.filter((id) => !deduped.includes(id))
+      return [...deduped, ...missing].filter((id) => allIds.includes(id))
+    })
+    // Load per-user saved view
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(userViewPrefKey)}`)
+        const value = res.data?.data?.value
+        if (cancelled) return
+        const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
+        const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
+        if (Array.isArray(cols) && cols.length > 0) setVisibleColumnIds(new Set(cols.map((x: any) => String(x))))
+        if (Array.isArray(order) && order.length > 0) setColumnOrderIds(order.map((x: any) => String(x)))
+      } catch {
+        // ignore
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compactColumns])
+
   const visibleColumns = useMemo(() => {
-    const visible = compactColumns.filter(c => visibleColumnIds.has(c.id))
-    const statusCol = compactColumns.find(c => c.id === 'status')
-    const hasStatus = visible.some(c => c.id === 'status')
-    const visibleWithStatus = hasStatus ? visible : (statusCol ? [...visible, statusCol] : visible)
-    
-    const ordered = [
-      ...visibleWithStatus.filter(c => c.id === 'late_indicator'),
-      ...visibleWithStatus.filter(c => c.id === 'operation_id'),
-      ...visibleWithStatus.filter(c => c.id === 'status'),
-      ...visibleWithStatus.filter(c => c.id !== 'late_indicator' && c.id !== 'operation_id' && c.id !== 'status')
-    ]
-    return ordered
-  }, [compactColumns, visibleColumnIds, editingId])
+    const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
+    const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : compactColumns.map((c) => c.id))
+      .filter((id) => byId.has(id))
+    const orderedAll = orderedIds.map((id) => byId.get(id)!).filter(Boolean)
+    const visible = orderedAll.filter((c) => visibleColumnIds.has(c.id))
+    // Always include status even if hidden (editing requires it).
+    const visibleIds = new Set(visible.map((c) => c.id))
+    const statusCol = byId.get('status')
+    const withStatus = !visibleIds.has('status') && statusCol ? [...visible, statusCol] : visible
+    return withStatus
+  }, [columnOrderIds, compactColumns, editingId, visibleColumnIds])
+
+  const reorderColumnByDrag = (dragId: string, dropId: string) => {
+    if (dragId === dropId) return
+    setColumnOrderIds((prev) => {
+      const ids = prev.length > 0 ? [...prev] : compactColumns.map((c) => c.id)
+      const from = ids.indexOf(dragId)
+      const to = ids.indexOf(dropId)
+      if (from < 0 || to < 0) return ids
+      ids.splice(from, 1)
+      ids.splice(to, 0, dragId)
+      return ids
+    })
+  }
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
+    saveViewTimerRef.current = setTimeout(() => {
+      void api
+        .post('/user-preferences/me', {
+          key: userViewPrefKey,
+          value: { visibleColumnIds: Array.from(visibleColumnIds), columnOrderIds },
+        })
+        .catch(() => {
+          /* keep localStorage fallback */
+        })
+    }, 600)
+    return () => {
+      if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
+    }
+  }, [columnOrderIds, visibleColumnIds])
 
   const sortedOperations = useMemo(() => {
     const col = compactColumns.find(c => c.id === sortKey)
@@ -1609,9 +1841,6 @@ function TruckingPageContent() {
                 <option value="ALL">All Status</option>
                 <option value="PLANNED">Planned</option>
                 <option value="IN_PROGRESS">In Progress</option>
-                <option value="LOADING">Loading</option>
-                <option value="IN_TRANSIT">In Transit</option>
-                <option value="UNLOADING">Unloading</option>
                 <option value="COMPLETED">Completed</option>
                 <option value="CANCELLED">Cancelled</option>
               </select>
@@ -1643,17 +1872,28 @@ function TruckingPageContent() {
                 <span className="text-gray-500">to</span>
                 <Input type="date" value={dateToDraft} onChange={(e) => setDateToDraft(e.target.value)} className="w-40" />
               </div>
+              <div className="min-w-[260px] shrink-0">
+                <SearchableMultiSelect
+                  label="Plant/Site"
+                  options={availablePlantSites}
+                  selected={selectedPlantSites}
+                  onChange={setSelectedPlantSites}
+                  placeholder="Select plant/site(s)"
+                  emptyMessage="Loading plants..."
+                />
+              </div>
               <Button onClick={handleFilterChange} variant="outline" size="sm" className="shrink-0">
                 <Filter className="h-4 w-4 mr-1" />
                 Apply
               </Button>
-              {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || loadingLocationFilter || unloadingLocationFilter || dateFromDraft || dateToDraft) && (
+              {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || loadingLocationFilter || unloadingLocationFilter || dateFromDraft || dateToDraft || selectedPlantSites.length > 0) && (
                 <Button 
                   onClick={() => {
                     setStatusFilter('ALL')
                     setLateIndicatorFilter('ALL')
                     setLoadingLocationFilter('')
                     setUnloadingLocationFilter('')
+                    setSelectedPlantSites([])
                     const now = new Date()
                     const yyyy = now.getFullYear()
                     const to = `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -1689,9 +1929,6 @@ function TruckingPageContent() {
               {[
                 { status: 'PLANNED', label: 'Planned', color: 'bg-blue-100', textColor: 'text-blue-800', badgeColor: 'bg-blue-600' },
                 { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600' },
-                { status: 'LOADING', label: 'Loading', color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600' },
-                { status: 'IN_TRANSIT', label: 'In Transit', color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600' },
-                { status: 'UNLOADING', label: 'Unloading', color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600' },
                 { status: 'COMPLETED', label: 'Completed', color: 'bg-green-100', textColor: 'text-green-800', badgeColor: 'bg-green-600' },
                 { status: 'CANCELLED', label: 'Cancelled', color: 'bg-red-100', textColor: 'text-red-800', badgeColor: 'bg-red-600' }
               ].map((statusInfo, index, array) => {
@@ -1699,12 +1936,9 @@ function TruckingPageContent() {
                 const count =
                   statusInfo.status === 'PLANNED' ? Number(s?.planned ?? 0)
                     : statusInfo.status === 'IN_PROGRESS' ? Number(s?.inProgress ?? 0)
-                      : statusInfo.status === 'LOADING' ? Number(s?.loading ?? 0)
-                        : statusInfo.status === 'IN_TRANSIT' ? Number(s?.inTransit ?? 0)
-                          : statusInfo.status === 'UNLOADING' ? Number(s?.unloading ?? 0)
-                            : statusInfo.status === 'COMPLETED' ? Number(s?.completed ?? 0)
-                              : statusInfo.status === 'CANCELLED' ? Number(s?.cancelled ?? 0)
-                                : 0
+                      : statusInfo.status === 'COMPLETED' ? Number(s?.completed ?? 0)
+                        : statusInfo.status === 'CANCELLED' ? Number(s?.cancelled ?? 0)
+                          : 0
                 return (
                   <div key={statusInfo.status} className="flex items-center flex-shrink-0">
                     <div className="relative overflow-visible">
@@ -1920,6 +2154,8 @@ function TruckingPageContent() {
                 editValue={calendarEditValue}
                 formatQty={formatTruckingQtyPlain}
                 visibleMetaCols={calendarVisibleMetaCols}
+                metaOrderIds={calendarMetaOrderIds}
+                onReorderMetaCols={reorderCalendarMetaCols}
                 onEditStart={(id, date, initial) => {
                   setCalendarEditing({ id, date })
                   setCalendarEditValue(initial)
@@ -2166,7 +2402,27 @@ function TruckingPageContent() {
                           const current = columnFilters[col.id]
 
                           return (
-                            <div key={col.id} className="relative min-w-0">
+                            <div
+                              key={col.id}
+                              className={`relative min-w-0 cursor-move ${dragColId === col.id ? 'opacity-60' : ''}`}
+                              draggable
+                              onDragStart={(e) => {
+                                setDragColId(col.id)
+                                e.dataTransfer.setData('text/plain', col.id)
+                                e.dataTransfer.effectAllowed = 'move'
+                              }}
+                              onDragEnd={() => setDragColId(null)}
+                              onDragOver={(e) => {
+                                e.preventDefault()
+                                e.dataTransfer.dropEffect = 'move'
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault()
+                                const dragged = e.dataTransfer.getData('text/plain')
+                                if (dragged) reorderColumnByDrag(dragged, col.id)
+                                setDragColId(null)
+                              }}
+                            >
                               <div className="flex items-center gap-1 min-w-0">
                                 <button
                                   type="button"
@@ -2494,9 +2750,6 @@ function TruckingPageContent() {
                                           <option value="">Select Status</option>
                                           <option value="PLANNED">PLANNED</option>
                                           <option value="IN_PROGRESS">IN_PROGRESS</option>
-                                          <option value="LOADING">LOADING</option>
-                                          <option value="IN_TRANSIT">IN_TRANSIT</option>
-                                          <option value="UNLOADING">UNLOADING</option>
                                           <option value="COMPLETED">COMPLETED</option>
                                           <option value="CANCELLED">CANCELLED</option>
                                         </select>
@@ -2702,9 +2955,6 @@ function TruckingPageContent() {
                               >
                                 <option value="PLANNED">Planned</option>
                                 <option value="IN_PROGRESS">In Progress</option>
-                                <option value="LOADING">Loading</option>
-                                <option value="IN_TRANSIT">In Transit</option>
-                                <option value="UNLOADING">Unloading</option>
                                 <option value="COMPLETED">Completed</option>
                                 <option value="CANCELLED">Cancelled</option>
                               </select>

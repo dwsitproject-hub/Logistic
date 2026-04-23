@@ -15,6 +15,7 @@ import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
+import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { format } from 'date-fns'
 import {
@@ -33,7 +34,6 @@ interface Shipment {
   contract_number: string
   vessel_name: string
   vessel_code: string
-  voyage_no: string
   vessel_owner: string
   vessel_draft: number | null
   vessel_loa?: number | null
@@ -170,6 +170,8 @@ function ShipmentsPageContent() {
   const perms = usePermissions()
   const canAddShipment = canCreatePermission(perms, 'data.shipments')
   const canEditShipment = canEditPermission(perms, 'data.shipments')
+  // Permissions load async. For UX, fail-open on button visibility and enforce on click.
+  const canShowEditShipmentButton = !perms.loaded || canEditShipment
   const canOpenAddShipmentModal = canAddShipment || canEditShipment
   const canExportShipments = canViewPermission(perms, 'action.export_data')
   const canBulkShipments = canCreatePermission(perms, 'action.bulk_operations')
@@ -190,6 +192,8 @@ function ShipmentsPageContent() {
   const [etaDischargeFilter, setEtaDischargeFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
   const [vesselFilter, setVesselFilter] = useState('')
   const [saving, setSaving] = useState(false)
+  const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
+  const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
   
   // Excel-like column filtering
   type ColumnFilter =
@@ -211,6 +215,7 @@ function ShipmentsPageContent() {
     sto_number?: string
     contract_number?: string
     contract_ext_no?: string
+    vessel_name?: string
     supplier?: string
     product?: string
     group_name?: string
@@ -223,6 +228,7 @@ function ShipmentsPageContent() {
     actual_vessel_qty_receive?: number
     outstanding_quantity?: number
     daily_deliverables?: Array<{ date: string; quantity_delivered: number }>
+    ata_vessel_complete_discharge?: string
   }
 
   const [shipCalendarMonth, setShipCalendarMonth] = useState(() => {
@@ -234,10 +240,76 @@ function ShipmentsPageContent() {
   const [shipCalendarSavingKey, setShipCalendarSavingKey] = useState<string | null>(null)
   const [shipCalendarEditing, setShipCalendarEditing] = useState<{ id: string; date: string } | null>(null)
   const [shipCalendarEditValue, setShipCalendarEditValue] = useState('')
+  const shipDailyPlanningPrefKey = 'shipments.daily_planning.view.v1'
+  const [shipCalendarMetaOrderIds, setShipCalendarMetaOrderIds] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return ['due_start', 'due_end', 'bl_qty']
+    try {
+      const raw = localStorage.getItem('shipments.daily_planning.metaOrder.v1')
+      const parsed = raw ? JSON.parse(raw) : null
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed.map(String)
+    } catch {}
+    return ['due_start', 'due_end', 'bl_qty']
+  })
+  const [shipCalendarDragMetaColId, setShipCalendarDragMetaColId] = useState<string | null>(null)
+  const shipDailyPlanningSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const shipPlanningFileInputRef = useRef<HTMLInputElement | null>(null)
   const [shipPlanningUploading, setShipPlanningUploading] = useState(false)
   const [shipPlanningUploadOpen, setShipPlanningUploadOpen] = useState(false)
   const [shipPlanningUploadSummary, setShipPlanningUploadSummary] = useState<any>(null)
+
+  useEffect(() => {
+    // Load per-user saved daily planning view (best effort).
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(shipDailyPlanningPrefKey)}`)
+        const value = res.data?.data?.value
+        if (cancelled) return
+        const order = Array.isArray(value?.metaOrderIds) ? value.metaOrderIds : Array.isArray(value?.metaOrder) ? value.metaOrder : null
+        if (Array.isArray(order) && order.length > 0) setShipCalendarMetaOrderIds(order.map((x: any) => String(x)))
+      } catch {
+        // ignore
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('shipments.daily_planning.metaOrder.v1', JSON.stringify(shipCalendarMetaOrderIds))
+    } catch {}
+  }, [shipCalendarMetaOrderIds])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (shipDailyPlanningSaveTimerRef.current) clearTimeout(shipDailyPlanningSaveTimerRef.current)
+    shipDailyPlanningSaveTimerRef.current = setTimeout(() => {
+      void api
+        .post('/user-preferences/me', {
+          key: shipDailyPlanningPrefKey,
+          value: { metaOrderIds: shipCalendarMetaOrderIds },
+        })
+        .catch(() => null)
+    }, 600)
+    return () => {
+      if (shipDailyPlanningSaveTimerRef.current) clearTimeout(shipDailyPlanningSaveTimerRef.current)
+    }
+  }, [shipCalendarMetaOrderIds])
+
+  const reorderShipCalendarMetaCols = (dragId: string, dropId: string) => {
+    if (dragId === dropId) return
+    setShipCalendarMetaOrderIds((prev) => {
+      const base = prev.length > 0 ? [...prev] : ['due_start', 'due_end', 'bl_qty']
+      const from = base.indexOf(dragId)
+      const to = base.indexOf(dropId)
+      if (from < 0 || to < 0) return base
+      base.splice(from, 1)
+      base.splice(to, 0, dragId)
+      return base
+    })
+  }
 
   const shipPlanningYearOptions = useMemo(() => {
     const y = new Date().getFullYear()
@@ -318,6 +390,7 @@ function ShipmentsPageContent() {
   // Compact/Expand view state
   const [expandedShipmentIds, setExpandedShipmentIds] = useState<Set<string>>(() => new Set())
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
+  const [dragColId, setDragColId] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<string>('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
@@ -539,7 +612,31 @@ function ShipmentsPageContent() {
   useEffect(() => {
     fetchShipments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, dateFrom, dateTo, page])
+  }, [statusFilter, dateFrom, dateTo, page, selectedPlantSites])
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .get('/dashboard/filter-options/plants')
+      .then((res) => {
+        if (cancelled) return
+        const plantPayload = res.data?.data
+        const plants = (Array.isArray(plantPayload)
+          ? plantPayload
+          : plantPayload && typeof plantPayload === 'object' && 'plants' in plantPayload
+            ? (plantPayload as { plants?: string[] }).plants
+            : []) as string[]
+        setAvailablePlantSites(Array.isArray(plants) ? plants : [])
+      })
+      .catch((e) => {
+        if (cancelled) return
+        console.error('Failed to fetch plant/site options:', e)
+        setAvailablePlantSites([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const isFirstLateIndicatorEffect = useRef(true)
   useEffect(() => {
@@ -637,6 +734,9 @@ function ShipmentsPageContent() {
       const contractParam = searchParams.get('contract')
       if (contractParam) {
         params.append('contract', contractParam)
+      }
+      if (selectedPlantSites.length > 0) {
+        selectedPlantSites.forEach((p) => params.append('plant', p))
       }
 
       // List path: skip heavy enriched summary SQL on the same round-trip; load summary after (debounced).
@@ -886,7 +986,7 @@ function ShipmentsPageContent() {
   const downloadTemplate = () => {
     // Build CSV template with headers only (no data, just a clean template for import)
     const headers = [
-      'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Voyage No','Vessel Owner','Vessel Draft (m)','Vessel LOA (m)','Vessel Capacity (MT)','Hull Type','Charter Type','Vessel OA Budget','Vessel OA Actual','Estimated KM','Estimated NM','Average Vessel Speed','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','B/L Quantity (MT)','Actual Vessel Qty Receive (MT)','Difference Final Qty BL QTY','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID',
+      'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Vessel Owner','Vessel Draft (m)','Vessel LOA (m)','Vessel Capacity (MT)','Hull Type','Charter Type','Vessel OA Budget','Vessel OA Actual','Estimated KM','Estimated NM','Average Vessel Speed','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','B/L Quantity (MT)','Actual Vessel Qty Receive (MT)','Difference Final Qty BL QTY','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID',
       // Loading port groups (1..3)
       'LP1 Port Name','LP1 Quantity (MT)','LP1 ETA Arrival','LP1 ATA Arrival','LP1 ETA Berthed','LP1 ATA Berthed','LP1 ETA Load Start','LP1 ATA Load Start','LP1 ETA Load Completed','LP1 ATA Load Completed','LP1 ETA Sailed','LP1 ATA Sailed','LP1 Loading Rate (MT/day)',
       'LP2 Port Name','LP2 Quantity (MT)','LP2 ETA Arrival','LP2 ATA Arrival','LP2 ETA Berthed','LP2 ATA Berthed','LP2 ETA Load Start','LP2 ATA Load Start','LP2 ETA Load Completed','LP2 ATA Load Completed','LP2 ETA Sailed','LP2 ATA Sailed','LP2 Loading Rate (MT/day)',
@@ -895,7 +995,7 @@ function ShipmentsPageContent() {
 
     // Sample row with STO Number and Contract Numbers
     const sampleRow = [
-      '2587817452','2313586719, 2313586720','PLANNED','MV Example','VES001','V001','Example Shipping Co','12.5','210','50000','Single Hull','Time Charter','75000','72000','1200','650','12.5','Jakarta','Singapore','1000','950','940','930','-10','1000','980','0','0','2025-01-01','2025-01-05','5','FALSE','SAP001',
+      '2587817452','2313586719, 2313586720','PLANNED','MV Example','VES001','Example Shipping Co','12.5','210','50000','Single Hull','Time Charter','75000','72000','1200','650','12.5','Jakarta','Singapore','1000','950','940','930','-10','1000','980','0','0','2025-01-01','2025-01-05','5','FALSE','SAP001',
       'Loading Port 1','500','2025-01-01T08:00','','2025-01-01T10:00','','2025-01-01T11:00','','2025-01-01T18:00','','2025-01-01T20:00','','71.43',
       '','','','','','','','','','','','','',
       '','','','','','','','','','','',''
@@ -927,7 +1027,7 @@ function ShipmentsPageContent() {
   const exportFilteredData = async () => {
     // Export actual filtered shipments data from the page
     const headers = [
-      'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Voyage No','Vessel Owner','Vessel Draft (m)','Vessel Capacity (MT)','Hull Type','Charter Type','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID',
+      'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Vessel Owner','Vessel Draft (m)','Vessel Capacity (MT)','Hull Type','Charter Type','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID',
       // Loading port groups (1..3)
       'LP1 Port Name','LP1 Quantity (MT)','LP1 ETA Arrival','LP1 ATA Arrival','LP1 ETA Berthed','LP1 ATA Berthed','LP1 ETA Load Start','LP1 ATA Load Start','LP1 ETA Load Completed','LP1 ATA Load Completed','LP1 ETA Sailed','LP1 ATA Sailed','LP1 Loading Rate (MT/day)',
       'LP2 Port Name','LP2 Quantity (MT)','LP2 ETA Arrival','LP2 ATA Arrival','LP2 ETA Berthed','LP2 ATA Berthed','LP2 ETA Load Start','LP2 ATA Load Start','LP2 ETA Load Completed','LP2 ATA Load Completed','LP2 ETA Sailed','LP2 ATA Sailed','LP2 Loading Rate (MT/day)',
@@ -976,7 +1076,6 @@ function ShipmentsPageContent() {
         escapeCsvValue(s.status),
         escapeCsvValue(s.vessel_name),
         escapeCsvValue(s.vessel_code),
-        escapeCsvValue(s.voyage_no),
         escapeCsvValue(s.vessel_owner),
         escapeCsvValue(s.vessel_draft ?? ''),
         escapeCsvValue(s.vessel_loa ?? ''),
@@ -1114,7 +1213,6 @@ function ShipmentsPageContent() {
           contractNumbers: contractNumbers ? contractNumbers.split(',').map((c: string) => c.trim()).filter((c: string) => c) : [],
           vesselName: row['Vessel Name'] || '',
           vesselCode: row['Vessel Code'] || '',
-          voyageNo: row['Voyage No'] || '',
           vesselOwner: row['Vessel Owner'] || '',
           vesselDraft: row['Vessel Draft (m)'] || '',
           vesselCapacity: row['Vessel Capacity (MT)'] || '',
@@ -1136,7 +1234,6 @@ function ShipmentsPageContent() {
         if (row['Status']) updateData.status = row['Status']
         if (row['Vessel Name']) updateData.vessel_name = row['Vessel Name']
         if (row['Vessel Code']) updateData.vessel_code = row['Vessel Code']
-        if (row['Voyage No']) updateData.voyage_no = row['Voyage No']
             if (row['Vessel Owner']) updateData.vessel_owner = row['Vessel Owner']
             if (row['Vessel Draft (m)']) updateData.vessel_draft = parseFloat(row['Vessel Draft (m)'])
             if (row['Vessel Capacity (MT)']) updateData.vessel_capacity = parseFloat(row['Vessel Capacity (MT)'])
@@ -1300,7 +1397,6 @@ function ShipmentsPageContent() {
       case 'contract_reference_po': return s.contract_reference_po || ''
       case 'vessel_name': return s.vessel_name || ''
       case 'vessel_code': return s.vessel_code || ''
-      case 'voyage_no': return s.voyage_no || ''
       case 'vessel_owner': return s.vessel_owner || ''
       case 'port_of_loading': return s.port_of_loading || ''
       case 'port_of_discharge': return s.port_of_discharge || ''
@@ -1537,7 +1633,9 @@ function ShipmentsPageContent() {
 
   // Column visibility and sorting
   const columnStorageKey = 'shipments.compact.visibleColumns'
+  const columnOrderStorageKey = 'shipments.compact.columnOrder'
   const sortStorageKey = 'shipments.compact.sort'
+  const userViewPrefKey = 'shipments.compact.view.v1'
 
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => {
     if (typeof window === 'undefined') return new Set()
@@ -1551,11 +1649,74 @@ function ShipmentsPageContent() {
     return new Set()
   })
 
+  const [columnOrderIds, setColumnOrderIds] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return []
+    try {
+      const stored = localStorage.getItem(columnOrderStorageKey)
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        return Array.isArray(parsed) ? parsed.map(String) : []
+      }
+    } catch {}
+    return []
+  })
+
   useEffect(() => {
     if (visibleColumnIds.size > 0) {
       localStorage.setItem(columnStorageKey, JSON.stringify(Array.from(visibleColumnIds)))
     }
   }, [visibleColumnIds])
+
+  useEffect(() => {
+    if (columnOrderIds.length > 0) {
+      localStorage.setItem(columnOrderStorageKey, JSON.stringify(columnOrderIds))
+    }
+  }, [columnOrderIds])
+
+  // Load per-user saved view (columns + order). Falls back to localStorage/defaults.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(userViewPrefKey)}`)
+        const value = res.data?.data?.value
+        if (cancelled) return
+        const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
+        const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
+        if (Array.isArray(cols) && cols.length > 0) setVisibleColumnIds(new Set(cols.map((x: any) => String(x))))
+        if (Array.isArray(order) && order.length > 0) setColumnOrderIds(order.map((x: any) => String(x)))
+      } catch {
+        // ignore
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Persist per-user saved view (debounced, best-effort).
+  const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
+    saveViewTimerRef.current = setTimeout(() => {
+      void api
+        .post('/user-preferences/me', {
+          key: userViewPrefKey,
+          value: {
+            visibleColumnIds: Array.from(visibleColumnIds),
+            columnOrderIds,
+          },
+        })
+        .catch(() => {
+          /* keep localStorage fallback */
+        })
+    }, 500)
+    return () => {
+      if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
+    }
+  }, [columnOrderIds, userViewPrefKey, visibleColumnIds])
 
   useEffect(() => {
     try {
@@ -1796,14 +1957,6 @@ function ShipmentsPageContent() {
       render: (s) => <span className="text-sm break-words">{s.port_of_discharge || s.plant_site || '-'}</span>
     },
     {
-      id: 'voyage_no',
-      label: 'Voyage No',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (s) => s.voyage_no || '',
-      render: (s) => <span className="text-sm">{s.voyage_no || '-'}</span>
-    },
-    {
       id: 'vessel_code',
       label: 'Vessel Code',
       defaultVisible: false,
@@ -1928,35 +2081,63 @@ function ShipmentsPageContent() {
     }
   }, [defaultVisibleColumnIds, visibleColumnIds])
 
+  // Initialize / heal column order whenever column definitions change.
+  useEffect(() => {
+    const allIds = compactColumns.map((c) => c.id)
+    setColumnOrderIds((prev) => {
+      const base = prev.length > 0 ? prev : allIds
+      const deduped = Array.from(new Set(base))
+      const missing = allIds.filter((id) => !deduped.includes(id))
+      return [...deduped, ...missing].filter((id) => allIds.includes(id))
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compactColumns])
+
   const visibleColumns = useMemo(() => {
-    const visible = compactColumns.filter(c => visibleColumnIds.has(c.id))
-    // Ensure late_indicator, operation_id, shipment_id and status are always visible
-    const lateIndicatorCol = compactColumns.find(c => c.id === 'late_indicator')
-    const operationIdCol = compactColumns.find(c => c.id === 'operation_id')
-    const shipmentIdCol = compactColumns.find(c => c.id === 'shipment_id')
-    const statusCol = compactColumns.find(c => c.id === 'status')
-    
-    // Build visible columns with required ones always included
-    const requiredCols: typeof compactColumns = []
-    if (lateIndicatorCol) requiredCols.push(lateIndicatorCol)
-    if (operationIdCol) requiredCols.push(operationIdCol)
-    if (shipmentIdCol) requiredCols.push(shipmentIdCol)
-    if (statusCol) requiredCols.push(statusCol)
-    
-    // Add required columns if they're not already visible
-    const visibleIds = new Set(visible.map(c => c.id))
-    const missingRequired = requiredCols.filter(col => !visibleIds.has(col.id))
-    const visibleWithRequired = [...visible, ...missingRequired]
-    
-    const ordered = [
-      ...visibleWithRequired.filter(c => c.id === 'late_indicator'),
-      ...visibleWithRequired.filter(c => c.id === 'operation_id'),
-      ...visibleWithRequired.filter(c => c.id === 'shipment_id'),
-      ...visibleWithRequired.filter(c => c.id === 'status'),
-      ...visibleWithRequired.filter(c => c.id !== 'late_indicator' && c.id !== 'operation_id' && c.id !== 'shipment_id' && c.id !== 'status')
-    ]
-    return ordered
-  }, [compactColumns, visibleColumnIds, editingId])
+    const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
+    const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : compactColumns.map((c) => c.id))
+      .filter((id) => byId.has(id))
+    const orderedAll = orderedIds.map((id) => byId.get(id)!).filter(Boolean)
+    const visible = orderedAll.filter((c) => visibleColumnIds.has(c.id))
+
+    // Keep required columns always visible (order is controlled by drag & drop).
+    const required = ['late_indicator', 'operation_id', 'shipment_id', 'status']
+    const visibleIds = new Set(visible.map((c) => c.id))
+    const missingRequired = required
+      .map((id) => byId.get(id))
+      .filter((c): c is CompactColumn => Boolean(c))
+      .filter((c) => !visibleIds.has(c.id))
+
+    return [...visible, ...missingRequired]
+  }, [compactColumns, visibleColumnIds, editingId, columnOrderIds])
+
+  const moveColumnOrder = (id: string, direction: 'up' | 'down') => {
+    const pinned = new Set(['late_indicator', 'operation_id', 'shipment_id', 'status'])
+    if (pinned.has(id)) return
+    setColumnOrderIds((prev) => {
+      const ids = prev.length > 0 ? [...prev] : compactColumns.map((c) => c.id)
+      const idx = ids.indexOf(id)
+      if (idx < 0) return ids
+      const swapWith = direction === 'up' ? idx - 1 : idx + 1
+      if (swapWith < 0 || swapWith >= ids.length) return ids
+      if (pinned.has(ids[swapWith])) return ids
+      ;[ids[idx], ids[swapWith]] = [ids[swapWith], ids[idx]]
+      return ids
+    })
+  }
+
+  const reorderColumnByDrag = (dragId: string, dropId: string) => {
+    if (dragId === dropId) return
+    setColumnOrderIds((prev) => {
+      const ids = prev.length > 0 ? [...prev] : compactColumns.map((c) => c.id)
+      const from = ids.indexOf(dragId)
+      const to = ids.indexOf(dropId)
+      if (from < 0 || to < 0) return ids
+      ids.splice(from, 1)
+      ids.splice(to, 0, dragId)
+      return ids
+    })
+  }
 
   const sortedShipments = useMemo(() => {
     const col = compactColumns.find(c => c.id === sortKey)
@@ -2187,14 +2368,10 @@ function ShipmentsPageContent() {
     // Save overall shipment info (includes first loading + first discharge port ETA)
     await handleSaveShipmentInfo()
 
-    // Only save the edited port separately when it's an *additional* port (not the first loading/discharge already saved above)
+    // Also save the edited port row (including first loading/discharge) so edits made in the table
+    // are not silently dropped when user presses "Save All".
     if (editingPortId) {
-      const firstLoading = loadingPorts.find(p => !p.is_discharge_port)
-      const firstDischarge = loadingPorts.find(p => p.is_discharge_port)
-      const isFirstPort = editingPortId === firstLoading?.id || editingPortId === firstDischarge?.id
-      if (!isFirstPort) {
-        await handleSavePort(editingPortId)
-      }
+      await handleSavePort(editingPortId)
     }
 
     setEditingPortId(null)
@@ -2217,7 +2394,20 @@ function ShipmentsPageContent() {
         eta_vessel_start_discharging: shipmentInfo.eta_vessel_start_discharging || '',
         eta_vessel_complete_discharge: shipmentInfo.eta_vessel_complete_discharge || '',
         vessel_loading_port_1: shipmentInfo.vessel_loading_port_1 || '',
-        vessel_discharge_port_1: shipmentInfo.vessel_discharge_port_1 || ''
+        vessel_discharge_port_1: shipmentInfo.vessel_discharge_port_1 || '',
+        // Ensure Quality fields are included (editable)
+        quality_at_loading_loc_1_ffa: shipmentInfo.quality_at_loading_loc_1_ffa ?? null,
+        quality_at_loading_loc_1_mi: shipmentInfo.quality_at_loading_loc_1_mi ?? null,
+        quality_at_loading_loc_1_dobi: shipmentInfo.quality_at_loading_loc_1_dobi ?? null,
+        quality_at_loading_loc_1_red: shipmentInfo.quality_at_loading_loc_1_red ?? null,
+        quality_at_loading_loc_1_ds: shipmentInfo.quality_at_loading_loc_1_ds ?? null,
+        quality_at_loading_loc_1_stone: shipmentInfo.quality_at_loading_loc_1_stone ?? null,
+        quality_at_discharge_loc_1_ffa: shipmentInfo.quality_at_discharge_loc_1_ffa ?? null,
+        quality_at_discharge_loc_1_mi: shipmentInfo.quality_at_discharge_loc_1_mi ?? null,
+        quality_at_discharge_loc_1_dobi: shipmentInfo.quality_at_discharge_loc_1_dobi ?? null,
+        quality_at_discharge_loc_1_red: shipmentInfo.quality_at_discharge_loc_1_red ?? null,
+        quality_at_discharge_loc_1_ds: shipmentInfo.quality_at_discharge_loc_1_ds ?? null,
+        quality_at_discharge_loc_1_stone: shipmentInfo.quality_at_discharge_loc_1_stone ?? null,
       })
       setEditingShipmentInfo(true)
     }
@@ -2294,6 +2484,13 @@ function ShipmentsPageContent() {
             port_sequence: firstPort.port_sequence ?? 1,
             quantity_at_loading_port: editedShipmentInfo.actual_vessel_qty_receive ?? firstPort.quantity_at_loading_port ?? 0,
             is_discharge_port: false,
+            // Quality (editable; may be overwritten by SAP later if SAP value is meaningful)
+            quality_ffa: editedShipmentInfo.quality_at_loading_loc_1_ffa ?? firstPort.quality_ffa ?? null,
+            quality_mi: editedShipmentInfo.quality_at_loading_loc_1_mi ?? firstPort.quality_mi ?? null,
+            quality_dobi: editedShipmentInfo.quality_at_loading_loc_1_dobi ?? firstPort.quality_dobi ?? null,
+            quality_red: editedShipmentInfo.quality_at_loading_loc_1_red ?? firstPort.quality_red ?? null,
+            quality_ds: editedShipmentInfo.quality_at_loading_loc_1_ds ?? firstPort.quality_ds ?? null,
+            quality_stone: editedShipmentInfo.quality_at_loading_loc_1_stone ?? firstPort.quality_stone ?? null,
             // ETA from form (override); use existing firstPort values as fallback so we don't clear other fields
             eta_vessel_arrival: toDateStr(editedShipmentInfo.eta_vessel_arrival_at_loading_port) ?? toDateStr(firstPort.eta_vessel_arrival),
             eta_vessel_berthed_at_loading_port: toDateStr(editedShipmentInfo.eta_vessel_berthed_at_loading_port) ?? toDateStr(firstPort.eta_vessel_berthed_at_loading_port),
@@ -2330,6 +2527,12 @@ function ShipmentsPageContent() {
             port_sequence: 1,
             quantity_at_loading_port: editedShipmentInfo.actual_vessel_qty_receive || 0,
             is_discharge_port: false,
+            quality_ffa: editedShipmentInfo.quality_at_loading_loc_1_ffa ?? null,
+            quality_mi: editedShipmentInfo.quality_at_loading_loc_1_mi ?? null,
+            quality_dobi: editedShipmentInfo.quality_at_loading_loc_1_dobi ?? null,
+            quality_red: editedShipmentInfo.quality_at_loading_loc_1_red ?? null,
+            quality_ds: editedShipmentInfo.quality_at_loading_loc_1_ds ?? null,
+            quality_stone: editedShipmentInfo.quality_at_loading_loc_1_stone ?? null,
             eta_vessel_arrival: editedShipmentInfo.eta_vessel_arrival_at_loading_port || null,
             eta_vessel_berthed_at_loading_port: editedShipmentInfo.eta_vessel_berthed_at_loading_port || null,
             eta_loading_start: editedShipmentInfo.eta_vessel_start_loading || null,
@@ -2355,6 +2558,13 @@ function ShipmentsPageContent() {
             port_sequence: dischargePort.port_sequence ?? 999,
             quantity_at_loading_port: dischargePort.quantity_at_loading_port ?? 0,
             is_discharge_port: true,
+            // Discharge quality is view-only (SAP-owned); preserve DB values.
+            quality_ffa: dischargePort.quality_ffa ?? null,
+            quality_mi: dischargePort.quality_mi ?? null,
+            quality_dobi: dischargePort.quality_dobi ?? null,
+            quality_red: dischargePort.quality_red ?? null,
+            quality_ds: dischargePort.quality_ds ?? null,
+            quality_stone: dischargePort.quality_stone ?? null,
             eta_vessel_arrive_at_discharge_port: toDateStrD(editedShipmentInfo.eta_vessel_arrive_at_discharge_port) ?? toDateStrD(dischargePort.eta_vessel_arrive_at_discharge_port),
             eta_vessel_berthed_at_discharge_port: toDateStrD(editedShipmentInfo.eta_vessel_berthed_at_discharge_port) ?? toDateStrD(dischargePort.eta_vessel_berthed_at_discharge_port),
             eta_vessel_start_discharging: toDateStrD(editedShipmentInfo.eta_vessel_start_discharging) ?? toDateStrD(dischargePort.eta_vessel_start_discharging),
@@ -2552,7 +2762,6 @@ function ShipmentsPageContent() {
       port_of_loading: '160px',
       port_of_discharge: '160px',
       quantity_receive: '140px',
-      voyage_no: '120px',
       vessel_code: '120px',
       quantity_delivered: '140px'
     }
@@ -2942,18 +3151,29 @@ function ShipmentsPageContent() {
                 <span className="text-gray-500">to</span>
                 <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-40" />
               </div>
+              <div className="min-w-[260px] w-full sm:w-auto">
+                <SearchableMultiSelect
+                  label="Plant/Site"
+                  options={availablePlantSites}
+                  selected={selectedPlantSites}
+                  onChange={setSelectedPlantSites}
+                  placeholder="Select plant/site(s)"
+                  emptyMessage="Loading plants..."
+                />
+              </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Button onClick={handleFilterChange} variant="outline" size="sm">
                   <Filter className="h-4 w-4 mr-1" />
                   Apply
                 </Button>
-                {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || viewFilterValue || dateFrom || dateTo) && (
+                {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || viewFilterValue || dateFrom || dateTo || selectedPlantSites.length > 0) && (
                   <Button
                     onClick={() => {
                       setStatusFilter('ALL')
                       setLateIndicatorFilter('ALL')
                       setViewOption('all')
                       setViewFilterValue('')
+                      setSelectedPlantSites([])
                       const now = new Date()
                       const yyyy = now.getFullYear()
                       const to = `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -3079,9 +3299,36 @@ function ShipmentsPageContent() {
                         <th className="sticky left-[220px] z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200 min-w-[260px]">
                           Contract Ext No / Supplier
                         </th>
-                        <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Due Start</th>
-                        <th className="px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200">Due End</th>
-                        <th className="px-3 py-2 text-right font-semibold text-gray-700 border-b border-gray-200">B/L Qty</th>
+                        {shipCalendarMetaOrderIds.map((id) => {
+                          const label = id === 'due_start' ? 'Due Start' : id === 'due_end' ? 'Due End' : 'B/L Qty (MT)'
+                          const alignRight = id === 'bl_qty'
+                          return (
+                            <th
+                              key={id}
+                              className={`px-3 py-2 font-semibold text-gray-700 border-b border-gray-200 cursor-move ${alignRight ? 'text-right' : 'text-left'} ${shipCalendarDragMetaColId === id ? 'opacity-60' : ''}`}
+                              draggable
+                              onDragStart={(e) => {
+                                setShipCalendarDragMetaColId(id)
+                                e.dataTransfer.setData('text/plain', id)
+                                e.dataTransfer.effectAllowed = 'move'
+                              }}
+                              onDragEnd={() => setShipCalendarDragMetaColId(null)}
+                              onDragOver={(e) => {
+                                e.preventDefault()
+                                e.dataTransfer.dropEffect = 'move'
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault()
+                                const dragged = e.dataTransfer.getData('text/plain')
+                                if (dragged) reorderShipCalendarMetaCols(dragged, id)
+                                setShipCalendarDragMetaColId(null)
+                              }}
+                              title="Drag to reorder"
+                            >
+                              {label}
+                            </th>
+                          )
+                        })}
                         {Array.from({ length: new Date(shipCalendarMonth.getFullYear(), shipCalendarMonth.getMonth() + 1, 0).getDate() }, (_, i) => i + 1).map((d) => (
                           <th key={d} className="px-2 py-2 text-right font-semibold text-gray-700 border-b border-gray-200 tabular-nums">{d}</th>
                         ))}
@@ -3096,29 +3343,70 @@ function ShipmentsPageContent() {
                           const dd = String(day).padStart(2, '0')
                           return `${yyyy}-${mm}-${dd}`
                         }
-                        const getQty = (date: string) => {
+                        const getQtyKg = (date: string) => {
                           const hit = (r.daily_deliverables || []).find((x) => (x?.date || '').slice(0, 10) === date)
                           return hit ? Number(hit.quantity_delivered || 0) : 0
                         }
+                        const kgToMt = (kg: number) => kg / 1000
+                        const fmtMt = (mt: number) =>
+                          Number.isFinite(mt)
+                            ? mt.toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: mt === 0 ? 0 : 2 })
+                            : '—'
                         const dueStart = r.delivery_start_date ? formatDateDMY(r.delivery_start_date) : '-'
                         const dueEnd = r.delivery_end_date ? formatDateDMY(r.delivery_end_date) : '-'
                         const blQty = Number(r.bl_quantity ?? r.quantity_shipped ?? 0)
+                        const blQtyMt = kgToMt(blQty)
+                        const commitShipDailyDeliverable = async (date: string, rawValue: string) => {
+                          const key = `${r.id}:${date}`
+                          const mt = rawValue.trim() === '' ? null : Number(String(rawValue).replace(/,/g, ''))
+                          if (mt != null && (!Number.isFinite(mt) || mt < 0)) {
+                            alert('Quantity must be a valid number (>= 0)')
+                            return false
+                          }
+                          const qKg = mt == null ? null : mt * 1000
+                          const existing = (r.daily_deliverables || []).slice()
+                          const next = existing.filter((x) => (x?.date || '').slice(0, 10) !== date)
+                          if (qKg != null && qKg !== 0) {
+                            next.push({ date, quantity_delivered: qKg })
+                            next.sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+                          }
+                          setShipCalendarSavingKey(key)
+                          try {
+                            const res = await api.put(`/shipments/${r.id}/daily-planning-deliverables`, { daily_deliverables: next })
+                            if (res.data?.success) {
+                              setShipCalendarRows((prev) =>
+                                prev.map((x) => (x.id === r.id ? { ...x, daily_deliverables: res.data.data.daily_deliverables || next } : x)),
+                              )
+                              return true
+                            }
+                            return false
+                          } catch (e2: any) {
+                            alert(e2?.response?.data?.error?.message || e2?.message || 'Failed to update daily deliverables')
+                            return false
+                          } finally {
+                            setShipCalendarSavingKey(null)
+                          }
+                        }
                         return (
                           <tr key={r.id} className="hover:bg-gray-50">
                             <td className="sticky left-0 z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[220px] align-top">
                               <div className="font-semibold text-gray-900 truncate" title={r.shipment_id}>{r.shipment_id}</div>
                               <div className="text-[10px] text-gray-500 truncate" title={r.sto_number || ''}>STO: {r.sto_number || '—'}</div>
+                              <div className="text-[10px] text-gray-500 truncate" title={r.vessel_name || ''}>Vessel: {r.vessel_name || '—'}</div>
                             </td>
                             <td className="sticky left-[220px] z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[260px] align-top">
                               <div className="font-medium text-gray-900 whitespace-normal break-words" title={r.contract_ext_no || ''}>{r.contract_ext_no || '—'}</div>
                               <div className="text-[10px] text-gray-500 whitespace-normal break-words" title={r.supplier || ''}>{r.supplier || '—'}</div>
                             </td>
-                            <td className="px-3 py-2 border-b border-gray-100 tabular-nums">{dueStart}</td>
-                            <td className="px-3 py-2 border-b border-gray-100 tabular-nums">{dueEnd}</td>
-                            <td className="px-3 py-2 border-b border-gray-100 text-right tabular-nums">{blQty ? `${formatNumber(blQty)} Kg` : '—'}</td>
+                            {shipCalendarMetaOrderIds.map((id) => {
+                              if (id === 'due_start') return <td key={id} className="px-3 py-2 border-b border-gray-100 tabular-nums">{dueStart}</td>
+                              if (id === 'due_end') return <td key={id} className="px-3 py-2 border-b border-gray-100 tabular-nums">{dueEnd}</td>
+                              return <td key={id} className="px-3 py-2 border-b border-gray-100 text-right tabular-nums">{blQty ? `${fmtMt(blQtyMt)} MT` : '—'}</td>
+                            })}
                             {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
                               const date = dayIso(d)
-                              const qty = getQty(date)
+                              const qtyKg = getQtyKg(date)
+                              const qtyMt = kgToMt(qtyKg)
                               const key = `${r.id}:${date}`
                               const isEditing = shipCalendarEditing?.id === r.id && shipCalendarEditing?.date === date
                               const isSaving = shipCalendarSavingKey === key
@@ -3129,7 +3417,7 @@ function ShipmentsPageContent() {
                                   onClick={() => {
                                     if (isSaving) return
                                     setShipCalendarEditing({ id: r.id, date })
-                                    setShipCalendarEditValue(qty ? String(qty) : '')
+                                    setShipCalendarEditValue(qtyKg ? String(qtyMt) : '')
                                   }}
                                 >
                                   {isEditing ? (
@@ -3141,31 +3429,27 @@ function ShipmentsPageContent() {
                                         onKeyDown={(e) => {
                                           if (e.key === 'Escape') setShipCalendarEditing(null)
                                           if (e.key === 'Enter') (async () => {
-                                            const rawValue = shipCalendarEditValue
-                                            const q = rawValue.trim() === '' ? null : Number(String(rawValue).replace(/,/g, ''))
-                                            if (q != null && (!Number.isFinite(q) || q < 0)) {
-                                              alert('Quantity must be a valid number (>= 0)')
+                                            const ok = await commitShipDailyDeliverable(date, shipCalendarEditValue)
+                                            if (ok) {
+                                              setShipCalendarEditing(null)
+                                              setShipCalendarEditValue('')
+                                            }
+                                          })()
+                                          if (e.key === 'Tab') (async () => {
+                                            e.preventDefault()
+                                            const ok = await commitShipDailyDeliverable(date, shipCalendarEditValue)
+                                            if (!ok) return
+                                            const nextDay = d + 1
+                                            if (nextDay > daysInMonth) {
+                                              setShipCalendarEditing(null)
+                                              setShipCalendarEditValue('')
                                               return
                                             }
-                                            const existing = (r.daily_deliverables || []).slice()
-                                            const next = existing.filter((x) => (x?.date || '').slice(0, 10) !== date)
-                                            if (q != null && q !== 0) {
-                                              next.push({ date, quantity_delivered: q })
-                                              next.sort((a, b) => (a.date || '').localeCompare(b.date || ''))
-                                            }
-                                            setShipCalendarSavingKey(key)
-                                            try {
-                                              const res = await api.put(`/shipments/${r.id}/daily-planning-deliverables`, { daily_deliverables: next })
-                                              if (res.data?.success) {
-                                                setShipCalendarRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, daily_deliverables: res.data.data.daily_deliverables || next } : x)))
-                                                setShipCalendarEditing(null)
-                                                setShipCalendarEditValue('')
-                                              }
-                                            } catch (e2: any) {
-                                              alert(e2?.response?.data?.error?.message || e2?.message || 'Failed to update daily deliverables')
-                                            } finally {
-                                              setShipCalendarSavingKey(null)
-                                            }
+                                            const nextDate = dayIso(nextDay)
+                                            const nextQtyKg = getQtyKg(nextDate)
+                                            const nextQtyMt = kgToMt(nextQtyKg)
+                                            setShipCalendarEditing({ id: r.id, date: nextDate })
+                                            setShipCalendarEditValue(nextQtyKg ? String(nextQtyMt) : '')
                                           })()
                                         }}
                                         onBlur={() => setShipCalendarEditing(null)}
@@ -3174,8 +3458,8 @@ function ShipmentsPageContent() {
                                       />
                                       {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-500" /> : null}
                                     </div>
-                                  ) : qty ? (
-                                    <span className="font-medium text-slate-900">{formatNumber(qty)}</span>
+                                  ) : qtyKg ? (
+                                    <span className="font-medium text-slate-900">{fmtMt(qtyMt)}</span>
                                   ) : (
                                     <span className="text-gray-300">—</span>
                                   )}
@@ -3285,11 +3569,44 @@ function ShipmentsPageContent() {
                             </label>
                           ))}
                       </div>
+                      <div className="mt-3 pt-3 border-t">
+                        <div className="text-xs font-semibold text-gray-600 mb-2">Column order</div>
+                        <div className="space-y-1 max-h-56 overflow-auto pr-1">
+                          {visibleColumns
+                            .filter((c) => !['late_indicator', 'operation_id', 'shipment_id', 'status'].includes(c.id))
+                            .map((col) => (
+                              <div key={`order-${col.id}`} className="flex items-center justify-between gap-2 text-sm">
+                                <span className="truncate">{col.label}</span>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    type="button"
+                                    className="p-1 rounded hover:bg-gray-100 text-gray-600"
+                                    title="Move up"
+                                    onClick={() => moveColumnOrder(col.id, 'up')}
+                                  >
+                                    <ArrowUp className="h-3.5 w-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="p-1 rounded hover:bg-gray-100 text-gray-600"
+                                    title="Move down"
+                                    onClick={() => moveColumnOrder(col.id, 'down')}
+                                  >
+                                    <ArrowDown className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
                       <div className="mt-3 flex items-center justify-between gap-2">
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => setVisibleColumnIds(new Set(defaultVisibleColumnIds))}
+                          onClick={() => {
+                            setVisibleColumnIds(new Set(defaultVisibleColumnIds))
+                            setColumnOrderIds(compactColumns.map((c) => c.id))
+                          }}
                         >
                           Reset
                         </Button>
@@ -3399,7 +3716,27 @@ function ShipmentsPageContent() {
                           const current = columnFilters[col.id]
 
                           return (
-                            <div key={col.id} className="relative min-w-0">
+                            <div
+                              key={col.id}
+                              className={`relative min-w-0 cursor-move ${dragColId === col.id ? 'opacity-60' : ''}`}
+                              draggable
+                              onDragStart={(e) => {
+                                setDragColId(col.id)
+                                e.dataTransfer.setData('text/plain', col.id)
+                                e.dataTransfer.effectAllowed = 'move'
+                              }}
+                              onDragEnd={() => setDragColId(null)}
+                              onDragOver={(e) => {
+                                e.preventDefault()
+                                e.dataTransfer.dropEffect = 'move'
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault()
+                                const dragged = e.dataTransfer.getData('text/plain')
+                                if (dragged) reorderColumnByDrag(dragged, col.id)
+                                setDragColId(null)
+                              }}
+                            >
                               <div className="flex items-center gap-1 min-w-0">
                                 <button
                                   type="button"
@@ -3850,17 +4187,23 @@ function ShipmentsPageContent() {
                                       </>
                                     ) : (
                                       <>
-                                        {canEditShipment && (
+                                      {canShowEditShipmentButton && (
                                         <Button
                                           variant="outline"
                                           size="sm"
-                                          onClick={() => handleEdit(shipment)}
+                                          onClick={() => {
+                                            if (perms.loaded && !canEditShipment) {
+                                              alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
+                                              return
+                                            }
+                                            handleEdit(shipment)
+                                          }}
                                           className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
                                         >
                                           <Edit2 className="h-4 w-4 mr-1" />
                                           Edit
                                         </Button>
-                                        )}
+                                      )}
                                         <Button
                                           variant="outline"
                                           size="sm"
@@ -3950,6 +4293,10 @@ function ShipmentsPageContent() {
                                                 <div className="font-medium">{detail.contract_number}</div>
                                               </div>
                                               <div>
+                                                <div className="text-gray-500">PO No</div>
+                                                <div className="font-medium">{detail.po_number || '-'}</div>
+                                              </div>
+                                              <div>
                                                 <div className="text-gray-500">Contract Ext No</div>
                                                 <div className="font-medium">{detail.contract_ext_no || '-'}</div>
                                               </div>
@@ -3985,6 +4332,14 @@ function ShipmentsPageContent() {
                                                     <div className="font-medium">{formatNumber(displayValue)} Kg</div>
                                                   )}
                                                 </div>
+                                              </div>
+                                              <div>
+                                                <div className="text-gray-500">Quantity Received</div>
+                                                <div className="font-medium">{formatNumber(detail.quantity_receive ?? 0)} Kg</div>
+                                              </div>
+                                              <div>
+                                                <div className="text-gray-500">Quantity Delivered</div>
+                                                <div className="font-medium">{formatNumber(detail.quantity_delivered ?? 0)} Kg</div>
                                               </div>
                                               <div>
                                                 <div className="text-gray-500">Due Date Delivery Start</div>
@@ -4077,11 +4432,22 @@ function ShipmentsPageContent() {
                                 </>
                               ) : (
                                 <>
-                                  {canEditShipment && (
-                                  <Button variant="outline" size="sm" onClick={() => handleEdit(shipment)} className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100">
-                                    <Edit2 className="h-4 w-4 mr-1" />
-                                    Edit
-                                  </Button>
+                                  {canShowEditShipmentButton && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => {
+                                        if (perms.loaded && !canEditShipment) {
+                                          alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
+                                          return
+                                        }
+                                        handleEdit(shipment)
+                                      }}
+                                      className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                                    >
+                                      <Edit2 className="h-4 w-4 mr-1" />
+                                      Edit
+                                    </Button>
                                   )}
                                   <Button variant="outline" size="sm" onClick={() => handleViewLoadingPorts(shipment)} className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
                                     <Ship className="h-4 w-4 mr-1" />
@@ -4161,6 +4527,10 @@ function ShipmentsPageContent() {
                                           <div>
                                             <div className="text-gray-500">Contract Ext No</div>
                                             <div className="font-medium">{detail.contract_ext_no || '-'}</div>
+                                          </div>
+                                          <div>
+                                            <div className="text-gray-500">PO No</div>
+                                            <div className="font-medium">{detail.po_number || '-'}</div>
                                           </div>
                                           <div>
                                             <div className="text-gray-500">Contract Qty</div>
@@ -4616,6 +4986,20 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">Quality at Loading Loc 1 FFA</div>
                             <div className="font-medium">
+                              {editingShipmentInfo ? (
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  value={editedShipmentInfo?.quality_at_loading_loc_1_ffa ?? ''}
+                                  onChange={(e) =>
+                                    setEditedShipmentInfo({
+                                      ...editedShipmentInfo!,
+                                      quality_at_loading_loc_1_ffa: e.target.value === '' ? null : Number(e.target.value),
+                                    })
+                                  }
+                                  className="h-8 text-sm mt-1"
+                                />
+                              ) : null}
                               {shipmentInfo.quality_at_loading_loc_1_ffa !== null && shipmentInfo.quality_at_loading_loc_1_ffa !== undefined 
                                 ? formatNumber(shipmentInfo.quality_at_loading_loc_1_ffa) 
                                 : '-'}
@@ -4624,6 +5008,20 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">Quality at Loading Loc 1 M&I</div>
                             <div className="font-medium">
+                              {editingShipmentInfo ? (
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  value={editedShipmentInfo?.quality_at_loading_loc_1_mi ?? ''}
+                                  onChange={(e) =>
+                                    setEditedShipmentInfo({
+                                      ...editedShipmentInfo!,
+                                      quality_at_loading_loc_1_mi: e.target.value === '' ? null : Number(e.target.value),
+                                    })
+                                  }
+                                  className="h-8 text-sm mt-1"
+                                />
+                              ) : null}
                               {shipmentInfo.quality_at_loading_loc_1_mi !== null && shipmentInfo.quality_at_loading_loc_1_mi !== undefined 
                                 ? formatNumber(shipmentInfo.quality_at_loading_loc_1_mi) 
                                 : '-'}
@@ -4632,14 +5030,42 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">Quality at Loading Loc 1 DOBI</div>
                             <div className="font-medium">
+                              {editingShipmentInfo ? (
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  value={editedShipmentInfo?.quality_at_loading_loc_1_dobi ?? ''}
+                                  onChange={(e) =>
+                                    setEditedShipmentInfo({
+                                      ...editedShipmentInfo!,
+                                      quality_at_loading_loc_1_dobi: e.target.value === '' ? null : Number(e.target.value),
+                                    })
+                                  }
+                                  className="h-8 text-sm mt-1"
+                                />
+                              ) : null}
                               {shipmentInfo.quality_at_loading_loc_1_dobi !== null && shipmentInfo.quality_at_loading_loc_1_dobi !== undefined 
                                 ? formatNumber(shipmentInfo.quality_at_loading_loc_1_dobi) 
                                 : '-'}
                             </div>
                           </div>
                           <div>
-                            <div className="text-gray-500">Quality at Loading Loc 1 RED</div>
+                            <div className="text-gray-500">Quality at Loading Loc 1 Color</div>
                             <div className="font-medium">
+                              {editingShipmentInfo ? (
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  value={editedShipmentInfo?.quality_at_loading_loc_1_red ?? ''}
+                                  onChange={(e) =>
+                                    setEditedShipmentInfo({
+                                      ...editedShipmentInfo!,
+                                      quality_at_loading_loc_1_red: e.target.value === '' ? null : Number(e.target.value),
+                                    })
+                                  }
+                                  className="h-8 text-sm mt-1"
+                                />
+                              ) : null}
                               {shipmentInfo.quality_at_loading_loc_1_red !== null && shipmentInfo.quality_at_loading_loc_1_red !== undefined 
                                 ? formatNumber(shipmentInfo.quality_at_loading_loc_1_red) 
                                 : '-'}
@@ -4648,6 +5074,20 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">Quality at Loading Loc 1 D&S</div>
                             <div className="font-medium">
+                              {editingShipmentInfo ? (
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  value={editedShipmentInfo?.quality_at_loading_loc_1_ds ?? ''}
+                                  onChange={(e) =>
+                                    setEditedShipmentInfo({
+                                      ...editedShipmentInfo!,
+                                      quality_at_loading_loc_1_ds: e.target.value === '' ? null : Number(e.target.value),
+                                    })
+                                  }
+                                  className="h-8 text-sm mt-1"
+                                />
+                              ) : null}
                               {shipmentInfo.quality_at_loading_loc_1_ds !== null && shipmentInfo.quality_at_loading_loc_1_ds !== undefined 
                                 ? formatNumber(shipmentInfo.quality_at_loading_loc_1_ds) 
                                 : '-'}
@@ -4656,6 +5096,20 @@ function ShipmentsPageContent() {
                           <div>
                             <div className="text-gray-500">Quality at Loading Loc 1 Stone</div>
                             <div className="font-medium">
+                              {editingShipmentInfo ? (
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  value={editedShipmentInfo?.quality_at_loading_loc_1_stone ?? ''}
+                                  onChange={(e) =>
+                                    setEditedShipmentInfo({
+                                      ...editedShipmentInfo!,
+                                      quality_at_loading_loc_1_stone: e.target.value === '' ? null : Number(e.target.value),
+                                    })
+                                  }
+                                  className="h-8 text-sm mt-1"
+                                />
+                              ) : null}
                               {shipmentInfo.quality_at_loading_loc_1_stone !== null && shipmentInfo.quality_at_loading_loc_1_stone !== undefined 
                                 ? formatNumber(shipmentInfo.quality_at_loading_loc_1_stone) 
                                 : '-'}
@@ -4692,7 +5146,7 @@ function ShipmentsPageContent() {
                             </div>
                           </div>
                           <div>
-                            <div className="text-gray-500">Quality at Discharge Port RED</div>
+                            <div className="text-gray-500">Quality at Discharge Port Color</div>
                             <div className="font-medium">
                               {shipmentInfo.quality_at_discharge_loc_1_red !== null && shipmentInfo.quality_at_discharge_loc_1_red !== undefined
                                 ? formatNumber(shipmentInfo.quality_at_discharge_loc_1_red)
@@ -4765,7 +5219,7 @@ function ShipmentsPageContent() {
                       [`${qualityPrefix} FFA`, port.quality_ffa],
                       [`${qualityPrefix} M&I`, port.quality_mi],
                       [`${qualityPrefix} DOBI`, port.quality_dobi],
-                      [`${qualityPrefix} RED`, port.quality_red],
+                      [`${qualityPrefix} Color`, port.quality_red],
                       [`${qualityPrefix} D&S`, port.quality_ds],
                       [`${qualityPrefix} Stone`, port.quality_stone]
                     ]

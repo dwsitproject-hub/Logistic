@@ -7,9 +7,9 @@ export const FIELD_HELP = {
 
   logCycle: `Land: Cargo Readiness Date → latest Trucking Last Receive (Close) or today (Open). SEA: Cargo Readiness Date → latest ATA Vessel Complete Discharge (Close) or today (Open).`,
 
-  tradeCycle: `Closed: latest receive/discharge → Due Date Delivery End (Land: Trucking Last Receive; SEA: ATA Vessel Complete Discharge).`,
+  tradeCycle: `Closed: latest receive/discharge → Due Date Delivery End (Land: Trucking Last Receive; SEA: ATA Vessel Complete Discharge). Open: Land uses latest Daily Planning Deliverables date; SEA uses ETA Vessel Complete Discharge.`,
 
-  cashCycle: `Closed only: latest receive/discharge → Payoff Date (Land: Trucking Last Receive; SEA: ATA Vessel Complete Discharge).`,
+  cashCycle: `Closed: latest receive/discharge → Payoff Date (Land: Trucking Last Receive; SEA: ATA Vessel Complete Discharge). Open: Land uses latest Daily Planning Deliverables date; SEA uses ETA Vessel Complete Discharge.`,
 
   outstandingQty: `Contract Quantity minus Total STO Quantity from SAP (can be negative if overshipped).`,
 

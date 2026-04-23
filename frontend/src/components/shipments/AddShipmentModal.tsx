@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Check, Loader2, Plus, X } from 'lucide-react'
 import api from '@/lib/api'
 import { formatDateDMY } from '@/lib/dateFormat'
+import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
   usePermissions,
   canCreatePermission,
@@ -19,7 +20,6 @@ const emptyShipment = () => ({
   contractNumbers: [] as string[],
   vesselName: '',
   vesselCode: '',
-  voyageNo: '',
   vesselOwner: '',
   vesselDraft: '',
   vesselCapacity: '',
@@ -610,14 +610,6 @@ export function AddShipmentModal({
               <Input value={newShipment.vesselCode} disabled placeholder="Filled when vessel is selected" className="bg-gray-100 cursor-not-allowed" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Voyage No</label>
-              <Input
-                value={newShipment.voyageNo}
-                onChange={(e) => setNewShipment((prev) => ({ ...prev, voyageNo: e.target.value }))}
-                placeholder="Enter voyage number"
-              />
-            </div>
-            <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Vessel Owner <span className="text-gray-500 text-xs">(from Master Vessel)</span>
               </label>
@@ -743,74 +735,65 @@ export function AddShipmentModal({
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <label className="block text-sm text-gray-500 mb-1">ETA Vessel Arrival at Loading Port</label>
-                <Input
-                  type="date"
-                  value={newShipment.etaVesselArrivalAtLoadingPort}
-                  onChange={(e) => setNewShipment((prev) => ({ ...prev, etaVesselArrivalAtLoadingPort: e.target.value }))}
+                <DateInputDdMmYyyy
+                  valueIso={newShipment.etaVesselArrivalAtLoadingPort}
+                  onChangeIso={(iso) => setNewShipment((prev) => ({ ...prev, etaVesselArrivalAtLoadingPort: iso }))}
                 />
               </div>
               <div>
                 <label className="block text-sm text-gray-500 mb-1">ETA Vessel Berthed at Loading Port</label>
-                <Input
-                  type="date"
-                  value={newShipment.etaVesselBerthedAtLoadingPort}
-                  onChange={(e) => setNewShipment((prev) => ({ ...prev, etaVesselBerthedAtLoadingPort: e.target.value }))}
+                <DateInputDdMmYyyy
+                  valueIso={newShipment.etaVesselBerthedAtLoadingPort}
+                  onChangeIso={(iso) => setNewShipment((prev) => ({ ...prev, etaVesselBerthedAtLoadingPort: iso }))}
                 />
               </div>
               <div>
                 <label className="block text-sm text-gray-500 mb-1">ETA Vessel Start Loading</label>
-                <Input
-                  type="date"
-                  value={newShipment.etaVesselStartLoading}
-                  onChange={(e) => setNewShipment((prev) => ({ ...prev, etaVesselStartLoading: e.target.value }))}
+                <DateInputDdMmYyyy
+                  valueIso={newShipment.etaVesselStartLoading}
+                  onChangeIso={(iso) => setNewShipment((prev) => ({ ...prev, etaVesselStartLoading: iso }))}
                 />
               </div>
               <div>
                 <label className="block text-sm text-gray-500 mb-1">ETA Vessel Completed Loading</label>
-                <Input
-                  type="date"
-                  value={newShipment.etaVesselCompletedLoading}
-                  onChange={(e) => setNewShipment((prev) => ({ ...prev, etaVesselCompletedLoading: e.target.value }))}
+                <DateInputDdMmYyyy
+                  valueIso={newShipment.etaVesselCompletedLoading}
+                  onChangeIso={(iso) => setNewShipment((prev) => ({ ...prev, etaVesselCompletedLoading: iso }))}
                 />
               </div>
               <div>
                 <label className="block text-sm text-gray-500 mb-1">ETA Vessel Sailed from Loading Port</label>
-                <Input
-                  type="date"
-                  value={newShipment.etaVesselSailedFromLoadingPort}
-                  onChange={(e) => setNewShipment((prev) => ({ ...prev, etaVesselSailedFromLoadingPort: e.target.value }))}
+                <DateInputDdMmYyyy
+                  valueIso={newShipment.etaVesselSailedFromLoadingPort}
+                  onChangeIso={(iso) => setNewShipment((prev) => ({ ...prev, etaVesselSailedFromLoadingPort: iso }))}
                 />
               </div>
               <div>
                 <label className="block text-sm text-gray-500 mb-1">ETA Vessel Arrive at Discharge Port</label>
-                <Input
-                  type="date"
-                  value={newShipment.etaVesselArriveAtDischargePort}
-                  onChange={(e) => setNewShipment((prev) => ({ ...prev, etaVesselArriveAtDischargePort: e.target.value }))}
+                <DateInputDdMmYyyy
+                  valueIso={newShipment.etaVesselArriveAtDischargePort}
+                  onChangeIso={(iso) => setNewShipment((prev) => ({ ...prev, etaVesselArriveAtDischargePort: iso }))}
                 />
               </div>
               <div>
                 <label className="block text-sm text-gray-500 mb-1">ETA Vessel Berthed at Discharge Port</label>
-                <Input
-                  type="date"
-                  value={newShipment.etaVesselBerthedAtDischargePort}
-                  onChange={(e) => setNewShipment((prev) => ({ ...prev, etaVesselBerthedAtDischargePort: e.target.value }))}
+                <DateInputDdMmYyyy
+                  valueIso={newShipment.etaVesselBerthedAtDischargePort}
+                  onChangeIso={(iso) => setNewShipment((prev) => ({ ...prev, etaVesselBerthedAtDischargePort: iso }))}
                 />
               </div>
               <div>
                 <label className="block text-sm text-gray-500 mb-1">ETA Vessel Start Discharging</label>
-                <Input
-                  type="date"
-                  value={newShipment.etaVesselStartDischarging}
-                  onChange={(e) => setNewShipment((prev) => ({ ...prev, etaVesselStartDischarging: e.target.value }))}
+                <DateInputDdMmYyyy
+                  valueIso={newShipment.etaVesselStartDischarging}
+                  onChangeIso={(iso) => setNewShipment((prev) => ({ ...prev, etaVesselStartDischarging: iso }))}
                 />
               </div>
               <div>
                 <label className="block text-sm text-gray-500 mb-1">ETA Vessel Complete Discharge</label>
-                <Input
-                  type="date"
-                  value={newShipment.etaVesselCompleteDischarge}
-                  onChange={(e) => setNewShipment((prev) => ({ ...prev, etaVesselCompleteDischarge: e.target.value }))}
+                <DateInputDdMmYyyy
+                  valueIso={newShipment.etaVesselCompleteDischarge}
+                  onChangeIso={(iso) => setNewShipment((prev) => ({ ...prev, etaVesselCompleteDischarge: iso }))}
                 />
               </div>
             </div>

@@ -97,6 +97,10 @@ export default function ClaimMutuPage() {
   const [sortKey, setSortKey] = useState<string>('os_days')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(new Set())
+  const [columnOrderIds, setColumnOrderIds] = useState<string[]>(() => [])
+  const [dragColId, setDragColId] = useState<string | null>(null)
+  const userViewPrefKey = 'claim_mutu.view.v1'
+  const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const columnsRef = useRef<HTMLDivElement>(null)
   const [columnFilters, setColumnFilters] = useState<Record<string, any>>({})
@@ -303,6 +307,7 @@ export default function ClaimMutuPage() {
 
   useEffect(() => {
     const key = 'claimMutu.visibleColumns.v1'
+    const orderKey = 'claimMutu.columnOrder.v1'
     try {
       const raw = localStorage.getItem(key)
       if (raw) {
@@ -311,6 +316,11 @@ export default function ClaimMutuPage() {
           setVisibleColumnIds(new Set(parsed))
         }
       }
+      const rawOrder = localStorage.getItem(orderKey)
+      if (rawOrder) {
+        const parsed = JSON.parse(rawOrder) as string[]
+        if (Array.isArray(parsed) && parsed.length > 0) setColumnOrderIds(parsed.map((x: any) => String(x)))
+      }
     } catch {}
     // Seed with defaults while we fetch server preference
     setVisibleColumnIds((prev) => (prev.size > 0 ? prev : new Set(defaultVisibleIds)))
@@ -318,11 +328,23 @@ export default function ClaimMutuPage() {
     // Load per-user preference from server (falls back to existing localStorage/defaults)
     ;(async () => {
       try {
-        const res = await api.get(`/user-preferences/me?key=${encodeURIComponent('claim_mutu.visible_columns')}`)
+        // Prefer combined view key first.
+        const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(userViewPrefKey)}`)
         const value = res.data?.data?.value
-        const arr = Array.isArray(value) ? value : (Array.isArray(value?.columns) ? value.columns : null)
-        if (Array.isArray(arr) && arr.length > 0) {
-          setVisibleColumnIds(new Set(arr.map((x: any) => String(x))))
+        const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
+        const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
+        if (Array.isArray(cols) && cols.length > 0) setVisibleColumnIds(new Set(cols.map((x: any) => String(x))))
+        if (Array.isArray(order) && order.length > 0) setColumnOrderIds(order.map((x: any) => String(x)))
+        // Legacy fallback
+        if (!cols) {
+          const legacy = await api.get(`/user-preferences/me?key=${encodeURIComponent('claim_mutu.visible_columns')}`)
+          const legacyValue = legacy.data?.data?.value
+          const arr = Array.isArray(legacyValue)
+            ? legacyValue
+            : Array.isArray(legacyValue?.columns)
+              ? legacyValue.columns
+              : null
+          if (Array.isArray(arr) && arr.length > 0) setVisibleColumnIds(new Set(arr.map((x: any) => String(x))))
         }
       } catch {
         // ignore; localStorage/defaults already applied
@@ -387,7 +409,60 @@ export default function ClaimMutuPage() {
     }
   }, [filterOpenKey, filterSearch, selectedImportId])
 
-  const visibleColumns = useMemo(() => columns.filter((c) => visibleColumnIds.has(c.id)), [columns, visibleColumnIds])
+  useEffect(() => {
+    // Initialize / heal order with any missing ids.
+    const allIds = columns.map((c) => c.id)
+    setColumnOrderIds((prev) => {
+      const base = prev.length > 0 ? prev : allIds
+      const deduped = Array.from(new Set(base))
+      const missing = allIds.filter((id) => !deduped.includes(id))
+      return [...deduped, ...missing].filter((id) => allIds.includes(id))
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [columns])
+
+  const visibleColumns = useMemo(() => {
+    const byId = new Map(columns.map((c) => [c.id, c] as const))
+    const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : columns.map((c) => c.id)).filter((id) => byId.has(id))
+    const orderedAll = orderedIds.map((id) => byId.get(id)!).filter(Boolean)
+    return orderedAll.filter((c) => visibleColumnIds.has(c.id))
+  }, [columnOrderIds, columns, visibleColumnIds])
+
+  useEffect(() => {
+    const orderKey = 'claimMutu.columnOrder.v1'
+    try {
+      if (columnOrderIds.length > 0) localStorage.setItem(orderKey, JSON.stringify(columnOrderIds))
+    } catch {}
+  }, [columnOrderIds])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
+    saveViewTimerRef.current = setTimeout(() => {
+      void api
+        .post('/user-preferences/me', {
+          key: userViewPrefKey,
+          value: { visibleColumnIds: Array.from(visibleColumnIds), columnOrderIds },
+        })
+        .catch(() => null)
+    }, 600)
+    return () => {
+      if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
+    }
+  }, [columnOrderIds, visibleColumnIds])
+
+  const reorderColumnByDrag = (dragId: string, dropId: string) => {
+    if (dragId === dropId) return
+    setColumnOrderIds((prev) => {
+      const ids = prev.length > 0 ? [...prev] : columns.map((c) => c.id)
+      const from = ids.indexOf(dragId)
+      const to = ids.indexOf(dropId)
+      if (from < 0 || to < 0) return ids
+      ids.splice(from, 1)
+      ids.splice(to, 0, dragId)
+      return ids
+    })
+  }
 
   const toggleColumn = (id: string) => {
     setVisibleColumnIds((prev) => {
@@ -398,14 +473,6 @@ export default function ClaimMutuPage() {
       try {
         localStorage.setItem(key, JSON.stringify(Array.from(next)))
       } catch {}
-      // Persist per-user preference (best effort)
-      ;(async () => {
-        try {
-          await api.post('/user-preferences/me', { key: 'claim_mutu.visible_columns', value: Array.from(next) })
-        } catch {
-          // ignore; localStorage is still updated
-        }
-      })()
       return next
     })
   }
@@ -734,7 +801,24 @@ export default function ClaimMutuPage() {
                       {visibleColumns.map((c) => (
                         <th
                           key={c.id}
-                          className={`relative px-3 py-2 font-medium text-gray-600 ${c.align === 'right' ? 'text-right' : 'text-left'}`}
+                          className={`relative px-3 py-2 font-medium text-gray-600 cursor-move ${c.align === 'right' ? 'text-right' : 'text-left'} ${dragColId === c.id ? 'opacity-60' : ''}`}
+                          draggable
+                          onDragStart={(e) => {
+                            setDragColId(c.id)
+                            e.dataTransfer.setData('text/plain', c.id)
+                            e.dataTransfer.effectAllowed = 'move'
+                          }}
+                          onDragEnd={() => setDragColId(null)}
+                          onDragOver={(e) => {
+                            e.preventDefault()
+                            e.dataTransfer.dropEffect = 'move'
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault()
+                            const dragged = e.dataTransfer.getData('text/plain')
+                            if (dragged) reorderColumnByDrag(dragged, c.id)
+                            setDragColId(null)
+                          }}
                         >
                           <div className={`flex items-center gap-2 ${c.align === 'right' ? 'justify-end' : 'justify-start'}`}>
                             <button

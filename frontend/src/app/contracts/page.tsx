@@ -362,6 +362,9 @@ function ContractsPageContent() {
   const columnStorageKey = isContractPerformance
     ? 'contract-performance.compact.visibleColumns'
     : 'contracts.compact.visibleColumns'
+  const columnOrderStorageKey = isContractPerformance
+    ? 'contract-performance.compact.columnOrder'
+    : 'contracts.compact.columnOrder'
   // Bumped so saved "created_at" default does not fight API order (newest contract_date first).
   const sortStorageKey = isContractPerformance ? 'contract-performance.compact.sort' : 'contracts.compact.sort.v2'
 
@@ -421,6 +424,11 @@ function ContractsPageContent() {
       }
       if (isContractPerformance && selectedPlantSites.length > 0) {
         selectedPlantSites.forEach((p) => params.append('plant', p))
+      }
+      // Contract Performance sorting must happen server-side across full filtered set.
+      if (isContractPerformance && sortKey) {
+        params.append('sortKey', sortKey)
+        params.append('sortDir', sortDir)
       }
 
       const response = await api.get(`/contracts?${params.toString()}`)
@@ -1240,7 +1248,15 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => c.trade_cycle_days ?? 0,
       render: (c) => (
-        <span className="text-xs font-semibold">
+        <span
+          className={`text-xs font-semibold ${
+            typeof c.trade_cycle_days === 'number'
+              ? c.trade_cycle_days > 0
+                ? 'text-red-600'
+                : 'text-green-600'
+              : ''
+          }`}
+        >
           {c.trade_cycle_days != null ? `${c.trade_cycle_days} days` : '-'}
         </span>
       ),
@@ -1254,7 +1270,15 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => c.cash_cycle_days ?? 0,
       render: (c) => (
-        <span className="text-xs font-semibold">
+        <span
+          className={`text-xs font-semibold ${
+            typeof c.cash_cycle_days === 'number'
+              ? c.cash_cycle_days > 0
+                ? 'text-red-600'
+                : 'text-green-600'
+              : ''
+          }`}
+        >
           {c.cash_cycle_days != null ? `${c.cash_cycle_days} days` : '-'}
         </span>
       ),
@@ -1439,6 +1463,10 @@ function ContractsPageContent() {
   }, [compactColumns, isContractPerformance])
 
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => new Set(defaultVisibleColumnIds))
+  const [columnOrderIds, setColumnOrderIds] = useState<string[]>(() => [])
+  const [dragColId, setDragColId] = useState<string | null>(null)
+  const userViewPrefKey = isContractPerformance ? 'contract_performance.compact.view.v1' : 'contracts.compact.view.v1'
+  const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Load persisted columns/sort (client only)
   useEffect(() => {
@@ -1449,6 +1477,11 @@ function ContractsPageContent() {
         const ids = JSON.parse(raw) as string[]
         if (Array.isArray(ids) && ids.length > 0) setVisibleColumnIds(new Set(ids))
       }
+      const rawOrder = localStorage.getItem(columnOrderStorageKey)
+      if (rawOrder) {
+        const ids = JSON.parse(rawOrder) as string[]
+        if (Array.isArray(ids) && ids.length > 0) setColumnOrderIds(ids.map(String))
+      }
       const rawSort = localStorage.getItem(sortStorageKey)
       if (rawSort) {
         const s = JSON.parse(rawSort) as { key?: string; dir?: 'asc' | 'desc' }
@@ -1458,6 +1491,25 @@ function ContractsPageContent() {
     } catch {
       // ignore
     }
+
+    // Load per-user saved view (best-effort). Falls back to localStorage/defaults.
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(userViewPrefKey)}`)
+        const value = res.data?.data?.value
+        if (cancelled) return
+        const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
+        const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
+        if (Array.isArray(cols) && cols.length > 0) setVisibleColumnIds(new Set(cols.map((x: any) => String(x))))
+        if (Array.isArray(order) && order.length > 0) setColumnOrderIds(order.map((x: any) => String(x)))
+      } catch {
+        // ignore
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -1466,34 +1518,77 @@ function ContractsPageContent() {
     if (typeof window === 'undefined') return
     try {
       localStorage.setItem(columnStorageKey, JSON.stringify(Array.from(visibleColumnIds)))
+      if (columnOrderIds.length > 0) localStorage.setItem(columnOrderStorageKey, JSON.stringify(columnOrderIds))
       localStorage.setItem(sortStorageKey, JSON.stringify({ key: sortKey, dir: sortDir }))
     } catch {
       // ignore
     }
-  }, [visibleColumnIds, sortKey, sortDir])
+  }, [columnOrderIds, columnStorageKey, columnOrderStorageKey, sortKey, sortDir, sortStorageKey, visibleColumnIds])
+
+  // Persist per-user view (debounced, best-effort): visible columns + column order.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
+    saveViewTimerRef.current = setTimeout(() => {
+      void api
+        .post('/user-preferences/me', {
+          key: userViewPrefKey,
+          value: { visibleColumnIds: Array.from(visibleColumnIds), columnOrderIds },
+        })
+        .catch(() => {
+          /* keep localStorage fallback */
+        })
+    }, 600)
+    return () => {
+      if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
+    }
+  }, [columnOrderIds, userViewPrefKey, visibleColumnIds])
 
   // (scroll width effect is defined after visibleColumns/sortedContracts)
 
   const visibleColumns = useMemo(() => {
-    const visible = compactColumns.filter(c => visibleColumnIds.has(c.id))
+    const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
+    const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : compactColumns.map((c) => c.id))
+      .filter((id) => byId.has(id))
+    const orderedAll = orderedIds.map((id) => byId.get(id)!).filter(Boolean)
+    const visible = orderedAll.filter((c) => visibleColumnIds.has(c.id))
     // Ensure required columns are always visible (Contracts page only).
     const mustHave = isContractPerformance ? [] : ['contract_id', 'status']
-    for (const id of mustHave) {
-      if (!visible.some(v => v.id === id)) {
-        const def = compactColumns.find(c => c.id === id)
-        if (def) visible.unshift(def)
-      }
-    }
-    // De-dupe
-    const seen = new Set<string>()
-    const deduped = visible.filter(c => (seen.has(c.id) ? false : (seen.add(c.id), true)))
+    const visibleIds = new Set(visible.map((c) => c.id))
+    const missing = mustHave
+      .map((id) => byId.get(id))
+      .filter((c): c is CompactColumn => Boolean(c) && !visibleIds.has((c as CompactColumn).id))
+    return [...visible, ...missing]
+  }, [columnOrderIds, compactColumns, isContractPerformance, visibleColumnIds])
 
-    // Contract Performance: keep the default view order stable.
-    if (!isContractPerformance) return deduped
-    const order = new Map<string, number>()
-    defaultVisibleColumnIds.forEach((id, idx) => order.set(id, idx))
-    return [...deduped].sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999))
-  }, [compactColumns, visibleColumnIds, isContractPerformance, defaultVisibleColumnIds])
+  const compactColumnIdsKey = useMemo(() => compactColumns.map((c) => c.id).join('|'), [compactColumns])
+
+  useEffect(() => {
+    // Initialize / heal column order with any missing ids.
+    const allIds = compactColumns.map((c) => c.id)
+    setColumnOrderIds((prev) => {
+      const base = prev.length > 0 ? prev : allIds
+      const deduped = Array.from(new Set(base))
+      const missing = allIds.filter((id) => !deduped.includes(id))
+      const next = [...deduped, ...missing].filter((id) => allIds.includes(id))
+      if (prev.length === next.length && prev.every((v, i) => v === next[i])) return prev
+      return next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compactColumnIdsKey])
+
+  const reorderColumnByDrag = (dragId: string, dropId: string) => {
+    if (dragId === dropId) return
+    setColumnOrderIds((prev) => {
+      const ids = prev.length > 0 ? [...prev] : compactColumns.map((c) => c.id)
+      const from = ids.indexOf(dragId)
+      const to = ids.indexOf(dropId)
+      if (from < 0 || to < 0) return ids
+      ids.splice(from, 1)
+      ids.splice(to, 0, dragId)
+      return ids
+    })
+  }
 
   const getColumnWidth = (id: string): string => {
     switch (id) {
@@ -1541,15 +1636,19 @@ function ContractsPageContent() {
   const onSortHeaderClick = (col: CompactColumn) => {
     if (!col.sortable) return
     setSortDir(prevDir => {
-      if (sortKey === col.id) {
-        return prevDir === 'asc' ? 'desc' : 'asc'
-      }
-      return 'asc'
+      const nextDir = sortKey === col.id ? (prevDir === 'asc' ? 'desc' : 'asc') : 'asc'
+      return nextDir
     })
     setSortKey(col.id)
+    if (isContractPerformance) {
+      setCurrentPage(1)
+      void fetchContracts(1)
+    }
   }
 
   const sortedContracts = useMemo(() => {
+    // Contract Performance should sort server-side (across all filtered rows), not per-page.
+    if (isContractPerformance) return filteredContracts
     const col = compactColumns.find(c => c.id === sortKey)
     if (!col?.sortable || !col.getSortValue) return filteredContracts
     const dirMul = sortDir === 'asc' ? 1 : -1
@@ -1563,7 +1662,7 @@ function ContractsPageContent() {
       return as.localeCompare(bs, undefined, { numeric: true, sensitivity: 'base' }) * dirMul
     })
     return copy
-  }, [compactColumns, filteredContracts, sortDir, sortKey])
+  }, [compactColumns, filteredContracts, isContractPerformance, sortDir, sortKey])
 
   const isColumnFilterActive = (colId: string) => {
     const f = columnFilters[colId]
@@ -2037,7 +2136,27 @@ function ContractsPageContent() {
                           const current = columnFilters[col.id]
 
                           return (
-                            <div key={col.id} className="relative min-w-0">
+                            <div
+                              key={col.id}
+                              className={`relative min-w-0 cursor-move ${dragColId === col.id ? 'opacity-60' : ''}`}
+                              draggable
+                              onDragStart={(e) => {
+                                setDragColId(col.id)
+                                e.dataTransfer.setData('text/plain', col.id)
+                                e.dataTransfer.effectAllowed = 'move'
+                              }}
+                              onDragEnd={() => setDragColId(null)}
+                              onDragOver={(e) => {
+                                e.preventDefault()
+                                e.dataTransfer.dropEffect = 'move'
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault()
+                                const dragged = e.dataTransfer.getData('text/plain')
+                                if (dragged) reorderColumnByDrag(dragged, col.id)
+                                setDragColId(null)
+                              }}
+                            >
                               <div className="flex items-center gap-1 min-w-0">
                             <button
                               type="button"
@@ -2840,7 +2959,15 @@ function ContractsPageContent() {
                           Trade Cycle
                           <FieldHelp text={FIELD_HELP.tradeCycle} />
                         </div>
-                        <div className="font-medium mt-1">
+                        <div
+                          className={`font-medium mt-1 ${
+                            typeof selectedContract.trade_cycle_days === 'number'
+                              ? selectedContract.trade_cycle_days > 0
+                                ? 'text-red-600'
+                                : 'text-green-600'
+                              : ''
+                          }`}
+                        >
                           {selectedContract.trade_cycle_days != null ? `${selectedContract.trade_cycle_days} days` : '-'}
                         </div>
                       </div>
@@ -2849,7 +2976,15 @@ function ContractsPageContent() {
                           Cash Cycle
                           <FieldHelp text={FIELD_HELP.cashCycle} />
                         </div>
-                        <div className="font-medium mt-1">
+                        <div
+                          className={`font-medium mt-1 ${
+                            typeof selectedContract.cash_cycle_days === 'number'
+                              ? selectedContract.cash_cycle_days > 0
+                                ? 'text-red-600'
+                                : 'text-green-600'
+                              : ''
+                          }`}
+                        >
                           {selectedContract.cash_cycle_days != null ? `${selectedContract.cash_cycle_days} days` : '-'}
                         </div>
                       </div>

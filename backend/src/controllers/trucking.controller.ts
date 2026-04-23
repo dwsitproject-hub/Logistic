@@ -108,7 +108,7 @@ async function ensureMissingTruckingOperationIds(): Promise<void> {
 export const getTruckingOperations = async (req: AuthRequest, res: Response) => {
   try {
     await ensureMissingTruckingOperationIds();
-    const { status, location, loadingLocation, unloadingLocation, dateFrom, dateTo, sto, contract, page = 1, limit = 10 } = req.query;
+    const { status, location, loadingLocation, unloadingLocation, dateFrom, dateTo, sto, contract, plant, page = 1, limit = 10 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
     const globalSearch =
       typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';
@@ -415,6 +415,15 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
     if (contract) {
       queryText += ` AND c.contract_id = $${paramIndex}`;
       queryParams.push(contract);
+      paramIndex++;
+    }
+
+    const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+    const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+    if (plants.length > 0) {
+      // Plant/Site filter: map to unloading location (fallback to derived location).
+      queryText += ` AND COALESCE(NULLIF(TRIM(t.unloading_location::text), ''), NULLIF(TRIM(t.location::text), ''), '') = ANY($${paramIndex}::text[])`;
+      queryParams.push(plants);
       paramIndex++;
     }
 

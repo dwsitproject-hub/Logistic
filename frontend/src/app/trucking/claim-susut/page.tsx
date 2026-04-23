@@ -146,6 +146,20 @@ export default function ClaimSusutPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(new Set(defaultVisibleIds))
+  const [columnOrderIds, setColumnOrderIds] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return []
+    try {
+      const raw = localStorage.getItem('claimSusut.columnOrder.v1')
+      if (!raw) return []
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) ? parsed.map(String) : []
+    } catch {
+      return []
+    }
+  })
+  const [dragColId, setDragColId] = useState<string | null>(null)
+  const userViewPrefKey = 'claim_susut.view.v1'
+  const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const columnsRef = useRef<HTMLDivElement>(null)
 
@@ -155,7 +169,79 @@ export default function ClaimSusutPage() {
 
   const selectedImport = useMemo(() => imports.find((i) => i.id === selectedImportId), [imports, selectedImportId])
 
-  const visibleColumns = useMemo(() => columns.filter((c) => visibleColumnIds.has(c.id)), [visibleColumnIds])
+  useEffect(() => {
+    // Initialize / heal order with any missing ids.
+    const allIds = columns.map((c) => c.id)
+    setColumnOrderIds((prev) => {
+      const base = prev.length > 0 ? prev : allIds
+      const deduped = Array.from(new Set(base))
+      const missing = allIds.filter((id) => !deduped.includes(id))
+      return [...deduped, ...missing].filter((id) => allIds.includes(id))
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [columns])
+
+  const visibleColumns = useMemo(() => {
+    const byId = new Map(columns.map((c) => [c.id, c] as const))
+    const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : columns.map((c) => c.id)).filter((id) => byId.has(id))
+    const orderedAll = orderedIds.map((id) => byId.get(id)!).filter(Boolean)
+    return orderedAll.filter((c) => visibleColumnIds.has(c.id))
+  }, [columnOrderIds, visibleColumnIds])
+
+  useEffect(() => {
+    try {
+      if (columnOrderIds.length > 0) localStorage.setItem('claimSusut.columnOrder.v1', JSON.stringify(columnOrderIds))
+    } catch {}
+  }, [columnOrderIds])
+
+  useEffect(() => {
+    // Load per-user saved view (best effort)
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(userViewPrefKey)}`)
+        const value = res.data?.data?.value
+        if (cancelled) return
+        const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
+        const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
+        if (Array.isArray(cols) && cols.length > 0) setVisibleColumnIds(new Set(cols.map((x: any) => String(x))))
+        if (Array.isArray(order) && order.length > 0) setColumnOrderIds(order.map((x: any) => String(x)))
+      } catch {
+        // ignore
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
+    saveViewTimerRef.current = setTimeout(() => {
+      void api
+        .post('/user-preferences/me', {
+          key: userViewPrefKey,
+          value: { visibleColumnIds: Array.from(visibleColumnIds), columnOrderIds },
+        })
+        .catch(() => null)
+    }, 600)
+    return () => {
+      if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
+    }
+  }, [columnOrderIds, visibleColumnIds])
+
+  const reorderColumnByDrag = (dragId: string, dropId: string) => {
+    if (dragId === dropId) return
+    setColumnOrderIds((prev) => {
+      const ids = prev.length > 0 ? [...prev] : columns.map((c) => c.id)
+      const from = ids.indexOf(dragId)
+      const to = ids.indexOf(dropId)
+      if (from < 0 || to < 0) return ids
+      ids.splice(from, 1)
+      ids.splice(to, 0, dragId)
+      return ids
+    })
+  }
 
   const loadImports = async () => {
     const res = await api.get('/claim-susut/imports')
@@ -558,7 +644,24 @@ export default function ClaimSusutPage() {
                       {visibleColumns.map((c) => (
                         <th
                           key={c.id}
-                          className={`px-3 py-2 font-medium text-gray-600 ${c.align === 'right' ? 'text-right' : 'text-left'}`}
+                          className={`px-3 py-2 font-medium text-gray-600 cursor-move ${c.align === 'right' ? 'text-right' : 'text-left'} ${dragColId === c.id ? 'opacity-60' : ''}`}
+                          draggable
+                          onDragStart={(e) => {
+                            setDragColId(c.id)
+                            e.dataTransfer.setData('text/plain', c.id)
+                            e.dataTransfer.effectAllowed = 'move'
+                          }}
+                          onDragEnd={() => setDragColId(null)}
+                          onDragOver={(e) => {
+                            e.preventDefault()
+                            e.dataTransfer.dropEffect = 'move'
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault()
+                            const dragged = e.dataTransfer.getData('text/plain')
+                            if (dragged) reorderColumnByDrag(dragged, c.id)
+                            setDragColId(null)
+                          }}
                         >
                           <button
                             type="button"
