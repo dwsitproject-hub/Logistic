@@ -3816,7 +3816,7 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
             WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(q.quantity_receive, 0)
             WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(q.quantity_delivery, 0)
             ELSE COALESCE(q.sto_quantity, 0)
-          END AS delivered_quantity
+          END AS delivered_quantity,
           (c.delivery_end_date::date - CURRENT_DATE) AS aging_os,
           CASE
             WHEN UPPER(COALESCE(NULLIF(TRIM(COALESCE(c.transport_mode, '')), ''), l.data->'contract'->>'transport_mode', l.data->'contract'->>'sea_land', l.data->'raw'->>'Sea / Land', l.data->'raw'->>'Sea_Land', '')) LIKE 'LAND%'

@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
-import { Plus, Upload, Edit2 } from 'lucide-react'
+import { Plus, Upload, Edit2, Trash2 } from 'lucide-react'
 
 interface MasterVessel {
   id: string
@@ -31,6 +31,7 @@ export default function MasterVesselPage() {
   const [editing, setEditing] = useState<MasterVessel | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [form, setForm] = useState<Partial<MasterVessel>>({})
+  const [isAdmin, setIsAdmin] = useState(false)
 
   const fetchData = async () => {
     try {
@@ -51,6 +52,12 @@ export default function MasterVesselPage() {
 
   useEffect(() => {
     fetchData()
+    try {
+      const u = JSON.parse(localStorage.getItem('user') || 'null')
+      setIsAdmin(String(u?.role || '').toUpperCase() === 'ADMIN')
+    } catch {
+      setIsAdmin(false)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -192,6 +199,20 @@ export default function MasterVesselPage() {
       alert('Failed to parse or upload file. Please upload CSV exported from Master Vessel.xlsx')
     } finally {
       e.target.value = ''
+    }
+  }
+
+  const handleDelete = async (v: MasterVessel) => {
+    if (!isAdmin) return
+    const ok = confirm(`Delete vessel?\n\n${v.vessel_code} - ${v.vessel_name}`)
+    if (!ok) return
+    try {
+      await api.delete(`/master-vessels/${v.id}`)
+      await fetchData()
+    } catch (err: any) {
+      console.error('Delete master vessel error', err)
+      const msg = err?.response?.data?.error?.message || 'Failed to delete master vessel'
+      alert(msg)
     }
   }
 
@@ -391,14 +412,18 @@ export default function MasterVesselPage() {
                         <td className="px-3 py-2">{v.heating == null ? '-' : (v.heating ? 'Yes' : 'No')}</td>
                         <td className="px-3 py-2">{v.lambung_type || '-'}</td>
                         <td className="px-3 py-2 text-right">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openEdit(v)}
-                          >
-                            <Edit2 className="h-4 w-4 mr-1" />
-                            Edit
-                          </Button>
+                          <div className="inline-flex gap-2">
+                            <Button variant="outline" size="sm" onClick={() => openEdit(v)}>
+                              <Edit2 className="h-4 w-4 mr-1" />
+                              Edit
+                            </Button>
+                            {isAdmin && (
+                              <Button variant="destructive" size="sm" onClick={() => handleDelete(v)}>
+                                <Trash2 className="h-4 w-4 mr-1" />
+                                Delete
+                              </Button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}

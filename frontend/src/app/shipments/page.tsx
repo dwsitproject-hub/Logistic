@@ -925,7 +925,7 @@ function ShipmentsPageContent() {
             return sum + n
           }, 0)
           if (sumAssigned > capacityForCheck) {
-            alert(`Sum of "Contract Qty assign to STO" (${formatNumber(sumAssigned)} Kg) cannot exceed Vessel Capacity (${formatNumber(capacityForCheck)} Kg).`)
+            alert(`Sum of "Contract Qty assign to STO" (${formatNumber(sumAssigned)} MT) cannot exceed Vessel Capacity (${formatNumber(capacityForCheck)} MT).`)
             setSaving(false)
             return
           }

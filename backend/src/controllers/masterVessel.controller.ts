@@ -241,3 +241,20 @@ export const bulkUploadMasterVessels = async (req: AuthRequest, res: Response): 
   }
 };
 
+export const deleteMasterVessel = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const result = await query('DELETE FROM master_vessels WHERE id = $1 RETURNING id', [id]);
+    if (result.rows.length === 0) {
+      res.status(404).json({ success: false, error: { message: 'Master vessel not found' } });
+      return;
+    }
+    res.json({ success: true, data: { id: result.rows[0].id } });
+    return;
+  } catch (error) {
+    logger.error('Delete master vessel error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to delete master vessel' } });
+    return;
+  }
+};
+

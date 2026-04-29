@@ -99,71 +99,91 @@ export function AddShipmentModal({
 
   const formatShortDate = (dateStr: string) => formatDateDMY(dateStr)
 
-  const validateContractNumber = useCallback(async (contractNumber: string) => {
-    if (!contractNumber || contractNumber.trim() === '') {
+  const validateContractNumber = useCallback(async (term: string): Promise<string | null> => {
+    if (!term || term.trim() === '') {
       setContractValidations((prev) => {
         const next = { ...prev }
-        delete next[contractNumber]
+        delete next[term]
         return next
       })
-      return
+      return null
     }
 
-    setContractValidations((prev) => ({
-      ...prev,
-      [contractNumber]: {
+    setContractValidations((prev) => {
+      const next = { ...prev }
+      next[term] = {
         checking: true,
         exists: false,
         contractData: null,
         message: 'Validating...',
-      },
-    }))
+      }
+      return next
+    })
 
     try {
       const response = await api.get(
-        `/shipments/contracts/validate?contract_number=${encodeURIComponent(contractNumber)}`,
+        `/shipments/contracts/validate?contract_number=${encodeURIComponent(term)}`,
       )
       if (response.data.success) {
         if (response.data.exists) {
           const data = response.data.data
-          setContractValidations((prev) => ({
-            ...prev,
-            [contractNumber]: {
+          const resolvedContractId = String(data?.contract_id || '').trim()
+          if (!resolvedContractId) {
+            setContractValidations((prev) => ({
+              ...prev,
+              [term]: {
+                checking: false,
+                exists: false,
+                contractData: null,
+                message: 'Contract not found',
+              },
+            }))
+            return null
+          }
+          setContractValidations((prev) => {
+            const next = { ...prev }
+            if (term !== resolvedContractId) delete next[term]
+            next[resolvedContractId] = {
               checking: false,
               exists: true,
               contractData: data,
               message: 'Contract found',
-            },
-          }))
+            }
+            return next
+          })
           setNewShipment((prev) => ({
             ...prev,
             portOfLoading: prev.portOfLoading || data.port_of_loading || '',
             portOfDischarge: prev.portOfDischarge || data.port_of_discharge || '',
           }))
+          return resolvedContractId
         } else {
           setContractValidations((prev) => ({
             ...prev,
-            [contractNumber]: {
+            [term]: {
               checking: false,
               exists: false,
               contractData: null,
               message: 'Contract number does not exist',
             },
           }))
+          return null
         }
       }
     } catch (error) {
       console.error('Error validating contract:', error)
       setContractValidations((prev) => ({
         ...prev,
-        [contractNumber]: {
+        [term]: {
           checking: false,
           exists: false,
           contractData: null,
           message: 'Error validating contract number',
         },
       }))
+      return null
     }
+    return null
   }, [])
 
   const handleContractSearch = async (searchTerm: string) => {
@@ -187,7 +207,7 @@ export function AddShipmentModal({
   }
 
   const handleAddContract = async (contract: any) => {
-    const contractId = contract.contract_id || contract
+    const contractId = String(contract.contract_id || contract).trim()
     if (!newShipment.contractNumbers.includes(contractId)) {
       await validateContractNumber(contractId)
 
@@ -202,17 +222,18 @@ export function AddShipmentModal({
   }
 
   const handleAddContractManually = async () => {
-    const contractId = contractSearchTerm.trim()
-    if (!contractId) return
+    const term = contractSearchTerm.trim()
+    if (!term) return
 
-    await validateContractNumber(contractId)
+    const resolvedContractId = await validateContractNumber(term)
+    if (!resolvedContractId) return
 
-    if (!newShipment.contractNumbers.includes(contractId)) {
+    if (!newShipment.contractNumbers.includes(resolvedContractId)) {
       setNewShipment((prev) => ({
         ...prev,
-        contractNumbers: [...prev.contractNumbers, contractId],
+        contractNumbers: [...prev.contractNumbers, resolvedContractId],
       }))
-      setContractQtyAssigned((prev) => ({ ...prev, [contractId]: prev[contractId] ?? '' }))
+      setContractQtyAssigned((prev) => ({ ...prev, [resolvedContractId]: prev[resolvedContractId] ?? '' }))
     }
     setContractSearchTerm('')
     setShowContractSuggestions(false)
@@ -309,6 +330,20 @@ export function AddShipmentModal({
   const contractQtyAssignedExceedsCapacity =
     vesselCapacityNum != null && !Number.isNaN(vesselCapacityNum) && contractQtyAssignedSum > vesselCapacityNum
 
+  const contractQtyAssignedExceedsOutstanding = useMemo(() => {
+    const next: Record<string, { assignedMt: number; outstandingMt: number }> = {}
+    for (const contractId of newShipment.contractNumbers) {
+      const assignedMt = parseFloat(String(contractQtyAssigned[contractId] ?? '')) || 0
+      const contractData = contractValidations[contractId]?.contractData
+      // Outstanding from API is in Kg; Add Shipment UI uses MT
+      const outstandingMt = (Number(contractData?.outstanding_quantity) || 0) / 1000
+      if (assignedMt > outstandingMt) {
+        next[contractId] = { assignedMt, outstandingMt }
+      }
+    }
+    return next
+  }, [contractQtyAssigned, contractValidations, newShipment.contractNumbers])
+
   const resetForm = useCallback(() => {
     setNewShipment(emptyShipment())
     setContractQtyAssigned({})
@@ -328,9 +363,10 @@ export function AddShipmentModal({
     const cid = initialContractId?.trim()
     if (!cid) return
     void (async () => {
-      setNewShipment((prev) => ({ ...prev, contractNumbers: [cid] }))
-      setContractQtyAssigned((prev) => ({ ...prev, [cid]: prev[cid] ?? '' }))
-      await validateContractNumber(cid)
+      const resolved = await validateContractNumber(cid)
+      if (!resolved) return
+      setNewShipment((prev) => ({ ...prev, contractNumbers: [resolved] }))
+      setContractQtyAssigned((prev) => ({ ...prev, [resolved]: prev[resolved] ?? '' }))
     })()
   }, [open, initialContractId, resetForm, validateContractNumber])
 
@@ -354,7 +390,15 @@ export function AddShipmentModal({
     }
 
     if (contractQtyAssignedExceedsCapacity) {
-      alert('Sum of "Contract Qty assign to STO" cannot exceed Vessel Capacity (Kg).')
+      alert('Sum of "Contract Qty assign to STO" cannot exceed Vessel Capacity (MT).')
+      return
+    }
+    if (Object.keys(contractQtyAssignedExceedsOutstanding).length > 0) {
+      const first = Object.keys(contractQtyAssignedExceedsOutstanding)[0]
+      const { assignedMt, outstandingMt } = contractQtyAssignedExceedsOutstanding[first]
+      alert(
+        `"Contract Qty assign to STO" for contract ${first} (${formatNumber(assignedMt)} MT) cannot exceed Outstanding Qty (${formatNumber(outstandingMt)} MT).`,
+      )
       return
     }
 
@@ -442,8 +486,8 @@ export function AddShipmentModal({
             />
             <p className="text-xs text-gray-500 mt-1">
               Operation ID will be automatically generated as: OP-
-              {(contractValidations[newShipment.contractNumbers[0]]?.contractData?.contract_ext_no || newShipment.contractNumbers[0]) ||
-                '{Contract Ext No}'}
+              {(contractValidations[newShipment.contractNumbers[0]]?.contractData?.po_number || newShipment.contractNumbers[0]) ||
+                '{PO Number}'}
               -{'{timestamp}'}
             </p>
           </div>
@@ -465,7 +509,7 @@ export function AddShipmentModal({
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Contract Ext No <span className="text-red-500">*</span>
+              PO Number <span className="text-red-500">*</span>
             </label>
             <div className="relative">
               <div className="flex gap-2">
@@ -479,7 +523,7 @@ export function AddShipmentModal({
                       void handleAddContractManually()
                     }
                   }}
-                  placeholder="Search or enter Contract Ext No and press Enter"
+                  placeholder="Search or enter PO Number and press Enter"
                   className="flex-1"
                   disabled={Boolean(initialContractId?.trim() && newShipment.contractNumbers.includes(initialContractId.trim()))}
                 />
@@ -495,9 +539,9 @@ export function AddShipmentModal({
                       className="px-4 py-2 hover:bg-gray-100 cursor-pointer border-b"
                       onClick={() => void handleAddContract(contract)}
                     >
-                      <div className="font-medium">{contract.contract_ext_no || contract.contract_id}</div>
+                      <div className="font-medium">{contract.po_number || contract.contract_id}</div>
                       <div className="text-sm text-gray-500">
-                        {contract.contract_ext_no ? <span className="text-gray-400">{contract.contract_id} • </span> : null}
+                        {contract.po_number ? <span className="text-gray-400">{contract.contract_id} • </span> : null}
                         {contract.supplier} • {contract.product}
                         {contract.sto_number && ` • STO: ${contract.sto_number}`}
                       </div>
@@ -512,7 +556,10 @@ export function AddShipmentModal({
                 {newShipment.contractNumbers.map((contractId) => {
                   const validation = contractValidations[contractId]
                   const data = validation?.contractData
-                  const label = (data?.contract_ext_no || contractId) as string
+                  const label = (data?.po_number || contractId) as string
+                  // Quantities from contracts are stored in Kg; Add Shipment UI displays MT
+                  const contractQtyMt = (Number(data?.quantity_ordered) || 0) / 1000
+                  const outstandingQtyMt = (Number(data?.outstanding_quantity) || 0) / 1000
                   return (
                     <div key={contractId} className="border rounded-md px-2 py-2 bg-gray-50">
                       <div className="flex items-center gap-2">
@@ -532,7 +579,7 @@ export function AddShipmentModal({
                             }}
                           />
                         </Badge>
-                        {data?.contract_ext_no ? <span className="text-[11px] text-gray-400 truncate">({contractId})</span> : null}
+                        {data?.po_number ? <span className="text-[11px] text-gray-400 truncate">({contractId})</span> : null}
                         {validation?.message && (
                           <span className={`text-xs ${validation.exists ? 'text-green-600' : 'text-red-600'}`}>
                             {validation.message}
@@ -550,13 +597,13 @@ export function AddShipmentModal({
                           <div>
                             <div className="text-gray-500">Contract Qty</div>
                             <div className="font-medium">
-                              {formatNumber(data.quantity_ordered || 0)} {data.unit || ''}
+                              {formatNumber(contractQtyMt)} MT
                             </div>
                           </div>
                           <div>
                             <div className="text-gray-500">Outstanding Qty</div>
                             <div className="font-medium">
-                              {formatNumber(data.outstanding_quantity || 0)} {data.unit || ''}
+                              {formatNumber(outstandingQtyMt)} MT
                             </div>
                           </div>
                           <div>
@@ -627,7 +674,7 @@ export function AddShipmentModal({
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Vessel Capacity (Kg) <span className="text-gray-500 text-xs">(from Master Vessel)</span>
+                Vessel Capacity (MT) <span className="text-gray-500 text-xs">(from Master Vessel)</span>
               </label>
               <Input
                 type="number"
@@ -688,41 +735,55 @@ export function AddShipmentModal({
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Contract Qty assign to STO (Kg)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Contract Qty assign to STO (MT)</label>
               <div
-                className={`rounded-md border p-3 ${contractQtyAssignedExceedsCapacity ? 'border-red-400 bg-red-50' : 'border-gray-200 bg-gray-50'}`}
+                className={`rounded-md border p-3 ${
+                  contractQtyAssignedExceedsCapacity || Object.keys(contractQtyAssignedExceedsOutstanding).length > 0
+                    ? 'border-red-400 bg-red-50'
+                    : 'border-gray-200 bg-gray-50'
+                }`}
               >
                 {newShipment.contractNumbers.length === 0 ? (
                   <div className="text-sm text-gray-500">Add contract numbers above to assign quantities.</div>
                 ) : (
                   <div className="space-y-2">
-                    {newShipment.contractNumbers.map((contractId) => (
-                      <div key={contractId} className="flex items-center justify-between gap-3">
-                        <div className="text-sm font-medium text-gray-700 truncate">{contractId}</div>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={contractQtyAssigned[contractId] ?? ''}
-                          onChange={(e) => setContractQtyAssigned((prev) => ({ ...prev, [contractId]: e.target.value }))}
-                          className="h-8 text-sm w-40 bg-white"
-                          placeholder="0"
-                        />
-                      </div>
-                    ))}
+                    {newShipment.contractNumbers.map((contractId) => {
+                      const exceed = contractQtyAssignedExceedsOutstanding[contractId]
+                      return (
+                        <div key={contractId} className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-medium text-gray-700 truncate">{contractId}</div>
+                          <div className="flex flex-col items-end gap-1">
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={contractQtyAssigned[contractId] ?? ''}
+                              onChange={(e) => setContractQtyAssigned((prev) => ({ ...prev, [contractId]: e.target.value }))}
+                              className={`h-8 text-sm w-40 bg-white ${exceed ? 'border-red-400 focus-visible:ring-red-300' : ''}`}
+                              placeholder="0"
+                            />
+                            {exceed && (
+                              <div className="text-[11px] text-red-700">
+                                Cannot exceed Outstanding Qty ({formatNumber(exceed.outstandingMt)} MT)
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
                     <div className="flex items-center justify-between text-sm pt-2 border-t">
                       <div className="text-gray-600">Total assigned</div>
                       <div className={`font-semibold ${contractQtyAssignedExceedsCapacity ? 'text-red-700' : 'text-gray-900'}`}>
-                        {formatNumber(contractQtyAssignedSum)} Kg
+                        {formatNumber(contractQtyAssignedSum)} MT
                       </div>
                     </div>
                     {vesselCapacityNum != null && !Number.isNaN(vesselCapacityNum) && (
                       <div className="flex items-center justify-between text-xs text-gray-600">
                         <div>Vessel Capacity</div>
-                        <div>{formatNumber(vesselCapacityNum)} Kg</div>
+                        <div>{formatNumber(vesselCapacityNum)} MT</div>
                       </div>
                     )}
                     {contractQtyAssignedExceedsCapacity && (
-                      <div className="text-xs text-red-700">Total assigned cannot exceed Vessel Capacity (Kg).</div>
+                      <div className="text-xs text-red-700">Total assigned cannot exceed Vessel Capacity (MT).</div>
                     )}
                   </div>
                 )}

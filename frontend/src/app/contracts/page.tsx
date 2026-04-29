@@ -71,6 +71,7 @@ interface Contract {
   shipment_count?: number
   document_count?: number
   cargo_readiness_date?: string
+  plant_site?: string | null
   over_under_delivery_status?: string
   log_cycle_days?: number | null
   trade_cycle_days?: number | null
@@ -209,6 +210,144 @@ function ContractsPageContent() {
   const [unassignedLandContracts, setUnassignedLandContracts] = useState(0)
   const [unassignedFilter, setUnassignedFilter] = useState<'sea' | 'land' | null>(null)
   const [updatingContractId, setUpdatingContractId] = useState<string | null>(null)
+
+  type LatePerfNode = { key: string; count: number; totalDays: number; maxDays: number; children: LatePerfNode[] }
+  const [latePerformanceTree, setLatePerformanceTree] = useState<LatePerfNode[]>([])
+  const [latePerformanceSummary, setLatePerformanceSummary] = useState<{ count: number; totalDays: number; avgDays: number; maxDays: number }>({
+    count: 0,
+    totalDays: 0,
+    avgDays: 0,
+    maxDays: 0,
+  })
+  const [latePerfLoading, setLatePerfLoading] = useState(false)
+  type LatePerfHotspot = {
+    incoterm: string
+    product: string
+    plant_site: string
+    group_name: string
+    count: number
+    totalDays: number
+    maxDays: number
+  }
+
+  const latePerfAllHotspots = useMemo((): LatePerfHotspot[] => {
+    const out: LatePerfHotspot[] = []
+    for (const inc of latePerformanceTree) {
+      for (const plant of inc.children || []) {
+        for (const prod of plant.children || []) {
+          for (const gn of prod.children || []) {
+            out.push({
+              incoterm: inc.key,
+              product: prod.key,
+              plant_site: plant.key,
+              group_name: gn.key,
+              count: gn.count,
+              totalDays: gn.totalDays,
+              maxDays: gn.maxDays,
+            })
+          }
+        }
+      }
+    }
+    return out
+  }, [latePerformanceTree])
+
+  type LatePerfBranchNode = {
+    id: string
+    label: string
+    level: 'total' | 'incoterm' | 'product' | 'plant'
+    count: number
+    totalDays: number
+    maxDays: number
+    children: LatePerfBranchNode[]
+  }
+
+  const latePerfBranchTree = useMemo((): LatePerfBranchNode => {
+    const norm = (v: unknown) => {
+      const s = String(v ?? '').trim()
+      return s ? s : 'Blank'
+    }
+    type Agg = { count: number; totalDays: number; maxDays: number; children: Map<string, Agg> }
+    const mk = (): Agg => ({ count: 0, totalDays: 0, maxDays: 0, children: new Map() })
+    const root = mk()
+
+    for (const h of latePerfAllHotspots) {
+      const inc = norm(h.incoterm)
+      const prod = norm(h.product)
+      const plant = norm(h.plant_site)
+      const days = Number(h.totalDays) || 0
+      const cnt = Number(h.count) || 0
+      const maxd = Number(h.maxDays) || 0
+
+      const nInc = root.children.get(inc) ?? mk()
+      root.children.set(inc, nInc)
+      const nProd = nInc.children.get(prod) ?? mk()
+      nInc.children.set(prod, nProd)
+      const nPlant = nProd.children.get(plant) ?? mk()
+      nProd.children.set(plant, nPlant)
+
+      for (const n of [root, nInc, nProd, nPlant]) {
+        n.count += cnt
+        n.totalDays += days
+        n.maxDays = Math.max(n.maxDays, maxd)
+      }
+    }
+
+    const toNodes = (m: Map<string, Agg>, parentId: string, level: LatePerfBranchNode['level']): LatePerfBranchNode[] => {
+      const nodes: LatePerfBranchNode[] = []
+      for (const [k, a] of m.entries()) {
+        const id = `${parentId}__${k}`
+        const nextLevel: LatePerfBranchNode['level'] =
+          level === 'incoterm' ? 'product' : level === 'product' ? 'plant' : 'plant'
+        const children =
+          level === 'plant'
+            ? []
+            : toNodes(a.children, id, nextLevel)
+        nodes.push({
+          id,
+          label: k,
+          level,
+          count: a.count,
+          totalDays: a.totalDays,
+          maxDays: a.maxDays,
+          children,
+        })
+      }
+      nodes.sort((a, b) => b.totalDays - a.totalDays || b.count - a.count || a.label.localeCompare(b.label))
+      return nodes
+    }
+
+    return {
+      id: 'total',
+      label: 'Total',
+      level: 'total',
+      count: root.count,
+      totalDays: root.totalDays,
+      maxDays: root.maxDays,
+      children: toNodes(root.children, 'total', 'incoterm'),
+    }
+  }, [latePerfAllHotspots])
+
+  const [latePerfSelIncoterm, setLatePerfSelIncoterm] = useState<string | null>(null)
+  const [latePerfSelProduct, setLatePerfSelProduct] = useState<string | null>(null)
+  const [latePerfSelPlant, setLatePerfSelPlant] = useState<string | null>(null)
+
+  const resetLatePerfSelections = useCallback(() => {
+    setLatePerfSelIncoterm(null)
+    setLatePerfSelProduct(null)
+    setLatePerfSelPlant(null)
+  }, [])
+
+  const findChild = useCallback((nodes: LatePerfBranchNode[], label: string | null) => {
+    if (!label) return null
+    return nodes.find((n) => n.label === label) ?? null
+  }, [])
+
+  const latePerfIncotermNodes = latePerfBranchTree.children
+  const latePerfSelectedIncNode = findChild(latePerfIncotermNodes, latePerfSelIncoterm)
+  const latePerfProductNodes = latePerfSelectedIncNode?.children ?? []
+  const latePerfSelectedProdNode = findChild(latePerfProductNodes, latePerfSelProduct)
+  const latePerfPlantNodes = latePerfSelectedProdNode?.children ?? []
 
   type ContractLogisticsUi =
     | { kind: 'truck-create'; contract: Contract }
@@ -470,6 +609,59 @@ function ContractsPageContent() {
       setLoading(false)
     }
   }
+
+  const fetchLatePerformance = useCallback(async () => {
+    if (!authReady || !isContractPerformance) return
+    try {
+      setLatePerfLoading(true)
+      const params = new URLSearchParams()
+      // Always show full YTD dashboard (independent of current page rows).
+      params.append('scope', 'ytd')
+      // Avoid any intermediate/browser caching (ETag/304) for dashboard data.
+      params.append('_ts', String(Date.now()))
+
+      const resp = await api.get(`/contracts/late-performance?${params.toString()}`)
+      const data = resp.data?.data
+      setLatePerformanceSummary(data?.summary ?? { count: 0, totalDays: 0, avgDays: 0, maxDays: 0 })
+      setLatePerformanceTree(Array.isArray(data?.tree) ? data.tree : [])
+    } catch (e) {
+      console.error('Failed to load late performance dashboard:', e)
+      setLatePerformanceSummary({ count: 0, totalDays: 0, avgDays: 0, maxDays: 0 })
+      setLatePerformanceTree([])
+    } finally {
+      setLatePerfLoading(false)
+    }
+  }, [
+    authReady,
+    isContractPerformance,
+  ])
+
+  useEffect(() => {
+    void fetchLatePerformance()
+  }, [fetchLatePerformance])
+
+  const applyLatePerformanceFocus = useCallback(
+    (incotermKey: string, productKey: string, plantKey: string) => {
+      if (!isContractPerformance) return
+
+      setLateOnTimeFilter('LATE')
+      setPerfTransportMode('ALL')
+
+      setSelectedIncoterms([incotermKey])
+      setSelectedPlantSites([plantKey])
+
+      setColumnFilters((prev) => ({
+        ...prev,
+        product: { type: 'text', value: productKey === 'Blank' ? '' : productKey, exact: true },
+      }))
+
+      setCurrentPage(1)
+      collapseAll()
+      void fetchContracts(1)
+      if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
+    },
+    [collapseAll, fetchContracts, isContractPerformance],
+  )
   
   // Fetch filter options on mount
   useEffect(() => {
@@ -1060,7 +1252,12 @@ function ContractsPageContent() {
     const base = contracts.filter((contract) => passesColumnFilters(contract, clientOnlyColumnFilters))
     if (!isContractPerformance || lateOnTimeFilter === 'ALL') return base
     return base.filter((c) => {
-      const tc = typeof c.trade_cycle_days === 'number' ? c.trade_cycle_days : null
+      const tc =
+        typeof c.trade_cycle_days === 'number'
+          ? c.trade_cycle_days
+          : (c.trade_cycle_days != null && c.trade_cycle_days !== ''
+              ? Number(String(c.trade_cycle_days).replace(/,/g, ''))
+              : null)
       if (tc == null) return false
       if (lateOnTimeFilter === 'LATE') return tc > 0
       return tc <= 0
@@ -1740,11 +1937,185 @@ function ContractsPageContent() {
               {totalPages > 1 && ` (Page ${currentPage} of ${totalPages})`}
             </p>
           </div>
-          <Button>
-            <Plus className="h-4 w-4 mr-2" />
-            New Contract
-          </Button>
         </div>
+
+        {isContractPerformance && (
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <CardTitle className="text-base">Late Performance (YTD)</CardTitle>
+                  <div className="text-sm text-gray-600 mt-1">
+                    Management view of late contracts where <span className="font-medium">Trade Cycle &gt; 0</span>. Use hotspots to jump to the exact contracts list.
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full sm:w-auto">
+                  <div className="rounded border bg-white px-3 py-2">
+                    <div className="text-[11px] text-gray-500">Late contracts</div>
+                    <div className="text-lg font-semibold text-gray-900">{latePerformanceSummary.count.toLocaleString('en-US')}</div>
+                  </div>
+                  <div className="rounded border bg-white px-3 py-2">
+                    <div className="text-[11px] text-gray-500">Total late days</div>
+                    <div className="text-lg font-semibold text-gray-900">{Math.round(latePerformanceSummary.totalDays).toLocaleString('en-US')}</div>
+                  </div>
+                  <div className="rounded border bg-white px-3 py-2">
+                    <div className="text-[11px] text-gray-500">Avg late days</div>
+                    <div className="text-lg font-semibold text-gray-900">{latePerformanceSummary.avgDays ? latePerformanceSummary.avgDays.toFixed(1) : '0.0'}</div>
+                  </div>
+                  <div className="rounded border bg-white px-3 py-2">
+                    <div className="text-[11px] text-gray-500">Max late days</div>
+                    <div className="text-lg font-semibold text-gray-900">{latePerformanceSummary.maxDays.toLocaleString('en-US')}</div>
+                  </div>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-2">
+              {latePerfLoading ? (
+                <div className="text-sm text-gray-500">Loading Late Performance dashboard…</div>
+              ) : latePerformanceTree.length === 0 ? (
+                <div className="text-sm text-gray-500">No late contracts found in YTD.</div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="text-sm text-gray-600">
+                    Navigate late issues as a tree: <span className="font-medium">Total → Incoterm → Product → Plant</span>.
+                    Click a <span className="font-medium">Plant</span> node to show the detailed contracts in the table below (Group Name is viewed there).
+                  </div>
+
+                  <div className="rounded-xl border bg-white p-4">
+                    <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+                      <div className="text-sm font-semibold text-gray-900">Late Performance drilldown</div>
+                      <button
+                        type="button"
+                        onClick={resetLatePerfSelections}
+                        className="text-sm text-blue-700 hover:underline"
+                      >
+                        Reset selection
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+                      {([
+                        { title: 'Total', subtitle: 'YTD late', level: 'total' as const },
+                        { title: 'Incoterm', subtitle: 'Pick one', level: 'incoterm' as const },
+                        { title: 'Product', subtitle: latePerfSelIncoterm ? `Under ${latePerfSelIncoterm}` : 'Pick incoterm first', level: 'product' as const },
+                        { title: 'Plant', subtitle: latePerfSelProduct ? `Under ${latePerfSelProduct}` : 'Pick product first', level: 'plant' as const },
+                      ] as const).map((col) => {
+                        const denom = latePerformanceSummary.totalDays || 1
+                        const levelStyles: Record<string, { headerBg: string; badge: string; bar: string; border: string }> = {
+                          total: { headerBg: 'bg-blue-50', badge: 'bg-blue-100 text-blue-800', bar: 'bg-blue-600', border: 'border-blue-200' },
+                          incoterm: { headerBg: 'bg-violet-50', badge: 'bg-violet-100 text-violet-800', bar: 'bg-violet-600', border: 'border-violet-200' },
+                          product: { headerBg: 'bg-amber-50', badge: 'bg-amber-100 text-amber-800', bar: 'bg-amber-600', border: 'border-amber-200' },
+                          plant: { headerBg: 'bg-emerald-50', badge: 'bg-emerald-100 text-emerald-800', bar: 'bg-emerald-600', border: 'border-emerald-200' },
+                        }
+                        const style = levelStyles[col.level] ?? levelStyles.total
+                        const itemClass = (selected: boolean) =>
+                          `w-full text-left rounded-lg border px-3 py-2 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-200 ${
+                            selected ? `bg-white ${style.border}` : 'bg-white border-gray-200'
+                          }`
+
+                        const renderItem = (node: LatePerfBranchNode, selected: boolean, onClick: () => void, rightAction?: React.ReactNode) => {
+                          const pct = Math.max(1, Math.round((Number(node.totalDays || 0) / denom) * 100))
+                          return (
+                            <div key={node.id} className={itemClass(selected)}>
+                              <div className="flex items-start justify-between gap-3">
+                                <button type="button" onClick={onClick} className="min-w-0 flex-1 text-left">
+                                  <div className="text-sm font-semibold text-gray-900 truncate">{node.label}</div>
+                                  <div className="mt-1 h-1.5 rounded bg-gray-100 overflow-hidden">
+                                    <div className={`h-full ${style.bar}`} style={{ width: `${pct}%` }} />
+                                  </div>
+                                  <div className="mt-1 text-xs text-gray-700 flex items-center justify-between gap-2">
+                                    <span className="font-semibold">{node.count.toLocaleString('en-US')}</span>
+                                    <span className="text-gray-500">contracts</span>
+                                    <span className="ml-auto font-semibold">{Math.round(node.totalDays).toLocaleString('en-US')}d</span>
+                                  </div>
+                                </button>
+                                {rightAction ? <div className="shrink-0">{rightAction}</div> : null}
+                              </div>
+                            </div>
+                          )
+                        }
+
+                        const panelHeader = (
+                          <div className={`rounded-lg border px-3 py-2 ${style.headerBg} ${style.border}`}>
+                            <div className="text-sm font-semibold text-gray-900">{col.title}</div>
+                            <div className="text-[11px] text-gray-500">{col.subtitle}</div>
+                          </div>
+                        )
+
+                        const body = (() => {
+                          if (col.level === 'total') {
+                            const n = latePerfBranchTree
+                            return renderItem(
+                              n,
+                              true,
+                              () => resetLatePerfSelections(),
+                              <span className={`px-2 py-1 rounded text-[11px] font-semibold ${style.badge}`}>Total</span>,
+                            )
+                          }
+                          if (col.level === 'incoterm') {
+                            return (
+                              <div className="space-y-2">
+                                {latePerfIncotermNodes.slice(0, 30).map((n) =>
+                                  renderItem(n, latePerfSelIncoterm === n.label, () => {
+                                    setLatePerfSelIncoterm(n.label)
+                                    setLatePerfSelProduct(null)
+                                    setLatePerfSelPlant(null)
+                                  }),
+                                )}
+                              </div>
+                            )
+                          }
+                          if (col.level === 'product') {
+                            if (!latePerfSelIncoterm) return <div className="text-sm text-gray-500">Select an incoterm to see products.</div>
+                            return (
+                              <div className="space-y-2">
+                                {latePerfProductNodes.slice(0, 30).map((n) =>
+                                  renderItem(n, latePerfSelProduct === n.label, () => {
+                                    setLatePerfSelProduct(n.label)
+                                    setLatePerfSelPlant(null)
+                                  }),
+                                )}
+                              </div>
+                            )
+                          }
+                          // plant
+                          if (!latePerfSelProduct || !latePerfSelIncoterm) return <div className="text-sm text-gray-500">Select a product to see plants.</div>
+                          return (
+                            <div className="space-y-2">
+                              {latePerfPlantNodes.slice(0, 30).map((n) =>
+                                renderItem(
+                                  n,
+                                  latePerfSelPlant === n.label,
+                                  () => setLatePerfSelPlant(n.label),
+                                  <button
+                                    type="button"
+                                    onClick={() => applyLatePerformanceFocus(latePerfSelIncoterm, latePerfSelProduct, n.label)}
+                                    className="px-2 py-1 rounded bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-700"
+                                  >
+                                    View
+                                  </button>,
+                                ),
+                              )}
+                            </div>
+                          )
+                        })()
+
+                        return (
+                          <div key={col.level} className="space-y-2">
+                            {panelHeader}
+                            <div className="space-y-2 max-h-[420px] overflow-auto pr-1">
+                              {body}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Filters */}
         <Card>

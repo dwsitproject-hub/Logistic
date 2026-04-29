@@ -154,6 +154,13 @@ const NAV_ITEMS: {
     permissionKey: 'page.contracts',
   },
   { name: 'Shipments', href: '/shipments', icon: Package, roles: ['ALL'], permissionKey: 'page.shipments' },
+  {
+    name: 'Shipping Performance',
+    href: '/shipping-performance',
+    icon: Package,
+    roles: ['ALL'],
+    permissionKey: 'page.shipments',
+  },
   { name: 'Trucking', href: '/trucking', icon: Truck, roles: ['ALL'], permissionKey: 'page.trucking' },
   // Claim Mutu is a trucking-adjacent module, placed right after Trucking
   { name: 'Claim Mutu', href: '/claim-mutu', icon: Truck, roles: ['ALL'], permissionKey: 'page.claim_mutu' },
@@ -181,6 +188,13 @@ const NAV_ITEMS: {
     icon: Layers,
     roles: ['ALL'],
     permissionKey: 'page.master_loading_ports',
+  },
+  {
+    name: 'Master Plant',
+    href: '/master-plant',
+    icon: Layers,
+    roles: ['ALL'],
+    permissionKey: 'page.master_plants',
   },
   { name: 'Finance', href: '/finance', icon: DollarSign, roles: ['FINANCE', 'MANAGEMENT', 'ADMIN'], permissionKey: 'page.finance' },
   { name: 'KLIP Agent AI', href: '/klip-agent-ai', icon: Bot, roles: ['ALL'], permissionKey: 'page.klip_agent_ai' },

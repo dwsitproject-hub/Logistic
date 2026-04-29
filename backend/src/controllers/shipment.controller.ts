@@ -943,6 +943,93 @@ ${contractMetaSelect}
   }
 };
 
+export const getShippingPerformance = async (_req: AuthRequest, res: Response) => {
+  try {
+    const result = await query(
+      `WITH latest_spd_contract AS (
+        SELECT DISTINCT ON (spd.contract_number)
+          spd.contract_number,
+          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no
+        FROM sap_processed_data spd
+        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      ),
+      loading_port AS (
+        SELECT DISTINCT ON (vlp.shipment_id)
+          vlp.shipment_id,
+          vlp.eta_vessel_arrival::date AS load_eta_arrival,
+          vlp.eta_vessel_berthed_at_loading_port::date AS load_eta_berthed,
+          vlp.eta_loading_completed::date AS load_eta_completed
+        FROM vessel_loading_ports vlp
+        WHERE COALESCE(vlp.is_discharge_port, false) = false
+        ORDER BY vlp.shipment_id, vlp.port_sequence NULLS LAST, vlp.id
+      ),
+      discharge_port AS (
+        SELECT DISTINCT ON (vlp.shipment_id)
+          vlp.shipment_id,
+          vlp.eta_vessel_arrive_at_discharge_port::date AS discharge_eta_arrival,
+          vlp.eta_vessel_berthed_at_discharge_port::date AS discharge_eta_berthed,
+          vlp.eta_vessel_complete_discharge::date AS discharge_eta_completed
+        FROM vessel_loading_ports vlp
+        WHERE COALESCE(vlp.is_discharge_port, false) = true
+        ORDER BY vlp.shipment_id, vlp.port_sequence NULLS LAST, vlp.id
+      )
+      SELECT
+        s.id,
+        s.shipment_id,
+        c.contract_id AS contract_number,
+        c.po_number,
+        c.sto_number,
+        l.contract_ext_no,
+        c.contract_date::date AS contract_date,
+        c.incoterm,
+        c.product,
+        s.vessel_name,
+        s.status,
+        COALESCE(NULLIF(TRIM(s.port_of_discharge), ''), 'Blank') AS plant_site,
+        c.group_name,
+        c.transport_mode,
+        c.cargo_readiness_date::date AS cargo_readiness_date,
+        COALESCE(lp.load_eta_arrival, s.eta_arrival::date) AS loading_eta_arrival,
+        COALESCE(lp.load_eta_berthed, s.eta_berthed::date) AS loading_eta_berthed,
+        COALESCE(lp.load_eta_completed, s.eta_loading_complete::date) AS loading_eta_completed,
+        COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) AS discharge_eta_arrival,
+        COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) AS discharge_eta_berthed,
+        COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date) AS discharge_eta_completed,
+        (COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - c.cargo_readiness_date::date)::int AS loading_delta_eta_etr_days,
+        (COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - COALESCE(lp.load_eta_berthed, s.eta_berthed::date))::int AS loading_delta_eta_etb_days,
+        (COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date))::int AS loading_delta_etb_etc_days,
+        (COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) - COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date))::int AS discharge_delta_eta_etb_days,
+        (COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date))::int AS discharge_delta_etb_etc_days,
+        (
+          COALESCE((COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - c.cargo_readiness_date::date), 0) +
+          COALESCE((COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - COALESCE(lp.load_eta_berthed, s.eta_berthed::date)), 0) +
+          COALESCE((COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date)), 0) +
+          COALESCE((COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) - COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date)), 0) +
+          COALESCE((COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date)), 0)
+        )::int AS total_delta_days
+      FROM shipments s
+      INNER JOIN contracts c ON s.contract_id = c.id
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      LEFT JOIN loading_port lp ON lp.shipment_id = s.id
+      LEFT JOIN discharge_port dp ON dp.shipment_id = s.id
+      WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
+      ORDER BY s.created_at DESC`
+    );
+
+    return res.json({
+      success: true,
+      data: result.rows,
+    });
+  } catch (error: any) {
+    logger.error('Get shipping performance error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch shipping performance data' },
+    });
+  }
+};
+
 export const getShipmentById = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
@@ -2316,18 +2403,10 @@ export const getContractSuggestions = async (req: AuthRequest, res: Response) =>
       });
     }
 
-    const result = await query(`
-      WITH latest_spd AS (
-        SELECT DISTINCT ON (spd.contract_number)
-          spd.contract_number,
-          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no
-        FROM sap_processed_data spd
-        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      )
+    const result = await query(
+      `
       SELECT 
         c.contract_id,
-        l.contract_ext_no,
         c.po_number,
         c.supplier,
         c.product,
@@ -2335,16 +2414,16 @@ export const getContractSuggestions = async (req: AuthRequest, res: Response) =>
         c.sto_number,
         c.sto_quantity
       FROM contracts c
-      LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       WHERE UPPER(COALESCE(c.status, '')) IN ('OPEN', 'ACTIVE')
         AND (
-          c.contract_id ILIKE $1
-          OR c.po_number ILIKE $1
-          OR COALESCE(l.contract_ext_no, '') ILIKE $1
+          c.po_number ILIKE $1
+          OR c.contract_id ILIKE $1
         )
-      ORDER BY COALESCE(l.contract_ext_no, c.contract_id)
+      ORDER BY COALESCE(NULLIF(TRIM(c.po_number), ''), c.contract_id)
       LIMIT 10
-    `, [`%${q}%`]);
+    `,
+      [`%${q}%`],
+    );
 
     return res.json({
       success: true,
@@ -2374,27 +2453,18 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
     const raw = String(contract_number).trim();
     const result = await query(
       `
-      WITH latest_spd AS (
-        SELECT DISTINCT ON (spd.contract_number)
-          spd.contract_number,
-          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no
-        FROM sap_processed_data spd
-        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      ),
-      matched AS (
+      WITH matched AS (
         SELECT c.*
         FROM contracts c
-        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
         WHERE c.contract_id = $1
-           OR COALESCE(l.contract_ext_no, '') = $1
+           OR c.po_number = $1
         ORDER BY (c.contract_id = $1) DESC
         LIMIT 1
       )
       SELECT 
         c.id,
         c.contract_id,
-        l.contract_ext_no,
+        c.po_number,
         c.sto_number,
         c.supplier,
         c.buyer,
@@ -2452,7 +2522,6 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
           LIMIT 1
         ), ''), '0.00') as port_of_discharge
       FROM matched c
-      LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       LIMIT 1
       `,
       [raw]

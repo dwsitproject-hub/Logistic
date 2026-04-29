@@ -7,6 +7,7 @@ import {
   getContractActivityLog,
   getB2bPartiesForContract,
   getContractFilterIncoterms,
+  getLatePerformance,
   createContract,
   updateContract,
 } from '../controllers/contract.controller';
@@ -49,6 +50,7 @@ router.use(authenticateToken);
  *         description: Contracts retrieved successfully
  */
 router.get('/', getContracts);
+router.get('/late-performance', getLatePerformance);
 router.get('/filter-options/incoterms', getContractFilterIncoterms);
 router.get('/unassigned-counts', getUnassignedCounts);
 

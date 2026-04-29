@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
-import { Plus, Upload, Edit2 } from 'lucide-react'
+import { Plus, Upload, Edit2, Trash2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -45,6 +45,7 @@ export default function MasterLoadingPortPage() {
   const [editing, setEditing] = useState<MasterLoadingPort | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [form, setForm] = useState<Partial<MasterLoadingPort>>({})
+  const [isAdmin, setIsAdmin] = useState(false)
   const [uploadResult, setUploadResult] = useState<{
     total: number
     success: number
@@ -73,6 +74,12 @@ export default function MasterLoadingPortPage() {
 
   useEffect(() => {
     fetchData()
+    try {
+      const u = JSON.parse(localStorage.getItem('user') || 'null')
+      setIsAdmin(String(u?.role || '').toUpperCase() === 'ADMIN')
+    } catch {
+      setIsAdmin(false)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -271,6 +278,20 @@ export default function MasterLoadingPortPage() {
       alert('Failed to parse or upload file. Please upload CSV exported from Master Loading Port.xlsx')
     } finally {
       e.target.value = ''
+    }
+  }
+
+  const handleDelete = async (p: MasterLoadingPort) => {
+    if (!isAdmin) return
+    const ok = confirm(`Delete loading port?\n\n${p.port}`)
+    if (!ok) return
+    try {
+      await api.delete(`/master-loading-ports/${p.id}`)
+      await fetchData()
+    } catch (err: any) {
+      console.error('Delete master loading port error', err)
+      const msg = err?.response?.data?.error?.message || 'Failed to delete master loading port'
+      alert(msg)
     }
   }
 
@@ -546,10 +567,18 @@ export default function MasterLoadingPortPage() {
                         <td className="px-3 py-2">{p.loading_rate_mt_per_hour ?? '-'}</td>
                         <td className="px-3 py-2">{p.shipper || '-'}</td>
                         <td className="px-3 py-2 text-right">
-                          <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
-                            <Edit2 className="h-4 w-4 mr-1" />
-                            Edit
-                          </Button>
+                          <div className="inline-flex gap-2">
+                            <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
+                              <Edit2 className="h-4 w-4 mr-1" />
+                              Edit
+                            </Button>
+                            {isAdmin && (
+                              <Button variant="destructive" size="sm" onClick={() => handleDelete(p)}>
+                                <Trash2 className="h-4 w-4 mr-1" />
+                                Delete
+                              </Button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}

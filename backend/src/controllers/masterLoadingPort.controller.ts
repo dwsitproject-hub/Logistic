@@ -326,3 +326,18 @@ export const bulkUploadMasterLoadingPorts = async (req: AuthRequest, res: Respon
   }
 };
 
+export const deleteMasterLoadingPort = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const result = await query('DELETE FROM master_loading_ports WHERE id = $1 RETURNING id', [id]);
+    if (result.rows.length === 0) {
+      res.status(404).json({ success: false, error: { message: 'Master loading port not found' } });
+      return;
+    }
+    res.json({ success: true, data: { id: result.rows[0].id } });
+  } catch (error) {
+    logger.error('Delete master loading port error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to delete master loading port' } });
+  }
+};
+

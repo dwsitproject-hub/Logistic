@@ -29,6 +29,26 @@ export const CONTRACTS_LIST_OUTER_SQL = `
         base.logistics_classification,
         base.po_classification,
         base.cargo_readiness_date,
+        COALESCE(
+          NULLIF((
+            SELECT s.port_of_discharge
+            FROM shipments s
+            WHERE s.contract_id = base.id
+              AND s.port_of_discharge IS NOT NULL
+              AND TRIM(s.port_of_discharge) <> ''
+            ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC NULLS LAST
+            LIMIT 1
+          ), ''),
+          NULLIF((
+            SELECT t.location
+            FROM trucking_operations t
+            WHERE t.contract_id = base.id
+              AND t.location IS NOT NULL
+              AND TRIM(t.location) <> ''
+            ORDER BY t.updated_at DESC NULLS LAST, t.created_at DESC NULLS LAST
+            LIMIT 1
+          ), '')
+        ) AS plant_site,
         base.created_at,
         base.po_numbers,
         base.sto_number,

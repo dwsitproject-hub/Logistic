@@ -89,10 +89,11 @@ npm run dev
 1. **Dashboard**: Overview with KPIs and AI insights
 2. **Contracts**: Contract management and tracking
 3. **Shipments**: Shipment tracker with gain/loss monitoring
-4. **Finance**: Payment status and proof upload
-5. **Documents**: Upload and manage supporting documents
-6. **SAP Import**: Excel file upload and data processing
-7. **Administration**: User management and audit logs
+4. **Shipping Performance**: SEA/MIX shipment performance page with ETA/ETR/ETB/ETC delta analytics, late/on-time drilldown, and configurable table
+5. **Finance**: Payment status and proof upload
+6. **Documents**: Upload and manage supporting documents
+7. **SAP Import**: Excel file upload and data processing
+8. **Administration**: User management and audit logs
 
 ## SAP Upload Mechanism
 
@@ -330,6 +331,28 @@ If a record with the same tri-key exists:
 - `GET /api/sap-master-v2/imports` - Get import history (ADMIN, MANAGEMENT)
 - `GET /api/sap-master-v2/imports/:importId` - Get import details and errors
 - `GET /api/sap-master-v2/pending-entries` - Get pending manual entries
+- `GET /api/shipments/performance` - Shipping Performance dataset (SEA/MIX), includes PO/Contract/STO identifiers and loading/discharge delta metrics
+
+### Shipping Performance (new)
+
+- **Frontend route**: `frontend/src/app/shipping-performance/page.tsx`
+- **Sidebar entry**: `Shipping Performance` (uses `page.shipments` visibility)
+- **Data source**: `GET /api/shipments/performance`
+- **Scope**: only contracts with transport mode `SEA` or `MIX`
+- **Main metrics**:
+  - Loading: `ETA-ETR`, `ETA-ETB`, `ETB-ETC`
+  - Discharge: `ETA-ETB`, `ETB-ETC`
+  - `Total` = sum of loading + discharge deltas
+- **Late Performance card**:
+  - Late logic: `Total > 0`
+  - On-time logic: `Total <= 0`
+  - Drilldown tree: `Total -> Incoterm -> Product -> Plant`
+  - Clicking card counts scopes the table below
+- **Table capabilities**:
+  - Column visibility toggle (including `PO No`, `Contract Ext No`, `Contract No`, `STO No`)
+  - Per-column header filter popover
+  - Drag-and-drop column ordering
+  - Per-column sorting
 
 ### Error Handling
 

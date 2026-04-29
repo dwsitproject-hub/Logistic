@@ -9,14 +9,14 @@ import { Input } from '@/components/ui/input'
 export function SearchableMultiSelect({
   label,
   options,
-  selected,
+  selected = [],
   onChange,
   placeholder,
   emptyMessage = 'Loading...',
 }: {
   label: string
   options: string[]
-  selected: string[]
+  selected?: string[]
   onChange: (value: string[]) => void
   placeholder: string
   emptyMessage?: string
