@@ -211,13 +211,14 @@ function ContractsPageContent() {
   const [unassignedFilter, setUnassignedFilter] = useState<'sea' | 'land' | null>(null)
   const [updatingContractId, setUpdatingContractId] = useState<string | null>(null)
 
-  type LatePerfNode = { key: string; count: number; totalDays: number; maxDays: number; children: LatePerfNode[] }
+  type LatePerfNode = { key: string; count: number; totalDays: number; maxDays: number; totalQtyDelivery?: number; children: LatePerfNode[] }
   const [latePerformanceTree, setLatePerformanceTree] = useState<LatePerfNode[]>([])
-  const [latePerformanceSummary, setLatePerformanceSummary] = useState<{ count: number; totalDays: number; avgDays: number; maxDays: number }>({
+  const [latePerformanceSummary, setLatePerformanceSummary] = useState<{ count: number; totalDays: number; avgDays: number; maxDays: number; totalQtyDelivery?: number }>({
     count: 0,
     totalDays: 0,
     avgDays: 0,
     maxDays: 0,
+    totalQtyDelivery: 0,
   })
   const [latePerfLoading, setLatePerfLoading] = useState(false)
   type LatePerfHotspot = {
@@ -228,6 +229,7 @@ function ContractsPageContent() {
     count: number
     totalDays: number
     maxDays: number
+    totalQtyDelivery: number
   }
 
   const latePerfAllHotspots = useMemo((): LatePerfHotspot[] => {
@@ -244,6 +246,7 @@ function ContractsPageContent() {
               count: gn.count,
               totalDays: gn.totalDays,
               maxDays: gn.maxDays,
+              totalQtyDelivery: gn.totalQtyDelivery || 0,
             })
           }
         }
@@ -259,6 +262,7 @@ function ContractsPageContent() {
     count: number
     totalDays: number
     maxDays: number
+    totalQtyDelivery: number
     children: LatePerfBranchNode[]
   }
 
@@ -267,8 +271,8 @@ function ContractsPageContent() {
       const s = String(v ?? '').trim()
       return s ? s : 'Blank'
     }
-    type Agg = { count: number; totalDays: number; maxDays: number; children: Map<string, Agg> }
-    const mk = (): Agg => ({ count: 0, totalDays: 0, maxDays: 0, children: new Map() })
+    type Agg = { count: number; totalDays: number; maxDays: number; totalQtyDelivery: number; children: Map<string, Agg> }
+    const mk = (): Agg => ({ count: 0, totalDays: 0, maxDays: 0, totalQtyDelivery: 0, children: new Map() })
     const root = mk()
 
     for (const h of latePerfAllHotspots) {
@@ -278,6 +282,7 @@ function ContractsPageContent() {
       const days = Number(h.totalDays) || 0
       const cnt = Number(h.count) || 0
       const maxd = Number(h.maxDays) || 0
+      const qty = Number(h.totalQtyDelivery) || 0
 
       const nInc = root.children.get(inc) ?? mk()
       root.children.set(inc, nInc)
@@ -290,6 +295,7 @@ function ContractsPageContent() {
         n.count += cnt
         n.totalDays += days
         n.maxDays = Math.max(n.maxDays, maxd)
+        n.totalQtyDelivery += qty
       }
     }
 
@@ -310,6 +316,7 @@ function ContractsPageContent() {
           count: a.count,
           totalDays: a.totalDays,
           maxDays: a.maxDays,
+          totalQtyDelivery: a.totalQtyDelivery,
           children,
         })
       }
@@ -324,6 +331,7 @@ function ContractsPageContent() {
       count: root.count,
       totalDays: root.totalDays,
       maxDays: root.maxDays,
+      totalQtyDelivery: root.totalQtyDelivery,
       children: toNodes(root.children, 'total', 'incoterm'),
     }
   }, [latePerfAllHotspots])
@@ -622,7 +630,7 @@ function ContractsPageContent() {
 
       const resp = await api.get(`/contracts/late-performance?${params.toString()}`)
       const data = resp.data?.data
-      setLatePerformanceSummary(data?.summary ?? { count: 0, totalDays: 0, avgDays: 0, maxDays: 0 })
+      setLatePerformanceSummary(data?.summary ?? { count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0 })
       setLatePerformanceTree(Array.isArray(data?.tree) ? data.tree : [])
     } catch (e) {
       console.error('Failed to load late performance dashboard:', e)
@@ -2013,7 +2021,7 @@ function ContractsPageContent() {
                             selected ? `bg-white ${style.border}` : 'bg-white border-gray-200'
                           }`
 
-                        const renderItem = (node: LatePerfBranchNode, selected: boolean, onClick: () => void, rightAction?: React.ReactNode) => {
+                        const renderItem = (node: LatePerfBranchNode, selected: boolean, onClick: () => void, rightAction?: React.ReactNode, rightStat?: React.ReactNode) => {
                           const pct = Math.max(1, Math.round((Number(node.totalDays || 0) / denom) * 100))
                           return (
                             <div key={node.id} className={itemClass(selected)}>
@@ -2026,7 +2034,7 @@ function ContractsPageContent() {
                                   <div className="mt-1 text-xs text-gray-700 flex items-center justify-between gap-2">
                                     <span className="font-semibold">{node.count.toLocaleString('en-US')}</span>
                                     <span className="text-gray-500">contracts</span>
-                                    <span className="ml-auto font-semibold">{Math.round(node.totalDays).toLocaleString('en-US')}d</span>
+                                    {rightStat ?? <span className="ml-auto font-semibold">{Math.round(node.totalDays).toLocaleString('en-US')}d</span>}
                                   </div>
                                 </button>
                                 {rightAction ? <div className="shrink-0">{rightAction}</div> : null}
@@ -2050,6 +2058,7 @@ function ContractsPageContent() {
                               true,
                               () => resetLatePerfSelections(),
                               <span className={`px-2 py-1 rounded text-[11px] font-semibold ${style.badge}`}>Total</span>,
+                              <span className="ml-auto font-semibold">{Math.round(n.totalQtyDelivery).toLocaleString('en-US')}kg</span>,
                             )
                           }
                           if (col.level === 'incoterm') {

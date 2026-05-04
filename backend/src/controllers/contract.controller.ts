@@ -1102,13 +1102,13 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
     const todayMid = new Date();
     todayMid.setHours(0, 0, 0, 0);
 
-    type AggNode = { key: string; count: number; totalDays: number; maxDays: number; children: Map<string, AggNode> };
+    type AggNode = { key: string; count: number; totalDays: number; maxDays: number; totalQtyDelivery: number; children: Map<string, AggNode> };
     const root = new Map<string, AggNode>();
     const add = (m: Map<string, AggNode>, key: string) => {
       const k = key && key.trim() ? key.trim() : 'Blank';
       const ex = m.get(k);
       if (ex) return ex;
-      const node: AggNode = { key: k, count: 0, totalDays: 0, maxDays: 0, children: new Map() };
+      const node: AggNode = { key: k, count: 0, totalDays: 0, maxDays: 0, totalQtyDelivery: 0, children: new Map() };
       m.set(k, node);
       return node;
     };
@@ -1116,6 +1116,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
     let lateCount = 0;
     let lateTotalDays = 0;
     let lateMaxDays = 0;
+    let lateTotalQtyDelivery = 0;
 
     const debugCounts = {
       totalRows: 0,
@@ -1234,6 +1235,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       lateCount += 1;
       lateTotalDays += tradeCycle;
       lateMaxDays = Math.max(lateMaxDays, tradeCycle);
+      lateTotalQtyDelivery += Number(row.quantity_delivery || 0);
       debugCounts.includedLate += 1;
       pushSample('includedLate', `${String(row.contract_id || '')}:${tradeCycle}`);
 
@@ -1250,13 +1252,14 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         n.count += 1;
         n.totalDays += tradeCycle;
         n.maxDays = Math.max(n.maxDays, tradeCycle);
+        n.totalQtyDelivery += Number(row.quantity_delivery || 0);
       }
     }
 
     const toSorted = (m: Map<string, AggNode>): any[] =>
       [...m.values()]
         .sort((a, b) => b.totalDays - a.totalDays || b.count - a.count || a.key.localeCompare(b.key))
-        .map((n) => ({ key: n.key, count: n.count, totalDays: n.totalDays, maxDays: n.maxDays, children: toSorted(n.children) }));
+        .map((n) => ({ key: n.key, count: n.count, totalDays: n.totalDays, maxDays: n.maxDays, totalQtyDelivery: n.totalQtyDelivery, children: toSorted(n.children) }));
 
     if (process.env.NODE_ENV === 'development') {
       logger.info('Late Performance debug', {
@@ -1277,6 +1280,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           totalDays: lateTotalDays,
           avgDays: lateCount > 0 ? lateTotalDays / lateCount : 0,
           maxDays: lateMaxDays,
+          totalQtyDelivery: lateTotalQtyDelivery,
         },
         tree: toSorted(root),
         ...(debug
