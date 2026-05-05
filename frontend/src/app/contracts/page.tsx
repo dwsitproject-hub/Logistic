@@ -226,6 +226,7 @@ function ContractsPageContent() {
     product: string
     plant_site: string
     group_name: string
+    supplier: string
     count: number
     totalDays: number
     maxDays: number
@@ -238,16 +239,19 @@ function ContractsPageContent() {
       for (const plant of inc.children || []) {
         for (const prod of plant.children || []) {
           for (const gn of prod.children || []) {
-            out.push({
-              incoterm: inc.key,
-              product: prod.key,
-              plant_site: plant.key,
-              group_name: gn.key,
-              count: gn.count,
-              totalDays: gn.totalDays,
-              maxDays: gn.maxDays,
-              totalQtyDelivery: gn.totalQtyDelivery || 0,
-            })
+            for (const sup of gn.children || []) {
+              out.push({
+                incoterm: inc.key,
+                product: prod.key,
+                plant_site: plant.key,
+                group_name: gn.key,
+                supplier: sup.key,
+                count: sup.count,
+                totalDays: sup.totalDays,
+                maxDays: sup.maxDays,
+                totalQtyDelivery: sup.totalQtyDelivery || 0,
+              })
+            }
           }
         }
       }
@@ -258,7 +262,7 @@ function ContractsPageContent() {
   type LatePerfBranchNode = {
     id: string
     label: string
-    level: 'total' | 'incoterm' | 'product' | 'plant'
+    level: 'total' | 'incoterm' | 'product' | 'plant' | 'supplier'
     count: number
     totalDays: number
     maxDays: number
@@ -283,6 +287,7 @@ function ContractsPageContent() {
       const cnt = Number(h.count) || 0
       const maxd = Number(h.maxDays) || 0
       const qty = Number(h.totalQtyDelivery) || 0
+      const sup = norm(h.supplier)
 
       const nInc = root.children.get(inc) ?? mk()
       root.children.set(inc, nInc)
@@ -290,8 +295,10 @@ function ContractsPageContent() {
       nInc.children.set(prod, nProd)
       const nPlant = nProd.children.get(plant) ?? mk()
       nProd.children.set(plant, nPlant)
+      const nSup = nPlant.children.get(sup) ?? mk()
+      nPlant.children.set(sup, nSup)
 
-      for (const n of [root, nInc, nProd, nPlant]) {
+      for (const n of [root, nInc, nProd, nPlant, nSup]) {
         n.count += cnt
         n.totalDays += days
         n.maxDays = Math.max(n.maxDays, maxd)
@@ -304,9 +311,9 @@ function ContractsPageContent() {
       for (const [k, a] of m.entries()) {
         const id = `${parentId}__${k}`
         const nextLevel: LatePerfBranchNode['level'] =
-          level === 'incoterm' ? 'product' : level === 'product' ? 'plant' : 'plant'
+          level === 'incoterm' ? 'product' : level === 'product' ? 'plant' : level === 'plant' ? 'supplier' : 'supplier'
         const children =
-          level === 'plant'
+          level === 'supplier'
             ? []
             : toNodes(a.children, id, nextLevel)
         nodes.push({
@@ -320,7 +327,7 @@ function ContractsPageContent() {
           children,
         })
       }
-      nodes.sort((a, b) => b.totalDays - a.totalDays || b.count - a.count || a.label.localeCompare(b.label))
+      nodes.sort((a, b) => b.totalQtyDelivery - a.totalQtyDelivery || b.count - a.count || a.label.localeCompare(b.label))
       return nodes
     }
 
@@ -339,11 +346,13 @@ function ContractsPageContent() {
   const [latePerfSelIncoterm, setLatePerfSelIncoterm] = useState<string | null>(null)
   const [latePerfSelProduct, setLatePerfSelProduct] = useState<string | null>(null)
   const [latePerfSelPlant, setLatePerfSelPlant] = useState<string | null>(null)
+  const [latePerfSelSupplier, setLatePerfSelSupplier] = useState<string | null>(null)
 
   const resetLatePerfSelections = useCallback(() => {
     setLatePerfSelIncoterm(null)
     setLatePerfSelProduct(null)
     setLatePerfSelPlant(null)
+    setLatePerfSelSupplier(null)
   }, [])
 
   const findChild = useCallback((nodes: LatePerfBranchNode[], label: string | null) => {
@@ -356,6 +365,8 @@ function ContractsPageContent() {
   const latePerfProductNodes = latePerfSelectedIncNode?.children ?? []
   const latePerfSelectedProdNode = findChild(latePerfProductNodes, latePerfSelProduct)
   const latePerfPlantNodes = latePerfSelectedProdNode?.children ?? []
+  const latePerfSelectedPlantNode = findChild(latePerfPlantNodes, latePerfSelPlant)
+  const latePerfSupplierNodes = latePerfSelectedPlantNode?.children ?? []
 
   type ContractLogisticsUi =
     | { kind: 'truck-create'; contract: Contract }
@@ -466,6 +477,7 @@ function ContractsPageContent() {
     dateTo,
     transportModeFilter,
     perfTransportMode,
+    lateOnTimeFilter,
     unassignedFilter,
     selectedIncoterms,
     selectedPlantSites,
@@ -507,7 +519,7 @@ function ContractsPageContent() {
   // NOTE: allVisibleIds/allExpanded are derived after filteredContracts is defined (below)
 
   const columnStorageKey = isContractPerformance
-    ? 'contract-performance.compact.visibleColumns'
+    ? 'contract-performance.compact.visibleColumns.v3'
     : 'contracts.compact.visibleColumns'
   const columnOrderStorageKey = isContractPerformance
     ? 'contract-performance.compact.columnOrder'
@@ -515,7 +527,7 @@ function ContractsPageContent() {
   // Bumped so saved "created_at" default does not fight API order (newest contract_date first).
   const sortStorageKey = isContractPerformance ? 'contract-performance.compact.sort' : 'contracts.compact.sort.v2'
 
-  const fetchContracts = async (page: number = currentPage, searchOverride?: string) => {
+  const fetchContracts = async (page: number = currentPage, searchOverride?: string, sortKeyOverride?: string, sortDirOverride?: 'asc' | 'desc') => {
     try {
       if (!authReady) return
       setLoading(true)
@@ -573,9 +585,9 @@ function ContractsPageContent() {
         selectedPlantSites.forEach((p) => params.append('plant', p))
       }
       // Contract Performance sorting must happen server-side across full filtered set.
-      if (isContractPerformance && sortKey) {
-        params.append('sortKey', sortKey)
-        params.append('sortDir', sortDir)
+      if (isContractPerformance && (sortKeyOverride || sortKey)) {
+        params.append('sortKey', sortKeyOverride || sortKey)
+        params.append('sortDir', sortDirOverride || sortDir)
       }
 
       const response = await api.get(`/contracts?${params.toString()}`)
@@ -649,7 +661,7 @@ function ContractsPageContent() {
   }, [fetchLatePerformance])
 
   const applyLatePerformanceFocus = useCallback(
-    (incotermKey: string, productKey: string, plantKey: string) => {
+    (incotermKey: string, productKey: string, plantKey: string, supplierKey?: string) => {
       if (!isContractPerformance) return
 
       setLateOnTimeFilter('LATE')
@@ -661,14 +673,16 @@ function ContractsPageContent() {
       setColumnFilters((prev) => ({
         ...prev,
         product: { type: 'text', value: productKey === 'Blank' ? '' : productKey, exact: true },
+        ...(supplierKey && supplierKey !== 'Blank'
+          ? { supplier: { type: 'text', value: supplierKey, exact: true } }
+          : {}),
       }))
 
       setCurrentPage(1)
       collapseAll()
-      void fetchContracts(1)
       if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
     },
-    [collapseAll, fetchContracts, isContractPerformance],
+    [collapseAll, isContractPerformance],
   )
   
   // Fetch filter options on mount
@@ -1140,7 +1154,7 @@ function ContractsPageContent() {
   }, [])
 
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
-    if (colId === 'contract_qty' || colId === 'outstanding_qty' || colId === 'contract_aging') return 'number'
+    if (colId === 'contract_qty' || colId === 'outstanding_qty' || colId === 'contract_aging' || colId === 'received_qty' || colId === 'outstanding_qty_mt') return 'number'
     if (colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'created_at') return 'date'
     if (colId === 'product' || colId === 'status' || colId === 'company_name' || colId === 'lt_spot' || colId === 'group_name' || colId === 'supplier') return 'multi'
     if (colId === 'month_delivery_end') return 'text'
@@ -1176,6 +1190,10 @@ function ContractsPageContent() {
       case 'contract_qty':
         return typeof c.quantity_ordered === 'number' ? c.quantity_ordered : null
       case 'outstanding_qty':
+        return typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : null
+      case 'received_qty':
+        return typeof c.quantity_receive === 'number' ? c.quantity_receive : null
+      case 'outstanding_qty_mt':
         return typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : null
       case 'delivery_start':
         return c.delivery_start_date || ''
@@ -1446,6 +1464,44 @@ function ContractsPageContent() {
       className: 'whitespace-nowrap'
     },
     {
+      id: 'contract_qty',
+      label: 'Contract Qty (MT)',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => typeof c.quantity_ordered === 'number' ? c.quantity_ordered : 0,
+      render: (c) => (
+        <span className="text-sm truncate">
+          {((Number(c.quantity_ordered) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT
+        </span>
+      )
+    },
+    {
+      id: 'received_qty',
+      label: 'Received Qty (MT)',
+      formulaHelp: FIELD_HELP.receivedQty,
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (c) => typeof c.quantity_receive === 'number' ? c.quantity_receive : 0,
+      render: (c) => (
+        <span className="text-sm truncate">
+          {((Number(c.quantity_receive) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT
+        </span>
+      )
+    },
+    {
+      id: 'outstanding_qty_mt',
+      label: 'Outstanding Qty (MT)',
+      formulaHelp: FIELD_HELP.outstandingQtyMt,
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (c) => typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : 0,
+      render: (c) => (
+        <span className={`text-sm truncate ${c.outstanding_quantity < 0 ? 'text-red-600' : ''}`}>
+          {((Number(c.outstanding_quantity) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT
+        </span>
+      )
+    },
+    {
       id: 'trade_cycle_days',
       label: 'Trade Cycle',
       formulaHelp: FIELD_HELP.tradeCycle,
@@ -1553,31 +1609,6 @@ function ContractsPageContent() {
       )
     },
     {
-      id: 'contract_qty',
-      label: 'Contract Qty (Kg)',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (c) => (typeof c.quantity_ordered === 'number' ? c.quantity_ordered : 0),
-      render: (c) => (
-        <span className="text-sm truncate">
-          {formatNumber(c.quantity_ordered)} Kg
-        </span>
-      )
-    },
-    {
-      id: 'outstanding_qty',
-      label: 'Outstanding Qty (Kg)',
-      formulaHelp: FIELD_HELP.outstandingQty,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (c) => (typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : 0),
-      render: (c) => (
-        <span className={`text-sm font-medium ${c.outstanding_quantity < 0 ? 'text-red-600' : 'text-gray-900'}`}>
-          {formatNumber(c.outstanding_quantity)} Kg
-        </span>
-      )
-    },
-    {
       id: 'delivery_start',
       label: 'Due Date Delivery Start',
       defaultVisible: true,
@@ -1660,6 +1691,8 @@ function ContractsPageContent() {
         'supplier',
         'group_name',
         'contract_ext_no',
+        'received_qty',
+        'outstanding_qty_mt',
         'trade_cycle_days',
         'cash_cycle_days',
       ]
@@ -1692,6 +1725,9 @@ function ContractsPageContent() {
         const s = JSON.parse(rawSort) as { key?: string; dir?: 'asc' | 'desc' }
         if (s?.key) setSortKey(s.key)
         if (s?.dir) setSortDir(s.dir)
+      } else if (isContractPerformance) {
+        setSortKey('outstanding_qty_mt')
+        setSortDir('desc')
       }
     } catch {
       // ignore
@@ -1840,14 +1876,12 @@ function ContractsPageContent() {
 
   const onSortHeaderClick = (col: CompactColumn) => {
     if (!col.sortable) return
-    setSortDir(prevDir => {
-      const nextDir = sortKey === col.id ? (prevDir === 'asc' ? 'desc' : 'asc') : 'asc'
-      return nextDir
-    })
+    const nextDir: 'asc' | 'desc' = sortKey === col.id ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc'
+    setSortDir(nextDir)
     setSortKey(col.id)
     if (isContractPerformance) {
       setCurrentPage(1)
-      void fetchContracts(1)
+      void fetchContracts(1, undefined, col.id, nextDir)
     }
   }
 
@@ -1937,15 +1971,17 @@ function ContractsPageContent() {
     <Layout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Contracts</h1>
-            <p className="text-gray-600 mt-2">
-              {totalContracts} total contracts | Showing {filteredContracts.length} on this page
-              {totalPages > 1 && ` (Page ${currentPage} of ${totalPages})`}
-            </p>
+        {!isContractPerformance && (
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">Contracts</h1>
+              <p className="text-gray-600 mt-2">
+                {totalContracts} total contracts | Showing {filteredContracts.length} on this page
+                {totalPages > 1 && ` (Page ${currentPage} of ${totalPages})`}
+              </p>
+            </div>
           </div>
-        </div>
+        )}
 
         {isContractPerformance && (
           <Card>
@@ -1957,10 +1993,14 @@ function ContractsPageContent() {
                     Management view of late contracts where <span className="font-medium">Trade Cycle &gt; 0</span>. Use hotspots to jump to the exact contracts list.
                   </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full sm:w-auto">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 w-full sm:w-auto">
                   <div className="rounded border bg-white px-3 py-2">
                     <div className="text-[11px] text-gray-500">Late contracts</div>
                     <div className="text-lg font-semibold text-gray-900">{latePerformanceSummary.count.toLocaleString('en-US')}</div>
+                  </div>
+                  <div className="rounded border bg-white px-3 py-2">
+                    <div className="text-[11px] text-gray-500">Total late qty</div>
+                    <div className="text-lg font-semibold text-gray-900">{((latePerformanceSummary.totalQtyDelivery ?? 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
                   </div>
                   <div className="rounded border bg-white px-3 py-2">
                     <div className="text-[11px] text-gray-500">Total late days</div>
@@ -1985,7 +2025,7 @@ function ContractsPageContent() {
               ) : (
                 <div className="space-y-3">
                   <div className="text-sm text-gray-600">
-                    Navigate late issues as a tree: <span className="font-medium">Total → Incoterm → Product → Plant</span>.
+                    Navigate late issues as a tree: <span className="font-medium">Total → Incoterm → Product → Plant → Supplier</span>.
                     Click a <span className="font-medium">Plant</span> node to show the detailed contracts in the table below (Group Name is viewed there).
                   </div>
 
@@ -2001,12 +2041,13 @@ function ContractsPageContent() {
                       </button>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+                    <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
                       {([
                         { title: 'Total', subtitle: 'YTD late', level: 'total' as const },
                         { title: 'Incoterm', subtitle: 'Pick one', level: 'incoterm' as const },
                         { title: 'Product', subtitle: latePerfSelIncoterm ? `Under ${latePerfSelIncoterm}` : 'Pick incoterm first', level: 'product' as const },
                         { title: 'Plant', subtitle: latePerfSelProduct ? `Under ${latePerfSelProduct}` : 'Pick product first', level: 'plant' as const },
+                        { title: 'Supplier', subtitle: latePerfSelPlant ? `Under ${latePerfSelPlant}` : 'Pick plant first', level: 'supplier' as const },
                       ] as const).map((col) => {
                         const denom = latePerformanceSummary.totalDays || 1
                         const levelStyles: Record<string, { headerBg: string; badge: string; bar: string; border: string }> = {
@@ -2014,6 +2055,7 @@ function ContractsPageContent() {
                           incoterm: { headerBg: 'bg-violet-50', badge: 'bg-violet-100 text-violet-800', bar: 'bg-violet-600', border: 'border-violet-200' },
                           product: { headerBg: 'bg-amber-50', badge: 'bg-amber-100 text-amber-800', bar: 'bg-amber-600', border: 'border-amber-200' },
                           plant: { headerBg: 'bg-emerald-50', badge: 'bg-emerald-100 text-emerald-800', bar: 'bg-emerald-600', border: 'border-emerald-200' },
+                          supplier: { headerBg: 'bg-rose-50', badge: 'bg-rose-100 text-rose-800', bar: 'bg-rose-600', border: 'border-rose-200' },
                         }
                         const style = levelStyles[col.level] ?? levelStyles.total
                         const itemClass = (selected: boolean) =>
@@ -2034,7 +2076,7 @@ function ContractsPageContent() {
                                   <div className="mt-1 text-xs text-gray-700 flex items-center justify-between gap-2">
                                     <span className="font-semibold">{node.count.toLocaleString('en-US')}</span>
                                     <span className="text-gray-500">contracts</span>
-                                    {rightStat ?? <span className="ml-auto font-semibold">{Math.round(node.totalDays).toLocaleString('en-US')}d</span>}
+                                    {rightStat ?? <span className="ml-auto font-semibold whitespace-nowrap">{(node.totalQtyDelivery / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>}
                                   </div>
                                 </button>
                                 {rightAction ? <div className="shrink-0">{rightAction}</div> : null}
@@ -2058,7 +2100,7 @@ function ContractsPageContent() {
                               true,
                               () => resetLatePerfSelections(),
                               <span className={`px-2 py-1 rounded text-[11px] font-semibold ${style.badge}`}>Total</span>,
-                              <span className="ml-auto font-semibold">{Math.round(n.totalQtyDelivery).toLocaleString('en-US')}kg</span>,
+                              <span className="ml-auto font-semibold whitespace-nowrap">{(n.totalQtyDelivery / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>,
                             )
                           }
                           if (col.level === 'incoterm') {
@@ -2069,6 +2111,7 @@ function ContractsPageContent() {
                                     setLatePerfSelIncoterm(n.label)
                                     setLatePerfSelProduct(null)
                                     setLatePerfSelPlant(null)
+                                    setLatePerfSelSupplier(null)
                                   }),
                                 )}
                               </div>
@@ -2082,6 +2125,7 @@ function ContractsPageContent() {
                                   renderItem(n, latePerfSelProduct === n.label, () => {
                                     setLatePerfSelProduct(n.label)
                                     setLatePerfSelPlant(null)
+                                    setLatePerfSelSupplier(null)
                                   }),
                                 )}
                               </div>
@@ -2095,14 +2139,30 @@ function ContractsPageContent() {
                                 renderItem(
                                   n,
                                   latePerfSelPlant === n.label,
-                                  () => setLatePerfSelPlant(n.label),
-                                  <button
-                                    type="button"
-                                    onClick={() => applyLatePerformanceFocus(latePerfSelIncoterm, latePerfSelProduct, n.label)}
-                                    className="px-2 py-1 rounded bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-700"
-                                  >
-                                    View
-                                  </button>,
+                                  () => {
+                                    setLatePerfSelPlant(n.label)
+                                    setLatePerfSelSupplier(null)
+                                  },
+                                ),
+                              )}
+                            </div>
+                          )
+                          // supplier
+                        })()
+                        // supplier column body (resolved above via col.level check below)
+                        const supplierBody = (() => {
+                          if (col.level !== 'supplier') return null
+                          if (!latePerfSelPlant || !latePerfSelProduct || !latePerfSelIncoterm) return <div className="text-sm text-gray-500">Select a plant to see suppliers.</div>
+                          return (
+                            <div className="space-y-2">
+                              {latePerfSupplierNodes.slice(0, 30).map((n) =>
+                                renderItem(
+                                  n,
+                                  latePerfSelSupplier === n.label,
+                                  () => {
+                                    setLatePerfSelSupplier(n.label)
+                                    applyLatePerformanceFocus(latePerfSelIncoterm!, latePerfSelProduct!, latePerfSelPlant!, n.label)
+                                  },
                                 ),
                               )}
                             </div>
@@ -2113,7 +2173,7 @@ function ContractsPageContent() {
                           <div key={col.level} className="space-y-2">
                             {panelHeader}
                             <div className="space-y-2 max-h-[420px] overflow-auto pr-1">
-                              {body}
+                              {col.level === 'supplier' ? supplierBody : body}
                             </div>
                           </div>
                         )
@@ -3462,7 +3522,7 @@ function ContractsPageContent() {
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Contract Quantity</div>
-                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.quantity_ordered)} Kg</div>
+                        <div className="font-medium mt-1 text-base">{((Number(selectedContract.quantity_ordered) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Quantity Delivery</div>

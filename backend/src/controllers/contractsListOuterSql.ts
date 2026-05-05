@@ -99,5 +99,4 @@ export const CONTRACTS_LIST_OUTER_SQL = `
         base.last_ata_vessel_complete_discharge,
         base.last_eta_vessel_complete_discharge
       FROM page AS base
-      ORDER BY base.contract_date DESC NULLS LAST, base.contract_id DESC
 `;

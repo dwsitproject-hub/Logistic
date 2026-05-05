@@ -6,9 +6,12 @@ import api from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { ArrowDown, ArrowUp, Filter, SlidersHorizontal } from 'lucide-react'
+import { ArrowDown, ArrowUp, Filter, Search, SlidersHorizontal, X } from 'lucide-react'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { FieldHelp } from '@/components/FieldHelp'
+import { FIELD_HELP } from '@/lib/fieldHelpText'
 
 interface ShippingPerformanceRow {
   id: string
@@ -30,6 +33,9 @@ interface ShippingPerformanceRow {
   discharge_delta_eta_etb_days: number | null
   discharge_delta_etb_etc_days: number | null
   total_delta_days: number | null
+  sto_qty?: number | null
+  received_qty?: number | null
+  outstanding_qty?: number | null
   cargo_readiness_date?: string | null
   loading_eta_arrival?: string | null
   loading_eta_berthed?: string | null
@@ -42,7 +48,7 @@ interface ShippingPerformanceRow {
 type LatePerfNode = {
   key: string
   count: number
-  totalDays: number
+  totalQty: number
   children: LatePerfNode[]
 }
 
@@ -53,25 +59,45 @@ type ColumnDef = {
   label: string
   type: ColumnType
   defaultVisible?: boolean
+  tooltip?: string
 }
 
 const COLUMN_DEFS: ColumnDef[] = [
+  { key: 'group_name', label: 'Group', type: 'text', defaultVisible: true },
+  { key: 'vessel_name', label: 'Vessel', type: 'text', defaultVisible: true },
   { key: 'shipment_id', label: 'Shipment ID', type: 'text', defaultVisible: true },
-  { key: 'vessel_name', label: 'Vessel Name', type: 'text', defaultVisible: true },
-  { key: 'group_name', label: 'Group Name', type: 'text', defaultVisible: true },
+  { key: 'status', label: 'Status', type: 'text', defaultVisible: true },
   { key: 'po_number', label: 'PO No', type: 'text', defaultVisible: false },
   { key: 'contract_ext_no', label: 'Contract Ext No', type: 'text', defaultVisible: false },
   { key: 'contract_number', label: 'Contract No', type: 'text', defaultVisible: false },
   { key: 'sto_number', label: 'STO No', type: 'text', defaultVisible: false },
+  { key: 'sto_qty', label: 'STO Qty (MT)', type: 'number', defaultVisible: false },
+  { key: 'received_qty', label: 'Received Qty (MT)', type: 'number', defaultVisible: false },
+  { key: 'outstanding_qty', label: 'Outstanding Qty (MT)', type: 'number', defaultVisible: true, tooltip: FIELD_HELP.shipmentOutstandingQty },
   { key: 'loading_delta_eta_etr_days', label: 'Loading ETA-ETR', type: 'number', defaultVisible: true },
   { key: 'loading_delta_eta_etb_days', label: 'Loading ETA-ETB', type: 'number', defaultVisible: true },
   { key: 'loading_delta_etb_etc_days', label: 'Loading ETB-ETC', type: 'number', defaultVisible: true },
   { key: 'discharge_delta_eta_etb_days', label: 'Discharge ETA-ETB', type: 'number', defaultVisible: true },
   { key: 'discharge_delta_etb_etc_days', label: 'Discharge ETB-ETC', type: 'number', defaultVisible: true },
-  { key: 'total_delta_days', label: 'Total', type: 'number', defaultVisible: true },
+  { key: 'total_delta_days', label: 'Total', type: 'number', defaultVisible: true, tooltip: FIELD_HELP.shipmentTotalDelta },
 ]
 
 const COLUMN_MAP = Object.fromEntries(COLUMN_DEFS.map((col) => [col.key, col])) as Record<string, ColumnDef>
+
+function getStatusColor(status: string): string {
+  switch (status) {
+    case 'PLANNED':     return 'bg-blue-100 text-blue-800'
+    case 'IN_PROGRESS': return 'bg-yellow-100 text-yellow-800'
+    case 'LOADING':     return 'bg-orange-100 text-orange-800'
+    case 'IN_TRANSIT':  return 'bg-purple-100 text-purple-800'
+    case 'ARRIVED':     return 'bg-indigo-100 text-indigo-800'
+    case 'UNLOADING':   return 'bg-cyan-100 text-cyan-800'
+    case 'COMPLETED':   return 'bg-green-100 text-green-800'
+    case 'CANCELLED':
+    case 'CANCELED':    return 'bg-red-100 text-red-800'
+    default:            return 'bg-gray-100 text-gray-800'
+  }
+}
 
 function asDisplayValue(value: unknown): string {
   if (value === null || value === undefined) return ''
@@ -101,8 +127,14 @@ export default function ShippingPerformancePage() {
   const [draggingColumn, setDraggingColumn] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<keyof ShippingPerformanceRow>('total_delta_days')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
+  const [currentPage, setCurrentPage] = useState(1)
+  const pageSize = 50
   const columnsMenuRef = useRef<HTMLDivElement | null>(null)
   const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
+  const topScrollRef = useRef<HTMLDivElement | null>(null)
+  const bottomScrollRef = useRef<HTMLDivElement | null>(null)
+  const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
+  const isSyncingScroll = useRef(false)
   const [statusFilter, setStatusFilter] = useState<string>('ALL')
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
@@ -117,6 +149,7 @@ export default function ShippingPerformancePage() {
     return `${d.getFullYear()}-${m}-${day}`
   })
   const [lateOnTimeFilter, setLateOnTimeFilter] = useState<'ALL' | 'LATE' | 'ON_TIME'>('ALL')
+  const [lateSelVessel, setLateSelVessel] = useState<string | null>(null)
   const [lateSelIncoterm, setLateSelIncoterm] = useState<string | null>(null)
   const [lateSelProduct, setLateSelProduct] = useState<string | null>(null)
   const [lateSelPlant, setLateSelPlant] = useState<string | null>(null)
@@ -184,48 +217,63 @@ export default function ShippingPerformancePage() {
   }, [rows, statusFilter, selectedIncoterms, selectedPlantSites, dateFrom, dateTo, lateOnTimeFilter])
 
   const lateTree = useMemo(() => {
-    const root = new Map<string, { count: number; totalDays: number; products: Map<string, { count: number; totalDays: number; plants: Map<string, { count: number; totalDays: number }> }> }>()
+    type PlantMap = Map<string, { count: number; totalQty: number }>
+    type ProdMap  = Map<string, { count: number; totalQty: number; plants: PlantMap }>
+    type IncMap   = Map<string, { count: number; totalQty: number; products: ProdMap }>
+    type VesMap   = Map<string, { count: number; totalQty: number; incoterms: IncMap }>
+    const root: VesMap = new Map()
     for (const row of filteredByTopFilters) {
-      const total = Number(row.total_delta_days ?? 0)
-      if (total <= 0) continue
-      const inc = String(row.incoterm || '').trim() || 'Blank'
-      const prod = String(row.product || '').trim() || 'Blank'
+      if (Number(row.total_delta_days ?? 0) <= 0) continue
+      if (row.status === 'COMPLETED') continue
+      const qty = Number(row.outstanding_qty ?? 0)
+      if (qty <= 0) continue
+      const ves  = String(row.vessel_name || '').trim() || 'Unknown'
+      const inc  = String(row.incoterm    || '').trim() || 'Blank'
+      const prod = String(row.product     || '').trim() || 'Blank'
       const plant = String(row.plant_site || '').trim() || 'Blank'
-      if (!root.has(inc)) root.set(inc, { count: 0, totalDays: 0, products: new Map() })
-      const incNode = root.get(inc)!
-      incNode.count += 1
-      incNode.totalDays += total
-      if (!incNode.products.has(prod)) incNode.products.set(prod, { count: 0, totalDays: 0, plants: new Map() })
+      if (!root.has(ves)) root.set(ves, { count: 0, totalQty: 0, incoterms: new Map() })
+      const vesNode = root.get(ves)!
+      vesNode.count += 1; vesNode.totalQty += qty
+      if (!vesNode.incoterms.has(inc)) vesNode.incoterms.set(inc, { count: 0, totalQty: 0, products: new Map() })
+      const incNode = vesNode.incoterms.get(inc)!
+      incNode.count += 1; incNode.totalQty += qty
+      if (!incNode.products.has(prod)) incNode.products.set(prod, { count: 0, totalQty: 0, plants: new Map() })
       const prodNode = incNode.products.get(prod)!
-      prodNode.count += 1
-      prodNode.totalDays += total
-      if (!prodNode.plants.has(plant)) prodNode.plants.set(plant, { count: 0, totalDays: 0 })
+      prodNode.count += 1; prodNode.totalQty += qty
+      if (!prodNode.plants.has(plant)) prodNode.plants.set(plant, { count: 0, totalQty: 0 })
       const plantNode = prodNode.plants.get(plant)!
-      plantNode.count += 1
-      plantNode.totalDays += total
+      plantNode.count += 1; plantNode.totalQty += qty
     }
-    const sortedInc = [...root.entries()].sort((a, b) => b[1].totalDays - a[1].totalDays)
-    const out: LatePerfNode[] = sortedInc.map(([inc, incNode]) => ({
-      key: inc,
-      count: incNode.count,
-      totalDays: incNode.totalDays,
-      children: [...incNode.products.entries()]
-        .sort((a, b) => b[1].totalDays - a[1].totalDays)
-        .map(([prod, prodNode]) => ({
-          key: prod,
-          count: prodNode.count,
-          totalDays: prodNode.totalDays,
-          children: [...prodNode.plants.entries()]
-            .sort((a, b) => b[1].totalDays - a[1].totalDays)
-            .map(([plant, plantNode]) => ({
-              key: plant,
-              count: plantNode.count,
-              totalDays: plantNode.totalDays,
-              children: [],
-            })),
+    const srt = <T,>(m: Map<string, T & { totalQty: number }>) =>
+      [...m.entries()].sort((a, b) => b[1].totalQty - a[1].totalQty)
+    const out: LatePerfNode[] = srt(root).map(([ves, vn]) => ({
+      key: ves, count: vn.count, totalQty: vn.totalQty,
+      children: srt(vn.incoterms).map(([inc, iN]) => ({
+        key: inc, count: iN.count, totalQty: iN.totalQty,
+        children: srt(iN.products).map(([prod, pN]) => ({
+          key: prod, count: pN.count, totalQty: pN.totalQty,
+          children: srt(pN.plants).map(([plant, plN]) => ({
+            key: plant, count: plN.count, totalQty: plN.totalQty, children: [],
+          })),
         })),
+      })),
     }))
     return out
+  }, [filteredByTopFilters])
+
+  const lateSummary = useMemo(() => {
+    let count = 0, totalQty = 0, totalDays = 0, maxDays = 0
+    for (const row of filteredByTopFilters) {
+      const days = Number(row.total_delta_days ?? 0)
+      if (days <= 0) continue
+      if (row.status === 'COMPLETED') continue
+      if (Number(row.outstanding_qty ?? 0) <= 0) continue
+      count++
+      totalQty += Number(row.outstanding_qty ?? 0)
+      totalDays += days
+      maxDays = Math.max(maxDays, days)
+    }
+    return { count, totalQty, totalDays, avgDays: count > 0 ? totalDays / count : 0, maxDays }
   }, [filteredByTopFilters])
 
   const visibleOrderedColumns = useMemo(
@@ -236,6 +284,7 @@ export default function ShippingPerformancePage() {
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase()
     const scoped = filteredByTopFilters.filter((row) => {
+      if (lateSelVessel  && (String(row.vessel_name || '').trim() || 'Unknown') !== lateSelVessel) return false
       if (lateSelIncoterm && (String(row.incoterm || '').trim() || 'Blank') !== lateSelIncoterm) return false
       if (lateSelProduct && (String(row.product || '').trim() || 'Blank') !== lateSelProduct) return false
       if (lateSelPlant && (String(row.plant_site || '').trim() || 'Blank') !== lateSelPlant) return false
@@ -290,7 +339,33 @@ export default function ShippingPerformancePage() {
       return 0
     })
     return sorted
-  }, [filteredByTopFilters, lateSelIncoterm, lateSelProduct, lateSelPlant, search, visibleOrderedColumns, columnFilters, sortBy, sortDirection])
+  }, [filteredByTopFilters, lateSelVessel, lateSelIncoterm, lateSelProduct, lateSelPlant, search, visibleOrderedColumns, columnFilters, sortBy, sortDirection])
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize))
+  const paginatedRows = useMemo(
+    () => filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [filteredRows, currentPage, pageSize]
+  )
+
+  useEffect(() => { setCurrentPage(1) }, [filteredRows.length])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const calc = () => {
+      const el = bottomScrollRef.current
+      if (el) setTableScrollWidth(el.scrollWidth)
+    }
+    calc()
+    window.addEventListener('resize', calc)
+    return () => window.removeEventListener('resize', calc)
+  }, [visibleOrderedColumns, paginatedRows.length])
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage >= 1 && newPage <= totalPages) {
+      setCurrentPage(newPage)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }
 
   const onToggleColumn = (key: keyof ShippingPerformanceRow) => {
     setVisibleColumns((prev) => {
@@ -325,21 +400,189 @@ export default function ShippingPerformancePage() {
 
   return (
     <Layout>
-      <div className="space-y-4">
+      <div className="space-y-6">
+        {/* Section 1: Late Performance */}
         <Card>
-          <CardHeader className="pb-3">
-            <CardTitle>Shipping Performance</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+          <CardHeader className="pb-2">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
               <div>
-                <label className="text-xs text-gray-600 mb-1 block">Status</label>
+                <CardTitle className="text-base">Late Performance (YTD)</CardTitle>
+                <div className="text-sm text-gray-600 mt-1">
+                  Management view of late shipping where <span className="font-medium">Total delta &gt; 0</span>. Use drilldown to filter the table below.
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 w-full sm:w-auto">
+                <div className="rounded border bg-white px-3 py-2">
+                  <div className="text-[11px] text-gray-500">Late shipments</div>
+                  <div className="text-lg font-semibold text-gray-900">{lateSummary.count.toLocaleString('en-US')}</div>
+                </div>
+                <div className="rounded border bg-white px-3 py-2">
+                  <div className="text-[11px] text-gray-500">Total late qty</div>
+                  <div className="text-lg font-semibold text-gray-900">{(lateSummary.totalQty / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
+                </div>
+                <div className="rounded border bg-white px-3 py-2">
+                  <div className="text-[11px] text-gray-500">Total late days</div>
+                  <div className="text-lg font-semibold text-gray-900">{Math.round(lateSummary.totalDays).toLocaleString('en-US')}</div>
+                </div>
+                <div className="rounded border bg-white px-3 py-2">
+                  <div className="text-[11px] text-gray-500">Avg late days</div>
+                  <div className="text-lg font-semibold text-gray-900">{lateSummary.avgDays ? lateSummary.avgDays.toFixed(1) : '0.0'}</div>
+                </div>
+                <div className="rounded border bg-white px-3 py-2">
+                  <div className="text-[11px] text-gray-500">Max late days</div>
+                  <div className="text-lg font-semibold text-gray-900">{lateSummary.maxDays.toLocaleString('en-US')}</div>
+                </div>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-2">
+            {lateTree.length === 0 ? (
+              <div className="text-sm text-gray-500">No late shipments found.</div>
+            ) : (
+              <div className="space-y-3">
+                <div className="text-sm text-gray-600">
+                  Navigate late issues as a tree: <span className="font-medium">Total → Vessel → Incoterm → Product → Plant</span>. Click a node to filter the table below.
+                </div>
+                <div className="rounded-xl border bg-white p-4">
+                  <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+                    <div className="text-sm font-semibold text-gray-900">Late Performance drilldown</div>
+                    <button
+                      type="button"
+                      onClick={() => { setLateSelVessel(null); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }}
+                      className="text-sm text-blue-700 hover:underline"
+                    >
+                      Reset selection
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+                    {([
+                      { title: 'Total',    subtitle: 'All late',                                                                       level: 'total'    as const },
+                      { title: 'Vessel',   subtitle: 'Pick one',                                                                       level: 'vessel'   as const },
+                      { title: 'Incoterm', subtitle: lateSelVessel  ? `Under ${lateSelVessel}`  : 'Pick vessel first',                 level: 'incoterm' as const },
+                      { title: 'Product',  subtitle: lateSelIncoterm ? `Under ${lateSelIncoterm}` : 'Pick incoterm first',             level: 'product'  as const },
+                      { title: 'Plant',    subtitle: lateSelProduct  ? `Under ${lateSelProduct}`  : 'Pick product first',              level: 'plant'    as const },
+                    ] as const).map((col) => {
+                      const totalLateCount = lateTree.reduce((s, n) => s + n.count, 0)
+                      const totalLateQty   = lateTree.reduce((s, n) => s + n.totalQty, 0)
+                      const denom = totalLateQty || 1
+                      const levelStyles: Record<string, { headerBg: string; badge: string; bar: string; border: string }> = {
+                        total:   { headerBg: 'bg-blue-50',    badge: 'bg-blue-100 text-blue-800',      bar: 'bg-blue-600',    border: 'border-blue-200' },
+                        vessel:  { headerBg: 'bg-sky-50',     badge: 'bg-sky-100 text-sky-800',        bar: 'bg-sky-600',     border: 'border-sky-200' },
+                        incoterm:{ headerBg: 'bg-violet-50',  badge: 'bg-violet-100 text-violet-800',  bar: 'bg-violet-600',  border: 'border-violet-200' },
+                        product: { headerBg: 'bg-amber-50',   badge: 'bg-amber-100 text-amber-800',    bar: 'bg-amber-600',   border: 'border-amber-200' },
+                        plant:   { headerBg: 'bg-emerald-50', badge: 'bg-emerald-100 text-emerald-800',bar: 'bg-emerald-600', border: 'border-emerald-200' },
+                      }
+                      const style = levelStyles[col.level]
+                      const itemClass = (selected: boolean) =>
+                        `w-full text-left rounded-lg border px-3 py-2 hover:bg-gray-50 focus:outline-none ${
+                          selected ? `bg-white ${style.border}` : 'bg-white border-gray-200'
+                        }`
+
+                      const renderNode = (node: LatePerfNode, selected: boolean, onClick: () => void, isTotal = false) => {
+                        const pct = Math.max(1, Math.round((node.totalQty / denom) * 100))
+                        return (
+                          <button key={node.key} type="button" className={itemClass(selected)} onClick={onClick}>
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1 text-left">
+                                <div className="text-sm font-semibold text-gray-900 truncate">{node.key}</div>
+                                <div className="mt-1 h-1.5 rounded bg-gray-100 overflow-hidden">
+                                  <div className={`h-full ${style.bar}`} style={{ width: `${pct}%` }} />
+                                </div>
+                                <div className="mt-1 text-xs text-gray-700 flex items-center justify-between gap-2">
+                                  <span className="font-semibold">{node.count.toLocaleString('en-US')}</span>
+                                  <span className="text-gray-500">shipments</span>
+                                  <span className="ml-auto font-semibold whitespace-nowrap">{(node.totalQty / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>
+                                </div>
+                              </div>
+                              {isTotal && (
+                                <span className={`shrink-0 px-2 py-1 rounded text-[11px] font-semibold ${style.badge}`}>Total</span>
+                              )}
+                            </div>
+                          </button>
+                        )
+                      }
+
+                      const panelHeader = (
+                        <div className={`rounded-lg border px-3 py-2 ${style.headerBg} ${style.border}`}>
+                          <div className="text-sm font-semibold text-gray-900">{col.title}</div>
+                          <div className="text-[11px] text-gray-500">{col.subtitle}</div>
+                        </div>
+                      )
+
+                      const vesselNode = lateTree.find((n) => n.key === lateSelVessel)
+                      const incotermNode = vesselNode?.children.find((n) => n.key === lateSelIncoterm)
+                      const productNode  = incotermNode?.children.find((n) => n.key === lateSelProduct)
+
+                      const body = (() => {
+                        if (col.level === 'total') {
+                          const totalNode: LatePerfNode = { key: 'Total', count: totalLateCount, totalQty: totalLateQty, children: [] }
+                          return renderNode(totalNode, true, () => { setLateSelVessel(null); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }, true)
+                        }
+                        if (col.level === 'vessel') {
+                          return (
+                            <div className="space-y-2">
+                              {lateTree.map((n) => renderNode(n, lateSelVessel === n.key, () => { setLateSelVessel(n.key); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }))}
+                            </div>
+                          )
+                        }
+                        if (col.level === 'incoterm') {
+                          if (!lateSelVessel) return <div className="text-sm text-gray-500">Select a vessel to see incoterms.</div>
+                          return (
+                            <div className="space-y-2">
+                              {(vesselNode?.children || []).map((n) => renderNode(n, lateSelIncoterm === n.key, () => { setLateSelIncoterm(n.key); setLateSelProduct(null); setLateSelPlant(null) }))}
+                            </div>
+                          )
+                        }
+                        if (col.level === 'product') {
+                          if (!lateSelIncoterm) return <div className="text-sm text-gray-500">Select an incoterm to see products.</div>
+                          return (
+                            <div className="space-y-2">
+                              {(incotermNode?.children || []).map((n) => renderNode(n, lateSelProduct === n.key, () => { setLateSelProduct(n.key); setLateSelPlant(null) }))}
+                            </div>
+                          )
+                        }
+                        if (!lateSelProduct) return <div className="text-sm text-gray-500">Select a product to see plants.</div>
+                        return (
+                          <div className="space-y-2">
+                            {(productNode?.children || []).map((n) => renderNode(n, lateSelPlant === n.key, () => setLateSelPlant(n.key)))}
+                          </div>
+                        )
+                      })()
+
+                      return (
+                        <div key={col.level} className="space-y-2">
+                          {panelHeader}
+                          <div className="space-y-2 max-h-[420px] overflow-auto pr-1">{body}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Section 2: Filters */}
+        <Card>
+          <CardContent className="pt-6">
+            <div className="space-y-4">
+              <div className="flex gap-4 flex-wrap">
+                <div className="flex-1 relative min-w-[200px]">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <Input
+                    placeholder="Search vessel, group, shipment ID, or contract..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="pl-10"
+                  />
+                </div>
                 <select
-                  className="w-full border rounded px-2 py-2 text-sm bg-white"
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
+                  className="px-4 py-2 border rounded-lg text-sm"
                 >
-                  <option value="ALL">All</option>
+                  <option value="ALL">All Status</option>
                   <option value="PLANNED">PLANNED</option>
                   <option value="IN_PROGRESS">IN_PROGRESS</option>
                   <option value="LOADING">LOADING</option>
@@ -349,307 +592,345 @@ export default function ShippingPerformancePage() {
                   <option value="COMPLETED">COMPLETED</option>
                   <option value="CANCELLED">CANCELLED</option>
                 </select>
-              </div>
-              <SearchableMultiSelect
-                label="Incoterm"
-                options={availableIncoterms}
-                selected={selectedIncoterms}
-                onChange={setSelectedIncoterms}
-                placeholder="Select incoterm(s)"
-                emptyMessage="No incoterms"
-              />
-              <SearchableMultiSelect
-                label="Plant/Site"
-                options={availablePlantSites}
-                selected={selectedPlantSites}
-                onChange={setSelectedPlantSites}
-                placeholder="Select plant/site(s)"
-                emptyMessage="No plants"
-              />
-              <div>
-                <label className="text-xs text-gray-600 mb-1 block">Contract Date From</label>
-                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="h-9" />
-              </div>
-              <div>
-                <label className="text-xs text-gray-600 mb-1 block">Contract Date To</label>
-                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="h-9" />
-              </div>
-            </div>
-
-            <div className="mb-4 flex items-center justify-between flex-wrap gap-3">
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-700">Late/On Time</label>
                 <select
-                  className="border rounded px-2 py-2 text-sm bg-white"
                   value={lateOnTimeFilter}
                   onChange={(e) => setLateOnTimeFilter(e.target.value as 'ALL' | 'LATE' | 'ON_TIME')}
+                  className="px-4 py-2 border rounded-lg text-sm"
                 >
-                  <option value="ALL">All</option>
-                  <option value="LATE">Late (Total &gt; 0)</option>
-                  <option value="ON_TIME">On Time (Total &lt;= 0)</option>
+                  <option value="ALL">Late/On Time: All</option>
+                  <option value="LATE">Late</option>
+                  <option value="ON_TIME">On Time</option>
                 </select>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setLateSelIncoterm(null)
-                  setLateSelProduct(null)
-                  setLateSelPlant(null)
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <SearchableMultiSelect
+                  label="Incoterm"
+                  options={availableIncoterms}
+                  selected={selectedIncoterms}
+                  onChange={setSelectedIncoterms}
+                  placeholder="Select incoterm(s)"
+                  emptyMessage="No incoterms"
+                />
+                <SearchableMultiSelect
+                  label="Plant/Site"
+                  options={availablePlantSites}
+                  selected={selectedPlantSites}
+                  onChange={setSelectedPlantSites}
+                  placeholder="Select plant/site(s)"
+                  emptyMessage="No plants"
+                />
+              </div>
+              <div className="flex gap-4 items-center flex-wrap">
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-700">Contract Date:</label>
+                  <Input
+                    type="date"
+                    value={dateFrom}
+                    onChange={(e) => setDateFrom(e.target.value)}
+                    className="w-40"
+                  />
+                  <span className="text-gray-500">to</span>
+                  <Input
+                    type="date"
+                    value={dateTo}
+                    onChange={(e) => setDateTo(e.target.value)}
+                    className="w-40"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-2"
+                    onClick={() => setCurrentPage(1)}
+                  >
+                    <Filter className="h-4 w-4 mr-1" />
+                    Apply
+                  </Button>
+                  {(dateFrom || dateTo) && (
+                    <Button
+                      onClick={() => { setDateFrom(''); setDateTo(''); setCurrentPage(1) }}
+                      variant="ghost"
+                      size="sm"
+                      className="text-gray-500"
+                    >
+                      <X className="h-4 w-4 mr-1" />
+                      Clear
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Section 3: Table */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <CardTitle>All Shipments</CardTitle>
+                <Badge variant="outline" className="hidden md:inline-flex">
+                  Default view: Compact
+                </Badge>
+              </div>
+              <div className="flex items-center gap-2">
+                <div ref={columnsMenuRef} className="relative">
+                  <Button variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)}>
+                    <SlidersHorizontal className="h-4 w-4 mr-2" />
+                    Columns
+                  </Button>
+                  {showColumnManager && (
+                    <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
+                      <div className="text-xs font-semibold text-gray-600 mb-2">Visible columns</div>
+                      <div className="space-y-2 max-h-72 overflow-auto pr-1">
+                        {COLUMN_DEFS.map((col) => (
+                          <label key={String(col.key)} className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                            <Checkbox
+                              checked={Boolean(visibleColumns[String(col.key)])}
+                              onCheckedChange={() => onToggleColumn(col.key)}
+                            />
+                            <span>{col.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="mt-3 flex items-center justify-between gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            setVisibleColumns(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultVisible !== false])))
+                          }
+                        >
+                          Reset
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => setShowColumnManager(false)}>
+                          Close
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-1">
+                    <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1}>
+                      Previous
+                    </Button>
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum: number
+                      if (totalPages <= 5) { pageNum = i + 1 }
+                      else if (currentPage <= 3) { pageNum = i + 1 }
+                      else if (currentPage >= totalPages - 2) { pageNum = totalPages - 4 + i }
+                      else { pageNum = currentPage - 2 + i }
+                      return (
+                        <Button key={pageNum} variant={currentPage === pageNum ? 'default' : 'outline'} size="sm" onClick={() => handlePageChange(pageNum)} className="min-w-[36px]">
+                          {pageNum}
+                        </Button>
+                      )
+                    })}
+                    <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages}>
+                      Next
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="border rounded-md">
+              {/* Top scrollbar */}
+              <div
+                ref={topScrollRef}
+                className="overflow-x-auto border-b bg-white rounded-t-md"
+                onScroll={() => {
+                  if (isSyncingScroll.current) return
+                  const top = topScrollRef.current
+                  const bottom = bottomScrollRef.current
+                  if (!top || !bottom) return
+                  isSyncingScroll.current = true
+                  bottom.scrollLeft = top.scrollLeft
+                  window.requestAnimationFrame(() => { isSyncingScroll.current = false })
                 }}
               >
-                Reset Drilldown
-              </Button>
-            </div>
+                <div style={{ width: tableScrollWidth || 0, height: 1 }} />
+              </div>
 
-            <Card className="mb-4">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">Late Performance (Shipping)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-xs text-gray-500 mb-3">
-                  Drilldown tree: <span className="font-medium">Total → Incoterm → Product → Plant</span>. Click number cards to filter table.
-                </p>
-                <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
-                  <button
-                    type="button"
-                    className="border rounded-md p-3 text-left hover:bg-gray-50"
-                    onClick={() => {
-                      setLateSelIncoterm(null)
-                      setLateSelProduct(null)
-                      setLateSelPlant(null)
-                    }}
-                  >
-                    <div className="text-xs text-gray-500">Total Late</div>
-                    <div className="text-2xl font-semibold">{filteredByTopFilters.filter((r) => Number(r.total_delta_days ?? 0) > 0).length}</div>
-                  </button>
-                  <div className="border rounded-md p-3">
-                    <div className="text-xs text-gray-500 mb-2">Incoterm</div>
-                    <div className="space-y-2 max-h-48 overflow-auto">
-                      {lateTree.map((n) => (
-                        <button
-                          key={n.key}
-                          type="button"
-                          className={`w-full text-left border rounded px-2 py-1 text-sm ${lateSelIncoterm === n.key ? 'bg-blue-50 border-blue-300' : 'hover:bg-gray-50'}`}
-                          onClick={() => {
-                            setLateSelIncoterm(n.key)
-                            setLateSelProduct(null)
-                            setLateSelPlant(null)
-                          }}
-                        >
-                          <span className="font-medium">{n.key}</span> <span className="text-gray-500">({n.count})</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="border rounded-md p-3">
-                    <div className="text-xs text-gray-500 mb-2">Product</div>
-                    <div className="space-y-2 max-h-48 overflow-auto">
-                      {(lateTree.find((n) => n.key === lateSelIncoterm)?.children || []).map((n) => (
-                        <button
-                          key={n.key}
-                          type="button"
-                          className={`w-full text-left border rounded px-2 py-1 text-sm ${lateSelProduct === n.key ? 'bg-blue-50 border-blue-300' : 'hover:bg-gray-50'}`}
-                          onClick={() => {
-                            setLateSelProduct(n.key)
-                            setLateSelPlant(null)
-                          }}
-                        >
-                          <span className="font-medium">{n.key}</span> <span className="text-gray-500">({n.count})</span>
-                        </button>
-                      ))}
-                      {!lateSelIncoterm && <div className="text-sm text-gray-500">Select incoterm first</div>}
-                    </div>
-                  </div>
-                  <div className="border rounded-md p-3">
-                    <div className="text-xs text-gray-500 mb-2">Plant</div>
-                    <div className="space-y-2 max-h-48 overflow-auto">
-                      {(lateTree.find((n) => n.key === lateSelIncoterm)?.children.find((p) => p.key === lateSelProduct)?.children || []).map((n) => (
-                        <button
-                          key={n.key}
-                          type="button"
-                          className={`w-full text-left border rounded px-2 py-1 text-sm ${lateSelPlant === n.key ? 'bg-blue-50 border-blue-300' : 'hover:bg-gray-50'}`}
-                          onClick={() => setLateSelPlant(n.key)}
-                        >
-                          <span className="font-medium">{n.key}</span> <span className="text-gray-500">({n.count})</span>
-                        </button>
-                      ))}
-                      {!lateSelProduct && <div className="text-sm text-gray-500">Select product first</div>}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-              <Input
-                placeholder="Search vessel, group, shipment ID, or contract..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="max-w-md"
-              />
-              <div className="flex items-center gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)}>
-                  <SlidersHorizontal className="h-4 w-4 mr-2" />
-                  Columns
-                </Button>
-                <span className="text-sm text-gray-500">{filteredRows.length} row(s)</span>
+              {/* Table */}
+              <div
+                ref={bottomScrollRef}
+                className="overflow-x-auto"
+                onScroll={() => {
+                  if (isSyncingScroll.current) return
+                  const top = topScrollRef.current
+                  const bottom = bottomScrollRef.current
+                  if (!top || !bottom) return
+                  isSyncingScroll.current = true
+                  top.scrollLeft = bottom.scrollLeft
+                  window.requestAnimationFrame(() => { isSyncingScroll.current = false })
+                }}
+              >
+                <table className="min-w-[1300px] w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr className="border-b">
+                      {visibleOrderedColumns.map((key) => {
+                        const col = COLUMN_MAP[String(key)]
+                        const isSorted = sortBy === key
+                        return (
+                          <th
+                            key={String(key)}
+                            className="relative px-3 py-2 text-left font-medium whitespace-nowrap cursor-move select-none"
+                            draggable
+                            onDragStart={() => setDraggingColumn(String(key))}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={() => {
+                              if (draggingColumn) moveColumn(draggingColumn, String(key))
+                              setDraggingColumn(null)
+                            }}
+                          >
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1"
+                              onClick={() => onHeaderSort(key)}
+                              title="Click to sort, drag to reorder"
+                            >
+                              <span>{col.label}</span>
+                              <span className="text-xs text-gray-500">
+                                {isSorted ? (sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : null}
+                              </span>
+                            </button>
+                            {col.tooltip ? (
+                              <span className="shrink-0 inline-flex items-center">
+                                <FieldHelp text={col.tooltip} />
+                              </span>
+                            ) : null}
+                            <button
+                              type="button"
+                              className={`ml-1 p-1 rounded hover:bg-gray-100 ${columnFilters[String(key)] ? 'text-blue-700' : 'text-gray-500'}`}
+                              title="Filter"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setOpenHeaderFilterId((prev) => (prev === String(key) ? null : String(key)))
+                              }}
+                            >
+                              <Filter className="h-3.5 w-3.5" />
+                            </button>
+                            {openHeaderFilterId === String(key) && (
+                              <div
+                                ref={headerFilterPopoverRef}
+                                className="absolute left-0 top-full mt-2 w-[240px] bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-30"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="text-xs font-semibold text-gray-700 truncate">{col.label} Filter</div>
+                                  <button
+                                    type="button"
+                                    className="text-xs text-gray-500 hover:text-gray-800"
+                                    onClick={() => setOpenHeaderFilterId(null)}
+                                  >
+                                    Close
+                                  </button>
+                                </div>
+                                <Input
+                                  value={columnFilters[String(key)] || ''}
+                                  onChange={(e) =>
+                                    setColumnFilters((prev) => ({
+                                      ...prev,
+                                      [String(key)]: e.target.value,
+                                    }))
+                                  }
+                                  placeholder={col.type === 'number' ? 'Type number text...' : 'Type to filter...'}
+                                  className="h-8 text-sm"
+                                />
+                                <div className="mt-2 flex justify-end">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() =>
+                                      setColumnFilters((prev) => {
+                                        const next = { ...prev }
+                                        delete next[String(key)]
+                                        return next
+                                      })
+                                    }
+                                  >
+                                    Clear
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+                          </th>
+                        )
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loading ? (
+                      <tr>
+                        <td colSpan={visibleOrderedColumns.length || 1} className="px-3 py-6 text-center text-gray-500">
+                          Loading shipping performance...
+                        </td>
+                      </tr>
+                    ) : filteredRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={visibleOrderedColumns.length || 1} className="px-3 py-6 text-center text-gray-500">
+                          No data found
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedRows.map((row) => (
+                        <tr key={row.id} className="border-t hover:bg-gray-50">
+                          {visibleOrderedColumns.map((key) => {
+                            const col = COLUMN_MAP[String(key)]
+                            const rawValue = row[key]
+                            return (
+                              <td key={`${row.id}-${String(key)}`} className="px-3 py-2 whitespace-nowrap">
+                                {(key === 'sto_qty' || key === 'received_qty' || key === 'outstanding_qty')
+                                  ? (rawValue === null || rawValue === undefined
+                                      ? <span className="text-gray-400">-</span>
+                                      : <span>{(Number(rawValue) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>)
+                                  : key === 'status'
+                                  ? (rawValue
+                                      ? <Badge className={getStatusColor(String(rawValue))}>{String(rawValue)}</Badge>
+                                      : <span className="text-gray-400">-</span>)
+                                  : col.type === 'number' ? <NumberCell value={rawValue} /> : asDisplayValue(rawValue) || '-'}
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
 
-            {showColumnManager && (
-              <div ref={columnsMenuRef} className="mb-4 w-72 rounded-md border bg-white shadow-md z-20 p-3">
-                <div className="text-xs font-semibold text-gray-600 mb-2">Visible columns</div>
-                <div className="space-y-2 max-h-72 overflow-auto pr-1">
-                  {COLUMN_DEFS.map((col) => (
-                    <label key={String(col.key)} className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                      <Checkbox
-                        checked={Boolean(visibleColumns[String(col.key)])}
-                        onCheckedChange={() => onToggleColumn(col.key)}
-                      />
-                      {col.label}
-                    </label>
-                  ))}
+            {/* Bottom pagination */}
+            {totalPages > 1 && (
+              <div className="mt-4 flex items-center justify-between border-t pt-4">
+                <div className="text-sm text-gray-700">
+                  Showing page {currentPage} of {totalPages} ({filteredRows.length} total shipments)
                 </div>
-                <div className="mt-3 flex items-center justify-between gap-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() =>
-                      setVisibleColumns(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultVisible !== false])))
-                    }
-                  >
-                    Reset
+                <div className="flex items-center gap-1">
+                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1}>
+                    Previous
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => setShowColumnManager(false)}>
-                    Close
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum: number
+                    if (totalPages <= 5) { pageNum = i + 1 }
+                    else if (currentPage <= 3) { pageNum = i + 1 }
+                    else if (currentPage >= totalPages - 2) { pageNum = totalPages - 4 + i }
+                    else { pageNum = currentPage - 2 + i }
+                    return (
+                      <Button key={pageNum} variant={currentPage === pageNum ? 'default' : 'outline'} size="sm" onClick={() => handlePageChange(pageNum)} className="min-w-[36px]">
+                        {pageNum}
+                      </Button>
+                    )
+                  })}
+                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages}>
+                    Next
                   </Button>
                 </div>
               </div>
             )}
-
-            <div className="overflow-auto border rounded-md">
-              <table className="min-w-[1300px] w-full text-sm">
-                <thead className="bg-gray-50">
-                  <tr className="border-b">
-                    {visibleOrderedColumns.map((key) => {
-                      const col = COLUMN_MAP[String(key)]
-                      const isSorted = sortBy === key
-                      return (
-                        <th
-                          key={String(key)}
-                          className="relative px-3 py-2 text-left font-medium whitespace-nowrap cursor-move select-none"
-                          draggable
-                          onDragStart={() => setDraggingColumn(String(key))}
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={() => {
-                            if (draggingColumn) moveColumn(draggingColumn, String(key))
-                            setDraggingColumn(null)
-                          }}
-                        >
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1"
-                            onClick={() => onHeaderSort(key)}
-                            title="Click to sort, drag to reorder"
-                          >
-                            <span>{col.label}</span>
-                            <span className="text-xs text-gray-500">
-                              {isSorted ? (sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : null}
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            className={`ml-1 p-1 rounded hover:bg-gray-100 ${columnFilters[String(key)] ? 'text-blue-700' : 'text-gray-500'}`}
-                            title="Filter"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setOpenHeaderFilterId((prev) => (prev === String(key) ? null : String(key)))
-                            }}
-                          >
-                            <Filter className="h-3.5 w-3.5" />
-                          </button>
-                          {openHeaderFilterId === String(key) && (
-                            <div
-                              ref={headerFilterPopoverRef}
-                              className="absolute left-0 top-full mt-2 w-[240px] bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-30"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="text-xs font-semibold text-gray-700 truncate">{col.label} Filter</div>
-                                <button
-                                  type="button"
-                                  className="text-xs text-gray-500 hover:text-gray-800"
-                                  onClick={() => setOpenHeaderFilterId(null)}
-                                >
-                                  Close
-                                </button>
-                              </div>
-                              <Input
-                                value={columnFilters[String(key)] || ''}
-                                onChange={(e) =>
-                                  setColumnFilters((prev) => ({
-                                    ...prev,
-                                    [String(key)]: e.target.value,
-                                  }))
-                                }
-                                placeholder={col.type === 'number' ? 'Type number text...' : 'Type to filter...'}
-                                className="h-8 text-sm"
-                              />
-                              <div className="mt-2 flex justify-end">
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() =>
-                                    setColumnFilters((prev) => {
-                                      const next = { ...prev }
-                                      delete next[String(key)]
-                                      return next
-                                    })
-                                  }
-                                >
-                                  Clear
-                                </Button>
-                              </div>
-                            </div>
-                          )}
-                        </th>
-                      )
-                    })}
-                  </tr>
-                </thead>
-                <tbody>
-                  {loading ? (
-                    <tr>
-                      <td colSpan={visibleOrderedColumns.length || 1} className="px-3 py-6 text-center text-gray-500">
-                        Loading shipping performance...
-                      </td>
-                    </tr>
-                  ) : filteredRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={visibleOrderedColumns.length || 1} className="px-3 py-6 text-center text-gray-500">
-                        No data found
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredRows.map((row) => (
-                      <tr key={row.id} className="border-t hover:bg-gray-50">
-                        {visibleOrderedColumns.map((key) => {
-                          const col = COLUMN_MAP[String(key)]
-                          const rawValue = row[key]
-                          return (
-                            <td key={`${row.id}-${String(key)}`} className="px-3 py-2 whitespace-nowrap">
-                              {col.type === 'number' ? <NumberCell value={rawValue} /> : asDisplayValue(rawValue) || '-'}
-                            </td>
-                          )
-                        })}
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
 
             <p className="text-xs text-gray-500 mt-3">
               Delta unit is day difference. Records include transport mode SEA or MIX only.

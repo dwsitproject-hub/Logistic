@@ -353,6 +353,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       sto_count: 'sto_count',
       total_sto_quantity: 'total_sto_quantity',
       outstanding_qty: 'outstanding_qty',
+      contract_qty: 'quantity_ordered',
       created_at: 'created_at',
       // computed (JS): log_cycle_days, trade_cycle_days, cash_cycle_days
     };
@@ -820,7 +821,9 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
           MAX(c.product) AS product,
           MAX(c.group_name) AS group_name,
+          MAX(c.supplier) AS supplier,
           MAX(c.incoterm) AS incoterm,
+          MAX(c.quantity_ordered) AS quantity_ordered,
           MAX(c.transport_mode) AS transport_mode,
           MAX(c.status) AS status,
           -- Align with GET /contracts: SAP import status is the primary "open/close" signal in Contract Performance.
@@ -1235,7 +1238,15 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       lateCount += 1;
       lateTotalDays += tradeCycle;
       lateMaxDays = Math.max(lateMaxDays, tradeCycle);
-      lateTotalQtyDelivery += Number(row.quantity_delivery || 0);
+      const _inc = String(row.incoterm || '').trim().toUpperCase();
+      const _qtyOrdered = Number(row.quantity_ordered || 0);
+      const _subtracted = ['FRC', 'CIF', 'CFR'].includes(_inc)
+        ? Number(row.quantity_receive || 0)
+        : ['LCO', 'FOB'].includes(_inc)
+        ? Number(row.quantity_delivery || 0)
+        : Number(row.total_sto_quantity || 0);
+      const _outstandingQty = Math.max(0, _qtyOrdered - _subtracted);
+      lateTotalQtyDelivery += _outstandingQty;
       debugCounts.includedLate += 1;
       pushSample('includedLate', `${String(row.contract_id || '')}:${tradeCycle}`);
 
@@ -1243,22 +1254,24 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       const pl = String(row.plant_site || '').trim() || 'Blank';
       const prod = String(row.product || '').trim() || 'Blank';
       const gn = String(row.group_name || '').trim() || 'Blank';
+      const sup = String(row.supplier || '').trim() || 'Blank';
 
       const n1 = add(root, inc);
       const n2 = add(n1.children, pl);
       const n3 = add(n2.children, prod);
       const n4 = add(n3.children, gn);
-      for (const n of [n1, n2, n3, n4]) {
+      const n5 = add(n4.children, sup);
+      for (const n of [n1, n2, n3, n4, n5]) {
         n.count += 1;
         n.totalDays += tradeCycle;
         n.maxDays = Math.max(n.maxDays, tradeCycle);
-        n.totalQtyDelivery += Number(row.quantity_delivery || 0);
+        n.totalQtyDelivery += _outstandingQty;
       }
     }
 
     const toSorted = (m: Map<string, AggNode>): any[] =>
       [...m.values()]
-        .sort((a, b) => b.totalDays - a.totalDays || b.count - a.count || a.key.localeCompare(b.key))
+        .sort((a, b) => b.totalQtyDelivery - a.totalQtyDelivery || b.count - a.count || a.key.localeCompare(b.key))
         .map((n) => ({ key: n.key, count: n.count, totalDays: n.totalDays, maxDays: n.maxDays, totalQtyDelivery: n.totalQtyDelivery, children: toSorted(n.children) }));
 
     if (process.env.NODE_ENV === 'development') {

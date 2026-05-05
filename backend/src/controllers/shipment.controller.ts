@@ -1007,7 +1007,13 @@ export const getShippingPerformance = async (_req: AuthRequest, res: Response) =
           COALESCE((COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date)), 0) +
           COALESCE((COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) - COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date)), 0) +
           COALESCE((COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date)), 0)
-        )::int AS total_delta_days
+        )::int AS total_delta_days,
+        COALESCE(c.sto_quantity, 0)::numeric AS sto_qty,
+        COALESCE(s.actual_vessel_qty_receive, s.bl_quantity, 0)::numeric AS received_qty,
+        CASE
+          WHEN s.status = 'COMPLETED' THEN 0
+          ELSE (COALESCE(c.sto_quantity, 0) - COALESCE(s.actual_vessel_qty_receive, s.bl_quantity, 0))
+        END::numeric AS outstanding_qty
       FROM shipments s
       INNER JOIN contracts c ON s.contract_id = c.id
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id

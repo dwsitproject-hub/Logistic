@@ -13,6 +13,10 @@ export const FIELD_HELP = {
 
   outstandingQty: `Contract Quantity minus Total STO Quantity from SAP (can be negative if overshipped).`,
 
+  receivedQty: `Actual quantity received based on contract data (quantity_receive). For sea shipments: received at destination. For land shipments: quantity delivered to plant/site.`,
+
+  outstandingQtyMt: `Contract Quantity minus Total STO Quantity from SAP, shown in MT (metric tons). Negative value indicates over-delivery.`,
+
   companyName: `From Buyer in latest SAP data. For B2B "origin" contracts (empty Contract Reff PO), Company Name may follow linked B2B child contracts per business rules.`,
 
   b2bParties: `Lists contracts whose Contract Reff PO Ini matches this contract's PO Number.`,
@@ -35,6 +39,13 @@ export const FIELD_HELP = {
   truckingOaBudget: `OA Budget is the planned operational allowance (budget) for the trucking leg.`,
   truckingOaActual: `OA Actual is the realized operational allowance (actual cost) for the trucking leg.`,
   etaVsDueDelivery: `ETA fields are planned dates; Due Date Delivery Start/End come from the contract delivery window. Use these to assess schedule risk and lateness.`,
+
+  // Shipping Performance
+  shipmentTotalDelta: `Sum of all delay gaps in days: (Loading ETA−ETR) + (Loading ETA−ETB) + (Loading ETB−ETC) + (Discharge ETA−ETB) + (Discharge ETB−ETC). Positive = late, negative = ahead of schedule.`,
+
+  shipmentStoQty: `STO Quantity from the linked contract in SAP (in MT). Represents the planned quantity allocated to this shipment.`,
+  shipmentReceivedQty: `Actual quantity received at destination (actual_vessel_qty_receive or BL quantity as fallback), in MT.`,
+  shipmentOutstandingQty: `STO Qty minus Received Qty. Shows how much quantity is still outstanding for this shipment.`,
 
   // Shipments
   shipmentLateIndicator: `On Time / Late is based on SLA days and actual vessel milestone dates. If key dates are missing, this shows "-".`,
