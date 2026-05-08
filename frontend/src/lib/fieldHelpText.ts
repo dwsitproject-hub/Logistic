@@ -7,15 +7,15 @@ export const FIELD_HELP = {
 
   logCycle: `Land: Cargo Readiness Date → latest Trucking Last Receive (Close) or today (Open). SEA: Cargo Readiness Date → latest ATA Vessel Complete Discharge (Close) or today (Open).`,
 
-  tradeCycle: `Closed: latest receive/discharge → Due Date Delivery End (Land: Trucking Last Receive; SEA: ATA Vessel Complete Discharge). Open: Land uses latest Daily Planning Deliverables date; SEA uses ETA Vessel Complete Discharge.`,
+  tradeCycle: `How many days a contract is late (or early) relative to its Delivery End Date. Positive = overdue; negative = on track.`,
 
-  cashCycle: `Closed: latest receive/discharge → Payoff Date (Land: Trucking Last Receive; SEA: ATA Vessel Complete Discharge). Open: Land uses latest Daily Planning Deliverables date; SEA uses ETA Vessel Complete Discharge.`,
+  cashCycle: `How many days between the actual delivery completion and the Payoff Date. Positive = payment is overdue relative to delivery; negative = payment settled ahead of delivery.`,
 
-  outstandingQty: `Contract Quantity minus Total STO Quantity from SAP (can be negative if overshipped).`,
+  outstandingQty: `Remaining quantity yet to be delivered. Positive = still outstanding; negative = over-delivered.`,
 
   receivedQty: `Actual quantity received based on contract data (quantity_receive). For sea shipments: received at destination. For land shipments: quantity delivered to plant/site.`,
 
-  outstandingQtyMt: `Contract Quantity minus Total STO Quantity from SAP, shown in MT (metric tons). Negative value indicates over-delivery.`,
+  outstandingQtyMt: `Remaining quantity yet to be delivered (in MT). Positive = still outstanding; negative = over-delivered.`,
 
   companyName: `From Buyer in latest SAP data. For B2B "origin" contracts (empty Contract Reff PO), Company Name may follow linked B2B child contracts per business rules.`,
 

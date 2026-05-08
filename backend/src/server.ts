@@ -33,6 +33,7 @@ import sapRoutes from './routes/sap.routes';
 import excelImportRoutes from './routes/excelImport.routes';
 import sapMasterV2Routes from './routes/sapMasterV2.routes';
 import supplierRoutes from './routes/supplier.routes';
+import supplierGroupsRoutes from './routes/supplier-groups.routes';
 import productRoutes from './routes/product.routes';
 import companyRoutes from './routes/company.routes';
 import claimMutuRoutes from './routes/claimMutu.routes';
@@ -40,6 +41,7 @@ import claimSusutRoutes from './routes/claimSusut.routes';
 import userPreferencesRoutes from './routes/userPreferences.routes';
 import activityRoutes from './routes/activity.routes';
 import agentAiRoutes from './routes/agentAi.routes';
+import oilLossRoutes from './routes/oilLoss.routes';
 
 dotenv.config();
 
@@ -120,11 +122,13 @@ app.use('/api/sap', sapRoutes);
 app.use('/api/excel-import', excelImportRoutes);
 app.use('/api/sap-master-v2', sapMasterV2Routes);
 app.use('/api/suppliers', supplierRoutes);
+app.use('/api/supplier-groups', supplierGroupsRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/companies', companyRoutes);
 app.use('/api/claim-mutu', claimMutuRoutes);
 app.use('/api/claim-susut', claimSusutRoutes);
 app.use('/api/user-preferences', userPreferencesRoutes);
+app.use('/api/oil-loss', oilLossRoutes);
 
 // Error handling
 app.use(notFoundHandler);

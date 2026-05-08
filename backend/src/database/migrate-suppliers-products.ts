@@ -66,6 +66,12 @@ const run = async () => {
     await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS pk_prod_est_year DECIMAL(15,2);`)
     await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS pome_prod_est_year DECIMAL(15,2);`)
     await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS shell_prod_est_year DECIMAL(15,2);`)
+    await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS prov_code VARCHAR(50);`)
+    await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS prov_no VARCHAR(50);`)
+    await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS mill_no VARCHAR(50);`)
+    await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS mill_code VARCHAR(100);`)
+    await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS ggl VARCHAR(100);`)
+    await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS update_year INTEGER;`)
 
     // Products table
     await pool.query(`

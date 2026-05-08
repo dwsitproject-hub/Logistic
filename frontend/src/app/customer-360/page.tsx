@@ -1,416 +1,201 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import Layout from '@/components/Layout'
 
-interface Supplier {
-  id: string
-  plant_code: string
-  mills: string | null
-  group_id: string | null
-  parent_company: string | null
-  group_holding: string | null
-  controlling_shareholder: string | null
-  other_shareholders: string | null
-  group_type: string | null
-  group_scale: string | null
-  integrated_status: string | null
-  cap: string | null
-  cpo_prod_est_month?: number | null
-  pk_prod_est_month?: number | null
-  pome_prod_est_month?: number | null
-  shell_prod_est_month?: number | null
-  cpo_prod_est_year?: number | null
-  pk_prod_est_year?: number | null
-  pome_prod_est_year?: number | null
-  shell_prod_est_year?: number | null
-  city_regency: string | null
-  province: string | null
-  island: string | null
-  longitude: number | null
-  latitude: number | null
-  kml_folder: string | null
-  map: string | null
-  rspo: string | null
-  rspo_type: string | null
-  ispo: string | null
-  iscc: string | null
-  year_commence: number | null
-  updated_date: string | null
-  remarks: string | null
-}
-
-const headersOrder = [
-  'PLANT CODE','MILLS','GROUP ID','PARENT COMPANY','GROUP / HOLDING','Controlling Shareholder','Other Shareholders','GROUP TYPE','Group Scale','Integrated Status','CAP',
-  'CITY / REGENCY','PROVINCE','ISLAND','Long.','Lat.','KML_FOLDER','MAP','RSPO','RSPO Type','ISPO','ISCC','Year Commence','Updated Date','Remarks'
-]
+type Period = 'month' | 'year'
 
 export default function Customer360Page() {
   const router = useRouter()
-  const [items, setItems] = useState<Supplier[]>([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [limit] = useState(50)
-  const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-
-  const [showModal, setShowModal] = useState(false)
-  const [editing, setEditing] = useState<Supplier | null>(null)
-  const [file, setFile] = useState<File | null>(null)
-  const [productConfigs, setProductConfigs] = useState<Record<string, any>>({})
+  const [groups, setGroups] = useState<any[]>([])
   const [islandTotals, setIslandTotals] = useState<any[]>([])
   const [provinceTotals, setProvinceTotals] = useState<any[]>([])
-  const [parentCompanyTotals, setParentCompanyTotals] = useState<any[]>([])
-  const [viewingSupplier, setViewingSupplier] = useState<Supplier | null>(null)
-
-  const emptyForm = {
-    plant_code: '', mills: '', group_id: '', parent_company: '', group_holding: '',
-    controlling_shareholder: '', other_shareholders: '', group_type: '', group_scale: '', integrated_status: '', cap: '',
-    cpo_prod_est_month: '', pk_prod_est_month: '', pome_prod_est_month: '', shell_prod_est_month: '',
-    cpo_prod_est_year: '', pk_prod_est_year: '', pome_prod_est_year: '', shell_prod_est_year: '',
-    city_regency: '', province: '', island: '',
-    longitude: '', latitude: '', kml_folder: '', map: '', rspo: '', rspo_type: '', ispo: '', iscc: '', year_commence: '', updated_date: '', remarks: ''
-  } as any
-  const [form, setForm] = useState<any>(emptyForm)
-
-  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit])
-
-  const fetchProductConfigs = async () => {
-    try {
-      const res = await api.get('/products?limit=200')
-      const map: Record<string, any> = {}
-      for (const p of res.data.data.items || []) {
-        const key = String(p.product_name || '').toUpperCase()
-        if (['CPO','PK','POME','SHELL'].includes(key)) map[key] = p
-      }
-      setProductConfigs(map)
-      console.log('Customer360 productConfigs loaded', map)
-    } catch {}
-  }
+  const [suppliers, setSuppliers] = useState<any[]>([])
+  const [period, setPeriod] = useState<Period>('month')
 
   useEffect(() => {
-    // Require login
-    const userStr = localStorage.getItem('user')
-    if (!userStr) {
-      router.push('/login')
-      return
-    }
-    fetchData()
-    fetchProductConfigs()
-    // fetch aggregates
+    if (!localStorage.getItem('user')) { router.push('/login'); return }
     ;(async () => {
       try {
-        const [islandRes, provinceRes, parentRes] = await Promise.all([
+        const [groupsRes, islandRes, provinceRes, suppliersRes] = await Promise.all([
+          api.get('/supplier-groups?page=1&limit=500'),
           api.get('/suppliers/aggregates/by-island'),
           api.get('/suppliers/aggregates/by-province'),
-          api.get('/suppliers/aggregates/by-parent-company'),
+          api.get('/suppliers?page=1&limit=5000'),
         ])
+        setGroups(groupsRes.data.data.items || [])
         setIslandTotals(islandRes.data.data || [])
         setProvinceTotals(provinceRes.data.data || [])
-        setParentCompanyTotals(parentRes.data.data || [])
+        setSuppliers(suppliersRes.data.data.items || [])
       } catch {}
     })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page])
+  }, [])
 
-  // Recompute estimates in the form whenever CAP or configs change
-  useEffect(() => {
-    const capNum = Number(form.cap)
-    if (!isFinite(capNum)) {
-      // clear computed fields if CAP invalid
-      setForm((f: any) => ({
-        ...f,
-        cpo_prod_est_month: '', pk_prod_est_month: '', pome_prod_est_month: '', shell_prod_est_month: '',
-        cpo_prod_est_year: '', pk_prod_est_year: '', pome_prod_est_year: '', shell_prod_est_year: ''
-      }))
-      return
-    }
-    const calc = (prod: any, useYear = false) => {
-      if (!prod) return ''
-      const pct = prod.percent_produce == null ? null : Number(prod.percent_produce) / 100
-      const hours = prod.working_hours_per_day == null ? null : Number(prod.working_hours_per_day)
-      const days = useYear
-        ? prod.working_days_per_year == null ? null : Number(prod.working_days_per_year)
-        : prod.working_days_per_month == null ? null : Number(prod.working_days_per_month)
-      if (pct == null || hours == null || days == null) return ''
-      const v = capNum * pct * hours * days
-      return isFinite(v) ? String(v) : ''
-    }
-    const computed = {
-      cpo_prod_est_month: calc(productConfigs['CPO'], false),
-      pk_prod_est_month: calc(productConfigs['PK'], false),
-      pome_prod_est_month: calc(productConfigs['POME'], false),
-      shell_prod_est_month: calc(productConfigs['SHELL'], false),
-      cpo_prod_est_year: calc(productConfigs['CPO'], true),
-      pk_prod_est_year: calc(productConfigs['PK'], true),
-      pome_prod_est_year: calc(productConfigs['POME'], true),
-      shell_prod_est_year: calc(productConfigs['SHELL'], true),
-    }
-    console.log('Customer360 auto-calc', { capNum, computed })
-    setForm((prev: any) => ({ ...prev, ...computed }))
-  }, [form.cap, productConfigs])
+  const suffix = period === 'month' ? '_month' : '_year'
+  const periodLabel = period === 'month' ? 'Per Month' : 'Per Year'
 
-  const fetchData = async () => {
-    setLoading(true)
-    setError('')
-    try {
-      const params = new URLSearchParams()
-      params.append('page', String(page))
-      params.append('limit', String(limit))
-      if (search) params.append('search', search)
-      const res = await api.get(`/suppliers?${params.toString()}`)
-      setItems(res.data.data.items)
-      setTotal(res.data.data.total)
-    } catch (e: any) {
-      setError(e?.response?.data?.error?.message || 'Failed to load suppliers')
-    } finally {
-      setLoading(false)
-    }
-  }
+  const sorted = useMemo(() => {
+    const items = groups.map(g => ({
+      ...g,
+      _total: Number(g[`cpo${suffix}`]||0) + Number(g[`pk${suffix}`]||0) + Number(g[`pome${suffix}`]||0) + Number(g[`shell${suffix}`]||0),
+    }))
+    return items.filter(g => g._total > 0).sort((a, b) => b._total - a._total).slice(0, 15)
+  }, [groups, suffix])
 
-  const openAdd = () => {
-    setEditing(null)
-    setForm({ ...emptyForm })
-    fetchProductConfigs()
-    setShowModal(true)
-  }
+  const sortedIslands = useMemo(() => {
+    const items = islandTotals.map(g => ({
+      ...g,
+      _total: Number(g[`cpo${suffix}`]||0) + Number(g[`pk${suffix}`]||0) + Number(g[`pome${suffix}`]||0) + Number(g[`shell${suffix}`]||0),
+    }))
+    return items.filter(g => g._total > 0).sort((a, b) => b._total - a._total)
+  }, [islandTotals, suffix])
 
-  const openEdit = (s: Supplier) => {
-    setEditing(s)
-    setForm({ ...s, updated_date: s.updated_date ? s.updated_date.substring(0,10) : '' })
-    setShowModal(true)
-  }
+  const supplierSuffix = period === 'month' ? '_est_month' : '_est_year'
 
-  const saveSupplier = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
-    setSuccess('')
-    try {
-      if (editing) {
-        await api.put(`/suppliers/${editing.id}`, form)
-        setSuccess('Supplier updated')
-      } else {
-        await api.post('/suppliers', form)
-        setSuccess('Supplier created')
-      }
-      setShowModal(false)
-      fetchData()
-    } catch (err: any) {
-      setError(err?.response?.data?.error?.message || 'Save failed')
-    }
-  }
+  const sortedSuppliers = useMemo(() => {
+    const items = suppliers.map(s => ({
+      ...s,
+      _total:
+        Number(s[`cpo_prod${supplierSuffix}`]  || 0) +
+        Number(s[`pk_prod${supplierSuffix}`]   || 0) +
+        Number(s[`pome_prod${supplierSuffix}`] || 0) +
+        Number(s[`shell_prod${supplierSuffix}`]|| 0),
+    }))
+    return items.filter(s => s._total > 0).sort((a, b) => b._total - a._total).slice(0, 15)
+  }, [suppliers, supplierSuffix])
 
-  const removeSupplier = async (s: Supplier) => {
-    if (!confirm(`Delete ${s.plant_code}?`)) return
-    try {
-      await api.delete(`/suppliers/${s.id}`)
-      fetchData()
-    } catch (e: any) {
-      alert(e?.response?.data?.error?.message || 'Delete failed')
-    }
-  }
+  const supplierCategories = [
+    { key: `cpo_prod${supplierSuffix}`,   label: `CPO / ${periodLabel}`,   color: '#2563eb' },
+    { key: `pk_prod${supplierSuffix}`,    label: `PK / ${periodLabel}`,    color: '#16a34a' },
+    { key: `pome_prod${supplierSuffix}`,  label: `POME / ${periodLabel}`,  color: '#f59e0b' },
+    { key: `shell_prod${supplierSuffix}`, label: `SHELL / ${periodLabel}`, color: '#ef4444' },
+  ]
 
-  const handleUpload = async () => {
-    setError('')
-    setSuccess('')
-    if (!file) {
-      setError('Please choose a file')
-      return
-    }
-    const fd = new FormData()
-    fd.append('file', file)
-    try {
-      const res = await api.post('/suppliers/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
-      const r = res.data.data
-      const details = r.errors?.length ? r.errors.slice(0, 10).join(' | ') + (r.errors.length > 10 ? ' | ...' : '') : ''
-      setSuccess(`Imported: ${r.inserted} inserted, ${r.updated} updated${r.errors?.length ? `, ${r.errors.length} errors` : ''}`)
-      if (details) setError(details)
-      fetchData()
-    } catch (e: any) {
-      setError(e?.response?.data?.error?.message || 'Import failed')
-    }
-  }
+  const sortedProvinces = useMemo(() => {
+    const items = provinceTotals.map(g => ({
+      ...g,
+      _total: Number(g[`cpo${suffix}`]||0) + Number(g[`pk${suffix}`]||0) + Number(g[`pome${suffix}`]||0) + Number(g[`shell${suffix}`]||0),
+    }))
+    return items.filter(g => g._total > 0).sort((a, b) => b._total - a._total)
+  }, [provinceTotals, suffix])
 
-  const downloadTemplate = () => {
-    const header = headersOrder.join(',') + '\n'
-    const blob = new Blob([header], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'Suppliers_Import_Template.csv'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-  }
+  const categories = [
+    { key: `cpo${suffix}`,   label: `CPO / ${periodLabel}`,   color: '#2563eb' },
+    { key: `pk${suffix}`,    label: `PK / ${periodLabel}`,    color: '#16a34a' },
+    { key: `pome${suffix}`,  label: `POME / ${periodLabel}`,  color: '#f59e0b' },
+    { key: `shell${suffix}`, label: `SHELL / ${periodLabel}`, color: '#ef4444' },
+  ]
+
+  const toggleBtn = (
+    <div className="flex rounded-lg border overflow-hidden text-sm shrink-0">
+      <button
+        onClick={() => setPeriod('month')}
+        className={`px-4 py-1.5 transition-colors ${period === 'month' ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+      >
+        Per Month
+      </button>
+      <button
+        onClick={() => setPeriod('year')}
+        className={`px-4 py-1.5 transition-colors ${period === 'year' ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+      >
+        Per Year
+      </button>
+    </div>
+  )
 
   return (
     <Layout>
       <div className="p-6 space-y-6">
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Production by Supplier Group */}
         <Card>
           <CardHeader>
-            <CardTitle>Production Estimates by Island (Per Month)</CardTitle>
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <CardTitle>
+                Production Estimates by Supplier Group ({sorted.length} groups)
+              </CardTitle>
+              {toggleBtn}
+            </div>
           </CardHeader>
           <CardContent>
-            {islandTotals.length === 0 ? (
+            {sorted.length === 0 ? (
               <div className="text-sm text-gray-500">No data</div>
             ) : (
-              <div className="overflow-x-auto">
-                <IslandStackedChart
-                  title="Per Month"
-                  data={islandTotals}
-                  labelField="island"
-                  filterField="island"
-                  onBarClick={(value) => { setSearch(value); setPage(1); fetchData(); }}
-                  categories={[
-                    { key: 'cpo_month', label: 'CPO / Month', color: '#2563eb' },
-                    { key: 'pk_month', label: 'PK / Month', color: '#16a34a' },
-                    { key: 'pome_month', label: 'POME / Month', color: '#f59e0b' },
-                    { key: 'shell_month', label: 'SHELL / Month', color: '#ef4444' },
-                  ]}
+              <div>
+                <SupplierBarChart data={sorted} categories={categories} />
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Production by Supplier (Top 50) */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <CardTitle>
+                Production Estimates by Supplier — Top 50 ({sortedSuppliers.length} shown)
+              </CardTitle>
+              {toggleBtn}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {sortedSuppliers.length === 0 ? (
+              <div className="text-sm text-gray-500">No data</div>
+            ) : (
+              <div>
+                <SupplierBarChart
+                  data={sortedSuppliers}
+                  labelField="mills"
+                  categories={supplierCategories}
                 />
               </div>
             )}
           </CardContent>
         </Card>
 
+        {/* Production by Island */}
         <Card>
           <CardHeader>
-            <CardTitle>Production Estimates by Island (Per Year)</CardTitle>
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <CardTitle>Production Estimates by Island</CardTitle>
+              {toggleBtn}
+            </div>
           </CardHeader>
           <CardContent>
-            {islandTotals.length === 0 ? (
+            {sortedIslands.length === 0 ? (
               <div className="text-sm text-gray-500">No data</div>
             ) : (
-              <div className="overflow-x-auto">
-                <IslandStackedChart
-                  title="Per Year"
-                  data={islandTotals}
+              <div>
+                <SupplierBarChart
+                  data={sortedIslands}
                   labelField="island"
-                  filterField="island"
-                  onBarClick={(value) => { setSearch(value); setPage(1); fetchData(); }}
-                  categories={[
-                    { key: 'cpo_year', label: 'CPO / Year', color: '#2563eb' },
-                    { key: 'pk_year', label: 'PK / Year', color: '#16a34a' },
-                    { key: 'pome_year', label: 'POME / Year', color: '#f59e0b' },
-                    { key: 'shell_year', label: 'SHELL / Year', color: '#ef4444' },
-                  ]}
+                  categories={categories}
                 />
               </div>
             )}
           </CardContent>
         </Card>
-        </div>
 
+        {/* Production by Province */}
         <Card>
           <CardHeader>
-            <CardTitle>Production Estimates by Province</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {provinceTotals.length === 0 ? (
-              <div className="text-sm text-gray-500">No data</div>
-            ) : (
-              <>
-                <div className="overflow-x-auto">
-                  <IslandStackedChart
-                    title="Per Month"
-                    data={provinceTotals}
-                    labelField="province"
-                    filterField="province"
-                    onBarClick={(value) => { setSearch(value); setPage(1); fetchData(); }}
-                    categories={[
-                      { key: 'cpo_month', label: 'CPO / Month', color: '#2563eb' },
-                      { key: 'pk_month', label: 'PK / Month', color: '#16a34a' },
-                      { key: 'pome_month', label: 'POME / Month', color: '#f59e0b' },
-                      { key: 'shell_month', label: 'SHELL / Month', color: '#ef4444' },
-                    ]}
-                  />
-                </div>
-                <div className="overflow-x-auto">
-                  <IslandStackedChart
-                    title="Per Year"
-                    data={provinceTotals}
-                    labelField="province"
-                    filterField="province"
-                    onBarClick={(value) => { setSearch(value); setPage(1); fetchData(); }}
-                    categories={[
-                      { key: 'cpo_year', label: 'CPO / Year', color: '#2563eb' },
-                      { key: 'pk_year', label: 'PK / Year', color: '#16a34a' },
-                      { key: 'pome_year', label: 'POME / Year', color: '#f59e0b' },
-                      { key: 'shell_year', label: 'SHELL / Year', color: '#ef4444' },
-                    ]}
-                  />
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Production Estimates by Parent Company</CardTitle>
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <CardTitle>Production Estimates by Province</CardTitle>
+              {toggleBtn}
+            </div>
           </CardHeader>
           <CardContent>
-            {parentCompanyTotals.length === 0 ? (
+            {sortedProvinces.length === 0 ? (
               <div className="text-sm text-gray-500">No data</div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="text-left border-b">
-                      <th className="p-3 font-semibold">Parent Company</th>
-                      <th className="p-3 font-semibold text-right">CPO / Month</th>
-                      <th className="p-3 font-semibold text-right">PK / Month</th>
-                      <th className="p-3 font-semibold text-right">POME / Month</th>
-                      <th className="p-3 font-semibold text-right">SHELL / Month</th>
-                      <th className="p-3 font-semibold text-right">CPO / Year</th>
-                      <th className="p-3 font-semibold text-right">PK / Year</th>
-                      <th className="p-3 font-semibold text-right">POME / Year</th>
-                      <th className="p-3 font-semibold text-right">SHELL / Year</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {parentCompanyTotals.map((row, idx) => (
-                      <tr key={idx} className="border-b hover:bg-gray-50">
-                        <td className="p-3 font-medium">{row.parent_company || 'UNKNOWN'}</td>
-                        <td className="p-3 text-right cursor-pointer hover:text-blue-600 hover:underline" onClick={() => { setSearch(String(row.parent_company || '')); setPage(1); fetchData(); }}>
-                          {Number(row.cpo_month || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                        </td>
-                        <td className="p-3 text-right cursor-pointer hover:text-blue-600 hover:underline" onClick={() => { setSearch(String(row.parent_company || '')); setPage(1); fetchData(); }}>
-                          {Number(row.pk_month || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                        </td>
-                        <td className="p-3 text-right cursor-pointer hover:text-blue-600 hover:underline" onClick={() => { setSearch(String(row.parent_company || '')); setPage(1); fetchData(); }}>
-                          {Number(row.pome_month || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                        </td>
-                        <td className="p-3 text-right cursor-pointer hover:text-blue-600 hover:underline" onClick={() => { setSearch(String(row.parent_company || '')); setPage(1); fetchData(); }}>
-                          {Number(row.shell_month || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                        </td>
-                        <td className="p-3 text-right cursor-pointer hover:text-blue-600 hover:underline" onClick={() => { setSearch(String(row.parent_company || '')); setPage(1); fetchData(); }}>
-                          {Number(row.cpo_year || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                        </td>
-                        <td className="p-3 text-right cursor-pointer hover:text-blue-600 hover:underline" onClick={() => { setSearch(String(row.parent_company || '')); setPage(1); fetchData(); }}>
-                          {Number(row.pk_year || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                        </td>
-                        <td className="p-3 text-right cursor-pointer hover:text-blue-600 hover:underline" onClick={() => { setSearch(String(row.parent_company || '')); setPage(1); fetchData(); }}>
-                          {Number(row.pome_year || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                        </td>
-                        <td className="p-3 text-right cursor-pointer hover:text-blue-600 hover:underline" onClick={() => { setSearch(String(row.parent_company || '')); setPage(1); fetchData(); }}>
-                          {Number(row.shell_year || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div>
+                <SupplierBarChart
+                  data={sortedProvinces}
+                  labelField="province"
+                  categories={categories}
+                />
               </div>
             )}
           </CardContent>
@@ -420,143 +205,83 @@ export default function Customer360Page() {
   )
 }
 
-function IslandStackedChart({ 
-  data, 
-  categories, 
-  title, 
-  labelField = 'island',
-  filterField = 'island',
-  onBarClick,
-  onValueClick
-}: { 
+function SupplierBarChart({
+  data,
+  categories,
+  labelField = 'group_id',
+}: {
   data: any[]
   categories: { key: string; label: string; color: string }[]
-  title: string
   labelField?: string
-  filterField?: string
-  onBarClick?: (value: string) => void
-  onValueClick?: (filterValue: string, categoryKey: string, categoryLabel: string) => void
 }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [containerWidth, setContainerWidth] = useState(800)
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const obs = new ResizeObserver(entries => {
+      setContainerWidth(entries[0].contentRect.width)
+    })
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [])
+
+  const height = 420
+  const labelHeight = 50
+  const chartAreaHeight = height - labelHeight
+  const gap = 6
+  const barWidth = data.length > 0 ? Math.max(20, (containerWidth - gap * (data.length - 1)) / data.length) : 48
+
   const maxVal = Math.max(
     1,
-    ...data.map((d) => categories.reduce((sum, c) => sum + Number(d[c.key] || 0), 0))
+    ...data.map(d => categories.reduce((sum, c) => sum + Number(d[c.key] || 0), 0))
   )
-  const groupWidth = 80
-  const groupGap = 40
-  const height = 400
-  const chartWidth = Math.max(600, data.length * (groupWidth + groupGap))
-  const [hoveredBar, setHoveredBar] = useState<{group: number, category: string} | null>(null)
-
-  const handleBarClick = (value: string | null | undefined) => {
-    if (onBarClick && value) {
-      onBarClick(String(value))
-    }
-  }
-
-  const handleValueClick = (e: React.MouseEvent, filterValue: string | null | undefined, categoryKey: string, categoryLabel: string) => {
-    e.stopPropagation()
-    if (onValueClick && filterValue) {
-      onValueClick(String(filterValue), categoryKey, categoryLabel)
-    }
-  }
 
   return (
-    <div className="min-w-full">
-      <div className="flex items-center gap-4 flex-wrap mb-3">
-        <div className="text-sm font-medium mr-2">{title}</div>
-        {categories.map((c) => (
+    <div ref={containerRef}>
+      <div className="flex items-center gap-4 flex-wrap mb-4">
+        {categories.map(c => (
           <div key={c.key} className="flex items-center gap-2 text-xs">
-            <span style={{ backgroundColor: c.color }} className="inline-block w-3 h-3 rounded-sm"></span>
+            <span style={{ backgroundColor: c.color }} className="inline-block w-3 h-3 rounded-sm shrink-0" />
             <span>{c.label}</span>
           </div>
         ))}
       </div>
-      <svg width={chartWidth} height={height} className="overflow-visible">
+      <svg width={containerWidth} height={height} className="overflow-visible">
+        <line x1={0} y1={chartAreaHeight} x2={containerWidth} y2={chartAreaHeight} stroke="#e5e7eb" strokeWidth={1.5} />
         {data.map((d, gi) => {
-          const total = categories.reduce((sum, c) => sum + Number(d[c.key] || 0), 0)
-          let yCursor = height - 60
-          const x = gi * (groupWidth + groupGap)
-          const filterValue = d[filterField] || d[labelField]
-          const isHovered = hoveredBar?.group === gi
-          
+          let yCursor = chartAreaHeight
+          const x = gi * (barWidth + gap)
+          const rawLabel = String(d[labelField] || '')
+          const maxChars = Math.max(4, Math.floor(barWidth / 6))
+          const label = rawLabel.length > maxChars ? rawLabel.substring(0, maxChars - 1) + '…' : rawLabel
+
           return (
-            <g 
-              key={gi} 
-              transform={`translate(${x}, 0)`}
-              style={{ cursor: onBarClick ? 'pointer' : 'default' }}
-              onClick={() => handleBarClick(filterValue)}
-              onMouseEnter={() => setHoveredBar({group: gi, category: ''})}
-              onMouseLeave={() => setHoveredBar(null)}
-            >
-              {categories.map((c, ci) => {
+            <g key={gi} transform={`translate(${x}, 0)`}>
+              {categories.map(c => {
                 const v = Number(d[c.key] || 0)
-                const h = Math.max(1, Math.round(((v / maxVal) * (height - 100))))
-                const y = yCursor - h
+                const barH = Math.max(v > 0 ? 2 : 0, Math.round((v / maxVal) * (chartAreaHeight - 20)))
+                const y = yCursor - barH
                 yCursor = y
-                const formattedVal = v.toLocaleString('en-US', { maximumFractionDigits: 0 })
-                const canFitInside = h >= 20
-                
                 return (
                   <g key={c.key}>
-                    <rect 
-                      x={0} 
-                      y={y} 
-                      width={groupWidth} 
-                      height={h} 
-                      fill={c.color} 
-                      rx={3}
-                      style={{ cursor: onBarClick ? 'pointer' : 'default' }}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleBarClick(filterValue)
-                      }}
-                    />
-                    {v > 0 && (
-                      <>
-                        {canFitInside ? (
-                          <text 
-                            x={groupWidth / 2} 
-                            y={y + h / 2 + 5} 
-                            textAnchor="middle" 
-                            className="text-xs font-semibold fill-white pointer-events-none"
-                            style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}
-                          >
-                            {formattedVal}
-                          </text>
-                        ) : (
-                          <text 
-                            x={groupWidth + 4} 
-                            y={y + h / 2 + 4} 
-                            textAnchor="start" 
-                            className="text-[10px] font-medium fill-gray-700 pointer-events-none"
-                          >
-                            {formattedVal}
-                          </text>
-                        )}
-                      </>
-                    )}
+                    <rect x={0} y={y} width={barWidth} height={barH} fill={c.color} rx={2}>
+                      <title>{c.label}: {v.toLocaleString('en-US', { maximumFractionDigits: 0 })}</title>
+                    </rect>
                   </g>
                 )
               })}
-              <text 
-                x={groupWidth / 2} 
-                y={height - 25} 
-                textAnchor="middle" 
-                className="text-xs font-medium fill-gray-700 pointer-events-none"
-              >
-                {String(d[labelField] || '').length > 15 
-                  ? String(d[labelField] || '').substring(0, 13) + '...'
-                  : d[labelField]
-                }
+              <text x={barWidth / 2} y={chartAreaHeight + 14} textAnchor="middle" fontSize={Math.min(10, barWidth / 5)} className="fill-gray-600 pointer-events-none">
+                {label}
+              </text>
+              <text x={barWidth / 2} y={chartAreaHeight + 26} textAnchor="middle" fontSize={Math.min(9, barWidth / 6)} className="fill-gray-400 pointer-events-none">
+                #{gi + 1}
               </text>
             </g>
           )
         })}
-        {/* baseline */}
-        <line x1={0} y1={height - 60} x2={chartWidth} y2={height - 60} stroke="#e5e7eb" strokeWidth={2} />
       </svg>
     </div>
   )
 }
-
-
