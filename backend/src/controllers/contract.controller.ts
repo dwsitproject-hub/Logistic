@@ -375,12 +375,14 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
 
     const cycleSortKeys = new Set(['log_cycle_days', 'trade_cycle_days', 'cash_cycle_days']);
     const wantCycleSort = cycleSortKeys.has(sortKeyRaw);
+    const lateOnTimeFilterRaw = String((req.query as any).lateOnTimeFilter || 'ALL').toUpperCase();
+    const wantLateFilter = lateOnTimeFilterRaw === 'LATE' || lateOnTimeFilterRaw === 'ON_TIME';
 
     const countResult = await query(countQuery, countParams);
     const totalCount = Number(countResult.rows[0]?.count ?? 0);
 
     let result: any;
-    if (!wantCycleSort) {
+    if (!wantCycleSort && !wantLateFilter) {
       result = await query(listQuery, listParams);
     } else {
       const cap = Math.min(totalCount, 10000);
@@ -654,18 +656,34 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    if (wantCycleSort) {
-      const dirMul = sortDir === 'ASC' ? 1 : -1;
-      const getNum = (r: any) => (typeof r?.[sortKeyRaw] === 'number' ? r[sortKeyRaw] : null);
-      const sorted = [...result.rows].sort((a, b) => {
-        const av = getNum(a);
-        const bv = getNum(b);
-        if (av == null && bv == null) return 0;
-        if (av == null) return 1;
-        if (bv == null) return -1;
-        return (av - bv) * dirMul;
-      });
-      result.rows = sorted.slice(offset, offset + Number(limit));
+    let responseTotal = totalCount;
+
+    if (wantLateFilter || wantCycleSort) {
+      let rows = result.rows as any[];
+
+      if (wantLateFilter) {
+        rows = rows.filter((r: any) => {
+          const tc = typeof r.trade_cycle_days === 'number' ? r.trade_cycle_days : null;
+          if (tc == null) return false;
+          return lateOnTimeFilterRaw === 'LATE' ? tc > 0 : tc <= 0;
+        });
+        responseTotal = rows.length;
+      }
+
+      if (wantCycleSort) {
+        const dirMul = sortDir === 'ASC' ? 1 : -1;
+        const getNum = (r: any) => (typeof r?.[sortKeyRaw] === 'number' ? r[sortKeyRaw] : null);
+        rows = [...rows].sort((a, b) => {
+          const av = getNum(a);
+          const bv = getNum(b);
+          if (av == null && bv == null) return 0;
+          if (av == null) return 1;
+          if (bv == null) return -1;
+          return (av - bv) * dirMul;
+        });
+      }
+
+      result.rows = rows.slice(offset, offset + Number(limit));
     }
 
     // Debug logging
@@ -684,10 +702,10 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       data: {
         contracts: result.rows,
         pagination: {
-          total: totalCount,
+          total: responseTotal,
           page: Number(page),
           limit: Number(limit),
-          totalPages: Math.ceil(totalCount / Number(limit)),
+          totalPages: Math.ceil(responseTotal / Number(limit)),
         },
       },
     });
@@ -1121,6 +1139,17 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
     let lateMaxDays = 0;
     let lateTotalQtyDelivery = 0;
 
+    type DistBucket = { count: number; qty: number };
+    const dist: Record<string, DistBucket> = {
+      noData:  { count: 0, qty: 0 },
+      onTime:  { count: 0, qty: 0 },
+      d1_7:    { count: 0, qty: 0 },
+      d8_14:   { count: 0, qty: 0 },
+      d15_30:  { count: 0, qty: 0 },
+      d31_60:  { count: 0, qty: 0 },
+      d61plus: { count: 0, qty: 0 },
+    };
+
     const debugCounts = {
       totalRows: 0,
       missingDeliveryEnd: 0,
@@ -1224,20 +1253,6 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         }
       }
 
-      if (tradeCycle == null) {
-        debugCounts.tradeCycleNull += 1;
-        pushSample('tradeCycleNull', String(row.contract_id || ''));
-        continue;
-      }
-      if (tradeCycle <= 0) {
-        debugCounts.tradeCycleNonPositive += 1;
-        pushSample('tradeCycleNonPositive', `${String(row.contract_id || '')}:${tradeCycle}`);
-        continue;
-      }
-
-      lateCount += 1;
-      lateTotalDays += tradeCycle;
-      lateMaxDays = Math.max(lateMaxDays, tradeCycle);
       const _inc = String(row.incoterm || '').trim().toUpperCase();
       const _qtyOrdered = Number(row.quantity_ordered || 0);
       const _subtracted = ['FRC', 'CIF', 'CFR'].includes(_inc)
@@ -1246,6 +1261,31 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         ? Number(row.quantity_delivery || 0)
         : Number(row.total_sto_quantity || 0);
       const _outstandingQty = Math.max(0, _qtyOrdered - _subtracted);
+
+      if (tradeCycle == null) {
+        debugCounts.tradeCycleNull += 1;
+        pushSample('tradeCycleNull', String(row.contract_id || ''));
+        dist.noData.count += 1;
+        dist.noData.qty += _outstandingQty;
+        continue;
+      }
+      if (tradeCycle <= 0) {
+        debugCounts.tradeCycleNonPositive += 1;
+        pushSample('tradeCycleNonPositive', `${String(row.contract_id || '')}:${tradeCycle}`);
+        dist.onTime.count += 1;
+        dist.onTime.qty += _outstandingQty;
+        continue;
+      }
+
+      if (tradeCycle <= 7)       { dist.d1_7.count    += 1; dist.d1_7.qty    += _outstandingQty; }
+      else if (tradeCycle <= 14) { dist.d8_14.count   += 1; dist.d8_14.qty   += _outstandingQty; }
+      else if (tradeCycle <= 30) { dist.d15_30.count  += 1; dist.d15_30.qty  += _outstandingQty; }
+      else if (tradeCycle <= 60) { dist.d31_60.count  += 1; dist.d31_60.qty  += _outstandingQty; }
+      else                       { dist.d61plus.count += 1; dist.d61plus.qty += _outstandingQty; }
+
+      lateCount += 1;
+      lateTotalDays += tradeCycle;
+      lateMaxDays = Math.max(lateMaxDays, tradeCycle);
       lateTotalQtyDelivery += _outstandingQty;
       debugCounts.includedLate += 1;
       pushSample('includedLate', `${String(row.contract_id || '')}:${tradeCycle}`);
@@ -1295,6 +1335,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           maxDays: lateMaxDays,
           totalQtyDelivery: lateTotalQtyDelivery,
         },
+        distribution: dist,
         tree: toSorted(root),
         ...(debug
           ? {
@@ -1331,8 +1372,50 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
 };
 
 /** Get counts of SEA contracts without shipments and LAND contracts without trucking (for dashboard cards) */
-export const getUnassignedCounts = async (_req: AuthRequest, res: Response) => {
+export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
   try {
+    const { status, search, b2bFlag, dateFrom, dateTo } = req.query as Record<string, string>;
+
+    const params: any[] = [];
+    const whereConditions: string[] = [];
+
+    if (status && status !== 'All Status' && status.toLowerCase() !== 'all') {
+      const s = status.trim().toUpperCase();
+      if (s === 'OPEN') {
+        whereConditions.push(`UPPER(c.status) IN ('OPEN', 'ACTIVE')`);
+      } else if (s === 'CLOSE') {
+        whereConditions.push(`UPPER(c.status) IN ('CLOSE', 'CLOSED', 'COMPLETED')`);
+      } else if (s === 'CANCELLED') {
+        whereConditions.push(`UPPER(c.status) IN ('CANCELLED')`);
+      } else {
+        params.push(`%${s}%`);
+        whereConditions.push(`UPPER(c.status) ILIKE $${params.length}`);
+      }
+    }
+
+    if (search && search.trim().length >= 2) {
+      params.push(`%${search.trim()}%`);
+      const p = `$${params.length}`;
+      whereConditions.push(`(c.contract_id ILIKE ${p} OR c.group_name ILIKE ${p})`);
+    }
+
+    if (b2bFlag && b2bFlag !== 'ALL') {
+      params.push(b2bFlag);
+      whereConditions.push(`UPPER(c.b2b_flag) = UPPER($${params.length})`);
+    }
+
+    if (dateFrom) {
+      params.push(dateFrom);
+      whereConditions.push(`c.contract_date >= $${params.length}`);
+    }
+
+    if (dateTo) {
+      params.push(dateTo);
+      whereConditions.push(`c.contract_date <= $${params.length}`);
+    }
+
+    const whereSql = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+
     const q = `
       WITH latest_spd AS (
         SELECT DISTINCT ON (contract_number) contract_number, data, created_at
@@ -1346,6 +1429,7 @@ export const getUnassignedCounts = async (_req: AuthRequest, res: Response) => {
           COALESCE(NULLIF(TRIM(MAX(c.transport_mode)), ''), (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'transport_mode', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'sea_land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea / Land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea_Land', '') AS effective_transport_mode
         FROM contracts c
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        ${whereSql}
         GROUP BY c.contract_id
       ),
       sea_no_ship AS (
@@ -1364,7 +1448,7 @@ export const getUnassignedCounts = async (_req: AuthRequest, res: Response) => {
         (SELECT COUNT(*) FROM sea_no_ship) AS sea_without_shipments,
         (SELECT COUNT(*) FROM land_no_truck) AS land_without_trucking
     `;
-    const result = await query(q);
+    const result = await query(q, params);
     const row = result.rows[0] || { sea_without_shipments: 0, land_without_trucking: 0 };
     res.json({
       success: true,

@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Minus, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Minus, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal } from 'lucide-react'
 import api from '@/lib/api'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
@@ -205,13 +205,23 @@ function ContractsPageContent() {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [totalContracts, setTotalContracts] = useState(0)
-  const contractsPerPage = 100
+  const contractsPerPage = 20
   const [unassignedSeaContracts, setUnassignedSeaContracts] = useState(0)
   const [unassignedLandContracts, setUnassignedLandContracts] = useState(0)
   const [unassignedFilter, setUnassignedFilter] = useState<'sea' | 'land' | null>(null)
   const [updatingContractId, setUpdatingContractId] = useState<string | null>(null)
 
   type LatePerfNode = { key: string; count: number; totalDays: number; maxDays: number; totalQtyDelivery?: number; children: LatePerfNode[] }
+  type TradeCycleBucket = { count: number; qty: number }
+  type TradeCycleDist = {
+    noData: TradeCycleBucket
+    onTime: TradeCycleBucket
+    d1_7:   TradeCycleBucket
+    d8_14:  TradeCycleBucket
+    d15_30: TradeCycleBucket
+    d31_60: TradeCycleBucket
+    d61plus: TradeCycleBucket
+  }
   const [latePerformanceTree, setLatePerformanceTree] = useState<LatePerfNode[]>([])
   const [latePerformanceSummary, setLatePerformanceSummary] = useState<{ count: number; totalDays: number; avgDays: number; maxDays: number; totalQtyDelivery?: number }>({
     count: 0,
@@ -220,6 +230,7 @@ function ContractsPageContent() {
     maxDays: 0,
     totalQtyDelivery: 0,
   })
+  const [tradeCycleDist, setTradeCycleDist] = useState<TradeCycleDist | null>(null)
   const [latePerfLoading, setLatePerfLoading] = useState(false)
   type LatePerfHotspot = {
     incoterm: string
@@ -353,6 +364,17 @@ function ContractsPageContent() {
     setLatePerfSelProduct(null)
     setLatePerfSelPlant(null)
     setLatePerfSelSupplier(null)
+    setLateOnTimeFilter('ALL')
+    setPerfTransportMode('ALL')
+    setSelectedIncoterms([])
+    setSelectedPlantSites([])
+    setColumnFilters(prev => {
+      const next = { ...prev }
+      delete next.product
+      delete next.supplier
+      return next
+    })
+    setCurrentPage(1)
   }, [])
 
   const findChild = useCallback((nodes: LatePerfBranchNode[], label: string | null) => {
@@ -584,6 +606,9 @@ function ContractsPageContent() {
       if (isContractPerformance && selectedPlantSites.length > 0) {
         selectedPlantSites.forEach((p) => params.append('plant', p))
       }
+      if (isContractPerformance && lateOnTimeFilter !== 'ALL') {
+        params.append('lateOnTimeFilter', lateOnTimeFilter)
+      }
       // Contract Performance sorting must happen server-side across full filtered set.
       if (isContractPerformance && (sortKeyOverride || sortKey)) {
         params.append('sortKey', sortKeyOverride || sortKey)
@@ -644,10 +669,12 @@ function ContractsPageContent() {
       const data = resp.data?.data
       setLatePerformanceSummary(data?.summary ?? { count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0 })
       setLatePerformanceTree(Array.isArray(data?.tree) ? data.tree : [])
+      setTradeCycleDist(data?.distribution ?? null)
     } catch (e) {
       console.error('Failed to load late performance dashboard:', e)
       setLatePerformanceSummary({ count: 0, totalDays: 0, avgDays: 0, maxDays: 0 })
       setLatePerformanceTree([])
+      setTradeCycleDist(null)
     } finally {
       setLatePerfLoading(false)
     }
@@ -735,12 +762,20 @@ function ContractsPageContent() {
     }
   }, [authReady, isContractPerformance])
 
-  // Dashboard cards: SEA without shipments, LAND without trucking (from dedicated API)
+  // Dashboard cards: SEA without shipments, LAND without trucking — reflect active filters
   useEffect(() => {
     if (!authReady) return
     const fetchUnassignedCounts = async () => {
       try {
-        const res = await api.get<{ success: boolean; data: { seaWithoutShipments: number; landWithoutTrucking: number } }>('/contracts/unassigned-counts')
+        const params = new URLSearchParams()
+        if (statusFilter && statusFilter !== 'All Status') params.append('status', statusFilter)
+        if (searchTerm.trim().length >= 2) params.append('search', searchTerm.trim())
+        if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
+        if (dateFrom) params.append('dateFrom', dateFrom)
+        if (dateTo) params.append('dateTo', dateTo)
+        const res = await api.get<{ success: boolean; data: { seaWithoutShipments: number; landWithoutTrucking: number } }>(
+          `/contracts/unassigned-counts?${params.toString()}`
+        )
         if (res.data?.success && res.data?.data) {
           setUnassignedSeaContracts(res.data.data.seaWithoutShipments ?? 0)
           setUnassignedLandContracts(res.data.data.landWithoutTrucking ?? 0)
@@ -750,7 +785,7 @@ function ContractsPageContent() {
       }
     }
     fetchUnassignedCounts()
-  }, [authReady])
+  }, [authReady, statusFilter, searchTerm, b2bFlagFilter, dateFrom, dateTo])
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -1275,20 +1310,8 @@ function ContractsPageContent() {
 
   // Search + most column filters run on the server; only computed UI columns filter here
   const filteredContracts = useMemo(() => {
-    const base = contracts.filter((contract) => passesColumnFilters(contract, clientOnlyColumnFilters))
-    if (!isContractPerformance || lateOnTimeFilter === 'ALL') return base
-    return base.filter((c) => {
-      const tc =
-        typeof c.trade_cycle_days === 'number'
-          ? c.trade_cycle_days
-          : (c.trade_cycle_days != null && c.trade_cycle_days !== ''
-              ? Number(String(c.trade_cycle_days).replace(/,/g, ''))
-              : null)
-      if (tc == null) return false
-      if (lateOnTimeFilter === 'LATE') return tc > 0
-      return tc <= 0
-    })
-  }, [contracts, clientOnlyColumnFilters, isContractPerformance, lateOnTimeFilter])
+    return contracts.filter((contract) => passesColumnFilters(contract, clientOnlyColumnFilters))
+  }, [contracts, clientOnlyColumnFilters])
 
   type CompactColumn = {
     id: string
@@ -2186,6 +2209,105 @@ function ContractsPageContent() {
           </Card>
         )}
 
+        {/* Trade Cycle Distribution */}
+        {false && isContractPerformance && tradeCycleDist && (() => {
+          const buckets = [
+            { key: 'onTime',  label: 'On Time',    sublabel: '≤ 0 days',   color: '#16a34a', bg: 'bg-green-50',  border: 'border-green-200',  text: 'text-green-700',  bar: '#16a34a' },
+            { key: 'd1_7',    label: '1–7 days',   sublabel: 'Watch',       color: '#ca8a04', bg: 'bg-yellow-50', border: 'border-yellow-200', text: 'text-yellow-700', bar: '#ca8a04' },
+            { key: 'd8_14',   label: '8–14 days',  sublabel: 'Caution',     color: '#ea580c', bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-700', bar: '#ea580c' },
+            { key: 'd15_30',  label: '15–30 days', sublabel: 'Late',        color: '#dc2626', bg: 'bg-red-50',    border: 'border-red-200',    text: 'text-red-700',    bar: '#dc2626' },
+            { key: 'd31_60',  label: '31–60 days', sublabel: 'Overdue',     color: '#9f1239', bg: 'bg-rose-50',   border: 'border-rose-200',   text: 'text-rose-700',   bar: '#9f1239' },
+            { key: 'd61plus', label: '61+ days',   sublabel: 'Critical',    color: '#6b21a8', bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-700', bar: '#6b21a8' },
+            { key: 'noData',  label: 'No Data',    sublabel: 'Missing dates', color: '#9ca3af', bg: 'bg-gray-50',  border: 'border-gray-200',   text: 'text-gray-500',   bar: '#9ca3af' },
+          ] as const
+          const total = buckets.reduce((s, b) => s + (tradeCycleDist[b.key as keyof typeof tradeCycleDist]?.count ?? 0), 0)
+          return (
+            <Card>
+              <CardHeader className="pb-2">
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div>
+                    <CardTitle className="text-base">Trade Cycle Distribution (YTD)</CardTitle>
+                    <div className="text-sm text-gray-600 mt-1">
+                      Distribution of all {total.toLocaleString()} tracked contracts by trade cycle lateness.
+                    </div>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="pt-2 space-y-4">
+                {/* Stacked bar */}
+                <div className="flex rounded-full overflow-hidden h-3 w-full">
+                  {buckets.map(b => {
+                    const cnt = tradeCycleDist[b.key as keyof typeof tradeCycleDist]?.count ?? 0
+                    const pct = total > 0 ? (cnt / total) * 100 : 0
+                    return pct > 0 ? (
+                      <div key={b.key} title={`${b.label}: ${cnt} contracts (${pct.toFixed(1)}%)`}
+                        style={{ width: `${pct}%`, backgroundColor: b.bar }} />
+                    ) : null
+                  })}
+                </div>
+                {/* Bucket cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                  {buckets.map(b => {
+                    const cnt = tradeCycleDist[b.key as keyof typeof tradeCycleDist]?.count ?? 0
+                    const qty = tradeCycleDist[b.key as keyof typeof tradeCycleDist]?.qty ?? 0
+                    const pct = total > 0 ? ((cnt / total) * 100).toFixed(1) : '0.0'
+                    return (
+                      <div key={b.key} className={`rounded border px-3 py-2 ${b.bg} ${b.border}`}>
+                        <div className={`text-[11px] font-semibold ${b.text}`}>{b.label}</div>
+                        <div className={`text-xs ${b.text} opacity-70 mb-1`}>{b.sublabel}</div>
+                        <div className="text-lg font-bold text-gray-900">{cnt.toLocaleString()}</div>
+                        <div className="text-[10px] text-gray-500">{pct}% of total</div>
+                        {qty > 0 && <div className="text-[10px] text-gray-400 mt-0.5">{(qty / 1000).toLocaleString('en-US', { maximumFractionDigits: 1 })} MT</div>}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* Formula legend */}
+                <div className="rounded-xl border bg-gray-50 p-3">
+                  <div className="text-xs font-semibold text-gray-700 mb-2">How Trade Cycle is calculated</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-xs text-gray-600">
+                    <div className="flex items-center gap-2">
+                      <span className="shrink-0 w-28 font-medium text-gray-700">Closed + LAND</span>
+                      <span className="text-gray-400">Trucking Last Receive</span>
+                      <span className="shrink-0 text-gray-400">→</span>
+                      <span className="text-gray-400">Delivery End Date</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="shrink-0 w-28 font-medium text-gray-700">Closed + SEA</span>
+                      <span className="text-gray-400">ATA Vessel Discharge</span>
+                      <span className="shrink-0 text-gray-400">→</span>
+                      <span className="text-gray-400">Delivery End Date</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="shrink-0 w-28 font-medium text-gray-700">Open + LAND</span>
+                      <span className="text-gray-400">Delivery End Date</span>
+                      <span className="shrink-0 text-gray-400">→</span>
+                      <span className="text-gray-400">Latest Daily Plan Date</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="shrink-0 w-28 font-medium text-gray-700">Open + SEA</span>
+                      <span className="text-gray-400">Delivery End Date</span>
+                      <span className="shrink-0 text-gray-400">→</span>
+                      <span className="text-gray-400">ETA Vessel Discharge</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4 mt-2 pt-2 border-t border-gray-200 text-xs">
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500" />
+                      <span className="text-gray-600">Result ≤ 0 = On Time</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500" />
+                      <span className="text-gray-600">Result &gt; 0 = Late (days overdue)</span>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )
+        })()}
+
         {/* Filters */}
         <Card>
           <CardContent className="pt-6">
@@ -2617,14 +2739,14 @@ function ContractsPageContent() {
 
                                 <button
                                   type="button"
-                                  className={`p-1 rounded hover:bg-gray-100 ${filterActive ? 'text-blue-700' : 'text-gray-500'}`}
+                                  className={`p-1 rounded hover:bg-gray-100 ${filterActive ? 'text-blue-700' : 'text-gray-400'}`}
                                   title="Filter"
                                   onClick={(e) => {
                                     e.stopPropagation()
                                     setOpenHeaderFilterId(prev => (prev === col.id ? null : col.id))
                                   }}
                                 >
-                                  <Filter className="h-3.5 w-3.5" />
+                                  <ArrowUpDown className="h-3.5 w-3.5" />
                                 </button>
                               </div>
 
