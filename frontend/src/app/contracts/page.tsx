@@ -2866,7 +2866,7 @@ function ContractsPageContent() {
                                   {filterType === 'text' && (
                                     <div className="space-y-2">
                                       <Input
-                                        value={(current?.type === 'text' && current.value) ? current.value : ''}
+                                        value={current?.type === 'text' ? (current.value ?? '') : ''}
                                         onChange={(e) => {
                                           const value = e.target.value
                                           setOrClearFilter(col.id, {
