@@ -1,10 +1,11 @@
 'use client'
 
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { X, Loader2, Plus, Check } from 'lucide-react'
 import api from '@/lib/api'
+import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 
 export const CreateTruckingOperationModal = memo(function CreateTruckingOperationModal({
   open,
@@ -49,6 +50,11 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     contractData: null,
     message: '',
   })
+
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({})
+
+  const clearFieldError = (field: string) =>
+    setFormErrors((prev) => { const next = { ...prev }; delete next[field]; return next })
 
   const [contractSearchTerm, setContractSearchTerm] = useState('')
   const [contractSuggestions, setContractSuggestions] = useState<any[]>([])
@@ -146,6 +152,47 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     await validateContractNumber(String(label || '').trim())
   }
 
+  const truckingDateRange = useMemo(() => {
+    const contractDateStr = contractValidation.contractData?.contract_date
+    if (!contractDateStr) return null
+    const contractDate = new Date(contractDateStr)
+    const minDate = new Date(contractDate)
+    minDate.setDate(minDate.getDate() - 30)
+    const maxDate = new Date(contractDate)
+    maxDate.setFullYear(maxDate.getFullYear() + 1)
+    return {
+      minIso: minDate.toISOString().slice(0, 10),
+      maxIso: maxDate.toISOString().slice(0, 10),
+    }
+  }, [contractValidation.contractData?.contract_date])
+
+  const validateForm = (): boolean => {
+    const errors: Record<string, string> = {}
+    if (!contractValidation.exists) errors.contract_number = 'Contract Ext No is required and must be valid'
+    if (!newOperation.location.trim()) errors.location = 'Plant/Site is required'
+    if (!newOperation.loading_location.trim()) errors.loading_location = 'Loading Location is required'
+    if (!newOperation.unloading_location.trim()) errors.unloading_location = 'Unloading Location is required'
+    if (!newOperation.trucking_owner.trim()) errors.trucking_owner = 'Trucking Owner is required'
+    if (!newOperation.quantity_sent.trim()) errors.quantity_sent = 'Quantity Sent is required'
+
+    if (truckingDateRange) {
+      const { minIso, maxIso } = truckingDateRange
+      const fmt = (iso: string) => iso.split('-').reverse().join('/')
+      const rangeMsg = `Date must be between ${fmt(minIso)} and ${fmt(maxIso)}`
+      if (newOperation.cargo_readiness_date) {
+        if (newOperation.cargo_readiness_date < minIso || newOperation.cargo_readiness_date > maxIso)
+          errors.cargo_readiness_date = rangeMsg
+      }
+      ;(newOperation.daily_deliverables || []).forEach((row, idx) => {
+        if (row.date && (row.date < minIso || row.date > maxIso))
+          errors[`dailyDate_${idx}`] = rangeMsg
+      })
+    }
+
+    setFormErrors(errors)
+    return Object.keys(errors).length === 0
+  }
+
   const resetForm = () => {
     setNewOperation({
       contract_number: '',
@@ -168,13 +215,11 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     setContractSearchTerm('')
     setContractSuggestions([])
     setShowContractSuggestions(false)
+    setFormErrors({})
   }
 
   const handleCreateOperation = async () => {
-    if (!newOperation.contract_number || !contractValidation.exists) {
-      alert('Please enter a valid contract')
-      return
-    }
+    if (!validateForm()) return
 
     const start = (contractValidation.contractData?.delivery_start_date || '').trim()
     const end = (contractValidation.contractData?.delivery_end_date || '').trim()
@@ -254,7 +299,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40">
       <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xl font-semibold">Create New Trucking Operation</h3>
+          <h3 className="text-xl font-semibold">Add New Trucking</h3>
           <Button
             variant="ghost"
             onClick={() => {
@@ -266,287 +311,346 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
           </Button>
         </div>
 
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Contract Ext No <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
-              <div className="flex gap-2">
-                <Input
-                  value={newOperation.contract_number}
-                  onChange={(e) => handleContractNumberChange(e.target.value)}
-                  onBlur={() => validateContractNumber(newOperation.contract_number)}
-                  onFocus={() => {
-                    if (contractSuggestions.length > 0) setShowContractSuggestions(true)
-                    if (contractSearchTerm.trim().length >= 2) fetchContractSuggestions(contractSearchTerm)
-                  }}
-                  className={`flex-1 ${
-                    contractValidation.exists
-                      ? 'border-green-500'
-                      : contractValidation.message && !contractValidation.checking
-                        ? 'border-red-500'
-                        : ''
-                  }`}
-                  placeholder="Enter Contract Ext No"
-                />
-                {contractValidation.checking && (
-                  <Loader2 className="h-5 w-5 animate-spin text-gray-400 self-center" />
-                )}
-                {!contractValidation.checking && contractValidation.exists && (
-                  <Check className="h-5 w-5 text-green-500 self-center" />
-                )}
-                {!contractValidation.checking && contractValidation.message && !contractValidation.exists && (
-                  <X className="h-5 w-5 text-red-500 self-center" />
+        <div className="space-y-5">
+
+          {/* Section 1 — Contract Detail */}
+          <div className="border rounded-lg overflow-hidden">
+            <div className="bg-gray-50 px-4 py-2 border-b">
+              <h4 className="text-sm font-semibold text-gray-700">1. Contract Detail</h4>
+            </div>
+            <div className="p-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Contract Ext No <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <div className="flex gap-2">
+                  <Input
+                    value={newOperation.contract_number}
+                    onChange={(e) => handleContractNumberChange(e.target.value)}
+                    onBlur={() => validateContractNumber(newOperation.contract_number)}
+                    onFocus={() => {
+                      if (contractSuggestions.length > 0) setShowContractSuggestions(true)
+                      if (contractSearchTerm.trim().length >= 2) fetchContractSuggestions(contractSearchTerm)
+                    }}
+                    className={`flex-1 ${
+                      contractValidation.exists
+                        ? 'border-green-500'
+                        : contractValidation.message && !contractValidation.checking
+                          ? 'border-red-500'
+                          : ''
+                    }`}
+                    placeholder="Enter Contract Ext No"
+                  />
+                  {contractValidation.checking && (
+                    <Loader2 className="h-5 w-5 animate-spin text-gray-400 self-center" />
+                  )}
+                  {!contractValidation.checking && contractValidation.exists && (
+                    <Check className="h-5 w-5 text-green-500 self-center" />
+                  )}
+                  {!contractValidation.checking && contractValidation.message && !contractValidation.exists && (
+                    <X className="h-5 w-5 text-red-500 self-center" />
+                  )}
+                </div>
+
+                {showContractSuggestions && contractSuggestions.length > 0 && (
+                  <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                    {contractSuggestions.map((c) => (
+                      <button
+                        key={c.contract_id}
+                        type="button"
+                        className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b last:border-b-0"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => handleSelectContractSuggestion(c)}
+                      >
+                        <div className="font-medium text-sm">{c.contract_ext_no || c.contract_id}</div>
+                        <div className="text-xs text-gray-500">
+                          {c.contract_ext_no ? <span className="text-gray-400">{c.contract_id} • </span> : null}
+                          {c.supplier} • {c.product}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 )}
               </div>
-
-              {showContractSuggestions && contractSuggestions.length > 0 && (
-                <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
-                  {contractSuggestions.map((c) => (
-                    <button
-                      key={c.contract_id}
-                      type="button"
-                      className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b last:border-b-0"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => handleSelectContractSuggestion(c)}
-                    >
-                      <div className="font-medium text-sm">{c.contract_ext_no || c.contract_id}</div>
-                      <div className="text-xs text-gray-500">
-                        {c.contract_ext_no ? <span className="text-gray-400">{c.contract_id} • </span> : null}
-                        {c.supplier} • {c.product}
+              {contractValidation.message && (
+                <p className={`text-xs mt-1 ${contractValidation.exists ? 'text-green-600' : 'text-red-600'}`}>
+                  {contractValidation.message}
+                </p>
+              )}
+              {formErrors.contract_number && !contractValidation.message && (
+                <p className="text-xs mt-1 text-red-600">{formErrors.contract_number}</p>
+              )}
+              {contractValidation.exists && contractValidation.contractData && (
+                <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-xs">
+                  <div className="grid grid-cols-2 gap-2">
+                    {contractValidation.contractData.contract_ext_no ? (
+                      <div>
+                        <span className="font-semibold">Contract Ext No:</span>{' '}
+                        {contractValidation.contractData.contract_ext_no}
                       </div>
-                    </button>
-                  ))}
+                    ) : null}
+                    <div>
+                      <span className="font-semibold">Contract ID:</span> {contractValidation.contractData.contract_id || '-'}
+                    </div>
+                    <div>
+                      <span className="font-semibold">STO Number:</span> {contractValidation.contractData.sto_number || '-'}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Supplier:</span> {contractValidation.contractData.supplier || '-'}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Product:</span> {contractValidation.contractData.product || '-'}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Group:</span> {contractValidation.contractData.group_name || '-'}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
-            {contractValidation.message && (
-              <p className={`text-xs mt-1 ${contractValidation.exists ? 'text-green-600' : 'text-red-600'}`}>
-                {contractValidation.message}
-              </p>
-            )}
-            {contractValidation.exists && contractValidation.contractData && (
-              <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-xs">
-                <div className="grid grid-cols-2 gap-2">
-                  {contractValidation.contractData.contract_ext_no ? (
-                    <div>
-                      <span className="font-semibold">Contract Ext No:</span>{' '}
-                      {contractValidation.contractData.contract_ext_no}
+          </div>
+
+          {/* Section 2 — Truck Detail */}
+          <div className="border rounded-lg overflow-hidden">
+            <div className="bg-gray-50 px-4 py-2 border-b">
+              <h4 className="text-sm font-semibold text-gray-700">2. Truck Detail</h4>
+            </div>
+            <div className="p-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Operation ID (optional)</label>
+                  <Input
+                    value={newOperation.operation_id}
+                    onChange={(e) => setNewOperation((prev) => ({ ...prev, operation_id: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                  <select
+                    value={newOperation.status}
+                    onChange={(e) => setNewOperation((prev) => ({ ...prev, status: e.target.value }))}
+                    className="w-full h-10 px-3 border border-gray-300 rounded-md"
+                  >
+                    <option value="PLANNED">Planned</option>
+                    <option value="IN_PROGRESS">In Progress</option>
+                    <option value="LOADING">Loading</option>
+                    <option value="IN_TRANSIT">In Transit</option>
+                    <option value="UNLOADING">Unloading</option>
+                    <option value="COMPLETED">Completed</option>
+                    <option value="CANCELLED">Cancelled</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Plant/Site <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    value={newOperation.location}
+                    onChange={(e) => { setNewOperation((prev) => ({ ...prev, location: e.target.value })); clearFieldError('location') }}
+                    className={formErrors.location ? 'border-red-500' : ''}
+                  />
+                  {formErrors.location && <p className="text-xs mt-1 text-red-600">{formErrors.location}</p>}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Loading Location <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    value={newOperation.loading_location}
+                    onChange={(e) => { setNewOperation((prev) => ({ ...prev, loading_location: e.target.value })); clearFieldError('loading_location') }}
+                    className={formErrors.loading_location ? 'border-red-500' : ''}
+                  />
+                  {formErrors.loading_location && <p className="text-xs mt-1 text-red-600">{formErrors.loading_location}</p>}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Unloading Location <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    value={newOperation.unloading_location}
+                    onChange={(e) => { setNewOperation((prev) => ({ ...prev, unloading_location: e.target.value })); clearFieldError('unloading_location') }}
+                    className={formErrors.unloading_location ? 'border-red-500' : ''}
+                  />
+                  {formErrors.unloading_location && <p className="text-xs mt-1 text-red-600">{formErrors.unloading_location}</p>}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Trucking Owner <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    value={newOperation.trucking_owner}
+                    onChange={(e) => { setNewOperation((prev) => ({ ...prev, trucking_owner: e.target.value })); clearFieldError('trucking_owner') }}
+                    className={formErrors.trucking_owner ? 'border-red-500' : ''}
+                  />
+                  {formErrors.trucking_owner && <p className="text-xs mt-1 text-red-600">{formErrors.trucking_owner}</p>}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Section 3 — Shipment Detail */}
+          <div className="border rounded-lg overflow-hidden">
+            <div className="bg-gray-50 px-4 py-2 border-b">
+              <h4 className="text-sm font-semibold text-gray-700">3. Shipment Detail</h4>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Quantity Sent (Kg) <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    inputMode="decimal"
+                    value={newOperation.quantity_sent}
+                    onChange={(e) => { setNewOperation((prev) => ({ ...prev, quantity_sent: e.target.value })); clearFieldError('quantity_sent') }}
+                    className={formErrors.quantity_sent ? 'border-red-500' : ''}
+                  />
+                  {formErrors.quantity_sent && <p className="text-xs mt-1 text-red-600">{formErrors.quantity_sent}</p>}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Quantity Delivered (Kg)</label>
+                  <Input
+                    inputMode="decimal"
+                    value={newOperation.quantity_delivered}
+                    onChange={(e) => setNewOperation((prev) => ({ ...prev, quantity_delivered: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Cargo Readiness Date</label>
+                  <DateInputDdMmYyyy
+                    valueIso={newOperation.cargo_readiness_date}
+                    minIso={truckingDateRange?.minIso}
+                    maxIso={truckingDateRange?.maxIso}
+                    onChangeIso={(iso) => { setNewOperation((prev) => ({ ...prev, cargo_readiness_date: iso })); clearFieldError('cargo_readiness_date') }}
+                    className={formErrors.cargo_readiness_date ? 'border-red-500' : ''}
+                  />
+                  {formErrors.cargo_readiness_date && <p className="text-xs mt-1 text-red-600">{formErrors.cargo_readiness_date}</p>}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Due Date Delivery Start</label>
+                  <DateInputDdMmYyyy
+                    valueIso={contractValidation.contractData?.delivery_start_date || ''}
+                    onChangeIso={() => {}}
+                    disabled
+                    className="bg-gray-100 cursor-not-allowed"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Due Date Delivery End</label>
+                  <DateInputDdMmYyyy
+                    valueIso={contractValidation.contractData?.delivery_end_date || ''}
+                    onChangeIso={() => {}}
+                    disabled
+                    className="bg-gray-100 cursor-not-allowed"
+                  />
+                </div>
+              </div>
+
+              <div className="border rounded-lg p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="font-semibold text-sm text-gray-900">Daily planning deliverables</div>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      Add daily delivered quantities (validated against Start/Last receive date and total Quantity Delivered).
                     </div>
-                  ) : null}
-                  <div>
-                    <span className="font-semibold">Contract ID:</span> {contractValidation.contractData.contract_id || '-'}
                   </div>
-                  <div>
-                    <span className="font-semibold">STO Number:</span> {contractValidation.contractData.sto_number || '-'}
-                  </div>
-                  <div>
-                    <span className="font-semibold">Supplier:</span> {contractValidation.contractData.supplier || '-'}
-                  </div>
-                  <div>
-                    <span className="font-semibold">Product:</span> {contractValidation.contractData.product || '-'}
-                  </div>
-                  <div>
-                    <span className="font-semibold">Group:</span> {contractValidation.contractData.group_name || '-'}
-                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setNewOperation((prev) => ({
+                        ...prev,
+                        daily_deliverables: [...(prev.daily_deliverables || []), { date: '', quantity: '' }],
+                      }))
+                    }
+                  >
+                    <Plus className="h-4 w-4 mr-1" />
+                    Add day
+                  </Button>
                 </div>
-              </div>
-            )}
-          </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Operation ID (optional)</label>
-              <Input
-                value={newOperation.operation_id}
-                onChange={(e) => setNewOperation((prev) => ({ ...prev, operation_id: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-              <select
-                value={newOperation.status}
-                onChange={(e) => setNewOperation((prev) => ({ ...prev, status: e.target.value }))}
-                className="w-full h-10 px-3 border border-gray-300 rounded-md"
-              >
-                <option value="PLANNED">Planned</option>
-                <option value="IN_PROGRESS">In Progress</option>
-                <option value="LOADING">Loading</option>
-                <option value="IN_TRANSIT">In Transit</option>
-                <option value="UNLOADING">Unloading</option>
-                <option value="COMPLETED">Completed</option>
-                <option value="CANCELLED">Cancelled</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Plant/Site</label>
-              <Input
-                value={newOperation.location}
-                onChange={(e) => setNewOperation((prev) => ({ ...prev, location: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Loading Location</label>
-              <Input
-                value={newOperation.loading_location}
-                onChange={(e) => setNewOperation((prev) => ({ ...prev, loading_location: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Unloading Location</label>
-              <Input
-                value={newOperation.unloading_location}
-                onChange={(e) => setNewOperation((prev) => ({ ...prev, unloading_location: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Trucking Owner</label>
-              <Input
-                value={newOperation.trucking_owner}
-                onChange={(e) => setNewOperation((prev) => ({ ...prev, trucking_owner: e.target.value }))}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Quantity Sent (Kg)</label>
-              <Input
-                inputMode="decimal"
-                value={newOperation.quantity_sent}
-                onChange={(e) => setNewOperation((prev) => ({ ...prev, quantity_sent: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Quantity Delivered (Kg)</label>
-              <Input
-                inputMode="decimal"
-                value={newOperation.quantity_delivered}
-                onChange={(e) => setNewOperation((prev) => ({ ...prev, quantity_delivered: e.target.value }))}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Cargo Readiness Date</label>
-              <Input
-                type="date"
-                value={newOperation.cargo_readiness_date}
-                onChange={(e) => setNewOperation((prev) => ({ ...prev, cargo_readiness_date: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Due Date Delivery Start</label>
-              <Input type="date" value={contractValidation.contractData?.delivery_start_date || ''} disabled />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Due Date Delivery End</label>
-              <Input type="date" value={contractValidation.contractData?.delivery_end_date || ''} disabled />
-            </div>
-          </div>
-
-          <div className="border rounded-lg p-4">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="font-semibold text-sm text-gray-900">Daily planning deliverables</div>
-                <div className="text-xs text-gray-500 mt-0.5">
-                  Add daily delivered quantities (validated against Start/Last receive date and total Quantity Delivered).
-                </div>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  setNewOperation((prev) => ({
-                    ...prev,
-                    daily_deliverables: [...(prev.daily_deliverables || []), { date: '', quantity: '' }],
-                  }))
-                }
-              >
-                <Plus className="h-4 w-4 mr-1" />
-                Add day
-              </Button>
-            </div>
-
-            {(newOperation.daily_deliverables || []).length === 0 ? (
-              <div className="text-sm text-gray-500 mt-3">No daily deliverables added.</div>
-            ) : (
-              <div className="mt-3 space-y-2">
-                {(newOperation.daily_deliverables || []).map((row, idx) => (
-                  <div key={idx} className="flex items-start gap-2">
-                    <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-xs text-gray-500">Date</label>
-                        <Input
-                          type="date"
-                          value={row.date}
-                          onChange={(e) =>
+                {(newOperation.daily_deliverables || []).length === 0 ? (
+                  <div className="text-sm text-gray-500 mt-3">No daily deliverables added.</div>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    {(newOperation.daily_deliverables || []).map((row, idx) => (
+                      <div key={idx} className="flex items-start gap-2">
+                        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-xs text-gray-500">Date</label>
+                            <DateInputDdMmYyyy
+                              valueIso={row.date}
+                              minIso={truckingDateRange?.minIso}
+                              maxIso={truckingDateRange?.maxIso}
+                              onChangeIso={(iso) => {
+                                setNewOperation((prev) => ({
+                                  ...prev,
+                                  daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
+                                    i === idx ? { ...r, date: iso } : r,
+                                  ),
+                                }))
+                                clearFieldError(`dailyDate_${idx}`)
+                              }}
+                              className={formErrors[`dailyDate_${idx}`] ? 'border-red-500' : ''}
+                            />
+                            {formErrors[`dailyDate_${idx}`] && (
+                              <p className="text-xs mt-1 text-red-600">{formErrors[`dailyDate_${idx}`]}</p>
+                            )}
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500">Quantity Delivered (Kg)</label>
+                            <Input
+                              inputMode="decimal"
+                              value={row.quantity}
+                              onChange={(e) =>
+                                setNewOperation((prev) => ({
+                                  ...prev,
+                                  daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
+                                    i === idx ? { ...r, quantity: e.target.value } : r,
+                                  ),
+                                }))
+                              }
+                              placeholder="0"
+                            />
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
                             setNewOperation((prev) => ({
                               ...prev,
-                              daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
-                                i === idx ? { ...r, date: e.target.value } : r,
-                              ),
+                              daily_deliverables: (prev.daily_deliverables || []).filter((_, i) => i !== idx),
                             }))
                           }
-                        />
+                          className="mt-5 text-gray-500 hover:text-red-600"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
                       </div>
-                      <div>
-                        <label className="text-xs text-gray-500">Quantity Delivered (Kg)</label>
-                        <Input
-                          inputMode="decimal"
-                          value={row.quantity}
-                          onChange={(e) =>
-                            setNewOperation((prev) => ({
-                              ...prev,
-                              daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
-                                i === idx ? { ...r, quantity: e.target.value } : r,
-                              ),
-                            }))
-                          }
-                          placeholder="0"
-                        />
-                      </div>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() =>
-                        setNewOperation((prev) => ({
-                          ...prev,
-                          daily_deliverables: (prev.daily_deliverables || []).filter((_, i) => i !== idx),
-                        }))
-                      }
-                      className="mt-5 text-gray-500 hover:text-red-600"
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </div>
-                ))}
+                    ))}
 
-                <div className="pt-2 text-xs text-gray-600">
-                  {contractValidation.contractData?.delivery_start_date &&
-                  contractValidation.contractData?.delivery_end_date ? (
-                    <div>
-                      Allowed date range: {contractValidation.contractData.delivery_start_date} to{' '}
-                      {contractValidation.contractData.delivery_end_date}
+                    <div className="pt-2 text-xs text-gray-600">
+                      {contractValidation.contractData?.delivery_start_date &&
+                      contractValidation.contractData?.delivery_end_date ? (
+                        <div>
+                          Allowed date range: {contractValidation.contractData.delivery_start_date} to{' '}
+                          {contractValidation.contractData.delivery_end_date}
+                        </div>
+                      ) : (
+                        <div>Due Date Delivery Start/End are required to validate date range.</div>
+                      )}
+                      <div className="mt-1">
+                        Sum qty: {sumQty}
+                        {Number.isFinite(maxQty) ? ` / ${maxQty}` : ''}
+                      </div>
                     </div>
-                  ) : (
-                    <div>Due Date Delivery Start/End are required to validate date range.</div>
-                  )}
-                  <div className="mt-1">
-                    Sum qty: {sumQty}
-                    {Number.isFinite(maxQty) ? ` / ${maxQty}` : ''}
                   </div>
-                </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
 
           <div className="flex justify-end gap-2 pt-4 border-t">
@@ -566,7 +670,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
               ) : (
                 <>
                   <Plus className="h-4 w-4 mr-2" />
-                  Create Operation
+                  Create Trucking
                 </>
               )}
             </Button>

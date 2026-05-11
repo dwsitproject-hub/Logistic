@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { ArrowDown, ArrowUp, Filter, Search, SlidersHorizontal, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, Filter, Search, SlidersHorizontal, X } from 'lucide-react'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
@@ -128,7 +128,7 @@ export default function ShippingPerformancePage() {
   const [sortBy, setSortBy] = useState<keyof ShippingPerformanceRow>('total_delta_days')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
   const [currentPage, setCurrentPage] = useState(1)
-  const pageSize = 50
+  const pageSize = 20
   const columnsMenuRef = useRef<HTMLDivElement | null>(null)
   const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
   const topScrollRef = useRef<HTMLDivElement | null>(null)
@@ -803,14 +803,14 @@ export default function ShippingPerformancePage() {
                             ) : null}
                             <button
                               type="button"
-                              className={`ml-1 p-1 rounded hover:bg-gray-100 ${columnFilters[String(key)] ? 'text-blue-700' : 'text-gray-500'}`}
+                              className={`ml-1 p-1 rounded hover:bg-gray-100 ${columnFilters[String(key)] ? 'text-blue-700' : 'text-gray-400'}`}
                               title="Filter"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 setOpenHeaderFilterId((prev) => (prev === String(key) ? null : String(key)))
                               }}
                             >
-                              <Filter className="h-3.5 w-3.5" />
+                              <ArrowUpDown className="h-3.5 w-3.5" />
                             </button>
                             {openHeaderFilterId === String(key) && (
                               <div

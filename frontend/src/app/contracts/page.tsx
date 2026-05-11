@@ -7,10 +7,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Minus, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, GripVertical, Minus, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal } from 'lucide-react'
 import api from '@/lib/api'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
+import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
   ContractTruckingDetailModal,
   ContractShipmentDetailModal,
@@ -156,6 +157,8 @@ function ContractsPageContent() {
   const [sortKey, setSortKey] = useState<string>('contract_date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
+  const contractsTableRef = useRef<HTMLDivElement | null>(null)
+
   // Desktop table horizontal scroll sync (top + bottom)
   const topScrollRef = useRef<HTMLDivElement | null>(null)
   const bottomScrollRef = useRef<HTMLDivElement | null>(null)
@@ -176,6 +179,8 @@ function ContractsPageContent() {
     return `${y}-${m}-${day}`
   })
   const [availableB2bFlags, setAvailableB2bFlags] = useState<string[]>([])
+  const [productFilter, setProductFilter] = useState<string>('ALL')
+  const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const [transportModeFilter, setTransportModeFilter] = useState<string>('ALL')
   const [perfTransportMode, setPerfTransportMode] = useState<'ALL' | 'SEA' | 'LAND'>('ALL')
   const [lateOnTimeFilter, setLateOnTimeFilter] = useState<'ALL' | 'LATE' | 'ON_TIME'>('ALL')
@@ -495,6 +500,7 @@ function ContractsPageContent() {
     searchParams,
     statusFilter,
     b2bFlagFilter,
+    productFilter,
     dateFrom,
     dateTo,
     transportModeFilter,
@@ -541,11 +547,11 @@ function ContractsPageContent() {
   // NOTE: allVisibleIds/allExpanded are derived after filteredContracts is defined (below)
 
   const columnStorageKey = isContractPerformance
-    ? 'contract-performance.compact.visibleColumns.v3'
-    : 'contracts.compact.visibleColumns'
+    ? 'contract-performance.compact.visibleColumns.v5'
+    : 'contracts.compact.visibleColumns.v3'
   const columnOrderStorageKey = isContractPerformance
-    ? 'contract-performance.compact.columnOrder'
-    : 'contracts.compact.columnOrder'
+    ? 'contract-performance.compact.columnOrder.v2'
+    : 'contracts.compact.columnOrder.v2'
   // Bumped so saved "created_at" default does not fight API order (newest contract_date first).
   const sortStorageKey = isContractPerformance ? 'contract-performance.compact.sort' : 'contracts.compact.sort.v2'
 
@@ -579,6 +585,9 @@ function ContractsPageContent() {
       if (!isContractPerformance) {
         if (b2bFlagFilter && b2bFlagFilter !== 'ALL') {
           params.append('b2bFlag', b2bFlagFilter)
+        }
+        if (productFilter && productFilter !== 'ALL') {
+          params.append('product', productFilter)
         }
         if (transportModeFilter && transportModeFilter !== 'ALL') {
           params.append('transportMode', transportModeFilter)
@@ -644,6 +653,8 @@ function ContractsPageContent() {
       // Use fresh response data; state updates are async.
       const b2bFlags = [...new Set(loadedContracts.map(c => c.b2b_flag).filter((v): v is string => typeof v === 'string' && v.length > 0))].sort()
       if (b2bFlags.length > 0) setAvailableB2bFlags(b2bFlags)
+      const products = [...new Set(loadedContracts.map(c => c.product).filter((v): v is string => typeof v === 'string' && v.length > 0))].sort()
+      if (products.length > 0) setAvailableProducts(prev => [...new Set([...prev, ...products])].sort())
     } catch (error) {
       console.error('Failed to fetch contracts:', error)
       const status = (error as any)?.response?.status
@@ -763,29 +774,30 @@ function ContractsPageContent() {
   }, [authReady, isContractPerformance])
 
   // Dashboard cards: SEA without shipments, LAND without trucking — reflect active filters
-  useEffect(() => {
+  const fetchUnassignedCounts = useCallback(async () => {
     if (!authReady) return
-    const fetchUnassignedCounts = async () => {
-      try {
-        const params = new URLSearchParams()
-        if (statusFilter && statusFilter !== 'All Status') params.append('status', statusFilter)
-        if (searchTerm.trim().length >= 2) params.append('search', searchTerm.trim())
-        if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
-        if (dateFrom) params.append('dateFrom', dateFrom)
-        if (dateTo) params.append('dateTo', dateTo)
-        const res = await api.get<{ success: boolean; data: { seaWithoutShipments: number; landWithoutTrucking: number } }>(
-          `/contracts/unassigned-counts?${params.toString()}`
-        )
-        if (res.data?.success && res.data?.data) {
-          setUnassignedSeaContracts(res.data.data.seaWithoutShipments ?? 0)
-          setUnassignedLandContracts(res.data.data.landWithoutTrucking ?? 0)
-        }
-      } catch (err) {
-        console.error('Failed to fetch unassigned counts:', err)
+    try {
+      const params = new URLSearchParams()
+      if (statusFilter && statusFilter !== 'All Status') params.append('status', statusFilter)
+      if (searchTerm.trim().length >= 2) params.append('search', searchTerm.trim())
+      if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
+      if (dateFrom) params.append('dateFrom', dateFrom)
+      if (dateTo) params.append('dateTo', dateTo)
+      const res = await api.get<{ success: boolean; data: { seaWithoutShipments: number; landWithoutTrucking: number } }>(
+        `/contracts/unassigned-counts?${params.toString()}`
+      )
+      if (res.data?.success && res.data?.data) {
+        setUnassignedSeaContracts(res.data.data.seaWithoutShipments ?? 0)
+        setUnassignedLandContracts(res.data.data.landWithoutTrucking ?? 0)
       }
+    } catch (err) {
+      console.error('Failed to fetch unassigned counts:', err)
     }
-    fetchUnassignedCounts()
   }, [authReady, statusFilter, searchTerm, b2bFlagFilter, dateFrom, dateTo])
+
+  useEffect(() => {
+    fetchUnassignedCounts()
+  }, [fetchUnassignedCounts])
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -1370,7 +1382,7 @@ function ContractsPageContent() {
       id: 'contract_aging',
       label: 'Contract Aging',
       formulaHelp: FIELD_HELP.contractAging,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => getContractAgingDays(c) ?? 0,
       render: (c) => {
@@ -1401,7 +1413,7 @@ function ContractsPageContent() {
     {
       id: 'contract_ext_no',
       label: 'Contract Ext No',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.contract_ext_no || '',
       render: (c) => (
@@ -1413,7 +1425,7 @@ function ContractsPageContent() {
     {
       id: 'product',
       label: 'Product',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.product || '',
       render: (c) => <span className="text-sm truncate">{c.product || '-'}</span>
@@ -1421,7 +1433,7 @@ function ContractsPageContent() {
     {
       id: 'delivery_status',
       label: 'Delivery Status',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => (c.import_status || c.status || ''),
       render: (c) => (
@@ -1433,7 +1445,7 @@ function ContractsPageContent() {
     {
       id: 'status_overall',
       label: 'Status',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => {
         const delivery = String(c.import_status || c.status || '').toUpperCase()
@@ -1450,7 +1462,7 @@ function ContractsPageContent() {
     {
       id: 'unusual_status',
       label: 'Unusual Status',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => {
         const isUnusual =
@@ -1476,7 +1488,7 @@ function ContractsPageContent() {
       id: 'log_cycle_days',
       label: 'Log Cycle',
       formulaHelp: FIELD_HELP.logCycle,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.log_cycle_days ?? 0,
       render: (c) => (
@@ -1515,7 +1527,7 @@ function ContractsPageContent() {
       id: 'outstanding_qty_mt',
       label: 'Outstanding Qty (MT)',
       formulaHelp: FIELD_HELP.outstandingQtyMt,
-      defaultVisible: false,
+      defaultVisible: true,
       sortable: true,
       getSortValue: (c) => typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : 0,
       render: (c) => (
@@ -1528,51 +1540,49 @@ function ContractsPageContent() {
       id: 'trade_cycle_days',
       label: 'Trade Cycle',
       formulaHelp: FIELD_HELP.tradeCycle,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.trade_cycle_days ?? 0,
-      render: (c) => (
-        <span
-          className={`text-xs font-semibold ${
-            typeof c.trade_cycle_days === 'number'
-              ? c.trade_cycle_days > 0
-                ? 'text-red-600'
-                : 'text-green-600'
-              : ''
-          }`}
-        >
-          {c.trade_cycle_days != null ? `${c.trade_cycle_days} days` : '-'}
-        </span>
-      ),
+      render: (c) => {
+        if (c.trade_cycle_days == null) return <span className="text-xs">-</span>
+        const abs = Math.abs(c.trade_cycle_days)
+        const unit = abs === 1 ? 'day' : 'days'
+        const isOver = c.trade_cycle_days > 0
+        const isZero = c.trade_cycle_days === 0
+        return (
+          <span className={`text-xs font-semibold ${isZero ? 'text-gray-500' : isOver ? 'text-red-600' : 'text-green-600'}`}>
+            {isZero ? '0 days' : isOver ? `${abs} ${unit} overdue` : `${abs} ${unit} left`}
+          </span>
+        )
+      },
       className: 'whitespace-nowrap'
     },
     {
       id: 'cash_cycle_days',
       label: 'Cash Cycle',
       formulaHelp: FIELD_HELP.cashCycle,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.cash_cycle_days ?? 0,
-      render: (c) => (
-        <span
-          className={`text-xs font-semibold ${
-            typeof c.cash_cycle_days === 'number'
-              ? c.cash_cycle_days > 0
-                ? 'text-red-600'
-                : 'text-green-600'
-              : ''
-          }`}
-        >
-          {c.cash_cycle_days != null ? `${c.cash_cycle_days} days` : '-'}
-        </span>
-      ),
+      render: (c) => {
+        if (c.cash_cycle_days == null) return <span className="text-xs">-</span>
+        const abs = Math.abs(c.cash_cycle_days)
+        const unit = abs === 1 ? 'day' : 'days'
+        const isOver = c.cash_cycle_days > 0
+        const isZero = c.cash_cycle_days === 0
+        return (
+          <span className={`text-xs font-semibold ${isZero ? 'text-gray-500' : isOver ? 'text-red-600' : 'text-green-600'}`}>
+            {isZero ? '0 days' : isOver ? `${abs} ${unit} overdue` : `${abs} ${unit} left`}
+          </span>
+        )
+      },
       className: 'whitespace-nowrap'
     },
     {
       id: 'over_under_delivery_status',
       label: 'Over/Under Delivery Status',
       formulaHelp: FIELD_HELP.overUnderDelivery,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.over_under_delivery_status || '',
       render: (c) => (
@@ -1594,7 +1604,7 @@ function ContractsPageContent() {
       id: 'company_name',
       label: 'Company Name',
       formulaHelp: FIELD_HELP.companyName,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.company_name || '',
       render: (c) => <span className="text-sm font-medium">{c.company_name || '-'}</span>
@@ -1602,7 +1612,7 @@ function ContractsPageContent() {
     {
       id: 'lt_spot',
       label: 'LT/SPOT',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.lt_spot || '',
       render: (c) => <span className="text-sm">{c.lt_spot || '-'}</span>
@@ -1622,7 +1632,7 @@ function ContractsPageContent() {
     {
       id: 'sto_number',
       label: 'STO Number',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.sto_numbers || c.sto_number || '',
       render: (c) => (
@@ -1634,7 +1644,7 @@ function ContractsPageContent() {
     {
       id: 'delivery_start',
       label: 'Due Date Delivery Start',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.delivery_start_date || '',
       render: (c) => <span className="text-sm">{formatShortDate(c.delivery_start_date)}</span>
@@ -1642,7 +1652,7 @@ function ContractsPageContent() {
     {
       id: 'delivery_end',
       label: 'Due Date Delivery End',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.delivery_end_date || '',
       render: (c) => <span className="text-sm">{formatShortDate(c.delivery_end_date)}</span>
@@ -1652,7 +1662,7 @@ function ContractsPageContent() {
           {
             id: 'month_delivery_end',
             label: 'Month Delivery End',
-            defaultVisible: true,
+            defaultVisible: false,
             sortable: true,
             getSortValue: (c: Contract) => (c.delivery_end_date ? String(c.delivery_end_date).slice(0, 7) : ''),
             render: (c: Contract) => <span className="text-sm">{formatMonthDeliveryEnd(c.delivery_end_date)}</span>,
@@ -1663,7 +1673,7 @@ function ContractsPageContent() {
     {
       id: 'cargo_readiness_date',
       label: 'Cargo Readiness Date',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.cargo_readiness_date || '',
       render: (c) => {
@@ -1709,24 +1719,15 @@ function ContractsPageContent() {
 
   const defaultVisibleColumnIds = useMemo(() => {
     if (isContractPerformance) {
-      return [
-        'month_delivery_end',
-        'supplier',
-        'group_name',
-        'contract_ext_no',
-        'received_qty',
-        'outstanding_qty_mt',
-        'trade_cycle_days',
-        'cash_cycle_days',
-      ]
+      return ['group_name', 'supplier', 'contract_id', 'po_number', 'trade_cycle_days', 'outstanding_qty_mt']
     }
-    return compactColumns.filter(c => c.defaultVisible).map(c => c.id)
-  }, [compactColumns, isContractPerformance])
+    return ['contract_id', 'contract_date', 'po_number', 'contract_qty', 'outstanding_qty_mt']
+  }, [isContractPerformance])
 
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => new Set(defaultVisibleColumnIds))
   const [columnOrderIds, setColumnOrderIds] = useState<string[]>(() => [])
   const [dragColId, setDragColId] = useState<string | null>(null)
-  const userViewPrefKey = isContractPerformance ? 'contract_performance.compact.view.v1' : 'contracts.compact.view.v1'
+  const userViewPrefKey = isContractPerformance ? 'contract_performance.compact.view.v1' : 'contracts.compact.view.v2'
   const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Load persisted columns/sort (client only)
@@ -1887,12 +1888,29 @@ function ContractsPageContent() {
   }
 
   const toggleColumn = (id: string) => {
-    // Prevent hiding required columns
     if (id === 'contract_id' || id === 'status') return
     setVisibleColumnIds(prev => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+        // Insert the newly-visible column right after the last currently-visible column in columnOrderIds
+        setColumnOrderIds(order => {
+          const base = order.length > 0 ? [...order] : compactColumns.map(c => c.id)
+          const currentVisibleIds = new Set(prev) // prev = before adding id
+          // Find the last position in base that is currently visible
+          let insertAfter = -1
+          for (let i = 0; i < base.length; i++) {
+            if (currentVisibleIds.has(base[i])) insertAfter = i
+          }
+          // Remove id from its current position, then insert after insertAfter
+          const without = base.filter(x => x !== id)
+          const insertIdx = insertAfter < 0 ? 0 : without.findIndex(x => x === base[insertAfter]) + 1
+          without.splice(insertIdx, 0, id)
+          return without
+        })
+      }
       return next
     })
   }
@@ -2135,6 +2153,14 @@ function ContractsPageContent() {
                                     setLatePerfSelProduct(null)
                                     setLatePerfSelPlant(null)
                                     setLatePerfSelSupplier(null)
+                                    setSelectedIncoterms([n.label])
+                                    setSelectedPlantSites([])
+                                    setColumnFilters((prev) => {
+                                      const next = { ...prev }
+                                      delete next.product
+                                      delete next.supplier
+                                      return next
+                                    })
                                   }),
                                 )}
                               </div>
@@ -2149,6 +2175,12 @@ function ContractsPageContent() {
                                     setLatePerfSelProduct(n.label)
                                     setLatePerfSelPlant(null)
                                     setLatePerfSelSupplier(null)
+                                    setSelectedPlantSites([])
+                                    setColumnFilters((prev) => {
+                                      const next = { ...prev, product: { type: 'text', value: n.label === 'Blank' ? '' : n.label, exact: true } as ColumnFilter }
+                                      delete next.supplier
+                                      return next
+                                    })
                                   }),
                                 )}
                               </div>
@@ -2165,6 +2197,12 @@ function ContractsPageContent() {
                                   () => {
                                     setLatePerfSelPlant(n.label)
                                     setLatePerfSelSupplier(null)
+                                    setSelectedPlantSites([n.label === 'Blank' ? '' : n.label])
+                                    setColumnFilters((prev) => {
+                                      const next = { ...prev }
+                                      delete next.supplier
+                                      return next
+                                    })
                                   },
                                 ),
                               )}
@@ -2351,13 +2389,25 @@ function ContractsPageContent() {
                 )}
                 {!isContractPerformance && (
                   <select
+                    value={productFilter}
+                    onChange={(e) => setProductFilter(e.target.value)}
+                    className="px-4 py-2 border rounded-lg"
+                  >
+                    <option value="ALL">All Products</option>
+                    {availableProducts.map(p => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                )}
+                {!isContractPerformance && (
+                  <select
                     value={transportModeFilter}
                     onChange={(e) => setTransportModeFilter(e.target.value)}
                     className="px-4 py-2 border rounded-lg"
                   >
-                    <option value="ALL">All Modes</option>
-                    <option value="SEA">SEA</option>
-                    <option value="LAND">LAND</option>
+                    <option value="ALL">All Transport</option>
+                    <option value="SEA">Sea</option>
+                    <option value="LAND">Land</option>
                   </select>
                 )}
                 {isContractPerformance && (
@@ -2410,36 +2460,30 @@ function ContractsPageContent() {
               <div className="flex gap-4 items-center">
                 <div className="flex items-center gap-2">
                   <label className="text-sm font-medium text-gray-700">Contract Date:</label>
-                  <Input
-                    type="date"
-                    value={dateFrom}
-                    onChange={(e) => setDateFrom(e.target.value)}
+                  <DateInputDdMmYyyy
+                    valueIso={dateFrom}
+                    onChangeIso={setDateFrom}
                     className="w-40"
-                    placeholder="From"
                   />
                   <span className="text-gray-500">to</span>
-                  <Input
-                    type="date"
-                    value={dateTo}
-                    onChange={(e) => setDateTo(e.target.value)}
+                  <DateInputDdMmYyyy
+                    valueIso={dateTo}
+                    onChangeIso={setDateTo}
                     className="w-40"
-                    placeholder="To"
                   />
-                  <Button 
-                    onClick={handleFilterChange}
-                    variant="outline"
-                    size="sm"
-                    className="ml-2"
-                  >
-                    <Filter className="h-4 w-4 mr-1" />
-                    Apply
-                  </Button>
-                  {(dateFrom || dateTo) && (
-                    <Button 
+                  {(dateFrom || dateTo || searchDraft || searchTerm || transportModeFilter !== 'ALL' || productFilter !== 'ALL' || b2bFlagFilter !== 'ALL' || statusFilter !== 'All Status') && (
+                    <Button
                       onClick={() => {
                         setDateFrom('')
                         setDateTo('')
-                        handleFilterChange()
+                        setSearchDraft('')
+                        setSearchTerm('')
+                        setTransportModeFilter('ALL')
+                        setProductFilter('ALL')
+                        setB2bFlagFilter('ALL')
+                        setStatusFilter('All Status')
+                        setCurrentPage(1)
+                        fetchContracts(1, '')
                       }}
                       variant="ghost"
                       size="sm"
@@ -2461,7 +2505,10 @@ function ContractsPageContent() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Card
                 className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'sea' ? 'ring-2 ring-blue-500 bg-blue-50/50' : ''}`}
-                onClick={() => setUnassignedFilter(prev => (prev === 'sea' ? null : 'sea'))}
+                onClick={() => {
+                  setUnassignedFilter(prev => (prev === 'sea' ? null : 'sea'))
+                  if (unassignedFilter !== 'sea') setTimeout(() => contractsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
+                }}
               >
                 <CardContent className="pt-4">
                   <div className="flex items-center justify-between">
@@ -2478,7 +2525,10 @@ function ContractsPageContent() {
               </Card>
               <Card
                 className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'land' ? 'ring-2 ring-amber-500 bg-amber-50/50' : ''}`}
-                onClick={() => setUnassignedFilter(prev => (prev === 'land' ? null : 'land'))}
+                onClick={() => {
+                  setUnassignedFilter(prev => (prev === 'land' ? null : 'land'))
+                  if (unassignedFilter !== 'land') setTimeout(() => contractsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
+                }}
               >
                 <CardContent className="pt-4">
                   <div className="flex items-center justify-between">
@@ -2518,14 +2568,26 @@ function ContractsPageContent() {
         )}
 
         {/* Contracts List */}
-        <Card>
+        <Card ref={contractsTableRef}>
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <CardTitle>All Contracts</CardTitle>
-                <Badge variant="outline" className="hidden md:inline-flex">
-                  Default view: Compact
-                </Badge>
+                <CardTitle>
+                  {unassignedFilter === 'sea'
+                    ? 'SEA Contracts Without Shipments'
+                    : unassignedFilter === 'land'
+                    ? 'LAND Contracts Without Trucking'
+                    : 'All Contracts'}
+                </CardTitle>
+                {unassignedFilter && (
+                  <Badge
+                    className={`hidden md:inline-flex cursor-pointer ${unassignedFilter === 'sea' ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}
+                    onClick={() => setUnassignedFilter(null)}
+                  >
+                    <X className="h-3 w-3 mr-1" />
+                    Clear filter
+                  </Badge>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <div className="relative">
@@ -2540,31 +2602,70 @@ function ContractsPageContent() {
                   </Button>
                   {showColumnsMenu && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
-                      <div className="text-xs font-semibold text-gray-600 mb-2">Visible columns</div>
-                      <div className="space-y-2 max-h-72 overflow-auto pr-1">
-                        {compactColumns
-                          .filter(c => c.id !== 'contract_id' && c.id !== 'status')
-                          .map(col => (
-                            <label key={col.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                              <Checkbox
-                                checked={visibleColumnIds.has(col.id)}
-                                onCheckedChange={() => toggleColumn(col.id)}
-                              />
-                              <span>{col.label}</span>
-                            </label>
-                          ))}
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="text-xs font-semibold text-gray-600">Visible columns</div>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setShowColumnsMenu(false)}>
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
                       </div>
-                      <div className="mt-3 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1 mb-2">
                         <Button
                           variant="ghost"
                           size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() => setVisibleColumnIds(new Set(compactColumns.map(c => c.id)))}
+                        >
+                          Select All
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() => setVisibleColumnIds(new Set(['contract_id', 'status']))}
+                        >
+                          Unselect All
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
                           onClick={() => setVisibleColumnIds(new Set(defaultVisibleColumnIds))}
                         >
                           Reset
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => setShowColumnsMenu(false)}>
-                          Close
-                        </Button>
+                      </div>
+                      <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
+                        {(() => {
+                          const excluded = new Set(['contract_id', 'status'])
+                          const visibleInMenu = visibleColumns.filter(c => !excluded.has(c.id))
+                          const visibleIds = new Set(visibleInMenu.map(c => c.id))
+                          const byId = new Map(compactColumns.map(c => [c.id, c] as const))
+                          const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : compactColumns.map(c => c.id))
+                          const hiddenCols = orderedIds
+                            .map(id => byId.get(id))
+                            .filter((c): c is CompactColumn => !!c && !excluded.has(c.id) && !visibleIds.has(c.id))
+                            .sort((a, b) => a.label.localeCompare(b.label))
+                          return [...visibleInMenu, ...hiddenCols]
+                        })().map(col => (
+                            <div
+                              key={col.id}
+                              draggable
+                              onDragStart={() => setDragColId(col.id)}
+                              onDragEnd={() => setDragColId(null)}
+                              onDragOver={e => e.preventDefault()}
+                              onDrop={() => { if (dragColId && dragColId !== col.id) reorderColumnByDrag(dragColId, col.id) }}
+                              className={`flex items-center gap-2 text-sm cursor-grab select-none rounded px-1 py-0.5 ${dragColId === col.id ? 'opacity-40' : 'hover:bg-gray-50'}`}
+                            >
+                              <GripVertical className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                              <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                              <Checkbox
+                                checked={visibleColumnIds.has(col.id)}
+                                onCheckedChange={() => toggleColumn(col.id)}
+                              />
+                              <span className="truncate">{col.label}</span>
+                              </label>
+                            </div>
+                          ))}
                       </div>
                     </div>
                   )}
@@ -2687,7 +2788,7 @@ function ContractsPageContent() {
                       <div
                         className="grid gap-3 px-3 py-2 text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10"
                         style={{
-                          gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} 320px`
+                          gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} ${isContractPerformance ? '60px' : '120px'}`
                         }}
                       >
                         <div />
@@ -2720,37 +2821,30 @@ function ContractsPageContent() {
                               }}
                             >
                               <div className="flex items-center gap-1 min-w-0">
-                            <button
-                              type="button"
-                                  className={`flex items-center gap-1 text-left min-w-0 ${col.sortable ? 'hover:text-gray-900' : ''}`}
-                              onClick={() => onSortHeaderClick(col)}
-                              title={col.sortable ? 'Sort' : undefined}
-                            >
-                              <span className="whitespace-normal break-words">{col.label}</span>
-                                  {col.sortable && activeSort && (
-                                sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                              )}
-                            </button>
-                            {col.formulaHelp ? (
-                              <span className="shrink-0 inline-flex items-center">
-                                <FieldHelp text={col.formulaHelp} />
-                              </span>
-                            ) : null}
-
-                                <button
-                                  type="button"
-                                  className={`p-1 rounded hover:bg-gray-100 ${filterActive ? 'text-blue-700' : 'text-gray-400'}`}
-                                  title="Filter"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setOpenHeaderFilterId(prev => (prev === col.id ? null : col.id))
-                                  }}
-                                >
-                                  <ArrowUpDown className="h-3.5 w-3.5" />
-                                </button>
+                                <span className="whitespace-normal break-words">{col.label}</span>
+                                {col.formulaHelp ? (
+                                  <span className="shrink-0 inline-flex items-center">
+                                    <FieldHelp text={col.formulaHelp} />
+                                  </span>
+                                ) : null}
+                                {col.sortable && (
+                                  <button
+                                    type="button"
+                                    className={`shrink-0 p-0.5 rounded hover:bg-gray-200 ${activeSort ? 'text-blue-600' : 'text-gray-400'}`}
+                                    onClick={() => onSortHeaderClick(col)}
+                                    title="Sort"
+                                  >
+                                    {activeSort
+                                      ? sortDir === 'asc'
+                                        ? <ArrowUp className="h-3.5 w-3.5" />
+                                        : <ArrowDown className="h-3.5 w-3.5" />
+                                      : <ArrowUpDown className="h-3.5 w-3.5" />
+                                    }
+                                  </button>
+                                )}
                               </div>
 
-                              {openHeaderFilterId === col.id && (
+                              {false && openHeaderFilterId === col.id && (
                                 <div
                                   ref={headerFilterPopoverRef}
                                   className="absolute left-0 top-full mt-2 w-[280px] bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-30"
@@ -3056,7 +3150,7 @@ function ContractsPageContent() {
                             </div>
                           )
                         })}
-                        <div className="text-right sticky right-0 bg-gray-50 border-l pl-3 pr-2">Actions</div>
+                        <div className={`text-right sticky right-0 bg-gray-50 border-l pl-3 pr-2 ${isContractPerformance ? 'min-w-[60px]' : 'min-w-[120px]'}`}>Actions</div>
                       </div>
 
                       {/* Rows */}
@@ -3075,7 +3169,7 @@ function ContractsPageContent() {
                               <div
                                 className="grid gap-3 items-center"
                                 style={{
-                                  gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} 320px`
+                                  gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} ${isContractPerformance ? '60px' : '120px'}`
                                 }}
                               >
                                 <button
@@ -3097,62 +3191,56 @@ function ContractsPageContent() {
                                   </div>
                                 ))}
 
-                                <div className="flex items-center justify-end gap-2 sticky right-0 bg-white border-l pl-3 pr-2 shadow-[-8px_0_12px_-12px_rgba(0,0,0,0.35)]">
-                                  <button
-                                    title="Trucking"
-                                    className={`p-1 ${getTruckingIconColor(contract)}`}
-                                    type="button"
-                                    onClick={() => handleTruckIconClick(contract)}
-                                  >
-                                    <Truck className="h-5 w-5" />
-                                  </button>
-                                  <button
-                                    title="Shipping"
-                                    className={`p-1 ${getShippingIconColor(contract)}`}
-                                    type="button"
-                                    onClick={() => handleShipIconClick(contract)}
-                                  >
-                                    <Ship className="h-5 w-5" />
-                                  </button>
-                                  <button
-                                    title="Documents"
-                                    className={`p-1 ${getDocumentIconColor(contract)}`}
-                                    onClick={() => setSelectedContract(contract)}
-                                  >
-                                    <FileText className="h-5 w-5" />
-                                  </button>
-
-                                  <Button variant="outline" size="sm" onClick={() => setSelectedContract(contract)}>
-                                    <Eye className="h-4 w-4 mr-2" />
-                                    View
+                                <div className={`flex items-center justify-end gap-2 sticky right-0 bg-white border-l pl-3 pr-2 shadow-[-8px_0_12px_-12px_rgba(0,0,0,0.35)] ${isContractPerformance ? 'min-w-[60px]' : 'min-w-[120px]'}`}>
+                                  {!isContractPerformance && transportIsLand(contract) && (() => {
+                                    const hasData = countGt0(contract.trucking_count)
+                                    return (
+                                      <Button variant="outline" size="icon" onClick={() => handleTruckIconClick(contract)}
+                                        title={hasData ? 'Edit' : 'Add'}
+                                        className={hasData ? '' : 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'}>
+                                        {hasData ? <Pencil className="h-4 w-4" /> : <Truck className="h-4 w-4" />}
+                                      </Button>
+                                    )
+                                  })()}
+                                  {!isContractPerformance && transportIsSea(contract) && (() => {
+                                    const hasData = countGt0(contract.shipment_count) || countGt0(contract.sto_count)
+                                    return (
+                                      <Button variant="outline" size="icon" onClick={() => handleShipIconClick(contract)}
+                                        title={hasData ? 'Edit' : 'Add'}
+                                        className={hasData ? '' : 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'}>
+                                        {hasData ? <Pencil className="h-4 w-4" /> : <Ship className="h-4 w-4" />}
+                                      </Button>
+                                    )
+                                  })()}
+                                  <Button variant="outline" size="icon" onClick={() => setSelectedContract(contract)} title="View" className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
+                                    <Eye className="h-4 w-4" />
                                   </Button>
 
-                                  <input
-                                    id={`contract-file-${contract.id}`}
-                                    type="file"
-                                    accept="application/pdf,image/png,image/jpeg"
-                                    className="hidden"
-                                    onChange={(e) => handleUploadFileChange(contract, e)}
-                                  />
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => document.getElementById(`contract-file-${contract.id}`)?.click()}
-                                    disabled={uploadingId === contract.id}
-                                    className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-                                  >
-                                    {uploadingId === contract.id ? (
-                                      <>
-                                        <span className="h-4 w-4 mr-2 inline-block border-2 border-green-600 border-t-transparent rounded-full animate-spin" />
-                                        Uploading...
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Upload className="h-4 w-4 mr-2" />
-                                        Upload
-                                      </>
-                                    )}
-                                  </Button>
+                                  {!isContractPerformance && (
+                                    <>
+                                      <input
+                                        id={`contract-file-${contract.id}`}
+                                        type="file"
+                                        accept="application/pdf,image/png,image/jpeg"
+                                        className="hidden"
+                                        onChange={(e) => handleUploadFileChange(contract, e)}
+                                      />
+                                      <Button
+                                        variant="outline"
+                                        size="icon"
+                                        onClick={() => document.getElementById(`contract-file-${contract.id}`)?.click()}
+                                        disabled={uploadingId === contract.id}
+                                        title="Upload"
+                                        className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100"
+                                      >
+                                        {uploadingId === contract.id ? (
+                                          <span className="h-4 w-4 inline-block border-2 border-orange-600 border-t-transparent rounded-full animate-spin" />
+                                        ) : (
+                                          <Upload className="h-4 w-4" />
+                                        )}
+                                      </Button>
+                                    </>
+                                  )}
                                 </div>
                               </div>
 
@@ -3253,22 +3341,24 @@ function ContractsPageContent() {
 
                         <div className="flex items-center gap-2 shrink-0">
                           {/* Icons: Trucking, Shipping, Documents */}
-                          <button
-                            title="Trucking"
-                            type="button"
-                            className={`p-1 ${getTruckingIconColor(contract)}`}
-                            onClick={() => handleTruckIconClick(contract)}
-                          >
-                            <Truck className="h-5 w-5" />
-                          </button>
-                          <button
-                            title="Shipping"
-                            type="button"
-                            className={`p-1 ${getShippingIconColor(contract)}`}
-                            onClick={() => handleShipIconClick(contract)}
-                          >
-                            <Ship className="h-5 w-5" />
-                          </button>
+                          {!isContractPerformance && transportIsLand(contract) && (() => {
+                            const hasData = countGt0(contract.trucking_count)
+                            return (
+                              <Button variant="outline" size="sm" onClick={() => handleTruckIconClick(contract)}
+                                className={hasData ? '' : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'}>
+                                {hasData ? <><Pencil className="h-4 w-4 mr-2" />Edit</> : <><Plus className="h-4 w-4 mr-2" />Add</>}
+                              </Button>
+                            )
+                          })()}
+                          {!isContractPerformance && transportIsSea(contract) && (() => {
+                            const hasData = countGt0(contract.shipment_count) || countGt0(contract.sto_count)
+                            return (
+                              <Button variant="outline" size="sm" onClick={() => handleShipIconClick(contract)}
+                                className={hasData ? '' : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'}>
+                                {hasData ? <><Pencil className="h-4 w-4 mr-2" />Edit</> : <><Plus className="h-4 w-4 mr-2" />Add</>}
+                              </Button>
+                            )
+                          })()}
                           <button
                             title="Documents"
                             className={`p-1 ${getDocumentIconColor(contract)}`}
@@ -3281,39 +3371,43 @@ function ContractsPageContent() {
                             variant="outline"
                             size="sm"
                             onClick={() => setSelectedContract(contract)}
-                            className="hidden md:inline-flex"
+                            className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 hidden md:inline-flex"
                           >
                             <Eye className="h-4 w-4 mr-2" />
                             View
                           </Button>
 
-                          {/* Upload supporting document */}
-                          <input
-                            id={`contract-file-${contract.id}`}
-                            type="file"
-                            accept="application/pdf,image/png,image/jpeg"
-                            className="hidden"
-                            onChange={(e) => handleUploadFileChange(contract, e)}
-                          />
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => document.getElementById(`contract-file-${contract.id}`)?.click()}
-                            disabled={uploadingId === contract.id}
-                            className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100 hidden md:inline-flex"
-                          >
-                            {uploadingId === contract.id ? (
-                              <>
-                                <span className="h-4 w-4 mr-2 inline-block border-2 border-green-600 border-t-transparent rounded-full animate-spin" />
-                                Uploading...
-                              </>
-                            ) : (
-                              <>
-                                <Upload className="h-4 w-4 mr-2" />
-                                Upload
-                              </>
-                            )}
-                          </Button>
+                          {!isContractPerformance && (
+                            <>
+                              {/* Upload supporting document */}
+                              <input
+                                id={`contract-file-${contract.id}`}
+                                type="file"
+                                accept="application/pdf,image/png,image/jpeg"
+                                className="hidden"
+                                onChange={(e) => handleUploadFileChange(contract, e)}
+                              />
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => document.getElementById(`contract-file-${contract.id}`)?.click()}
+                                disabled={uploadingId === contract.id}
+                                className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 hidden md:inline-flex"
+                              >
+                                {uploadingId === contract.id ? (
+                                  <>
+                                    <span className="h-4 w-4 mr-2 inline-block border-2 border-orange-600 border-t-transparent rounded-full animate-spin" />
+                                    Uploading...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Upload className="h-4 w-4 mr-2" />
+                                    Upload
+                                  </>
+                                )}
+                              </Button>
+                            </>
+                          )}
                         </div>
                       </div>
 
@@ -3435,50 +3529,50 @@ function ContractsPageContent() {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-6">
-                  {/* Basic Information */}
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Basic Information</h3>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Status</div>
-                        <div className="font-medium mt-1">
-                          {(() => {
-                            const delivery = String(selectedContract.import_status || selectedContract.status || '').toUpperCase()
-                            const paid = String(selectedContract.payment_status || '').toUpperCase() === 'PAID'
-                            return delivery === 'CLOSE' && paid ? 'Close' : (selectedContract.import_status || selectedContract.status || '-')
-                          })()}
-                        </div>
+                <div className="space-y-0 divide-y divide-gray-100">
+
+                  {/* ── 1. Highlight Information ─────────────────────────── */}
+                  <section className="pb-5">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Highlight Information</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+                      <div className="p-3 bg-gray-50 rounded-lg border">
+                        <div className="text-xs text-gray-500 mb-1">Contract Date</div>
+                        <div className="font-semibold">{formatDate(selectedContract.contract_date)}</div>
                       </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Unusual Flag</div>
-                        <div className="mt-1">
-                          {(() => {
-                            const isUnusual =
-                              (selectedContract.log_cycle_days != null && selectedContract.log_cycle_days >= 35) ||
-                              (selectedContract.trade_cycle_days != null && selectedContract.trade_cycle_days >= 35) ||
-                              (selectedContract.cash_cycle_days != null && selectedContract.cash_cycle_days >= 35)
-                            return isUnusual ? (
-                              <Badge className="bg-red-100 text-red-800 hover:bg-red-100">Unusual</Badge>
-                            ) : (
-                              <Badge className="bg-gray-100 text-gray-700 hover:bg-gray-100">Normal</Badge>
-                            )
-                          })()}
-                        </div>
+                      <div className="p-3 bg-gray-50 rounded-lg border">
+                        <div className="text-xs text-gray-500 mb-1">Qty Contract</div>
+                        <div className="font-semibold">{formatNumber(Number(selectedContract.quantity_ordered) || 0)} Kg</div>
                       </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Delivery Status</div>
-                        <div className="mt-1">
-                          <Badge className={getStatusColor(selectedContract.import_status || selectedContract.status)}>
-                            {selectedContract.import_status || selectedContract.status}
-                          </Badge>
+                      <div className={`p-3 rounded-lg border-2 ${selectedContract.outstanding_quantity < 0 ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
+                        <div className={`text-xs mb-1 flex items-center gap-1 ${selectedContract.outstanding_quantity < 0 ? 'text-red-600' : 'text-blue-600'}`}>
+                          Outstanding Qty
+                          <FieldHelp text={FIELD_HELP.outstandingQty} />
                         </div>
+                        <div className={`font-bold text-lg ${selectedContract.outstanding_quantity < 0 ? 'text-red-600' : 'text-blue-600'}`}>
+                          {formatNumber(selectedContract.outstanding_quantity)} Kg
+                        </div>
+                        {selectedContract.outstanding_quantity < 0 && (
+                          <div className="text-xs text-red-500 mt-0.5">Overshipped</div>
+                        )}
                       </div>
+                      <div className="p-3 bg-gray-50 rounded-lg border">
+                        <div className="text-xs text-gray-500 mb-1">Incoterm</div>
+                        <div className="font-semibold">{selectedContract.incoterm || '-'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded-lg border col-span-2">
+                        <div className="text-xs text-gray-500 mb-1">Supplier</div>
+                        <div className="font-semibold">{selectedContract.supplier || '-'}</div>
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* ── 2. Contract Detail ───────────────────────────────── */}
+                  <section className="py-5">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Contract Detail</h3>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Contract Ext No</div>
-                        <div className="font-medium mt-1 break-words whitespace-normal">
-                          {selectedContract.contract_ext_no || '-'}
-                        </div>
+                        <div className="font-medium mt-1 break-words whitespace-normal">{selectedContract.contract_ext_no || '-'}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Source Type</div>
@@ -3489,17 +3583,6 @@ function ContractsPageContent() {
                         <div className="font-medium mt-1">{selectedContract.contract_type || '-'}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Group Name</div>
-                        <div className="font-medium mt-1">{selectedContract.group_name || '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500 flex items-center gap-1">
-                          Company Name
-                          <FieldHelp text={FIELD_HELP.companyName} />
-                        </div>
-                        <div className="font-medium mt-1">{selectedContract.company_name || '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">B2B Flag</div>
                         <div className="font-medium mt-1">{selectedContract.b2b_flag || '-'}</div>
                       </div>
@@ -3507,10 +3590,37 @@ function ContractsPageContent() {
                         <div className="text-gray-500">LT/SPOT</div>
                         <div className="font-medium mt-1">{selectedContract.lt_spot || '-'}</div>
                       </div>
+                      <div className="p-3 bg-gray-50 rounded col-span-2">
+                        <div className="text-gray-500">
+                          PO Number{selectedContract.po_count > 1 ? `s (${selectedContract.po_count} total)` : ''}
+                        </div>
+                        <div className="font-medium mt-1 text-xs">{selectedContract.po_numbers || selectedContract.po_number || '-'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Contract Date</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.contract_date)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Cargo Readiness Date</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.cargo_readiness_date as any)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Delivery Start Date</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.delivery_start_date)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Delivery End Date</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.delivery_end_date)}</div>
+                      </div>
+                      {isContractPerformance && (
+                        <div className="p-3 bg-gray-50 rounded">
+                          <div className="text-gray-500">Month Delivery End</div>
+                          <div className="font-medium mt-1">{formatMonthDeliveryEnd(selectedContract.delivery_end_date)}</div>
+                        </div>
+                      )}
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500 flex items-center gap-1">
-                          Log Cycle
-                          <FieldHelp text={FIELD_HELP.logCycle} />
+                          Log Cycle <FieldHelp text={FIELD_HELP.logCycle} />
                         </div>
                         <div className="font-medium mt-1">
                           {selectedContract.log_cycle_days != null ? `${selectedContract.log_cycle_days} days` : '-'}
@@ -3518,110 +3628,82 @@ function ContractsPageContent() {
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500 flex items-center gap-1">
-                          Trade Cycle
-                          <FieldHelp text={FIELD_HELP.tradeCycle} />
+                          Trade Cycle <FieldHelp text={FIELD_HELP.tradeCycle} />
                         </div>
-                        <div
-                          className={`font-medium mt-1 ${
-                            typeof selectedContract.trade_cycle_days === 'number'
-                              ? selectedContract.trade_cycle_days > 0
-                                ? 'text-red-600'
-                                : 'text-green-600'
-                              : ''
-                          }`}
-                        >
-                          {selectedContract.trade_cycle_days != null ? `${selectedContract.trade_cycle_days} days` : '-'}
-                        </div>
+                        {(() => {
+                          const v = selectedContract.trade_cycle_days
+                          if (v == null) return <div className="font-medium mt-1">-</div>
+                          const abs = Math.abs(v)
+                          const unit = abs === 1 ? 'day' : 'days'
+                          return (
+                            <div className={`font-medium mt-1 ${v === 0 ? 'text-gray-500' : v > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                              {v === 0 ? '0 days' : v > 0 ? `${abs} ${unit} overdue` : `${abs} ${unit} left`}
+                            </div>
+                          )
+                        })()}
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500 flex items-center gap-1">
-                          Cash Cycle
-                          <FieldHelp text={FIELD_HELP.cashCycle} />
+                          Cash Cycle <FieldHelp text={FIELD_HELP.cashCycle} />
                         </div>
-                        <div
-                          className={`font-medium mt-1 ${
-                            typeof selectedContract.cash_cycle_days === 'number'
-                              ? selectedContract.cash_cycle_days > 0
-                                ? 'text-red-600'
-                                : 'text-green-600'
-                              : ''
-                          }`}
-                        >
-                          {selectedContract.cash_cycle_days != null ? `${selectedContract.cash_cycle_days} days` : '-'}
-                        </div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded col-span-2">
-                        <div className="text-gray-500">
-                          PO Number{selectedContract.po_count > 1 ? `s (${selectedContract.po_count} total)` : ''}
-                        </div>
-                        <div className="font-medium mt-1 text-xs">
-                          {selectedContract.po_numbers || selectedContract.po_number || '-'}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Parties */}
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Parties</h3>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Buyer</div>
-                        <div className="font-medium mt-1">{partiesBuyerDisplay(selectedContract)}</div>
+                        {(() => {
+                          const v = selectedContract.cash_cycle_days
+                          if (v == null) return <div className="font-medium mt-1">-</div>
+                          const abs = Math.abs(v)
+                          const unit = abs === 1 ? 'day' : 'days'
+                          return (
+                            <div className={`font-medium mt-1 ${v === 0 ? 'text-gray-500' : v > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                              {v === 0 ? '0 days' : v > 0 ? `${abs} ${unit} overdue` : `${abs} ${unit} left`}
+                            </div>
+                          )
+                        })()}
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Supplier</div>
-                        <div className="font-medium mt-1">{selectedContract.supplier}</div>
+                        <div className="text-gray-500">Unit Price</div>
+                        <div className="font-medium mt-1">{formatCurrency(selectedContract.unit_price, selectedContract.currency)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Contract Value</div>
+                        <div className="font-medium mt-1">{formatCurrency(selectedContract.contract_value, selectedContract.currency)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Due Date Payment</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.due_date_payment as any)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">DP Date</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.dp_date as any)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Payoff Date</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.payoff_date as any)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">DP Date Deviation (Days)</div>
+                        <div className="font-medium mt-1">{selectedContract.dp_date_deviation_days ?? '-'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Payoff Date Deviation (Days)</div>
+                        <div className="font-medium mt-1">{selectedContract.payoff_date_deviation_days ?? '-'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Payment Status</div>
+                        <div className="font-medium mt-1">
+                          {contractPaymentsLoading ? (
+                            <span className="text-gray-400">Loading...</span>
+                          ) : contractPayments.length === 0 ? (
+                            '-'
+                          ) : (
+                            contractPayments.map((p) => p.payment_status).filter(Boolean).join(', ') || '-'
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  </section>
 
-                  {/* B2B Parties */}
-                  {(isContractB2b(selectedContract) &&
-                    String(selectedContract.contract_reference_po || '').trim() === '') && (
-                    <div>
-                      <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-                        B2B Parties
-                        <FieldHelp text={FIELD_HELP.b2bParties} />
-                      </h3>
-                      {b2bPartiesLoading ? (
-                        <div className="text-sm text-gray-500">Loading B2B parties...</div>
-                      ) : b2bParties.length === 0 ? (
-                        <div className="text-sm text-gray-500">No B2B contracts linked to this origin contract.</div>
-                      ) : (
-                        <div className="overflow-x-auto border rounded">
-                          <table className="w-full text-sm">
-                            <thead>
-                              <tr className="bg-gray-100 border-b">
-                                <th className="text-left p-2 font-medium">PO Number</th>
-                                <th className="text-left p-2 font-medium">Contract Ext No</th>
-                                <th className="text-left p-2 font-medium">Company Name</th>
-                                <th className="text-left p-2 font-medium">Supplier</th>
-                                <th className="text-left p-2 font-medium">Incoterm</th>
-                                <th className="text-left p-2 font-medium">Certification</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {b2bParties.map((r) => (
-                                <tr key={r.contract_id} className="border-b last:border-0">
-                                  <td className="p-2">{r.po_numbers || '-'}</td>
-                                  <td className="p-2">{r.contract_ext_no || '-'}</td>
-                                  <td className="p-2">{r.company_name || '-'}</td>
-                                  <td className="p-2">{r.supplier || '-'}</td>
-                                  <td className="p-2">{r.incoterm || '-'}</td>
-                                  <td className="p-2">{r.certification || '-'}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Product & Quantity */}
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Product & Quantity</h3>
+                  {/* ── 3. Product Detail ────────────────────────────────── */}
+                  <section className="py-5">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Product Detail</h3>
                     {(() => {
                       const inc = String(selectedContract.incoterm || '').trim().toUpperCase()
                       const basis =
@@ -3631,20 +3713,24 @@ function ContractsPageContent() {
                             ? { label: 'Quantity Delivery', hint: 'Incoterm LCO/FOB' }
                             : { label: 'STO Quantity', hint: 'Fallback (other incoterms)' }
                       return (
-                        <div className="text-xs text-gray-600 mb-2">
-                          Outstanding Quantity basis: <span className="font-medium text-gray-800">{basis.label}</span>{' '}
+                        <div className="text-xs text-gray-600 mb-3">
+                          Outstanding basis: <span className="font-medium text-gray-800">{basis.label}</span>{' '}
                           <span className="text-gray-500">({basis.hint})</span>
                         </div>
                       )
                     })()}
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div className="p-3 bg-gray-50 rounded">
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="p-3 bg-gray-50 rounded col-span-2">
                         <div className="text-gray-500">Product</div>
                         <div className="font-medium mt-1">{selectedContract.product}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Contract Quantity</div>
                         <div className="font-medium mt-1 text-base">{((Number(selectedContract.quantity_ordered) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Total STO Quantity ({selectedContract.sto_count || 0} STO{selectedContract.sto_count > 1 ? 's' : ''})</div>
+                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.total_sto_quantity)} Kg</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Quantity Delivery</div>
@@ -3654,12 +3740,8 @@ function ContractsPageContent() {
                         <div className="text-gray-500">Quantity Receive</div>
                         <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.quantity_receive ?? 0)} Kg</div>
                       </div>
-                      <div className="p-3 bg-blue-50 rounded border-2 border-blue-200">
-                        <div className="text-gray-500">Total STO Quantity ({selectedContract.sto_count || 0} STO{selectedContract.sto_count > 1 ? 's' : ''})</div>
-                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.total_sto_quantity)} Kg</div>
-                      </div>
                       <div className={`p-3 rounded border-2 ${selectedContract.outstanding_quantity < 0 ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
-                        <div className={`font-semibold flex items-center gap-1 ${selectedContract.outstanding_quantity < 0 ? 'text-red-700' : 'text-blue-700'}`}>
+                        <div className={`font-semibold flex items-center gap-1 text-xs ${selectedContract.outstanding_quantity < 0 ? 'text-red-700' : 'text-blue-700'}`}>
                           Outstanding Quantity
                           <FieldHelp text={FIELD_HELP.outstandingQty} />
                         </div>
@@ -3675,26 +3757,115 @@ function ContractsPageContent() {
                           Over/Under Delivery Status
                           <FieldHelp text={FIELD_HELP.overUnderDelivery} />
                         </div>
-                        <div className="font-semibold mt-1">
-                          {selectedContract.over_under_delivery_status || '-'}
-                        </div>
+                        <div className="font-semibold mt-1">{selectedContract.over_under_delivery_status || '-'}</div>
                       </div>
                     </div>
-                  </div>
+                  </section>
 
-                  {/* Logistic Information */}
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Logistic Information</h3>
-                    <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                  {/* ── 4. Supplier Detail ───────────────────────────────── */}
+                  <section className="py-5">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Supplier Detail</h3>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Transport Mode</div>
-                        <div className="font-medium mt-1">{selectedContract.transport_mode || '-'}</div>
+                        <div className="text-gray-500">Buyer</div>
+                        <div className="font-medium mt-1">{partiesBuyerDisplay(selectedContract)}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Incoterm</div>
-                        <div className="font-medium mt-1">{selectedContract.incoterm || '-'}</div>
+                        <div className="text-gray-500">Supplier</div>
+                        <div className="font-medium mt-1">{selectedContract.supplier}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Group Name</div>
+                        <div className="font-medium mt-1">{selectedContract.group_name || '-'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500 flex items-center gap-1">
+                          Company Name <FieldHelp text={FIELD_HELP.companyName} />
+                        </div>
+                        <div className="font-medium mt-1">{selectedContract.company_name || '-'}</div>
                       </div>
                     </div>
+                    {(isContractB2b(selectedContract) &&
+                      String(selectedContract.contract_reference_po || '').trim() === '') && (
+                      <div className="mt-4">
+                        <div className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-1">
+                          B2B Parties <FieldHelp text={FIELD_HELP.b2bParties} />
+                        </div>
+                        {b2bPartiesLoading ? (
+                          <div className="text-sm text-gray-500">Loading B2B parties...</div>
+                        ) : b2bParties.length === 0 ? (
+                          <div className="text-sm text-gray-500">No B2B contracts linked to this origin contract.</div>
+                        ) : (
+                          <div className="overflow-x-auto border rounded">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="bg-gray-100 border-b">
+                                  <th className="text-left p-2 font-medium">PO Number</th>
+                                  <th className="text-left p-2 font-medium">Contract Ext No</th>
+                                  <th className="text-left p-2 font-medium">Company Name</th>
+                                  <th className="text-left p-2 font-medium">Supplier</th>
+                                  <th className="text-left p-2 font-medium">Incoterm</th>
+                                  <th className="text-left p-2 font-medium">Certification</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {b2bParties.map((r) => (
+                                  <tr key={r.contract_id} className="border-b last:border-0">
+                                    <td className="p-2">{r.po_numbers || '-'}</td>
+                                    <td className="p-2">{r.contract_ext_no || '-'}</td>
+                                    <td className="p-2">{r.company_name || '-'}</td>
+                                    <td className="p-2">{r.supplier || '-'}</td>
+                                    <td className="p-2">{r.incoterm || '-'}</td>
+                                    <td className="p-2">{r.certification || '-'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </section>
+
+                  {/* ── 5. Shipment Detail ───────────────────────────────── */}
+                  <section className="py-5">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Shipment Detail</h3>
+
+                    {/* Shipment & Trucking Performance Summary — Contract Performance only */}
+                    {isContractPerformance && stoInfo.length > 0 && (() => {
+                      const lateRows = stoInfo.filter(r => r.late_indicator === 'Late')
+                      const onTimeRows = stoInfo.filter(r => r.late_indicator === 'On Time')
+                      const totalQtyDelivered = stoInfo.reduce((s, r) => s + (Number(r.quantity_delivered) || 0), 0)
+                      const totalQtyReceive = stoInfo.reduce((s, r) => s + (Number(r.quantity_receive) || 0), 0)
+                      return (
+                        <div className="mb-4 p-4 rounded-lg border bg-gray-50">
+                          <div className="text-sm font-semibold text-gray-700 mb-3">Shipment & Trucking Performance</div>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                            <div className="bg-white rounded border p-3 text-center">
+                              <div className="text-2xl font-bold text-gray-800">{stoInfo.length}</div>
+                              <div className="text-xs text-gray-500 mt-1">Total STO</div>
+                            </div>
+                            <div className={`rounded border p-3 text-center ${lateRows.length > 0 ? 'bg-red-50 border-red-200' : 'bg-white'}`}>
+                              <div className={`text-2xl font-bold ${lateRows.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>{lateRows.length}</div>
+                              <div className="text-xs text-gray-500 mt-1">Late</div>
+                            </div>
+                            <div className={`rounded border p-3 text-center ${onTimeRows.length > 0 ? 'bg-green-50 border-green-200' : 'bg-white'}`}>
+                              <div className={`text-2xl font-bold ${onTimeRows.length > 0 ? 'text-green-600' : 'text-gray-400'}`}>{onTimeRows.length}</div>
+                              <div className="text-xs text-gray-500 mt-1">On Time</div>
+                            </div>
+                            <div className="bg-white rounded border p-3 text-center">
+                              <div className="text-lg font-bold text-gray-800">{(totalQtyDelivered / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
+                              <div className="text-xs text-gray-500 mt-1">Total Qty Delivered</div>
+                            </div>
+                          </div>
+                          {totalQtyReceive > 0 && (
+                            <div className="mt-2 text-xs text-gray-500 text-right">
+                              Total Qty Received: <span className="font-medium text-gray-700">{(totalQtyReceive / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
                     {stoInfoLoading ? (
                       <div className="text-sm text-gray-500">Loading STO information...</div>
                     ) : stoInfo.length === 0 ? (
@@ -3769,87 +3940,11 @@ function ContractsPageContent() {
                         </table>
                       </div>
                     )}
-                  </div>
+                  </section>
 
-                  {/* Dates */}
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Important Dates</h3>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Contract Date</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.contract_date)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Due Date Delivery Start</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.delivery_start_date)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Due Date Delivery End</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.delivery_end_date)}</div>
-                      </div>
-                      {isContractPerformance && (
-                        <div className="p-3 bg-gray-50 rounded">
-                          <div className="text-gray-500">Month Delivery End</div>
-                          <div className="font-medium mt-1">{formatMonthDeliveryEnd(selectedContract.delivery_end_date)}</div>
-                        </div>
-                      )}
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Cargo Readiness Date</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.cargo_readiness_date as any)}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Payment Dates */}
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Payment Information</h3>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Unit Price</div>
-                        <div className="font-medium mt-1">{formatCurrency(selectedContract.unit_price, selectedContract.currency)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Contract Value</div>
-                        <div className="font-medium mt-1">{formatCurrency(selectedContract.contract_value, selectedContract.currency)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Due Date Payment</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.due_date_payment as any)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">DP Date</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.dp_date as any)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Payoff Date</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.payoff_date as any)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">DP Date Deviation (Days)</div>
-                        <div className="font-medium mt-1">{selectedContract.dp_date_deviation_days ?? '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Payoff Date Deviation (Days)</div>
-                        <div className="font-medium mt-1">{selectedContract.payoff_date_deviation_days ?? '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Payment Status</div>
-                        <div className="font-medium mt-1">
-                          {contractPaymentsLoading ? (
-                            <span className="text-gray-400">Loading...</span>
-                          ) : contractPayments.length === 0 ? (
-                            '-'
-                          ) : (
-                            contractPayments.map((p) => p.payment_status).filter(Boolean).join(', ') || '-'
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Documents */}
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Documents</h3>
+                  {/* ── Documents ────────────────────────────────────────── */}
+                  <section className="py-5">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Documents</h3>
                     {docsLoading ? (
                       <div className="text-sm text-gray-500">Loading documents...</div>
                     ) : selectedContractDocs.length === 0 ? (
@@ -3877,12 +3972,12 @@ function ContractsPageContent() {
                         })}
                       </div>
                     )}
-                  </div>
+                  </section>
 
-                  {/* Activity Log / Comments */}
-                  <div>
+                  {/* ── Activity ─────────────────────────────────────────── */}
+                  <section className="pt-5">
                     <div className="flex items-center justify-between gap-3 mb-3">
-                      <h3 className="text-lg font-semibold">Activity</h3>
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Activity</h3>
                       <div className="inline-flex rounded-md border overflow-hidden">
                         <button
                           type="button"
@@ -4006,7 +4101,7 @@ function ContractsPageContent() {
                         </div>
                       </div>
                     )}
-                  </div>
+                  </section>
                 </div>
               </CardContent>
             </Card>
@@ -4083,6 +4178,7 @@ function ContractsPageContent() {
           onCreated={() => {
             setContractLogisticsUi(null)
             void fetchContracts(currentPage)
+            void fetchUnassignedCounts()
           }}
           initialContractExtNo={
             contractLogisticsUi?.kind === 'truck-create'
@@ -4096,6 +4192,7 @@ function ContractsPageContent() {
           onCreated={() => {
             setContractLogisticsUi(null)
             void fetchContracts(currentPage)
+            void fetchUnassignedCounts()
           }}
           initialContractId={contractLogisticsUi?.kind === 'ship-create' ? contractLogisticsUi.contractId : null}
         />

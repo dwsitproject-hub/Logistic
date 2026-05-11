@@ -140,7 +140,7 @@ export default function ClaimSusutPage() {
     errors: { rowIndex: number; message: string }[]
   } | null>(null)
 
-  const pageSize = 200
+  const pageSize = 20
   const [page, setPage] = useState(1)
   const [sortKey, setSortKey] = useState<string>('os_days')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')

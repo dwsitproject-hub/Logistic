@@ -179,7 +179,7 @@ function ShipmentsPageContent() {
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
-  const [pageSize] = useState(50)
+  const [pageSize] = useState(20)
   const [totalCount, setTotalCount] = useState(0)
   // Search should apply only on Enter / Apply (not per keystroke)
   const [searchDraft, setSearchDraft] = useState('')
@@ -2866,14 +2866,14 @@ function ShipmentsPageContent() {
           <CardContent>
             <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto py-4 px-4">
               {[
-                { status: 'PLANNED', label: 'Planned', color: 'bg-blue-100', textColor: 'text-blue-800', badgeColor: 'bg-blue-600' },
-                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600' },
-                { status: 'LOADING', label: 'Loading', color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600' },
-                { status: 'IN_TRANSIT', label: 'In Transit', color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600' },
-                { status: 'ARRIVED', label: 'Arrived', color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600' },
-                { status: 'UNLOADING', label: 'Unloading', color: 'bg-cyan-100', textColor: 'text-cyan-800', badgeColor: 'bg-cyan-600' },
-                { status: 'COMPLETED', label: 'Completed', color: 'bg-green-100', textColor: 'text-green-800', badgeColor: 'bg-green-600' },
-                { status: 'CANCELLED', label: 'Cancelled', color: 'bg-red-100', textColor: 'text-red-800', badgeColor: 'bg-red-600' }
+                { status: 'PLANNED',     label: 'Planned',     color: 'bg-blue-100',   textColor: 'text-blue-800',   badgeColor: 'bg-blue-600',   tooltip: 'Shipment sudah dijadwalkan dan menunggu proses dimulai.' },
+                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600', tooltip: 'Shipment sedang diproses — kapal menuju lokasi pemuatan.' },
+                { status: 'LOADING',     label: 'Loading',     color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600', tooltip: 'Kapal sedang memuat muatan di pelabuhan asal.' },
+                { status: 'IN_TRANSIT',  label: 'In Transit',  color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600', tooltip: 'Kapal sudah berangkat dan sedang dalam perjalanan ke pelabuhan tujuan.' },
+                { status: 'ARRIVED',     label: 'Arrived',     color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600', tooltip: 'Kapal sudah tiba di pelabuhan tujuan, menunggu proses bongkar.' },
+                { status: 'UNLOADING',   label: 'Unloading',   color: 'bg-cyan-100',   textColor: 'text-cyan-800',   badgeColor: 'bg-cyan-600',   tooltip: 'Muatan sedang dibongkar dari kapal di pelabuhan tujuan.' },
+                { status: 'COMPLETED',   label: 'Completed',   color: 'bg-green-100',  textColor: 'text-green-800',  badgeColor: 'bg-green-600',  tooltip: 'Pengiriman selesai — muatan sudah diterima di tujuan.' },
+                { status: 'CANCELLED',   label: 'Cancelled',   color: 'bg-red-100',    textColor: 'text-red-800',    badgeColor: 'bg-red-600',    tooltip: 'Shipment dibatalkan dan tidak dilanjutkan.' },
               ].map((statusInfo, index, array) => {
                 const summary = shipmentsSummary?.status
                 const count =
@@ -2890,7 +2890,7 @@ function ShipmentsPageContent() {
                   <div key={statusInfo.status} className="flex items-center flex-shrink-0">
                     <div className="relative">
                       {/* Status Circle */}
-                      <div className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg hover:shadow-xl transition-shadow`}>
+                      <div title={statusInfo.tooltip} className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg hover:shadow-xl transition-shadow cursor-help`}>
                         {/* Count Badge */}
                         <div className={`absolute -top-3 -right-3 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10`}>
                           {count}
@@ -2926,7 +2926,7 @@ function ShipmentsPageContent() {
               {[
                 {
                   key: 'MORE_THAN_7D' as const,
-                  label: 'ETA Loading &gt; 7D',
+                  label: 'ETA Loading > 7D',
                   count: Number(shipmentsSummary?.etaLoading?.moreThan7D ?? etaLoadingBuckets.counts.moreThan7D),
                   color: 'bg-sky-50',
                 },
@@ -4187,23 +4187,29 @@ function ShipmentsPageContent() {
                                       </>
                                     ) : (
                                       <>
-                                      {canShowEditShipmentButton && (
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={() => {
-                                            if (perms.loaded && !canEditShipment) {
-                                              alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
-                                              return
-                                            }
-                                            handleEdit(shipment)
-                                          }}
-                                          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                                        >
-                                          <Edit2 className="h-4 w-4 mr-1" />
-                                          Edit
-                                        </Button>
-                                      )}
+                                      {canShowEditShipmentButton && (() => {
+                                        const hasData = !!(shipment.vessel_name && shipment.vessel_name.trim())
+                                        return (
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => {
+                                              if (perms.loaded && !canEditShipment) {
+                                                alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
+                                                return
+                                              }
+                                              handleEdit(shipment)
+                                            }}
+                                            className={hasData ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100' : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'}
+                                          >
+                                            {hasData ? (
+                                              <><Edit2 className="h-4 w-4 mr-1" />Edit</>
+                                            ) : (
+                                              <><Plus className="h-4 w-4 mr-1" />Add</>
+                                            )}
+                                          </Button>
+                                        )
+                                      })()}
                                         <Button
                                           variant="outline"
                                           size="sm"
@@ -4432,23 +4438,29 @@ function ShipmentsPageContent() {
                                 </>
                               ) : (
                                 <>
-                                  {canShowEditShipmentButton && (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => {
-                                        if (perms.loaded && !canEditShipment) {
-                                          alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
-                                          return
-                                        }
-                                        handleEdit(shipment)
-                                      }}
-                                      className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                                    >
-                                      <Edit2 className="h-4 w-4 mr-1" />
-                                      Edit
-                                    </Button>
-                                  )}
+                                  {canShowEditShipmentButton && (() => {
+                                    const hasData = !!(shipment.vessel_name && shipment.vessel_name.trim())
+                                    return (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => {
+                                          if (perms.loaded && !canEditShipment) {
+                                            alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
+                                            return
+                                          }
+                                          handleEdit(shipment)
+                                        }}
+                                        className={hasData ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100' : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'}
+                                      >
+                                        {hasData ? (
+                                          <><Edit2 className="h-4 w-4 mr-1" />Edit</>
+                                        ) : (
+                                          <><Plus className="h-4 w-4 mr-1" />Add</>
+                                        )}
+                                      </Button>
+                                    )
+                                  })()}
                                   <Button variant="outline" size="sm" onClick={() => handleViewLoadingPorts(shipment)} className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
                                     <Ship className="h-4 w-4 mr-1" />
                                     Ports

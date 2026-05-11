@@ -468,7 +468,7 @@ function TruckingPageContent() {
   })
   const [uploadingId, setUploadingId] = useState<string>('')
   const [page, setPage] = useState<number>(1)
-  const pageSize = 50
+  const pageSize = 20
   const [totalCount, setTotalCount] = useState(0)
   const [hasMore, setHasMore] = useState<boolean>(true)
   const [truckingSummary, setTruckingSummary] = useState<any>(null)
@@ -1761,163 +1761,42 @@ function TruckingPageContent() {
               Manage and track all trucking operations - {totalCount || filteredOperations.length} total
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             <Button
+              variant="outline"
+              size="sm"
+              disabled={uploading}
+              onClick={() => document.getElementById('trucking-upload')?.click()}
+            >
+              {uploading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Upload CSV
+                </>
+              )}
+            </Button>
+            <input
+              id="trucking-upload"
+              type="file"
+              accept=".csv"
+              onChange={() => alert('CSV upload feature coming soon!')}
+              className="hidden"
+              disabled={uploading}
+            />
+            <Button
+              size="sm"
               onClick={() => setShowCreateForm(true)}
-              className="bg-blue-600 hover:bg-blue-700"
             >
               <Plus className="h-4 w-4 mr-2" />
               Create New
             </Button>
-            <Button
-              onClick={downloadTemplate}
-              variant="outline"
-              className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Download Template
-            </Button>
-            <label className="cursor-pointer">
-              <input
-                type="file"
-                accept=".csv"
-                onChange={() => alert('CSV upload feature coming soon!')}
-                className="hidden"
-                disabled={uploading}
-              />
-              <Button
-                disabled={uploading}
-                className="bg-blue-600 hover:bg-blue-700 cursor-pointer"
-                onClick={(e) => {
-                  e.preventDefault()
-                  const input = e.currentTarget.parentElement?.querySelector('input[type="file"]') as HTMLInputElement
-                  input?.click()
-                }}
-              >
-                {uploading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4 mr-2" />
-                    Bulk Update
-                  </>
-                )}
-              </Button>
-            </label>
           </div>
         </div>
-
-        {/* Filters (list + daily planning) */}
-        <>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex flex-wrap gap-3 items-center">
-              <div className="flex-1 min-w-[280px] relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                <Input
-                  placeholder="Search by Operation ID, Contract Numbers, PO No, or Truck Loading/Discharge..."
-                  value={searchDraft}
-                  onChange={(e) => setSearchDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      applySearch()
-                    }
-                  }}
-                  className="pl-10"
-                />
-              </div>
-              <Button variant="outline" onClick={applySearch} disabled={loading}>
-                Apply
-              </Button>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="shrink-0 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="ALL">All Status</option>
-                <option value="PLANNED">Planned</option>
-                <option value="IN_PROGRESS">In Progress</option>
-                <option value="COMPLETED">Completed</option>
-                <option value="CANCELLED">Cancelled</option>
-              </select>
-              <select
-                value={lateIndicatorFilter}
-                onChange={(e) => setLateIndicatorFilter(e.target.value)}
-                className="shrink-0 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="ALL">All Late Indicator</option>
-                <option value="ON_TIME">On Time</option>
-                <option value="LATE">Late</option>
-                <option value="NA">N/A</option>
-              </select>
-              <Input
-                placeholder="Truck Loading Location"
-                value={loadingLocationFilter}
-                onChange={(e) => setLoadingLocationFilter(e.target.value)}
-                className="shrink-0 w-48"
-              />
-              <Input
-                placeholder="Truck Discharge Location"
-                value={unloadingLocationFilter}
-                onChange={(e) => setUnloadingLocationFilter(e.target.value)}
-                className="shrink-0 w-48"
-              />
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-sm text-gray-600">Contract Date:</span>
-                <Input type="date" value={dateFromDraft} onChange={(e) => setDateFromDraft(e.target.value)} className="w-40" />
-                <span className="text-gray-500">to</span>
-                <Input type="date" value={dateToDraft} onChange={(e) => setDateToDraft(e.target.value)} className="w-40" />
-              </div>
-              <div className="min-w-[260px] shrink-0">
-                <SearchableMultiSelect
-                  label="Plant/Site"
-                  options={availablePlantSites}
-                  selected={selectedPlantSites}
-                  onChange={setSelectedPlantSites}
-                  placeholder="Select plant/site(s)"
-                  emptyMessage="Loading plants..."
-                />
-              </div>
-              <Button onClick={handleFilterChange} variant="outline" size="sm" className="shrink-0">
-                <Filter className="h-4 w-4 mr-1" />
-                Apply
-              </Button>
-              {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || loadingLocationFilter || unloadingLocationFilter || dateFromDraft || dateToDraft || selectedPlantSites.length > 0) && (
-                <Button 
-                  onClick={() => {
-                    setStatusFilter('ALL')
-                    setLateIndicatorFilter('ALL')
-                    setLoadingLocationFilter('')
-                    setUnloadingLocationFilter('')
-                    setSelectedPlantSites([])
-                    const now = new Date()
-                    const yyyy = now.getFullYear()
-                    const to = `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-                    setDateFromDraft(`${yyyy}-01-01`)
-                    setDateToDraft(to)
-                    setDateFrom(`${yyyy}-01-01`)
-                    setDateTo(to)
-                    setPage(1)
-                    fetchTruckingOperations(1)
-                  }}
-                  variant="ghost"
-                  size="sm"
-                  className="shrink-0 text-gray-500"
-                >
-                  <X className="h-4 w-4 mr-1" />
-                  Clear
-                </Button>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-        </>
-
-        {/* Calendar is rendered in the main section below (replaces All Trucking Operations on that tab). */}
 
         {/* Status Distribution */}
         <Card>
@@ -1925,7 +1804,7 @@ function TruckingPageContent() {
             <CardTitle>Status Distribution</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto overflow-y-visible pt-4 pb-4 px-6">
+            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto py-4 px-4">
               {[
                 { status: 'PLANNED', label: 'Planned', color: 'bg-blue-100', textColor: 'text-blue-800', badgeColor: 'bg-blue-600' },
                 { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600' },
@@ -1941,11 +1820,11 @@ function TruckingPageContent() {
                           : 0
                 return (
                   <div key={statusInfo.status} className="flex items-center flex-shrink-0">
-                    <div className="relative overflow-visible">
+                    <div className="relative">
                       {/* Status Circle */}
                       <div className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg hover:shadow-xl transition-shadow`}>
                         {/* Count Badge */}
-                        <div className={`absolute -top-2 -right-2 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-7 h-7 md:w-8 md:h-8 flex items-center justify-center shadow-lg z-10`}>
+                        <div className={`absolute -top-3 -right-3 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10`}>
                           {count}
                         </div>
                         {/* Status Label */}
@@ -1994,6 +1873,115 @@ function TruckingPageContent() {
             </div>
           ) : null}
         </div>
+
+        {/* Filters (list + daily planning) */}
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:gap-4 xl:items-center">
+              <div className="flex-1 min-w-[280px] relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                <Input
+                  placeholder="Search by Operation ID, Contract Numbers, PO No, or Truck Loading/Discharge..."
+                  value={searchDraft}
+                  onChange={(e) => setSearchDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      applySearch()
+                    }
+                  }}
+                  className="pl-10"
+                />
+              </div>
+              <Button variant="outline" onClick={applySearch} disabled={loading}>
+                Apply
+              </Button>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto"
+              >
+                <option value="ALL">All Status</option>
+                <option value="PLANNED">Planned</option>
+                <option value="IN_PROGRESS">In Progress</option>
+                <option value="COMPLETED">Completed</option>
+                <option value="CANCELLED">Cancelled</option>
+              </select>
+              <select
+                value={lateIndicatorFilter}
+                onChange={(e) => setLateIndicatorFilter(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto"
+              >
+                <option value="ALL">All Late Indicator</option>
+                <option value="ON_TIME">On Time</option>
+                <option value="LATE">Late</option>
+                <option value="NA">N/A</option>
+              </select>
+              <Input
+                placeholder="Truck Loading Location"
+                value={loadingLocationFilter}
+                onChange={(e) => setLoadingLocationFilter(e.target.value)}
+                className="w-full sm:w-48"
+              />
+              <Input
+                placeholder="Truck Discharge Location"
+                value={unloadingLocationFilter}
+                onChange={(e) => setUnloadingLocationFilter(e.target.value)}
+                className="w-full sm:w-48"
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm text-gray-600">Contract Date:</span>
+                <Input type="date" value={dateFromDraft} onChange={(e) => setDateFromDraft(e.target.value)} className="w-40" />
+                <span className="text-gray-500">to</span>
+                <Input type="date" value={dateToDraft} onChange={(e) => setDateToDraft(e.target.value)} className="w-40" />
+              </div>
+              <div className="min-w-[260px] w-full sm:w-auto">
+                <SearchableMultiSelect
+                  label="Plant/Site"
+                  options={availablePlantSites}
+                  selected={selectedPlantSites}
+                  onChange={setSelectedPlantSites}
+                  placeholder="Select plant/site(s)"
+                  emptyMessage="Loading plants..."
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button onClick={handleFilterChange} variant="outline" size="sm">
+                  <Filter className="h-4 w-4 mr-1" />
+                  Apply
+                </Button>
+                {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || loadingLocationFilter || unloadingLocationFilter || dateFromDraft || dateToDraft || selectedPlantSites.length > 0) && (
+                  <Button
+                    onClick={() => {
+                      setStatusFilter('ALL')
+                      setLateIndicatorFilter('ALL')
+                      setLoadingLocationFilter('')
+                      setUnloadingLocationFilter('')
+                      setSelectedPlantSites([])
+                      const now = new Date()
+                      const yyyy = now.getFullYear()
+                      const to = `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+                      setDateFromDraft(`${yyyy}-01-01`)
+                      setDateToDraft(to)
+                      setDateFrom(`${yyyy}-01-01`)
+                      setDateTo(to)
+                      setPage(1)
+                      fetchTruckingOperations(1)
+                    }}
+                    variant="ghost"
+                    size="sm"
+                    className="text-gray-500"
+                  >
+                    <X className="h-4 w-4 mr-1" />
+                    Clear
+                  </Button>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Calendar is rendered in the main section below (replaces All Trucking Operations on that tab). */}
 
         {activeTab === 'calendar' && (
           <>
@@ -2792,15 +2780,23 @@ function TruckingPageContent() {
                                       </>
                                     ) : (
                                       <>
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={() => handleEdit(operation)}
-                                          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                                        >
-                                          <Edit2 className="h-4 w-4 mr-1" />
-                                          Edit
-                                        </Button>
+                                        {(() => {
+                                          const hasData = !!(operation.trucking_owner && String(operation.trucking_owner).trim())
+                                          return (
+                                            <Button
+                                              variant="outline"
+                                              size="sm"
+                                              onClick={() => handleEdit(operation)}
+                                              className={hasData ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100' : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'}
+                                            >
+                                              {hasData ? (
+                                                <><Edit2 className="h-4 w-4 mr-1" />Edit</>
+                                              ) : (
+                                                <><Plus className="h-4 w-4 mr-1" />Add</>
+                                              )}
+                                            </Button>
+                                          )
+                                        })()}
                                         <Button
                                           variant="outline"
                                           size="sm"
@@ -2997,15 +2993,23 @@ function TruckingPageContent() {
                               </>
                             ) : (
                               <>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => handleEdit(operation)}
-                                  className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                                >
-                                  <Edit2 className="h-4 w-4 mr-1" />
-                                  Edit
-                                </Button>
+                                {(() => {
+                                  const hasData = !!(operation.trucking_owner && String(operation.trucking_owner).trim())
+                                  return (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => handleEdit(operation)}
+                                      className={hasData ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100' : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'}
+                                    >
+                                      {hasData ? (
+                                        <><Edit2 className="h-4 w-4 mr-1" />Edit</>
+                                      ) : (
+                                        <><Plus className="h-4 w-4 mr-1" />Add</>
+                                      )}
+                                    </Button>
+                                  )
+                                })()}
                                 <Button
                                   variant="outline"
                                   size="sm"

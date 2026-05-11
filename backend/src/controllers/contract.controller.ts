@@ -12,6 +12,7 @@ import { CONTRACTS_LIST_OUTER_SQL } from './contractsListOuterSql';
 export const getContracts = async (req: AuthRequest, res: Response) => {
   try {
     const { status, supplier, buyer, dateFrom, dateTo, outstanding, companyCode, b2bFlag, page = 1, limit = 10 } = req.query;
+    const productFilter = (req.query as any).product as string | undefined;
     const transportMode = (req.query as any).transportMode as string | undefined;
     const unassigned = (req.query as any).unassigned as string | undefined; // 'sea' | 'land' -> filter to SEA without shipments or LAND without trucking
     const plant = (req.query as any).plant as string | string[] | undefined;
@@ -264,6 +265,12 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag', '') = $${paramIndex}
       )`;
       queryParams.push(b2bFlag);
+      paramIndex++;
+    }
+
+    if (productFilter && productFilter.trim().length > 0) {
+      queryText += ` AND COALESCE(base.product, '') ILIKE $${paramIndex}`;
+      queryParams.push(`%${productFilter.trim()}%`);
       paramIndex++;
     }
 

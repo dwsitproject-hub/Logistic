@@ -2505,6 +2505,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
           c.quantity_ordered
         ) AS outstanding_quantity,
         c.unit,
+        c.contract_date,
         c.delivery_start_date,
         c.delivery_end_date,
         c.transport_mode,

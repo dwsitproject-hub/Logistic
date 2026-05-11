@@ -10,10 +10,12 @@ type Props = {
   onChangeIso: (iso: string) => void
   className?: string
   disabled?: boolean
+  minIso?: string
+  maxIso?: string
 }
 
 /** Text input showing **DD/MM/YYYY**; stores **YYYY-MM-DD** via onChangeIso (same as native date value to API). */
-export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled }: Props) {
+export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, minIso, maxIso }: Props) {
   const [draft, setDraft] = useState('')
 
   const normalizedIso = useMemo(() => {
@@ -66,6 +68,11 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled }
           }
           const iso = parseDdMmYyyyToIso(t)
           if (iso) {
+            if ((minIso && iso < minIso) || (maxIso && iso > maxIso)) {
+              // Out of range — revert to previous value
+              setDraft(isoDateStringToDdMmYyyy(valueIso))
+              return
+            }
             onChangeIso(iso)
             setDraft(isoDateStringToDdMmYyyy(iso))
           } else {
@@ -80,6 +87,8 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled }
         <input
           type="date"
           disabled={disabled}
+          min={minIso}
+          max={maxIso}
           value={normalizedIso}
           onChange={(e) => {
             const v = e.target.value

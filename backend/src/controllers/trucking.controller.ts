@@ -757,7 +757,10 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         c.supplier,
         c.product,
         c.group_name,
-        c.quantity_ordered
+        c.quantity_ordered,
+        c.contract_date,
+        c.delivery_start_date,
+        c.delivery_end_date
       FROM matched c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       LIMIT 1
