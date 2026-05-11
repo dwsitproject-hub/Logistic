@@ -2797,9 +2797,10 @@ function ContractsPageContent() {
                           const filterActive = isColumnFilterActive(col.id)
                           const filterType = getFilterTypeForColumn(col.id)
                           const current = columnFilters[col.id]
-                          const currentText = current && current.type === 'text' ? current : null
-                          const currentNum  = current && current.type === 'number' ? current : null
-                          const currentDate = current && current.type === 'date' ? current : null
+                          const currentText  = current && current.type === 'text'   ? current : null
+                          const currentNum   = current && current.type === 'number' ? current : null
+                          const currentDate  = current && current.type === 'date'   ? current : null
+                          const currentMulti = current && current.type === 'multi'  ? current : null
 
                           return (
                             <div
@@ -3068,7 +3069,6 @@ function ContractsPageContent() {
                                         const options = Array.from(nonBlankSet).sort((a, b) =>
                                           a.localeCompare(b, undefined, { sensitivity: 'base' })
                                         )
-                                        const currentMulti = current && current.type === 'multi' ? current : undefined
                                         const selectedValues = currentMulti?.values || []
                                         const includeBlank = currentMulti?.includeBlank ?? false
 
