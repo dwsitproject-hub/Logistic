@@ -2797,6 +2797,9 @@ function ContractsPageContent() {
                           const filterActive = isColumnFilterActive(col.id)
                           const filterType = getFilterTypeForColumn(col.id)
                           const current = columnFilters[col.id]
+                          const currentText = current && current.type === 'text' ? current : null
+                          const currentNum  = current && current.type === 'number' ? current : null
+                          const currentDate = current && current.type === 'date' ? current : null
 
                           return (
                             <div
@@ -2866,15 +2869,15 @@ function ContractsPageContent() {
                                   {filterType === 'text' && (
                                     <div className="space-y-2">
                                       <Input
-                                        value={current?.type === 'text' ? (current.value ?? '') : ''}
+                                        value={currentText?.value ?? ''}
                                         onChange={(e) => {
                                           const value = e.target.value
                                           setOrClearFilter(col.id, {
                                             type: 'text',
                                             value,
-                                            exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                            emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
-                                            notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
+                                            exact: Boolean(currentText?.exact),
+                                            emptyOnly: Boolean(currentText?.emptyOnly),
+                                            notBlankOnly: Boolean(currentText?.notBlankOnly),
                                           })
                                         }}
                                         onKeyDown={(e) => {
@@ -2890,14 +2893,13 @@ function ContractsPageContent() {
                                       <div className="flex flex-col gap-2">
                                         <label className="flex items-center gap-2 text-xs text-gray-700">
                                           <Checkbox
-                                            checked={current?.type === 'text' ? Boolean(current.exact) : false}
+                                            checked={Boolean(currentText?.exact)}
                                             onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
                                               setOrClearFilter(col.id, {
                                                 type: 'text',
-                                                value,
+                                                value: currentText?.value ?? '',
                                                 exact: Boolean(checked),
-                                                emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
+                                                emptyOnly: Boolean(currentText?.emptyOnly),
                                               })
                                             }}
                                           />
@@ -2905,15 +2907,14 @@ function ContractsPageContent() {
                                         </label>
                                         <label className="flex items-center gap-2 text-xs text-gray-700">
                                           <Checkbox
-                                            checked={Boolean(current?.emptyOnly)}
+                                            checked={Boolean(currentText?.emptyOnly)}
                                             onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
                                               setOrClearFilter(col.id, {
                                                 type: 'text',
-                                                value,
-                                                exact: current?.type === 'text' ? Boolean(current.exact) : false,
+                                                value: currentText?.value ?? '',
+                                                exact: Boolean(currentText?.exact),
                                                 emptyOnly: Boolean(checked),
-                                                notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
+                                                notBlankOnly: Boolean(currentText?.notBlankOnly),
                                               })
                                             }}
                                           />
@@ -2921,14 +2922,13 @@ function ContractsPageContent() {
                                         </label>
                                         <label className="flex items-center gap-2 text-xs text-gray-700">
                                           <Checkbox
-                                            checked={Boolean((current as any)?.notBlankOnly)}
+                                            checked={Boolean(currentText?.notBlankOnly)}
                                             onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
                                               setOrClearFilter(col.id, {
                                                 type: 'text',
-                                                value,
-                                                exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                                emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
+                                                value: currentText?.value ?? '',
+                                                exact: Boolean(currentText?.exact),
+                                                emptyOnly: Boolean(currentText?.emptyOnly),
                                                 notBlankOnly: Boolean(checked),
                                               })
                                             }}
@@ -2944,11 +2944,9 @@ function ContractsPageContent() {
                                     <div className="space-y-2">
                                       <div className="grid grid-cols-2 gap-2">
                                       <Input
-                                          value={(current?.type === 'number' && current.min) ? current.min : ''}
+                                          value={currentNum?.min ?? ''}
                                           onChange={(e) => {
-                                            const min = e.target.value
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                            setOrClearFilter(col.id, { type: 'number', min: e.target.value, max: currentNum?.max, emptyOnly: Boolean(currentNum?.emptyOnly), notBlankOnly: Boolean(currentNum?.notBlankOnly) })
                                           }}
                                           onKeyDown={(e) => {
                                             if (e.key === 'Enter') {
@@ -2961,11 +2959,9 @@ function ContractsPageContent() {
                                           className="h-8 text-sm"
                                         />
                                       <Input
-                                          value={(current?.type === 'number' && current.max) ? current.max : ''}
+                                          value={currentNum?.max ?? ''}
                                           onChange={(e) => {
-                                            const max = e.target.value
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                            setOrClearFilter(col.id, { type: 'number', min: currentNum?.min, max: e.target.value, emptyOnly: Boolean(currentNum?.emptyOnly), notBlankOnly: Boolean(currentNum?.notBlankOnly) })
                                           }}
                                           onKeyDown={(e) => {
                                             if (e.key === 'Enter') {
@@ -2980,22 +2976,18 @@ function ContractsPageContent() {
                                       </div>
                                       <label className="flex items-center gap-2 text-xs text-gray-700">
                                         <Checkbox
-                                          checked={Boolean(current?.emptyOnly)}
+                                          checked={Boolean(currentNum?.emptyOnly)}
                                           onCheckedChange={(checked) => {
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                            setOrClearFilter(col.id, { type: 'number', min: currentNum?.min, max: currentNum?.max, emptyOnly: Boolean(checked), notBlankOnly: Boolean(currentNum?.notBlankOnly) })
                                           }}
                                         />
                                         Only blanks
                                       </label>
                                       <label className="flex items-center gap-2 text-xs text-gray-700">
                                         <Checkbox
-                                          checked={Boolean((current as any)?.notBlankOnly)}
+                                          checked={Boolean(currentNum?.notBlankOnly)}
                                           onCheckedChange={(checked) => {
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
+                                            setOrClearFilter(col.id, { type: 'number', min: currentNum?.min, max: currentNum?.max, emptyOnly: Boolean(currentNum?.emptyOnly), notBlankOnly: Boolean(checked) })
                                           }}
                                         />
                                         Only not blanks
@@ -3009,11 +3001,9 @@ function ContractsPageContent() {
                                       <div className="grid grid-cols-2 gap-2">
                                       <Input
                                           type="date"
-                                          value={(current?.type === 'date' && current.from) ? current.from : ''}
+                                          value={currentDate?.from ?? ''}
                                           onChange={(e) => {
-                                            const from = e.target.value
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                            setOrClearFilter(col.id, { type: 'date', from: e.target.value, to: currentDate?.to, emptyOnly: Boolean(currentDate?.emptyOnly), notBlankOnly: Boolean(currentDate?.notBlankOnly) })
                                           }}
                                           onKeyDown={(e) => {
                                             if (e.key === 'Enter') {
@@ -3026,11 +3016,9 @@ function ContractsPageContent() {
                                         />
                                       <Input
                                           type="date"
-                                          value={(current?.type === 'date' && current.to) ? current.to : ''}
+                                          value={currentDate?.to ?? ''}
                                           onChange={(e) => {
-                                            const to = e.target.value
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                            setOrClearFilter(col.id, { type: 'date', from: currentDate?.from, to: e.target.value, emptyOnly: Boolean(currentDate?.emptyOnly), notBlankOnly: Boolean(currentDate?.notBlankOnly) })
                                           }}
                                           onKeyDown={(e) => {
                                             if (e.key === 'Enter') {
@@ -3044,22 +3032,18 @@ function ContractsPageContent() {
                                       </div>
                                       <label className="flex items-center gap-2 text-xs text-gray-700">
                                         <Checkbox
-                                          checked={Boolean(current?.emptyOnly)}
+                                          checked={Boolean(currentDate?.emptyOnly)}
                                           onCheckedChange={(checked) => {
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
+                                            setOrClearFilter(col.id, { type: 'date', from: currentDate?.from, to: currentDate?.to, emptyOnly: Boolean(checked), notBlankOnly: Boolean(currentDate?.notBlankOnly) })
                                           }}
                                         />
                                         Only blanks
                                       </label>
                                       <label className="flex items-center gap-2 text-xs text-gray-700">
                                         <Checkbox
-                                          checked={Boolean((current as any)?.notBlankOnly)}
+                                          checked={Boolean(currentDate?.notBlankOnly)}
                                           onCheckedChange={(checked) => {
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
+                                            setOrClearFilter(col.id, { type: 'date', from: currentDate?.from, to: currentDate?.to, emptyOnly: Boolean(currentDate?.emptyOnly), notBlankOnly: Boolean(checked) })
                                           }}
                                         />
                                         Only not blanks
