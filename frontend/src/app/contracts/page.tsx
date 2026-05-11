@@ -2220,7 +2220,7 @@ function ContractsPageContent() {
             { key: 'd61plus', label: '61+ days',   sublabel: 'Critical',    color: '#6b21a8', bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-700', bar: '#6b21a8' },
             { key: 'noData',  label: 'No Data',    sublabel: 'Missing dates', color: '#9ca3af', bg: 'bg-gray-50',  border: 'border-gray-200',   text: 'text-gray-500',   bar: '#9ca3af' },
           ] as const
-          const total = buckets.reduce((s, b) => s + (tradeCycleDist[b.key as keyof typeof tradeCycleDist]?.count ?? 0), 0)
+          const total = buckets.reduce((s, b) => s + (tradeCycleDist![b.key as keyof typeof tradeCycleDist]?.count ?? 0), 0)
           return (
             <Card>
               <CardHeader className="pb-2">
@@ -2237,7 +2237,7 @@ function ContractsPageContent() {
                 {/* Stacked bar */}
                 <div className="flex rounded-full overflow-hidden h-3 w-full">
                   {buckets.map(b => {
-                    const cnt = tradeCycleDist[b.key as keyof typeof tradeCycleDist]?.count ?? 0
+                    const cnt = tradeCycleDist![b.key as keyof typeof tradeCycleDist]?.count ?? 0
                     const pct = total > 0 ? (cnt / total) * 100 : 0
                     return pct > 0 ? (
                       <div key={b.key} title={`${b.label}: ${cnt} contracts (${pct.toFixed(1)}%)`}
@@ -2248,8 +2248,8 @@ function ContractsPageContent() {
                 {/* Bucket cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
                   {buckets.map(b => {
-                    const cnt = tradeCycleDist[b.key as keyof typeof tradeCycleDist]?.count ?? 0
-                    const qty = tradeCycleDist[b.key as keyof typeof tradeCycleDist]?.qty ?? 0
+                    const cnt = tradeCycleDist![b.key as keyof typeof tradeCycleDist]?.count ?? 0
+                    const qty = tradeCycleDist![b.key as keyof typeof tradeCycleDist]?.qty ?? 0
                     const pct = total > 0 ? ((cnt / total) * 100).toFixed(1) : '0.0'
                     return (
                       <div key={b.key} className={`rounded border px-3 py-2 ${b.bg} ${b.border}`}>
