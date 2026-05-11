@@ -2177,7 +2177,7 @@ function ContractsPageContent() {
                                     setLatePerfSelSupplier(null)
                                     setSelectedPlantSites([])
                                     setColumnFilters((prev) => {
-                                      const next = { ...prev, product: { type: 'text', value: n.label === 'Blank' ? '' : n.label, exact: true } as ColumnFilter }
+                                      const next: Record<string, ColumnFilter> = { ...prev, product: { type: 'text', value: n.label === 'Blank' ? '' : n.label, exact: true } as ColumnFilter }
                                       delete next.supplier
                                       return next
                                     })
