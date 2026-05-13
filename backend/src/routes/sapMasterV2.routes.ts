@@ -1,13 +1,19 @@
 import { Router } from 'express';
 import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 import { authenticateToken, authorize } from '../middleware/auth';
 import * as sapMasterV2Controller from '../controllers/sapMasterV2.controller';
 
 const router = Router();
 
+// Ensure uploads directory exists (matches supplier.routes.ts; avoids 500 when cwd lacks uploads/)
+const uploadDir = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
 // Configure multer for file uploads
 const upload = multer({
-  dest: 'uploads/',
+  dest: uploadDir,
   limits: {
     fileSize: 50 * 1024 * 1024 // 50MB max file size
   },
