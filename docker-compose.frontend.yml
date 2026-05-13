@@ -1,6 +1,10 @@
 # Frontend server stack: Next.js only
 # Run on frontend server (e.g. 172.28.92.56): docker-compose -f docker-compose.frontend.yml up -d
 # Set NEXT_PUBLIC_API_URL in .env: use /api when Nginx proxies /api to backend (same-origin).
+#
+# Host port defaults to 80 (browser uses http://server/ without :3001).
+# If Nginx already listens on 80 on this host, set FRONTEND_PORT=3001 and keep Nginx → 127.0.0.1:3001.
+# When using port 80 without Nginx, set BACKEND_INTERNAL_URL (e.g. http://172.28.92.57:5001) so Next.js rewrites /api to the backend.
 version: '3.8'
 
 services:
@@ -10,13 +14,14 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+        BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-}
     container_name: klip-frontend
     environment:
       NODE_ENV: production
       PORT: 3001
       HOSTNAME: 0.0.0.0
     ports:
-      - "${FRONTEND_PORT:-3001}:3001"
+      - "${FRONTEND_PORT:-80}:3001"
     networks:
       - klip-frontend-network
     restart: unless-stopped

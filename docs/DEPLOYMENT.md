@@ -209,10 +209,16 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
 
    ```env
    NEXT_PUBLIC_API_URL=/api
-   FRONTEND_PORT=3001
+   FRONTEND_PORT=80
    ```
 
-   Save and exit. **Important**: `NEXT_PUBLIC_API_URL` is baked into the frontend at **build** time. Use `/api` so the browser uses the same host as the page and Nginx can proxy to the backend.
+   By default the compose file maps **host port 80 → container port 3001** (Next.js still listens on 3001 inside the container). Users open **`http://<IP>/`** without `:3001`.
+
+   **If host Nginx also listens on port 80** on the same machine, either disable/stop Nginx or use **`FRONTEND_PORT=3001`** so Docker binds **3001** and Nginx proxies `/` → `127.0.0.1:3001` (recommended split for `/api` via Nginx).
+
+   **Docker-only on port 80 (no Nginx):** set **`BACKEND_INTERNAL_URL=http://172.28.92.57:5001`** (adjust IP) so Next.js **rewrites** `/api/*` to the backend at build time. Omit `BACKEND_INTERNAL_URL` when Nginx handles `/api`.
+
+   Save and exit. **Important**: `NEXT_PUBLIC_API_URL` is baked into the frontend at **build** time. Use `/api` so the browser uses the same host as the page.
 
 3. **Build and start the frontend container**:
 
@@ -227,8 +233,10 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
 
    ```bash
    docker compose -f docker-compose.frontend.yml ps
-   curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3001
+   curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1/
    ```
+
+   With default `FRONTEND_PORT=80`, use **`http://127.0.0.1/`** (port 80). If you set `FRONTEND_PORT=3001`, use `http://127.0.0.1:3001`.
 
    You should get `200`.
 

@@ -7,6 +7,10 @@ WORKDIR /app
 ARG NEXT_PUBLIC_API_URL=/api
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
+# Optional: backend base URL for Next.js rewrites when Docker serves host :80 without Nginx (e.g. http://172.28.92.57:5001)
+ARG BACKEND_INTERNAL_URL=
+ENV BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL}
+
 # Copy package files
 COPY package*.json ./
 

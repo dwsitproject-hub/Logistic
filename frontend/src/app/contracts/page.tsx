@@ -1429,7 +1429,9 @@ function ContractsPageContent() {
               <div className="flex items-center gap-1 min-w-0">
                 <span className="text-sm truncate">{c.contract_id}</span>
                 {showUrgentFlag(c) && (
-                  <Flag className="h-3.5 w-3.5 text-red-500 shrink-0 fill-red-500" title="No shipment/trucking — due within 14 days" />
+                  <span title="No shipment/trucking — due within 14 days" className="shrink-0 inline-flex">
+                    <Flag className="h-3.5 w-3.5 text-red-500 fill-red-500" />
+                  </span>
                 )}
               </div>
             ),
