@@ -305,6 +305,22 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
            proxy_cache_bypass $http_upgrade;
        }
 
+       # SAP MASTER file import runs synchronously and can take many minutes (thousands of rows).
+       # This path MUST use longer proxy timeouts than generic /api/ — otherwise Nginx closes the
+       # connection (~60s) while Node is still working; the browser then shows 500 / "Internal Server Error".
+       location /api/sap-master-v2/import-upload {
+           proxy_pass http://klip_backend/api/sap-master-v2/import-upload;
+           proxy_http_version 1.1;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+           proxy_connect_timeout 60s;
+           proxy_send_timeout 3600s;
+           proxy_read_timeout 3600s;
+           client_max_body_size 50M;
+       }
+
        # /api/* → backend server
        location /api/ {
            proxy_pass http://klip_backend/api/;
@@ -716,6 +732,20 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_cache_bypass $http_upgrade;
+    }
+
+    # SAP MASTER upload: long-running request (many minutes); do not use the 60s /api/ defaults here.
+    location /api/sap-master-v2/import-upload {
+        proxy_pass http://klip_backend/api/sap-master-v2/import-upload;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 3600s;
+        proxy_read_timeout 3600s;
+        client_max_body_size 50M;
     }
 
     # Backend API – proxy to private IP
