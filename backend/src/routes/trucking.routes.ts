@@ -42,6 +42,9 @@ router.get('/', getTruckingOperations);
 // Contract suggestions (LAND + Open) for create form
 router.get('/contracts/suggestions', getLandOpenContractSuggestions);
 
+// Validate contract number (legacy alias — some clients used /contracts/validate)
+router.get('/contracts/validate', validateContractNumber);
+
 // Validate contract number
 router.get('/validate/contract', validateContractNumber);
 

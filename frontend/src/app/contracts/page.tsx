@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, Minus, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal } from 'lucide-react'
 import api from '@/lib/api'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
@@ -138,6 +138,62 @@ type B2bPartyRow = {
   supplier?: string | null
   incoterm?: string | null
   certification?: string | null
+}
+
+/** Matches compact grid `minmax(Npx, …)` — used for <col /> widths with table-fixed */
+function compactGridTrackMinPx(track: string): string {
+  const m = track.match(/minmax\((\d+)px/)
+  return m ? `${m[1]}px` : '96px'
+}
+
+/** Default left-to-right order on `/contracts` when no saved column order (Supplier & Buyer after PO Number). */
+const CONTRACTS_DEFAULT_COLUMN_ORDER: string[] = [
+  'contract_date',
+  'contract_id',
+  'contract_ext_no',
+  'po_number',
+  'supplier',
+  'company_name',
+  'contract_qty',
+  'outstanding_qty_mt',
+]
+
+/** Merge preferred Contracts order with any extra compact column ids (append unknown). Contract Performance: keep schema order. */
+function compactColumnFallbackOrder(isContractPerformance: boolean, allIds: string[]): string[] {
+  if (isContractPerformance) return [...allIds]
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const id of CONTRACTS_DEFAULT_COLUMN_ORDER) {
+    if (allIds.includes(id) && !seen.has(id)) {
+      out.push(id)
+      seen.add(id)
+    }
+  }
+  for (const id of allIds) {
+    if (!seen.has(id)) {
+      out.push(id)
+      seen.add(id)
+    }
+  }
+  return out
+}
+
+/** App defaults when no saved column prefs (routes use separate localStorage keys). */
+function defaultCompactVisibleColumnIds(isContractPerformance: boolean): string[] {
+  if (isContractPerformance) {
+    return [
+      'contract_date',
+      'contract_id',
+      'group_name',
+      'supplier',
+      'outstanding_qty_mt',
+      'trade_cycle_days',
+      'cash_cycle_days',
+      'log_cycle_days',
+      'month_delivery_end',
+    ]
+  }
+  return [...CONTRACTS_DEFAULT_COLUMN_ORDER]
 }
 
 function ContractsPageContent() {
@@ -560,11 +616,6 @@ function ContractsPageContent() {
   }
 
   const collapseAll = () => setExpandedContractIds(new Set())
-
-  const expandAll = (ids: string[]) => setExpandedContractIds(new Set(ids))
-
-  const expandedCount = expandedContractIds.size
-  // NOTE: allVisibleIds/allExpanded are derived after filteredContracts is defined (below)
 
   const columnStorageKey = isContractPerformance
     ? 'contract-performance.compact.visibleColumns.v10'
@@ -1241,7 +1292,12 @@ function ContractsPageContent() {
     } else {
       api.get('/trucking', { params: { contract: selectedContract.contract_id, limit: 200 } })
         .then((res) => {
-          const list = res.data?.data?.operations ?? res.data?.operations ?? []
+          const list =
+            res.data?.data?.truckingOperations ??
+            res.data?.data?.operations ??
+            res.data?.truckingOperations ??
+            res.data?.operations ??
+            []
           const op = Array.isArray(list) && row.operation_id
             ? list.find((o: any) => String(o.operation_id || '') === String(row.operation_id))
             : (Array.isArray(list) && list.length > 0 ? list[0] : null)
@@ -1785,25 +1841,16 @@ function ContractsPageContent() {
   }, [getStatusColor, isContractPerformance, formatMonthDeliveryEnd]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
-   * Default visible columns (Contracts + Contract Performance).
-   * Contract Qty + Buyer off by default; Trade/Cash/Log Cycle + others on; toggle via Columns menu.
+   * Same arrays as {@link defaultCompactVisibleColumnIds}; kept for reset + deps.
    */
   const defaultVisibleColumnIds = useMemo(
-    () => [
-      'contract_date',
-      'contract_id',
-      'po_number',
-      'group_name',
-      'supplier',
-      'outstanding_qty_mt',
-      'trade_cycle_days',
-      'cash_cycle_days',
-      'log_cycle_days',
-    ],
-    []
+    () => defaultCompactVisibleColumnIds(isContractPerformance),
+    [isContractPerformance],
   )
 
-  const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => new Set(defaultVisibleColumnIds))
+  const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() =>
+    new Set(defaultCompactVisibleColumnIds(pathname === '/contract-performance')),
+  )
   const [columnOrderIds, setColumnOrderIds] = useState<string[]>(() => [])
   const [dragColId, setDragColId] = useState<string | null>(null)
   const userViewPrefKey = isContractPerformance ? 'contract_performance.compact.view.v6' : 'contracts.compact.view.v9'
@@ -1812,7 +1859,7 @@ function ContractsPageContent() {
   /** Reset visible columns + column order to app defaults, persist locally and on server (so async prefs cannot wipe it). */
   const resetCompactColumnView = useCallback(() => {
     const vis = new Set(defaultVisibleColumnIds)
-    const order = compactColumns.map((c) => c.id)
+    const order = compactColumnFallbackOrder(isContractPerformance, compactColumns.map((c) => c.id))
     setVisibleColumnIds(vis)
     setColumnOrderIds(order)
     if (typeof window !== 'undefined') {
@@ -1837,6 +1884,7 @@ function ContractsPageContent() {
     columnStorageKey,
     compactColumns,
     defaultVisibleColumnIds,
+    isContractPerformance,
     userViewPrefKey,
   ])
 
@@ -1947,12 +1995,14 @@ function ContractsPageContent() {
 
   const visibleColumns = useMemo(() => {
     const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
-    const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : compactColumns.map((c) => c.id))
-      .filter((id) => byId.has(id))
+    const allIds = compactColumns.map((c) => c.id)
+    const fallbackOrder = compactColumnFallbackOrder(isContractPerformance, allIds)
+    const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : fallbackOrder).filter((id) => byId.has(id))
     const orderedAll = orderedIds.map((id) => byId.get(id)!).filter(Boolean)
     const visible = orderedAll.filter((c) => visibleColumnIds.has(c.id))
     // Ensure required columns are always visible (Contracts page only).
-    const mustHave = isContractPerformance ? [] : ['contract_id', 'status']
+    // Always keep Contract column if toggled off by mistake; status is optional (default view does not include it).
+    const mustHave = isContractPerformance ? [] : ['contract_id']
     const visibleIds = new Set(visible.map((c) => c.id))
     const missing = mustHave
       .map((id) => byId.get(id))
@@ -1966,7 +2016,7 @@ function ContractsPageContent() {
     // Initialize / heal column order with any missing ids.
     const allIds = compactColumns.map((c) => c.id)
     setColumnOrderIds((prev) => {
-      const base = prev.length > 0 ? prev : allIds
+      const base = prev.length > 0 ? prev : compactColumnFallbackOrder(isContractPerformance, allIds)
       const deduped = Array.from(new Set(base))
       const missing = allIds.filter((id) => !deduped.includes(id))
       const next = [...deduped, ...missing].filter((id) => allIds.includes(id))
@@ -1974,12 +2024,13 @@ function ContractsPageContent() {
       return next
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compactColumnIdsKey])
+  }, [compactColumnIdsKey, isContractPerformance])
 
   const reorderColumnByDrag = (dragId: string, dropId: string) => {
     if (dragId === dropId) return
     setColumnOrderIds((prev) => {
-      const ids = prev.length > 0 ? [...prev] : compactColumns.map((c) => c.id)
+      const allIds = compactColumns.map((c) => c.id)
+      const ids = prev.length > 0 ? [...prev] : compactColumnFallbackOrder(isContractPerformance, allIds)
       const from = ids.indexOf(dragId)
       const to = ids.indexOf(dropId)
       if (from < 0 || to < 0) return ids
@@ -2269,9 +2320,6 @@ function ContractsPageContent() {
     window.addEventListener('resize', calc)
     return () => window.removeEventListener('resize', calc)
   }, [visibleColumns, sortedContracts.length, compactGridColumnTracks])
-
-  const allVisibleIds = useMemo(() => sortedContracts.map(c => c.id), [sortedContracts])
-  const allExpanded = expandedCount > 0 && expandedCount === allVisibleIds.length
 
   // If pagination/filtering changes, drop expansions that aren't on the current view to avoid stale set growth
   useEffect(() => {
@@ -2851,6 +2899,8 @@ function ContractsPageContent() {
                       ? 'SEA Contracts Without Shipments'
                       : unassignedFilter === 'land'
                       ? 'LAND Contracts Without Trucking'
+                      : isContractPerformance
+                      ? 'Contract Performance'
                       : 'All Contracts'}
                   </CardTitle>
                   <p className="text-sm text-gray-500 mt-1">
@@ -2949,24 +2999,6 @@ function ContractsPageContent() {
                     </div>
                   )}
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => (allExpanded ? collapseAll() : expandAll(allVisibleIds))}
-                  disabled={loading || filteredContracts.length === 0}
-                >
-                  {allExpanded ? (
-                    <>
-                      <Minus className="h-4 w-4 mr-2" />
-                      Collapse All
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Expand All
-                    </>
-                  )}
-                </Button>
               </div>
               {/* Pagination Controls - Top */}
               {totalPages > 1 && (
@@ -3026,7 +3058,7 @@ function ContractsPageContent() {
               <div className="text-center py-8">Loading contracts...</div>
             ) : (
               <>
-                {/* Desktop compact table: ONE scroll container + clean rows */}
+                {/* Desktop compact table (Contracts + Contract Performance): semantic <table>, zebra on <tr>/<td> */}
                 <div className="hidden lg:block border rounded-lg overflow-hidden">
                   {/* Top scrollbar (synced) */}
                   <div
@@ -3063,13 +3095,16 @@ function ContractsPageContent() {
                     }}
                   >
                     <div className="min-w-[1100px]">
+                      <table className="w-full min-w-[1100px] table-fixed border-collapse">
+                        <colgroup>
+                          {visibleColumns.map((c) => (
+                            <col key={c.id} style={{ width: compactGridTrackMinPx(getColumnWidth(c.id)) }} />
+                          ))}
+                          <col style={{ width: isContractPerformance ? 60 : 160 }} />
+                        </colgroup>
                       {/* Header */}
-                      <div
-                        className="grid gap-3 px-3 py-2 text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10"
-                        style={{
-                          gridTemplateColumns: `${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} ${isContractPerformance ? '60px' : '160px'}`
-                        }}
-                      >
+                      <thead>
+                      <tr className="text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10">
                         {visibleColumns.map(col => {
                           const activeSort = sortKey === col.id
                           const filterActive = isColumnFilterActive(col.id)
@@ -3081,9 +3116,10 @@ function ContractsPageContent() {
                           const currentMulti = current && current.type === 'multi'  ? current : null
 
                           return (
-                            <div
+                            <th
                               key={col.id}
-                              className={`relative min-w-0 cursor-move ${dragColId === col.id ? 'opacity-60' : ''}`}
+                              scope="col"
+                              className={`relative min-w-0 px-3 py-2 text-left align-bottom font-semibold cursor-move ${dragColId === col.id ? 'opacity-60' : ''}`}
                               draggable
                               onDragStart={(e) => {
                                 setDragColId(col.id)
@@ -3409,38 +3445,42 @@ function ContractsPageContent() {
                                   </div>
                                 </div>
                               )}
-                            </div>
+                            </th>
                           )
                         })}
-                        <div className={`text-center sticky right-0 z-20 bg-gray-50 border-l pl-3 pr-2 ${isContractPerformance ? 'min-w-[60px]' : 'min-w-[160px]'}`}>Actions</div>
-                      </div>
+                        <th
+                          scope="col"
+                          className={`text-center align-bottom font-semibold sticky right-0 z-20 top-0 bg-gray-50 border-l border-gray-200 pl-3 pr-2 ${isContractPerformance ? 'min-w-[60px]' : 'min-w-[160px]'}`}
+                        >
+                          Actions
+                        </th>
+                      </tr>
+                      </thead>
 
                       {/* Rows */}
-                      <div className="divide-y">
+                      <tbody className="divide-y divide-gray-200">
                         {sortedContracts.length === 0 ? (
-                          <div className="bg-white">
-                            <div className="px-4 py-10 text-center text-gray-500">
+                          <tr className="bg-white">
+                            <td colSpan={visibleColumns.length + 1} className="px-4 py-10 text-center text-gray-500">
                               <p>No contracts found</p>
                               {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
-                            </div>
-                          </div>
+                            </td>
+                          </tr>
                         ) : (
-                          sortedContracts.map((contract, idx) => (
-                          <div key={contract.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                            <div className="px-3 py-2">
-                              <div
-                                className="grid gap-3 items-center"
-                                style={{
-                                  gridTemplateColumns: `${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} ${isContractPerformance ? '60px' : '160px'}`
-                                }}
-                              >
+                          sortedContracts.map((contract, idx) => {
+                            const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                            return (
+                          <tr key={contract.id} className={stripeClass}>
                                 {visibleColumns.map(col => (
-                                  <div key={col.id} className="min-w-0">
-                                    {col.render(contract)}
-                                  </div>
+                                  <td key={col.id} className={`min-w-0 px-3 py-2 align-middle ${stripeClass}`}>
+                                    <div className="flex min-h-[40px] items-center">{col.render(contract)}</div>
+                                  </td>
                                 ))}
 
-                                <div className={`flex items-center justify-end gap-2 sticky right-0 z-10 bg-white border-l pl-3 pr-2 shadow-[-8px_0_12px_-12px_rgba(0,0,0,0.35)] ${isContractPerformance ? 'min-w-[60px]' : 'min-w-[160px]'}`}>
+                                <td
+                                  className={`sticky right-0 z-10 border-l border-gray-200 px-3 py-2 align-middle ${isContractPerformance ? 'min-w-[60px]' : 'min-w-[160px]'} ${stripeClass}`}
+                                >
+                                  <div className="flex items-center justify-end gap-2">
                                   {!isContractPerformance && (transportIsLand(contract) || transportIsMix(contract)) && (() => {
                                     const hasData = countGt0(contract.trucking_count)
                                     return (
@@ -3490,14 +3530,14 @@ function ContractsPageContent() {
                                       </Button>
                                     </>
                                   )}
-                                </div>
-                              </div>
-
-                            </div>
-                          </div>
-                        ))
+                                  </div>
+                                </td>
+                              </tr>
+                            )
+                          })
                         )}
-                      </div>
+                      </tbody>
+                    </table>
                     </div>
                   </div>
                 </div>
