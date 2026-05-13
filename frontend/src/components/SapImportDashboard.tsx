@@ -6,6 +6,30 @@ import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import api from '../lib/api';
 
+/** Parses API error bodies (including HTML fallback) so alerts show the real backend message. */
+function formatImportFailureMessage(error: unknown): string {
+  const err = error as { message?: string; response?: { data?: unknown; status?: number } };
+  const d = err.response?.data;
+  if (typeof d === 'string' && d.trim()) {
+    const stripped = d.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return stripped.slice(0, 400) || err.message || 'Request failed';
+  }
+  if (d && typeof d === 'object') {
+    const o = d as { error?: { message?: string; detail?: string; code?: string }; message?: string };
+    const msg = o.error?.message ?? o.message;
+    const detail = o.error?.detail;
+    const code = o.error?.code;
+    const parts = [msg, detail, code].filter(Boolean);
+    if (parts.length) return parts.join(' — ');
+    try {
+      return JSON.stringify(d).slice(0, 400);
+    } catch {
+      /* ignore */
+    }
+  }
+  return err.message || 'Request failed';
+}
+
 interface SapImport {
   id: string;
   import_date: string;
@@ -69,17 +93,16 @@ const SapImportDashboard: React.FC = () => {
       const formData = new FormData();
       formData.append('file', file);
 
+      // Do not set Content-Type: FormData needs multipart boundary from the browser/axios.
       const response = await api.post('/sap-master-v2/import-upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        }
+        timeout: 0,
       });
       
       alert(`Import started successfully!\nFile: ${file.name}\nImport ID: ${response.data.data.importId}\nTotal Records: ${response.data.data.totalRecords}`);
       loadImports();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to start import:', error);
-      alert(`Import failed: ${error.response?.data?.error?.message || error.message}`);
+      alert(`Import failed: ${formatImportFailureMessage(error)}`);
     } finally {
       setImporting(false);
       setSelectedFile(null);

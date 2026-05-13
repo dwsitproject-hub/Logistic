@@ -4,6 +4,20 @@ import logger from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
 
+/** Safe fields only — raw pg errors can break JSON.stringify when nested/circular. */
+function sapImportHttpError(error: unknown): { message: string; code?: string; detail?: string } {
+  if (error instanceof Error) {
+    const e = error as Error & { code?: string; detail?: string };
+    const body: { message: string; code?: string; detail?: string } = {
+      message: e.message || 'Unknown error',
+    };
+    if (typeof e.code === 'string') body.code = e.code;
+    if (typeof e.detail === 'string') body.detail = e.detail;
+    return body;
+  }
+  return { message: typeof error === 'string' ? error : 'Unknown error' };
+}
+
 /**
  * Import SAP MASTER v2 data from uploaded file
  */
@@ -29,10 +43,7 @@ export const importMasterV2 = async (req: Request, res: Response): Promise<void>
     logger.error('SAP MASTER v2 import failed', error);
     res.status(500).json({
       success: false,
-      error: {
-        message: error instanceof Error ? error.message : 'Unknown error',
-        details: error
-      }
+      error: sapImportHttpError(error),
     });
   }
 };
@@ -267,10 +278,7 @@ export const importMasterV2Upload = async (req: Request, res: Response): Promise
     
     res.status(500).json({
       success: false,
-      error: {
-        message: error instanceof Error ? error.message : 'Unknown error',
-        details: error
-      }
+      error: sapImportHttpError(error),
     });
   }
 };
