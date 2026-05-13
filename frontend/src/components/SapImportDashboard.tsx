@@ -101,7 +101,9 @@ const SapImportDashboard: React.FC = () => {
       alert(`Import started successfully!\nFile: ${file.name}\nImport ID: ${response.data.data.importId}\nTotal Records: ${response.data.data.totalRecords}`);
       loadImports();
     } catch (error: unknown) {
-      console.error('Failed to start import:', error);
+      const err = error as { response?: { status?: number; data?: unknown }; message?: string };
+      console.error('Failed to start import:', formatImportFailureMessage(error));
+      console.error('Import upload response:', err.response?.status, err.response?.data);
       alert(`Import failed: ${formatImportFailureMessage(error)}`);
     } finally {
       setImporting(false);

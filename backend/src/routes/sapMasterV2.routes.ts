@@ -1,14 +1,17 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { authenticateToken, authorize } from '../middleware/auth';
 import * as sapMasterV2Controller from '../controllers/sapMasterV2.controller';
 
 const router = Router();
 
-// Ensure uploads directory exists (matches supplier.routes.ts; avoids 500 when cwd lacks uploads/)
-const uploadDir = path.join(process.cwd(), 'uploads');
+// Use OS temp dir for transient SAP uploads. Docker volume `backend_uploads:/app/uploads` is often
+// root-owned while the app runs as `nodejs`, causing EACCES and 500 from multer; files are deleted
+// after import anyway (see importMasterV2Upload).
+const uploadDir = path.join(os.tmpdir(), 'klip-sap-uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 // Configure multer for file uploads
@@ -19,13 +22,19 @@ const upload = multer({
   },
   fileFilter: (_req, file, cb) => {
     const lower = file.originalname.toLowerCase();
-    if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+    if (/\.(xlsx|xlsm|xlsb|xls)$/i.test(lower)) {
       cb(null, true);
     } else {
-      cb(new Error('Only Excel files (.xlsx, .xls) are allowed'));
+      cb(new Error('Only Excel files (.xlsx, .xlsm, .xlsb, .xls) are allowed'));
     }
   }
 });
+
+const catchAsync =
+  (fn: (req: Request, res: Response) => Promise<void>) =>
+  (req: Request, res: Response, next: NextFunction): void => {
+    Promise.resolve(fn(req, res)).catch(next);
+  };
 
 // Import endpoints
 router.post(
@@ -40,7 +49,7 @@ router.post(
   authenticateToken,
   authorize('ADMIN'),
   upload.single('file'),
-  sapMasterV2Controller.importMasterV2Upload
+  catchAsync(sapMasterV2Controller.importMasterV2Upload)
 );
 
 router.get(
