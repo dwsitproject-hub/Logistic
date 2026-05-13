@@ -8,6 +8,7 @@ import {
   getB2bPartiesForContract,
   getContractFilterIncoterms,
   getLatePerformance,
+  getDistinctBuyers,
   createContract,
   updateContract,
 } from '../controllers/contract.controller';
@@ -53,6 +54,7 @@ router.get('/', getContracts);
 router.get('/late-performance', getLatePerformance);
 router.get('/filter-options/incoterms', getContractFilterIncoterms);
 router.get('/unassigned-counts', getUnassignedCounts);
+router.get('/buyers', getDistinctBuyers);
 
 /**
  * @swagger

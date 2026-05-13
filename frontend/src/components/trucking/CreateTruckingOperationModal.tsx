@@ -3,6 +3,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
+import { BuyerCombobox } from '@/components/BuyerCombobox'
 import { X, Loader2, Plus, Check } from 'lucide-react'
 import api from '@/lib/api'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
@@ -72,12 +74,25 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       const response = await api.get(`/trucking/validate/contract?contract_number=${encodeURIComponent(contractNumber)}`)
       if (response.data.success) {
         if (response.data.exists) {
+          const cd = response.data.data
           setContractValidation({
             checking: false,
             exists: true,
-            contractData: response.data.data,
+            contractData: cd,
             message: 'Contract found',
           })
+          const plantLabel = cd.plant_name || ''
+          if (plantLabel) {
+            setNewOperation((prev) => ({ ...prev, location: plantLabel }))
+          }
+          const supplierLabel = cd.supplier || ''
+          if (supplierLabel) {
+            setNewOperation((prev) => ({ ...prev, loading_location: supplierLabel }))
+          }
+          const buyerLabel = (cd.buyer || '').trim()
+          if (buyerLabel) {
+            setNewOperation((prev) => ({ ...prev, unloading_location: buyerLabel }))
+          }
         } else {
           setContractValidation({
             checking: false,
@@ -169,11 +184,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   const validateForm = (): boolean => {
     const errors: Record<string, string> = {}
     if (!contractValidation.exists) errors.contract_number = 'Contract Ext No is required and must be valid'
-    if (!newOperation.location.trim()) errors.location = 'Plant/Site is required'
-    if (!newOperation.loading_location.trim()) errors.loading_location = 'Loading Location is required'
-    if (!newOperation.unloading_location.trim()) errors.unloading_location = 'Unloading Location is required'
-    if (!newOperation.trucking_owner.trim()) errors.trucking_owner = 'Trucking Owner is required'
-    if (!newOperation.quantity_sent.trim()) errors.quantity_sent = 'Quantity Sent is required'
 
     if (truckingDateRange) {
       const { minIso, maxIso } = truckingDateRange
@@ -314,13 +324,13 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         <div className="space-y-5">
 
           {/* Section 1 — Contract Detail */}
-          <div className="border rounded-lg overflow-hidden">
+          <div className="border rounded-lg">
             <div className="bg-gray-50 px-4 py-2 border-b">
               <h4 className="text-sm font-semibold text-gray-700">1. Contract Detail</h4>
             </div>
             <div className="p-4">
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Contract Ext No <span className="text-red-500">*</span>
+                Contract Ext No{!initialContractExtNo && <span className="text-red-500"> *</span>}
               </label>
               <div className="relative">
                 <div className="flex gap-2">
@@ -332,7 +342,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       if (contractSuggestions.length > 0) setShowContractSuggestions(true)
                       if (contractSearchTerm.trim().length >= 2) fetchContractSuggestions(contractSearchTerm)
                     }}
-                    className={`flex-1 ${
+                    readOnly={!!initialContractExtNo}
+                    className={`flex-1 ${initialContractExtNo ? 'bg-gray-50 cursor-default' : ''} ${
                       contractValidation.exists
                         ? 'border-green-500'
                         : contractValidation.message && !contractValidation.checking
@@ -399,6 +410,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       <span className="font-semibold">Supplier:</span> {contractValidation.contractData.supplier || '-'}
                     </div>
                     <div>
+                      <span className="font-semibold">Buyer:</span> {contractValidation.contractData.buyer || '-'}
+                    </div>
+                    <div>
                       <span className="font-semibold">Product:</span> {contractValidation.contractData.product || '-'}
                     </div>
                     <div>
@@ -411,121 +425,61 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
           </div>
 
           {/* Section 2 — Truck Detail */}
-          <div className="border rounded-lg overflow-hidden">
+          <div className="border rounded-lg">
             <div className="bg-gray-50 px-4 py-2 border-b">
               <h4 className="text-sm font-semibold text-gray-700">2. Truck Detail</h4>
             </div>
             <div className="p-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Operation ID (optional)</label>
-                  <Input
-                    value={newOperation.operation_id}
-                    onChange={(e) => setNewOperation((prev) => ({ ...prev, operation_id: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-                  <select
-                    value={newOperation.status}
-                    onChange={(e) => setNewOperation((prev) => ({ ...prev, status: e.target.value }))}
-                    className="w-full h-10 px-3 border border-gray-300 rounded-md"
-                  >
-                    <option value="PLANNED">Planned</option>
-                    <option value="IN_PROGRESS">In Progress</option>
-                    <option value="LOADING">Loading</option>
-                    <option value="IN_TRANSIT">In Transit</option>
-                    <option value="UNLOADING">Unloading</option>
-                    <option value="COMPLETED">Completed</option>
-                    <option value="CANCELLED">Cancelled</option>
-                  </select>
-                </div>
-                <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Plant/Site <span className="text-red-500">*</span>
+                    Plant/Site
                   </label>
-                  <Input
+                  <PlantSiteCombobox
                     value={newOperation.location}
-                    onChange={(e) => { setNewOperation((prev) => ({ ...prev, location: e.target.value })); clearFieldError('location') }}
+                    onChange={(val) => { setNewOperation((prev) => ({ ...prev, location: val })); clearFieldError('location') }}
                     className={formErrors.location ? 'border-red-500' : ''}
+                    placeholder="Search plant/site..."
+                    valueField="plant_name"
+                    disabled={contractValidation.exists}
                   />
                   {formErrors.location && <p className="text-xs mt-1 text-red-600">{formErrors.location}</p>}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Loading Location <span className="text-red-500">*</span>
+                    Loading Location
                   </label>
-                  <Input
+                  <PlantSiteCombobox
                     value={newOperation.loading_location}
-                    onChange={(e) => { setNewOperation((prev) => ({ ...prev, loading_location: e.target.value })); clearFieldError('loading_location') }}
+                    onChange={(val) => { setNewOperation((prev) => ({ ...prev, loading_location: val })); clearFieldError('loading_location') }}
                     className={formErrors.loading_location ? 'border-red-500' : ''}
+                    placeholder="Search loading location..."
                   />
                   {formErrors.loading_location && <p className="text-xs mt-1 text-red-600">{formErrors.loading_location}</p>}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Unloading Location <span className="text-red-500">*</span>
+                    Unloading Location
                   </label>
-                  <Input
+                  <BuyerCombobox
                     value={newOperation.unloading_location}
-                    onChange={(e) => { setNewOperation((prev) => ({ ...prev, unloading_location: e.target.value })); clearFieldError('unloading_location') }}
+                    onChange={(val) => { setNewOperation((prev) => ({ ...prev, unloading_location: val })); clearFieldError('unloading_location') }}
                     className={formErrors.unloading_location ? 'border-red-500' : ''}
+                    placeholder="Search buyer (unloading location)..."
                   />
                   {formErrors.unloading_location && <p className="text-xs mt-1 text-red-600">{formErrors.unloading_location}</p>}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Trucking Owner <span className="text-red-500">*</span>
-                  </label>
-                  <Input
-                    value={newOperation.trucking_owner}
-                    onChange={(e) => { setNewOperation((prev) => ({ ...prev, trucking_owner: e.target.value })); clearFieldError('trucking_owner') }}
-                    className={formErrors.trucking_owner ? 'border-red-500' : ''}
-                  />
-                  {formErrors.trucking_owner && <p className="text-xs mt-1 text-red-600">{formErrors.trucking_owner}</p>}
                 </div>
               </div>
             </div>
           </div>
 
           {/* Section 3 — Shipment Detail */}
-          <div className="border rounded-lg overflow-hidden">
+          <div className="border rounded-lg">
             <div className="bg-gray-50 px-4 py-2 border-b">
               <h4 className="text-sm font-semibold text-gray-700">3. Shipment Detail</h4>
             </div>
             <div className="p-4 space-y-4">
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Quantity Sent (Kg) <span className="text-red-500">*</span>
-                  </label>
-                  <Input
-                    inputMode="decimal"
-                    value={newOperation.quantity_sent}
-                    onChange={(e) => { setNewOperation((prev) => ({ ...prev, quantity_sent: e.target.value })); clearFieldError('quantity_sent') }}
-                    className={formErrors.quantity_sent ? 'border-red-500' : ''}
-                  />
-                  {formErrors.quantity_sent && <p className="text-xs mt-1 text-red-600">{formErrors.quantity_sent}</p>}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Quantity Delivered (Kg)</label>
-                  <Input
-                    inputMode="decimal"
-                    value={newOperation.quantity_delivered}
-                    onChange={(e) => setNewOperation((prev) => ({ ...prev, quantity_delivered: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Cargo Readiness Date</label>
-                  <DateInputDdMmYyyy
-                    valueIso={newOperation.cargo_readiness_date}
-                    minIso={truckingDateRange?.minIso}
-                    maxIso={truckingDateRange?.maxIso}
-                    onChangeIso={(iso) => { setNewOperation((prev) => ({ ...prev, cargo_readiness_date: iso })); clearFieldError('cargo_readiness_date') }}
-                    className={formErrors.cargo_readiness_date ? 'border-red-500' : ''}
-                  />
-                  {formErrors.cargo_readiness_date && <p className="text-xs mt-1 text-red-600">{formErrors.cargo_readiness_date}</p>}
-                </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Due Date Delivery Start</label>
                   <DateInputDdMmYyyy

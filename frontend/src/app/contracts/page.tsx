@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, GripVertical, Minus, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, Minus, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal } from 'lucide-react'
 import api from '@/lib/api'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
@@ -450,6 +450,25 @@ function ContractsPageContent() {
     return out
   }, [columnFilters, SERVER_COLUMN_FILTER_IDS])
 
+  /** True if any server-side column filter popover has a real constraint (section 1 is not "clean"). */
+  const hasActiveSectionOneColumnFilters = useCallback((filters: Record<string, ColumnFilter>): boolean => {
+    for (const f of Object.values(filters)) {
+      if (f.emptyOnly || f.notBlankOnly) return true
+      if (f.type === 'text' && (f.value || '').trim().length > 0) return true
+      if (f.type === 'number') {
+        if ((f.min !== undefined && String(f.min).trim() !== '') || (f.max !== undefined && String(f.max).trim() !== '')) {
+          return true
+        }
+      }
+      if (f.type === 'date' && ((f.from && String(f.from).trim()) || (f.to && String(f.to).trim()))) return true
+      if (f.type === 'multi') {
+        if (f.values && f.values.length > 0) return true
+        if (f.includeBlank) return true
+      }
+    }
+    return false
+  }, [])
+
   useEffect(() => {
     if (typeof window === 'undefined') return
     const onMouseDown = (e: MouseEvent) => {
@@ -509,6 +528,7 @@ function ContractsPageContent() {
     unassignedFilter,
     selectedIncoterms,
     selectedPlantSites,
+    columnFilters,
   ])
 
   // Debounced refetch: global search runs on the server (full dataset), not only the current page
@@ -547,11 +567,12 @@ function ContractsPageContent() {
   // NOTE: allVisibleIds/allExpanded are derived after filteredContracts is defined (below)
 
   const columnStorageKey = isContractPerformance
-    ? 'contract-performance.compact.visibleColumns.v5'
-    : 'contracts.compact.visibleColumns.v3'
+    ? 'contract-performance.compact.visibleColumns.v10'
+    : 'contracts.compact.visibleColumns.v8'
   const columnOrderStorageKey = isContractPerformance
-    ? 'contract-performance.compact.columnOrder.v2'
-    : 'contracts.compact.columnOrder.v2'
+    ? 'contract-performance.compact.columnOrder.v7'
+    : 'contracts.compact.columnOrder.v9'
+  // v4: default column order puts Contract Date first (ignore stale v3 saved order).
   // Bumped so saved "created_at" default does not fight API order (newest contract_date first).
   const sortStorageKey = isContractPerformance ? 'contract-performance.compact.sort' : 'contracts.compact.sort.v2'
 
@@ -578,7 +599,23 @@ function ContractsPageContent() {
       if (cfKeys.length > 0) {
         params.append('columnFilters', JSON.stringify(mergedColumnFilters))
       }
-      if (statusFilter && statusFilter !== 'All Status') {
+
+      // SEA/LAND unassigned cards count only Open contracts (see getUnassignedCounts). When section 1
+      // has no extra filters, align the table with the card by requesting Open only.
+      const sectionOneCleanForUnassigned =
+        !isContractPerformance &&
+        unassignedFilter &&
+        searchTrim.length < 2 &&
+        (!statusFilter || statusFilter === 'All Status') &&
+        b2bFlagFilter === 'ALL' &&
+        productFilter === 'ALL' &&
+        transportModeFilter === 'ALL' &&
+        searchParams.get('outstanding') !== 'true' &&
+        !hasActiveSectionOneColumnFilters(columnFilters)
+
+      if (sectionOneCleanForUnassigned) {
+        params.append('status', 'Open')
+      } else if (statusFilter && statusFilter !== 'All Status') {
         // Status is aligned with SAP (Open/Close/Cancelled)
         params.append('status', statusFilter)
       }
@@ -652,7 +689,7 @@ function ContractsPageContent() {
       // Extract unique B2B flags from contracts
       // Use fresh response data; state updates are async.
       const b2bFlags = [...new Set(loadedContracts.map(c => c.b2b_flag).filter((v): v is string => typeof v === 'string' && v.length > 0))].sort()
-      if (b2bFlags.length > 0) setAvailableB2bFlags(b2bFlags)
+      if (b2bFlags.length > 0) setAvailableB2bFlags(prev => [...new Set([...prev, ...b2bFlags])].sort())
       const products = [...new Set(loadedContracts.map(c => c.product).filter((v): v is string => typeof v === 'string' && v.length > 0))].sort()
       if (products.length > 0) setAvailableProducts(prev => [...new Set([...prev, ...products])].sort())
     } catch (error) {
@@ -671,10 +708,12 @@ function ContractsPageContent() {
     try {
       setLatePerfLoading(true)
       const params = new URLSearchParams()
-      // Always show full YTD dashboard (independent of current page rows).
       params.append('scope', 'ytd')
-      // Avoid any intermediate/browser caching (ETag/304) for dashboard data.
       params.append('_ts', String(Date.now()))
+
+      if (transportModeFilter && transportModeFilter !== 'ALL') params.append('transportMode', transportModeFilter)
+      if (productFilter && productFilter !== 'ALL') params.append('product', productFilter)
+      if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
 
       const resp = await api.get(`/contracts/late-performance?${params.toString()}`)
       const data = resp.data?.data
@@ -692,6 +731,9 @@ function ContractsPageContent() {
   }, [
     authReady,
     isContractPerformance,
+    transportModeFilter,
+    productFilter,
+    b2bFlagFilter,
   ])
 
   useEffect(() => {
@@ -778,9 +820,10 @@ function ContractsPageContent() {
     if (!authReady) return
     try {
       const params = new URLSearchParams()
-      if (statusFilter && statusFilter !== 'All Status') params.append('status', statusFilter)
       if (searchTerm.trim().length >= 2) params.append('search', searchTerm.trim())
       if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
+      if (productFilter && productFilter !== 'ALL') params.append('product', productFilter)
+      if (transportModeFilter && transportModeFilter !== 'ALL') params.append('transportMode', transportModeFilter)
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
       const res = await api.get<{ success: boolean; data: { seaWithoutShipments: number; landWithoutTrucking: number } }>(
@@ -793,7 +836,7 @@ function ContractsPageContent() {
     } catch (err) {
       console.error('Failed to fetch unassigned counts:', err)
     }
-  }, [authReady, statusFilter, searchTerm, b2bFlagFilter, dateFrom, dateTo])
+  }, [authReady, searchTerm, b2bFlagFilter, productFilter, transportModeFilter, dateFrom, dateTo])
 
   useEffect(() => {
     fetchUnassignedCounts()
@@ -842,11 +885,26 @@ function ContractsPageContent() {
 
   const transportIsLand = (c: Contract) => String(c.transport_mode || '').toUpperCase() === 'LAND'
   const transportIsSea = (c: Contract) => String(c.transport_mode || '').toUpperCase() === 'SEA'
+  const transportIsMix = (c: Contract) => String(c.transport_mode || '').toUpperCase() === 'MIX'
+
+  const showUrgentFlag = (c: Contract): boolean => {
+    if (!c.delivery_start_date) return false
+    const daysUntilDelivery = Math.floor(
+      (new Date(c.delivery_start_date).getTime() - Date.now()) / 86400000
+    )
+    if (daysUntilDelivery > 14) return false
+    const noShipment = !countGt0(c.shipment_count) && !countGt0(c.sto_count)
+    const noTrucking = !countGt0(c.trucking_count)
+    if (transportIsSea(c)) return noShipment
+    if (transportIsLand(c)) return noTrucking
+    if (transportIsMix(c)) return noShipment || noTrucking
+    return noShipment && noTrucking
+  }
 
   const handleTruckIconClick = (contract: Contract) => {
     const hasTrucking = countGt0(contract.trucking_count)
     if (!hasTrucking) {
-      if (!transportIsLand(contract)) {
+      if (!transportIsLand(contract) && !transportIsMix(contract)) {
         alert(
           'Trucking operations apply to LAND contracts only. Open the Trucking page from the menu if you need to work across transport modes.',
         )
@@ -861,7 +919,7 @@ function ContractsPageContent() {
   const handleShipIconClick = (contract: Contract) => {
     const hasShipping = countGt0(contract.shipment_count) || countGt0(contract.sto_count)
     if (!hasShipping) {
-      if (!transportIsSea(contract)) {
+      if (!transportIsSea(contract) && !transportIsMix(contract)) {
         alert(
           'Shipments apply to SEA contracts only. Open the Shipments page from the menu if you need to work across transport modes.',
         )
@@ -1338,10 +1396,29 @@ function ContractsPageContent() {
     headerClassName?: string
   }
 
-  const compactColumns: CompactColumn[] = useMemo(() => [
-    ...(isContractPerformance
-      ? []
-      : ([
+  const compactColumns: CompactColumn[] = useMemo(() => {
+    const poNumberColumn: CompactColumn = {
+      id: 'po_number',
+      label: 'PO Number',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => c.po_numbers || c.po_number || '',
+      render: (c) => (
+        <span className="text-sm truncate block" title={c.po_numbers || c.po_number || ''}>
+          {c.po_numbers || c.po_number || '-'}
+        </span>
+      ),
+    }
+    return [
+    {
+      id: 'contract_date',
+      label: 'Contract Date',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c: Contract) => c.contract_date || '',
+      render: (c: Contract) => <span className="text-sm">{formatShortDate(c.contract_date)}</span>
+    },
+    ...([
           {
             id: 'contract_id',
             label: 'Contract',
@@ -1349,35 +1426,26 @@ function ContractsPageContent() {
             sortable: true,
             getSortValue: (c: Contract) => c.contract_id || '',
             render: (c: Contract) => (
-              <div className="min-w-0">
-                <div className="font-semibold truncate">{c.contract_id}</div>
-                <div className="text-xs text-gray-600 truncate">
-                  {c.supplier || '-'} • {c.product || '-'}
-                </div>
+              <div className="flex items-center gap-1 min-w-0">
+                <span className="text-sm truncate">{c.contract_id}</span>
+                {showUrgentFlag(c) && (
+                  <Flag className="h-3.5 w-3.5 text-red-500 shrink-0 fill-red-500" title="No shipment/trucking — due within 14 days" />
+                )}
               </div>
             ),
           },
-        ] as CompactColumn[])),
-    ...(isContractPerformance
-      ? ([
+          poNumberColumn,
           {
-            id: 'group_name',
-            label: 'Group Name',
-            defaultVisible: true,
-            sortable: true,
-            getSortValue: (c: Contract) => c.group_name || '',
-            render: (c: Contract) => <span className="text-sm">{c.group_name || '-'}</span>,
-          },
-          {
-            id: 'supplier',
+            id: 'supplier_name',
             label: 'Supplier',
             defaultVisible: true,
             sortable: true,
             getSortValue: (c: Contract) => c.supplier || '',
-            render: (c: Contract) => <span className="text-sm">{c.supplier || '-'}</span>,
+            render: (c: Contract) => (
+              <span className="text-sm truncate block">{c.supplier || '-'}</span>
+            ),
           },
-        ] as CompactColumn[])
-      : []),
+        ] as CompactColumn[]),
     {
       id: 'contract_aging',
       label: 'Contract Aging',
@@ -1485,23 +1553,9 @@ function ContractsPageContent() {
       className: 'whitespace-nowrap'
     },
     {
-      id: 'log_cycle_days',
-      label: 'Log Cycle',
-      formulaHelp: FIELD_HELP.logCycle,
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (c) => c.log_cycle_days ?? 0,
-      render: (c) => (
-        <span className="text-xs font-semibold">
-          {c.log_cycle_days != null ? `${c.log_cycle_days} days` : '-'}
-        </span>
-      ),
-      className: 'whitespace-nowrap'
-    },
-    {
       id: 'contract_qty',
       label: 'Contract Qty (MT)',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (c) => typeof c.quantity_ordered === 'number' ? c.quantity_ordered : 0,
       render: (c) => (
@@ -1524,6 +1578,22 @@ function ContractsPageContent() {
       )
     },
     {
+      id: 'group_name',
+      label: 'Group',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c: Contract) => c.group_name || '',
+      render: (c: Contract) => <span className="text-sm truncate block">{c.group_name || '-'}</span>,
+    },
+    {
+      id: 'supplier',
+      label: 'Supplier',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => c.supplier || '',
+      render: (c) => <span className="text-sm">{c.supplier || '-'}</span>,
+    },
+    {
       id: 'outstanding_qty_mt',
       label: 'Outstanding Qty (MT)',
       formulaHelp: FIELD_HELP.outstandingQtyMt,
@@ -1540,7 +1610,7 @@ function ContractsPageContent() {
       id: 'trade_cycle_days',
       label: 'Trade Cycle',
       formulaHelp: FIELD_HELP.tradeCycle,
-      defaultVisible: false,
+      defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.trade_cycle_days ?? 0,
       render: (c) => {
@@ -1561,7 +1631,7 @@ function ContractsPageContent() {
       id: 'cash_cycle_days',
       label: 'Cash Cycle',
       formulaHelp: FIELD_HELP.cashCycle,
-      defaultVisible: false,
+      defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.cash_cycle_days ?? 0,
       render: (c) => {
@@ -1579,6 +1649,20 @@ function ContractsPageContent() {
       className: 'whitespace-nowrap'
     },
     {
+      id: 'log_cycle_days',
+      label: 'Log Cycle',
+      formulaHelp: FIELD_HELP.logCycle,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => c.log_cycle_days ?? 0,
+      render: (c) => (
+        <span className="text-xs font-semibold">
+          {c.log_cycle_days != null ? `${c.log_cycle_days} days` : '-'}
+        </span>
+      ),
+      className: 'whitespace-nowrap'
+    },
+    {
       id: 'over_under_delivery_status',
       label: 'Over/Under Delivery Status',
       formulaHelp: FIELD_HELP.overUnderDelivery,
@@ -1593,21 +1677,13 @@ function ContractsPageContent() {
       className: 'whitespace-nowrap'
     },
     {
-      id: 'contract_date',
-      label: 'Contract Date',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (c) => c.contract_date || '',
-      render: (c) => <span className="text-sm">{formatShortDate(c.contract_date)}</span>
-    },
-    {
       id: 'company_name',
-      label: 'Company Name',
+      label: 'Buyer',
       formulaHelp: FIELD_HELP.companyName,
       defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.company_name || '',
-      render: (c) => <span className="text-sm font-medium">{c.company_name || '-'}</span>
+      render: (c) => <span className="text-sm truncate block">{c.company_name || '-'}</span>
     },
     {
       id: 'lt_spot',
@@ -1616,18 +1692,6 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => c.lt_spot || '',
       render: (c) => <span className="text-sm">{c.lt_spot || '-'}</span>
-    },
-    {
-      id: 'po_number',
-      label: 'PO Number',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (c) => c.po_numbers || c.po_number || '',
-      render: (c) => (
-        <span className="text-sm truncate block" title={c.po_numbers || c.po_number || ''}>
-          {c.po_numbers || c.po_number || '-'}
-        </span>
-      )
     },
     {
       id: 'sto_number',
@@ -1715,24 +1779,88 @@ function ContractsPageContent() {
       getSortValue: (c) => c.created_at || '',
       render: (c) => <span className="text-sm">{formatShortDate(c.created_at)}</span>
     },
-  ], [getStatusColor, isContractPerformance, formatMonthDeliveryEnd]) // eslint-disable-line react-hooks/exhaustive-deps
+    ]
+  }, [getStatusColor, isContractPerformance, formatMonthDeliveryEnd]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const defaultVisibleColumnIds = useMemo(() => {
-    if (isContractPerformance) {
-      return ['group_name', 'supplier', 'contract_id', 'po_number', 'trade_cycle_days', 'outstanding_qty_mt']
-    }
-    return ['contract_id', 'contract_date', 'po_number', 'contract_qty', 'outstanding_qty_mt']
-  }, [isContractPerformance])
+  /**
+   * Default visible columns (Contracts + Contract Performance).
+   * Contract Qty + Buyer off by default; Trade/Cash/Log Cycle + others on; toggle via Columns menu.
+   */
+  const defaultVisibleColumnIds = useMemo(
+    () => [
+      'contract_date',
+      'contract_id',
+      'po_number',
+      'group_name',
+      'supplier',
+      'outstanding_qty_mt',
+      'trade_cycle_days',
+      'cash_cycle_days',
+      'log_cycle_days',
+    ],
+    []
+  )
 
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => new Set(defaultVisibleColumnIds))
   const [columnOrderIds, setColumnOrderIds] = useState<string[]>(() => [])
   const [dragColId, setDragColId] = useState<string | null>(null)
-  const userViewPrefKey = isContractPerformance ? 'contract_performance.compact.view.v1' : 'contracts.compact.view.v2'
+  const userViewPrefKey = isContractPerformance ? 'contract_performance.compact.view.v6' : 'contracts.compact.view.v9'
   const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** Reset visible columns + column order to app defaults, persist locally and on server (so async prefs cannot wipe it). */
+  const resetCompactColumnView = useCallback(() => {
+    const vis = new Set(defaultVisibleColumnIds)
+    const order = compactColumns.map((c) => c.id)
+    setVisibleColumnIds(vis)
+    setColumnOrderIds(order)
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(columnStorageKey, JSON.stringify(Array.from(vis)))
+        localStorage.setItem(columnOrderStorageKey, JSON.stringify(order))
+      } catch {
+        // ignore
+      }
+    }
+    if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
+    void api
+      .post('/user-preferences/me', {
+        key: userViewPrefKey,
+        value: { visibleColumnIds: Array.from(vis), columnOrderIds: order },
+      })
+      .catch(() => {
+        /* localStorage already updated */
+      })
+  }, [
+    columnOrderStorageKey,
+    columnStorageKey,
+    compactColumns,
+    defaultVisibleColumnIds,
+    userViewPrefKey,
+  ])
 
   // Load persisted columns/sort (client only)
   useEffect(() => {
     if (typeof window === 'undefined') return
+    const hadSavedVisibleAtOpen = (() => {
+      try {
+        const raw = localStorage.getItem(columnStorageKey)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as unknown
+        return Array.isArray(parsed) && parsed.length > 0
+      } catch {
+        return Boolean(localStorage.getItem(columnStorageKey))
+      }
+    })()
+    const hadSavedOrderAtOpen = (() => {
+      try {
+        const raw = localStorage.getItem(columnOrderStorageKey)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as unknown
+        return Array.isArray(parsed) && parsed.length > 0
+      } catch {
+        return Boolean(localStorage.getItem(columnOrderStorageKey))
+      }
+    })()
     try {
       const raw = localStorage.getItem(columnStorageKey)
       if (raw) {
@@ -1757,7 +1885,7 @@ function ContractsPageContent() {
       // ignore
     }
 
-    // Load per-user saved view (best-effort). Falls back to localStorage/defaults.
+    // Apply server view only if there was no saved column prefs before this load (local wins after first paint persist).
     let cancelled = false
     ;(async () => {
       try {
@@ -1766,8 +1894,12 @@ function ContractsPageContent() {
         if (cancelled) return
         const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
         const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
-        if (Array.isArray(cols) && cols.length > 0) setVisibleColumnIds(new Set(cols.map((x: any) => String(x))))
-        if (Array.isArray(order) && order.length > 0) setColumnOrderIds(order.map((x: any) => String(x)))
+        if (Array.isArray(cols) && cols.length > 0 && !hadSavedVisibleAtOpen) {
+          setVisibleColumnIds(new Set(cols.map((x: any) => String(x))))
+        }
+        if (Array.isArray(order) && order.length > 0 && !hadSavedOrderAtOpen) {
+          setColumnOrderIds(order.map((x: any) => String(x)))
+        }
       } catch {
         // ignore
       }
@@ -1855,38 +1987,6 @@ function ContractsPageContent() {
     })
   }
 
-  const getColumnWidth = (id: string): string => {
-    switch (id) {
-      case 'contract_id':
-        return 'minmax(220px, 1.6fr)'
-      case 'product':
-        return 'minmax(140px, 1fr)'
-      case 'status':
-        return 'minmax(110px, 0.8fr)'
-      case 'contract_date':
-        return 'minmax(120px, 0.9fr)'
-      case 'company_code':
-        return 'minmax(90px, 0.6fr)'
-      case 'lt_spot':
-        return 'minmax(90px, 0.6fr)'
-      case 'contract_ext_no':
-        return 'minmax(140px, 1fr)'
-      case 'po_number':
-      case 'sto_number':
-        return 'minmax(150px, 1fr)'
-      case 'contract_qty':
-      case 'outstanding_qty':
-        return 'minmax(150px, 1fr)'
-      case 'delivery_start':
-      case 'delivery_end':
-        return 'minmax(130px, 0.9fr)'
-      case 'cargo_readiness_date':
-        return 'minmax(220px, 1.1fr)'
-      default:
-        return 'minmax(120px, 1fr)'
-    }
-  }
-
   const toggleColumn = (id: string) => {
     if (id === 'contract_id' || id === 'status') return
     setVisibleColumnIds(prev => {
@@ -1944,6 +2044,180 @@ function ContractsPageContent() {
     return copy
   }, [compactColumns, filteredContracts, isContractPerformance, sortDir, sortKey])
 
+  /** Grid column widths sized from header labels + longest cell text on the current page (fixed px tracks, no loose fr). */
+  const compactGridColumnTracks = useMemo(() => {
+    const fmtQtyMt = (kg: unknown) =>
+      `${((Number(kg) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+
+    const H = {
+      contract_date: 'Contract Date',
+      contract_id: 'Contract',
+      supplier_name: 'Supplier',
+      supplier: 'Supplier',
+      group_name: 'Group',
+      contract_aging: 'Contract Aging',
+      contract_ext_no: 'Contract Ext No',
+      product: 'Product',
+      delivery_status: 'Delivery Status',
+      status_overall: 'Status',
+      unusual_status: 'Unusual Status',
+      log_cycle_days: 'Log Cycle',
+      contract_qty: 'Contract Qty (MT)',
+      received_qty: 'Received Qty (MT)',
+      outstanding_qty: 'Outstanding Qty',
+      outstanding_qty_mt: 'Outstanding Qty (MT)',
+      trade_cycle_days: 'Trade Cycle',
+      cash_cycle_days: 'Cash Cycle',
+      over_under_delivery_status: 'Over/Under Delivery Status',
+      company_name: 'Buyer',
+      lt_spot: 'LT/SPOT',
+      po_number: 'PO Number',
+      sto_number: 'STO Number',
+      delivery_start: 'Due Date Delivery Start',
+      delivery_end: 'Due Date Delivery End',
+      month_delivery_end: 'Month Delivery End',
+      cargo_readiness_date: 'Cargo Readiness Date',
+      created_at: 'Created',
+      company_code: 'Co.',
+      status: 'Status',
+    }
+
+    const track = (header: string, contentChars: number, minPx: number, maxPx: number, charPx = 7.2, pad = 52) => {
+      const n = Math.max(header.length, contentChars)
+      const px = Math.min(maxPx, Math.max(minPx, Math.round(n * charPx + pad)))
+      return `minmax(${px}px, ${px}px)`
+    }
+
+    let contractIdLen = H.contract_id.length
+    let contractDateLen = H.contract_date.length
+    let supplierLen = H.supplier.length
+    let groupLen = H.group_name.length
+    let agingContentLen = H.contract_aging.length
+    let extNoLen = H.contract_ext_no.length
+    let productLen = H.product.length
+    let deliveryStatusLen = H.delivery_status.length
+    let statusOverallLen = H.status_overall.length
+    let poLen = H.po_number.length
+    let stoLen = H.sto_number.length
+    let buyerLen = H.company_name.length
+    let ltLen = H.lt_spot.length
+    let qtyFmtLen = H.contract_qty.length
+    let recvFmtLen = H.received_qty.length
+    let outMtFmtLen = H.outstanding_qty_mt.length
+    let outQtyFmtLen = H.outstanding_qty.length
+    let tradeLen = H.trade_cycle_days.length
+    let cashLen = H.cash_cycle_days.length
+    let overUnderLen = H.over_under_delivery_status.length
+    let logCycleLen = H.log_cycle_days.length
+    let dsLen = H.delivery_start.length
+    let deLen = H.delivery_end.length
+    let monthEndLen = H.month_delivery_end.length
+    let createdLen = H.created_at.length
+
+    for (const c of sortedContracts) {
+      contractIdLen = Math.max(contractIdLen, String(c.contract_id ?? '').length)
+      contractDateLen = Math.max(contractDateLen, formatDateDMY(c.contract_date || '').length)
+      supplierLen = Math.max(supplierLen, String(c.supplier ?? '').length)
+      groupLen = Math.max(groupLen, String(c.group_name ?? '').length)
+      extNoLen = Math.max(extNoLen, String(c.contract_ext_no ?? '').length)
+      productLen = Math.max(productLen, String(c.product ?? '').length)
+      deliveryStatusLen = Math.max(deliveryStatusLen, String(c.import_status || c.status || '').length)
+      const delivery = String(c.import_status || c.status || '').toUpperCase()
+      const paid = String(c.payment_status || '').toUpperCase() === 'PAID'
+      const overall =
+        delivery === 'CLOSE' && paid ? 'Close' : String(c.import_status || c.status || '-')
+      statusOverallLen = Math.max(statusOverallLen, overall.length)
+      poLen = Math.max(poLen, String(c.po_numbers || c.po_number || '').length)
+      stoLen = Math.max(stoLen, String(c.sto_numbers || c.sto_number || '').length)
+      buyerLen = Math.max(buyerLen, String(c.company_name ?? '').length)
+      ltLen = Math.max(ltLen, String(c.lt_spot ?? '').length)
+      qtyFmtLen = Math.max(qtyFmtLen, fmtQtyMt(typeof c.quantity_ordered === 'number' ? c.quantity_ordered : 0).length)
+      recvFmtLen = Math.max(recvFmtLen, fmtQtyMt(typeof c.quantity_receive === 'number' ? c.quantity_receive : 0).length)
+      const oq = typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : 0
+      outMtFmtLen = Math.max(outMtFmtLen, fmtQtyMt(oq).length)
+      outQtyFmtLen = Math.max(outQtyFmtLen, fmtQtyMt(oq).length)
+      overUnderLen = Math.max(overUnderLen, String(c.over_under_delivery_status ?? '').length)
+
+      const info = getContractAgingInfo(c)
+      if (info) {
+        const absDays = Math.abs(info.days)
+        const daysLabel = `${absDays} day${absDays === 1 ? '' : 's'}`
+        const text =
+          info.days === 0 ? 'Due today' : info.isOverdue ? `${daysLabel} overdue` : `${daysLabel} left`
+        agingContentLen = Math.max(agingContentLen, text.length)
+      } else {
+        agingContentLen = Math.max(agingContentLen, 1)
+      }
+
+      if (c.trade_cycle_days != null) {
+        const abs = Math.abs(c.trade_cycle_days)
+        const unit = abs === 1 ? 'day' : 'days'
+        const isOver = c.trade_cycle_days > 0
+        const isZero = c.trade_cycle_days === 0
+        const t = isZero ? '0 days' : isOver ? `${abs} ${unit} overdue` : `${abs} ${unit} left`
+        tradeLen = Math.max(tradeLen, t.length)
+      }
+      if (c.cash_cycle_days != null) {
+        const abs = Math.abs(c.cash_cycle_days)
+        const unit = abs === 1 ? 'day' : 'days'
+        const isOver = c.cash_cycle_days > 0
+        const isZero = c.cash_cycle_days === 0
+        const t = isZero ? '0 days' : isOver ? `${abs} ${unit} overdue` : `${abs} ${unit} left`
+        cashLen = Math.max(cashLen, t.length)
+      }
+      if (c.log_cycle_days != null) {
+        logCycleLen = Math.max(logCycleLen, `${c.log_cycle_days} days`.length)
+      }
+
+      dsLen = Math.max(dsLen, formatDateDMY(c.delivery_start_date || '').length)
+      deLen = Math.max(deLen, formatDateDMY(c.delivery_end_date || '').length)
+      monthEndLen = Math.max(monthEndLen, formatMonthDeliveryEnd(c.delivery_end_date || '').length)
+      createdLen = Math.max(createdLen, formatDateDMY(c.created_at || '').length)
+    }
+
+    const supplierTrack = track(H.supplier, supplierLen, 100, 360)
+    const qtyTrack = (header: string, len: number, minPx: number, maxPx: number) =>
+      track(header, len, minPx, maxPx, 7.5, 44)
+
+    return {
+      contract_id: track(H.contract_id, contractIdLen, 76, 280, 8, 52),
+      contract_date: track(H.contract_date, contractDateLen, 96, 140),
+      supplier_name: supplierTrack,
+      supplier: supplierTrack,
+      group_name: track(H.group_name, groupLen, 96, 260),
+      contract_aging: track(H.contract_aging, agingContentLen, 108, 180),
+      contract_ext_no: track(H.contract_ext_no, extNoLen, 100, 320),
+      product: track(H.product, productLen, 96, 280),
+      delivery_status: track(H.delivery_status, deliveryStatusLen, 96, 200),
+      status_overall: track(H.status_overall, statusOverallLen, 88, 180),
+      unusual_status: track(H.unusual_status, 8, 96, 160),
+      log_cycle_days: track(H.log_cycle_days, logCycleLen, 88, 160),
+      contract_qty: qtyTrack(H.contract_qty, qtyFmtLen, 86, 200),
+      received_qty: qtyTrack(H.received_qty, recvFmtLen, 96, 220),
+      outstanding_qty: qtyTrack(H.outstanding_qty, outQtyFmtLen, 96, 220),
+      outstanding_qty_mt: qtyTrack(H.outstanding_qty_mt, outMtFmtLen, 96, 240),
+      trade_cycle_days: track(H.trade_cycle_days, tradeLen, 108, 220),
+      cash_cycle_days: track(H.cash_cycle_days, cashLen, 108, 220),
+      over_under_delivery_status: track(H.over_under_delivery_status, overUnderLen, 120, 260),
+      company_name: track(H.company_name, buyerLen, 100, 380),
+      lt_spot: track(H.lt_spot, ltLen, 72, 140),
+      po_number: track(H.po_number, poLen, 88, 340),
+      sto_number: track(H.sto_number, stoLen, 88, 340),
+      delivery_start: track(H.delivery_start, dsLen, 108, 280),
+      delivery_end: track(H.delivery_end, deLen, 108, 280),
+      month_delivery_end: track(H.month_delivery_end, monthEndLen, 96, 200),
+      cargo_readiness_date: track(H.cargo_readiness_date, 24, 220, 320),
+      created_at: track(H.created_at, createdLen, 96, 140),
+      company_code: track(H.company_code, 8, 72, 120),
+      status: track(H.status, 12, 88, 160),
+    } as Record<string, string>
+  }, [sortedContracts, formatMonthDeliveryEnd])
+
+  const getColumnWidth = useCallback(
+    (id: string): string => compactGridColumnTracks[id] ?? 'minmax(96px, 1fr)',
+    [compactGridColumnTracks]
+  )
+
   const isColumnFilterActive = (colId: string) => {
     const f = columnFilters[colId]
     if (!f) return false
@@ -1992,7 +2266,7 @@ function ContractsPageContent() {
     calc()
     window.addEventListener('resize', calc)
     return () => window.removeEventListener('resize', calc)
-  }, [visibleColumns, sortedContracts.length])
+  }, [visibleColumns, sortedContracts.length, compactGridColumnTracks])
 
   const allVisibleIds = useMemo(() => sortedContracts.map(c => c.id), [sortedContracts])
   const allExpanded = expandedCount > 0 && expandedCount === allVisibleIds.length
@@ -2016,10 +2290,6 @@ function ContractsPageContent() {
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-3xl font-bold text-gray-900">Contracts</h1>
-              <p className="text-gray-600 mt-2">
-                {totalContracts} total contracts | Showing {filteredContracts.length} on this page
-                {totalPages > 1 && ` (Page ${currentPage} of ${totalPages})`}
-              </p>
             </div>
           </div>
         )}
@@ -2381,7 +2651,7 @@ function ContractsPageContent() {
                     onChange={(e) => setB2bFlagFilter(e.target.value)}
                     className="px-4 py-2 border rounded-lg"
                   >
-                    <option value="ALL">All B2B Flags</option>
+                    <option value="ALL">All Contract Type</option>
                     {availableB2bFlags.map(flag => (
                       <option key={flag} value={flag}>{flag}</option>
                     ))}
@@ -2408,6 +2678,7 @@ function ContractsPageContent() {
                     <option value="ALL">All Transport</option>
                     <option value="SEA">Sea</option>
                     <option value="LAND">Land</option>
+                    <option value="MIX">Mix</option>
                   </select>
                 )}
                 {isContractPerformance && (
@@ -2572,13 +2843,19 @@ function ContractsPageContent() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <CardTitle>
-                  {unassignedFilter === 'sea'
-                    ? 'SEA Contracts Without Shipments'
-                    : unassignedFilter === 'land'
-                    ? 'LAND Contracts Without Trucking'
-                    : 'All Contracts'}
-                </CardTitle>
+                <div>
+                  <CardTitle>
+                    {unassignedFilter === 'sea'
+                      ? 'SEA Contracts Without Shipments'
+                      : unassignedFilter === 'land'
+                      ? 'LAND Contracts Without Trucking'
+                      : 'All Contracts'}
+                  </CardTitle>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {totalContracts} total contracts | Showing {filteredContracts.length} on this page
+                    {totalPages > 1 && ` (Page ${currentPage} of ${totalPages})`}
+                  </p>
+                </div>
                 {unassignedFilter && (
                   <Badge
                     className={`hidden md:inline-flex cursor-pointer ${unassignedFilter === 'sea' ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}
@@ -2629,7 +2906,7 @@ function ContractsPageContent() {
                           variant="ghost"
                           size="sm"
                           className="flex-1 text-xs h-7"
-                          onClick={() => setVisibleColumnIds(new Set(defaultVisibleColumnIds))}
+                          onClick={() => resetCompactColumnView()}
                         >
                           Reset
                         </Button>
@@ -2788,10 +3065,9 @@ function ContractsPageContent() {
                       <div
                         className="grid gap-3 px-3 py-2 text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10"
                         style={{
-                          gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} ${isContractPerformance ? '60px' : '120px'}`
+                          gridTemplateColumns: `${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} ${isContractPerformance ? '60px' : '160px'}`
                         }}
                       >
-                        <div />
                         {visibleColumns.map(col => {
                           const activeSort = sortKey === col.id
                           const filterActive = isColumnFilterActive(col.id)
@@ -2825,7 +3101,7 @@ function ContractsPageContent() {
                               }}
                             >
                               <div className="flex items-center gap-1 min-w-0">
-                                <span className="whitespace-normal break-words">{col.label}</span>
+                                <span className="whitespace-normal break-words leading-tight">{col.label}</span>
                                 {col.formulaHelp ? (
                                   <span className="shrink-0 inline-flex items-center">
                                     <FieldHelp text={col.formulaHelp} />
@@ -3134,7 +3410,7 @@ function ContractsPageContent() {
                             </div>
                           )
                         })}
-                        <div className={`text-right sticky right-0 bg-gray-50 border-l pl-3 pr-2 ${isContractPerformance ? 'min-w-[60px]' : 'min-w-[120px]'}`}>Actions</div>
+                        <div className={`text-center sticky right-0 z-20 bg-gray-50 border-l pl-3 pr-2 ${isContractPerformance ? 'min-w-[60px]' : 'min-w-[160px]'}`}>Actions</div>
                       </div>
 
                       {/* Rows */}
@@ -3153,30 +3429,17 @@ function ContractsPageContent() {
                               <div
                                 className="grid gap-3 items-center"
                                 style={{
-                                  gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} ${isContractPerformance ? '60px' : '120px'}`
+                                  gridTemplateColumns: `${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} ${isContractPerformance ? '60px' : '160px'}`
                                 }}
                               >
-                                <button
-                                  type="button"
-                                  onClick={() => toggleExpanded(contract.id)}
-                                  className="p-1 text-gray-500 hover:text-gray-800"
-                                  title={expandedContractIds.has(contract.id) ? 'Collapse' : 'Expand'}
-                                >
-                                  {expandedContractIds.has(contract.id) ? (
-                                    <ChevronDown className="h-5 w-5" />
-                                  ) : (
-                                    <ChevronRight className="h-5 w-5" />
-                                  )}
-                                </button>
-
                                 {visibleColumns.map(col => (
                                   <div key={col.id} className="min-w-0">
                                     {col.render(contract)}
                                   </div>
                                 ))}
 
-                                <div className={`flex items-center justify-end gap-2 sticky right-0 bg-white border-l pl-3 pr-2 shadow-[-8px_0_12px_-12px_rgba(0,0,0,0.35)] ${isContractPerformance ? 'min-w-[60px]' : 'min-w-[120px]'}`}>
-                                  {!isContractPerformance && transportIsLand(contract) && (() => {
+                                <div className={`flex items-center justify-end gap-2 sticky right-0 z-10 bg-white border-l pl-3 pr-2 shadow-[-8px_0_12px_-12px_rgba(0,0,0,0.35)] ${isContractPerformance ? 'min-w-[60px]' : 'min-w-[160px]'}`}>
+                                  {!isContractPerformance && (transportIsLand(contract) || transportIsMix(contract)) && (() => {
                                     const hasData = countGt0(contract.trucking_count)
                                     return (
                                       <Button variant="outline" size="icon" onClick={() => handleTruckIconClick(contract)}
@@ -3186,7 +3449,7 @@ function ContractsPageContent() {
                                       </Button>
                                     )
                                   })()}
-                                  {!isContractPerformance && transportIsSea(contract) && (() => {
+                                  {!isContractPerformance && (transportIsSea(contract) || transportIsMix(contract)) && (() => {
                                     const hasData = countGt0(contract.shipment_count) || countGt0(contract.sto_count)
                                     return (
                                       <Button variant="outline" size="icon" onClick={() => handleShipIconClick(contract)}
@@ -3228,38 +3491,6 @@ function ContractsPageContent() {
                                 </div>
                               </div>
 
-                              {/* Expanded Details (optional) */}
-                              {expandedContractIds.has(contract.id) && (
-                                <div className="mt-3 p-3 border rounded bg-white">
-                                  {/* Main Info Grid */}
-                                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-                                    <div>
-                                      <div className="text-gray-500">Source</div>
-                                      <div className="font-medium">{contract.source_type || '-'}</div>
-                                    </div>
-                                    <div>
-                                      <div className="text-gray-500">Group Name</div>
-                                      <div className="font-medium">{contract.group_name || '-'}</div>
-                                    </div>
-                                    <div>
-                                      <div className="text-gray-500">B2B Flag</div>
-                                      <div className="font-medium">{contract.b2b_flag || '-'}</div>
-                                    </div>
-                                    <div>
-                                      <div className="text-gray-500">Buyer</div>
-                                      <div className="font-medium">{partiesBuyerDisplay(contract)}</div>
-                                    </div>
-                                    <div>
-                                      <div className="text-gray-500">Transport Mode</div>
-                                      <div className="font-medium">{contract.transport_mode || '-'}</div>
-                                    </div>
-                                    <div>
-                                      <div className="text-gray-500">Incoterm</div>
-                                      <div className="font-medium">{contract.incoterm || '-'}</div>
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
                             </div>
                           </div>
                         ))
@@ -3325,7 +3556,7 @@ function ContractsPageContent() {
 
                         <div className="flex items-center gap-2 shrink-0">
                           {/* Icons: Trucking, Shipping, Documents */}
-                          {!isContractPerformance && transportIsLand(contract) && (() => {
+                          {!isContractPerformance && (transportIsLand(contract) || transportIsMix(contract)) && (() => {
                             const hasData = countGt0(contract.trucking_count)
                             return (
                               <Button variant="outline" size="sm" onClick={() => handleTruckIconClick(contract)}
@@ -3334,7 +3565,7 @@ function ContractsPageContent() {
                               </Button>
                             )
                           })()}
-                          {!isContractPerformance && transportIsSea(contract) && (() => {
+                          {!isContractPerformance && (transportIsSea(contract) || transportIsMix(contract)) && (() => {
                             const hasData = countGt0(contract.shipment_count) || countGt0(contract.sto_count)
                             return (
                               <Button variant="outline" size="sm" onClick={() => handleShipIconClick(contract)}
@@ -3513,50 +3744,50 @@ function ContractsPageContent() {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-0 divide-y divide-gray-100">
-
-                  {/* ── 1. Highlight Information ─────────────────────────── */}
-                  <section className="pb-5">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Highlight Information</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
-                      <div className="p-3 bg-gray-50 rounded-lg border">
-                        <div className="text-xs text-gray-500 mb-1">Contract Date</div>
-                        <div className="font-semibold">{formatDate(selectedContract.contract_date)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded-lg border">
-                        <div className="text-xs text-gray-500 mb-1">Qty Contract</div>
-                        <div className="font-semibold">{formatNumber(Number(selectedContract.quantity_ordered) || 0)} Kg</div>
-                      </div>
-                      <div className={`p-3 rounded-lg border-2 ${selectedContract.outstanding_quantity < 0 ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
-                        <div className={`text-xs mb-1 flex items-center gap-1 ${selectedContract.outstanding_quantity < 0 ? 'text-red-600' : 'text-blue-600'}`}>
-                          Outstanding Qty
-                          <FieldHelp text={FIELD_HELP.outstandingQty} />
+                <div className="space-y-6">
+                  {/* Basic Information */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Basic Information</h3>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Status</div>
+                        <div className="font-medium mt-1">
+                          {(() => {
+                            const delivery = String(selectedContract.import_status || selectedContract.status || '').toUpperCase()
+                            const paid = String(selectedContract.payment_status || '').toUpperCase() === 'PAID'
+                            return delivery === 'CLOSE' && paid ? 'Close' : (selectedContract.import_status || selectedContract.status || '-')
+                          })()}
                         </div>
-                        <div className={`font-bold text-lg ${selectedContract.outstanding_quantity < 0 ? 'text-red-600' : 'text-blue-600'}`}>
-                          {formatNumber(selectedContract.outstanding_quantity)} Kg
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Unusual Flag</div>
+                        <div className="mt-1">
+                          {(() => {
+                            const isUnusual =
+                              (selectedContract.log_cycle_days != null && selectedContract.log_cycle_days >= 35) ||
+                              (selectedContract.trade_cycle_days != null && selectedContract.trade_cycle_days >= 35) ||
+                              (selectedContract.cash_cycle_days != null && selectedContract.cash_cycle_days >= 35)
+                            return isUnusual ? (
+                              <Badge className="bg-red-100 text-red-800 hover:bg-red-100">Unusual</Badge>
+                            ) : (
+                              <Badge className="bg-gray-100 text-gray-700 hover:bg-gray-100">Normal</Badge>
+                            )
+                          })()}
                         </div>
-                        {selectedContract.outstanding_quantity < 0 && (
-                          <div className="text-xs text-red-500 mt-0.5">Overshipped</div>
-                        )}
                       </div>
-                      <div className="p-3 bg-gray-50 rounded-lg border">
-                        <div className="text-xs text-gray-500 mb-1">Incoterm</div>
-                        <div className="font-semibold">{selectedContract.incoterm || '-'}</div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Delivery Status</div>
+                        <div className="mt-1">
+                          <Badge className={getStatusColor(selectedContract.import_status || selectedContract.status)}>
+                            {selectedContract.import_status || selectedContract.status}
+                          </Badge>
+                        </div>
                       </div>
-                      <div className="p-3 bg-gray-50 rounded-lg border col-span-2">
-                        <div className="text-xs text-gray-500 mb-1">Supplier</div>
-                        <div className="font-semibold">{selectedContract.supplier || '-'}</div>
-                      </div>
-                    </div>
-                  </section>
-
-                  {/* ── 2. Contract Detail ───────────────────────────────── */}
-                  <section className="py-5">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Contract Detail</h3>
-                    <div className="grid grid-cols-2 gap-3 text-sm">
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Contract Ext No</div>
-                        <div className="font-medium mt-1 break-words whitespace-normal">{selectedContract.contract_ext_no || '-'}</div>
+                        <div className="font-medium mt-1 break-words whitespace-normal">
+                          {selectedContract.contract_ext_no || '-'}
+                        </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Source Type</div>
@@ -3567,6 +3798,17 @@ function ContractsPageContent() {
                         <div className="font-medium mt-1">{selectedContract.contract_type || '-'}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Group Name</div>
+                        <div className="font-medium mt-1">{selectedContract.group_name || '-'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500 flex items-center gap-1">
+                          Company Name
+                          <FieldHelp text={FIELD_HELP.companyName} />
+                        </div>
+                        <div className="font-medium mt-1">{selectedContract.company_name || '-'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">B2B Flag</div>
                         <div className="font-medium mt-1">{selectedContract.b2b_flag || '-'}</div>
                       </div>
@@ -3574,37 +3816,10 @@ function ContractsPageContent() {
                         <div className="text-gray-500">LT/SPOT</div>
                         <div className="font-medium mt-1">{selectedContract.lt_spot || '-'}</div>
                       </div>
-                      <div className="p-3 bg-gray-50 rounded col-span-2">
-                        <div className="text-gray-500">
-                          PO Number{selectedContract.po_count > 1 ? `s (${selectedContract.po_count} total)` : ''}
-                        </div>
-                        <div className="font-medium mt-1 text-xs">{selectedContract.po_numbers || selectedContract.po_number || '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Contract Date</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.contract_date)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Cargo Readiness Date</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.cargo_readiness_date as any)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Delivery Start Date</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.delivery_start_date)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Delivery End Date</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.delivery_end_date)}</div>
-                      </div>
-                      {isContractPerformance && (
-                        <div className="p-3 bg-gray-50 rounded">
-                          <div className="text-gray-500">Month Delivery End</div>
-                          <div className="font-medium mt-1">{formatMonthDeliveryEnd(selectedContract.delivery_end_date)}</div>
-                        </div>
-                      )}
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500 flex items-center gap-1">
-                          Log Cycle <FieldHelp text={FIELD_HELP.logCycle} />
+                          Log Cycle
+                          <FieldHelp text={FIELD_HELP.logCycle} />
                         </div>
                         <div className="font-medium mt-1">
                           {selectedContract.log_cycle_days != null ? `${selectedContract.log_cycle_days} days` : '-'}
@@ -3612,82 +3827,110 @@ function ContractsPageContent() {
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500 flex items-center gap-1">
-                          Trade Cycle <FieldHelp text={FIELD_HELP.tradeCycle} />
+                          Trade Cycle
+                          <FieldHelp text={FIELD_HELP.tradeCycle} />
                         </div>
-                        {(() => {
-                          const v = selectedContract.trade_cycle_days
-                          if (v == null) return <div className="font-medium mt-1">-</div>
-                          const abs = Math.abs(v)
-                          const unit = abs === 1 ? 'day' : 'days'
-                          return (
-                            <div className={`font-medium mt-1 ${v === 0 ? 'text-gray-500' : v > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                              {v === 0 ? '0 days' : v > 0 ? `${abs} ${unit} overdue` : `${abs} ${unit} left`}
-                            </div>
-                          )
-                        })()}
+                        <div
+                          className={`font-medium mt-1 ${
+                            typeof selectedContract.trade_cycle_days === 'number'
+                              ? selectedContract.trade_cycle_days > 0
+                                ? 'text-red-600'
+                                : 'text-green-600'
+                              : ''
+                          }`}
+                        >
+                          {selectedContract.trade_cycle_days != null ? `${selectedContract.trade_cycle_days} days` : '-'}
+                        </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500 flex items-center gap-1">
-                          Cash Cycle <FieldHelp text={FIELD_HELP.cashCycle} />
+                          Cash Cycle
+                          <FieldHelp text={FIELD_HELP.cashCycle} />
                         </div>
-                        {(() => {
-                          const v = selectedContract.cash_cycle_days
-                          if (v == null) return <div className="font-medium mt-1">-</div>
-                          const abs = Math.abs(v)
-                          const unit = abs === 1 ? 'day' : 'days'
-                          return (
-                            <div className={`font-medium mt-1 ${v === 0 ? 'text-gray-500' : v > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                              {v === 0 ? '0 days' : v > 0 ? `${abs} ${unit} overdue` : `${abs} ${unit} left`}
-                            </div>
-                          )
-                        })()}
+                        <div
+                          className={`font-medium mt-1 ${
+                            typeof selectedContract.cash_cycle_days === 'number'
+                              ? selectedContract.cash_cycle_days > 0
+                                ? 'text-red-600'
+                                : 'text-green-600'
+                              : ''
+                          }`}
+                        >
+                          {selectedContract.cash_cycle_days != null ? `${selectedContract.cash_cycle_days} days` : '-'}
+                        </div>
                       </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Unit Price</div>
-                        <div className="font-medium mt-1">{formatCurrency(selectedContract.unit_price, selectedContract.currency)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Contract Value</div>
-                        <div className="font-medium mt-1">{formatCurrency(selectedContract.contract_value, selectedContract.currency)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Due Date Payment</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.due_date_payment as any)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">DP Date</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.dp_date as any)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Payoff Date</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.payoff_date as any)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">DP Date Deviation (Days)</div>
-                        <div className="font-medium mt-1">{selectedContract.dp_date_deviation_days ?? '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Payoff Date Deviation (Days)</div>
-                        <div className="font-medium mt-1">{selectedContract.payoff_date_deviation_days ?? '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Payment Status</div>
-                        <div className="font-medium mt-1">
-                          {contractPaymentsLoading ? (
-                            <span className="text-gray-400">Loading...</span>
-                          ) : contractPayments.length === 0 ? (
-                            '-'
-                          ) : (
-                            contractPayments.map((p) => p.payment_status).filter(Boolean).join(', ') || '-'
-                          )}
+                      <div className="p-3 bg-gray-50 rounded col-span-2">
+                        <div className="text-gray-500">
+                          PO Number{selectedContract.po_count > 1 ? `s (${selectedContract.po_count} total)` : ''}
+                        </div>
+                        <div className="font-medium mt-1 text-xs">
+                          {selectedContract.po_numbers || selectedContract.po_number || '-'}
                         </div>
                       </div>
                     </div>
-                  </section>
+                  </div>
 
-                  {/* ── 3. Product Detail ────────────────────────────────── */}
-                  <section className="py-5">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Product Detail</h3>
+                  {/* Parties */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Parties</h3>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Buyer</div>
+                        <div className="font-medium mt-1">{partiesBuyerDisplay(selectedContract)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Supplier</div>
+                        <div className="font-medium mt-1">{selectedContract.supplier}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* B2B Parties */}
+                  {(isContractB2b(selectedContract) &&
+                    String(selectedContract.contract_reference_po || '').trim() === '') && (
+                    <div>
+                      <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                        B2B Parties
+                        <FieldHelp text={FIELD_HELP.b2bParties} />
+                      </h3>
+                      {b2bPartiesLoading ? (
+                        <div className="text-sm text-gray-500">Loading B2B parties...</div>
+                      ) : b2bParties.length === 0 ? (
+                        <div className="text-sm text-gray-500">No B2B contracts linked to this origin contract.</div>
+                      ) : (
+                        <div className="overflow-x-auto border rounded">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-gray-100 border-b">
+                                <th className="text-left p-2 font-medium">PO Number</th>
+                                <th className="text-left p-2 font-medium">Contract Ext No</th>
+                                <th className="text-left p-2 font-medium">Company Name</th>
+                                <th className="text-left p-2 font-medium">Supplier</th>
+                                <th className="text-left p-2 font-medium">Incoterm</th>
+                                <th className="text-left p-2 font-medium">Certification</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {b2bParties.map((r) => (
+                                <tr key={r.contract_id} className="border-b last:border-0">
+                                  <td className="p-2">{r.po_numbers || '-'}</td>
+                                  <td className="p-2">{r.contract_ext_no || '-'}</td>
+                                  <td className="p-2">{r.company_name || '-'}</td>
+                                  <td className="p-2">{r.supplier || '-'}</td>
+                                  <td className="p-2">{r.incoterm || '-'}</td>
+                                  <td className="p-2">{r.certification || '-'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Product & Quantity */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Product & Quantity</h3>
                     {(() => {
                       const inc = String(selectedContract.incoterm || '').trim().toUpperCase()
                       const basis =
@@ -3697,24 +3940,20 @@ function ContractsPageContent() {
                             ? { label: 'Quantity Delivery', hint: 'Incoterm LCO/FOB' }
                             : { label: 'STO Quantity', hint: 'Fallback (other incoterms)' }
                       return (
-                        <div className="text-xs text-gray-600 mb-3">
-                          Outstanding basis: <span className="font-medium text-gray-800">{basis.label}</span>{' '}
+                        <div className="text-xs text-gray-600 mb-2">
+                          Outstanding Quantity basis: <span className="font-medium text-gray-800">{basis.label}</span>{' '}
                           <span className="text-gray-500">({basis.hint})</span>
                         </div>
                       )
                     })()}
-                    <div className="grid grid-cols-2 gap-3 text-sm">
-                      <div className="p-3 bg-gray-50 rounded col-span-2">
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Product</div>
                         <div className="font-medium mt-1">{selectedContract.product}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Contract Quantity</div>
                         <div className="font-medium mt-1 text-base">{((Number(selectedContract.quantity_ordered) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Total STO Quantity ({selectedContract.sto_count || 0} STO{selectedContract.sto_count > 1 ? 's' : ''})</div>
-                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.total_sto_quantity)} Kg</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Quantity Delivery</div>
@@ -3724,8 +3963,12 @@ function ContractsPageContent() {
                         <div className="text-gray-500">Quantity Receive</div>
                         <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.quantity_receive ?? 0)} Kg</div>
                       </div>
+                      <div className="p-3 bg-blue-50 rounded border-2 border-blue-200">
+                        <div className="text-gray-500">Total STO Quantity ({selectedContract.sto_count || 0} STO{selectedContract.sto_count > 1 ? 's' : ''})</div>
+                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.total_sto_quantity)} Kg</div>
+                      </div>
                       <div className={`p-3 rounded border-2 ${selectedContract.outstanding_quantity < 0 ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
-                        <div className={`font-semibold flex items-center gap-1 text-xs ${selectedContract.outstanding_quantity < 0 ? 'text-red-700' : 'text-blue-700'}`}>
+                        <div className={`font-semibold flex items-center gap-1 ${selectedContract.outstanding_quantity < 0 ? 'text-red-700' : 'text-blue-700'}`}>
                           Outstanding Quantity
                           <FieldHelp text={FIELD_HELP.outstandingQty} />
                         </div>
@@ -3741,115 +3984,26 @@ function ContractsPageContent() {
                           Over/Under Delivery Status
                           <FieldHelp text={FIELD_HELP.overUnderDelivery} />
                         </div>
-                        <div className="font-semibold mt-1">{selectedContract.over_under_delivery_status || '-'}</div>
+                        <div className="font-semibold mt-1">
+                          {selectedContract.over_under_delivery_status || '-'}
+                        </div>
                       </div>
                     </div>
-                  </section>
+                  </div>
 
-                  {/* ── 4. Supplier Detail ───────────────────────────────── */}
-                  <section className="py-5">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Supplier Detail</h3>
-                    <div className="grid grid-cols-2 gap-3 text-sm">
+                  {/* Logistic Information */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Logistic Information</h3>
+                    <div className="grid grid-cols-2 gap-4 text-sm mb-4">
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Buyer</div>
-                        <div className="font-medium mt-1">{partiesBuyerDisplay(selectedContract)}</div>
+                        <div className="text-gray-500">Transport Mode</div>
+                        <div className="font-medium mt-1">{selectedContract.transport_mode || '-'}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Supplier</div>
-                        <div className="font-medium mt-1">{selectedContract.supplier}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Group Name</div>
-                        <div className="font-medium mt-1">{selectedContract.group_name || '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500 flex items-center gap-1">
-                          Company Name <FieldHelp text={FIELD_HELP.companyName} />
-                        </div>
-                        <div className="font-medium mt-1">{selectedContract.company_name || '-'}</div>
+                        <div className="text-gray-500">Incoterm</div>
+                        <div className="font-medium mt-1">{selectedContract.incoterm || '-'}</div>
                       </div>
                     </div>
-                    {(isContractB2b(selectedContract) &&
-                      String(selectedContract.contract_reference_po || '').trim() === '') && (
-                      <div className="mt-4">
-                        <div className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-1">
-                          B2B Parties <FieldHelp text={FIELD_HELP.b2bParties} />
-                        </div>
-                        {b2bPartiesLoading ? (
-                          <div className="text-sm text-gray-500">Loading B2B parties...</div>
-                        ) : b2bParties.length === 0 ? (
-                          <div className="text-sm text-gray-500">No B2B contracts linked to this origin contract.</div>
-                        ) : (
-                          <div className="overflow-x-auto border rounded">
-                            <table className="w-full text-sm">
-                              <thead>
-                                <tr className="bg-gray-100 border-b">
-                                  <th className="text-left p-2 font-medium">PO Number</th>
-                                  <th className="text-left p-2 font-medium">Contract Ext No</th>
-                                  <th className="text-left p-2 font-medium">Company Name</th>
-                                  <th className="text-left p-2 font-medium">Supplier</th>
-                                  <th className="text-left p-2 font-medium">Incoterm</th>
-                                  <th className="text-left p-2 font-medium">Certification</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {b2bParties.map((r) => (
-                                  <tr key={r.contract_id} className="border-b last:border-0">
-                                    <td className="p-2">{r.po_numbers || '-'}</td>
-                                    <td className="p-2">{r.contract_ext_no || '-'}</td>
-                                    <td className="p-2">{r.company_name || '-'}</td>
-                                    <td className="p-2">{r.supplier || '-'}</td>
-                                    <td className="p-2">{r.incoterm || '-'}</td>
-                                    <td className="p-2">{r.certification || '-'}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </section>
-
-                  {/* ── 5. Shipment Detail ───────────────────────────────── */}
-                  <section className="py-5">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Shipment Detail</h3>
-
-                    {/* Shipment & Trucking Performance Summary — Contract Performance only */}
-                    {isContractPerformance && stoInfo.length > 0 && (() => {
-                      const lateRows = stoInfo.filter(r => r.late_indicator === 'Late')
-                      const onTimeRows = stoInfo.filter(r => r.late_indicator === 'On Time')
-                      const totalQtyDelivered = stoInfo.reduce((s, r) => s + (Number(r.quantity_delivered) || 0), 0)
-                      const totalQtyReceive = stoInfo.reduce((s, r) => s + (Number(r.quantity_receive) || 0), 0)
-                      return (
-                        <div className="mb-4 p-4 rounded-lg border bg-gray-50">
-                          <div className="text-sm font-semibold text-gray-700 mb-3">Shipment & Trucking Performance</div>
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                            <div className="bg-white rounded border p-3 text-center">
-                              <div className="text-2xl font-bold text-gray-800">{stoInfo.length}</div>
-                              <div className="text-xs text-gray-500 mt-1">Total STO</div>
-                            </div>
-                            <div className={`rounded border p-3 text-center ${lateRows.length > 0 ? 'bg-red-50 border-red-200' : 'bg-white'}`}>
-                              <div className={`text-2xl font-bold ${lateRows.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>{lateRows.length}</div>
-                              <div className="text-xs text-gray-500 mt-1">Late</div>
-                            </div>
-                            <div className={`rounded border p-3 text-center ${onTimeRows.length > 0 ? 'bg-green-50 border-green-200' : 'bg-white'}`}>
-                              <div className={`text-2xl font-bold ${onTimeRows.length > 0 ? 'text-green-600' : 'text-gray-400'}`}>{onTimeRows.length}</div>
-                              <div className="text-xs text-gray-500 mt-1">On Time</div>
-                            </div>
-                            <div className="bg-white rounded border p-3 text-center">
-                              <div className="text-lg font-bold text-gray-800">{(totalQtyDelivered / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
-                              <div className="text-xs text-gray-500 mt-1">Total Qty Delivered</div>
-                            </div>
-                          </div>
-                          {totalQtyReceive > 0 && (
-                            <div className="mt-2 text-xs text-gray-500 text-right">
-                              Total Qty Received: <span className="font-medium text-gray-700">{(totalQtyReceive / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })()}
                     {stoInfoLoading ? (
                       <div className="text-sm text-gray-500">Loading STO information...</div>
                     ) : stoInfo.length === 0 ? (
@@ -3924,11 +4078,87 @@ function ContractsPageContent() {
                         </table>
                       </div>
                     )}
-                  </section>
+                  </div>
 
-                  {/* ── Documents ────────────────────────────────────────── */}
-                  <section className="py-5">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Documents</h3>
+                  {/* Dates */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Important Dates</h3>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Contract Date</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.contract_date)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Due Date Delivery Start</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.delivery_start_date)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Due Date Delivery End</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.delivery_end_date)}</div>
+                      </div>
+                      {isContractPerformance && (
+                        <div className="p-3 bg-gray-50 rounded">
+                          <div className="text-gray-500">Month Delivery End</div>
+                          <div className="font-medium mt-1">{formatMonthDeliveryEnd(selectedContract.delivery_end_date)}</div>
+                        </div>
+                      )}
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Cargo Readiness Date</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.cargo_readiness_date as any)}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Payment Dates */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Payment Information</h3>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Unit Price</div>
+                        <div className="font-medium mt-1">{formatCurrency(selectedContract.unit_price, selectedContract.currency)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Contract Value</div>
+                        <div className="font-medium mt-1">{formatCurrency(selectedContract.contract_value, selectedContract.currency)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Due Date Payment</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.due_date_payment as any)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">DP Date</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.dp_date as any)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Payoff Date</div>
+                        <div className="font-medium mt-1">{formatDate(selectedContract.payoff_date as any)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">DP Date Deviation (Days)</div>
+                        <div className="font-medium mt-1">{selectedContract.dp_date_deviation_days ?? '-'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Payoff Date Deviation (Days)</div>
+                        <div className="font-medium mt-1">{selectedContract.payoff_date_deviation_days ?? '-'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Payment Status</div>
+                        <div className="font-medium mt-1">
+                          {contractPaymentsLoading ? (
+                            <span className="text-gray-400">Loading...</span>
+                          ) : contractPayments.length === 0 ? (
+                            '-'
+                          ) : (
+                            contractPayments.map((p) => p.payment_status).filter(Boolean).join(', ') || '-'
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Documents */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Documents</h3>
                     {docsLoading ? (
                       <div className="text-sm text-gray-500">Loading documents...</div>
                     ) : selectedContractDocs.length === 0 ? (
@@ -3956,12 +4186,12 @@ function ContractsPageContent() {
                         })}
                       </div>
                     )}
-                  </section>
+                  </div>
 
-                  {/* ── Activity ─────────────────────────────────────────── */}
-                  <section className="pt-5">
+                  {/* Activity Log / Comments */}
+                  <div>
                     <div className="flex items-center justify-between gap-3 mb-3">
-                      <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Activity</h3>
+                      <h3 className="text-lg font-semibold">Activity</h3>
                       <div className="inline-flex rounded-md border overflow-hidden">
                         <button
                           type="button"
@@ -4085,7 +4315,7 @@ function ContractsPageContent() {
                         </div>
                       </div>
                     )}
-                  </section>
+                  </div>
                 </div>
               </CardContent>
             </Card>

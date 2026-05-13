@@ -492,7 +492,7 @@ export class SapMasterV2ImportService {
       'source', 'ltc / spot', 'lt/spot', // Handle with and without space
       'status', 'sto no', 'sto quantity', 'classification',
       'b2b flag', 'contract type', 'contract reff po', 'contract reff po ini', 'contract reff so ini', // Updated fields
-      'contract ref po', 'company code' // Company Code field
+      'contract ref po', 'company code', 'plant code' // Company Code / Plant Code fields
     ];
     return contractFields.some(cf => lower.includes(cf));
   }
@@ -594,6 +594,9 @@ export class SapMasterV2ImportService {
       
       'company code': 'company_code',
       'company code.': 'company_code',
+
+      'plant code': 'plant_code',
+      'plant code.': 'plant_code',
       
       'incoterm at starting point 1': 'incoterm_starting_1',
       'incoterm at starting point 2': 'incoterm_starting_2',

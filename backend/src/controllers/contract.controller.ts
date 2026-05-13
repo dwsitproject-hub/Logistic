@@ -115,6 +115,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           MAX(c.contract_type) AS contract_type,
           MAX(c.logistics_classification) AS logistics_classification,
           MAX(c.po_classification) AS po_classification,
+          MAX(c.plant_code) AS plant_code,
           MAX(c.cargo_readiness_date) AS cargo_readiness_date,
           MAX(c.created_at) AS created_at,
           STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') AS po_numbers,
@@ -299,30 +300,34 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       queryText += ` AND ${effectiveTransportExpr} LIKE 'LAND%' AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = base.id)`;
     }
 
-    // Plant/Site filter (Dashboard semantics): OR match any selected plant.
-    // SEA: shipments.port_of_discharge. LAND: trucking_operations.location.
-    // 'Blank' matches null/empty.
+    // Plant/Site filter: matches contract.plant_code directly, or via shipments/trucking operations.
+    // 'Blank' matches null/empty plant_code.
     const plantArr = Array.isArray(plant) ? plant : (plant ? [plant] : []);
     const plants = plantArr.map((p) => String(p)).filter((p) => p.trim() !== '');
     if (plants.length > 0) {
       const blankIncluded = plants.some((p) => p === 'Blank');
       const nonBlank = plants.filter((p) => p !== 'Blank');
+      const contractParts: string[] = [];
       const shipParts: string[] = [];
       const truckParts: string[] = [];
       if (blankIncluded) {
+        contractParts.push(`(base.plant_code IS NULL OR TRIM(base.plant_code) = '')`);
         shipParts.push(`(s.port_of_discharge IS NULL OR TRIM(s.port_of_discharge) = '')`);
         truckParts.push(`(t.location IS NULL OR TRIM(t.location) = '')`);
       }
       if (nonBlank.length > 0) {
         const ph = nonBlank.map(() => `$${paramIndex++}`).join(', ');
+        contractParts.push(`base.plant_code IN (SELECT plant_code FROM master_plants WHERE plant_name IN (${ph}))`);
         shipParts.push(`s.port_of_discharge IN (${ph})`);
         truckParts.push(`t.location IN (${ph})`);
         queryParams.push(...nonBlank);
       }
+      const contractOr = contractParts.length > 0 ? contractParts.join(' OR ') : 'FALSE';
       const shipOr = shipParts.length > 0 ? shipParts.join(' OR ') : 'FALSE';
       const truckOr = truckParts.length > 0 ? truckParts.join(' OR ') : 'FALSE';
       queryText += ` AND (
-        EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = base.id AND (${shipOr}))
+        (${contractOr})
+        OR EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = base.id AND (${shipOr}))
         OR EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = base.id AND (${truckOr}))
       )`;
     }
@@ -770,6 +775,8 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
     const plant = (req.query as any).plant as string | string[] | undefined;
     const globalSearch = typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';
     const selectedIncoterms = (req.query as any).incoterms as string | undefined; // comma-separated
+    const b2bFlag = (req.query as any).b2bFlag as string | undefined;
+    const productFilter = (req.query as any).product as string | undefined;
 
     const now = new Date();
     const y = now.getFullYear();
@@ -851,6 +858,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           MAX(c.quantity_ordered) AS quantity_ordered,
           MAX(c.transport_mode) AS transport_mode,
           MAX(c.status) AS status,
+          MAX(c.plant_code) AS plant_code,
           -- Align with GET /contracts: SAP import status is the primary "open/close" signal in Contract Performance.
           (array_agg(l.data->'contract'->>'status' ORDER BY l.created_at DESC NULLS LAST))[1] AS import_status,
           MAX(c.delivery_end_date) AS delivery_end_date,
@@ -943,40 +951,9 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       )
       SELECT
         base.*,
-        -- Plant/Site: same logic as Dashboard "Contract Quantity by Plant/Site"
-        COALESCE(NULLIF(TRIM(ps.plant_site), ''), 'Blank') AS plant_site
+        COALESCE(NULLIF(TRIM(mp.plant_name), ''), NULLIF(TRIM(base.plant_code), ''), 'Blank') AS plant_site
       FROM base
-      LEFT JOIN LATERAL (
-        SELECT UPPER(TRIM(COALESCE(
-          NULLIF(TRIM(base.transport_mode), ''),
-          base.latest_spd_data->'contract'->>'transport_mode',
-          base.latest_spd_data->'raw'->>'Sea / Land',
-          ''
-        ))) AS tm_upper
-      ) tx ON true
-      LEFT JOIN LATERAL (
-        SELECT COALESCE(
-          CASE
-            WHEN tx.tm_upper LIKE 'LAND%' THEN (
-              SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
-              FROM trucking_operations t
-              WHERE t.contract_id = base.id
-              ORDER BY t.created_at DESC NULLS LAST
-              LIMIT 1
-            )
-            WHEN tx.tm_upper LIKE 'SEA%' THEN (
-              SELECT NULLIF(TRIM(s.port_of_discharge), '')
-              FROM shipments s
-              WHERE s.contract_id = base.id
-              ORDER BY s.created_at DESC NULLS LAST
-              LIMIT 1
-            )
-            ELSE NULL
-          END,
-          NULLIF(TRIM(base.latest_spd_data->'raw'->>'Unloading Site'), ''),
-          NULLIF(TRIM(base.latest_spd_data->'raw'->>'Loading Site'), '')
-        ) AS plant_site
-      ) ps ON true
+      LEFT JOIN master_plants mp ON mp.plant_code = base.plant_code
       WHERE 1=1
     `;
 
@@ -1017,9 +994,23 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
-    if (scope === 'filtered' && transportMode && String(transportMode).toUpperCase() !== 'ALL') {
+    if (transportMode && String(transportMode).toUpperCase() !== 'ALL') {
       queryText += ` AND UPPER(COALESCE(NULLIF(TRIM(base.transport_mode), ''), '')) LIKE $${paramIndex}`;
       queryParams.push(`${String(transportMode).toUpperCase()}%`);
+      paramIndex++;
+    }
+
+    if (b2bFlag && b2bFlag.toUpperCase() !== 'ALL') {
+      if (b2bFlag.toUpperCase() === 'B2B') {
+        queryText += ` AND UPPER(COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag', '')) = 'B2B'`;
+      } else {
+        queryText += ` AND UPPER(COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag', '')) != 'B2B'`;
+      }
+    }
+
+    if (productFilter && productFilter.toUpperCase() !== 'ALL') {
+      queryText += ` AND UPPER(COALESCE(base.product, '')) = UPPER($${paramIndex})`;
+      queryParams.push(productFilter);
       paramIndex++;
     }
 
@@ -1030,10 +1021,10 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       const blankIncluded = plants.some((p) => p === 'Blank');
       const nonBlank = plants.filter((p) => p !== 'Blank');
       const parts: string[] = [];
-      if (blankIncluded) parts.push(`(base.plant_site IS NULL OR TRIM(base.plant_site) = '')`);
+      if (blankIncluded) parts.push(`(base.plant_code IS NULL OR TRIM(base.plant_code) = '')`);
       if (nonBlank.length > 0) {
         const ph = nonBlank.map(() => `$${paramIndex++}`).join(', ');
-        parts.push(`base.plant_site IN (${ph})`);
+        parts.push(`COALESCE(mp.plant_name, base.plant_code) IN (${ph})`);
         queryParams.push(...nonBlank);
       }
       queryText += ` AND (${parts.join(' OR ')})`;
@@ -1060,7 +1051,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         base.contract_id ILIKE $${paramIndex}
         OR COALESCE(base.product, '') ILIKE $${paramIndex}
         OR COALESCE(base.group_name, '') ILIKE $${paramIndex}
-        OR COALESCE(base.plant_site, '') ILIKE $${paramIndex}
+        OR COALESCE(mp.plant_name, base.plant_code, '') ILIKE $${paramIndex}
       )`;
       queryParams.push(`%${globalSearch}%`);
       paramIndex++;
@@ -1381,47 +1372,58 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
 /** Get counts of SEA contracts without shipments and LAND contracts without trucking (for dashboard cards) */
 export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
   try {
-    const { status, search, b2bFlag, dateFrom, dateTo } = req.query as Record<string, string>;
+    const { search, b2bFlag, dateFrom, dateTo, product, transportMode } = req.query as Record<string, string>;
 
     const params: any[] = [];
-    const whereConditions: string[] = [];
 
-    if (status && status !== 'All Status' && status.toLowerCase() !== 'all') {
-      const s = status.trim().toUpperCase();
-      if (s === 'OPEN') {
-        whereConditions.push(`UPPER(c.status) IN ('OPEN', 'ACTIVE')`);
-      } else if (s === 'CLOSE') {
-        whereConditions.push(`UPPER(c.status) IN ('CLOSE', 'CLOSED', 'COMPLETED')`);
-      } else if (s === 'CANCELLED') {
-        whereConditions.push(`UPPER(c.status) IN ('CANCELLED')`);
-      } else {
-        params.push(`%${s}%`);
-        whereConditions.push(`UPPER(c.status) ILIKE $${params.length}`);
-      }
-    }
+    // Row-level conditions (applied before GROUP BY — work on individual contract rows)
+    const rowConditions: string[] = [];
+
+    // Aggregate-level conditions (applied after GROUP BY — mirror getContracts filter logic)
+    const aggConditions: string[] = [];
 
     if (search && search.trim().length >= 2) {
       params.push(`%${search.trim()}%`);
       const p = `$${params.length}`;
-      whereConditions.push(`(c.contract_id ILIKE ${p} OR c.group_name ILIKE ${p})`);
-    }
-
-    if (b2bFlag && b2bFlag !== 'ALL') {
-      params.push(b2bFlag);
-      whereConditions.push(`UPPER(c.b2b_flag) = UPPER($${params.length})`);
+      rowConditions.push(`(c.contract_id ILIKE ${p} OR c.group_name ILIKE ${p})`);
     }
 
     if (dateFrom) {
       params.push(dateFrom);
-      whereConditions.push(`c.contract_date >= $${params.length}`);
+      rowConditions.push(`c.contract_date >= $${params.length}`);
     }
 
     if (dateTo) {
       params.push(dateTo);
-      whereConditions.push(`c.contract_date <= $${params.length}`);
+      rowConditions.push(`c.contract_date <= $${params.length}`);
     }
 
-    const whereSql = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+    // Always restrict to Open/Active contracts only
+    aggConditions.push(`(
+      (base.spd_data->'contract'->>'status' = 'Open' OR UPPER(base.spd_data->'contract'->>'status') = 'ACTIVE')
+      OR (base.spd_data IS NULL AND UPPER(base.raw_status) IN ('OPEN', 'ACTIVE'))
+    )`);
+
+    // B2B flag — use JSONB contract_type (same as getContracts)
+    if (b2bFlag && b2bFlag !== 'ALL') {
+      params.push(b2bFlag);
+      aggConditions.push(`COALESCE(base.spd_data->'contract'->>'contract_type', base.spd_data->>'B2B Flag', '') = $${params.length}`);
+    }
+
+    // Product — ILIKE with wildcard (same as getContracts)
+    if (product && product !== 'ALL') {
+      params.push(`%${product.trim()}%`);
+      aggConditions.push(`COALESCE(base.raw_product, '') ILIKE $${params.length}`);
+    }
+
+    // Transport mode — filter on effective_transport_mode (includes JSONB fallback)
+    if (transportMode && transportMode.toUpperCase() !== 'ALL') {
+      params.push(`${transportMode.toUpperCase()}%`);
+      aggConditions.push(`UPPER(base.effective_transport_mode) LIKE $${params.length}`);
+    }
+
+    const rowWhereSql = rowConditions.length > 0 ? `WHERE ${rowConditions.join(' AND ')}` : '';
+    const aggWhereSql = aggConditions.length > 0 ? `AND ${aggConditions.join(' AND ')}` : '';
 
     const q = `
       WITH latest_spd AS (
@@ -1433,23 +1435,30 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
         SELECT
           c.contract_id,
           (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
+          MAX(c.status) AS raw_status,
+          MAX(c.product) AS raw_product,
+          (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS spd_data,
           COALESCE(NULLIF(TRIM(MAX(c.transport_mode)), ''), (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'transport_mode', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'sea_land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea / Land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea_Land', '') AS effective_transport_mode
         FROM contracts c
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-        ${whereSql}
+        ${rowWhereSql}
         GROUP BY c.contract_id
+      ),
+      filtered AS (
+        SELECT * FROM base
+        WHERE 1=1 ${aggWhereSql}
       ),
       sea_no_ship AS (
         SELECT 1
-        FROM base b
-        WHERE UPPER(TRIM(b.effective_transport_mode)) LIKE 'SEA%'
-          AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = b.id)
+        FROM filtered f
+        WHERE UPPER(TRIM(f.effective_transport_mode)) LIKE 'SEA%'
+          AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = f.id)
       ),
       land_no_truck AS (
         SELECT 1
-        FROM base b
-        WHERE UPPER(TRIM(b.effective_transport_mode)) LIKE 'LAND%'
-          AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = b.id)
+        FROM filtered f
+        WHERE UPPER(TRIM(f.effective_transport_mode)) LIKE 'LAND%'
+          AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = f.id)
       )
       SELECT
         (SELECT COUNT(*) FROM sea_no_ship) AS sea_without_shipments,
@@ -1469,6 +1478,46 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
     res.status(500).json({
       success: false,
       error: { message: 'Failed to fetch unassigned counts' },
+    });
+  }
+};
+
+/** Distinct buyer names from `contracts` (for trucking unloading location, etc.). */
+export const getDistinctBuyers = async (req: AuthRequest, res: Response) => {
+  try {
+    const search = req.query.search != null ? String(req.query.search).trim() : '';
+    const limitRaw = parseInt(String(req.query.limit ?? '30'), 10);
+    const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 30, 1), 100);
+
+    const params: unknown[] = [];
+    let where = `WHERE buyer IS NOT NULL AND TRIM(buyer) <> ''`;
+    if (search) {
+      params.push(`%${search}%`);
+      where += ` AND TRIM(buyer) ILIKE $${params.length}`;
+    }
+    params.push(limit);
+
+    const result = await query(
+      `
+      SELECT DISTINCT TRIM(buyer) AS buyer
+      FROM contracts
+      ${where}
+      ORDER BY buyer ASC
+      LIMIT $${params.length}
+      `,
+      params
+    );
+
+    const items = (result.rows as { buyer: string }[]).map((r) => r.buyer).filter(Boolean);
+    return res.json({
+      success: true,
+      data: { items },
+    });
+  } catch (error) {
+    logger.error('Get distinct buyers error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch buyers' },
     });
   }
 };

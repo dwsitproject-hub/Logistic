@@ -1,8 +1,9 @@
-﻿'use client'
+'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
 import { Badge } from '@/components/ui/badge'
 import { Check, Loader2, Plus, X } from 'lucide-react'
 import api from '@/lib/api'
@@ -584,7 +585,7 @@ export function AddShipmentModal({
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  PO Number <span className="text-red-500">*</span>
+                  PO Number
                 </label>
                 <div className="relative">
                   <div className="flex gap-2">
@@ -616,9 +617,9 @@ export function AddShipmentModal({
                         >
                           <div className="font-medium">{contract.po_number || contract.contract_id}</div>
                           <div className="text-sm text-gray-500">
-                            {contract.po_number ? <span className="text-gray-400">{contract.contract_id} â€¢ </span> : null}
-                            {contract.supplier} â€¢ {contract.product}
-                            {contract.sto_number && ` â€¢ STO: ${contract.sto_number}`}
+                            {contract.po_number ? <span className="text-gray-400">{contract.contract_id} • </span> : null}
+                            {contract.supplier} • {contract.product}
+                            {contract.sto_number && ` • STO: ${contract.sto_number}`}
                           </div>
                         </div>
                       ))}
@@ -662,7 +663,7 @@ export function AddShipmentModal({
                             )}
                             {validation?.exists && data && (
                               <div className="text-xs text-gray-500 truncate">
-                                {data.supplier} â€¢ {data.product} {data.transport_mode ? `â€¢ ${data.transport_mode}` : ''}
+                                {data.supplier} • {data.product} {data.transport_mode ? `• ${data.transport_mode}` : ''}
                               </div>
                             )}
                           </div>
@@ -706,7 +707,7 @@ export function AddShipmentModal({
           {/* Section 2 â€” Vessel/Truck Detail */}
           <div className="border rounded-lg overflow-hidden">
             <div className="bg-gray-50 px-4 py-2 border-b">
-              <h4 className="text-sm font-semibold text-gray-700">2. Vessel/Truck Detail</h4>
+              <h4 className="text-sm font-semibold text-gray-700">2. Vessel Detail</h4>
             </div>
             <div className="p-4 space-y-4">
               <div>
@@ -798,7 +799,7 @@ export function AddShipmentModal({
                         >
                           <div className="font-medium text-sm">{v.vessel_name}</div>
                           <div className="text-xs text-gray-500">
-                            {v.vessel_code} {v.vessel_owner ? ` â€¢ ${v.vessel_owner}` : ''}
+                            {v.vessel_code} {v.vessel_owner ? ` • ${v.vessel_owner}` : ''}
                           </div>
                         </div>
                       ))}
@@ -807,18 +808,6 @@ export function AddShipmentModal({
                   {formErrors.vesselName && (
                     <p className="text-xs mt-1 text-red-600">{formErrors.vesselName}</p>
                   )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Vessel Code <span className="text-gray-500 text-xs">(from Master Vessel)</span>
-                  </label>
-                  <Input value={newShipment.vesselCode} disabled placeholder="Filled when vessel is selected" className="bg-gray-100 cursor-not-allowed" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Vessel Owner <span className="text-gray-500 text-xs">(from Master Vessel)</span>
-                  </label>
-                  <Input value={newShipment.vesselOwner} disabled placeholder="Filled when vessel is selected" className="bg-gray-100 cursor-not-allowed" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -832,12 +821,6 @@ export function AddShipmentModal({
                     placeholder="Filled when vessel is selected"
                     className="bg-gray-100 cursor-not-allowed"
                   />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Hull Type <span className="text-gray-500 text-xs">(from Master Vessel)</span>
-                  </label>
-                  <Input value={newShipment.vesselHullType} disabled placeholder="Filled when vessel is selected" className="bg-gray-100 cursor-not-allowed" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -887,10 +870,10 @@ export function AddShipmentModal({
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-500 mb-2">Plant/Site (Discharge Port) (Optional)</label>
-                  <Input
+                  <PlantSiteCombobox
                     value={newShipment.portOfDischarge}
-                    onChange={(e) => setNewShipment((prev) => ({ ...prev, portOfDischarge: e.target.value }))}
-                    placeholder="Enter discharge port"
+                    onChange={(val) => setNewShipment((prev) => ({ ...prev, portOfDischarge: val }))}
+                    placeholder="Search plant/site..."
                   />
                 </div>
               </div>
@@ -1010,86 +993,6 @@ export function AddShipmentModal({
                 </>
               )}
 
-              {/* LAND ETA fields */}
-              {(selectedTransportMode === 'land' || selectedTransportMode === 'mixed') && (
-                <>
-                  {selectedTransportMode === 'mixed' && (
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4">Land</p>
-                  )}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-sm text-gray-500 mb-1">ETA Truck at Loading Site</label>
-                      <DateInputDdMmYyyy
-                        minIso={etaDateRange?.minIso}
-                        maxIso={etaDateRange?.maxIso}
-                        valueIso={newShipment.etaVesselArrivalAtLoadingPort}
-                        onChangeIso={(iso) => { setNewShipment((prev) => ({ ...prev, etaVesselArrivalAtLoadingPort: iso })); clearFieldError('eta_arrival') }}
-                      />
-                      {formErrors.eta_arrival && <p className="text-xs mt-1 text-red-600">{formErrors.eta_arrival}</p>}
-                    </div>
-                    <div>
-                      <label className="block text-sm text-gray-500 mb-1">ETA Start Loading</label>
-                      <DateInputDdMmYyyy
-                        minIso={etaDateRange?.minIso}
-                        maxIso={etaDateRange?.maxIso}
-                        valueIso={newShipment.etaVesselStartLoading}
-                        onChangeIso={(iso) => { setNewShipment((prev) => ({ ...prev, etaVesselStartLoading: iso })); clearFieldError('eta_startLoading') }}
-                      />
-                      {formErrors.eta_startLoading && <p className="text-xs mt-1 text-red-600">{formErrors.eta_startLoading}</p>}
-                    </div>
-                    <div>
-                      <label className="block text-sm text-gray-500 mb-1">ETA Completed Loading</label>
-                      <DateInputDdMmYyyy
-                        minIso={etaDateRange?.minIso}
-                        maxIso={etaDateRange?.maxIso}
-                        valueIso={newShipment.etaVesselCompletedLoading}
-                        onChangeIso={(iso) => { setNewShipment((prev) => ({ ...prev, etaVesselCompletedLoading: iso })); clearFieldError('eta_completedLoading') }}
-                      />
-                      {formErrors.eta_completedLoading && <p className="text-xs mt-1 text-red-600">{formErrors.eta_completedLoading}</p>}
-                    </div>
-                    <div>
-                      <label className="block text-sm text-gray-500 mb-1">ETA Truck Departed</label>
-                      <DateInputDdMmYyyy
-                        minIso={etaDateRange?.minIso}
-                        maxIso={etaDateRange?.maxIso}
-                        valueIso={newShipment.etaVesselSailedFromLoadingPort}
-                        onChangeIso={(iso) => { setNewShipment((prev) => ({ ...prev, etaVesselSailedFromLoadingPort: iso })); clearFieldError('eta_sailed') }}
-                      />
-                      {formErrors.eta_sailed && <p className="text-xs mt-1 text-red-600">{formErrors.eta_sailed}</p>}
-                    </div>
-                    <div>
-                      <label className="block text-sm text-gray-500 mb-1">ETA Truck at Destination (Plant)</label>
-                      <DateInputDdMmYyyy
-                        minIso={etaDateRange?.minIso}
-                        maxIso={etaDateRange?.maxIso}
-                        valueIso={newShipment.etaVesselArriveAtDischargePort}
-                        onChangeIso={(iso) => { setNewShipment((prev) => ({ ...prev, etaVesselArriveAtDischargePort: iso })); clearFieldError('eta_arriveDischarge') }}
-                      />
-                      {formErrors.eta_arriveDischarge && <p className="text-xs mt-1 text-red-600">{formErrors.eta_arriveDischarge}</p>}
-                    </div>
-                    <div>
-                      <label className="block text-sm text-gray-500 mb-1">ETA Start Unloading</label>
-                      <DateInputDdMmYyyy
-                        minIso={etaDateRange?.minIso}
-                        maxIso={etaDateRange?.maxIso}
-                        valueIso={newShipment.etaVesselStartDischarging}
-                        onChangeIso={(iso) => { setNewShipment((prev) => ({ ...prev, etaVesselStartDischarging: iso })); clearFieldError('eta_startDischarging') }}
-                      />
-                      {formErrors.eta_startDischarging && <p className="text-xs mt-1 text-red-600">{formErrors.eta_startDischarging}</p>}
-                    </div>
-                    <div>
-                      <label className="block text-sm text-gray-500 mb-1">ETA Completed Unloading</label>
-                      <DateInputDdMmYyyy
-                        minIso={etaDateRange?.minIso}
-                        maxIso={etaDateRange?.maxIso}
-                        valueIso={newShipment.etaVesselCompleteDischarge}
-                        onChangeIso={(iso) => { setNewShipment((prev) => ({ ...prev, etaVesselCompleteDischarge: iso })); clearFieldError('eta_completeDischarge') }}
-                      />
-                      {formErrors.eta_completeDischarge && <p className="text-xs mt-1 text-red-600">{formErrors.eta_completeDischarge}</p>}
-                    </div>
-                  </div>
-                </>
-              )}
             </div>
           </div>
 

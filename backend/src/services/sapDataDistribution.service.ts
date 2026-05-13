@@ -396,10 +396,10 @@ export class SapDataDistributionService {
         incoterm, transport_mode, quantity_ordered, unit, unit_price, contract_value,
         delivery_start_date, delivery_end_date, source_type, contract_type,
         status, sto_number, sto_quantity, logistics_classification, po_classification,
-        created_by
+        plant_code, created_by
       ) VALUES (
         $1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10::numeric, 'MT', $11::numeric, $12::numeric,
-        $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22
+        $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22, $23
       )
       ON CONFLICT (contract_id) DO UPDATE SET
         group_name = COALESCE(EXCLUDED.group_name, contracts.group_name),
@@ -422,6 +422,7 @@ export class SapDataDistributionService {
         sto_quantity = COALESCE(EXCLUDED.sto_quantity, contracts.sto_quantity),
         logistics_classification = COALESCE(EXCLUDED.logistics_classification, contracts.logistics_classification),
         po_classification = COALESCE(EXCLUDED.po_classification, contracts.po_classification),
+        plant_code = COALESCE(EXCLUDED.plant_code, contracts.plant_code),
         updated_at = CURRENT_TIMESTAMP
       RETURNING id`,
       [
@@ -446,6 +447,7 @@ export class SapDataDistributionService {
         this.parseNumber(contractData.sto_quantity),
         contractData.logistics_area_classification,
         contractData.sto_classification || contractData.po_classification,
+        contractData.plant_code || null,
         userId
       ]
     );

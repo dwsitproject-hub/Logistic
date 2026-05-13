@@ -68,6 +68,7 @@ export const CONTRACTS_LIST_OUTER_SQL = `
         base.po_count,
         base.sto_count,
         COALESCE(base.latest_spd_data->'contract'->>'company_code', base.latest_spd_data->'raw'->>'Company Code', base.latest_spd_data->'raw'->>'company code', base.latest_spd_data->>'Company Code', base.latest_spd_data->>'company code') AS company_code,
+        COALESCE(base.plant_code, base.latest_spd_data->'contract'->>'plant_code', base.latest_spd_data->'raw'->>'Plant Code', base.latest_spd_data->'raw'->>'plant code') AS plant_code,
         COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag') AS b2b_flag,
         COALESCE(
           base.latest_spd_data->'contract'->>'contract_reference_po',

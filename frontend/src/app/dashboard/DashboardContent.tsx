@@ -1240,20 +1240,20 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                 ? ` | OutDel ${fmt(seg.breakdown.outstandingDelivery)} / OutPay ${fmt(seg.breakdown.outstandingPayment)} / ClaimMutu ${fmt(seg.breakdown.outstandingClaimMutu)} / ClaimSusut ${fmt(seg.breakdown.outstandingClaimSusut)} / Done ${fmt(seg.breakdown.completed)}`
                 : ''
               const common = {
-                key: seg.label,
                 className: `${color(seg.tone)} ${clickable ? 'cursor-pointer hover:opacity-90' : ''} border-r border-white/60 last:border-r-0`,
                 style: { width: `${w}%` },
                 title: `${seg.label}: ${fmt(v)} (${pctText(v, total)})${breakdownSuffix}`,
               } as const
               return clickable ? (
                 <button
+                  key={seg.label}
                   type="button"
                   {...common}
                   onClick={() => onSegmentClick(seg.label)}
                   aria-label={`Filter: ${seg.label}`}
                 />
               ) : (
-                <div {...common} />
+                <div key={seg.label} {...common} />
               )
             })}
           </div>
@@ -2619,11 +2619,18 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       ]
 
                       return (
-                        <button
+                        <div
                           key={p.product}
-                          type="button"
+                          role="button"
+                          tabIndex={0}
                           className="w-full text-left p-3.5 rounded-xl border bg-white hover:bg-gray-50 transition-colors shadow-sm"
                           onClick={() => openProductContracts({ product: p.product, title: `${p.product} contracts` })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              openProductContracts({ product: p.product, title: `${p.product} contracts` })
+                            }
+                          }}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-start gap-3 min-w-0">
@@ -2857,7 +2864,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                               </div>
                             </div>
                           )}
-                        </button>
+                        </div>
                       )
                     })
                   })()
@@ -2987,11 +2994,18 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       ]
 
                       return (
-                        <button
+                        <div
                           key={p.product}
-                          type="button"
+                          role="button"
+                          tabIndex={0}
                           className="w-full text-left p-3.5 rounded-xl border bg-white hover:bg-gray-50 transition-colors shadow-sm"
                           onClick={() => openProductContracts({ product: p.product, title: `${p.product} contracts` })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              openProductContracts({ product: p.product, title: `${p.product} contracts` })
+                            }
+                          }}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-start gap-3 min-w-0">
@@ -3087,7 +3101,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                               formatValue={(v) => formatRupiah(v)}
                             />
                           </div>
-                        </button>
+                        </div>
                       )
                     })
                   })()
@@ -3195,11 +3209,18 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       }
 
                       return (
-                        <button
+                        <div
                           key={`${p.plant}-${index}`}
-                          type="button"
+                          role="button"
+                          tabIndex={0}
                           className="w-full text-left p-3.5 rounded-xl border bg-white hover:bg-gray-50 transition-colors shadow-sm"
                           onClick={() => openPlantContracts({ plant: p.plant, title: `${p.plant} contracts` })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              openPlantContracts({ plant: p.plant, title: `${p.plant} contracts` })
+                            }
+                          }}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-start gap-3 min-w-0">
@@ -3315,7 +3336,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                               formatValue={(v) => formatKg(v)}
                             />
                           </div>
-                        </button>
+                        </div>
                       )
                     })
                   })()

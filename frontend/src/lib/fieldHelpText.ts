@@ -7,9 +7,9 @@ export const FIELD_HELP = {
 
   logCycle: `Land: Cargo Readiness Date → latest Trucking Last Receive (Close) or today (Open). SEA: Cargo Readiness Date → latest ATA Vessel Complete Discharge (Close) or today (Open).`,
 
-  tradeCycle: `How many days a contract is late (or early) relative to its Delivery End Date. Positive = overdue; negative = on track.`,
+  tradeCycle: `Closed: latest receive/discharge → Due Date Delivery End (Land: Trucking Last Receive; SEA: ATA Vessel Complete Discharge). Open: Land uses latest Daily Planning Deliverables date; SEA uses ETA Vessel Complete Discharge.`,
 
-  cashCycle: `How many days between the actual delivery completion and the Payoff Date. Positive = payment is overdue relative to delivery; negative = payment settled ahead of delivery.`,
+  cashCycle: `Closed: latest receive/discharge → Payoff Date (Land: Trucking Last Receive; SEA: ATA Vessel Complete Discharge). Open: Land uses latest Daily Planning Deliverables date; SEA uses ETA Vessel Complete Discharge.`,
 
   outstandingQty: `Remaining quantity yet to be delivered. Positive = still outstanding; negative = over-delivered.`,
 

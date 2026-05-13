@@ -16,6 +16,17 @@ import {
   formatDDMMYYYY,
 } from '../utils/operationId';
 
+function deriveTruckingStatus(
+  truckingStartDate: any,
+  truckingCompletionDate: any,
+  cargoReadinessDate: any
+): string {
+  if (truckingCompletionDate) return 'COMPLETED';
+  if (truckingStartDate) return 'IN_TRANSIT';
+  if (cargoReadinessDate) return 'LOADING';
+  return 'PLANNED';
+}
+
 export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Response) => {
   try {
     const { q } = req.query;
@@ -45,13 +56,9 @@ export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Resp
       FROM contracts c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       WHERE
-        UPPER(COALESCE(c.status, '')) IN ('OPEN', 'ACTIVE')
-        AND UPPER(COALESCE(c.transport_mode, '')) = 'LAND'
-        AND (
-          COALESCE(l.contract_ext_no, '') ILIKE $1
-          OR c.contract_id ILIKE $1
-          OR COALESCE(c.po_number, '') ILIKE $1
-        )
+        COALESCE(l.contract_ext_no, '') ILIKE $1
+        OR c.contract_id ILIKE $1
+        OR COALESCE(c.sto_number, '') ILIKE $1
       ORDER BY COALESCE(l.contract_ext_no, c.contract_id)
       LIMIT 10
       `,
@@ -587,7 +594,6 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
       gain_loss_amount,
       oa_budget,
       oa_actual,
-      status,
       daily_deliverables
     } = req.body;
 
@@ -697,7 +703,7 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         gain_loss_amount || null,
         oa_budget || null,
         oa_actual || null,
-        status || 'PLANNED',
+        deriveTruckingStatus(trucking_start_date, trucking_completion_date, cargo_readiness_date),
         JSON.stringify(dd.rows)
       ]
     );
@@ -755,14 +761,19 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         l.contract_ext_no,
         c.sto_number,
         c.supplier,
+        c.buyer,
         c.product,
         c.group_name,
         c.quantity_ordered,
         c.contract_date,
         c.delivery_start_date,
-        c.delivery_end_date
+        c.delivery_end_date,
+        c.plant_code,
+        mp.plant_name,
+        mp.company_name AS plant_company_name
       FROM matched c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+      LEFT JOIN master_plants mp ON mp.plant_code = c.plant_code
       LIMIT 1
       `,
       [raw]

@@ -67,15 +67,15 @@ function LayoutChrome({
         data-tour="tour-sidebar"
         className={`${
           sidebarOpen ? 'w-64' : 'w-20'
-        } bg-white border-r border-gray-200 transition-all duration-300 ease-in-out shrink-0`}
+        } bg-white border-r border-gray-200 transition-all duration-300 ease-in-out shrink-0 flex flex-col overflow-hidden`}
       >
-        <div className="flex items-center justify-between p-4 border-b">
+        <div className="flex items-center justify-between p-4 border-b shrink-0">
           {sidebarOpen && <h1 className="text-2xl font-bold text-primary">KLIP</h1>}
           <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)}>
             {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </Button>
         </div>
-        <nav className="p-4 space-y-2">
+        <nav className="flex-1 overflow-y-auto p-4 space-y-2">
           {filteredNavigation.map((item) => {
             const Icon = item.icon
             const isActive = pathname === item.href
