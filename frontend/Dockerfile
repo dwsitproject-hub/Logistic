@@ -50,15 +50,16 @@ RUN addgroup -g 1001 -S nodejs && \
 USER nextjs
 
 # Listen on all interfaces so the app is reachable from outside the container (Docker port mapping)
+ENV HOST=0.0.0.0
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3001
 
 # Expose port
 EXPOSE 3001
 
-# Health check (Next.js app root)
+# Health check: use 127.0.0.1 (avoid IPv6 localhost quirks); accept 2xx/3xx (Next may redirect /).
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3001', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
+  CMD node -e "require('http').get('http://127.0.0.1:3001/login',(r)=>{r.on('end',()=>process.exit(r.statusCode>=200&&r.statusCode<400?0:1));r.resume();}).on('error',()=>process.exit(1))"
 
 # Start the application
 CMD ["node", "server.js"]

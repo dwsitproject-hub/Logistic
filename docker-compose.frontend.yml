@@ -5,7 +5,6 @@
 # Host port defaults to 80 (browser uses http://server/ without :3001).
 # If Nginx already listens on 80 on this host, set FRONTEND_PORT=3001 and keep Nginx → 127.0.0.1:3001.
 # When using port 80 without Nginx, set BACKEND_INTERNAL_URL (e.g. http://172.28.92.57:5001) so Next.js rewrites /api to the backend.
-version: '3.8'
 
 services:
   frontend:
@@ -19,6 +18,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3001
+      # Next standalone + Docker: avoid bind/listen quirks; HOST is honored on newer Next.
+      HOST: 0.0.0.0
       HOSTNAME: 0.0.0.0
     ports:
       - "${FRONTEND_PORT:-80}:3001"
@@ -26,7 +27,13 @@ services:
       - klip-frontend-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3001/login',(r)=>{r.on('end',()=>process.exit(r.statusCode>=200&&r.statusCode<400?0:1));r.resume();}).on('error',()=>process.exit(1))",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
