@@ -13,7 +13,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
-import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
+import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -152,6 +152,49 @@ interface VesselLoadingPort {
   is_discharge_port?: boolean
   created_at?: string
   updated_at?: string
+}
+
+function apiErrorMessage(error: unknown, fallback: string): string {
+  const err = error as { response?: { data?: { error?: { message?: string } } }; message?: string }
+  return err?.response?.data?.error?.message || err?.message || fallback
+}
+
+/** Payload for PUT /shipments/:id/loading-ports/:portId (only fields the API accepts). */
+function buildLoadingPortUpdatePayload(
+  source: Partial<VesselLoadingPort> & Record<string, unknown>,
+  portId: string,
+): Record<string, unknown> {
+  const berthedLoading = toApiDateOnly(
+    source.eta_vessel_berthed_at_loading_port ?? source.eta_vessel_berthed,
+  )
+  return {
+    id: portId,
+    port_name: source.port_name,
+    port_sequence: source.port_sequence ?? 1,
+    quantity_at_loading_port: source.quantity_at_loading_port ?? 0,
+    is_discharge_port: Boolean(source.is_discharge_port),
+    quality_ffa: source.quality_ffa ?? null,
+    quality_mi: source.quality_mi ?? null,
+    quality_dobi: source.quality_dobi ?? null,
+    quality_red: source.quality_red ?? null,
+    quality_ds: source.quality_ds ?? null,
+    quality_stone: source.quality_stone ?? null,
+    eta_vessel_arrival: toApiDateOnly(source.eta_vessel_arrival),
+    ata_vessel_arrival: toApiDateOnly(source.ata_vessel_arrival),
+    eta_vessel_berthed: berthedLoading,
+    ata_vessel_berthed: toApiDateOnly(source.ata_vessel_berthed),
+    eta_vessel_berthed_at_loading_port: berthedLoading,
+    eta_loading_start: toApiDateOnly(source.eta_loading_start),
+    ata_loading_start: toApiDateOnly(source.ata_loading_start),
+    eta_loading_completed: toApiDateOnly(source.eta_loading_completed),
+    ata_loading_completed: toApiDateOnly(source.ata_loading_completed),
+    eta_vessel_sailed: toApiDateOnly(source.eta_vessel_sailed),
+    ata_vessel_sailed: toApiDateOnly(source.ata_vessel_sailed),
+    eta_vessel_arrive_at_discharge_port: toApiDateOnly(source.eta_vessel_arrive_at_discharge_port),
+    eta_vessel_berthed_at_discharge_port: toApiDateOnly(source.eta_vessel_berthed_at_discharge_port),
+    eta_vessel_start_discharging: toApiDateOnly(source.eta_vessel_start_discharging),
+    eta_vessel_complete_discharge: toApiDateOnly(source.eta_vessel_complete_discharge),
+  }
 }
 
 interface DocumentItem {
@@ -2343,19 +2386,18 @@ function ShipmentsPageContent() {
     if (!selectedShipment || !editedPortData) return
 
     try {
-      const portData = { ...editedPortData, id: portId }
-      // Use PUT for updates
+      const portData = buildLoadingPortUpdatePayload(editedPortData, portId)
       const response = await api.put(`/shipments/${selectedShipment.id}/loading-ports/${portId}`, portData)
       
       if (response.data.success) {
-        await fetchLoadingPorts(selectedShipment.id)
+        await fetchLoadingPorts(selectedShipment.id, true)
         setEditingPortId(null)
         setEditedPortData(null)
         alert('Loading port updated successfully!')
       }
     } catch (error) {
       console.error('Error saving loading port:', error)
-      alert('Failed to save loading port')
+      alert(apiErrorMessage(error, 'Failed to save loading port'))
     }
   }
 
@@ -2422,176 +2464,159 @@ function ShipmentsPageContent() {
     if (!selectedShipment || !editedShipmentInfo) return
 
     try {
-      // Always work with specific shipment UUID for loading ports
       const identifier = selectedShipment.id
-      
-      // Map the edited fields to the update format
-      const updateData: any = {
-        shipment_id: selectedShipment.shipment_id
-      }
+      const info = editedShipmentInfo
 
-      // Add fields that can be updated in shipments table
-      if (editedShipmentInfo.quantity_delivered !== undefined) {
-        updateData.quantity_delivered = editedShipmentInfo.quantity_delivered
+      const updateData: Record<string, unknown> = {}
+      if (info.quantity_delivered !== undefined && info.quantity_delivered !== null) {
+        updateData.quantity_delivered = info.quantity_delivered
       }
-      if (editedShipmentInfo.actual_vessel_qty_receive !== undefined) {
-        updateData.actual_vessel_qty_receive = editedShipmentInfo.actual_vessel_qty_receive
+      if (info.actual_vessel_qty_receive !== undefined && info.actual_vessel_qty_receive !== null) {
+        updateData.actual_vessel_qty_receive = info.actual_vessel_qty_receive
       }
-      if (editedShipmentInfo.vessel_oa_actual !== undefined) {
-        updateData.vessel_oa_actual = editedShipmentInfo.vessel_oa_actual
+      if (info.vessel_oa_actual !== undefined && info.vessel_oa_actual !== null) {
+        updateData.vessel_oa_actual = info.vessel_oa_actual
       }
-      if (editedShipmentInfo.vessel_oa_budget !== undefined) {
-        updateData.vessel_oa_budget = editedShipmentInfo.vessel_oa_budget
+      if (info.vessel_oa_budget !== undefined && info.vessel_oa_budget !== null) {
+        updateData.vessel_oa_budget = info.vessel_oa_budget
       }
-      if (editedShipmentInfo.bl_quantity !== undefined) {
-        updateData.bl_quantity = editedShipmentInfo.bl_quantity
+      if (info.bl_quantity !== undefined && info.bl_quantity !== null) {
+        updateData.bl_quantity = info.bl_quantity
       }
-      if (editedShipmentInfo.vessel_loading_port_1 !== undefined && editedShipmentInfo.vessel_loading_port_1 !== '' && editedShipmentInfo.vessel_loading_port_1 !== '0.00') {
-        updateData.port_of_loading = editedShipmentInfo.vessel_loading_port_1
-      }
-      if (editedShipmentInfo.vessel_discharge_port_1 !== undefined && editedShipmentInfo.vessel_discharge_port_1 !== '' && editedShipmentInfo.vessel_discharge_port_1 !== '0.00') {
-        updateData.port_of_discharge = editedShipmentInfo.vessel_discharge_port_1
-      }
+      const pol = String(info.vessel_loading_port_1 ?? '').trim()
+      if (pol && pol !== '0.00') updateData.port_of_loading = pol
+      const pod = String(info.vessel_discharge_port_1 ?? '').trim()
+      if (pod && pod !== '0.00') updateData.port_of_discharge = pod
 
-      // Save shipment data
-      const response = await api.put(`/shipments/${selectedShipment.id}`, updateData)
-      
-      if (response.data.success) {
-        // Refresh loading ports to get the latest data before saving ETA fields
-        const refreshedPortsResponse = await api.get(`/shipments/${identifier}/loading-ports`)
-        let refreshedPorts: any[] = []
-        if (refreshedPortsResponse.data.success && refreshedPortsResponse.data.data.ports) {
-          refreshedPorts = refreshedPortsResponse.data.data.ports
+      if (Object.keys(updateData).length > 0) {
+        const response = await api.put(`/shipments/${identifier}`, updateData)
+        if (!response.data?.success) {
+          throw new Error(response.data?.error?.message || 'Failed to update shipment')
         }
-        
-        // Now save ETA fields to the first loading port
-        // Find ANY existing loading port (prefer port_sequence 1, but use any if available)
-        let firstPort = refreshedPorts.find((p: any) => !p.is_discharge_port && p.port_sequence === 1) 
-                     || refreshedPorts.find((p: any) => !p.is_discharge_port)
-                     || loadingPorts.find(p => !p.is_discharge_port && p.port_sequence === 1)
-                     || loadingPorts.find(p => !p.is_discharge_port)
+      }
 
-        // Detect if shipment already has any loading port at all
-        const hasAnyLoadingPort =
-          refreshedPorts.some((p: any) => !p.is_discharge_port) ||
-          loadingPorts.some(p => !p.is_discharge_port)
+      const refreshedPortsResponse = await api.get(`/shipments/${identifier}/loading-ports`)
+      let refreshedPorts: VesselLoadingPort[] = []
+      if (refreshedPortsResponse.data.success && refreshedPortsResponse.data.data.ports) {
+        refreshedPorts = refreshedPortsResponse.data.data.ports
+      }
 
-        if (firstPort && firstPort.id) {
-          // Update existing loading port: merge existing port data so backend does not overwrite with null
-          const toDateStr = (v: unknown) => (v != null && v !== '' ? String(v).split('T')[0] : null)
-          const loadingPortUpdateData: any = {
-            port_name: editedShipmentInfo.vessel_loading_port_1 || firstPort.port_name || 'Loading Port 1',
+      const firstPort =
+        refreshedPorts.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
+        refreshedPorts.find((p) => !p.is_discharge_port) ||
+        loadingPorts.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
+        loadingPorts.find((p) => !p.is_discharge_port)
+
+      const hasAnyLoadingPort =
+        refreshedPorts.some((p) => !p.is_discharge_port) || loadingPorts.some((p) => !p.is_discharge_port)
+
+      if (firstPort?.id) {
+        const loadingPortUpdateData = buildLoadingPortUpdatePayload(
+          {
+            ...firstPort,
+            port_name: info.vessel_loading_port_1 || firstPort.port_name || 'Loading Port 1',
             port_sequence: firstPort.port_sequence ?? 1,
-            quantity_at_loading_port: editedShipmentInfo.actual_vessel_qty_receive ?? firstPort.quantity_at_loading_port ?? 0,
+            quantity_at_loading_port: info.actual_vessel_qty_receive ?? firstPort.quantity_at_loading_port ?? 0,
             is_discharge_port: false,
-            // Quality (editable; may be overwritten by SAP later if SAP value is meaningful)
-            quality_ffa: editedShipmentInfo.quality_at_loading_loc_1_ffa ?? firstPort.quality_ffa ?? null,
-            quality_mi: editedShipmentInfo.quality_at_loading_loc_1_mi ?? firstPort.quality_mi ?? null,
-            quality_dobi: editedShipmentInfo.quality_at_loading_loc_1_dobi ?? firstPort.quality_dobi ?? null,
-            quality_red: editedShipmentInfo.quality_at_loading_loc_1_red ?? firstPort.quality_red ?? null,
-            quality_ds: editedShipmentInfo.quality_at_loading_loc_1_ds ?? firstPort.quality_ds ?? null,
-            quality_stone: editedShipmentInfo.quality_at_loading_loc_1_stone ?? firstPort.quality_stone ?? null,
-            // ETA from form (override); use existing firstPort values as fallback so we don't clear other fields
-            eta_vessel_arrival: toDateStr(editedShipmentInfo.eta_vessel_arrival_at_loading_port) ?? toDateStr(firstPort.eta_vessel_arrival),
-            eta_vessel_berthed_at_loading_port: toDateStr(editedShipmentInfo.eta_vessel_berthed_at_loading_port) ?? toDateStr(firstPort.eta_vessel_berthed_at_loading_port),
-            eta_loading_start: toDateStr(editedShipmentInfo.eta_vessel_start_loading) ?? toDateStr(firstPort.eta_loading_start),
-            eta_loading_completed: toDateStr(editedShipmentInfo.eta_vessel_completed_loading) ?? toDateStr(firstPort.eta_loading_completed),
-            eta_vessel_sailed: toDateStr(editedShipmentInfo.eta_vessel_sailed_from_loading_port) ?? toDateStr(firstPort.eta_vessel_sailed),
-            // Preserve existing ATA so backend UPDATE does not overwrite with null
-            ata_vessel_arrival: toDateStr(firstPort.ata_vessel_arrival),
-            ata_vessel_berthed: toDateStr(firstPort.ata_vessel_berthed),
-            ata_loading_start: toDateStr(firstPort.ata_loading_start),
-            ata_loading_completed: toDateStr(firstPort.ata_loading_completed),
-            ata_vessel_sailed: toDateStr(firstPort.ata_vessel_sailed),
+            quality_ffa: info.quality_at_loading_loc_1_ffa ?? firstPort.quality_ffa ?? null,
+            quality_mi: info.quality_at_loading_loc_1_mi ?? firstPort.quality_mi ?? null,
+            quality_dobi: info.quality_at_loading_loc_1_dobi ?? firstPort.quality_dobi ?? null,
+            quality_red: info.quality_at_loading_loc_1_red ?? firstPort.quality_red ?? null,
+            quality_ds: info.quality_at_loading_loc_1_ds ?? firstPort.quality_ds ?? null,
+            quality_stone: info.quality_at_loading_loc_1_stone ?? firstPort.quality_stone ?? null,
+            eta_vessel_arrival: info.eta_vessel_arrival_at_loading_port ?? firstPort.eta_vessel_arrival,
+            eta_vessel_berthed_at_loading_port:
+              info.eta_vessel_berthed_at_loading_port ?? firstPort.eta_vessel_berthed_at_loading_port,
+            eta_vessel_berthed:
+              info.eta_vessel_berthed_at_loading_port ?? firstPort.eta_vessel_berthed_at_loading_port ?? firstPort.eta_vessel_berthed,
+            eta_loading_start: info.eta_vessel_start_loading ?? firstPort.eta_loading_start,
+            eta_loading_completed: info.eta_vessel_completed_loading ?? firstPort.eta_loading_completed,
+            eta_vessel_sailed: info.eta_vessel_sailed_from_loading_port ?? firstPort.eta_vessel_sailed,
             eta_vessel_arrive_at_discharge_port: null,
             eta_vessel_berthed_at_discharge_port: null,
             eta_vessel_start_discharging: null,
-            eta_vessel_complete_discharge: null
-          }
-          
-          await api.put(`/shipments/${identifier}/loading-ports/${firstPort.id}`, loadingPortUpdateData)
-        } else if (
-          !hasAnyLoadingPort &&
-          (
-            editedShipmentInfo.eta_vessel_arrival_at_loading_port ||
-            editedShipmentInfo.eta_vessel_berthed_at_loading_port ||
-            editedShipmentInfo.eta_vessel_start_loading ||
-            editedShipmentInfo.eta_vessel_completed_loading ||
-            editedShipmentInfo.eta_vessel_sailed_from_loading_port ||
-            editedShipmentInfo.vessel_loading_port_1
-          )
-        ) {
-          // Create a first loading port ONLY if none exists yet and user entered ETA/port data
-          const newPortData: any = {
-            port_name: editedShipmentInfo.vessel_loading_port_1 || 'Loading Port 1',
+            eta_vessel_complete_discharge: null,
+          },
+          firstPort.id,
+        )
+        await api.put(`/shipments/${identifier}/loading-ports/${firstPort.id}`, loadingPortUpdateData)
+      } else if (
+        !hasAnyLoadingPort &&
+        (info.eta_vessel_arrival_at_loading_port ||
+          info.eta_vessel_berthed_at_loading_port ||
+          info.eta_vessel_start_loading ||
+          info.eta_vessel_completed_loading ||
+          info.eta_vessel_sailed_from_loading_port ||
+          info.vessel_loading_port_1)
+      ) {
+        const newPortData = buildLoadingPortUpdatePayload(
+          {
+            port_name: info.vessel_loading_port_1 || 'Loading Port 1',
             port_sequence: 1,
-            quantity_at_loading_port: editedShipmentInfo.actual_vessel_qty_receive || 0,
+            quantity_at_loading_port: info.actual_vessel_qty_receive || 0,
             is_discharge_port: false,
-            quality_ffa: editedShipmentInfo.quality_at_loading_loc_1_ffa ?? null,
-            quality_mi: editedShipmentInfo.quality_at_loading_loc_1_mi ?? null,
-            quality_dobi: editedShipmentInfo.quality_at_loading_loc_1_dobi ?? null,
-            quality_red: editedShipmentInfo.quality_at_loading_loc_1_red ?? null,
-            quality_ds: editedShipmentInfo.quality_at_loading_loc_1_ds ?? null,
-            quality_stone: editedShipmentInfo.quality_at_loading_loc_1_stone ?? null,
-            eta_vessel_arrival: editedShipmentInfo.eta_vessel_arrival_at_loading_port || null,
-            eta_vessel_berthed_at_loading_port: editedShipmentInfo.eta_vessel_berthed_at_loading_port || null,
-            eta_loading_start: editedShipmentInfo.eta_vessel_start_loading || null,
-            eta_loading_completed: editedShipmentInfo.eta_vessel_completed_loading || null,
-            eta_vessel_sailed: editedShipmentInfo.eta_vessel_sailed_from_loading_port || null,
-          }
+            quality_ffa: info.quality_at_loading_loc_1_ffa ?? null,
+            quality_mi: info.quality_at_loading_loc_1_mi ?? null,
+            quality_dobi: info.quality_at_loading_loc_1_dobi ?? null,
+            quality_red: info.quality_at_loading_loc_1_red ?? null,
+            quality_ds: info.quality_at_loading_loc_1_ds ?? null,
+            quality_stone: info.quality_at_loading_loc_1_stone ?? null,
+            eta_vessel_arrival: info.eta_vessel_arrival_at_loading_port,
+            eta_vessel_berthed_at_loading_port: info.eta_vessel_berthed_at_loading_port,
+            eta_vessel_berthed: info.eta_vessel_berthed_at_loading_port,
+            eta_loading_start: info.eta_vessel_start_loading,
+            eta_loading_completed: info.eta_vessel_completed_loading,
+            eta_vessel_sailed: info.eta_vessel_sailed_from_loading_port,
+          },
+          '',
+        )
+        delete newPortData.id
+        await api.post(`/shipments/${identifier}/loading-ports`, newPortData)
+      }
 
-          await api.post(`/shipments/${identifier}/loading-ports`, newPortData)
-        }
-        
-        // Handle discharge port ETA fields separately
-        // Use refreshed ports list - refresh again after loading port operations
-        const finalPortsResponse = await api.get(`/shipments/${identifier}/loading-ports`)
-        let finalPorts: any[] = []
-        if (finalPortsResponse.data.success && finalPortsResponse.data.data.ports) {
-          finalPorts = finalPortsResponse.data.data.ports
-        }
-        let dischargePort = finalPorts.find((p: any) => p.is_discharge_port) || refreshedPorts.find((p: any) => p.is_discharge_port) || loadingPorts.find(p => p.is_discharge_port)
-        if (dischargePort && dischargePort.id) {
-          const toDateStrD = (v: unknown) => (v != null && v !== '' ? String(v).split('T')[0] : null)
-          const dischargePortUpdateData: any = {
-            port_name: editedShipmentInfo.vessel_discharge_port_1 || dischargePort.port_name || 'Discharge Port',
+      const finalPortsResponse = await api.get(`/shipments/${identifier}/loading-ports`)
+      let finalPorts: VesselLoadingPort[] = []
+      if (finalPortsResponse.data.success && finalPortsResponse.data.data.ports) {
+        finalPorts = finalPortsResponse.data.data.ports
+      }
+      const dischargePort =
+        finalPorts.find((p) => p.is_discharge_port) ||
+        refreshedPorts.find((p) => p.is_discharge_port) ||
+        loadingPorts.find((p) => p.is_discharge_port)
+
+      if (dischargePort?.id) {
+        const dischargePortUpdateData = buildLoadingPortUpdatePayload(
+          {
+            ...dischargePort,
+            port_name: info.vessel_discharge_port_1 || dischargePort.port_name || 'Discharge Port',
             port_sequence: dischargePort.port_sequence ?? 999,
-            quantity_at_loading_port: dischargePort.quantity_at_loading_port ?? 0,
             is_discharge_port: true,
-            // Discharge quality is view-only (SAP-owned); preserve DB values.
-            quality_ffa: dischargePort.quality_ffa ?? null,
-            quality_mi: dischargePort.quality_mi ?? null,
-            quality_dobi: dischargePort.quality_dobi ?? null,
-            quality_red: dischargePort.quality_red ?? null,
-            quality_ds: dischargePort.quality_ds ?? null,
-            quality_stone: dischargePort.quality_stone ?? null,
-            eta_vessel_arrive_at_discharge_port: toDateStrD(editedShipmentInfo.eta_vessel_arrive_at_discharge_port) ?? toDateStrD(dischargePort.eta_vessel_arrive_at_discharge_port),
-            eta_vessel_berthed_at_discharge_port: toDateStrD(editedShipmentInfo.eta_vessel_berthed_at_discharge_port) ?? toDateStrD(dischargePort.eta_vessel_berthed_at_discharge_port),
-            eta_vessel_start_discharging: toDateStrD(editedShipmentInfo.eta_vessel_start_discharging) ?? toDateStrD(dischargePort.eta_vessel_start_discharging),
-            eta_vessel_complete_discharge: toDateStrD(editedShipmentInfo.eta_vessel_complete_discharge) ?? toDateStrD(dischargePort.eta_vessel_complete_discharge),
+            eta_vessel_arrive_at_discharge_port:
+              info.eta_vessel_arrive_at_discharge_port ?? dischargePort.eta_vessel_arrive_at_discharge_port,
+            eta_vessel_berthed_at_discharge_port:
+              info.eta_vessel_berthed_at_discharge_port ?? dischargePort.eta_vessel_berthed_at_discharge_port,
+            eta_vessel_start_discharging:
+              info.eta_vessel_start_discharging ?? dischargePort.eta_vessel_start_discharging,
+            eta_vessel_complete_discharge:
+              info.eta_vessel_complete_discharge ?? dischargePort.eta_vessel_complete_discharge,
             eta_vessel_arrival: null,
             eta_vessel_berthed_at_loading_port: null,
             eta_loading_start: null,
             eta_loading_completed: null,
             eta_vessel_sailed: null,
-            ata_vessel_arrival: toDateStrD(dischargePort.ata_vessel_arrival),
-            ata_vessel_berthed: toDateStrD(dischargePort.ata_vessel_berthed),
-            ata_loading_start: toDateStrD(dischargePort.ata_loading_start),
-            ata_loading_completed: toDateStrD(dischargePort.ata_loading_completed),
-            ata_vessel_sailed: toDateStrD(dischargePort.ata_vessel_sailed)
-          }
-          await api.put(`/shipments/${identifier}/loading-ports/${dischargePort.id}`, dischargePortUpdateData)
-        }
-        
-        // Refetch so Shipment Information (including ETA) shows saved data (skipCache to avoid stale response)
-        await fetchLoadingPorts(identifier, true)
-        setEditingShipmentInfo(false)
-        setEditedShipmentInfo(null)
-        alert('Shipment information updated successfully!')
+          },
+          dischargePort.id,
+        )
+        await api.put(`/shipments/${identifier}/loading-ports/${dischargePort.id}`, dischargePortUpdateData)
       }
+
+      await fetchLoadingPorts(identifier, true)
+      setEditingShipmentInfo(false)
+      setEditedShipmentInfo(null)
+      alert('Shipment information updated successfully!')
     } catch (error) {
       console.error('Error saving shipment info:', error)
-      alert('Failed to save shipment information')
+      alert(apiErrorMessage(error, 'Failed to save shipment information'))
     }
   }
 

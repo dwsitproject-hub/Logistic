@@ -349,28 +349,42 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const limitParam = paramIndex;
     const offsetParam = paramIndex + 1;
 
+    const outstandingQtyExpr = `(
+      quantity_ordered - COALESCE(
+        CASE
+          WHEN UPPER(TRIM(COALESCE(incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN quantity_receive
+          WHEN UPPER(TRIM(COALESCE(incoterm, ''))) IN ('LCO', 'FOB') THEN quantity_delivery
+          ELSE total_sto_quantity
+        END,
+        0
+      )
+    )`;
     const allowedSort: Record<string, string> = {
-      contract_date: 'contract_date',
+      contract_date: 'contract_date::date',
       contract_id: 'contract_id',
       status: 'status',
       supplier: 'supplier',
+      supplier_name: 'supplier',
       buyer: 'buyer',
       product: 'product',
       group_name: 'group_name',
       company_name: 'company_name',
       incoterm: 'incoterm',
       transport_mode: 'transport_mode',
-      delivery_start_date: 'delivery_start_date',
-      delivery_end_date: 'delivery_end_date',
+      delivery_start: 'delivery_start_date::date',
+      delivery_end: 'delivery_end_date::date',
+      delivery_start_date: 'delivery_start_date::date',
+      delivery_end_date: 'delivery_end_date::date',
       sto_count: 'sto_count',
       total_sto_quantity: 'total_sto_quantity',
-      outstanding_qty: 'outstanding_qty',
+      outstanding_qty: outstandingQtyExpr,
+      outstanding_qty_mt: outstandingQtyExpr,
       contract_qty: 'quantity_ordered',
       created_at: 'created_at',
       // computed (JS): log_cycle_days, trade_cycle_days, cash_cycle_days
     };
     const sortKey = allowedSort[sortKeyRaw] ? sortKeyRaw : 'contract_date';
-    const orderExpr = allowedSort[sortKey] || 'contract_date';
+    const orderExpr = allowedSort[sortKey] || 'contract_date::date';
 
     const filteredClosedAndPage = `
       )

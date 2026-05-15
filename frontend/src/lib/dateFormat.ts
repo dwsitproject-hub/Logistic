@@ -23,6 +23,32 @@ function parseForDisplay(input: string): Date | null {
   return Number.isNaN(fallback.getTime()) ? null : fallback
 }
 
+/** Normalize UI/API date input to `YYYY-MM-DD` for Postgres `date` columns. */
+export function toApiDateOnly(input: string | Date | null | undefined): string | null {
+  if (input === null || input === undefined || input === '') return null
+  if (input instanceof Date) {
+    if (Number.isNaN(input.getTime())) return null
+    return format(input, 'yyyy-MM-dd')
+  }
+  const s = String(input).trim()
+  if (!s) return null
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
+  const fromDd = parseDdMmYyyyToIso(s)
+  if (fromDd) return fromDd
+  const d = parseForDisplay(s)
+  return d ? format(d, 'yyyy-MM-dd') : null
+}
+
+/** Numeric timestamp for sorting (null = empty / unparseable). */
+export function toSortableTimestamp(input: string | Date | null | undefined): number | null {
+  if (input === null || input === undefined || input === '') return null
+  if (input instanceof Date) {
+    return Number.isNaN(input.getTime()) ? null : input.getTime()
+  }
+  const d = parseForDisplay(String(input))
+  return d ? d.getTime() : null
+}
+
 /** Date only: DD/MM/YYYY */
 export function formatDateDMY(input: string | Date | null | undefined): string {
   if (input === null || input === undefined || input === '') return '-'

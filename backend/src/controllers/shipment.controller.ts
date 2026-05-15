@@ -1821,13 +1821,26 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
       eta_vessel_complete_discharge
     } = req.body;
 
-    // Normalize date-like fields: empty string or invalid -> null so DB accepts them
+    // Normalize date-like fields: empty string or invalid -> null; always store YYYY-MM-DD for date columns.
     const toDateOrNull = (v: unknown): string | null => {
       if (v == null || v === '') return null;
-      if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return v;
-      if (typeof v === 'string') {
-        const d = new Date(v);
-        if (!Number.isNaN(d.getTime())) return v;
+      const s = String(v).trim();
+      if (!s) return null;
+      const iso = /^(\d{4}-\d{2}-\d{2})/.exec(s);
+      if (iso) return iso[1];
+      const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+      if (dmy) {
+        const dd = dmy[1].padStart(2, '0');
+        const mm = dmy[2].padStart(2, '0');
+        const yyyy = dmy[3];
+        return `${yyyy}-${mm}-${dd}`;
+      }
+      const d = new Date(s);
+      if (!Number.isNaN(d.getTime())) {
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}`;
       }
       return null;
     };

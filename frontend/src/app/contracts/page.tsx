@@ -20,8 +20,82 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { formatKgFromMt, formatRupiah, toKgFromMt } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
-import { formatDateDMY } from '@/lib/dateFormat'
+import { formatDateDMY, toSortableTimestamp } from '@/lib/dateFormat'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+
+/** Column ids sorted on the API (see GET /contracts allowedSort). */
+const API_SORTABLE_COLUMN_IDS = new Set([
+  'contract_date',
+  'contract_id',
+  'status',
+  'supplier',
+  'supplier_name',
+  'buyer',
+  'product',
+  'group_name',
+  'company_name',
+  'incoterm',
+  'transport_mode',
+  'delivery_start',
+  'delivery_end',
+  'sto_count',
+  'contract_qty',
+  'outstanding_qty_mt',
+  'created_at',
+])
+
+/** Computed / UI-only columns — sorted client-side on the current result set. */
+const CLIENT_ONLY_SORT_COLUMN_IDS = new Set([
+  'log_cycle_days',
+  'trade_cycle_days',
+  'cash_cycle_days',
+  'contract_aging',
+  'delivery_status',
+  'status_overall',
+  'unusual_status',
+  'received_qty',
+  'over_under_delivery_status',
+  'month_delivery_end',
+  'cargo_readiness_date',
+  'po_number',
+  'contract_ext_no',
+  'lt_spot',
+  'sto_number',
+])
+
+const DATE_SORT_COLUMN_IDS = new Set([
+  'contract_date',
+  'delivery_start',
+  'delivery_end',
+  'created_at',
+  'cargo_readiness_date',
+])
+
+function resolveApiSortKey(columnId: string): string | null {
+  if (CLIENT_ONLY_SORT_COLUMN_IDS.has(columnId)) return null
+  if (!API_SORTABLE_COLUMN_IDS.has(columnId)) return null
+  return columnId
+}
+
+function compareContractSortValues(
+  av: string | number,
+  bv: string | number,
+  columnId: string,
+  dirMul: number,
+): number {
+  if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dirMul
+  if (DATE_SORT_COLUMN_IDS.has(columnId)) {
+    const at = toSortableTimestamp(String(av ?? ''))
+    const bt = toSortableTimestamp(String(bv ?? ''))
+    if (at != null && bt != null) return (at - bt) * dirMul
+    if (at == null && bt == null) return 0
+    if (at == null) return 1 * dirMul
+    if (bt == null) return -1 * dirMul
+  }
+  const as = String(av ?? '')
+  const bs = String(bv ?? '')
+  return as.localeCompare(bs, undefined, { numeric: true, sensitivity: 'base' }) * dirMul
+}
 
 interface Contract {
   id: string
@@ -588,6 +662,8 @@ function ContractsPageContent() {
     selectedIncoterms,
     selectedPlantSites,
     columnFilters,
+    sortKey,
+    sortDir,
   ])
 
   // Debounced refetch: global search runs on the server (full dataset), not only the current page
@@ -694,10 +770,12 @@ function ContractsPageContent() {
       if (isContractPerformance && lateOnTimeFilter !== 'ALL') {
         params.append('lateOnTimeFilter', lateOnTimeFilter)
       }
-      // Contract Performance sorting must happen server-side across full filtered set.
-      if (isContractPerformance && (sortKeyOverride || sortKey)) {
-        params.append('sortKey', sortKeyOverride || sortKey)
-        params.append('sortDir', sortDirOverride || sortDir)
+      const activeSortCol = sortKeyOverride || sortKey
+      const activeSortDir = sortDirOverride || sortDir
+      const apiSortKey = resolveApiSortKey(activeSortCol)
+      if (apiSortKey) {
+        params.append('sortKey', apiSortKey)
+        params.append('sortDir', activeSortDir)
       }
 
       const response = await api.get(`/contracts?${params.toString()}`)
@@ -2074,29 +2152,22 @@ function ContractsPageContent() {
     const nextDir: 'asc' | 'desc' = sortKey === col.id ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc'
     setSortDir(nextDir)
     setSortKey(col.id)
-    if (isContractPerformance) {
-      setCurrentPage(1)
-      void fetchContracts(1, undefined, col.id, nextDir)
-    }
+    setCurrentPage(1)
   }
 
   const sortedContracts = useMemo(() => {
-    // Contract Performance should sort server-side (across all filtered rows), not per-page.
-    if (isContractPerformance) return filteredContracts
-    const col = compactColumns.find(c => c.id === sortKey)
+    const col = compactColumns.find((c) => c.id === sortKey)
     if (!col?.sortable || !col.getSortValue) return filteredContracts
+    if (resolveApiSortKey(sortKey)) return filteredContracts
     const dirMul = sortDir === 'asc' ? 1 : -1
     const copy = [...filteredContracts]
     copy.sort((a, b) => {
       const av = col.getSortValue!(a)
       const bv = col.getSortValue!(b)
-      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dirMul
-      const as = String(av ?? '')
-      const bs = String(bv ?? '')
-      return as.localeCompare(bs, undefined, { numeric: true, sensitivity: 'base' }) * dirMul
+      return compareContractSortValues(av, bv, sortKey, dirMul)
     })
     return copy
-  }, [compactColumns, filteredContracts, isContractPerformance, sortDir, sortKey])
+  }, [compactColumns, filteredContracts, sortDir, sortKey])
 
   /** Grid column widths sized from header labels + longest cell text on the current page (fixed px tracks, no loose fr). */
   const compactGridColumnTracks = useMemo(() => {
@@ -2795,7 +2866,14 @@ function ContractsPageContent() {
                     transportModeFilter !== 'ALL' ||
                     productFilter !== 'ALL' ||
                     b2bFlagFilter !== 'ALL' ||
-                    statusFilter !== (isContractPerformance ? 'All Status' : 'Open')) && (
+                    statusFilter !== 'All Status' ||
+                    (!isContractPerformance && unassignedFilter) ||
+                    hasActiveSectionOneColumnFilters(columnFilters) ||
+                    (isContractPerformance &&
+                      (lateOnTimeFilter !== 'ALL' ||
+                        perfTransportMode !== 'ALL' ||
+                        selectedIncoterms.length > 0 ||
+                        selectedPlantSites.length > 0))) && (
                     <Button
                       onClick={() => {
                         setDateFrom('')
@@ -2805,7 +2883,16 @@ function ContractsPageContent() {
                         setTransportModeFilter('ALL')
                         setProductFilter('ALL')
                         setB2bFlagFilter('ALL')
-                        setStatusFilter(isContractPerformance ? 'All Status' : 'Open')
+                        setStatusFilter('All Status')
+                        setColumnFilters({})
+                        if (!isContractPerformance) {
+                          setUnassignedFilter(null)
+                        } else {
+                          setLateOnTimeFilter('ALL')
+                          setPerfTransportMode('ALL')
+                          setSelectedIncoterms([])
+                          setSelectedPlantSites([])
+                        }
                         setCurrentPage(1)
                         fetchContracts(1, '')
                       }}
@@ -3152,7 +3239,11 @@ function ContractsPageContent() {
                                   <button
                                     type="button"
                                     className={`shrink-0 p-0.5 rounded hover:bg-gray-200 ${activeSort ? 'text-blue-600' : 'text-gray-400'}`}
-                                    onClick={() => onSortHeaderClick(col)}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      e.preventDefault()
+                                      onSortHeaderClick(col)
+                                    }}
                                     title="Sort"
                                   >
                                     {activeSort

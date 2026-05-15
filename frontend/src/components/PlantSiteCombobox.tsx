@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Input } from '@/components/ui/input'
 import api from '@/lib/api'
 
@@ -26,20 +27,50 @@ export function PlantSiteCombobox({ value, onChange, placeholder = 'Search plant
   const [options, setOptions] = useState<PlantOption[]>([])
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [mounted, setMounted] = useState(false)
+  const [dropdownRect, setDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Sync external value → input text
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
   useEffect(() => {
     setQuery(value)
   }, [value])
 
-  // Click outside closes dropdown
+  const updateDropdownPosition = useCallback(() => {
+    const el = inputRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    setDropdownRect({
+      top: rect.bottom + 4,
+      left: rect.left,
+      width: rect.width,
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    updateDropdownPosition()
+    const onReposition = () => updateDropdownPosition()
+    window.addEventListener('resize', onReposition)
+    window.addEventListener('scroll', onReposition, true)
+    return () => {
+      window.removeEventListener('resize', onReposition)
+      window.removeEventListener('scroll', onReposition, true)
+    }
+  }, [open, options.length, loading, updateDropdownPosition])
+
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
+      const target = e.target as Node
+      if (containerRef.current?.contains(target)) return
+      if (dropdownRef.current?.contains(target)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -80,9 +111,44 @@ export function PlantSiteCombobox({ value, onChange, placeholder = 'Search plant
     setOpen(false)
   }
 
+  const showDropdown = open && (options.length > 0 || loading)
+
+  const dropdown =
+    showDropdown && dropdownRect && mounted ? (
+      <div
+        ref={dropdownRef}
+        role="listbox"
+        className="rounded-md border bg-white shadow-lg max-h-60 overflow-y-auto"
+        style={{
+          position: 'fixed',
+          top: dropdownRect.top,
+          left: dropdownRect.left,
+          width: dropdownRect.width,
+          zIndex: 10000,
+        }}
+      >
+        {loading && <div className="px-3 py-2 text-sm text-gray-400">Loading...</div>}
+        {!loading &&
+          options.map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              onMouseDown={() => handleSelect(opt)}
+              className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b last:border-0"
+            >
+              <div className="text-sm font-medium text-gray-800">{opt.plant_name}</div>
+              <div className="text-xs text-gray-400">
+                {opt.plant_code} · {opt.company_name}
+              </div>
+            </button>
+          ))}
+      </div>
+    ) : null
+
   return (
     <div ref={containerRef} className="relative">
       <Input
+        ref={inputRef}
         value={query}
         onChange={handleInputChange}
         onFocus={handleFocus}
@@ -91,24 +157,7 @@ export function PlantSiteCombobox({ value, onChange, placeholder = 'Search plant
         disabled={disabled}
         autoComplete="off"
       />
-      {open && (options.length > 0 || loading) && (
-        <div className="absolute z-50 mt-1 w-full rounded-md border bg-white shadow-lg max-h-60 overflow-y-auto">
-          {loading && (
-            <div className="px-3 py-2 text-sm text-gray-400">Loading...</div>
-          )}
-          {!loading && options.map((opt) => (
-            <button
-              key={opt.id}
-              type="button"
-              onMouseDown={() => handleSelect(opt)}
-              className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b last:border-0"
-            >
-              <div className="text-sm font-medium text-gray-800">{opt.plant_name}</div>
-              <div className="text-xs text-gray-400">{opt.plant_code} · {opt.company_name}</div>
-            </button>
-          ))}
-        </div>
-      )}
+      {dropdown && createPortal(dropdown, document.body)}
     </div>
   )
 }
