@@ -1480,12 +1480,13 @@ function ContractsPageContent() {
             label: 'Contract',
             defaultVisible: true,
             sortable: true,
+            formulaHelp: isContractPerformance ? undefined : FIELD_HELP.contractUrgentFlag,
             getSortValue: (c: Contract) => c.contract_id || '',
             render: (c: Contract) => (
               <div className="flex items-center gap-1 min-w-0">
                 <span className="text-sm truncate">{c.contract_id}</span>
-                {showUrgentFlag(c) && (
-                  <span title="No shipment/trucking — due within 14 days" className="shrink-0 inline-flex">
+                {showUrgentFlag(c) && !isContractPerformance && (
+                  <span title="Urgent: delivery window ≤14 days and missing shipment/STO or trucking per transport mode (see column help)" className="shrink-0 inline-flex">
                     <Flag className="h-3.5 w-3.5 text-red-500 fill-red-500" />
                   </span>
                 )}
@@ -2386,8 +2387,9 @@ function ContractsPageContent() {
               ) : (
                 <div className="space-y-3">
                   <div className="text-sm text-gray-600">
-                    Navigate late issues as a tree: <span className="font-medium">Total → Incoterm → Product → Plant → Supplier</span>.
-                    Click a <span className="font-medium">Plant</span> node to show the detailed contracts in the table below (Group Name is viewed there).
+                    Navigate late issues as a tree: <span className="font-medium">Incoterm → Product → Plant → Supplier</span>.
+                    Choosing a node updates the contracts table below to the same <span className="font-medium">YTD late</span> scope (Trade Cycle &gt; 0) and your selection.
+                    Click a <span className="font-medium">Plant</span> node to narrow further (Group Name is viewed in the table).
                   </div>
 
                   <div className="rounded-xl border bg-white p-4">
@@ -2402,9 +2404,8 @@ function ContractsPageContent() {
                       </button>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
                       {([
-                        { title: 'Total', subtitle: 'YTD late', level: 'total' as const },
                         { title: 'Incoterm', subtitle: 'Pick one', level: 'incoterm' as const },
                         { title: 'Product', subtitle: latePerfSelIncoterm ? `Under ${latePerfSelIncoterm}` : 'Pick incoterm first', level: 'product' as const },
                         { title: 'Plant', subtitle: latePerfSelProduct ? `Under ${latePerfSelProduct}` : 'Pick product first', level: 'plant' as const },
@@ -2412,13 +2413,12 @@ function ContractsPageContent() {
                       ] as const).map((col) => {
                         const denom = latePerformanceSummary.totalDays || 1
                         const levelStyles: Record<string, { headerBg: string; badge: string; bar: string; border: string }> = {
-                          total: { headerBg: 'bg-blue-50', badge: 'bg-blue-100 text-blue-800', bar: 'bg-blue-600', border: 'border-blue-200' },
                           incoterm: { headerBg: 'bg-violet-50', badge: 'bg-violet-100 text-violet-800', bar: 'bg-violet-600', border: 'border-violet-200' },
                           product: { headerBg: 'bg-amber-50', badge: 'bg-amber-100 text-amber-800', bar: 'bg-amber-600', border: 'border-amber-200' },
                           plant: { headerBg: 'bg-emerald-50', badge: 'bg-emerald-100 text-emerald-800', bar: 'bg-emerald-600', border: 'border-emerald-200' },
                           supplier: { headerBg: 'bg-rose-50', badge: 'bg-rose-100 text-rose-800', bar: 'bg-rose-600', border: 'border-rose-200' },
                         }
-                        const style = levelStyles[col.level] ?? levelStyles.total
+                        const style = levelStyles[col.level] ?? levelStyles.incoterm
                         const itemClass = (selected: boolean) =>
                           `w-full text-left rounded-lg border px-3 py-2 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-200 ${
                             selected ? `bg-white ${style.border}` : 'bg-white border-gray-200'
@@ -2454,21 +2454,13 @@ function ContractsPageContent() {
                         )
 
                         const body = (() => {
-                          if (col.level === 'total') {
-                            const n = latePerfBranchTree
-                            return renderItem(
-                              n,
-                              true,
-                              () => resetLatePerfSelections(),
-                              <span className={`px-2 py-1 rounded text-[11px] font-semibold ${style.badge}`}>Total</span>,
-                              <span className="ml-auto font-semibold whitespace-nowrap">{(n.totalQtyDelivery / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>,
-                            )
-                          }
                           if (col.level === 'incoterm') {
                             return (
                               <div className="space-y-2">
                                 {latePerfIncotermNodes.slice(0, 30).map((n) =>
                                   renderItem(n, latePerfSelIncoterm === n.label, () => {
+                                    setLateOnTimeFilter('LATE')
+                                    setPerfTransportMode('ALL')
                                     setLatePerfSelIncoterm(n.label)
                                     setLatePerfSelProduct(null)
                                     setLatePerfSelPlant(null)
@@ -2492,6 +2484,8 @@ function ContractsPageContent() {
                               <div className="space-y-2">
                                 {latePerfProductNodes.slice(0, 30).map((n) =>
                                   renderItem(n, latePerfSelProduct === n.label, () => {
+                                    setLateOnTimeFilter('LATE')
+                                    setPerfTransportMode('ALL')
                                     setLatePerfSelProduct(n.label)
                                     setLatePerfSelPlant(null)
                                     setLatePerfSelSupplier(null)
@@ -2515,6 +2509,8 @@ function ContractsPageContent() {
                                   n,
                                   latePerfSelPlant === n.label,
                                   () => {
+                                    setLateOnTimeFilter('LATE')
+                                    setPerfTransportMode('ALL')
                                     setLatePerfSelPlant(n.label)
                                     setLatePerfSelSupplier(null)
                                     setSelectedPlantSites([n.label === 'Blank' ? '' : n.label])
@@ -3787,6 +3783,47 @@ function ContractsPageContent() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-6">
+                  {/* Highlight — key identifiers at a glance */}
+                  <div className="rounded-xl border-2 border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50/80 p-4 shadow-sm">
+                    <h3 className="text-base font-semibold text-amber-900 mb-3 tracking-tight">Highlight Information</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+                      <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Contract</div>
+                        <div className="font-semibold text-gray-900 mt-0.5 truncate" title={selectedContract.contract_id || ''}>
+                          {selectedContract.contract_id || '-'}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Contract Ext No</div>
+                        <div className="font-semibold text-gray-900 mt-0.5 break-words whitespace-normal">
+                          {selectedContract.contract_ext_no || '-'}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5 sm:col-span-2 lg:col-span-1">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">
+                          PO Number{selectedContract.po_count && selectedContract.po_count > 1 ? ` (${selectedContract.po_count})` : ''}
+                        </div>
+                        <div className="font-semibold text-gray-900 mt-0.5 text-xs leading-snug break-words">
+                          {selectedContract.po_numbers || selectedContract.po_number || '-'}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Contract Qty</div>
+                        <div className="font-semibold text-gray-900 mt-0.5">
+                          {((Number(selectedContract.quantity_ordered) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Incoterm</div>
+                        <div className="font-semibold text-gray-900 mt-0.5">{selectedContract.incoterm || '-'}</div>
+                      </div>
+                      <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5 sm:col-span-2 lg:col-span-1">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Product</div>
+                        <div className="font-semibold text-gray-900 mt-0.5 break-words">{selectedContract.product || '-'}</div>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Basic Information */}
                   <div>
                     <h3 className="text-lg font-semibold mb-3">Basic Information</h3>

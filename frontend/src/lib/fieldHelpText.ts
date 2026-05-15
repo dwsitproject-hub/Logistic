@@ -3,6 +3,16 @@
 export const FIELD_HELP = {
   contractAging: `Days from today to Due Date Delivery End (or delivery window). Overdue shows in red when past the end date.`,
 
+  /** Matches `showUrgentFlag` in contracts/page.tsx */
+  contractUrgentFlag: `Red flag when the contract is within the delivery window and expected logistics rows are still missing.
+
+• Due Date Delivery Start must be set; otherwise no flag.
+• Shown only when that start date is in 14 days or less from today (includes overdue starts).
+• SEA: flag if there are no shipments and no STOs (both counts zero).
+• LAND: flag if there is no trucking (count zero).
+• MIX: flag if shipments/STOs are missing OR trucking is missing.
+• Other transport modes: flag only if both shipments/STOs and trucking are missing.`,
+
   overUnderDelivery: `When contract status is Close: compares Outstanding Quantity vs 0 — "Over Delivery" when outstanding < 0, "Under Delivery" when outstanding > 0, or "Passed" when outstanding = 0. Open contracts show "-".`,
 
   logCycle: `Land: Cargo Readiness Date → latest Trucking Last Receive (Close) or today (Open). SEA: Cargo Readiness Date → latest ATA Vessel Complete Discharge (Close) or today (Open).`,
