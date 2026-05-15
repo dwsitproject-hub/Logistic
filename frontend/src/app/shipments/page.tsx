@@ -159,13 +159,20 @@ function apiErrorMessage(error: unknown, fallback: string): string {
   return err?.response?.data?.error?.message || err?.message || fallback
 }
 
+function dateInputFromUnknown(v: unknown): string | Date | null | undefined {
+  if (v == null) return v as null | undefined
+  if (v instanceof Date) return v
+  if (typeof v === 'string') return v
+  return undefined
+}
+
 /** Payload for PUT /shipments/:id/loading-ports/:portId (only fields the API accepts). */
 function buildLoadingPortUpdatePayload(
-  source: Partial<VesselLoadingPort> & Record<string, unknown>,
+  source: Record<string, unknown>,
   portId: string,
 ): Record<string, unknown> {
   const berthedLoading = toApiDateOnly(
-    source.eta_vessel_berthed_at_loading_port ?? source.eta_vessel_berthed,
+    dateInputFromUnknown(source.eta_vessel_berthed_at_loading_port ?? source.eta_vessel_berthed),
   )
   return {
     id: portId,
@@ -179,21 +186,21 @@ function buildLoadingPortUpdatePayload(
     quality_red: source.quality_red ?? null,
     quality_ds: source.quality_ds ?? null,
     quality_stone: source.quality_stone ?? null,
-    eta_vessel_arrival: toApiDateOnly(source.eta_vessel_arrival),
-    ata_vessel_arrival: toApiDateOnly(source.ata_vessel_arrival),
+    eta_vessel_arrival: toApiDateOnly(dateInputFromUnknown(source.eta_vessel_arrival)),
+    ata_vessel_arrival: toApiDateOnly(dateInputFromUnknown(source.ata_vessel_arrival)),
     eta_vessel_berthed: berthedLoading,
-    ata_vessel_berthed: toApiDateOnly(source.ata_vessel_berthed),
+    ata_vessel_berthed: toApiDateOnly(dateInputFromUnknown(source.ata_vessel_berthed)),
     eta_vessel_berthed_at_loading_port: berthedLoading,
-    eta_loading_start: toApiDateOnly(source.eta_loading_start),
-    ata_loading_start: toApiDateOnly(source.ata_loading_start),
-    eta_loading_completed: toApiDateOnly(source.eta_loading_completed),
-    ata_loading_completed: toApiDateOnly(source.ata_loading_completed),
-    eta_vessel_sailed: toApiDateOnly(source.eta_vessel_sailed),
-    ata_vessel_sailed: toApiDateOnly(source.ata_vessel_sailed),
-    eta_vessel_arrive_at_discharge_port: toApiDateOnly(source.eta_vessel_arrive_at_discharge_port),
-    eta_vessel_berthed_at_discharge_port: toApiDateOnly(source.eta_vessel_berthed_at_discharge_port),
-    eta_vessel_start_discharging: toApiDateOnly(source.eta_vessel_start_discharging),
-    eta_vessel_complete_discharge: toApiDateOnly(source.eta_vessel_complete_discharge),
+    eta_loading_start: toApiDateOnly(dateInputFromUnknown(source.eta_loading_start)),
+    ata_loading_start: toApiDateOnly(dateInputFromUnknown(source.ata_loading_start)),
+    eta_loading_completed: toApiDateOnly(dateInputFromUnknown(source.eta_loading_completed)),
+    ata_loading_completed: toApiDateOnly(dateInputFromUnknown(source.ata_loading_completed)),
+    eta_vessel_sailed: toApiDateOnly(dateInputFromUnknown(source.eta_vessel_sailed)),
+    ata_vessel_sailed: toApiDateOnly(dateInputFromUnknown(source.ata_vessel_sailed)),
+    eta_vessel_arrive_at_discharge_port: toApiDateOnly(dateInputFromUnknown(source.eta_vessel_arrive_at_discharge_port)),
+    eta_vessel_berthed_at_discharge_port: toApiDateOnly(dateInputFromUnknown(source.eta_vessel_berthed_at_discharge_port)),
+    eta_vessel_start_discharging: toApiDateOnly(dateInputFromUnknown(source.eta_vessel_start_discharging)),
+    eta_vessel_complete_discharge: toApiDateOnly(dateInputFromUnknown(source.eta_vessel_complete_discharge)),
   }
 }
 
@@ -2386,7 +2393,7 @@ function ShipmentsPageContent() {
     if (!selectedShipment || !editedPortData) return
 
     try {
-      const portData = buildLoadingPortUpdatePayload(editedPortData, portId)
+      const portData = buildLoadingPortUpdatePayload(editedPortData as Record<string, unknown>, portId)
       const response = await api.put(`/shipments/${selectedShipment.id}/loading-ports/${portId}`, portData)
       
       if (response.data.success) {
@@ -2513,7 +2520,7 @@ function ShipmentsPageContent() {
       if (firstPort?.id) {
         const loadingPortUpdateData = buildLoadingPortUpdatePayload(
           {
-            ...firstPort,
+            ...(firstPort as unknown as Record<string, unknown>),
             port_name: info.vessel_loading_port_1 || firstPort.port_name || 'Loading Port 1',
             port_sequence: firstPort.port_sequence ?? 1,
             quantity_at_loading_port: info.actual_vessel_qty_receive ?? firstPort.quantity_at_loading_port ?? 0,
@@ -2587,7 +2594,7 @@ function ShipmentsPageContent() {
       if (dischargePort?.id) {
         const dischargePortUpdateData = buildLoadingPortUpdatePayload(
           {
-            ...dischargePort,
+            ...(dischargePort as unknown as Record<string, unknown>),
             port_name: info.vessel_discharge_port_1 || dischargePort.port_name || 'Discharge Port',
             port_sequence: dischargePort.port_sequence ?? 999,
             is_discharge_port: true,
