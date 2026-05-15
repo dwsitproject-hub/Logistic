@@ -21,6 +21,30 @@ import {
   formatDDMMYYYY,
 } from '../utils/operationId';
 
+/** Normalize date-like fields for shipments / loading ports (YYYY-MM-DD or null). */
+function toShipmentDateOrNull(v: unknown): string | null {
+  if (v == null || v === '') return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const iso = /^(\d{4}-\d{2}-\d{2})/.exec(s);
+  if (iso) return iso[1];
+  const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+  if (dmy) {
+    const dd = dmy[1].padStart(2, '0');
+    const mm = dmy[2].padStart(2, '0');
+    const yyyy = dmy[3];
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  return null;
+}
+
 function shipmentListSummaryPayload(totalCount: number, summaryRow: Record<string, unknown>) {
   return {
     total: totalCount,
@@ -1297,6 +1321,27 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
+    const etaShipmentFields = [
+      'eta_arrival',
+      'eta_berthed',
+      'eta_loading_start',
+      'eta_loading_complete',
+      'eta_sailed',
+      'eta_discharge_arrival',
+      'eta_discharge_berthed',
+      'eta_discharge_start',
+      'eta_discharge_complete',
+    ] as const;
+    let etaFieldsUpdated = false;
+    for (const field of etaShipmentFields) {
+      if (Object.prototype.hasOwnProperty.call(updateData, field)) {
+        updateFields.push(`${field} = $${paramIndex}::date`);
+        updateValues.push(toShipmentDateOrNull(updateData[field]));
+        paramIndex++;
+        etaFieldsUpdated = true;
+      }
+    }
+
     if (updateFields.length === 0) {
       return res.status(400).json({
         success: false,
@@ -1362,6 +1407,43 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       updated.status = sRes.rows?.[0]?.status ?? autoStatus;
     } else {
       updated.status = autoStatus;
+    }
+
+    if (etaFieldsUpdated) {
+      await query(
+        `UPDATE vessel_loading_ports SET
+          eta_vessel_arrival = $2,
+          eta_vessel_berthed_at_loading_port = $3,
+          eta_loading_start = $4,
+          eta_loading_completed = $5,
+          eta_vessel_sailed = $6,
+          updated_at = CURRENT_TIMESTAMP
+         WHERE shipment_id = $1 AND port_sequence = 1 AND COALESCE(is_discharge_port, false) = false`,
+        [
+          shipmentId,
+          updated.eta_arrival,
+          updated.eta_berthed,
+          updated.eta_loading_start,
+          updated.eta_loading_complete,
+          updated.eta_sailed,
+        ],
+      );
+      await query(
+        `UPDATE vessel_loading_ports SET
+          eta_vessel_arrive_at_discharge_port = $2,
+          eta_vessel_berthed_at_discharge_port = $3,
+          eta_vessel_start_discharging = $4,
+          eta_vessel_complete_discharge = $5,
+          updated_at = CURRENT_TIMESTAMP
+         WHERE shipment_id = $1 AND COALESCE(is_discharge_port, false) = true`,
+        [
+          shipmentId,
+          updated.eta_discharge_arrival,
+          updated.eta_discharge_berthed,
+          updated.eta_discharge_start,
+          updated.eta_discharge_complete,
+        ],
+      );
     }
 
     logger.info('Shipment updated:', { id, updatedFields: updateFields.length, autoStatus });

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { X, Pencil } from 'lucide-react'
 import api from '@/lib/api'
-import { formatDateDMY } from '@/lib/dateFormat'
+import { formatDateDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 
 type TruckingOperation = {
@@ -341,21 +341,25 @@ export function ContractShipmentDetailModal({
     if (!selected) return
     setSaving(true)
     try {
-      await api.put(`/shipments/${selected.id}`, {
-        eta_arrival: editDates.eta_arrival || null,
-        eta_berthed: editDates.eta_berthed || null,
-        eta_loading_start: editDates.eta_loading_start || null,
-        eta_loading_complete: editDates.eta_loading_complete || null,
-        eta_sailed: editDates.eta_sailed || null,
-        eta_discharge_arrival: editDates.eta_discharge_arrival || null,
-        eta_discharge_berthed: editDates.eta_discharge_berthed || null,
-        eta_discharge_start: editDates.eta_discharge_start || null,
-        eta_discharge_complete: editDates.eta_discharge_complete || null,
-      })
-      setRows((prev) => prev.map((r) => r.id === selected.id ? { ...r, ...editDates } : r))
+      const payload = {
+        eta_arrival: toApiDateOnly(editDates.eta_arrival),
+        eta_berthed: toApiDateOnly(editDates.eta_berthed),
+        eta_loading_start: toApiDateOnly(editDates.eta_loading_start),
+        eta_loading_complete: toApiDateOnly(editDates.eta_loading_complete),
+        eta_sailed: toApiDateOnly(editDates.eta_sailed),
+        eta_discharge_arrival: toApiDateOnly(editDates.eta_discharge_arrival),
+        eta_discharge_berthed: toApiDateOnly(editDates.eta_discharge_berthed),
+        eta_discharge_start: toApiDateOnly(editDates.eta_discharge_start),
+        eta_discharge_complete: toApiDateOnly(editDates.eta_discharge_complete),
+      }
+      const res = await api.put(`/shipments/${selected.id}`, payload)
+      const saved = (res.data?.data ?? payload) as Partial<ShipmentRow>
+      setRows((prev) => prev.map((r) => (r.id === selected.id ? { ...r, ...saved } : r)))
       setIsEditing(false)
-    } catch {
-      alert('Failed to save. Please try again.')
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { error?: { message?: string } } }; message?: string }
+      const msg = err?.response?.data?.error?.message || err?.message || 'Failed to save. Please try again.'
+      alert(msg)
     } finally {
       setSaving(false)
     }
