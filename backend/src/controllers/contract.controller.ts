@@ -859,6 +859,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           MAX(c.transport_mode) AS transport_mode,
           MAX(c.status) AS status,
           MAX(c.plant_code) AS plant_code,
+          MAX(c.company_name) AS company_name,
           -- Align with GET /contracts: SAP import status is the primary "open/close" signal in Contract Performance.
           (array_agg(l.data->'contract'->>'status' ORDER BY l.created_at DESC NULLS LAST))[1] AS import_status,
           MAX(c.delivery_end_date) AS delivery_end_date,
@@ -951,9 +952,31 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       )
       SELECT
         base.*,
-        COALESCE(NULLIF(TRIM(mp.plant_name), ''), NULLIF(TRIM(base.plant_code), ''), 'Blank') AS plant_site
+        COALESCE(
+          NULLIF(TRIM(pnc.plant_name), ''),
+          NULLIF(TRIM(pna.plant_name), ''),
+          NULLIF(TRIM(base.plant_code), ''),
+          'Blank'
+        ) AS plant_site
       FROM base
-      LEFT JOIN master_plants mp ON mp.plant_code = base.plant_code
+      LEFT JOIN LATERAL (
+        SELECT mp.plant_name
+        FROM master_plants mp
+        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(base.plant_code, '')))
+          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
+          AND NULLIF(TRIM(base.company_name), '') IS NOT NULL
+          AND TRIM(UPPER(COALESCE(mp.company_name, ''))) = TRIM(UPPER(COALESCE(base.company_name, '')))
+        ORDER BY mp.updated_at DESC NULLS LAST
+        LIMIT 1
+      ) pnc ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT mp.plant_name
+        FROM master_plants mp
+        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(base.plant_code, '')))
+          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
+        ORDER BY mp.updated_at DESC NULLS LAST
+        LIMIT 1
+      ) pna ON TRUE
       WHERE 1=1
     `;
 
@@ -1024,7 +1047,9 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       if (blankIncluded) parts.push(`(base.plant_code IS NULL OR TRIM(base.plant_code) = '')`);
       if (nonBlank.length > 0) {
         const ph = nonBlank.map(() => `$${paramIndex++}`).join(', ');
-        parts.push(`COALESCE(mp.plant_name, base.plant_code) IN (${ph})`);
+        parts.push(
+          `COALESCE(NULLIF(TRIM(pnc.plant_name), ''), NULLIF(TRIM(pna.plant_name), ''), NULLIF(TRIM(base.plant_code), '')) IN (${ph})`
+        );
         queryParams.push(...nonBlank);
       }
       queryText += ` AND (${parts.join(' OR ')})`;
@@ -1051,7 +1076,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         base.contract_id ILIKE $${paramIndex}
         OR COALESCE(base.product, '') ILIKE $${paramIndex}
         OR COALESCE(base.group_name, '') ILIKE $${paramIndex}
-        OR COALESCE(mp.plant_name, base.plant_code, '') ILIKE $${paramIndex}
+        OR COALESCE(NULLIF(TRIM(pnc.plant_name), ''), NULLIF(TRIM(pna.plant_name), ''), base.plant_code, '') ILIKE $${paramIndex}
       )`;
       queryParams.push(`%${globalSearch}%`);
       paramIndex++;
