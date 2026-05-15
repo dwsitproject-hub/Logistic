@@ -1397,7 +1397,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
 /** Get counts of SEA contracts without shipments and LAND contracts without trucking (for dashboard cards) */
 export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
   try {
-    const { search, b2bFlag, dateFrom, dateTo, product, transportMode } = req.query as Record<string, string>;
+    const { search, b2bFlag, dateFrom, dateTo, product, transportMode, status } = req.query as Record<string, string>;
 
     const params: any[] = [];
 
@@ -1423,11 +1423,25 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
       rowConditions.push(`c.contract_date <= $${params.length}`);
     }
 
-    // Always restrict to Open/Active contracts only
-    aggConditions.push(`(
-      (base.spd_data->'contract'->>'status' = 'Open' OR UPPER(base.spd_data->'contract'->>'status') = 'ACTIVE')
-      OR (base.spd_data IS NULL AND UPPER(base.raw_status) IN ('OPEN', 'ACTIVE'))
-    )`);
+    // Status: same rules as GET /contracts (when omitted, count all statuses so cards match the list).
+    const statusNorm = typeof status === 'string' ? status.trim() : '';
+    if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {
+      if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
+        aggConditions.push(`(
+          (base.spd_data->'contract'->>'status' = 'Open' OR UPPER(base.spd_data->'contract'->>'status') = 'ACTIVE')
+          OR (base.spd_data IS NULL AND UPPER(base.raw_status) IN ('OPEN', 'ACTIVE'))
+        )`);
+      } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
+        aggConditions.push(`(
+          (base.spd_data->'contract'->>'status' = 'Close' OR UPPER(base.spd_data->'contract'->>'status') IN ('CLOSE', 'COMPLETED', 'CLOSED'))
+          OR (base.spd_data IS NULL AND UPPER(base.raw_status) IN ('CLOSE', 'COMPLETED', 'CLOSED'))
+        )`);
+      } else {
+        params.push(statusNorm);
+        const p = `$${params.length}`;
+        aggConditions.push(`(base.raw_status = ${p} OR base.spd_data->'contract'->>'status' = ${p})`);
+      }
+    }
 
     // B2B flag — use JSONB contract_type (same as getContracts)
     if (b2bFlag && b2bFlag !== 'ALL') {

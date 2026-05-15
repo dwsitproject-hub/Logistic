@@ -220,7 +220,10 @@ function ContractsPageContent() {
   const bottomScrollRef = useRef<HTMLDivElement | null>(null)
   const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
   const isSyncingScroll = useRef(false)
-  const [statusFilter, setStatusFilter] = useState<string>('All Status')
+  // Contracts page: default Open so the list and SEA/LAND "without shipment/trucking" cards show actionable open contracts only.
+  const [statusFilter, setStatusFilter] = useState<string>(() =>
+    pathname === '/contract-performance' ? 'All Status' : 'Open'
+  )
   const [b2bFlagFilter, setB2bFlagFilter] = useState<string>('ALL')
   /** Default YTD on first load so GET /contracts stays bounded (same as Contract Performance). */
   const [dateFrom, setDateFrom] = useState(() => {
@@ -651,23 +654,8 @@ function ContractsPageContent() {
         params.append('columnFilters', JSON.stringify(mergedColumnFilters))
       }
 
-      // SEA/LAND unassigned cards count only Open contracts (see getUnassignedCounts). When section 1
-      // has no extra filters, align the table with the card by requesting Open only.
-      const sectionOneCleanForUnassigned =
-        !isContractPerformance &&
-        unassignedFilter &&
-        searchTrim.length < 2 &&
-        (!statusFilter || statusFilter === 'All Status') &&
-        b2bFlagFilter === 'ALL' &&
-        productFilter === 'ALL' &&
-        transportModeFilter === 'ALL' &&
-        searchParams.get('outstanding') !== 'true' &&
-        !hasActiveSectionOneColumnFilters(columnFilters)
-
-      if (sectionOneCleanForUnassigned) {
-        params.append('status', 'Open')
-      } else if (statusFilter && statusFilter !== 'All Status') {
-        // Status is aligned with SAP (Open/Close/Cancelled)
+      // Status: only send when a specific value is chosen. "All Status" omits the param so counts and list include every status.
+      if (statusFilter && statusFilter !== 'All Status') {
         params.append('status', statusFilter)
       }
       if (!isContractPerformance) {
@@ -877,6 +865,9 @@ function ContractsPageContent() {
       if (transportModeFilter && transportModeFilter !== 'ALL') params.append('transportMode', transportModeFilter)
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
+      if (statusFilter && statusFilter !== 'All Status') {
+        params.append('status', statusFilter)
+      }
       const res = await api.get<{ success: boolean; data: { seaWithoutShipments: number; landWithoutTrucking: number } }>(
         `/contracts/unassigned-counts?${params.toString()}`
       )
@@ -887,7 +878,16 @@ function ContractsPageContent() {
     } catch (err) {
       console.error('Failed to fetch unassigned counts:', err)
     }
-  }, [authReady, searchTerm, b2bFlagFilter, productFilter, transportModeFilter, dateFrom, dateTo])
+  }, [
+    authReady,
+    searchTerm,
+    b2bFlagFilter,
+    productFilter,
+    transportModeFilter,
+    dateFrom,
+    dateTo,
+    statusFilter,
+  ])
 
   useEffect(() => {
     fetchUnassignedCounts()
@@ -2788,7 +2788,14 @@ function ContractsPageContent() {
                     onChangeIso={setDateTo}
                     className="w-40"
                   />
-                  {(dateFrom || dateTo || searchDraft || searchTerm || transportModeFilter !== 'ALL' || productFilter !== 'ALL' || b2bFlagFilter !== 'ALL' || statusFilter !== 'All Status') && (
+                  {(dateFrom ||
+                    dateTo ||
+                    searchDraft ||
+                    searchTerm ||
+                    transportModeFilter !== 'ALL' ||
+                    productFilter !== 'ALL' ||
+                    b2bFlagFilter !== 'ALL' ||
+                    statusFilter !== (isContractPerformance ? 'All Status' : 'Open')) && (
                     <Button
                       onClick={() => {
                         setDateFrom('')
@@ -2798,7 +2805,7 @@ function ContractsPageContent() {
                         setTransportModeFilter('ALL')
                         setProductFilter('ALL')
                         setB2bFlagFilter('ALL')
-                        setStatusFilter('All Status')
+                        setStatusFilter(isContractPerformance ? 'All Status' : 'Open')
                         setCurrentPage(1)
                         fetchContracts(1, '')
                       }}
