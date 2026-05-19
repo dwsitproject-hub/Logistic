@@ -257,7 +257,7 @@ function ShipmentsPageContent() {
   const canShowEditShipmentButton = !perms.loaded || canEditShipment
   const canOpenAddShipmentModal = canAddShipment || canEditShipment
   const canExportShipments = canViewPermission(perms, 'action.export_data')
-  const canBulkShipments = canCreatePermission(perms, 'action.bulk_operations')
+  const canBulkShipments = canCreatePermission(perms, 'data.shipments') || canCreatePermission(perms, 'action.bulk_operations')
   const canImportShipments = canViewPermission(perms, 'action.import_excel')
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [loading, setLoading] = useState(true)
@@ -2906,8 +2906,7 @@ function ShipmentsPageContent() {
               <Plus className="h-4 w-4 mr-2" />
               Add New Shipment
             </Button>
-            {canImportShipments && (
-              <Button
+            <Button
                 onClick={downloadTemplate}
                 variant="outline"
                 className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
@@ -2915,7 +2914,6 @@ function ShipmentsPageContent() {
                 <Download className="h-4 w-4 mr-2" />
                 Download Template
               </Button>
-            )}
             {canExportShipments && (
               <Button
                 onClick={exportFilteredData}
@@ -2926,8 +2924,7 @@ function ShipmentsPageContent() {
                 Export Data
               </Button>
             )}
-            {canBulkShipments && (
-              <>
+            <>
                 <input
                   type="file"
                   accept=".csv"
@@ -2949,12 +2946,11 @@ function ShipmentsPageContent() {
                   ) : (
                     <>
                       <Upload className="h-4 w-4 mr-2" />
-                      Bulk Update
+                      Upload CSV
                     </>
                   )}
                 </Button>
               </>
-            )}
           </div>
         </div>
 

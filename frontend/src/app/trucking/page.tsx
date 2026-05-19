@@ -467,52 +467,31 @@ function CalendarDeliverablesTable({
                     const key = `${r.id}:${date}`
                     const draftValue = cellDrafts[key] ?? ''
                     const isDirty = (draftValue ?? '') !== (cellBaseline[key] ?? '')
-                    const dueBounds = getRowDueDateBounds(r)
-                    const inDueWindow = isDateInDueWindow(r, date)
-                    const dueTitle =
-                      dueBounds && !inDueWindow
-                        ? `Outside due window (${formatDateDMY(dueBounds.start)} – ${formatDateDMY(dueBounds.end)})`
-                        : date
                     return (
                       <td
                         key={date}
-                        className={`px-2 py-1.5 border-b border-gray-100 text-right tabular-nums ${
-                          !inDueWindow ? 'bg-gray-100' : isDirty ? 'bg-amber-50/50' : ''
-                        }`}
+                        className={`px-2 py-1.5 border-b border-gray-100 text-right tabular-nums ${isDirty ? 'bg-amber-50/50' : ''}`}
                       >
-                        {inDueWindow ? (
-                          <input
-                            value={draftValue}
-                            onChange={(e) => onCellChange(r.id, date, e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Tab' && !e.shiftKey) {
-                                e.preventDefault()
-                                const rowEl = e.currentTarget.closest('tr')
-                                for (let nd = d + 1; nd <= daysInMonth; nd++) {
-                                  const nextDate = dayIso(nd)
-                                  if (!isDateInDueWindow(r, nextDate)) continue
-                                  const nextInput = rowEl?.querySelector<HTMLInputElement>(
-                                    `input[data-day-index="${nd}"]`,
-                                  )
-                                  if (nextInput) {
-                                    nextInput.focus()
-                                    break
-                                  }
-                                }
-                              }
-                            }}
-                            disabled={savingAll}
-                            data-day-input="1"
-                            data-day-index={d}
-                            className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-white text-right text-xs focus:border-blue-400 focus:ring-1 focus:ring-blue-200 disabled:opacity-60"
-                            placeholder="0"
-                            title={dueTitle}
-                          />
-                        ) : (
-                          <span className="inline-block w-[64px] text-center text-gray-400" title={dueTitle}>
-                            —
-                          </span>
-                        )}
+                        <input
+                          value={draftValue}
+                          onChange={(e) => onCellChange(r.id, date, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Tab' && !e.shiftKey) {
+                              e.preventDefault()
+                              const rowEl = e.currentTarget.closest('tr')
+                              const nextInput = rowEl?.querySelector<HTMLInputElement>(
+                                `input[data-day-index="${d + 1}"]`,
+                              )
+                              if (nextInput) nextInput.focus()
+                            }
+                          }}
+                          disabled={savingAll}
+                          data-day-input="1"
+                          data-day-index={d}
+                          className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-white text-right text-xs focus:border-blue-400 focus:ring-1 focus:ring-blue-200 disabled:opacity-60"
+                          placeholder="0"
+                          title={date}
+                        />
                       </td>
                     )
                   })}
@@ -1987,32 +1966,6 @@ function TruckingPageContent() {
           </div>
           <div className="flex items-center gap-2">
             <Button
-              variant="outline"
-              size="sm"
-              disabled={uploading}
-              onClick={() => document.getElementById('trucking-upload')?.click()}
-            >
-              {uploading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Upload className="h-4 w-4 mr-2" />
-                  Upload CSV
-                </>
-              )}
-            </Button>
-            <input
-              id="trucking-upload"
-              type="file"
-              accept=".csv"
-              onChange={() => alert('CSV upload feature coming soon!')}
-              className="hidden"
-              disabled={uploading}
-            />
-            <Button
               size="sm"
               onClick={() => setShowCreateForm(true)}
             >
@@ -2105,7 +2058,6 @@ function TruckingPageContent() {
 
         {/* View: List vs Daily Planning Deliverables — above main table/calendar */}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm font-medium text-gray-700">View</div>
           <div className="inline-flex rounded-lg border bg-white p-1">
             <button
               type="button"
