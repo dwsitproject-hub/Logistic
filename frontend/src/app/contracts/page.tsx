@@ -2496,6 +2496,14 @@ function ContractsPageContent() {
         )}
 
         {isContractPerformance && (
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">Contract Performance</h1>
+            </div>
+          </div>
+        )}
+
+        {isContractPerformance && (
           <Card>
             <CardHeader className="pb-2">
               <div className="flex items-start justify-between gap-4 flex-wrap">

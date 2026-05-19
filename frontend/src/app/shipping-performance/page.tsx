@@ -471,6 +471,13 @@ export default function ShippingPerformancePage() {
   return (
     <Layout>
       <div className="space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Shipping Performance</h1>
+          </div>
+        </div>
+
         {/* Section 1: Late Performance */}
         <Card>
           <CardHeader className="pb-2">
@@ -726,8 +733,14 @@ export default function ShippingPerformancePage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <CardTitle>All Shipments</CardTitle>
-                <Badge variant="outline" className="hidden md:inline-flex">
+                <div>
+                  <CardTitle>All Shipments</CardTitle>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {filteredRows.length} total shipments | Showing {paginatedRows.length} on this page
+                    {totalPages > 1 && ` (Page ${currentPage} of ${totalPages})`}
+                  </p>
+                </div>
+                <Badge variant="outline" className="hidden">
                   Default view: Compact
                 </Badge>
               </div>
