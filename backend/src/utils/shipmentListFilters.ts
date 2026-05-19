@@ -101,6 +101,7 @@ export function appendShipmentGlobalSearch(
       OR COALESCE(sb.supplier::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.port_of_discharge::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.plant_site::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.contract_ext_no::text, '') ILIKE ${likeExpr}
     )`
   return { sql, params: [`%${searchTrim}%`], nextIndex: startIndex + 1 }
 }
@@ -237,6 +238,13 @@ export function appendShipmentViewOptionFilter(
       nextIndex: startIndex + 1,
     }
   }
+  if (mode === 'contract_ext' || mode === 'contract_ext_no') {
+    return {
+      sql: ` AND COALESCE(sb.contract_ext_no::text, '') ILIKE $${p}`,
+      params: [`%${q}%`],
+      nextIndex: startIndex + 1,
+    }
+  }
   if (mode === 'vessel') {
     return {
       sql: ` AND COALESCE(sb.vessel_name::text, '') ILIKE $${p}`,
@@ -279,6 +287,67 @@ export function normalizeShipmentEtaBucketParam(raw: unknown): string | null {
  * - Skips rows that would show as COMPLETED after ATA derivation (all 9 ATA milestones present on sb).
  * - Priority: NO_ETA → DELAY → D → D_MINUS_2 → MORE_THAN_7D; else GAP (matches no toolbar bucket).
  */
+/** True when grouped row has at least one shipment-level ETA milestone. */
+export function shipmentHasAnyEtaExpr(alias: string): string {
+  const f = alias
+  return `(
+    ${f}.eta_arrival IS NOT NULL OR ${f}.eta_berthed IS NOT NULL OR ${f}.eta_loading_start IS NOT NULL OR ${f}.eta_loading_complete IS NOT NULL OR ${f}.eta_sailed IS NOT NULL
+    OR ${f}.eta_discharge_arrival IS NOT NULL OR ${f}.eta_discharge_berthed IS NOT NULL OR ${f}.eta_discharge_start IS NOT NULL OR ${f}.eta_vessel_complete_discharge IS NOT NULL
+  )`
+}
+
+/**
+ * Effective SEA shipment status on grouped list rows (`shipment_base` / `filtered_shipments`).
+ * PLANNED from ETA; IN_PROGRESS–COMPLETED from ATA (see deriveShipmentStatus in shipmentStatus.ts).
+ */
+export function shipmentEffectiveStatusExpr(alias: string): string {
+  const f = alias
+  return `(
+    CASE
+      WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
+      WHEN ${f}.ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'
+      WHEN ${f}.ata_vessel_start_discharging IS NOT NULL THEN 'UNLOADING'
+      WHEN ${f}.ata_vessel_arrive_at_discharge_port IS NOT NULL THEN 'ARRIVED'
+      WHEN ${f}.ata_vessel_sailed_from_loading_port IS NOT NULL THEN 'IN_TRANSIT'
+      WHEN ${f}.ata_vessel_start_loading IS NOT NULL THEN 'LOADING'
+      WHEN ${f}.ata_vessel_arrival_at_loading_port IS NOT NULL THEN 'IN_PROGRESS'
+      WHEN ${shipmentHasAnyEtaExpr(f)} THEN 'PLANNED'
+      ELSE 'UNPLANNED'
+    END
+  )`
+}
+
+const SHIPMENT_STATUS_FILTER_VALUES = new Set([
+  'UNPLANNED',
+  'PLANNED',
+  'IN_PROGRESS',
+  'LOADING',
+  'IN_TRANSIT',
+  'ARRIVED',
+  'UNLOADING',
+  'COMPLETED',
+  'CANCELLED',
+])
+
+/** Filter list rows by derived status (matches deriveShipmentStatus / shipmentEffectiveStatusExpr). */
+export function appendShipmentStatusFilter(
+  statusParam: string | undefined,
+  startIndex: number
+): { sql: string; params: unknown[]; nextIndex: number } {
+  const normalized = String(statusParam ?? '')
+    .trim()
+    .toUpperCase()
+  if (!normalized || normalized === 'ALL' || !SHIPMENT_STATUS_FILTER_VALUES.has(normalized)) {
+    return { sql: '', params: [], nextIndex: startIndex }
+  }
+
+  return {
+    sql: ` AND ${shipmentEffectiveStatusExpr('sb')} = $${startIndex}`,
+    params: [normalized],
+    nextIndex: startIndex + 1,
+  }
+}
+
 export function appendShipmentEtaBucketFilters(
   etaLoading: string | null,
   etaDischarge: string | null

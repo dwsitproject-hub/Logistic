@@ -169,7 +169,7 @@ export function ContractTruckingDetailModal({
   return (
     <div className="fixed inset-0 z-[58] flex items-center justify-center bg-black/40 p-4">
       <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg max-h-[90vh] overflow-hidden flex flex-col">
-        <div className="flex items-center justify-between px-5 py-3 border-b">
+        <div className="flex shrink-0 items-center justify-between border-b bg-white px-5 py-3">
           <h3 className="text-lg font-semibold">Trucking operation</h3>
           <div className="flex items-center gap-2">
             {!isEditing && selected && (
@@ -370,7 +370,7 @@ export function ContractShipmentDetailModal({
   return (
     <div className="fixed inset-0 z-[58] flex items-center justify-center bg-black/40 p-4">
       <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg max-h-[90vh] overflow-hidden flex flex-col">
-        <div className="flex items-center justify-between px-5 py-3 border-b">
+        <div className="flex shrink-0 items-center justify-between border-b bg-white px-5 py-3">
           <h3 className="text-lg font-semibold">Shipment</h3>
           <div className="flex items-center gap-2">
             {!isEditing && selected && (

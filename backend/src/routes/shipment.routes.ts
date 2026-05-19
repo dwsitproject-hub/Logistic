@@ -15,6 +15,7 @@ import {
   deleteVesselLoadingPort,
   getContractSuggestions,
   validateContractNumber,
+  getContractPurchaseOrders,
   checkStoExists,
   createShipment,
   getContractDetailsForSto,
@@ -46,6 +47,7 @@ const shipmentPlanningUpload = multer({
 // New shipment creation routes - MUST BE BEFORE parameterized routes
 router.get('/contracts/suggestions', getContractSuggestions);
 router.get('/contracts/validate', validateContractNumber);
+router.get('/contracts/:contractId/purchase-orders', getContractPurchaseOrders);
 router.get('/contracts/details', getContractDetailsForSto);
 router.put('/contracts/sto-qty', auditLog('UPDATE', 'STO_QTY_ASSIGNED'), updateStoQtyAssigned);
 router.get('/check-sto/:stoNumber', checkStoExists);

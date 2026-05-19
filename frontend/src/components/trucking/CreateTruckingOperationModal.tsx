@@ -5,7 +5,20 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
 import { BuyerCombobox } from '@/components/BuyerCombobox'
-import { X, Loader2, Plus, Check } from 'lucide-react'
+import {
+  AlertCircle,
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  ChevronRight,
+  Clock,
+  FileText,
+  Info,
+  Loader2,
+  Plus,
+  Truck,
+  X,
+} from 'lucide-react'
 import api from '@/lib/api'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 
@@ -22,6 +35,22 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   initialContractExtNo?: string | null
 }) {
   const [creating, setCreating] = useState(false)
+
+  const [notification, setNotification] = useState<{
+    type: 'success' | 'error' | 'warning'
+    message: string
+    detail?: string
+  } | null>(null)
+  const notifTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const showNotification = useCallback(
+    (type: 'success' | 'error' | 'warning', message: string, detail?: string) => {
+      if (notifTimerRef.current) clearTimeout(notifTimerRef.current)
+      setNotification({ type, message, detail })
+      notifTimerRef.current = setTimeout(() => setNotification(null), 6000)
+    },
+    [],
+  )
+
   type DailyDeliverableDraft = { date: string; quantity: string }
   const [newOperation, setNewOperation] = useState({
     contract_number: '',
@@ -239,11 +268,11 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     const rows = newOperation.daily_deliverables || []
     if (rows.length > 0) {
       if (!start || !end) {
-        alert('Due Date Delivery Start and Due Date Delivery End are required when daily deliverables are provided.')
+        showNotification('warning', 'Delivery dates required', 'Due Date Delivery Start and End are required when daily deliverables are provided.')
         return
       }
       if (!Number.isFinite(maxQty)) {
-        alert('Quantity Delivered (Kg) is required when daily deliverables are provided.')
+        showNotification('warning', 'Quantity Delivered required', 'Quantity Delivered (Kg) is required when daily deliverables are provided.')
         return
       }
       let sum = 0
@@ -251,13 +280,13 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         const r = rows[i]
         const d = (r.date || '').trim()
         const qn = r.quantity ? parseFloat(String(r.quantity).replace(/,/g, '').trim()) : NaN
-        if (!d) return alert(`Daily deliverables row ${i + 1}: Date is required`)
-        if (!Number.isFinite(qn) || qn < 0) return alert(`Daily deliverables row ${i + 1}: Quantity must be a valid number`)
-        if (d < start) return alert(`Daily deliverables row ${i + 1}: Date cannot be before Due Date Delivery Start`)
-        if (d > end) return alert(`Daily deliverables row ${i + 1}: Date cannot be after Due Date Delivery End`)
-        if (qn > maxQty) return alert(`Daily deliverables row ${i + 1}: Quantity cannot exceed Quantity Delivered (Kg)`)
+        if (!d) { showNotification('error', `Row ${i + 1}: Date is required`); return }
+        if (!Number.isFinite(qn) || qn < 0) { showNotification('error', `Row ${i + 1}: Quantity must be a valid number`); return }
+        if (d < start) { showNotification('error', `Row ${i + 1}: Date cannot be before Delivery Start`); return }
+        if (d > end) { showNotification('error', `Row ${i + 1}: Date cannot be after Delivery End`); return }
+        if (qn > maxQty) { showNotification('error', `Row ${i + 1}: Quantity cannot exceed Quantity Delivered (Kg)`); return }
         sum += qn
-        if (sum > maxQty) return alert('Sum of daily deliverables quantity cannot exceed Quantity Delivered (Kg)')
+        if (sum > maxQty) { showNotification('error', 'Sum of daily quantities cannot exceed Quantity Delivered (Kg)'); return }
       }
     }
 
@@ -281,7 +310,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
 
       const response = await api.post('/trucking', payload)
       if (response.data.success) {
-        alert('Trucking operation created successfully!')
+        showNotification('success', 'Trucking operation created successfully!')
         resetForm()
         onClose()
         onCreated()
@@ -289,7 +318,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     } catch (error: any) {
       console.error('Create trucking operation error:', error)
       const errorMessage = error.response?.data?.error?.message || 'Failed to create trucking operation'
-      alert(errorMessage)
+      showNotification('error', errorMessage)
     } finally {
       setCreating(false)
     }
@@ -305,329 +334,444 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     return s + (Number.isFinite(n) ? n : 0)
   }, 0)
 
+  const step1Done = contractValidation.exists
+  const step2Done = Boolean(newOperation.location || newOperation.loading_location || newOperation.unloading_location)
+  const step3Done = Boolean(contractValidation.contractData?.delivery_start_date)
+  const cd = contractValidation.contractData
+
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40">
-      <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xl font-semibold">Add New Trucking</h3>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              resetForm()
-              onClose()
-            }}
-          >
-            <X className="h-5 w-5" />
-          </Button>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-xl bg-white shadow-xl">
+
+        {/* Header */}
+        <div className="shrink-0 rounded-t-xl border-b border-gray-200">
+          <div className="flex items-center justify-between px-6 py-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-500 text-white shrink-0">
+                <Truck className="h-4 w-4" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Add New Trucking</h3>
+                <p className="text-xs text-gray-500">Fill in contract, truck, and delivery details</p>
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="shrink-0 text-gray-400 hover:text-gray-600"
+              aria-label="Close"
+              onClick={() => { resetForm(); onClose() }}
+            >
+              <X className="h-5 w-5" />
+            </Button>
+          </div>
+          {/* Step progress */}
+          <div className="flex items-center px-6 py-2 bg-gray-50/80 border-t border-gray-100">
+            {[
+              { num: 1, label: 'Contract', done: step1Done },
+              { num: 2, label: 'Truck Detail', done: step2Done },
+              { num: 3, label: 'Shipment Detail', done: step3Done },
+            ].map((s, i) => (
+              <div key={s.num} className="flex items-center">
+                <div className="flex items-center gap-1.5">
+                  <div className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold transition-colors ${s.done ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                    {s.done ? <Check className="h-3.5 w-3.5" /> : s.num}
+                  </div>
+                  <span className={`text-xs font-medium ${s.done ? 'text-green-700' : 'text-gray-500'}`}>{s.label}</span>
+                </div>
+                {i < 2 && <ChevronRight className="mx-3 h-3.5 w-3.5 text-gray-300 shrink-0" />}
+              </div>
+            ))}
+          </div>
         </div>
 
-        <div className="space-y-5">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
 
-          {/* Section 1 — Contract Detail */}
-          <div className="border rounded-lg">
-            <div className="bg-gray-50 px-4 py-2 border-b">
-              <h4 className="text-sm font-semibold text-gray-700">1. Contract Detail</h4>
+          {/* Notification banner */}
+          {notification && (
+            <div className={`mb-4 flex items-start gap-3 rounded-lg border px-4 py-3 text-sm shadow-sm ${
+              notification.type === 'success' ? 'border-green-200 bg-green-50 text-green-800'
+              : notification.type === 'error' ? 'border-red-200 bg-red-50 text-red-800'
+              : 'border-amber-200 bg-amber-50 text-amber-800'
+            }`}>
+              <div className="mt-0.5 shrink-0">
+                {notification.type === 'success' ? <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  : notification.type === 'error' ? <AlertCircle className="h-4 w-4 text-red-600" />
+                  : <AlertTriangle className="h-4 w-4 text-amber-600" />}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-medium">{notification.message}</p>
+                {notification.detail && <p className="mt-0.5 text-xs opacity-80">{notification.detail}</p>}
+              </div>
+              <button className="shrink-0 opacity-60 hover:opacity-100" onClick={() => setNotification(null)}>
+                <X className="h-4 w-4" />
+              </button>
             </div>
-            <div className="p-4">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Contract Ext No{!initialContractExtNo && <span className="text-red-500"> *</span>}
-              </label>
-              <div className="relative">
-                <div className="flex gap-2">
-                  <Input
-                    value={newOperation.contract_number}
-                    onChange={(e) => handleContractNumberChange(e.target.value)}
-                    onBlur={() => validateContractNumber(newOperation.contract_number)}
-                    onFocus={() => {
-                      if (contractSuggestions.length > 0) setShowContractSuggestions(true)
-                      if (contractSearchTerm.trim().length >= 2) fetchContractSuggestions(contractSearchTerm)
-                    }}
-                    readOnly={!!initialContractExtNo}
-                    className={`flex-1 ${initialContractExtNo ? 'bg-gray-50 cursor-default' : ''} ${
-                      contractValidation.exists
-                        ? 'border-green-500'
-                        : contractValidation.message && !contractValidation.checking
-                          ? 'border-red-500'
+          )}
+
+          <div className="space-y-5">
+
+            {/* Section 1 — Contract Detail */}
+            <div className="rounded-xl border border-gray-200 shadow-sm">
+              <div className="flex items-center gap-2.5 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-white px-4 py-2.5 rounded-t-xl">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100 shrink-0">
+                  <FileText className="h-3.5 w-3.5 text-blue-600" />
+                </div>
+                <h4 className="text-sm font-semibold text-gray-800">1. Contract Detail</h4>
+                {step1Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
+              </div>
+              <div className="p-4 space-y-3">
+                <div className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                  <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
+                  <span><strong>Required:</strong> Contract Ext No &nbsp;•&nbsp; Location, Loading, dan Unloading akan terisi otomatis dari contract</span>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-gray-700">
+                      Contract Ext No <span className="text-red-500">*</span>
+                    </label>
+                    {!initialContractExtNo && (
+                      <span className="text-[10px] text-gray-400">Ketik untuk mencari contract</span>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <div className="flex gap-2 items-center">
+                      <Input
+                        value={newOperation.contract_number}
+                        onChange={(e) => handleContractNumberChange(e.target.value)}
+                        onBlur={() => validateContractNumber(newOperation.contract_number)}
+                        onFocus={() => {
+                          if (contractSuggestions.length > 0) setShowContractSuggestions(true)
+                          if (contractSearchTerm.trim().length >= 2) fetchContractSuggestions(contractSearchTerm)
+                        }}
+                        readOnly={!!initialContractExtNo}
+                        className={`flex-1 h-9 ${initialContractExtNo ? 'bg-gray-50 cursor-default' : ''} ${
+                          contractValidation.exists ? 'border-green-500 focus-visible:ring-green-400'
+                          : contractValidation.message && !contractValidation.checking ? 'border-red-500 focus-visible:ring-red-400'
                           : ''
-                    }`}
-                    placeholder="Enter Contract Ext No"
-                  />
-                  {contractValidation.checking && (
-                    <Loader2 className="h-5 w-5 animate-spin text-gray-400 self-center" />
+                        }`}
+                        placeholder="Masukkan Contract Ext No..."
+                      />
+                      {contractValidation.checking && <Loader2 className="h-4 w-4 animate-spin text-gray-400 shrink-0" />}
+                      {!contractValidation.checking && contractValidation.exists && <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />}
+                      {!contractValidation.checking && contractValidation.message && !contractValidation.exists && <AlertCircle className="h-4 w-4 text-red-500 shrink-0" />}
+                    </div>
+
+                    {showContractSuggestions && contractSuggestions.length > 0 && (
+                      <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
+                        {contractSuggestions.map((c) => (
+                          <button
+                            key={c.contract_id}
+                            type="button"
+                            className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b last:border-b-0 transition-colors"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => handleSelectContractSuggestion(c)}
+                          >
+                            <div className="font-semibold text-sm text-gray-900">{c.contract_ext_no || c.contract_id}</div>
+                            <div className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
+                              {c.contract_ext_no && <><span className="font-mono text-gray-400">{c.contract_id}</span><span className="text-gray-300">•</span></>}
+                              <span>{c.supplier}</span>
+                              <span className="text-gray-300">•</span>
+                              <span>{c.product}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {contractValidation.message && (
+                    <p className={`text-xs mt-1.5 flex items-center gap-1 ${contractValidation.exists ? 'text-green-600' : 'text-red-600'}`}>
+                      {contractValidation.exists
+                        ? <CheckCircle2 className="h-3 w-3" />
+                        : <AlertCircle className="h-3 w-3" />}
+                      {contractValidation.message}
+                    </p>
                   )}
-                  {!contractValidation.checking && contractValidation.exists && (
-                    <Check className="h-5 w-5 text-green-500 self-center" />
-                  )}
-                  {!contractValidation.checking && contractValidation.message && !contractValidation.exists && (
-                    <X className="h-5 w-5 text-red-500 self-center" />
+                  {formErrors.contract_number && !contractValidation.message && (
+                    <p className="text-xs mt-1 text-red-600 flex items-center gap-1">
+                      <AlertCircle className="h-3 w-3" />{formErrors.contract_number}
+                    </p>
                   )}
                 </div>
 
-                {showContractSuggestions && contractSuggestions.length > 0 && (
-                  <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
-                    {contractSuggestions.map((c) => (
-                      <button
-                        key={c.contract_id}
-                        type="button"
-                        className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b last:border-b-0"
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => handleSelectContractSuggestion(c)}
-                      >
-                        <div className="font-medium text-sm">{c.contract_ext_no || c.contract_id}</div>
-                        <div className="text-xs text-gray-500">
-                          {c.contract_ext_no ? <span className="text-gray-400">{c.contract_id} • </span> : null}
-                          {c.supplier} • {c.product}
+                {/* Contract Data Card */}
+                {contractValidation.exists && cd && (
+                  <div className="rounded-lg border border-green-200 bg-green-50 overflow-hidden">
+                    <div className="grid grid-cols-2 md:grid-cols-3 divide-x divide-green-100 border-b border-green-100">
+                      {[
+                        { label: 'Contract Ext No', value: cd.contract_ext_no || cd.contract_id },
+                        { label: 'Contract ID', value: cd.contract_id || '—' },
+                        { label: 'STO Number', value: cd.sto_number || '—' },
+                      ].map((f) => (
+                        <div key={f.label} className="px-3 py-2">
+                          <div className="text-[10px] font-medium uppercase tracking-wide text-green-600">{f.label}</div>
+                          <div className="text-xs font-semibold text-gray-800 mt-0.5 truncate">{f.value}</div>
                         </div>
-                      </button>
-                    ))}
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-3 divide-x divide-green-100 px-0">
+                      {[
+                        { label: 'Supplier', value: cd.supplier || '—' },
+                        { label: 'Buyer', value: cd.buyer || '—' },
+                        { label: 'Product', value: cd.product || '—' },
+                        { label: 'Group', value: cd.group_name || '—' },
+                      ].map((f) => (
+                        <div key={f.label} className="px-3 py-2">
+                          <div className="text-[10px] font-medium uppercase tracking-wide text-green-600">{f.label}</div>
+                          <div className="text-xs font-semibold text-gray-800 mt-0.5 truncate">{f.value}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
-              {contractValidation.message && (
-                <p className={`text-xs mt-1 ${contractValidation.exists ? 'text-green-600' : 'text-red-600'}`}>
-                  {contractValidation.message}
-                </p>
-              )}
-              {formErrors.contract_number && !contractValidation.message && (
-                <p className="text-xs mt-1 text-red-600">{formErrors.contract_number}</p>
-              )}
-              {contractValidation.exists && contractValidation.contractData && (
-                <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-xs">
-                  <div className="grid grid-cols-2 gap-2">
-                    {contractValidation.contractData.contract_ext_no ? (
-                      <div>
-                        <span className="font-semibold">Contract Ext No:</span>{' '}
-                        {contractValidation.contractData.contract_ext_no}
-                      </div>
-                    ) : null}
-                    <div>
-                      <span className="font-semibold">Contract ID:</span> {contractValidation.contractData.contract_id || '-'}
-                    </div>
-                    <div>
-                      <span className="font-semibold">STO Number:</span> {contractValidation.contractData.sto_number || '-'}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Supplier:</span> {contractValidation.contractData.supplier || '-'}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Buyer:</span> {contractValidation.contractData.buyer || '-'}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Product:</span> {contractValidation.contractData.product || '-'}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Group:</span> {contractValidation.contractData.group_name || '-'}
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
-          </div>
 
-          {/* Section 2 — Truck Detail */}
-          <div className="border rounded-lg">
-            <div className="bg-gray-50 px-4 py-2 border-b">
-              <h4 className="text-sm font-semibold text-gray-700">2. Truck Detail</h4>
-            </div>
-            <div className="p-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Plant/Site
-                  </label>
-                  <PlantSiteCombobox
-                    value={newOperation.location}
-                    onChange={(val) => { setNewOperation((prev) => ({ ...prev, location: val })); clearFieldError('location') }}
-                    className={formErrors.location ? 'border-red-500' : ''}
-                    placeholder="Search plant/site..."
-                    valueField="plant_name"
-                    disabled={contractValidation.exists}
-                  />
-                  {formErrors.location && <p className="text-xs mt-1 text-red-600">{formErrors.location}</p>}
+            {/* Section 2 — Truck Detail */}
+            <div className="rounded-xl border border-gray-200 shadow-sm">
+              <div className="flex items-center gap-2.5 border-b border-gray-200 bg-gradient-to-r from-orange-50 to-white px-4 py-2.5 rounded-t-xl">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-orange-100 shrink-0">
+                  <Truck className="h-3.5 w-3.5 text-orange-600" />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Loading Location
-                  </label>
-                  <PlantSiteCombobox
-                    value={newOperation.loading_location}
-                    onChange={(val) => { setNewOperation((prev) => ({ ...prev, loading_location: val })); clearFieldError('loading_location') }}
-                    className={formErrors.loading_location ? 'border-red-500' : ''}
-                    placeholder="Search loading location..."
-                  />
-                  {formErrors.loading_location && <p className="text-xs mt-1 text-red-600">{formErrors.loading_location}</p>}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Unloading Location
-                  </label>
-                  <BuyerCombobox
-                    value={newOperation.unloading_location}
-                    onChange={(val) => { setNewOperation((prev) => ({ ...prev, unloading_location: val })); clearFieldError('unloading_location') }}
-                    className={formErrors.unloading_location ? 'border-red-500' : ''}
-                    placeholder="Search buyer (unloading location)..."
-                  />
-                  {formErrors.unloading_location && <p className="text-xs mt-1 text-red-600">{formErrors.unloading_location}</p>}
-                </div>
+                <h4 className="text-sm font-semibold text-gray-800">2. Truck Detail</h4>
+                {step2Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
-            </div>
-          </div>
-
-          {/* Section 3 — Shipment Detail */}
-          <div className="border rounded-lg">
-            <div className="bg-gray-50 px-4 py-2 border-b">
-              <h4 className="text-sm font-semibold text-gray-700">3. Shipment Detail</h4>
-            </div>
-            <div className="p-4 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Due Date Delivery Start</label>
-                  <DateInputDdMmYyyy
-                    valueIso={contractValidation.contractData?.delivery_start_date || ''}
-                    onChangeIso={() => {}}
-                    disabled
-                    className="bg-gray-100 cursor-not-allowed"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Due Date Delivery End</label>
-                  <DateInputDdMmYyyy
-                    valueIso={contractValidation.contractData?.delivery_end_date || ''}
-                    onChangeIso={() => {}}
-                    disabled
-                    className="bg-gray-100 cursor-not-allowed"
-                  />
-                </div>
-              </div>
-
-              <div className="border rounded-lg p-4">
-                <div className="flex items-start justify-between gap-4">
+              <div className="p-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
-                    <div className="font-semibold text-sm text-gray-900">Daily planning deliverables</div>
-                    <div className="text-xs text-gray-500 mt-0.5">
-                      Add daily delivered quantities (validated against Start/Last receive date and total Quantity Delivered).
-                    </div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">Plant/Site</label>
+                    <PlantSiteCombobox
+                      value={newOperation.location}
+                      onChange={(val) => { setNewOperation((prev) => ({ ...prev, location: val })); clearFieldError('location') }}
+                      className={formErrors.location ? 'border-red-500' : ''}
+                      placeholder="Search plant/site..."
+                      valueField="plant_name"
+                      disabled={contractValidation.exists}
+                    />
+                    {formErrors.location && <p className="text-xs mt-1 text-red-600">{formErrors.location}</p>}
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      setNewOperation((prev) => ({
-                        ...prev,
-                        daily_deliverables: [...(prev.daily_deliverables || []), { date: '', quantity: '' }],
-                      }))
-                    }
-                  >
-                    <Plus className="h-4 w-4 mr-1" />
-                    Add day
-                  </Button>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">Loading Location</label>
+                    <PlantSiteCombobox
+                      value={newOperation.loading_location}
+                      onChange={(val) => { setNewOperation((prev) => ({ ...prev, loading_location: val })); clearFieldError('loading_location') }}
+                      className={formErrors.loading_location ? 'border-red-500' : ''}
+                      placeholder="Search loading location..."
+                    />
+                    {formErrors.loading_location && <p className="text-xs mt-1 text-red-600">{formErrors.loading_location}</p>}
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">Unloading Location</label>
+                    <BuyerCombobox
+                      value={newOperation.unloading_location}
+                      onChange={(val) => { setNewOperation((prev) => ({ ...prev, unloading_location: val })); clearFieldError('unloading_location') }}
+                      className={formErrors.unloading_location ? 'border-red-500' : ''}
+                      placeholder="Search buyer (unloading)..."
+                    />
+                    {formErrors.unloading_location && <p className="text-xs mt-1 text-red-600">{formErrors.unloading_location}</p>}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Section 3 — Shipment Detail */}
+            <div className="rounded-xl border border-gray-200 shadow-sm">
+              <div className="flex items-center gap-2.5 border-b border-gray-200 bg-gradient-to-r from-violet-50 to-white px-4 py-2.5 rounded-t-xl">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-100 shrink-0">
+                  <Clock className="h-3.5 w-3.5 text-violet-600" />
+                </div>
+                <h4 className="text-sm font-semibold text-gray-800">3. Shipment Detail</h4>
+                {step3Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
+              </div>
+              <div className="p-4 space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+                      Due Date Delivery Start
+                      <span className="ml-1 font-normal text-gray-400">(dari contract)</span>
+                    </label>
+                    <DateInputDdMmYyyy
+                      valueIso={cd?.delivery_start_date || ''}
+                      onChangeIso={() => {}}
+                      disabled
+                      className="bg-gray-100 cursor-not-allowed"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+                      Due Date Delivery End
+                      <span className="ml-1 font-normal text-gray-400">(dari contract)</span>
+                    </label>
+                    <DateInputDdMmYyyy
+                      valueIso={cd?.delivery_end_date || ''}
+                      onChangeIso={() => {}}
+                      disabled
+                      className="bg-gray-100 cursor-not-allowed"
+                    />
+                  </div>
                 </div>
 
-                {(newOperation.daily_deliverables || []).length === 0 ? (
-                  <div className="text-sm text-gray-500 mt-3">No daily deliverables added.</div>
-                ) : (
-                  <div className="mt-3 space-y-2">
-                    {(newOperation.daily_deliverables || []).map((row, idx) => (
-                      <div key={idx} className="flex items-start gap-2">
-                        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-2">
-                          <div>
-                            <label className="text-xs text-gray-500">Date</label>
-                            <DateInputDdMmYyyy
-                              valueIso={row.date}
-                              minIso={truckingDateRange?.minIso}
-                              maxIso={truckingDateRange?.maxIso}
-                              onChangeIso={(iso) => {
+                {/* Daily Deliverables */}
+                <div className="rounded-lg border border-gray-200 overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+                    <div>
+                      <p className="text-xs font-semibold text-gray-700">Daily Planning Deliverables</p>
+                      <p className="text-[10px] text-gray-400 mt-0.5">Opsional — validasi terhadap tanggal dan total Qty Delivered</p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-7 text-xs bg-violet-600 hover:bg-violet-700 text-white"
+                      onClick={() =>
+                        setNewOperation((prev) => ({
+                          ...prev,
+                          daily_deliverables: [...(prev.daily_deliverables || []), { date: '', quantity: '' }],
+                        }))
+                      }
+                    >
+                      <Plus className="h-3.5 w-3.5 mr-1" />
+                      Add Day
+                    </Button>
+                  </div>
+
+                  <div className="p-4">
+                    {(newOperation.daily_deliverables || []).length === 0 ? (
+                      <div className="text-center py-4 text-sm text-gray-400 italic">
+                        Belum ada daily deliverables. Klik "Add Day" untuk menambahkan.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {(newOperation.daily_deliverables || []).map((row, idx) => (
+                          <div key={idx} className="flex items-start gap-2 rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2.5">
+                            <div className="flex h-5 w-5 items-center justify-center rounded-full bg-violet-100 text-[10px] font-bold text-violet-600 shrink-0 mt-1">
+                              {idx + 1}
+                            </div>
+                            <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-3">
+                              <div>
+                                <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Date</label>
+                                <DateInputDdMmYyyy
+                                  valueIso={row.date}
+                                  minIso={truckingDateRange?.minIso}
+                                  maxIso={truckingDateRange?.maxIso}
+                                  onChangeIso={(iso) => {
+                                    setNewOperation((prev) => ({
+                                      ...prev,
+                                      daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
+                                        i === idx ? { ...r, date: iso } : r,
+                                      ),
+                                    }))
+                                    clearFieldError(`dailyDate_${idx}`)
+                                  }}
+                                  className={`mt-1 ${formErrors[`dailyDate_${idx}`] ? 'border-red-500' : ''}`}
+                                />
+                                {formErrors[`dailyDate_${idx}`] && (
+                                  <p className="text-xs mt-0.5 text-red-600">{formErrors[`dailyDate_${idx}`]}</p>
+                                )}
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Quantity Delivered (Kg)</label>
+                                <Input
+                                  inputMode="decimal"
+                                  value={row.quantity}
+                                  onChange={(e) =>
+                                    setNewOperation((prev) => ({
+                                      ...prev,
+                                      daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
+                                        i === idx ? { ...r, quantity: e.target.value } : r,
+                                      ),
+                                    }))
+                                  }
+                                  placeholder="0"
+                                  className="mt-1 h-9"
+                                />
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="mt-1 shrink-0 text-gray-300 hover:text-red-500 transition-colors p-1 rounded"
+                              onClick={() =>
                                 setNewOperation((prev) => ({
                                   ...prev,
-                                  daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
-                                    i === idx ? { ...r, date: iso } : r,
-                                  ),
-                                }))
-                                clearFieldError(`dailyDate_${idx}`)
-                              }}
-                              className={formErrors[`dailyDate_${idx}`] ? 'border-red-500' : ''}
-                            />
-                            {formErrors[`dailyDate_${idx}`] && (
-                              <p className="text-xs mt-1 text-red-600">{formErrors[`dailyDate_${idx}`]}</p>
-                            )}
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-500">Quantity Delivered (Kg)</label>
-                            <Input
-                              inputMode="decimal"
-                              value={row.quantity}
-                              onChange={(e) =>
-                                setNewOperation((prev) => ({
-                                  ...prev,
-                                  daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
-                                    i === idx ? { ...r, quantity: e.target.value } : r,
-                                  ),
+                                  daily_deliverables: (prev.daily_deliverables || []).filter((_, i) => i !== idx),
                                 }))
                               }
-                              placeholder="0"
-                            />
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
                           </div>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            setNewOperation((prev) => ({
-                              ...prev,
-                              daily_deliverables: (prev.daily_deliverables || []).filter((_, i) => i !== idx),
-                            }))
-                          }
-                          className="mt-5 text-gray-500 hover:text-red-600"
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    ))}
+                        ))}
 
-                    <div className="pt-2 text-xs text-gray-600">
-                      {contractValidation.contractData?.delivery_start_date &&
-                      contractValidation.contractData?.delivery_end_date ? (
-                        <div>
-                          Allowed date range: {contractValidation.contractData.delivery_start_date} to{' '}
-                          {contractValidation.contractData.delivery_end_date}
+                        {/* Qty summary */}
+                        <div className="flex items-center justify-between mt-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs">
+                          <span className="text-gray-500">
+                            Allowed range:{' '}
+                            {cd?.delivery_start_date && cd?.delivery_end_date
+                              ? `${cd.delivery_start_date} — ${cd.delivery_end_date}`
+                              : 'Set contract first'}
+                          </span>
+                          <span className={`font-semibold tabular-nums ${Number.isFinite(maxQty) && sumQty > maxQty ? 'text-red-600' : 'text-gray-700'}`}>
+                            Total: {sumQty}{Number.isFinite(maxQty) ? ` / ${maxQty} Kg` : ' Kg'}
+                          </span>
                         </div>
-                      ) : (
-                        <div>Due Date Delivery Start/End are required to validate date range.</div>
-                      )}
-                      <div className="mt-1">
-                        Sum qty: {sumQty}
-                        {Number.isFinite(maxQty) ? ` / ${maxQty}` : ''}
                       </div>
-                    </div>
+                    )}
                   </div>
-                )}
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="flex justify-end gap-2 pt-4 border-t">
-            <Button variant="outline" onClick={() => { resetForm(); onClose(); }} disabled={creating}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleCreateOperation}
-              disabled={creating || !contractValidation.exists}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
-              {creating ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                <>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Create Trucking
-                </>
-              )}
-            </Button>
+            {/* Footer action bar */}
+            <div className="rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                  {contractValidation.exists && (
+                    <span className="flex items-center gap-1 rounded-full bg-blue-100 px-2.5 py-1 text-blue-700 font-medium">
+                      <FileText className="h-3 w-3" />
+                      {cd?.contract_ext_no || newOperation.contract_number}
+                    </span>
+                  )}
+                  {newOperation.location && (
+                    <span className="flex items-center gap-1 rounded-full bg-orange-100 px-2.5 py-1 text-orange-700 font-medium">
+                      <Truck className="h-3 w-3" />
+                      {newOperation.location}
+                    </span>
+                  )}
+                  {(newOperation.daily_deliverables || []).length > 0 && (
+                    <span className="flex items-center gap-1 rounded-full bg-violet-100 px-2.5 py-1 text-violet-700 font-medium">
+                      {(newOperation.daily_deliverables || []).length} hari direncanakan
+                    </span>
+                  )}
+                  {!contractValidation.exists && (
+                    <span className="italic text-gray-400">Masukkan Contract Ext No untuk melanjutkan</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button variant="outline" className="h-9" onClick={() => { resetForm(); onClose() }} disabled={creating}>
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleCreateOperation}
+                    disabled={creating || !contractValidation.exists}
+                    className="h-9 bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+                  >
+                    {creating ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <Truck className="h-4 w-4 mr-2" />
+                        Create Trucking
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
       </div>

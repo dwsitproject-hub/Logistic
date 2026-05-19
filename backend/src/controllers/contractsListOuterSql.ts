@@ -64,6 +64,11 @@ export const CONTRACTS_LIST_OUTER_SQL = `
               END,
               0
             )
+          - COALESCE((
+              SELECT SUM(u.sto_qty_assigned * 1000)
+              FROM user_sto_contract_assignments u
+              WHERE u.contract_number = base.contract_id
+            ), 0)
         )::numeric AS outstanding_quantity,
         base.po_count,
         base.sto_count,

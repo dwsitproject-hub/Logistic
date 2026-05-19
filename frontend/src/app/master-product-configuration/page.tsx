@@ -153,7 +153,7 @@ export default function MasterProductConfigurationPage() {
 
       {showModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
-          <div className="bg-white rounded-md w-full max-w-3xl p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-md w-full max-w-3xl max-h-[90vh] overflow-y-auto px-6 pb-6">
             <h2 className="text-xl font-semibold mb-4">{editing ? 'Edit Product' : 'Add Product'}</h2>
             <form onSubmit={saveProduct} className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {[

@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download } from 'lucide-react'
 import api from '@/lib/api'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
@@ -324,6 +324,9 @@ function ContractsPageContent() {
   const [uploadingId, setUploadingId] = useState<string>('')
   const [docsLoading, setDocsLoading] = useState<boolean>(false)
   const [selectedContractDocs, setSelectedContractDocs] = useState<DocumentItem[]>([])
+  const [docsModalContract, setDocsModalContract] = useState<Contract | null>(null)
+  const [docsModalDocs, setDocsModalDocs] = useState<DocumentItem[]>([])
+  const [docsModalLoading, setDocsModalLoading] = useState(false)
   const [stoInfoLoading, setStoInfoLoading] = useState<boolean>(false)
   const [stoInfo, setStoInfo] = useState<StoInfoRow[]>([])
   const [stoDetailRow, setStoDetailRow] = useState<StoInfoRow | null>(null)
@@ -346,7 +349,8 @@ function ContractsPageContent() {
   const contractsPerPage = 20
   const [unassignedSeaContracts, setUnassignedSeaContracts] = useState(0)
   const [unassignedLandContracts, setUnassignedLandContracts] = useState(0)
-  const [unassignedFilter, setUnassignedFilter] = useState<'sea' | 'land' | null>(null)
+  const [unassignedMixContracts, setUnassignedMixContracts] = useState(0)
+  const [unassignedFilter, setUnassignedFilter] = useState<'sea' | 'land' | 'mix' | null>(null)
   const [updatingContractId, setUpdatingContractId] = useState<string | null>(null)
 
   type LatePerfNode = { key: string; count: number; totalDays: number; maxDays: number; totalQtyDelivery?: number; children: LatePerfNode[] }
@@ -946,12 +950,14 @@ function ContractsPageContent() {
       if (statusFilter && statusFilter !== 'All Status') {
         params.append('status', statusFilter)
       }
-      const res = await api.get<{ success: boolean; data: { seaWithoutShipments: number; landWithoutTrucking: number } }>(
-        `/contracts/unassigned-counts?${params.toString()}`
-      )
+      const res = await api.get<{
+        success: boolean
+        data: { seaWithoutShipments: number; landWithoutTrucking: number; mixWithoutLogistics: number }
+      }>(`/contracts/unassigned-counts?${params.toString()}`)
       if (res.data?.success && res.data?.data) {
         setUnassignedSeaContracts(res.data.data.seaWithoutShipments ?? 0)
         setUnassignedLandContracts(res.data.data.landWithoutTrucking ?? 0)
+        setUnassignedMixContracts(res.data.data.mixWithoutLogistics ?? 0)
       }
     } catch (err) {
       console.error('Failed to fetch unassigned counts:', err)
@@ -1060,11 +1066,6 @@ function ContractsPageContent() {
     setContractLogisticsUi({ kind: 'ship-detail', contractId: contract.contract_id })
   }
 
-  const getDocumentIconColor = (c: Contract) => {
-    if (!countGt0(c.document_count)) return 'text-gray-400'
-    return 'text-green-600'
-  }
-
   const formatDate = (dateStr: string) => formatDateDMY(dateStr)
 
   const formatNumber = (num: number | string) => {
@@ -1156,6 +1157,9 @@ function ContractsPageContent() {
         if (selectedContract && selectedContract.id === contract.id) {
           await fetchContractDocuments(contract.id)
         }
+        if (docsModalContract && docsModalContract.id === contract.id) {
+          await fetchDocumentsForModal(contract.id)
+        }
       } else {
         alert(res.data?.error?.message || 'Failed to upload document')
       }
@@ -1191,13 +1195,17 @@ function ContractsPageContent() {
     }
   }
 
+  const fetchDocumentsByContractId = async (contractInternalId: string): Promise<DocumentItem[]> => {
+    const params = new URLSearchParams()
+    params.append('contractId', contractInternalId)
+    const res = await api.get(`/documents?${params.toString()}`)
+    return res.data?.data || []
+  }
+
   const fetchContractDocuments = async (contractInternalId: string) => {
     try {
       setDocsLoading(true)
-      const params = new URLSearchParams()
-      params.append('contractId', contractInternalId)
-      const res = await api.get(`/documents?${params.toString()}`)
-      const docs: DocumentItem[] = res.data?.data || []
+      const docs = await fetchDocumentsByContractId(contractInternalId)
       setSelectedContractDocs(docs)
     } catch (err) {
       console.error('Fetch documents error:', err)
@@ -1205,6 +1213,29 @@ function ContractsPageContent() {
     } finally {
       setDocsLoading(false)
     }
+  }
+
+  const fetchDocumentsForModal = async (contractInternalId: string) => {
+    try {
+      setDocsModalLoading(true)
+      const docs = await fetchDocumentsByContractId(contractInternalId)
+      setDocsModalDocs(docs)
+    } catch (err) {
+      console.error('Fetch documents error:', err)
+      setDocsModalDocs([])
+    } finally {
+      setDocsModalLoading(false)
+    }
+  }
+
+  const openContractDocsModal = (contract: Contract) => {
+    setDocsModalContract(contract)
+    void fetchDocumentsForModal(contract.id)
+  }
+
+  const closeContractDocsModal = () => {
+    setDocsModalContract(null)
+    setDocsModalDocs([])
   }
 
   const handleDownloadDocument = async (docId: string, fileName: string) => {
@@ -2913,7 +2944,7 @@ function ContractsPageContent() {
         {!isContractPerformance && (
           <>
             {/* Assignment summary - clickable to filter list */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Card
                 className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'sea' ? 'ring-2 ring-blue-500 bg-blue-50/50' : ''}`}
                 onClick={() => {
@@ -2954,6 +2985,29 @@ function ContractsPageContent() {
                   </div>
                 </CardContent>
               </Card>
+              <Card
+                className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'mix' ? 'ring-2 ring-indigo-500 bg-indigo-50/50' : ''}`}
+                onClick={() => {
+                  setUnassignedFilter(prev => (prev === 'mix' ? null : 'mix'))
+                  if (unassignedFilter !== 'mix') setTimeout(() => contractsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
+                }}
+              >
+                <CardContent className="pt-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm text-gray-500">MIX contracts without shipment or trucking</div>
+                      <div className="text-2xl font-semibold text-gray-900 mt-1">
+                        {unassignedMixContracts}
+                      </div>
+                      <div className="text-xs text-gray-400 mt-1">Click to view list</div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Ship className="h-7 w-7 text-indigo-500" />
+                      <Truck className="h-7 w-7 text-indigo-500" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
             </div>
 
             {/* Active filter banner */}
@@ -2962,7 +3016,9 @@ function ContractsPageContent() {
                 <span className="text-gray-700">
                   {unassignedFilter === 'sea'
                     ? 'Showing SEA contracts without shipments'
-                    : 'Showing LAND contracts without trucking'}
+                    : unassignedFilter === 'land'
+                      ? 'Showing LAND contracts without trucking'
+                      : 'Showing MIX contracts without shipment or trucking'}
                 </span>
                 <Button
                   variant="ghost"
@@ -2989,6 +3045,8 @@ function ContractsPageContent() {
                       ? 'SEA Contracts Without Shipments'
                       : unassignedFilter === 'land'
                       ? 'LAND Contracts Without Trucking'
+                      : unassignedFilter === 'mix'
+                      ? 'MIX Contracts Without Shipment or Trucking'
                       : isContractPerformance
                       ? 'Contract Performance'
                       : 'All Contracts'}
@@ -3000,7 +3058,13 @@ function ContractsPageContent() {
                 </div>
                 {unassignedFilter && (
                   <Badge
-                    className={`hidden md:inline-flex cursor-pointer ${unassignedFilter === 'sea' ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}
+                    className={`hidden md:inline-flex cursor-pointer ${
+                      unassignedFilter === 'sea'
+                        ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                        : unassignedFilter === 'land'
+                          ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                          : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                    }`}
                     onClick={() => setUnassignedFilter(null)}
                   >
                     <X className="h-3 w-3 mr-1" />
@@ -3579,8 +3643,8 @@ function ContractsPageContent() {
                                     const hasData = countGt0(contract.trucking_count)
                                     return (
                                       <Button variant="outline" size="icon" onClick={() => handleTruckIconClick(contract)}
-                                        title={hasData ? 'Edit' : 'Add'}
-                                        className={hasData ? '' : 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'}>
+                                        title={hasData ? 'Edit trucking' : 'Add trucking'}
+                                        className="bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100">
                                         {hasData ? <Pencil className="h-4 w-4" /> : <Truck className="h-4 w-4" />}
                                       </Button>
                                     )
@@ -3601,6 +3665,15 @@ function ContractsPageContent() {
 
                                   {!isContractPerformance && (
                                     <>
+                                      <Button
+                                        variant="outline"
+                                        size="icon"
+                                        onClick={() => openContractDocsModal(contract)}
+                                        title="Docs"
+                                        className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
+                                      >
+                                        <FileText className="h-4 w-4" />
+                                      </Button>
                                       <input
                                         id={`contract-file-${contract.id}`}
                                         type="file"
@@ -3614,10 +3687,10 @@ function ContractsPageContent() {
                                         onClick={() => document.getElementById(`contract-file-${contract.id}`)?.click()}
                                         disabled={uploadingId === contract.id}
                                         title="Upload"
-                                        className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100"
+                                        className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
                                       >
                                         {uploadingId === contract.id ? (
-                                          <span className="h-4 w-4 inline-block border-2 border-orange-600 border-t-transparent rounded-full animate-spin" />
+                                          <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
                                         ) : (
                                           <Upload className="h-4 w-4" />
                                         )}
@@ -3696,8 +3769,8 @@ function ContractsPageContent() {
                             const hasData = countGt0(contract.trucking_count)
                             return (
                               <Button variant="outline" size="sm" onClick={() => handleTruckIconClick(contract)}
-                                className={hasData ? '' : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'}>
-                                {hasData ? <><Pencil className="h-4 w-4 mr-2" />Edit</> : <><Plus className="h-4 w-4 mr-2" />Add</>}
+                                className="bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100">
+                                {hasData ? <><Pencil className="h-4 w-4 mr-2" />Edit</> : <><Truck className="h-4 w-4 mr-2" />Add</>}
                               </Button>
                             )
                           })()}
@@ -3710,14 +3783,6 @@ function ContractsPageContent() {
                               </Button>
                             )
                           })()}
-                          <button
-                            title="Documents"
-                            className={`p-1 ${getDocumentIconColor(contract)}`}
-                            onClick={() => setSelectedContract(contract)}
-                          >
-                            <FileText className="h-5 w-5" />
-                          </button>
-
                           <Button
                             variant="outline"
                             size="sm"
@@ -3730,6 +3795,25 @@ function ContractsPageContent() {
 
                           {!isContractPerformance && (
                             <>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                onClick={() => openContractDocsModal(contract)}
+                                title="Docs"
+                                className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100 md:hidden"
+                              >
+                                <FileText className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => openContractDocsModal(contract)}
+                                title="Docs"
+                                className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100 hidden md:inline-flex"
+                              >
+                                <FileText className="h-4 w-4 mr-2" />
+                                Docs
+                              </Button>
                               {/* Upload supporting document */}
                               <input
                                 id={`contract-file-${contract.id}`}
@@ -3743,11 +3827,11 @@ function ContractsPageContent() {
                                 size="sm"
                                 onClick={() => document.getElementById(`contract-file-${contract.id}`)?.click()}
                                 disabled={uploadingId === contract.id}
-                                className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 hidden md:inline-flex"
+                                className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100 hidden md:inline-flex"
                               >
                                 {uploadingId === contract.id ? (
                                   <>
-                                    <span className="h-4 w-4 mr-2 inline-block border-2 border-orange-600 border-t-transparent rounded-full animate-spin" />
+                                    <span className="h-4 w-4 mr-2 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
                                     Uploading...
                                   </>
                                 ) : (
@@ -3860,26 +3944,80 @@ function ContractsPageContent() {
           </CardContent>
         </Card>
 
+        {/* Contract documents modal (from Actions > Docs) */}
+        {docsModalContract && (
+          <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/50 p-4">
+            <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg max-h-[80vh] flex flex-col overflow-hidden">
+              <div className="flex shrink-0 items-center justify-between border-b px-6 py-4">
+                <div>
+                  <h3 className="text-xl font-semibold">Documents</h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Contract {docsModalContract.contract_id}
+                  </p>
+                </div>
+                <Button variant="ghost" size="icon" className="shrink-0" aria-label="Close" onClick={closeContractDocsModal}>
+                  <X className="h-5 w-5" />
+                </Button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+                {docsModalLoading ? (
+                  <div className="text-sm text-gray-500 py-8 text-center">Loading documents...</div>
+                ) : docsModalDocs.length === 0 ? (
+                  <div className="text-sm text-gray-500 py-8 text-center">
+                    No documents uploaded for this contract. Use the Upload action to add files.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {docsModalDocs.map((doc) => (
+                      <div
+                        key={doc.id}
+                        className="flex items-center justify-between px-4 py-3 border rounded hover:bg-gray-50"
+                      >
+                        <div>
+                          <div className="text-sm font-medium">{doc.file_name}</div>
+                          <div className="text-xs text-gray-500">
+                            {(doc.document_type || 'FILE')}
+                            {doc.created_at ? ` • ${new Date(doc.created_at).toLocaleString()}` : ''}
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleDownloadDocument(doc.id, doc.file_name)}
+                        >
+                          <Download className="h-4 w-4 mr-1" />
+                          Download
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Contract Details Modal */}
         {selectedContract && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <Card className="max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-              <CardHeader>
+            <Card className="max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden">
+              <CardHeader className="shrink-0 border-b">
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle>Contract Details</CardTitle>
-                    <p className="text-sm text-gray-500 mt-1">{selectedContract.contract_id}</p>
                   </div>
                   <Button
                     variant="ghost"
-                    size="sm"
+                    size="icon"
+                    className="shrink-0"
+                    aria-label="Close"
                     onClick={() => setSelectedContract(null)}
                   >
-                    <X className="h-4 w-4" />
+                    <X className="h-5 w-5" />
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="min-h-0 flex-1 overflow-y-auto">
                 <div className="space-y-6">
                   {/* Highlight — key identifiers at a glance */}
                   <div className="rounded-xl border-2 border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50/80 p-4 shadow-sm">
@@ -4502,20 +4640,20 @@ function ContractsPageContent() {
         {/* STO / Operation detail modal */}
         {stoDetailRow && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
-            <Card className="max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-              <CardHeader>
+            <Card className="max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden">
+              <CardHeader className="shrink-0 border-b">
                 <div className="flex items-center justify-between">
                   <CardTitle>
                     {stoDetailRow.type === 'shipment' ? 'Shipment' : 'Trucking'} details
                     {stoDetailRow.sto_number && stoDetailRow.sto_number !== '-' && ` · STO ${stoDetailRow.sto_number}`}
                     {stoDetailRow.operation_id && ` · ${stoDetailRow.operation_id}`}
                   </CardTitle>
-                  <Button variant="ghost" size="sm" onClick={closeStoDetail}>
-                    <X className="h-4 w-4" />
+                  <Button variant="ghost" size="icon" className="shrink-0" aria-label="Close" onClick={closeStoDetail}>
+                    <X className="h-5 w-5" />
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="min-h-0 flex-1 overflow-y-auto">
                 {stoDetailLoading ? (
                   <div className="text-sm text-gray-500 py-8">Loading details...</div>
                 ) : !stoDetailData ? (

@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useEffect, useMemo, useRef, useState, Suspense, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
@@ -7,10 +7,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, ChevronDown, ChevronUp, ChevronRight, ArrowDown, ArrowUp, Minus, SlidersHorizontal, ArrowLeft, ArrowRight } from 'lucide-react'
+import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, ArrowDown, ArrowUp, ArrowUpDown, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor } from 'lucide-react'
 import api from '@/lib/api'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
@@ -25,6 +26,38 @@ import {
   canViewPermission,
 } from '@/components/PermissionsContext'
 // import * as XLSX from 'xlsx' // Temporarily disabled
+
+/** Extract fixed px width from a minmax(Npx, …) grid track for <col style>. */
+function compactGridTrackMinPx(track: string): string {
+  const m = track.match(/minmax\((\d+)px/)
+  if (m) return `${m[1]}px`
+  const px = track.match(/^(\d+)px$/)
+  return px ? `${px[1]}px` : '96px'
+}
+
+const SHIPMENT_COLUMN_WIDTH_PX: Record<string, number> = {
+  operation_id: 150,
+  shipment_id: 200,
+  status: 120,
+  contract_numbers: 180,
+  po_numbers: 150,
+  contract_reference_po: 150,
+  contract_ext_no: 150,
+  delivery_start: 180,
+  delivery_end: 180,
+  ata_vessel_completed_loading: 200,
+  ata_vessel_complete_discharge: 200,
+  late_indicator: 130,
+  vessel_name: 180,
+  sto_quantity: 140,
+  incoterm: 120,
+  b2b_flag: 100,
+  port_of_loading: 160,
+  port_of_discharge: 160,
+  quantity_receive: 140,
+  vessel_code: 120,
+  quantity_delivered: 140,
+}
 
 interface Shipment {
   id: string
@@ -255,7 +288,9 @@ function ShipmentsPageContent() {
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
   const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
 
-  const [viewOption, setViewOption] = useState<'all' | 'sto' | 'contract' | 'vessel' | 'port_loading' | 'port_discharge' | 'daily_planning'>('all')
+  const [viewOption, setViewOption] = useState<
+    'all' | 'sto' | 'contract' | 'contract_ext' | 'vessel' | 'port_loading' | 'port_discharge'
+  >('all')
   const [viewFilterValue, setViewFilterValue] = useState('')
 
   // Daily Planning Deliverables (Shipments) calendar state
@@ -660,9 +695,19 @@ function ShipmentsPageContent() {
   }, [searchParams])
 
   useEffect(() => {
-    fetchShipments()
+    setPage(1)
+    fetchShipments(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, dateFrom, dateTo, page, selectedPlantSites])
+  }, [
+    statusFilter,
+    dateFrom,
+    dateTo,
+    selectedPlantSites,
+    lateIndicatorFilter,
+    viewOption,
+    etaLoadingFilter,
+    etaDischargeFilter,
+  ])
 
   useEffect(() => {
     let cancelled = false
@@ -688,17 +733,6 @@ function ShipmentsPageContent() {
     }
   }, [])
 
-  const isFirstLateIndicatorEffect = useRef(true)
-  useEffect(() => {
-    if (isFirstLateIndicatorEffect.current) {
-      isFirstLateIndicatorEffect.current = false
-      return
-    }
-    setPage(1)
-    fetchShipments(1)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lateIndicatorFilter])
-
   const applySearch = useCallback(() => {
     setPage(1)
     setSearchTerm(searchDraft)
@@ -706,32 +740,13 @@ function ShipmentsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchDraft])
 
-  // Column header filters apply only when user presses Enter inside the filter popover.
-
-  const isFirstViewFilterRender = useRef(true)
-  useEffect(() => {
-    if (isFirstViewFilterRender.current) {
-      isFirstViewFilterRender.current = false
-      return
-    }
-    const t = setTimeout(() => {
-      setPage(1)
-      fetchShipments(1)
-    }, 500)
-    return () => clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewOption, viewFilterValue])
-
-  const isFirstEtaBucketEffect = useRef(true)
-  useEffect(() => {
-    if (isFirstEtaBucketEffect.current) {
-      isFirstEtaBucketEffect.current = false
-      return
-    }
+  const applyViewFilter = useCallback(() => {
     setPage(1)
     fetchShipments(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [etaLoadingFilter, etaDischargeFilter])
+  }, [])
+
+  // Column header filters apply only when user presses Enter inside the filter popover.
 
   const fetchShipments = async (forcedPage?: number, searchOverride?: string) => {
     setLoading(true)
@@ -866,7 +881,6 @@ function ShipmentsPageContent() {
   }
 
   const fetchShipmentCalendarRows = useCallback(async () => {
-    if (viewOption !== 'daily_planning') return
     setShipCalendarLoading(true)
     try {
       const from = new Date(shipCalendarMonth.getFullYear(), shipCalendarMonth.getMonth(), 1)
@@ -882,12 +896,7 @@ function ShipmentsPageContent() {
     } finally {
       setShipCalendarLoading(false)
     }
-  }, [shipCalendarMonth, viewOption])
-
-  useEffect(() => {
-    if (viewOption !== 'daily_planning') return
-    fetchShipmentCalendarRows()
-  }, [viewOption, shipCalendarMonth, fetchShipmentCalendarRows])
+  }, [shipCalendarMonth])
 
   const downloadShipmentPlanningTemplate = async () => {
     try {
@@ -956,6 +965,13 @@ function ShipmentsPageContent() {
 
       // Prepare shipment payload
       const payload: Partial<Shipment> = { ...editedData }
+
+      // Status is derived from ETA/ATA; only manual override allowed is CANCELLED.
+      if (String(payload.status || '').trim().toUpperCase() === 'CANCELLED') {
+        payload.status = 'CANCELLED'
+      } else {
+        delete payload.status
+      }
       
       // Validate: sum of "Contract Qty assign to STO" <= Vessel Capacity (MT)
       const capacityForCheck =
@@ -1331,9 +1347,9 @@ function ShipmentsPageContent() {
 
       // Show detailed results
       let message = `Bulk operation completed!\n\n`
-      message += `✅ Created: ${createCount}\n`
-      message += `✅ Updated: ${updateCount}\n`
-      message += `❌ Failed: ${errorCount}`
+      message += `âœ… Created: ${createCount}\n`
+      message += `âœ… Updated: ${updateCount}\n`
+      message += `âŒ Failed: ${errorCount}`
       
       if (errors.length > 0 && errors.length <= 10) {
         message += `\n\nErrors:\n${errors.join('\n')}`
@@ -1388,10 +1404,48 @@ function ShipmentsPageContent() {
 
   const formatDate = (dateStr: string) => formatDateDMY(dateStr)
 
-  const handleFilterChange = () => {
+  const hasActiveShipmentColumnFilters = useCallback((filters: Record<string, ColumnFilter>): boolean => {
+    for (const f of Object.values(filters)) {
+      if (f.emptyOnly || f.notBlankOnly) return true
+      if (f.type === 'text' && (f.value || '').trim().length > 0) return true
+      if (f.type === 'number') {
+        if ((f.min !== undefined && String(f.min).trim() !== '') || (f.max !== undefined && String(f.max).trim() !== '')) {
+          return true
+        }
+      }
+      if (f.type === 'date' && ((f.from && String(f.from).trim()) || (f.to && String(f.to).trim()))) return true
+    }
+    return false
+  }, [])
+
+  const hasActiveShipmentFilters =
+    Boolean(dateFrom || dateTo || searchDraft || searchTerm) ||
+    statusFilter !== 'ALL' ||
+    lateIndicatorFilter !== 'ALL' ||
+    viewFilterValue !== '' ||
+    viewOption !== 'all' ||
+    selectedPlantSites.length > 0 ||
+    etaLoadingFilter !== 'ALL' ||
+    etaDischargeFilter !== 'ALL' ||
+    hasActiveShipmentColumnFilters(columnFilters)
+
+  const clearShipmentFilters = useCallback(() => {
+    setSearchDraft('')
+    setSearchTerm('')
+    setStatusFilter('ALL')
+    setLateIndicatorFilter('ALL')
+    setViewOption('all')
+    setViewFilterValue('')
+    setSelectedPlantSites([])
+    setDateFrom('')
+    setDateTo('')
+    setColumnFilters({})
+    setEtaLoadingFilter('ALL')
+    setEtaDischargeFilter('ALL')
     setPage(1)
-    fetchShipments(1)
-  }
+    fetchShipments(1, '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Helper function to calculate late indicator for shipments
   const getLateIndicator = (shipment: Shipment): { color: string; text: string } => {
@@ -1886,7 +1940,7 @@ function ShipmentsPageContent() {
     },
     {
       id: 'contract_reference_po',
-      label: 'CONTRACT REFF PO',
+      label: 'Contract Reff PO',
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => s.contract_reference_po || '',
@@ -2118,6 +2172,8 @@ function ShipmentsPageContent() {
         'operation_id',
         'shipment_id',
         'status',
+        'contract_numbers',
+        'contract_ext_no',
         // Key operational quantities should never "disappear" due to stored user preferences
         'sto_quantity',
         'quantity_receive',
@@ -2206,6 +2262,43 @@ function ShipmentsPageContent() {
 
     return sorted
   }, [compactColumns, filteredShipments, sortDir, sortKey])
+
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil((totalCount || 0) / pageSize)),
+    [totalCount, pageSize]
+  )
+
+  const handlePageChange = useCallback((nextPage: number) => {
+    if (nextPage >= 1 && nextPage <= totalPages) {
+      setPage(nextPage)
+      fetchShipments(nextPage)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalPages])
+
+  const resetCompactColumnView = useCallback(() => {
+    const vis = new Set(defaultVisibleColumnIds)
+    const order = compactColumns.map((c) => c.id)
+    setVisibleColumnIds(vis)
+    setColumnOrderIds(order)
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(columnStorageKey, JSON.stringify(Array.from(vis)))
+        localStorage.setItem(columnOrderStorageKey, JSON.stringify(order))
+      } catch {
+        // ignore
+      }
+    }
+  }, [defaultVisibleColumnIds, compactColumns, columnStorageKey, columnOrderStorageKey])
+
+  const compactGridColumnTracks = useMemo(() => {
+    const tracks: Record<string, string> = {}
+    for (const [id, px] of Object.entries(SHIPMENT_COLUMN_WIDTH_PX)) {
+      tracks[id] = `minmax(${px}px, ${px}px)`
+    }
+    return tracks
+  }, [])
 
   const allVisibleIds = useMemo(() => sortedShipments.map(s => s.id), [sortedShipments])
   const expandedCount = expandedShipmentIds.size
@@ -2773,32 +2866,10 @@ function ShipmentsPageContent() {
 
   const formatDateTime = (dateStr: string) => formatDateTimeDMY(dateStr)
 
-  const getColumnWidth = (colId: string): string => {
-    const widths: { [key: string]: string } = {
-      operation_id: '150px',
-      shipment_id: '200px',
-      status: '120px',
-      contract_numbers: '180px',
-      po_numbers: '150px',
-      contract_reference_po: '150px',
-      contract_ext_no: '150px',
-      delivery_start: '180px',
-      delivery_end: '180px',
-      ata_vessel_completed_loading: '200px',
-      ata_vessel_complete_discharge: '200px',
-      late_indicator: '130px',
-      vessel_name: '180px',
-      sto_quantity: '140px',
-      incoterm: '120px',
-      b2b_flag: '100px',
-      port_of_loading: '160px',
-      port_of_discharge: '160px',
-      quantity_receive: '140px',
-      vessel_code: '120px',
-      quantity_delivered: '140px'
-    }
-    return widths[colId] || '150px'
-  }
+  const getColumnWidth = useCallback(
+    (colId: string): string => compactGridColumnTracks[colId] ?? 'minmax(150px, 150px)',
+    [compactGridColumnTracks]
+  )
 
   const onSortHeaderClick = (col: CompactColumn) => {
     if (!col.sortable) return
@@ -2817,9 +2888,6 @@ function ShipmentsPageContent() {
         <div className="flex items-center justify-between">
         <div>
             <h1 className="text-3xl font-bold">Shipments</h1>
-            <p className="text-gray-600 mt-1">
-              Manage and track all shipments - {totalCount || filteredShipments.length} total
-            </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -2896,10 +2964,11 @@ function ShipmentsPageContent() {
             <CardTitle>Status Distribution</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto py-4 px-4">
+            <div className="flex w-full min-w-0 items-center justify-start gap-3 overflow-x-auto py-4 px-4 md:gap-6">
+              <div className="flex flex-nowrap items-center shrink-0">
               {[
-                { status: 'PLANNED',     label: 'Planned',     color: 'bg-blue-100',   textColor: 'text-blue-800',   badgeColor: 'bg-blue-600',   tooltip: 'Shipment sudah dijadwalkan dan menunggu proses dimulai.' },
-                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600', tooltip: 'Shipment sedang diproses — kapal menuju lokasi pemuatan.' },
+                { status: 'PLANNED',     label: 'Planned',     color: 'bg-blue-100',   textColor: 'text-blue-800',   badgeColor: 'bg-blue-600',   tooltip: 'Shipment sudah memiliki ETA — minimal satu milestone ETA sudah diinput.' },
+                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600', tooltip: 'Shipment sedang diproses — kapal menuju lokasi pemuatan (ATA arrival at loading port).' },
                 { status: 'LOADING',     label: 'Loading',     color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600', tooltip: 'Kapal sedang memuat muatan di pelabuhan asal.' },
                 { status: 'IN_TRANSIT',  label: 'In Transit',  color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600', tooltip: 'Kapal sudah berangkat dan sedang dalam perjalanan ke pelabuhan tujuan.' },
                 { status: 'ARRIVED',     label: 'Arrived',     color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600', tooltip: 'Kapal sudah tiba di pelabuhan tujuan, menunggu proses bongkar.' },
@@ -2921,19 +2990,20 @@ function ShipmentsPageContent() {
                 return (
                   <div key={statusInfo.status} className="flex items-center flex-shrink-0">
                     <div className="relative">
-                      {/* Status Circle */}
-                      <div title={statusInfo.tooltip} className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg hover:shadow-xl transition-shadow cursor-help`}>
+                      <div
+                        title={statusInfo.tooltip}
+                        className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full border-2 border-white shadow-lg hover:shadow-xl transition-shadow cursor-help ${statusInfo.color} flex items-center justify-center`}
+                      >
                         {/* Count Badge */}
-                        <div className={`absolute -top-3 -right-3 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10`}>
+                        <div className={`absolute -top-3 -right-3 text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10 ${statusInfo.badgeColor}`}>
                           {count}
                         </div>
                         {/* Status Label */}
-                        <span className={`text-xs md:text-sm font-semibold ${statusInfo.textColor} text-center px-2 leading-tight`}>
+                        <span className={`text-xs md:text-sm font-semibold px-2 leading-tight ${statusInfo.textColor} text-center`}>
                           {statusInfo.label}
                         </span>
                       </div>
                     </div>
-                    {/* Arrow */}
                     {index < array.length - 1 && (
                       <div className="flex-shrink-0 mx-2 md:mx-3">
                         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-gray-400">
@@ -2944,6 +3014,7 @@ function ShipmentsPageContent() {
                   </div>
                 )
               })}
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -3074,116 +3145,101 @@ function ShipmentsPageContent() {
           </CardContent>
         </Card>
 
-        {/* View: List vs Daily Planning Deliverables */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm font-medium text-gray-700">View</div>
-          <div className="inline-flex rounded-lg border bg-white p-1">
-            <button
-              type="button"
-              onClick={() => setViewOption('all')}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                viewOption !== 'daily_planning' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              List
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewOption('daily_planning')}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                viewOption === 'daily_planning' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              Daily Planning Deliverables
-            </button>
-          </div>
-        </div>
 
-        {/* Search & filters (below ETA buckets) */}
+        {/* Filters */}
         <Card>
           <CardContent className="pt-6">
-            <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:gap-4 xl:items-center">
-              <div className="flex-1 min-w-[200px] relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                <Input
-                  placeholder="Search by Shipment ID, Contract Numbers, PO No, or Vessel Name..."
-                  value={searchDraft}
-                  onChange={(e) => setSearchDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      applySearch()
-                    }
-                  }}
-                  className="pl-10"
-                />
-              </div>
-              <Button variant="outline" onClick={applySearch} disabled={loading}>
-                Apply
-              </Button>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto"
-              >
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-4">
+                <div className="relative min-w-[12rem] flex-1">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
+                  <Input
+                    placeholder="Search by Shipment ID, Contract Ext No, Contract Numbers, PO No, or Vessel Name..."
+                    value={searchDraft}
+                    onChange={(e) => setSearchDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        applySearch()
+                      }
+                    }}
+                    className="pl-10"
+                  />
+                </div>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="rounded-lg border px-4 py-2"
+                >
                 <option value="ALL">All Status</option>
                 <option value="PLANNED">Planned</option>
+                <option value="IN_PROGRESS">In Progress</option>
+                <option value="LOADING">Loading</option>
                 <option value="IN_TRANSIT">In Transit</option>
                 <option value="ARRIVED">Arrived</option>
                 <option value="UNLOADING">Unloading</option>
                 <option value="COMPLETED">Completed</option>
                 <option value="CANCELLED">Cancelled</option>
-              </select>
-              <select
-                value={lateIndicatorFilter}
-                onChange={(e) => setLateIndicatorFilter(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto"
-              >
+                </select>
+                <select
+                  value={lateIndicatorFilter}
+                  onChange={(e) => setLateIndicatorFilter(e.target.value)}
+                  className="rounded-lg border px-4 py-2"
+                >
                 <option value="ALL">All Late Indicator</option>
                 <option value="ON_TIME">On Time</option>
                 <option value="LATE">Late</option>
                 <option value="NA">N/A</option>
-              </select>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm text-gray-600">View by:</span>
+                </select>
                 <select
                   value={viewOption}
                   onChange={(e) => {
-                    setViewOption(e.target.value as 'all' | 'sto' | 'contract' | 'vessel' | 'port_loading' | 'port_discharge' | 'daily_planning')
+                    setViewOption(
+                      e.target.value as
+                        | 'all'
+                        | 'sto'
+                        | 'contract'
+                        | 'contract_ext'
+                        | 'vessel'
+                        | 'port_loading'
+                        | 'port_discharge',
+                    )
                     setViewFilterValue('')
                   }}
-                  className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="rounded-lg border px-4 py-2"
                 >
-                  <option value="all">All</option>
-                  <option value="sto">STO Number</option>
-                  <option value="contract">Contract Numbers</option>
-                  <option value="vessel">Vessel Name</option>
-                  <option value="port_loading">Port of Loading</option>
-                  <option value="port_discharge">Port of Discharge</option>
-                  <option value="daily_planning">Daily Planning Deliverables</option>
+                  <option value="all">View by: All</option>
+                  <option value="sto">View by: STO Number</option>
+                  <option value="contract">View by: Contract Numbers</option>
+                  <option value="contract_ext">View by: Contract Ext No</option>
+                  <option value="vessel">View by: Vessel Name</option>
+                  <option value="port_loading">View by: Port of Loading</option>
+                  <option value="port_discharge">View by: Port of Discharge</option>
                 </select>
-                {viewOption !== 'all' && viewOption !== 'daily_planning' && (
+                {viewOption !== 'all' && (
                   <Input
                     placeholder={`Filter by ${
                       viewOption === 'sto' ? 'STO Number'
                         : viewOption === 'contract' ? 'Contract Numbers'
+                          : viewOption === 'contract_ext' ? 'Contract Ext No'
                           : viewOption === 'vessel' ? 'Vessel Name'
                             : viewOption === 'port_loading' ? 'Port of Loading'
                               : 'Port of Discharge'
                     }...`}
                     value={viewFilterValue}
                     onChange={(e) => setViewFilterValue(e.target.value)}
-                    className="w-full sm:w-48"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        applyViewFilter()
+                      }
+                    }}
+                    className="w-48"
                   />
                 )}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm text-gray-600">Contract Date:</span>
-                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-40" />
-                <span className="text-gray-500">to</span>
-                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-40" />
-              </div>
-              <div className="min-w-[260px] w-full sm:w-auto">
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <SearchableMultiSelect
                   label="Plant/Site"
                   options={availablePlantSites}
@@ -3193,40 +3249,32 @@ function ShipmentsPageContent() {
                   emptyMessage="Loading plants..."
                 />
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button onClick={handleFilterChange} variant="outline" size="sm">
-                  <Filter className="h-4 w-4 mr-1" />
-                  Apply
-                </Button>
-                {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || viewFilterValue || dateFrom || dateTo || selectedPlantSites.length > 0) && (
-                  <Button
-                    onClick={() => {
-                      setStatusFilter('ALL')
-                      setLateIndicatorFilter('ALL')
-                      setViewOption('all')
-                      setViewFilterValue('')
-                      setSelectedPlantSites([])
-                      const now = new Date()
-                      const yyyy = now.getFullYear()
-                      const to = `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-                      setDateFrom(`${yyyy}-01-01`)
-                      setDateTo(to)
-                      handleFilterChange()
-                    }}
-                    variant="ghost"
-                    size="sm"
-                    className="text-gray-500"
-                  >
-                    <X className="h-4 w-4 mr-1" />
-                    Clear
-                  </Button>
-                )}
+
+              <div className="flex gap-4 items-center">
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-700">Contract Date:</label>
+                  <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={setDateFrom} className="w-40" />
+                  <span className="text-gray-500">to</span>
+                  <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={setDateTo} className="w-40" />
+                  {hasActiveShipmentFilters && (
+                    <Button
+                      type="button"
+                      onClick={clearShipmentFilters}
+                      variant="ghost"
+                      size="sm"
+                      className="text-gray-500"
+                    >
+                      <X className="h-4 w-4 mr-1" />
+                      Clear
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
           </CardContent>
         </Card>
 
-        {viewOption === 'daily_planning' && (
+        {false && (
           <>
           <Card>
             <CardHeader className="space-y-4">
@@ -3509,7 +3557,7 @@ function ShipmentsPageContent() {
           </Card>
 
           <Dialog open={shipPlanningUploadOpen} onOpenChange={setShipPlanningUploadOpen}>
-            <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto">
+            <DialogContent className="max-w-2xl max-h-[88vh]">
               <DialogHeader>
                 <DialogTitle>Shipment daily planning upload result</DialogTitle>
               </DialogHeader>
@@ -3535,7 +3583,7 @@ function ShipmentsPageContent() {
                       <ul className="max-h-40 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
                         {shipPlanningUploadSummary.rowParseFailures.map((f: any, i: number) => (
                           <li key={`spr-${i}`}>
-                            <span className="font-mono">Line {f.rowNumber}</span>{f.contract_ext_no ? ` · ${f.contract_ext_no}` : ''}: {f.reason}
+                            <span className="font-mono">Line {f.rowNumber}</span>{f.contract_ext_no ? ` Â· ${f.contract_ext_no}` : ''}: {f.reason}
                           </li>
                         ))}
                       </ul>
@@ -3548,7 +3596,7 @@ function ShipmentsPageContent() {
                         {shipPlanningUploadSummary.operationFailures.map((f: any, i: number) => (
                           <li key={`spf-${i}`}>
                             <span className="font-semibold">{f.contract_ext_no}</span>
-                            {f.shipment_ids?.length ? <span className="text-gray-600"> · Shipments: {f.shipment_ids.join(', ')}</span> : null}
+                            {f.shipment_ids?.length ? <span className="text-gray-600"> Â· Shipments: {f.shipment_ids.join(', ')}</span> : null}
                             {f.rowNumbers?.length ? <span className="text-gray-600"> (rows {f.rowNumbers.join(', ')})</span> : null}
                             : {f.reason}
                           </li>
@@ -3564,15 +3612,15 @@ function ShipmentsPageContent() {
         )}
 
         {/* Shipments List */}
-        {viewOption !== 'daily_planning' && (
         <Card>
           <CardHeader>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-3">
+              <div>
                 <CardTitle>All Shipments</CardTitle>
-                <Badge variant="outline" className="hidden md:inline-flex">
-                  Default view: Compact
-                </Badge>
+                <p className="text-sm text-gray-500 mt-1">
+                  {totalCount} total shipments | Showing {sortedShipments.length} on this page
+                  {totalPages > 1 && ` (Page ${page} of ${totalPages})`}
+                </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="relative">
@@ -3587,64 +3635,46 @@ function ShipmentsPageContent() {
                   </Button>
                   {showColumnsMenu && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
-                      <div className="text-xs font-semibold text-gray-600 mb-2">Visible columns</div>
-                      <div className="space-y-2 max-h-72 overflow-auto pr-1">
-                        {compactColumns
-                          .filter(c => c.id !== 'late_indicator' && c.id !== 'operation_id' && c.id !== 'shipment_id' && c.id !== 'status')
-                          .map(col => (
-                            <label key={col.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                              <Checkbox
-                                checked={visibleColumnIds.has(col.id)}
-                                onCheckedChange={() => toggleColumn(col.id)}
-                              />
-                              <span>{col.label}</span>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="text-xs font-semibold text-gray-600">Visible columns</div>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setShowColumnsMenu(false)}>
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                      <div className="flex items-center gap-1 mb-2">
+                        <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set(compactColumns.map(c => c.id)))}>Select All</Button>
+                        <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set(['late_indicator', 'operation_id', 'shipment_id', 'status']))}>Unselect All</Button>
+                        <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => resetCompactColumnView()}>Reset</Button>
+                      </div>
+                      <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
+                        {(() => {
+                          const pinned = new Set(['late_indicator', 'operation_id', 'shipment_id', 'status'])
+                          const visibleInMenu = visibleColumns.filter(c => !pinned.has(c.id))
+                          const visibleIds = new Set(visibleInMenu.map(c => c.id))
+                          const byId = new Map(compactColumns.map(c => [c.id, c] as const))
+                          const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : compactColumns.map(c => c.id))
+                          const hiddenCols = orderedIds
+                            .map(id => byId.get(id))
+                            .filter((c): c is CompactColumn => !!c && !pinned.has(c.id) && !visibleIds.has(c.id))
+                            .sort((a, b) => a.label.localeCompare(b.label))
+                          return [...visibleInMenu, ...hiddenCols]
+                        })().map(col => (
+                          <div
+                            key={col.id}
+                            draggable
+                            onDragStart={() => setDragColId(col.id)}
+                            onDragEnd={() => setDragColId(null)}
+                            onDragOver={e => e.preventDefault()}
+                            onDrop={() => { if (dragColId && dragColId !== col.id) reorderColumnByDrag(dragColId, col.id) }}
+                            className={`flex items-center gap-2 text-sm cursor-grab select-none rounded px-1 py-0.5 ${dragColId === col.id ? 'opacity-40' : 'hover:bg-gray-50'}`}
+                          >
+                            <GripVertical className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                            <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                              <Checkbox checked={visibleColumnIds.has(col.id)} onCheckedChange={() => toggleColumn(col.id)} />
+                              <span className="truncate">{col.label}</span>
                             </label>
-                          ))}
-                      </div>
-                      <div className="mt-3 pt-3 border-t">
-                        <div className="text-xs font-semibold text-gray-600 mb-2">Column order</div>
-                        <div className="space-y-1 max-h-56 overflow-auto pr-1">
-                          {visibleColumns
-                            .filter((c) => !['late_indicator', 'operation_id', 'shipment_id', 'status'].includes(c.id))
-                            .map((col) => (
-                              <div key={`order-${col.id}`} className="flex items-center justify-between gap-2 text-sm">
-                                <span className="truncate">{col.label}</span>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <button
-                                    type="button"
-                                    className="p-1 rounded hover:bg-gray-100 text-gray-600"
-                                    title="Move up"
-                                    onClick={() => moveColumnOrder(col.id, 'up')}
-                                  >
-                                    <ArrowUp className="h-3.5 w-3.5" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="p-1 rounded hover:bg-gray-100 text-gray-600"
-                                    title="Move down"
-                                    onClick={() => moveColumnOrder(col.id, 'down')}
-                                  >
-                                    <ArrowDown className="h-3.5 w-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                        </div>
-                      </div>
-                      <div className="mt-3 flex items-center justify-between gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            setVisibleColumnIds(new Set(defaultVisibleColumnIds))
-                            setColumnOrderIds(compactColumns.map((c) => c.id))
-                          }}
-                        >
-                          Reset
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => setShowColumnsMenu(false)}>
-                          Close
-                        </Button>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
@@ -3667,27 +3697,52 @@ function ShipmentsPageContent() {
                     </>
                   )}
                 </Button>
-                <div className="flex items-center gap-1 border-l border-gray-200 pl-2 ml-1">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page <= 1 || loading}
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  >
-                    Prev
-                  </Button>
-                  <div className="text-sm text-gray-600 min-w-[72px] text-center px-1">
-                    Page {page}
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(page - 1)}
+                      disabled={page <= 1 || loading}
+                    >
+                      Previous
+                    </Button>
+                    <div className="flex items-center gap-1">
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum: number
+                        if (totalPages <= 5) {
+                          pageNum = i + 1
+                        } else if (page <= 3) {
+                          pageNum = i + 1
+                        } else if (page >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i
+                        } else {
+                          pageNum = page - 2 + i
+                        }
+                        return (
+                          <Button
+                            key={pageNum}
+                            variant={page === pageNum ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => handlePageChange(pageNum)}
+                            disabled={loading}
+                            className="min-w-[40px]"
+                          >
+                            {pageNum}
+                          </Button>
+                        )
+                      })}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(page + 1)}
+                      disabled={page >= totalPages || loading}
+                    >
+                      Next
+                    </Button>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={loading || (totalCount > 0 && page * pageSize >= totalCount)}
-                    onClick={() => setPage((p) => p + 1)}
-                  >
-                    Next
-                  </Button>
-                </div>
+                )}
               </div>
             </div>
           </CardHeader>
@@ -3733,14 +3788,17 @@ function ShipmentsPageContent() {
                     }}
                   >
                     <div className="min-w-[1100px]">
-                      {/* Header */}
-                      <div
-                        className="grid gap-3 px-3 py-2 text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10"
-                        style={{
-                          gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} 320px`
-                        }}
-                      >
-                        <div />
+                      <table className="w-full min-w-[1100px] table-fixed border-collapse">
+                        <colgroup>
+                          <col style={{ width: '40px' }} />
+                          {visibleColumns.map((c) => (
+                            <col key={c.id} style={{ width: compactGridTrackMinPx(getColumnWidth(c.id)) }} />
+                          ))}
+                          <col style={{ width: '160px' }} />
+                        </colgroup>
+                        <thead>
+                        <tr className="text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10">
+                          <th scope="col" className="w-10 px-2 py-2 align-bottom" />
                         {visibleColumns.map(col => {
                           const active = sortKey === col.id
                           const filterActive = isColumnFilterActive(col.id)
@@ -3748,9 +3806,10 @@ function ShipmentsPageContent() {
                           const current = columnFilters[col.id]
 
                           return (
-                            <div
+                            <th
                               key={col.id}
-                              className={`relative min-w-0 cursor-move ${dragColId === col.id ? 'opacity-60' : ''}`}
+                              scope="col"
+                              className={`relative min-w-0 px-3 py-2 text-left align-bottom font-semibold cursor-move ${dragColId === col.id ? 'opacity-60' : ''}`}
                               draggable
                               onDragStart={(e) => {
                                 setDragColId(col.id)
@@ -3770,22 +3829,31 @@ function ShipmentsPageContent() {
                               }}
                             >
                               <div className="flex items-center gap-1 min-w-0">
-                                <button
-                                  type="button"
-                                  className={`flex items-center gap-1 text-left min-w-0 ${col.sortable ? 'hover:text-gray-900' : ''}`}
-                                  onClick={() => {
-                                    if (col.sortable) {
+                                <span className="whitespace-normal break-words leading-tight">{col.label}</span>
+                                {col.formulaHelp ? (
+                                  <span className="shrink-0 inline-flex items-center">
+                                    <FieldHelp text={col.formulaHelp} />
+                                  </span>
+                                ) : null}
+                                {col.sortable && (
+                                  <button
+                                    type="button"
+                                    className={`shrink-0 p-0.5 rounded hover:bg-gray-200 ${active ? 'text-blue-600' : 'text-gray-400'}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      e.preventDefault()
                                       onSortHeaderClick(col)
+                                    }}
+                                    title="Sort"
+                                  >
+                                    {active
+                                      ? sortDir === 'asc'
+                                        ? <ArrowUp className="h-3.5 w-3.5" />
+                                        : <ArrowDown className="h-3.5 w-3.5" />
+                                      : <ArrowUpDown className="h-3.5 w-3.5" />
                                     }
-                                  }}
-                                  title={col.sortable ? 'Sort' : undefined}
-                                >
-                                  <span className="truncate">{col.label}</span>
-                                  {col.formulaHelp ? <FieldHelp text={col.formulaHelp} /> : null}
-                                  {col.sortable && active && (
-                                    sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                                  )}
-                                </button>
+                                  </button>
+                                )}
 
                                 <button
                                   type="button"
@@ -4035,33 +4103,32 @@ function ShipmentsPageContent() {
                                   </div>
                                 </div>
                               )}
-                            </div>
+                            </th>
                           )
                         })}
-                        <div className="text-right sticky right-0 bg-gray-50 border-l pl-3 pr-2">Actions</div>
-                      </div>
+                        <th scope="col" className="sticky right-0 z-20 bg-gray-50 border-l px-3 py-2 text-center align-bottom font-semibold whitespace-nowrap shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]">
+                          Actions
+                        </th>
+                        </tr>
+                        </thead>
+                        <tbody>
 
                       {/* Rows */}
-                      <div className="divide-y">
                         {sortedShipments.length === 0 ? (
-                          <div className="bg-white">
-                            <div className="px-4 py-10 text-center text-gray-500">
+                          <tr>
+                            <td colSpan={visibleColumns.length + 2} className="px-4 py-10 text-center text-gray-500 bg-white">
                               <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />
                               <p>No shipments found</p>
                               {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
-                            </div>
-                          </div>
+                            </td>
+                          </tr>
                         ) : sortedShipments.map((shipment, idx) => {
                           const isEditing = editingId === shipment.id
+                          const rowBg = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                           return (
-                            <div key={shipment.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                              <div className="px-3 py-2">
-                                <div
-                                  className="grid gap-3 items-center"
-                                  style={{
-                                    gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} 320px`
-                                  }}
-                                >
+                            <>
+                              <tr key={shipment.id} className={rowBg}>
+                                <td className="px-2 py-2 align-middle w-10">
                                   <button
                                     type="button"
                                     onClick={() => toggleExpanded(shipment.id)}
@@ -4074,9 +4141,11 @@ function ShipmentsPageContent() {
                                       <ChevronRight className="h-5 w-5" />
                                     )}
                                   </button>
+                                </td>
 
                                   {visibleColumns.map(col => (
-                                    <div key={col.id} className="min-w-0">
+                                    <td key={col.id} className="px-3 py-2 align-middle min-w-0">
+                                      <div className="min-h-[40px] flex items-center">
                                       {col.id === 'vessel_name' && isEditing ? (
                                         <div className="relative">
                                           <Input
@@ -4167,64 +4236,78 @@ function ShipmentsPageContent() {
                                           )}
                                         </div>
                                       ) : col.id === 'status' && isEditing ? (
-                                        <select
-                                          value={editedData.status ?? shipment.status ?? ''}
-                                          onChange={(e) => handleFieldChange('status', e.target.value)}
-                                          className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full bg-white"
-                                        >
-                                          <option value="">Select Status</option>
-                                          <option value="PLANNED">PLANNED</option>
-                                          <option value="IN_TRANSIT">IN_TRANSIT</option>
-                                          <option value="ARRIVED">ARRIVED</option>
-                                          <option value="UNLOADING">UNLOADING</option>
-                                          <option value="COMPLETED">COMPLETED</option>
-                                          <option value="CANCELLED">CANCELLED</option>
-                                        </select>
+                                        (() => {
+                                          const currentStatus = String(shipment.status || '').toUpperCase()
+                                          if (currentStatus === 'CANCELLED') {
+                                            return (
+                                              <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
+                                            )
+                                          }
+                                          const selected =
+                                            String(editedData.status || '').toUpperCase() === 'CANCELLED'
+                                              ? 'CANCELLED'
+                                              : currentStatus
+                                          return (
+                                            <select
+                                              value={selected}
+                                              onChange={(e) => {
+                                                if (e.target.value === 'CANCELLED') {
+                                                  handleFieldChange('status', 'CANCELLED')
+                                                } else {
+                                                  const next = { ...editedData }
+                                                  delete next.status
+                                                  setEditedData(next)
+                                                }
+                                              }}
+                                              className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full bg-white"
+                                              title="Status diturunkan otomatis. Hanya dapat dibatalkan secara manual."
+                                            >
+                                              <option value={currentStatus}>{shipment.status}</option>
+                                              <option value="CANCELLED">CANCELLED</option>
+                                            </select>
+                                          )
+                                        })()
                                       ) : (
                                         col.render(shipment)
                                       )}
-                                    </div>
+                                      </div>
+                                    </td>
                                   ))}
 
-                                  <div className="flex items-center justify-end gap-2 sticky right-0 bg-white border-l pl-3 pr-2 shadow-[-8px_0_12px_-12px_rgba(0,0,0,0.35)]">
+                                  <td className={`sticky right-0 z-10 border-l px-3 py-2 align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${rowBg}`}>
+                                  <div className="flex items-center justify-end gap-2 min-h-[40px]">
                                     {isEditing ? (
                                       <>
                                         <Button
                                           variant="outline"
-                                          size="sm"
+                                          size="icon"
                                           onClick={handleCancelEdit}
                                           disabled={saving}
+                                          title="Cancel"
                                         >
-                                          <X className="h-4 w-4 mr-1" />
-                                          Cancel
+                                          <X className="h-4 w-4" />
                                         </Button>
                                         <Button
-                                          size="sm"
+                                          size="icon"
                                           onClick={() => handleSave(shipment.id)}
                                           disabled={saving}
-                                          className="bg-green-600 hover:bg-green-700"
+                                          title="Save"
+                                          className="bg-green-600 hover:bg-green-700 text-white"
                                         >
                                           {saving ? (
-                                            <>
-                                              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                                              Saving...
-                                            </>
+                                            <Loader2 className="h-4 w-4 animate-spin" />
                                           ) : (
-                                            <>
-                                              <Save className="h-4 w-4 mr-1" />
-                                              Save
-                                            </>
+                                            <Save className="h-4 w-4" />
                                           )}
                                         </Button>
                                       </>
                                     ) : (
                                       <>
-                                      {canShowEditShipmentButton && (() => {
-                                        const hasData = !!(shipment.vessel_name && shipment.vessel_name.trim())
-                                        return (
+                                      {canShowEditShipmentButton &&
+                                        shipment.vessel_name?.trim() && (
                                           <Button
                                             variant="outline"
-                                            size="sm"
+                                            size="icon"
                                             onClick={() => {
                                               if (perms.loaded && !canEditShipment) {
                                                 alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
@@ -4232,33 +4315,28 @@ function ShipmentsPageContent() {
                                               }
                                               handleEdit(shipment)
                                             }}
-                                            className={hasData ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100' : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'}
+                                            title="Edit"
                                           >
-                                            {hasData ? (
-                                              <><Edit2 className="h-4 w-4 mr-1" />Edit</>
-                                            ) : (
-                                              <><Plus className="h-4 w-4 mr-1" />Add</>
-                                            )}
+                                            <Pencil className="h-4 w-4" />
                                           </Button>
-                                        )
-                                      })()}
+                                        )}
                                         <Button
                                           variant="outline"
-                                          size="sm"
+                                          size="icon"
                                           onClick={() => handleViewLoadingPorts(shipment)}
+                                          title="Ports"
                                           className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
                                         >
-                                          <Ship className="h-4 w-4 mr-1" />
-                                          Ports
+                                          <Ship className="h-4 w-4" />
                                         </Button>
                                         <Button
                                           variant="outline"
-                                          size="sm"
+                                          size="icon"
                                           onClick={() => handleViewDocuments(shipment)}
-                                          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                                          title="Docs"
+                                          className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
                                         >
-                                          <Package className="h-4 w-4 mr-1" />
-                                          Docs
+                                          <FileText className="h-4 w-4" />
                                         </Button>
                                         <input
                                           id={`shipment-file-${shipment.id}`}
@@ -4269,31 +4347,27 @@ function ShipmentsPageContent() {
                                         />
                                         <Button
                                           variant="outline"
-                                          size="sm"
+                                          size="icon"
                                           onClick={() => document.getElementById(`shipment-file-${shipment.id}`)?.click()}
                                           disabled={uploadingId === shipment.id}
-                                          className="bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100"
+                                          title="Upload"
+                                          className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
                                         >
                                           {uploadingId === shipment.id ? (
-                                            <>
-                                              <span className="h-4 w-4 mr-2 inline-block border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
-                                              Uploading...
-                                            </>
+                                            <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
                                           ) : (
-                                            <>
-                                              <Upload className="h-4 w-4 mr-1" />
-                                              Upload
-                                            </>
+                                            <Upload className="h-4 w-4" />
                                           )}
                                         </Button>
                                       </>
                                     )}
                                   </div>
-                                </div>
-
-                                {/* Expanded Details */}
-                                {expandedShipmentIds.has(shipment.id) && (
-                                  <div className="mt-3 p-3 border rounded bg-white">
+                                  </td>
+                              </tr>
+                              {expandedShipmentIds.has(shipment.id) && (
+                                <tr key={`${shipment.id}-expanded`} className={rowBg}>
+                                  <td colSpan={visibleColumns.length + 2} className="px-3 py-3">
+                                  <div className="p-3 border rounded bg-white">
                                     {/* Basic Info */}
                                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mb-4 pb-4 border-b">
                                       <div>
@@ -4405,12 +4479,14 @@ function ShipmentsPageContent() {
                                       </div>
                                     )}
                                   </div>
-                                )}
-                              </div>
-                            </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </>
                           )
                         })}
-                      </div>
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 </div>
@@ -4450,32 +4526,20 @@ function ShipmentsPageContent() {
                             <div className="flex gap-2">
                               {isEditing ? (
                                 <>
-                                  <Button variant="outline" size="sm" onClick={handleCancelEdit} disabled={saving}>
-                                    <X className="h-4 w-4 mr-1" />
-                                    Cancel
+                                  <Button variant="outline" size="icon" onClick={handleCancelEdit} disabled={saving} title="Cancel">
+                                    <X className="h-4 w-4" />
                                   </Button>
-                                  <Button size="sm" onClick={() => handleSave(shipment.id)} disabled={saving} className="bg-green-600 hover:bg-green-700">
-                                    {saving ? (
-                                      <>
-                                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                                        Saving...
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Save className="h-4 w-4 mr-1" />
-                                        Save
-                                      </>
-                                    )}
+                                  <Button size="icon" onClick={() => handleSave(shipment.id)} disabled={saving} title="Save" className="bg-green-600 hover:bg-green-700 text-white">
+                                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                                   </Button>
                                 </>
                               ) : (
                                 <>
-                                  {canShowEditShipmentButton && (() => {
-                                    const hasData = !!(shipment.vessel_name && shipment.vessel_name.trim())
-                                    return (
+                                  {canShowEditShipmentButton &&
+                                    shipment.vessel_name?.trim() && (
                                       <Button
                                         variant="outline"
-                                        size="sm"
+                                        size="icon"
                                         onClick={() => {
                                           if (perms.loaded && !canEditShipment) {
                                             alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
@@ -4483,23 +4547,16 @@ function ShipmentsPageContent() {
                                           }
                                           handleEdit(shipment)
                                         }}
-                                        className={hasData ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100' : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'}
+                                        title="Edit"
                                       >
-                                        {hasData ? (
-                                          <><Edit2 className="h-4 w-4 mr-1" />Edit</>
-                                        ) : (
-                                          <><Plus className="h-4 w-4 mr-1" />Add</>
-                                        )}
+                                        <Pencil className="h-4 w-4" />
                                       </Button>
-                                    )
-                                  })()}
-                                  <Button variant="outline" size="sm" onClick={() => handleViewLoadingPorts(shipment)} className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
-                                    <Ship className="h-4 w-4 mr-1" />
-                                    Ports
+                                    )}
+                                  <Button variant="outline" size="icon" onClick={() => handleViewLoadingPorts(shipment)} title="Ports" className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
+                                    <Ship className="h-4 w-4" />
                                   </Button>
-                                  <Button variant="outline" size="sm" onClick={() => handleViewDocuments(shipment)} className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100">
-                                    <Package className="h-4 w-4 mr-1" />
-                                    Docs
+                                  <Button variant="outline" size="icon" onClick={() => handleViewDocuments(shipment)} title="Docs" className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100">
+                                    <FileText className="h-4 w-4" />
                                   </Button>
                                   <input
                                     id={`shipment-file-${shipment.id}`}
@@ -4510,21 +4567,16 @@ function ShipmentsPageContent() {
                                   />
                                   <Button
                                     variant="outline"
-                                    size="sm"
+                                    size="icon"
                                     onClick={() => document.getElementById(`shipment-file-${shipment.id}`)?.click()}
                                     disabled={uploadingId === shipment.id}
-                                    className="bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100"
+                                    title="Upload"
+                                    className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
                                   >
                                     {uploadingId === shipment.id ? (
-                                      <>
-                                        <span className="h-4 w-4 mr-2 inline-block border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
-                                        Uploading...
-                                      </>
+                                      <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
                                     ) : (
-                                      <>
-                                        <Upload className="h-4 w-4 mr-1" />
-                                        Upload
-                                      </>
+                                      <Upload className="h-4 w-4" />
                                     )}
                                   </Button>
                                 </>
@@ -4671,74 +4723,150 @@ function ShipmentsPageContent() {
                       </div>
                     )})}
                   </div>
-                </>
-              )}
+
+                {totalPages > 1 && (
+                  <div className="mt-6 flex items-center justify-between border-t pt-4">
+                    <div className="text-sm text-gray-700">
+                      Showing page {page} of {totalPages} ({totalCount} total shipments)
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handlePageChange(page - 1)}
+                        disabled={page <= 1 || loading}
+                      >
+                        Previous
+                      </Button>
+                      <div className="flex items-center gap-1">
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                          let pageNum: number
+                          if (totalPages <= 5) {
+                            pageNum = i + 1
+                          } else if (page <= 3) {
+                            pageNum = i + 1
+                          } else if (page >= totalPages - 2) {
+                            pageNum = totalPages - 4 + i
+                          } else {
+                            pageNum = page - 2 + i
+                          }
+                          return (
+                            <Button
+                              key={pageNum}
+                              variant={page === pageNum ? 'default' : 'outline'}
+                              size="sm"
+                              onClick={() => handlePageChange(pageNum)}
+                              disabled={loading}
+                              className="min-w-[40px]"
+                            >
+                              {pageNum}
+                            </Button>
+                          )
+                        })}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handlePageChange(page + 1)}
+                        disabled={page >= totalPages || loading}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </CardContent>
         </Card>
-        )}
       </div>
 
       {/* Loading Ports Modal */}
       {showLoadingPorts && selectedShipment && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto">
-          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg p-6 my-4 max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-semibold">Vessel Loading Ports — {selectedShipment.vessel_name || selectedShipment.shipment_id}</h3>
-              <Button variant="ghost" onClick={() => setShowLoadingPorts(false)}>
-                <X className="h-5 w-5" />
-              </Button>
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4">
+          <div className="bg-white w-full max-w-6xl rounded-xl shadow-xl my-4 max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="shrink-0 border-b border-gray-200">
+              <div className="flex items-center justify-between px-6 py-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-cyan-600 text-white shrink-0">
+                    <Anchor className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900">
+                      {selectedShipment.vessel_name || selectedShipment.shipment_id}
+                    </h3>
+                    <p className="text-xs text-gray-500">Vessel Loading Ports &amp; Shipment Information</p>
+                  </div>
+                </div>
+                <Button variant="ghost" size="icon" className="shrink-0 text-gray-400 hover:text-gray-600" aria-label="Close" onClick={() => setShowLoadingPorts(false)}>
+                  <X className="h-5 w-5" />
+                </Button>
+              </div>
             </div>
 
-            <div className="flex flex-col gap-4 flex-1 min-h-0">
+            <div className="flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto px-6 py-4">
               {/* Combined Shipment Information and Loading Ports */}
               <div
                 className={[
-                  'border rounded-lg flex flex-col min-h-0',
+                  'rounded-xl border border-gray-200 shadow-sm flex flex-col min-h-0',
                   portsListExpanded ? 'flex-1' : 'flex-none'
                 ].join(' ')}
               >
-                <div 
-                  className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer hover:bg-gray-100 rounded-t-lg"
+                <div
+                  className="flex items-center justify-between px-4 py-2.5 bg-gradient-to-r from-blue-50 to-white cursor-pointer hover:from-blue-100 rounded-t-xl border-b border-gray-200 transition-colors"
                   onClick={() => setPortsListExpanded(!portsListExpanded)}
                 >
-                  <h4 className="font-semibold text-sm">Shipment Information</h4>
-                  <div className="flex items-center gap-2">
-                    {portsListExpanded ? (
-                      <ChevronUp className="h-5 w-5 text-gray-500" />
-                    ) : (
-                      <ChevronDown className="h-5 w-5 text-gray-500" />
-                    )}
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100 shrink-0">
+                      <FileText className="h-3.5 w-3.5 text-blue-600" />
+                    </div>
+                    <h4 className="font-semibold text-sm text-gray-800">Shipment Information</h4>
                   </div>
+                  {portsListExpanded ? (
+                    <ChevronUp className="h-4.5 w-4.5 text-gray-400" />
+                  ) : (
+                    <ChevronDown className="h-4.5 w-4.5 text-gray-400" />
+                  )}
                 </div>
                 {portsListExpanded && (
-                <div className="space-y-3 overflow-auto p-4 flex-1 min-h-0">
+                <div className="space-y-4 overflow-auto p-4 flex-1 min-h-0">
                   {/* Shipment-Level Information */}
                   {shipmentInfo ? (
-                    <div className="border rounded-md p-4 bg-gray-50 mb-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <h5 className="font-semibold text-sm">Shipment Information</h5>
-                          <div className="flex gap-2">
+                    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden mb-2">
+                      {/* Key Metrics Summary Bar */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-gray-100 bg-gray-50 border-b border-gray-200">
+                        {[
+                          { label: 'Qty Delivery', value: shipmentInfo.quantity_delivered ? `${formatNumber(shipmentInfo.quantity_delivered)} Kg` : '—', color: 'text-gray-800' },
+                          { label: 'Qty Receive', value: shipmentInfo.actual_vessel_qty_receive ? `${formatNumber(shipmentInfo.actual_vessel_qty_receive)} Kg` : '—', color: 'text-gray-800' },
+                          { label: 'Loading Port', value: shipmentInfo.vessel_loading_port_1 || '—', color: 'text-blue-700' },
+                          { label: 'Discharge Port', value: shipmentInfo.vessel_discharge_port_1 || '—', color: 'text-cyan-700' },
+                        ].map((m) => (
+                          <div key={m.label} className="px-4 py-3">
+                            <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">{m.label}</div>
+                            <div className={`text-sm font-semibold mt-0.5 truncate ${m.color}`}>{m.value}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Edit Action Bar */}
+                      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 bg-white">
+                        <h5 className="text-xs font-semibold uppercase tracking-wide text-gray-400">Detail Fields</h5>
+                        <div className="flex gap-2">
                           {editingShipmentInfo ? (
                             <>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                                onClick={handleCancelEditAll}
-                            >
-                              <X className="h-4 w-4 mr-1" /> Cancel
-                            </Button>
-                            <Button
-                              size="sm"
-                                onClick={handleSaveAll}
-                              className="bg-green-600 hover:bg-green-700"
-                            >
-                              <Save className="h-4 w-4 mr-1" /> Save
-                            </Button>
+                              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleCancelEditAll}>
+                                <X className="h-3.5 w-3.5 mr-1" /> Cancel
+                              </Button>
+                              <Button size="sm" className="h-7 text-xs bg-green-600 hover:bg-green-700" onClick={handleSaveAll}>
+                                <Save className="h-3.5 w-3.5 mr-1" /> Save Changes
+                              </Button>
                             </>
                           ) : (
                             <Button
                               variant="outline"
                               size="sm"
+                              className="h-7 text-xs"
                               onClick={() => {
                                 handleEditShipmentInfo()
                                 if (loadingPorts.length > 0) {
@@ -4746,12 +4874,17 @@ function ShipmentsPageContent() {
                                 }
                               }}
                             >
-                              <Edit2 className="h-4 w-4 mr-1" />
+                              <Edit2 className="h-3.5 w-3.5 mr-1" />
                               Edit
                             </Button>
                           )}
-                          </div>
+                        </div>
                       </div>
+
+                      <div className="p-4 space-y-4">
+                      {/* Quantities & Port Fields */}
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quantities &amp; Ports</p>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                         <div>
                           <div className="text-gray-500">Quantity Delivery</div>
@@ -4856,42 +4989,6 @@ function ShipmentsPageContent() {
                           )}
                         </div>
                         <div>
-                          <div className="text-gray-500">ATA Vessel Arrival at Loading Port</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_arrival_at_loading_port)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Berthed at Loading Port</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_berthed_at_loading_port)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Start Loading</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_start_loading)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Completed Loading</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_completed_loading)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Sailed from Loading Port</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_sailed_from_loading_port)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Arrive at Discharge Port</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_arrive_at_discharge_port)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Berthed at Discharge Port</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_berthed_at_discharge_port)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Start Discharging</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_start_discharging)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Complete Discharge</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_complete_discharge)}</div>
-                        </div>
-                        <div>
                           <div className="text-gray-500">Loading Rate (Kg/day)</div>
                           <div className="font-semibold text-blue-700">
                             {shipmentInfo.loading_rate_kg_per_day !== null && shipmentInfo.loading_rate_kg_per_day !== undefined
@@ -4902,15 +4999,40 @@ function ShipmentsPageContent() {
                       </div>
                           {(shipmentInfo.loading_rate_kg_per_day ?? shipmentInfo.loading_rate_mt_per_hour) && (
                             <div className="text-xs text-gray-500 mt-1">
-                              Formula: Quantity Receive / (ATA Completed Loading − ATA Start Loading) days
+                              Qty Receive &divide; (Completed &minus; Start Loading) days
                     </div>
                   )}
                         </div>
                       </div>
+                      </div>
+                      </div>
+
+                      {/* ATA Fields Section */}
+                      <div className="border-t pt-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">ATA &mdash; Actual Time of Arrival</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+                          {[
+                            { label: 'Arrival at Loading Port', value: shipmentInfo.ata_vessel_arrival_at_loading_port },
+                            { label: 'Berthed at Loading Port', value: shipmentInfo.ata_vessel_berthed_at_loading_port },
+                            { label: 'Start Loading', value: shipmentInfo.ata_vessel_start_loading },
+                            { label: 'Completed Loading', value: shipmentInfo.ata_vessel_completed_loading },
+                            { label: 'Sailed from Loading Port', value: shipmentInfo.ata_vessel_sailed_from_loading_port },
+                            { label: 'Arrive at Discharge Port', value: shipmentInfo.ata_vessel_arrive_at_discharge_port },
+                            { label: 'Berthed at Discharge Port', value: shipmentInfo.ata_vessel_berthed_at_discharge_port },
+                            { label: 'Start Discharging', value: shipmentInfo.ata_vessel_start_discharging },
+                            { label: 'Complete Discharge', value: shipmentInfo.ata_vessel_complete_discharge },
+                          ].map(({ label, value }) => (
+                            <div key={label}>
+                              <div className="text-xs text-gray-500">ATA Vessel {label}</div>
+                              <div className="font-medium text-sm mt-0.5">{formatDate(value) || "—"}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
 
                       {/* ETA Fields Section */}
-                      <div className="mt-4 pt-4 border-t">
-                        <h6 className="font-semibold text-sm mb-3 text-gray-700">ETA (Estimated Time of Arrival) Information</h6>
+                      <div className="border-t pt-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">ETA — Estimated Time of Arrival</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           <div>
                             <div className="text-gray-500">ETA Vessel Arrival at Loading Port</div>
@@ -5024,8 +5146,8 @@ function ShipmentsPageContent() {
                       </div>
                       
                       {/* Quality Fields Section */}
-                      <div className="mt-4 pt-4 border-t">
-                        <h6 className="font-semibold text-sm mb-3 text-gray-700">Quality at Loading Loc 1</h6>
+                      <div className="border-t pt-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quality at Loading Loc 1</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           <div>
                             <div className="text-gray-500">Quality at Loading Loc 1 FFA</div>
@@ -5162,8 +5284,8 @@ function ShipmentsPageContent() {
                         </div>
                       </div>
 
-                      <div className="mt-4 pt-4 border-t">
-                        <h6 className="font-semibold text-sm mb-3 text-gray-700">Quality at Discharge Loc 1</h6>
+                      <div className="border-t pt-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quality at Discharge Loc 1</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           <div>
                             <div className="text-gray-500">Quality at Discharge Port FFA</div>
@@ -5217,10 +5339,9 @@ function ShipmentsPageContent() {
                       </div>
                     </div>
                   ) : (
-                    <div className="border rounded-md p-4 bg-gray-50 mb-4">
-                      <div className="text-center text-gray-500 py-4">
-                        Loading shipment information...
-                      </div>
+                    <div className="rounded-xl border border-gray-200 p-6 text-center">
+                      <Loader2 className="h-5 w-5 animate-spin text-gray-400 mx-auto mb-2" />
+                      <p className="text-sm text-gray-500">Loading shipment information...</p>
                     </div>
                   )}
                 {loadingPorts.length === 0 ? (
@@ -5272,7 +5393,7 @@ function ShipmentsPageContent() {
                     const isEditing = port.id && editingPortId === port.id
                     const displayData = isEditing && editedPortData ? editedPortData : port
 
-                    // Loading ports: quantity at this port / (ATA completed loading − ATA start loading) in days
+                    // Loading ports: quantity at this port / (ATA completed loading âˆ’ ATA start loading) in days
                     let computedLoadingRate: number | null = null
                     if (!port.is_discharge_port) {
                       const ataStart = displayData.ata_loading_start
@@ -5487,7 +5608,7 @@ function ShipmentsPageContent() {
                             </div>
                             {!port.is_discharge_port && (
                               <div className="text-xs text-gray-500 mt-1">
-                                Formula: Quantity Receive / (ATA Completed Loading − ATA Start Loading) days
+                                Formula: Quantity Receive / (ATA Completed Loading âˆ’ ATA Start Loading) days
                               </div>
                             )}
                           </div>
@@ -5517,135 +5638,151 @@ function ShipmentsPageContent() {
               {/* Add / Edit Loading Port */}
               <div
                 className={[
-                  'border rounded-lg flex flex-col min-h-0',
+                  'rounded-xl border border-gray-200 shadow-sm flex flex-col min-h-0',
                   addPortExpanded ? 'flex-1' : 'flex-none'
                 ].join(' ')}
               >
-                <div 
-                  className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer hover:bg-gray-100 rounded-t-lg"
+                <div
+                  className="flex items-center justify-between px-4 py-2.5 bg-gradient-to-r from-green-50 to-white cursor-pointer hover:from-green-100 rounded-t-xl border-b border-gray-200 transition-colors"
                   onClick={() => setAddPortExpanded(!addPortExpanded)}
                 >
-                  <h4 className="font-semibold text-sm">Add Loading Port</h4>
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-green-100 shrink-0">
+                      <Plus className="h-3.5 w-3.5 text-green-600" />
+                    </div>
+                    <h4 className="font-semibold text-sm text-gray-800">Add Loading Port</h4>
+                  </div>
                   {addPortExpanded ? (
-                    <ChevronUp className="h-5 w-5 text-gray-500" />
+                    <ChevronUp className="h-4.5 w-4.5 text-gray-400" />
                   ) : (
-                    <ChevronDown className="h-5 w-5 text-gray-500" />
+                    <ChevronDown className="h-4.5 w-4.5 text-gray-400" />
                   )}
                 </div>
                 {addPortExpanded && (
-                <div className="p-4 overflow-auto flex-1 min-h-0">
+                <div className="p-4 overflow-auto flex-1 min-h-0 space-y-4">
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
-                <div>
-                  <div className="text-gray-500 mb-1">Port Name</div>
-                  <Input
-                    value={newPort.port_name as string}
-                    onChange={(e) => setNewPort({ ...newPort, port_name: e.target.value })}
-                    className="h-8 text-sm"
-                    placeholder="e.g., Loading Port 1"
-                  />
-                </div>
-                <div>
-                  <div className="text-gray-500 mb-1">Sequence</div>
-                  <Input
-                    type="number"
-                    value={newPort.port_sequence as number}
-                    onChange={(e) => {
-                      const v = parseInt(e.target.value || '1')
-                      setNewPort({ ...newPort, port_sequence: v })
-                    }}
-                    className="h-8 text-sm"
-                    min={1}
-                  />
-                </div>
-                <div>
-                  <div className="text-gray-500 mb-1">Quantity (Kg)</div>
-                  <Input
-                    type="number"
-                    value={newPort.quantity_at_loading_port as number}
-                    onChange={(e) => {
-                      const v = parseFloat(e.target.value || '0')
-                      setNewPort({ ...newPort, quantity_at_loading_port: v })
-                    }}
-                    className="h-8 text-sm"
-                  />
-                </div>
-                <div>
-                  <div className="text-gray-500 mb-1">Loading Rate (Kg/day)</div>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={newPort.loading_rate as number}
-                    onChange={(e) => {
-                      const v = parseFloat(e.target.value || '0')
-                      setNewPort({ ...newPort, loading_rate: v })
-                    }}
-                    className="h-8 text-sm"
-                  />
-                </div>
-
-                <div className="col-span-full">
-                  <div className="text-gray-500 mb-2 font-medium">ETA Date Fields</div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {[
-                  ['ETA Vessel Arrival at Loading Port', 'eta_vessel_arrival'],
-                  ['ETA Vessel Berthed at Loading Port', 'eta_vessel_berthed_at_loading_port'],
-                  ['ETA Vessel Start Loading', 'eta_loading_start'],
-                  ['ETA Vessel Completed Loading', 'eta_loading_completed'],
-                  ['ETA Vessel Sailed from Loading Port', 'eta_vessel_sailed'],
-                  ['ETA Vessel Arrive at Discharge Port', 'eta_vessel_arrive_at_discharge_port'],
-                  ['ETA Vessel Berthed at Discharge Port', 'eta_vessel_berthed_at_discharge_port'],
-                  ['ETA Vessel Start Discharging', 'eta_vessel_start_discharging'],
-                  ['ETA Vessel Complete Discharge', 'eta_vessel_complete_discharge']
-                ].map(([label, key]) => (
-                  <div key={key as string}>
-                    <div className="text-gray-500 mb-1">{label}</div>
-                    <DateInputDdMmYyyy
-                      valueIso={(newPort as any)[key]}
-                      onChangeIso={(iso) => setNewPort({ ...(newPort as any), [key]: iso } as any)}
-                      className="h-8 text-sm"
-                    />
+                  {/* Basic Info */}
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Port Info</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Port Name</label>
+                        <Input
+                          value={newPort.port_name as string}
+                          onChange={(e) => setNewPort({ ...newPort, port_name: e.target.value })}
+                          className="h-9 text-sm"
+                          placeholder="e.g., Loading Port 1"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Sequence</label>
+                        <Input
+                          type="number"
+                          value={newPort.port_sequence as number}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value || '1')
+                            setNewPort({ ...newPort, port_sequence: v })
+                          }}
+                          className="h-9 text-sm"
+                          min={1}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Quantity (Kg)</label>
+                        <Input
+                          type="number"
+                          value={newPort.quantity_at_loading_port as number}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value || '0')
+                            setNewPort({ ...newPort, quantity_at_loading_port: v })
+                          }}
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Loading Rate (Kg/day)</label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={newPort.loading_rate as number}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value || '0')
+                            setNewPort({ ...newPort, loading_rate: v })
+                          }}
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                    </div>
                   </div>
-                ))}
-                  </div>
-                </div>
-              </div>
 
-              <div className="mt-4 flex items-center justify-end gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setNewPort({
-                      port_name: '',
-                      port_sequence: loadingPorts.length + 1,
-                      quantity_at_loading_port: 0,
-                      eta_vessel_arrival: '',
-                      ata_vessel_arrival: '',
-                      eta_vessel_berthed: '',
-                      ata_vessel_berthed: '',
-                      eta_loading_start: '',
-                      ata_loading_start: '',
-                      eta_loading_completed: '',
-                      ata_loading_completed: '',
-                      eta_vessel_sailed: '',
-                      ata_vessel_sailed: '',
-                      eta_vessel_berthed_at_loading_port: '',
-                      eta_vessel_arrive_at_discharge_port: '',
-                      eta_vessel_berthed_at_discharge_port: '',
-                      eta_vessel_start_discharging: '',
-                      eta_vessel_complete_discharge: '',
-                      loading_rate: 0,
-                      is_discharge_port: false
-                    })
-                  }}
-                >
-                  <X className="h-4 w-4 mr-1" /> Reset
-                </Button>
-                <Button onClick={handleSaveLoadingPort} className="bg-green-600 hover:bg-green-700">
-                  {false ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
-                  Add Loading Port
-                </Button>
-              </div>
+                  {/* ETA Date Fields */}
+                  <div className="border-t pt-4">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">ETA Date Fields</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+                      {[
+                        ['ETA Vessel Arrival at Loading Port', 'eta_vessel_arrival'],
+                        ['ETA Vessel Berthed at Loading Port', 'eta_vessel_berthed_at_loading_port'],
+                        ['ETA Vessel Start Loading', 'eta_loading_start'],
+                        ['ETA Vessel Completed Loading', 'eta_loading_completed'],
+                        ['ETA Vessel Sailed from Loading Port', 'eta_vessel_sailed'],
+                        ['ETA Vessel Arrive at Discharge Port', 'eta_vessel_arrive_at_discharge_port'],
+                        ['ETA Vessel Berthed at Discharge Port', 'eta_vessel_berthed_at_discharge_port'],
+                        ['ETA Vessel Start Discharging', 'eta_vessel_start_discharging'],
+                        ['ETA Vessel Complete Discharge', 'eta_vessel_complete_discharge']
+                      ].map(([label, key]) => (
+                        <div key={key as string}>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
+                          <DateInputDdMmYyyy
+                            valueIso={(newPort as any)[key]}
+                            onChangeIso={(iso) => setNewPort({ ...(newPort as any), [key]: iso } as any)}
+                            className="h-9 text-sm"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="border-t pt-3 flex items-center justify-between gap-3">
+                    <p className="text-xs text-gray-400 italic">ETA fields are optional</p>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => {
+                          setNewPort({
+                            port_name: '',
+                            port_sequence: loadingPorts.length + 1,
+                            quantity_at_loading_port: 0,
+                            eta_vessel_arrival: '',
+                            ata_vessel_arrival: '',
+                            eta_vessel_berthed: '',
+                            ata_vessel_berthed: '',
+                            eta_loading_start: '',
+                            ata_loading_start: '',
+                            eta_loading_completed: '',
+                            ata_loading_completed: '',
+                            eta_vessel_sailed: '',
+                            ata_vessel_sailed: '',
+                            eta_vessel_berthed_at_loading_port: '',
+                            eta_vessel_arrive_at_discharge_port: '',
+                            eta_vessel_berthed_at_discharge_port: '',
+                            eta_vessel_start_discharging: '',
+                            eta_vessel_complete_discharge: '',
+                            loading_rate: 0,
+                            is_discharge_port: false
+                          })
+                        }}
+                      >
+                        <X className="h-3.5 w-3.5 mr-1" /> Reset
+                      </Button>
+                      <Button size="sm" className="h-8 text-xs bg-green-600 hover:bg-green-700" onClick={handleSaveLoadingPort}>
+                        <Save className="h-3.5 w-3.5 mr-1" />
+                        Save Loading Port
+                      </Button>
+                    </div>
+                  </div>
                 </div>
                 )}
               </div>
@@ -5657,14 +5794,15 @@ function ShipmentsPageContent() {
       {/* Documents Modal */}
       {showDocs && selectedShipment && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg p-6 max-h-[80vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="flex shrink-0 items-center justify-between border-b px-6 py-4">
               <h3 className="text-xl font-semibold">Documents — {selectedShipment.vessel_name || selectedShipment.shipment_id}</h3>
-              <Button variant="ghost" onClick={() => setShowDocs(false)}>
+              <Button variant="ghost" size="icon" className="shrink-0" aria-label="Close" onClick={() => setShowDocs(false)}>
                 <X className="h-5 w-5" />
               </Button>
             </div>
 
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
             {docsLoading ? (
               <div className="text-sm text-gray-500 py-8 text-center">Loading documents...</div>
             ) : shipmentDocs.length === 0 ? (
@@ -5691,6 +5829,7 @@ function ShipmentsPageContent() {
                 ))}
               </div>
             )}
+            </div>
           </div>
         </div>
       )}

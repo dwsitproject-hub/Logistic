@@ -637,8 +637,14 @@ export default function SupplierPage() {
 
         {showModal && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-            <div className="bg-white rounded-md w-full max-w-5xl p-6 max-h-[90vh] overflow-y-auto">
-              <h2 className="text-xl font-semibold mb-4">{editing ? 'Edit Supplier' : 'Add Supplier'}</h2>
+            <div className="bg-white rounded-md w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
+              <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b bg-white px-6 py-4">
+                <h2 className="text-xl font-semibold">{editing ? 'Edit Supplier' : 'Add Supplier'}</h2>
+                <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label="Close" onClick={() => setShowModal(false)}>
+                  <X className="h-5 w-5" />
+                </Button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
               <form onSubmit={saveSupplier} className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {[
                   ['plant_code','Plant Code'],['prov_code','Prov Code'],['prov_no','Prov #'],['mill_no','Mill No'],['mill_code','Mill Code'],
@@ -697,6 +703,7 @@ export default function SupplierPage() {
                   <Button type="submit">Save</Button>
                 </div>
               </form>
+              </div>
             </div>
           </div>
         )}
@@ -717,19 +724,19 @@ export default function SupplierPage() {
           )
           return (
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-              <Card className="max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-                <CardHeader>
+              <Card className="max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden">
+                <CardHeader className="shrink-0 border-b">
                   <div className="flex items-center justify-between">
                     <div>
                       <CardTitle>Supplier Details</CardTitle>
                       <p className="text-sm text-gray-500 mt-1">{viewingSupplier.plant_code}{viewingSupplier.mills ? ` — ${viewingSupplier.mills}` : ''}</p>
                     </div>
-                    <Button variant="ghost" size="sm" onClick={() => setViewingSupplier(null)}>
-                      <X className="h-4 w-4" />
+                    <Button variant="ghost" size="icon" className="shrink-0" aria-label="Close" onClick={() => setViewingSupplier(null)}>
+                      <X className="h-5 w-5" />
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="min-h-0 flex-1 overflow-y-auto">
                   <div className="space-y-6 text-sm">
                     {/* Basic Info */}
                     <div>

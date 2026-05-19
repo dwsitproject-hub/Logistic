@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Layout from '@/components/Layout'
 import api from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -8,8 +8,9 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { ArrowDown, ArrowUp, ArrowUpDown, Filter, Search, SlidersHorizontal, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Filter, Search, SlidersHorizontal, X } from 'lucide-react'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 
@@ -114,7 +115,8 @@ function NumberCell({ value }: { value: unknown }) {
 export default function ShippingPerformancePage() {
   const [rows, setRows] = useState<ShippingPerformanceRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
+  const [searchDraft, setSearchDraft] = useState('')
+  const [searchTerm, setSearchTerm] = useState('')
   const [showColumnManager, setShowColumnManager] = useState(false)
   const [columnOrder, setColumnOrder] = useState<Array<keyof ShippingPerformanceRow>>(
     COLUMN_DEFS.map((c) => c.key)
@@ -123,6 +125,7 @@ export default function ShippingPerformancePage() {
     Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultVisible !== false]))
   )
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({})
+  const [columnFilterDrafts, setColumnFilterDrafts] = useState<Record<string, string>>({})
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
   const [draggingColumn, setDraggingColumn] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<keyof ShippingPerformanceRow>('total_delta_days')
@@ -281,8 +284,60 @@ export default function ShippingPerformancePage() {
     [columnOrder, visibleColumns]
   )
 
+  const applySearch = useCallback(() => {
+    setSearchTerm(searchDraft)
+    setCurrentPage(1)
+  }, [searchDraft])
+
+  const applyColumnFilter = useCallback((key: string) => {
+    const value = (columnFilterDrafts[key] || '').trim()
+    setColumnFilters((prev) => {
+      const next = { ...prev }
+      if (value) next[key] = value
+      else delete next[key]
+      return next
+    })
+    setOpenHeaderFilterId(null)
+    setCurrentPage(1)
+  }, [columnFilterDrafts])
+
+  const hasActiveColumnFilters = useCallback((filters: Record<string, string>): boolean => {
+    return Object.values(filters).some((v) => (v || '').trim().length > 0)
+  }, [])
+
+  const hasActiveFilters =
+    Boolean(searchDraft || searchTerm) ||
+    statusFilter !== 'ALL' ||
+    lateOnTimeFilter !== 'ALL' ||
+    selectedIncoterms.length > 0 ||
+    selectedPlantSites.length > 0 ||
+    Boolean(dateFrom || dateTo) ||
+    hasActiveColumnFilters(columnFilters) ||
+    lateSelVessel !== null ||
+    lateSelIncoterm !== null ||
+    lateSelProduct !== null ||
+    lateSelPlant !== null
+
+  const clearAllFilters = useCallback(() => {
+    setSearchDraft('')
+    setSearchTerm('')
+    setStatusFilter('ALL')
+    setLateOnTimeFilter('ALL')
+    setSelectedIncoterms([])
+    setSelectedPlantSites([])
+    setDateFrom('')
+    setDateTo('')
+    setColumnFilters({})
+    setColumnFilterDrafts({})
+    setLateSelVessel(null)
+    setLateSelIncoterm(null)
+    setLateSelProduct(null)
+    setLateSelPlant(null)
+    setCurrentPage(1)
+  }, [])
+
   const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase()
+    const q = searchTerm.trim().toLowerCase()
     const scoped = filteredByTopFilters.filter((row) => {
       if (lateSelVessel  && (String(row.vessel_name || '').trim() || 'Unknown') !== lateSelVessel) return false
       if (lateSelIncoterm && (String(row.incoterm || '').trim() || 'Blank') !== lateSelIncoterm) return false
@@ -339,7 +394,7 @@ export default function ShippingPerformancePage() {
       return 0
     })
     return sorted
-  }, [filteredByTopFilters, lateSelVessel, lateSelIncoterm, lateSelProduct, lateSelPlant, search, visibleOrderedColumns, columnFilters, sortBy, sortDirection])
+  }, [filteredByTopFilters, lateSelVessel, lateSelIncoterm, lateSelProduct, lateSelPlant, searchTerm, columnFilters, sortBy, sortDirection])
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize))
   const paginatedRows = useMemo(
@@ -347,7 +402,22 @@ export default function ShippingPerformancePage() {
     [filteredRows, currentPage, pageSize]
   )
 
-  useEffect(() => { setCurrentPage(1) }, [filteredRows.length])
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [
+    statusFilter,
+    selectedIncoterms,
+    selectedPlantSites,
+    dateFrom,
+    dateTo,
+    lateOnTimeFilter,
+    searchTerm,
+    columnFilters,
+    lateSelVessel,
+    lateSelIncoterm,
+    lateSelProduct,
+    lateSelPlant,
+  ])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -567,20 +637,26 @@ export default function ShippingPerformancePage() {
         <Card>
           <CardContent className="pt-6">
             <div className="space-y-4">
-              <div className="flex gap-4 flex-wrap">
-                <div className="flex-1 relative min-w-[200px]">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <div className="flex flex-wrap gap-4">
+                <div className="relative min-w-[12rem] flex-1">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
                   <Input
                     placeholder="Search vessel, group, shipment ID, or contract..."
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
+                    value={searchDraft}
+                    onChange={(e) => setSearchDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        applySearch()
+                      }
+                    }}
                     className="pl-10"
                   />
                 </div>
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
-                  className="px-4 py-2 border rounded-lg text-sm"
+                  className="rounded-lg border px-4 py-2"
                 >
                   <option value="ALL">All Status</option>
                   <option value="PLANNED">PLANNED</option>
@@ -595,7 +671,8 @@ export default function ShippingPerformancePage() {
                 <select
                   value={lateOnTimeFilter}
                   onChange={(e) => setLateOnTimeFilter(e.target.value as 'ALL' | 'LATE' | 'ON_TIME')}
-                  className="px-4 py-2 border rounded-lg text-sm"
+                  className="rounded-lg border px-4 py-2"
+                  title="Late: Total delta > 0. On Time: Total delta ≤ 0."
                 >
                   <option value="ALL">Late/On Time: All</option>
                   <option value="LATE">Late</option>
@@ -620,34 +697,16 @@ export default function ShippingPerformancePage() {
                   emptyMessage="No plants"
                 />
               </div>
-              <div className="flex gap-4 items-center flex-wrap">
+              <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
                   <label className="text-sm font-medium text-gray-700">Contract Date:</label>
-                  <Input
-                    type="date"
-                    value={dateFrom}
-                    onChange={(e) => setDateFrom(e.target.value)}
-                    className="w-40"
-                  />
+                  <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={setDateFrom} className="w-40" />
                   <span className="text-gray-500">to</span>
-                  <Input
-                    type="date"
-                    value={dateTo}
-                    onChange={(e) => setDateTo(e.target.value)}
-                    className="w-40"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="ml-2"
-                    onClick={() => setCurrentPage(1)}
-                  >
-                    <Filter className="h-4 w-4 mr-1" />
-                    Apply
-                  </Button>
-                  {(dateFrom || dateTo) && (
+                  <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={setDateTo} className="w-40" />
+                  {hasActiveFilters && (
                     <Button
-                      onClick={() => { setDateFrom(''); setDateTo(''); setCurrentPage(1) }}
+                      type="button"
+                      onClick={clearAllFilters}
                       variant="ghost"
                       size="sm"
                       className="text-gray-500"
@@ -807,10 +866,15 @@ export default function ShippingPerformancePage() {
                               title="Filter"
                               onClick={(e) => {
                                 e.stopPropagation()
-                                setOpenHeaderFilterId((prev) => (prev === String(key) ? null : String(key)))
+                                const colKey = String(key)
+                                setColumnFilterDrafts((prev) => ({
+                                  ...prev,
+                                  [colKey]: columnFilters[colKey] || '',
+                                }))
+                                setOpenHeaderFilterId((prev) => (prev === colKey ? null : colKey))
                               }}
                             >
-                              <ArrowUpDown className="h-3.5 w-3.5" />
+                              <Filter className="h-3.5 w-3.5" />
                             </button>
                             {openHeaderFilterId === String(key) && (
                               <div
@@ -829,14 +893,20 @@ export default function ShippingPerformancePage() {
                                   </button>
                                 </div>
                                 <Input
-                                  value={columnFilters[String(key)] || ''}
+                                  value={columnFilterDrafts[String(key)] ?? columnFilters[String(key)] ?? ''}
                                   onChange={(e) =>
-                                    setColumnFilters((prev) => ({
+                                    setColumnFilterDrafts((prev) => ({
                                       ...prev,
                                       [String(key)]: e.target.value,
                                     }))
                                   }
-                                  placeholder={col.type === 'number' ? 'Type number text...' : 'Type to filter...'}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault()
+                                      applyColumnFilter(String(key))
+                                    }
+                                  }}
+                                  placeholder={col.type === 'number' ? 'Type number (Enter to apply)' : 'Type to filter (Enter to apply)'}
                                   className="h-8 text-sm"
                                 />
                                 <div className="mt-2 flex justify-end">
@@ -844,13 +914,21 @@ export default function ShippingPerformancePage() {
                                     type="button"
                                     variant="ghost"
                                     size="sm"
-                                    onClick={() =>
+                                    onClick={() => {
+                                      const colKey = String(key)
                                       setColumnFilters((prev) => {
                                         const next = { ...prev }
-                                        delete next[String(key)]
+                                        delete next[colKey]
                                         return next
                                       })
-                                    }
+                                      setColumnFilterDrafts((prev) => {
+                                        const next = { ...prev }
+                                        delete next[colKey]
+                                        return next
+                                      })
+                                      setOpenHeaderFilterId(null)
+                                      setCurrentPage(1)
+                                    }}
                                   >
                                     Clear
                                   </Button>

@@ -14,7 +14,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const { status, supplier, buyer, dateFrom, dateTo, outstanding, companyCode, b2bFlag, page = 1, limit = 10 } = req.query;
     const productFilter = (req.query as any).product as string | undefined;
     const transportMode = (req.query as any).transportMode as string | undefined;
-    const unassigned = (req.query as any).unassigned as string | undefined; // 'sea' | 'land' -> filter to SEA without shipments or LAND without trucking
+    const unassigned = (req.query as any).unassigned as string | undefined; // 'sea' | 'land' | 'mix'
     const plant = (req.query as any).plant as string | string[] | undefined;
     const sortKeyRaw = String((req.query as any).sortKey || 'contract_date');
     const sortDirRaw = String((req.query as any).sortDir || 'desc').toLowerCase();
@@ -221,12 +221,12 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
         queryText += ` AND (
           (base.latest_spd_data->'contract'->>'status' = 'Open' OR UPPER(base.latest_spd_data->'contract'->>'status') = 'ACTIVE')
-          OR (base.latest_spd_data IS NULL AND base.status = 'ACTIVE')
+          OR (base.latest_spd_data IS NULL AND UPPER(base.status) IN ('OPEN', 'ACTIVE'))
         )`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
         queryText += ` AND (
           (base.latest_spd_data->'contract'->>'status' = 'Close' OR UPPER(base.latest_spd_data->'contract'->>'status') IN ('CLOSE', 'COMPLETED', 'CLOSED'))
-          OR (base.latest_spd_data IS NULL AND base.status IN ('CLOSE', 'COMPLETED', 'CLOSED'))
+          OR (base.latest_spd_data IS NULL AND UPPER(base.status) IN ('CLOSE', 'COMPLETED', 'CLOSED'))
         )`;
       } else {
         queryText += ` AND (base.status = $${paramIndex} OR base.latest_spd_data->'contract'->>'status' = $${paramIndex})`;
@@ -285,6 +285,11 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           END,
           0
         )
+        - COALESCE((
+          SELECT SUM(u.sto_qty_assigned * 1000)
+          FROM user_sto_contract_assignments u
+          WHERE u.contract_number = base.contract_id
+        ), 0)
       ) > 0`;
     }
 
@@ -298,6 +303,11 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       queryText += ` AND ${effectiveTransportExpr} LIKE 'SEA%' AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = base.id)`;
     } else if (unassigned === 'land') {
       queryText += ` AND ${effectiveTransportExpr} LIKE 'LAND%' AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = base.id)`;
+    } else if (unassigned === 'mix') {
+      queryText += ` AND ${effectiveTransportExpr} LIKE 'MIX%' AND (
+        NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = base.id)
+        OR NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = base.id)
+      )`;
     }
 
     // Plant/Site filter: matches contract.plant_code directly, or via shipments/trucking operations.
@@ -358,6 +368,11 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         END,
         0
       )
+      - COALESCE((
+        SELECT SUM(u.sto_qty_assigned * 1000)
+        FROM user_sto_contract_assignments u
+        WHERE u.contract_number = contract_id
+      ), 0)
     )`;
     const allowedSort: Record<string, string> = {
       contract_date: 'contract_date::date',
@@ -999,12 +1014,12 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
         queryText += ` AND (
           (base.latest_spd_data->'contract'->>'status' = 'Open' OR UPPER(base.latest_spd_data->'contract'->>'status') = 'ACTIVE')
-          OR (base.latest_spd_data IS NULL AND base.status = 'ACTIVE')
+          OR (base.latest_spd_data IS NULL AND UPPER(base.status) IN ('OPEN', 'ACTIVE'))
         )`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
         queryText += ` AND (
           (base.latest_spd_data->'contract'->>'status' = 'Close' OR UPPER(base.latest_spd_data->'contract'->>'status') IN ('CLOSE', 'COMPLETED', 'CLOSED'))
-          OR (base.latest_spd_data IS NULL AND base.status IN ('CLOSE', 'COMPLETED', 'CLOSED'))
+          OR (base.latest_spd_data IS NULL AND UPPER(base.status) IN ('CLOSE', 'COMPLETED', 'CLOSED'))
         )`;
       } else {
         queryText += ` AND (base.status = $${paramIndex} OR base.latest_spd_data->'contract'->>'status' = $${paramIndex})`;
@@ -1408,7 +1423,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
   }
 };
 
-/** Get counts of SEA contracts without shipments and LAND contracts without trucking (for dashboard cards) */
+/** Get counts of SEA/LAND/MIX contracts missing required logistics (for dashboard cards) */
 export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
   try {
     const { search, b2bFlag, dateFrom, dateTo, product, transportMode, status } = req.query as Record<string, string>;
@@ -1512,18 +1527,29 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
         FROM filtered f
         WHERE UPPER(TRIM(f.effective_transport_mode)) LIKE 'LAND%'
           AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = f.id)
+      ),
+      mix_incomplete AS (
+        SELECT 1
+        FROM filtered f
+        WHERE UPPER(TRIM(f.effective_transport_mode)) LIKE 'MIX%'
+          AND (
+            NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = f.id)
+            OR NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = f.id)
+          )
       )
       SELECT
         (SELECT COUNT(*) FROM sea_no_ship) AS sea_without_shipments,
-        (SELECT COUNT(*) FROM land_no_truck) AS land_without_trucking
+        (SELECT COUNT(*) FROM land_no_truck) AS land_without_trucking,
+        (SELECT COUNT(*) FROM mix_incomplete) AS mix_without_logistics
     `;
     const result = await query(q, params);
-    const row = result.rows[0] || { sea_without_shipments: 0, land_without_trucking: 0 };
+    const row = result.rows[0] || { sea_without_shipments: 0, land_without_trucking: 0, mix_without_logistics: 0 };
     res.json({
       success: true,
       data: {
         seaWithoutShipments: parseInt(String(row.sea_without_shipments), 10) || 0,
         landWithoutTrucking: parseInt(String(row.land_without_trucking), 10) || 0,
+        mixWithoutLogistics: parseInt(String(row.mix_without_logistics), 10) || 0,
       },
     });
   } catch (error) {

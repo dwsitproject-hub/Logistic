@@ -49,6 +49,10 @@ export const FIELD_HELP = {
   truckingOaBudget: `OA Budget is the planned operational allowance (budget) for the trucking leg.`,
   truckingOaActual: `OA Actual is the realized operational allowance (actual cost) for the trucking leg.`,
   etaVsDueDelivery: `ETA fields are planned dates; Due Date Delivery Start/End come from the contract delivery window. Use these to assess schedule risk and lateness.`,
+  truckingStatusPlanned: `No Trucking Start Receive Date yet (from SAP or manual entry). The operation is open and waiting to begin the land leg.`,
+  truckingStatusInProgress: `Trucking Start Receive Date is set and Trucking Last Receive Date is still empty. SAP column AV maps to trucking start; status IN_PROGRESS.`,
+  truckingStatusCompleted: `Trucking Last Receive Date is set (SAP column AW, stored as trucking completion date). The land delivery leg is finished for this operation.`,
+  truckingStatusCancelled: `Operation was set to Cancelled manually and is excluded from active execution. Use the Status filter below to view cancelled operations only.`,
 
   // Shipping Performance
   shipmentTotalDelta: `Sum of all delay gaps in days: (Loading ETA−ETR) + (Loading ETA−ETB) + (Loading ETB−ETC) + (Discharge ETA−ETB) + (Discharge ETB−ETC). Positive = late, negative = ahead of schedule.`,

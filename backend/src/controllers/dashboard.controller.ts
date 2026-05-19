@@ -486,7 +486,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
                 WHEN NOT (
                   sb.eta_arrival IS NOT NULL OR sb.eta_berthed IS NOT NULL OR sb.eta_loading_start IS NOT NULL OR sb.eta_loading_complete IS NOT NULL OR sb.eta_sailed IS NOT NULL
                   OR sb.eta_discharge_arrival IS NOT NULL OR sb.eta_discharge_berthed IS NOT NULL OR sb.eta_discharge_start IS NOT NULL OR sb.eta_discharge_complete IS NOT NULL
-                ) THEN 'PLANNED'
+                ) THEN 'UNPLANNED'
                 WHEN (
                   sb.eta_arrival IS NOT NULL AND sb.eta_berthed IS NOT NULL AND sb.eta_loading_start IS NOT NULL AND sb.eta_loading_complete IS NOT NULL AND sb.eta_sailed IS NOT NULL
                   AND sb.eta_discharge_arrival IS NOT NULL AND sb.eta_discharge_berthed IS NOT NULL
@@ -508,7 +508,10 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
       )
       SELECT
         COUNT(*) as total_shipments,
-        COUNT(*) FILTER (WHERE effective_status = 'PLANNED') as planned_shipments,
+        COUNT(*) FILTER (WHERE (
+          eta_arrival IS NOT NULL OR eta_berthed IS NOT NULL OR eta_loading_start IS NOT NULL OR eta_loading_complete IS NOT NULL OR eta_sailed IS NOT NULL
+          OR eta_discharge_arrival IS NOT NULL OR eta_discharge_berthed IS NOT NULL OR eta_discharge_start IS NOT NULL OR eta_discharge_complete IS NOT NULL
+        )) as planned_shipments,
         COUNT(*) FILTER (WHERE effective_status = 'IN_PROGRESS') as in_progress_shipments,
         COUNT(*) FILTER (WHERE effective_status = 'LOADING') as loading_shipments,
         COUNT(*) FILTER (WHERE effective_status = 'IN_TRANSIT') as in_transit_shipments,
@@ -1758,7 +1761,7 @@ export const getShipmentsByStatus = async (req: AuthRequest, res: Response) => {
                 WHEN NOT (
                   sb.eta_arrival IS NOT NULL OR sb.eta_berthed IS NOT NULL OR sb.eta_loading_start IS NOT NULL OR sb.eta_loading_complete IS NOT NULL OR sb.eta_sailed IS NOT NULL
                   OR sb.eta_discharge_arrival IS NOT NULL OR sb.eta_discharge_berthed IS NOT NULL OR sb.eta_discharge_start IS NOT NULL OR sb.eta_discharge_complete IS NOT NULL
-                ) THEN 'PLANNED'
+                ) THEN 'UNPLANNED'
                 WHEN (
                   sb.eta_arrival IS NOT NULL AND sb.eta_berthed IS NOT NULL AND sb.eta_loading_start IS NOT NULL AND sb.eta_loading_complete IS NOT NULL AND sb.eta_sailed IS NOT NULL
                   AND sb.eta_discharge_arrival IS NOT NULL AND sb.eta_discharge_berthed IS NOT NULL

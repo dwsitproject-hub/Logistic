@@ -592,7 +592,7 @@ export default function MasterLoadingPortPage() {
 
       {/* Upload result dialog */}
       <Dialog open={!!uploadResult} onOpenChange={(open) => !open && setUploadResult(null)}>
-        <DialogContent className="sm:max-w-xl max-h-[85vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-xl max-h-[85vh]">
           <DialogHeader>
             <DialogTitle>Upload result</DialogTitle>
           </DialogHeader>

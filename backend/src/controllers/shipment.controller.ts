@@ -5,15 +5,17 @@ import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import { normalizeAndValidateShipmentDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/shipmentDailyDeliverables';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
-import { deriveShipmentStatusFromAta, deriveShipmentStatusFromEta } from '../utils/shipmentStatus';
+import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import {
   appendShipmentColumnFilters,
   appendShipmentEtaBucketFilters,
   appendShipmentGlobalSearch,
   appendShipmentLateIndicatorFilter,
+  appendShipmentStatusFilter,
   appendShipmentViewOptionFilter,
   normalizeShipmentEtaBucketParam,
   parseColumnFiltersQuery,
+  shipmentEffectiveStatusExpr,
 } from '../utils/shipmentListFilters';
 import {
   allocateNextSyntheticSequenceDefault,
@@ -43,6 +45,92 @@ function toShipmentDateOrNull(v: unknown): string | null {
     return `${yyyy}-${mm}-${dd}`;
   }
   return null;
+}
+
+/** Ensure assignments table exists and supports per-PO rows. */
+async function ensureUserStoContractAssignmentsTable() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS user_sto_contract_assignments (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      sto_number VARCHAR(255) NOT NULL,
+      contract_number VARCHAR(255) NOT NULL,
+      sto_qty_assigned NUMERIC(15, 2) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(sto_number, contract_number)
+    )
+  `);
+  await query(`
+    ALTER TABLE user_sto_contract_assignments
+    ADD COLUMN IF NOT EXISTS po_number VARCHAR(255)
+  `);
+  await query(`
+    ALTER TABLE user_sto_contract_assignments
+    DROP CONSTRAINT IF EXISTS user_sto_contract_assignments_sto_number_contract_number_key
+  `);
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS user_sto_contract_assignments_sto_contract_po_key
+    ON user_sto_contract_assignments (sto_number, contract_number, COALESCE(po_number, ''))
+  `);
+}
+
+const PURCHASE_ORDER_LINES_SQL = `
+  SELECT
+    c.id AS contract_row_id,
+    c.contract_id,
+    c.po_number,
+    c.quantity_ordered,
+    c.delivery_start_date,
+    c.delivery_end_date,
+    c.supplier,
+    c.product,
+    c.transport_mode,
+    GREATEST(
+      0,
+      COALESCE(c.quantity_ordered, 0)::numeric
+      - COALESCE((
+          SELECT SUM(u.sto_qty_assigned * 1000)
+          FROM user_sto_contract_assignments u
+          WHERE u.contract_number = c.contract_id
+            AND COALESCE(u.po_number, '') = COALESCE(c.po_number, '')
+        ), 0)::numeric
+    ) AS outstanding_quantity
+  FROM contracts c
+  WHERE c.contract_id = $1
+  ORDER BY COALESCE(c.po_number, ''), c.created_at ASC
+`;
+
+async function fetchPurchaseOrderLines(contractId: string) {
+  await ensureUserStoContractAssignmentsTable();
+  const result = await query(PURCHASE_ORDER_LINES_SQL, [contractId]);
+  return result.rows;
+}
+
+async function upsertPoQtyAssignment(
+  assignmentKey: string,
+  contractNumber: string,
+  poNumber: string | null,
+  qtyMt: number,
+) {
+  const poKey = poNumber ? String(poNumber).trim() : '';
+  await query(
+    `
+    DELETE FROM user_sto_contract_assignments
+    WHERE sto_number = $1
+      AND contract_number = $2
+      AND COALESCE(po_number, '') = $3
+    `,
+    [assignmentKey, contractNumber, poKey],
+  );
+  if (qtyMt > 0) {
+    await query(
+      `
+      INSERT INTO user_sto_contract_assignments (sto_number, contract_number, po_number, sto_qty_assigned)
+      VALUES ($1, $2, NULLIF($3, ''), $4::numeric)
+      `,
+      [assignmentKey, contractNumber, poKey || null, qtyMt],
+    );
+  }
 }
 
 function shipmentListSummaryPayload(totalCount: number, summaryRow: Record<string, unknown>) {
@@ -181,8 +269,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
 
     const contractMetaSelect = compact
       ? `
-          NULL::text AS contract_reference_po,
-          NULL::text AS contract_ext_no`
+          MAX(NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '')) AS contract_reference_po,
+          MAX(NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), '')) AS contract_ext_no`
       : `
           -- Get contract reference PO from contracts or sap_processed_data
           MAX((SELECT COALESCE(
@@ -203,20 +291,15 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
            ORDER BY spd.created_at DESC NULLS LAST
            LIMIT 1)) AS contract_ext_no`;
 
-    const seaCond = `UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) = 'SEA'`;
+    const seaMixTransportCond = `UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')`;
     const stoIsSet = Boolean(sto && String(sto).trim() !== '');
     /** STO filter may depend on SAP effective_sto — keep full latest_spd scan in that case. */
     const scopeLatestSpdToContracts = !stoIsSet;
 
-    const coreWhereParts: string[] = [seaCond];
+    const coreWhereParts: string[] = [seaMixTransportCond];
     const coreParams: any[] = [];
     let cp = 1;
 
-    if (status) {
-      coreWhereParts.push(`s.status = $${cp}`);
-      coreParams.push(status);
-      cp += 1;
-    }
     if (vessel) {
       coreWhereParts.push(`s.vessel_name ILIKE $${cp}`);
       coreParams.push(`%${vessel}%`);
@@ -279,6 +362,10 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
             spd.data->'raw'->>'Contract Reff PO Ini',
             spd.data->'raw'->>'CONTRACT REFF PO'
           ) AS contract_reference_po_raw,
+          COALESCE(
+            spd.data->'raw'->>'Contract Ext No',
+            spd.data->>'Contract Ext No'
+          ) AS contract_ext_no_raw,
           spd.created_at`;
 
     const prelude = scopeLatestSpdToContracts
@@ -434,9 +521,20 @@ ${contractMetaSelect}
     const vo = appendShipmentViewOptionFilter(viewOptionParam, viewQueryParam, fp);
     fp = vo.nextIndex;
     const etaBuckets = appendShipmentEtaBucketFilters(etaLoadingBucket, etaDischargeBucket);
+    const statusFilter = appendShipmentStatusFilter(
+      typeof status === 'string' ? status : undefined,
+      fp,
+    );
+    fp = statusFilter.nextIndex;
 
-    const outerSql = `${gSearch.sql}${cCol.sql}${li.sql}${vo.sql}${etaBuckets.sql}`;
-    const outerParams = [...gSearch.params, ...cCol.params, ...li.params, ...vo.params];
+    const outerSql = `${gSearch.sql}${cCol.sql}${li.sql}${vo.sql}${etaBuckets.sql}${statusFilter.sql}`;
+    const outerParams = [
+      ...gSearch.params,
+      ...cCol.params,
+      ...li.params,
+      ...vo.params,
+      ...statusFilter.params,
+    ];
     const countParams = [...innerParams, ...outerParams];
 
     /**
@@ -450,7 +548,8 @@ ${contractMetaSelect}
       !cCol.sql &&
       !li.sql &&
       !vo.sql &&
-      !etaBuckets.sql;
+      !etaBuckets.sql &&
+      !statusFilter.sql;
 
     const rankedStoCte = `
       ranked_sto AS (
@@ -512,42 +611,7 @@ ${contractMetaSelect}
       enriched AS (
         SELECT
           f.*,
-          CASE
-            WHEN UPPER(TRIM(COALESCE(f.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
-            WHEN (
-              f.ata_vessel_arrival_at_loading_port IS NOT NULL AND
-              f.ata_vessel_berthed_at_loading_port IS NOT NULL AND
-              f.ata_vessel_start_loading IS NOT NULL AND
-              f.ata_vessel_completed_loading IS NOT NULL AND
-              f.ata_vessel_sailed_from_loading_port IS NOT NULL AND
-              f.ata_vessel_arrive_at_discharge_port IS NOT NULL AND
-              f.ata_vessel_berthed_at_discharge_port IS NOT NULL AND
-              f.ata_vessel_start_discharging IS NOT NULL AND
-              f.ata_vessel_complete_discharge IS NOT NULL
-            ) THEN 'COMPLETED'
-            ELSE (
-              CASE
-                WHEN NOT (
-                  f.eta_arrival IS NOT NULL OR f.eta_berthed IS NOT NULL OR f.eta_loading_start IS NOT NULL OR f.eta_loading_complete IS NOT NULL OR f.eta_sailed IS NOT NULL
-                  OR f.eta_discharge_arrival IS NOT NULL OR f.eta_discharge_berthed IS NOT NULL OR f.eta_discharge_start IS NOT NULL OR f.eta_vessel_complete_discharge IS NOT NULL
-                ) THEN 'PLANNED'
-                WHEN (
-                  f.eta_arrival IS NOT NULL AND f.eta_berthed IS NOT NULL AND f.eta_loading_start IS NOT NULL AND f.eta_loading_complete IS NOT NULL AND f.eta_sailed IS NOT NULL
-                  AND f.eta_discharge_arrival IS NOT NULL AND f.eta_discharge_berthed IS NOT NULL
-                ) THEN 'UNLOADING'
-                WHEN (
-                  f.eta_arrival IS NOT NULL AND f.eta_berthed IS NOT NULL AND f.eta_loading_start IS NOT NULL AND f.eta_loading_complete IS NOT NULL AND f.eta_sailed IS NOT NULL
-                  AND f.eta_discharge_arrival IS NOT NULL
-                ) THEN 'ARRIVED'
-                WHEN (
-                  f.eta_arrival IS NOT NULL AND f.eta_berthed IS NOT NULL AND f.eta_loading_start IS NOT NULL AND f.eta_loading_complete IS NOT NULL AND f.eta_sailed IS NOT NULL
-                ) THEN 'IN_TRANSIT'
-                WHEN (f.eta_arrival IS NOT NULL AND f.eta_loading_start IS NOT NULL) THEN 'LOADING'
-                WHEN (f.eta_arrival IS NOT NULL) THEN 'IN_PROGRESS'
-                ELSE 'PLANNED'
-              END
-            )
-          END AS effective_status,
+          ${shipmentEffectiveStatusExpr('f')} AS effective_status,
           (
             f.eta_arrival IS NULL AND f.eta_berthed IS NULL AND f.eta_loading_start IS NULL AND f.eta_loading_complete IS NULL AND f.eta_sailed IS NULL
           ) AS loading_no_eta,
@@ -872,10 +936,16 @@ ${contractMetaSelect}
         row.sto_number = stoKeyStr;
       }
 
-      // Auto-derive SEA shipment status for consistent UI:
-      // - COMPLETED only when full ATA ladder exists
-      // - otherwise derive from ETA ladder
-      const ataDerived = deriveShipmentStatusFromAta({
+      row.status = deriveShipmentStatus({
+        eta_arrival_at_loading_port: row.eta_vessel_arrival_at_loading_port ?? row.eta_arrival,
+        eta_berthed_at_loading_port: row.eta_vessel_berthed_at_loading_port ?? row.eta_berthed,
+        eta_start_loading: row.eta_vessel_start_loading ?? row.eta_loading_start,
+        eta_completed_loading: row.eta_vessel_completed_loading ?? row.eta_loading_complete,
+        eta_sailed_from_loading_port: row.eta_vessel_sailed_from_loading_port ?? row.eta_sailed,
+        eta_arrive_at_discharge_port: row.eta_vessel_arrive_at_discharge_port ?? row.eta_discharge_arrival,
+        eta_berthed_at_discharge_port: row.eta_vessel_berthed_at_discharge_port ?? row.eta_discharge_berthed,
+        eta_start_discharging: row.eta_vessel_start_discharging ?? row.eta_discharge_start,
+        eta_complete_discharge: row.eta_vessel_complete_discharge ?? row.eta_discharge_complete,
         ata_arrival_at_loading_port: row.ata_vessel_arrival_at_loading_port,
         ata_berthed_at_loading_port: row.ata_vessel_berthed_at_loading_port,
         ata_start_loading: row.ata_vessel_start_loading,
@@ -886,21 +956,6 @@ ${contractMetaSelect}
         ata_start_discharging: row.ata_vessel_start_discharging,
         ata_complete_discharge: row.ata_vessel_complete_discharge,
       });
-      if (ataDerived === 'COMPLETED') {
-        row.status = 'COMPLETED';
-      } else {
-        row.status = deriveShipmentStatusFromEta({
-          eta_arrival_at_loading_port: row.eta_vessel_arrival_at_loading_port ?? row.eta_arrival,
-          eta_berthed_at_loading_port: row.eta_vessel_berthed_at_loading_port ?? row.eta_berthed,
-          eta_start_loading: row.eta_vessel_start_loading ?? row.eta_loading_start,
-          eta_completed_loading: row.eta_vessel_completed_loading ?? row.eta_loading_complete,
-          eta_sailed_from_loading_port: row.eta_vessel_sailed_from_loading_port ?? row.eta_sailed,
-          eta_arrive_at_discharge_port: row.eta_vessel_arrive_at_discharge_port ?? row.eta_discharge_arrival,
-          eta_berthed_at_discharge_port: row.eta_vessel_berthed_at_discharge_port ?? row.eta_discharge_berthed,
-          eta_start_discharging: row.eta_vessel_start_discharging ?? row.eta_discharge_start,
-          eta_complete_discharge: row.eta_vessel_complete_discharge ?? row.eta_discharge_complete,
-        });
-      }
     }
 
     let summaryRow: Record<string, unknown> = {};
@@ -1145,7 +1200,15 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
     // Skip shipment_id update to avoid duplicate key conflicts
     // The shipment_id should remain unchanged during updates
 
-    // Status is auto-derived from ETA/ATA milestones; ignore manual status updates.
+    // Status is auto-derived from ETA/ATA milestones; only manual override is CANCELLED.
+    if (updateData.status !== undefined && updateData.status !== null) {
+      const requestedStatus = String(updateData.status).trim().toUpperCase();
+      if (requestedStatus === 'CANCELLED') {
+        updateFields.push(`status = $${paramIndex}`);
+        updateValues.push('CANCELLED');
+        paramIndex++;
+      }
+    }
 
     if (updateData.vessel_code) {
       updateFields.push(`vessel_code = $${paramIndex}`);
@@ -1373,7 +1436,16 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
 
     // Auto-derive status after milestone updates.
     const updated = result.rows[0] as any;
-    const ataDerived = deriveShipmentStatusFromAta({
+    const autoStatus = deriveShipmentStatus({
+      eta_arrival_at_loading_port: updated.eta_arrival,
+      eta_berthed_at_loading_port: updated.eta_berthed,
+      eta_start_loading: updated.eta_loading_start,
+      eta_completed_loading: updated.eta_loading_complete,
+      eta_sailed_from_loading_port: updated.eta_sailed,
+      eta_arrive_at_discharge_port: updated.eta_discharge_arrival,
+      eta_berthed_at_discharge_port: updated.eta_discharge_berthed,
+      eta_start_discharging: updated.eta_discharge_start,
+      eta_complete_discharge: updated.eta_discharge_complete,
       ata_arrival_at_loading_port: updated.ata_arrival,
       ata_berthed_at_loading_port: updated.ata_berthed,
       ata_start_loading: updated.ata_loading_start,
@@ -1384,22 +1456,11 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       ata_start_discharging: updated.ata_discharge_start,
       ata_complete_discharge: updated.ata_discharge_complete,
     });
-    const autoStatus =
-      ataDerived === 'COMPLETED'
-        ? 'COMPLETED'
-        : deriveShipmentStatusFromEta({
-            eta_arrival_at_loading_port: updated.eta_arrival,
-            eta_berthed_at_loading_port: updated.eta_berthed,
-            eta_start_loading: updated.eta_loading_start,
-            eta_completed_loading: updated.eta_loading_complete,
-            eta_sailed_from_loading_port: updated.eta_sailed,
-            eta_arrive_at_discharge_port: updated.eta_discharge_arrival,
-            eta_berthed_at_discharge_port: updated.eta_discharge_berthed,
-            eta_start_discharging: updated.eta_discharge_start,
-            eta_complete_discharge: updated.eta_discharge_complete,
-          });
 
-    if (String(updated.status || '').trim().toUpperCase() !== autoStatus) {
+    const persistedStatus = String(updated.status || '').trim().toUpperCase();
+    if (persistedStatus === 'CANCELLED') {
+      updated.status = 'CANCELLED';
+    } else if (persistedStatus !== autoStatus) {
       const sRes = await query(
         `UPDATE shipments SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING status`,
         [autoStatus, shipmentId]
@@ -2512,7 +2573,22 @@ export const getContractSuggestions = async (req: AuthRequest, res: Response) =>
         c.supplier,
         c.product,
         c.group_name,
-        c.sto_number,
+        COALESCE(
+          NULLIF(TRIM(c.sto_number::text), ''),
+          (
+            SELECT NULLIF(TRIM(COALESCE(
+              spd.sto_number::text,
+              spd.data->'raw'->>'STO No.',
+              spd.data->'raw'->>'STO Number',
+              spd.data->'shipment'->>'sto_no',
+              spd.data->'contract'->>'sto_no'
+            )), '')
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = c.contract_id
+            ORDER BY spd.created_at DESC NULLS LAST
+            LIMIT 1
+          )
+        ) AS sto_number,
         c.sto_quantity
       FROM contracts c
       WHERE UPPER(COALESCE(c.status, '')) IN ('OPEN', 'ACTIVE')
@@ -2535,6 +2611,41 @@ export const getContractSuggestions = async (req: AuthRequest, res: Response) =>
     return res.status(500).json({
       success: false,
       error: { message: 'Failed to get contract suggestions' },
+    });
+  }
+};
+
+export const getContractPurchaseOrders = async (req: AuthRequest, res: Response) => {
+  try {
+    const contractId = String(req.params.contractId || '').trim();
+    if (!contractId) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Contract ID is required' },
+      });
+    }
+
+    const exists = await query(
+      `SELECT 1 FROM contracts WHERE contract_id = $1 LIMIT 1`,
+      [contractId],
+    );
+    if (exists.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Contract not found' },
+      });
+    }
+
+    const purchaseOrders = await fetchPurchaseOrderLines(contractId);
+    return res.json({
+      success: true,
+      data: purchaseOrders,
+    });
+  } catch (error) {
+    logger.error('Get contract purchase orders error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch purchase orders' },
     });
   }
 };
@@ -2566,7 +2677,22 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         c.id,
         c.contract_id,
         c.po_number,
-        c.sto_number,
+        COALESCE(
+          NULLIF(TRIM(c.sto_number::text), ''),
+          (
+            SELECT NULLIF(TRIM(COALESCE(
+              spd.sto_number::text,
+              spd.data->'raw'->>'STO No.',
+              spd.data->'raw'->>'STO Number',
+              spd.data->'shipment'->>'sto_no',
+              spd.data->'contract'->>'sto_no'
+            )), '')
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = c.contract_id
+            ORDER BY spd.created_at DESC NULLS LAST
+            LIMIT 1
+          )
+        ) AS sto_number,
         c.supplier,
         c.buyer,
         c.product,
@@ -2637,10 +2763,14 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       });
     }
 
+    const contractRow = result.rows[0];
+    const purchaseOrders = await fetchPurchaseOrderLines(String(contractRow.contract_id));
+
     return res.json({
       success: true,
       exists: true,
-      data: result.rows[0],
+      data: contractRow,
+      purchase_orders: purchaseOrders,
     });
   } catch (error) {
     logger.error('Validate contract number error:', error);
@@ -2703,19 +2833,7 @@ export const getContractDetailsForSto = async (req: AuthRequest, res: Response) 
 
     const contractList = contractNumbers ? String(contractNumbers).split(',').map(c => c.trim()).filter(Boolean) : [];
 
-    // Ensure user_sto_contract_assignments table exists (it is created in updateStoQtyAssigned,
-    // but that endpoint may not have been called yet on a fresh database)
-    await query(`
-      CREATE TABLE IF NOT EXISTS user_sto_contract_assignments (
-        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-        sto_number VARCHAR(255) NOT NULL,
-        contract_number VARCHAR(255) NOT NULL,
-        sto_qty_assigned NUMERIC(15, 2) NOT NULL DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(sto_number, contract_number)
-      )
-    `);
+    await ensureUserStoContractAssignmentsTable();
 
     // Get ALL contract numbers linked to this STO: column sto_number OR STO in raw/shipment/contract JSON
     const sapResult = await query(
@@ -2834,18 +2952,7 @@ export const updateStoQtyAssigned = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // Create table if it doesn't exist (for user input storage)
-    await query(`
-      CREATE TABLE IF NOT EXISTS user_sto_contract_assignments (
-        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-        sto_number VARCHAR(255) NOT NULL,
-        contract_number VARCHAR(255) NOT NULL,
-        sto_qty_assigned NUMERIC(15, 2) NOT NULL DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(sto_number, contract_number)
-      )
-    `);
+    await ensureUserStoContractAssignmentsTable();
 
     // Create update timestamp trigger if it doesn't exist
     await query(`
@@ -2895,6 +3002,7 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       stoNumber, 
       contractNumbers, 
       contractQtyAssigned,
+      poQtyAssigned,
       vesselName, 
       vesselCode, 
       voyageNo, 
@@ -2914,7 +3022,8 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       eta_discharge_arrival,
       eta_discharge_berthed,
       eta_discharge_start,
-      eta_discharge_complete
+      eta_discharge_complete,
+      etaByContract,
     } = req.body;
 
     // Validate required fields - Contract Numbers are required, STO Number is optional
@@ -2963,17 +3072,21 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
     const timestamp = Date.now().toString()
     
     // Validate assigned qty sum <= vessel capacity (if provided)
-    if (vesselCapacity != null && contractQtyAssigned && typeof contractQtyAssigned === 'object') {
+    const qtyForCapacity =
+      poQtyAssigned && typeof poQtyAssigned === 'object' && Object.keys(poQtyAssigned as object).length > 0
+        ? poQtyAssigned
+        : contractQtyAssigned;
+    if (vesselCapacity != null && qtyForCapacity && typeof qtyForCapacity === 'object') {
       const cap = parseFloat(String(vesselCapacity))
       if (!Number.isNaN(cap)) {
-        const sumAssigned = Object.values(contractQtyAssigned as Record<string, any>).reduce((sum: number, v: any) => {
+        const sumAssigned = Object.values(qtyForCapacity as Record<string, any>).reduce((sum: number, v: any) => {
           const n = parseFloat(String(v))
           return sum + (Number.isNaN(n) ? 0 : n)
         }, 0)
         if (sumAssigned > cap) {
           return res.status(400).json({
             success: false,
-            error: { message: `Sum of "Contract Qty assign to STO" (${sumAssigned}) cannot exceed Vessel Capacity (${cap}).` },
+            error: { message: `Sum of assigned PO quantities (${sumAssigned} MT) cannot exceed Vessel Capacity (${cap} MT).` },
           });
         }
       }
@@ -2989,7 +3102,30 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       resolvedOperationId = buildSyntheticOperationId('SEA', dmy, seq);
     }
 
+    const legacyEta = {
+      eta_arrival: eta_arrival || null,
+      eta_berthed: eta_berthed || null,
+      eta_loading_start: eta_loading_start || null,
+      eta_loading_complete: eta_loading_complete || null,
+      eta_sailed: eta_sailed || null,
+      eta_discharge_arrival: eta_discharge_arrival || null,
+      eta_discharge_berthed: eta_discharge_berthed || null,
+      eta_discharge_start: eta_discharge_start || null,
+      eta_discharge_complete: eta_discharge_complete || null,
+    };
+
+    const etaByContractMap =
+      etaByContract && typeof etaByContract === 'object' && !Array.isArray(etaByContract)
+        ? (etaByContract as Record<string, Record<string, string | null>>)
+        : {};
+
     for (const contract of contractCheck.rows) {
+      const contractIdKey = String(contract.contract_id).trim();
+      const perContractEta =
+        etaByContractMap[contractIdKey] && typeof etaByContractMap[contractIdKey] === 'object'
+          ? etaByContractMap[contractIdKey]
+          : legacyEta;
+
       // Generate shipment_id:
       // - If STO is provided, use "<STO>-<CONTRACT_ID>" so all contracts under an STO can be grouped
       // - If STO is NOT provided (manual shipment), generate an internal unique id (do NOT mirror operation_id),
@@ -2998,6 +3134,18 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
         ? `${stoNumber}-${contract.contract_id}`
         : `MNL-${timestamp.slice(-8)}-${contract.contract_id}`;
       
+      const derivedStatus = deriveShipmentStatus({
+        eta_arrival_at_loading_port: perContractEta.eta_arrival,
+        eta_berthed_at_loading_port: perContractEta.eta_berthed,
+        eta_start_loading: perContractEta.eta_loading_start,
+        eta_completed_loading: perContractEta.eta_loading_complete,
+        eta_sailed_from_loading_port: perContractEta.eta_sailed,
+        eta_arrive_at_discharge_port: perContractEta.eta_discharge_arrival,
+        eta_berthed_at_discharge_port: perContractEta.eta_discharge_berthed,
+        eta_start_discharging: perContractEta.eta_discharge_start,
+        eta_complete_discharge: perContractEta.eta_discharge_complete,
+      });
+
       const result = await query(`
         INSERT INTO shipments (
           shipment_id, operation_id, contract_id, vessel_name, vessel_code, voyage_no, vessel_owner,
@@ -3011,7 +3159,7 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
           $12, $13, $14::numeric,
           $15::date, $16::date, $17::date, $18::date, $19::date,
           $20::date, $21::date, $22::date, $23::date,
-          'PLANNED'
+          $24
         ) RETURNING id
       `, [
         shipmentId,
@@ -3028,53 +3176,69 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
         portOfLoading || null,
         portOfDischarge || null,
         quantityShipped ? parseFloat(String(quantityShipped)) : null,
-        eta_arrival || null,
-        eta_berthed || null,
-        eta_loading_start || null,
-        eta_loading_complete || null,
-        eta_sailed || null,
-        eta_discharge_arrival || null,
-        eta_discharge_berthed || null,
-        eta_discharge_start || null,
-        eta_discharge_complete || null
+        perContractEta.eta_arrival || null,
+        perContractEta.eta_berthed || null,
+        perContractEta.eta_loading_start || null,
+        perContractEta.eta_loading_complete || null,
+        perContractEta.eta_sailed || null,
+        perContractEta.eta_discharge_arrival || null,
+        perContractEta.eta_discharge_berthed || null,
+        perContractEta.eta_discharge_start || null,
+        perContractEta.eta_discharge_complete || null,
+        derivedStatus,
       ]);
 
       shipmentIds.push(result.rows[0].id);
     }
 
     // Persist user contract qty assignment (keyed by STO if exists; else operationId; else shipment_id)
-    if (contractQtyAssigned && typeof contractQtyAssigned === 'object') {
-      const assignmentKey = (hasStoNumber && stoNumber && String(stoNumber).trim())
-        ? String(stoNumber).trim()
-        : (resolvedOperationId && String(resolvedOperationId).trim())
-          ? String(resolvedOperationId).trim()
-          : `MNL-${timestamp.slice(-8)}`;
+    const assignmentKey = (hasStoNumber && stoNumber && String(stoNumber).trim())
+      ? String(stoNumber).trim()
+      : (resolvedOperationId && String(resolvedOperationId).trim())
+        ? String(resolvedOperationId).trim()
+        : `MNL-${timestamp.slice(-8)}`;
 
-      // Ensure table exists
-      await query(`
-        CREATE TABLE IF NOT EXISTS user_sto_contract_assignments (
-          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-          sto_number VARCHAR(255) NOT NULL,
-          contract_number VARCHAR(255) NOT NULL,
-          sto_qty_assigned NUMERIC(15, 2) NOT NULL DEFAULT 0,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          UNIQUE(sto_number, contract_number)
-        )
-      `);
+    const hasPoAssignments =
+      poQtyAssigned && typeof poQtyAssigned === 'object' && Object.keys(poQtyAssigned as object).length > 0;
+    const hasContractAssignments =
+      contractQtyAssigned && typeof contractQtyAssigned === 'object' && Object.keys(contractQtyAssigned as object).length > 0;
 
-      for (const [contractNumber, qty] of Object.entries(contractQtyAssigned as Record<string, any>)) {
-        if (!contractNumber) continue;
-        const n = parseFloat(String(qty));
-        await query(
-          `
-          INSERT INTO user_sto_contract_assignments (sto_number, contract_number, sto_qty_assigned)
-          VALUES ($1, $2, $3::numeric)
-          ON CONFLICT (sto_number, contract_number)
-          DO UPDATE SET sto_qty_assigned = EXCLUDED.sto_qty_assigned, updated_at = CURRENT_TIMESTAMP
-          `,
-          [assignmentKey, String(contractNumber).trim(), Number.isNaN(n) ? 0 : n]
+    if (hasPoAssignments || hasContractAssignments) {
+      await ensureUserStoContractAssignmentsTable();
+
+      if (hasPoAssignments) {
+        const rowIds = Object.keys(poQtyAssigned as Record<string, any>).filter(Boolean);
+        const rowsResult = await query(
+          `SELECT id, contract_id, po_number FROM contracts WHERE id = ANY($1::uuid[])`,
+          [rowIds],
         );
+        const rowById = new Map(
+          rowsResult.rows.map((r: { id: string; contract_id: string; po_number: string | null }) => [String(r.id), r]),
+        );
+
+        for (const [rowId, qty] of Object.entries(poQtyAssigned as Record<string, any>)) {
+          const row = rowById.get(String(rowId));
+          if (!row) continue;
+          const n = parseFloat(String(qty));
+          if (Number.isNaN(n) || n <= 0) continue;
+          await upsertPoQtyAssignment(
+            assignmentKey,
+            String(row.contract_id).trim(),
+            row.po_number ? String(row.po_number).trim() : null,
+            n,
+          );
+        }
+      } else if (hasContractAssignments) {
+        for (const [contractNumber, qty] of Object.entries(contractQtyAssigned as Record<string, any>)) {
+          if (!contractNumber) continue;
+          const n = parseFloat(String(qty));
+          await upsertPoQtyAssignment(
+            assignmentKey,
+            String(contractNumber).trim(),
+            null,
+            Number.isNaN(n) ? 0 : n,
+          );
+        }
       }
     }
 

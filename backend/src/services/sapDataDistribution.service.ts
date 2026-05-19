@@ -2,7 +2,7 @@ import { PoolClient } from 'pg';
 import logger from '../utils/logger';
 import { isLandSapRowEligibleForTruckingCreation } from '../utils/landTruckingEligibility';
 import { isSeaSapRowEligibleForShipmentCreation } from '../utils/seaShipmentEligibility';
-import { deriveShipmentStatusFromAta } from '../utils/shipmentStatus';
+import { deriveShipmentStatus } from '../utils/shipmentStatus';
 
 export interface DistributionResult {
   contractId?: string;
@@ -264,16 +264,15 @@ export class SapDataDistributionService {
           sto_no: parsedData.shipment?.sto_no,
         });
       } else if (isLand && isLandSapRowEligibleForTruckingCreation(parsedData)) {
-        // 2b. LAND: create trucking only when SAP row has at least one trucking anchor field
-        // (STO No, loading/discharge location, owner, STO qty, qty delivery/receive — see landTruckingEligibility).
+        // 2b. LAND: use parsedData.trucking[] (columns AV/AW Last/Start Receive) — NOT vessel shipment dates.
         try {
-          logger.info('Creating trucking operation from shipment data (LAND):', {
+          logger.info('Creating trucking operation(s) from SAP trucking data (LAND):', {
             sto_no: parsedData.shipment?.sto_no,
-            contractId: result.contractId
+            contractId: result.contractId,
+            truckingLegs: parsedData.trucking?.length ?? 0,
           });
-          
-          // Convert shipment data to trucking operation format
-          const truckingDataFromShipment = {
+
+          const shipmentFallback = {
             sequence: 1,
             data: {
               cargo_readiness_at_starting_location: parsedData.shipment?.eta_vessel_arrival_loading_port_1 || null,
@@ -282,25 +281,32 @@ export class SapDataDistributionService {
               trucking_owner_at_starting_location: parsedData.shipment?.vessel_owner || null,
               trucking_oa_budget_at_starting_location: null,
               trucking_oa_actual_at_starting_location: null,
-              quantity_sent_via_trucking_based_on_surat_jalan: parsedData.shipment?.quantity_at_loading_port_1_based_on_bast || null,
+              quantity_sent_via_trucking_based_on_surat_jalan:
+                parsedData.shipment?.quantity_at_loading_port_1_based_on_bast || null,
               quantity_delivered_via_trucking: parsedData.shipment?.quantity_delivered || null,
               trucking_gain_loss_at_starting_location: null,
-              trucking_starting_date_at_starting_location: parsedData.shipment?.eta_vessel_arrival_loading_port_1 || null,
-              trucking_completion_date_at_starting_location: parsedData.shipment?.ata_vessel_sailed_at_loading_port_1 || null
-            }
+            },
           };
-          
-          const truckingId = await this.createTruckingOperation(
-            client,
-            undefined, // No shipment_id for LAND operations
-            result.contractId,
-            truckingDataFromShipment
-          );
-          if (truckingId) result.truckingOperationIds.push(truckingId);
-          logger.info('Trucking operation created successfully from shipment data:', truckingId);
+
+          const truckingEntries =
+            Array.isArray(parsedData.trucking) && parsedData.trucking.length > 0
+              ? parsedData.trucking
+              : [shipmentFallback];
+
+          for (const entry of truckingEntries) {
+            const enriched = this.enrichLandTruckingDataFromRaw(parsedData, entry);
+            const truckingId = await this.createTruckingOperation(
+              client,
+              undefined,
+              result.contractId,
+              enriched
+            );
+            if (truckingId) result.truckingOperationIds.push(truckingId);
+            logger.info('Trucking operation upserted from SAP (LAND):', truckingId);
+          }
         } catch (truckingError) {
-          logger.error('Failed to create trucking operation from shipment data:', truckingError);
-          logger.error('Shipment data:', JSON.stringify(parsedData.shipment, null, 2));
+          logger.error('Failed to create trucking operation from SAP (LAND):', truckingError);
+          logger.error('Parsed trucking:', JSON.stringify(parsedData.trucking, null, 2));
           throw truckingError;
         }
       } else {
@@ -545,7 +551,7 @@ export class SapDataDistributionService {
     const ataSailedLoading = this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_1 ?? shipmentData.ata_vessel_sailed_from_loading_port ?? shipmentData.ata_sailed);
     const ataDischargeBerthed = this.parseDate(shipmentData.ata_vessel_berthed_at_discharge_port ?? shipmentData.ata_discharge_berthed);
 
-    const statusForInsert = deriveShipmentStatusFromAta({
+    const statusForInsert = deriveShipmentStatus({
       ata_arrival_at_loading_port: ataArrivalLoading,
       ata_berthed_at_loading_port: ataBerthedLoading,
       ata_start_loading: ataLoadingStart,
@@ -1079,6 +1085,72 @@ export class SapDataDistributionService {
   }
   
   /**
+   * SAP upload uses "Trucking Start/Last Receive Date" (columns AV/AW), not
+   * trucking_completion_date_at_starting_location. Resolve DB dates from all aliases.
+   */
+  private static firstParsedDate(...values: unknown[]): string | null {
+    for (const v of values) {
+      const d = this.parseDate(v);
+      if (d) return d;
+    }
+    return null;
+  }
+
+  private static resolveTruckingStartDate(data: Record<string, unknown>): string | null {
+    return this.firstParsedDate(
+      data.trucking_starting_date_at_starting_location,
+      data.trucking_starting_date_at_starting_location_2,
+      data.trucking_starting_date_at_starting_location_3,
+      data.trucking_start_receive_date
+    );
+  }
+
+  private static resolveTruckingCompletionDate(data: Record<string, unknown>): string | null {
+    return this.firstParsedDate(
+      data.trucking_completion_date_at_starting_location,
+      data.trucking_completion_date_at_starting_location_2,
+      data.trucking_completion_date_at_starting_location_3,
+      data.trucking_last_receive_date,
+      data.last_receive_date
+    );
+  }
+
+  private static deriveTruckingStatusForSap(
+    startDate: string | null,
+    completionDate: string | null
+  ): 'PLANNED' | 'IN_PROGRESS' | 'COMPLETED' {
+    if (completionDate) return 'COMPLETED';
+    if (startDate) return 'IN_PROGRESS';
+    return 'PLANNED';
+  }
+
+  /** Copy SAP raw AV/AW columns into trucking leg when normalized trucking[] dates are missing. */
+  private static enrichLandTruckingDataFromRaw(parsedData: any, truckingData: any): { sequence: number; data: Record<string, unknown> } {
+    const data: Record<string, unknown> = { ...(truckingData?.data || {}) };
+    const raw = parsedData?.raw || {};
+    const pick = (keys: string[]): unknown => {
+      for (const k of keys) {
+        const v = raw[k];
+        if (v != null && String(v).trim() !== '') return v;
+      }
+      return null;
+    };
+    if (!data.trucking_start_receive_date) {
+      data.trucking_start_receive_date = pick([
+        'Trucking Start Receive Date',
+        'trucking start receive date',
+      ]);
+    }
+    if (!data.trucking_last_receive_date) {
+      data.trucking_last_receive_date = pick([
+        'Trucking Last Receive Date',
+        'trucking last receive date',
+      ]);
+    }
+    return { sequence: truckingData?.sequence ?? 1, data };
+  }
+
+  /**
    * Create or update trucking operation
    */
   private static async createTruckingOperation(
@@ -1108,12 +1180,9 @@ export class SapDataDistributionService {
     // Derive a generic plant/location value for filters and dashboards
     const location = unloadingLocation || loadingLocation || null;
     
-    const startDate = this.parseDate(data.trucking_starting_date_at_starting_location);
-    const completionDate = this.parseDate(data.trucking_completion_date_at_starting_location);
-    const status =
-      completionDate != null ? 'COMPLETED' :
-      startDate != null ? 'IN_PROGRESS' :
-      'PLANNED';
+    const startDate = this.resolveTruckingStartDate(data);
+    const completionDate = this.resolveTruckingCompletionDate(data);
+    const status = this.deriveTruckingStatusForSap(startDate, completionDate);
 
     const truckingOwner = data.trucking_owner_at_starting_location;
 
@@ -1142,9 +1211,9 @@ export class SapDataDistributionService {
 
     if (targetTruckingId) {
       // Update existing trucking operation, but do NOT override:
-      // - status
       // - eta_delivery_start_date, eta_delivery_end_date
       // - eta_trucking_start_date, eta_trucking_completion_date
+      // Status is re-derived from SAP start/last receive when not CANCELLED.
       await client.query(
         `UPDATE trucking_operations SET
           shipment_id = COALESCE($1::uuid, shipment_id),
@@ -1161,6 +1230,12 @@ export class SapDataDistributionService {
           gain_loss = COALESCE($12::numeric, gain_loss),
           trucking_start_date = COALESCE($13::date, trucking_start_date),
           trucking_completion_date = COALESCE($14::date, trucking_completion_date),
+          status = CASE
+            WHEN status = 'CANCELLED' THEN status
+            WHEN COALESCE($14::date, trucking_completion_date) IS NOT NULL THEN 'COMPLETED'
+            WHEN COALESCE($13::date, trucking_start_date) IS NOT NULL THEN 'IN_PROGRESS'
+            ELSE COALESCE(status, 'PLANNED')
+          END,
           updated_at = CURRENT_TIMESTAMP
          WHERE id = $15`,
         [

@@ -7,7 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Truck, Package, Save, Loader2, Download, Upload, Edit2, Plus, Minus, SlidersHorizontal, ChevronRight, ChevronDown, ArrowUp, ArrowDown, Check, ArrowLeft, ArrowRight } from 'lucide-react'
+import { Search, Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, ArrowUp, ArrowDown, Check, ArrowLeft, ArrowRight, FileText, Pencil } from 'lucide-react'
+import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
@@ -17,6 +18,13 @@ import { format } from 'date-fns'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+
+const TRUCKING_ACTIONS_COL_WIDTH = 140
+
+function columnWidthToPx(width: string): number {
+  const n = parseInt(width, 10)
+  return Number.isFinite(n) ? n : 120
+}
 
 /** Aligns with list `formatNumber` / `formatKg`: comma thousands, period decimals. */
 function formatTruckingQtyPlain(n: number): string {
@@ -99,36 +107,129 @@ interface DocumentItem {
   created_at?: string
 }
 
+function buildCalendarCellDrafts(rows: TruckingCalendarRow[], month: Date): Record<string, string> {
+  const yyyy = month.getFullYear()
+  const mm = month.getMonth()
+  const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
+  const drafts: Record<string, string> = {}
+  for (const r of rows) {
+    const byDate = new Map(
+      (r.daily_deliverables || []).map((x) => [(x?.date || '').slice(0, 10), Number(x?.quantity_delivered || 0)]),
+    )
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = `${yyyy}-${String(mm + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+      const qty = byDate.get(date) || 0
+      drafts[`${r.id}:${date}`] = qty ? String(qty) : ''
+    }
+  }
+  return drafts
+}
+
+function parseCalendarDraftQty(raw: string): number | 'invalid' {
+  const trimmed = raw.trim()
+  if (trimmed === '') return 0
+  const n = Number(String(raw).replace(/,/g, ''))
+  if (!Number.isFinite(n) || n < 0) return 'invalid'
+  return n
+}
+
+function isDateInCalendarMonth(dateIso: string, month: Date): boolean {
+  const d = (dateIso || '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false
+  const yyyy = month.getFullYear()
+  const mm = month.getMonth()
+  const prefix = `${yyyy}-${String(mm + 1).padStart(2, '0')}-`
+  return d.startsWith(prefix)
+}
+
+function getRowDueDateBounds(row: TruckingCalendarRow): { start: string; end: string } | null {
+  const start = (row.delivery_start_date || '').slice(0, 10)
+  const end = (row.delivery_end_date || '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) return null
+  return { start, end }
+}
+
+function isDateInDueWindow(row: TruckingCalendarRow, dateIso: string): boolean {
+  const bounds = getRowDueDateBounds(row)
+  if (!bounds) return true
+  return dateIso >= bounds.start && dateIso <= bounds.end
+}
+
+function buildRowDeliverablesFromDrafts(
+  row: TruckingCalendarRow,
+  month: Date,
+  drafts: Record<string, string>,
+): Array<{ date: string; quantity_delivered: number }> {
+  const yyyy = month.getFullYear()
+  const mm = month.getMonth()
+  const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
+  const outsideMonth = (row.daily_deliverables || []).filter(
+    (x) => !isDateInCalendarMonth((x?.date || '').slice(0, 10), month),
+  )
+  const inMonth: Array<{ date: string; quantity_delivered: number }> = []
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = `${yyyy}-${String(mm + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    const key = `${row.id}:${date}`
+    const qty = parseCalendarDraftQty(drafts[key] ?? '')
+    if (qty === 'invalid') throw new Error(`Invalid quantity on ${date}`)
+    if (qty > 0) {
+      if (!isDateInDueWindow(row, date)) {
+        const bounds = getRowDueDateBounds(row)
+        throw new Error(
+          bounds
+            ? `Date ${date} is outside Due Start (${bounds.start}) – Due End (${bounds.end})`
+            : `Date ${date} is outside the allowed due delivery window`,
+        )
+      }
+      inMonth.push({ date, quantity_delivered: qty })
+    }
+  }
+  return [...outsideMonth, ...inMonth].sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+}
+
+function calendarDraftsHaveChanges(
+  rows: TruckingCalendarRow[],
+  month: Date,
+  drafts: Record<string, string>,
+  baseline: Record<string, string>,
+): boolean {
+  const yyyy = month.getFullYear()
+  const mm = month.getMonth()
+  const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
+  for (const r of rows) {
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = `${yyyy}-${String(mm + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+      const key = `${r.id}:${date}`
+      if ((drafts[key] ?? '') !== (baseline[key] ?? '')) return true
+    }
+  }
+  return false
+}
+
 function CalendarDeliverablesTable({
   month,
   rows,
   loading,
-  savingKey,
-  editing,
-  editValue,
+  savingAll,
+  cellDrafts,
+  cellBaseline,
   formatQty,
   visibleMetaCols,
   metaOrderIds,
   onReorderMetaCols,
-  onEditStart,
-  onEditChange,
-  onEditCancel,
-  onEditCommit,
+  onCellChange,
 }: {
   month: Date
   rows: TruckingCalendarRow[]
   loading: boolean
-  savingKey: string | null
-  editing: { id: string; date: string } | null
-  editValue: string
+  savingAll: boolean
+  cellDrafts: Record<string, string>
+  cellBaseline: Record<string, string>
   formatQty: (n: number) => string
   visibleMetaCols: Set<string>
   metaOrderIds: string[]
   onReorderMetaCols: (dragId: string, dropId: string) => void
-  onEditStart: (id: string, date: string, initial: string) => void
-  onEditChange: (v: string) => void
-  onEditCancel: () => void
-  onEditCommit: (id: string, date: string, value: string) => Promise<void>
+  onCellChange: (id: string, date: string, value: string) => void
 }) {
   const yyyy = month.getFullYear()
   const mm = month.getMonth()
@@ -148,11 +249,6 @@ function CalendarDeliverablesTable({
     const d = String(day).padStart(2, '0')
     return `${yyyy}-${m}-${d}`
   }
-  const getQty = (r: TruckingCalendarRow, date: string) => {
-    const hit = (r.daily_deliverables || []).find((x) => (x?.date || '').slice(0, 10) === date)
-    return hit ? Number(hit.quantity_delivered || 0) : 0
-  }
-
   const sumPlannedQty = (r: TruckingCalendarRow) =>
     (r.daily_deliverables || []).reduce((s, x) => s + Number(x?.quantity_delivered || 0), 0)
 
@@ -368,50 +464,54 @@ function CalendarDeliverablesTable({
                   })}
                   {days.map((d) => {
                     const date = dayIso(d)
-                    const qty = getQty(r, date)
                     const key = `${r.id}:${date}`
-                    const isEditing = editing?.id === r.id && editing?.date === date
-                    const isSaving = savingKey === key
+                    const draftValue = cellDrafts[key] ?? ''
+                    const isDirty = (draftValue ?? '') !== (cellBaseline[key] ?? '')
+                    const dueBounds = getRowDueDateBounds(r)
+                    const inDueWindow = isDateInDueWindow(r, date)
+                    const dueTitle =
+                      dueBounds && !inDueWindow
+                        ? `Outside due window (${formatDateDMY(dueBounds.start)} – ${formatDateDMY(dueBounds.end)})`
+                        : date
                     return (
                       <td
                         key={date}
-                        className={`px-2 py-1.5 border-b border-gray-100 text-right tabular-nums ${isEditing ? 'bg-amber-50' : ''}`}
-                        onClick={() => {
-                          if (isSaving) return
-                          onEditStart(r.id, date, qty ? String(qty) : '')
-                        }}
+                        className={`px-2 py-1.5 border-b border-gray-100 text-right tabular-nums ${
+                          !inDueWindow ? 'bg-gray-100' : isDirty ? 'bg-amber-50/50' : ''
+                        }`}
                       >
-                        {isEditing ? (
-                          <div className="flex items-center justify-end gap-1">
-                            <input
-                              autoFocus
-                              value={editValue}
-                              onChange={(e) => onEditChange(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Escape') onEditCancel()
-                                if (e.key === 'Enter') onEditCommit(r.id, date, editValue)
-                                if (e.key === 'Tab') {
-                                  e.preventDefault()
-                                  void (async () => {
-                                    await onEditCommit(r.id, date, editValue)
-                                    const nextDay = d + 1
-                                    if (nextDay > daysInMonth) return
-                                    const nextDate = dayIso(nextDay)
-                                    const nextQty = getQty(r, nextDate)
-                                    onEditStart(r.id, nextDate, nextQty ? String(nextQty) : '')
-                                  })()
+                        {inDueWindow ? (
+                          <input
+                            value={draftValue}
+                            onChange={(e) => onCellChange(r.id, date, e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Tab' && !e.shiftKey) {
+                                e.preventDefault()
+                                const rowEl = e.currentTarget.closest('tr')
+                                for (let nd = d + 1; nd <= daysInMonth; nd++) {
+                                  const nextDate = dayIso(nd)
+                                  if (!isDateInDueWindow(r, nextDate)) continue
+                                  const nextInput = rowEl?.querySelector<HTMLInputElement>(
+                                    `input[data-day-index="${nd}"]`,
+                                  )
+                                  if (nextInput) {
+                                    nextInput.focus()
+                                    break
+                                  }
                                 }
-                              }}
-                              onBlur={() => onEditCommit(r.id, date, editValue)}
-                              className="w-[64px] h-7 px-2 rounded border bg-white text-right text-xs"
-                              placeholder="0"
-                            />
-                            {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-500" /> : null}
-                          </div>
-                        ) : qty ? (
-                          <span className="font-medium text-slate-900">{formatQty(qty)}</span>
+                              }
+                            }}
+                            disabled={savingAll}
+                            data-day-input="1"
+                            data-day-index={d}
+                            className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-white text-right text-xs focus:border-blue-400 focus:ring-1 focus:ring-blue-200 disabled:opacity-60"
+                            placeholder="0"
+                            title={dueTitle}
+                          />
                         ) : (
-                          <span className="text-gray-300">—</span>
+                          <span className="inline-block w-[64px] text-center text-gray-400" title={dueTitle}>
+                            —
+                          </span>
                         )}
                       </td>
                     )
@@ -445,27 +545,16 @@ function TruckingPageContent() {
   const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
-  // Date filters: keep draft values so typing/selecting doesn't auto-refresh until Apply
-  const [dateFromDraft, setDateFromDraft] = useState(() => {
+  const defaultContractDateRange = useMemo(() => {
     const now = new Date()
     const yyyy = now.getFullYear()
-    return `${yyyy}-01-01`
-  })
-  const [dateToDraft, setDateToDraft] = useState(() => {
-    const now = new Date()
-    const yyyy = now.getFullYear()
-    return `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  })
-  const [dateFrom, setDateFrom] = useState(() => {
-    const now = new Date()
-    const yyyy = now.getFullYear()
-    return `${yyyy}-01-01`
-  })
-  const [dateTo, setDateTo] = useState(() => {
-    const now = new Date()
-    const yyyy = now.getFullYear()
-    return `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  })
+    return {
+      from: `${yyyy}-01-01`,
+      to: `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
+    }
+  }, [])
+  const [dateFrom, setDateFrom] = useState(() => defaultContractDateRange.from)
+  const [dateTo, setDateTo] = useState(() => defaultContractDateRange.to)
   const [uploadingId, setUploadingId] = useState<string>('')
   const [page, setPage] = useState<number>(1)
   const pageSize = 20
@@ -483,9 +572,9 @@ function TruckingPageContent() {
   })
   const [calendarRows, setCalendarRows] = useState<TruckingCalendarRow[]>([])
   const [calendarLoading, setCalendarLoading] = useState(false)
-  const [calendarSavingKey, setCalendarSavingKey] = useState<string | null>(null)
-  const [calendarEditing, setCalendarEditing] = useState<{ id: string; date: string } | null>(null)
-  const [calendarEditValue, setCalendarEditValue] = useState<string>('')
+  const [calendarCellDrafts, setCalendarCellDrafts] = useState<Record<string, string>>({})
+  const [calendarSavedBaseline, setCalendarSavedBaseline] = useState<Record<string, string>>({})
+  const [calendarSavingAll, setCalendarSavingAll] = useState(false)
   const [planningUploadOpen, setPlanningUploadOpen] = useState(false)
   const [planningUploading, setPlanningUploading] = useState(false)
   const [planningUploadSummary, setPlanningUploadSummary] = useState<{
@@ -670,6 +759,120 @@ function TruckingPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, fetchCalendarRows])
 
+  useEffect(() => {
+    if (activeTab !== 'calendar') return
+    const baseline = buildCalendarCellDrafts(calendarRows, calendarMonth)
+    setCalendarSavedBaseline(baseline)
+    setCalendarCellDrafts(baseline)
+  }, [activeTab, calendarRows, calendarMonth])
+
+  const calendarHasUnsavedChanges = useMemo(
+    () => calendarDraftsHaveChanges(calendarRows, calendarMonth, calendarCellDrafts, calendarSavedBaseline),
+    [calendarRows, calendarMonth, calendarCellDrafts, calendarSavedBaseline],
+  )
+
+  const saveAllCalendarDrafts = useCallback(async () => {
+    if (!calendarHasUnsavedChanges) return
+
+    const yyyy = calendarMonth.getFullYear()
+    const mm = calendarMonth.getMonth()
+    const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
+    const dirtyRowIds = new Set<string>()
+
+    for (const r of calendarRows) {
+      for (let d = 1; d <= daysInMonth; d++) {
+        const date = `${yyyy}-${String(mm + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+        const key = `${r.id}:${date}`
+        if ((calendarCellDrafts[key] ?? '') !== (calendarSavedBaseline[key] ?? '')) {
+          dirtyRowIds.add(r.id)
+        }
+      }
+    }
+
+    for (const r of calendarRows) {
+      const bounds = getRowDueDateBounds(r)
+      for (let d = 1; d <= daysInMonth; d++) {
+        const date = `${yyyy}-${String(mm + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+        const key = `${r.id}:${date}`
+        const raw = calendarCellDrafts[key] ?? ''
+        if (!dirtyRowIds.has(r.id)) continue
+        const qty = parseCalendarDraftQty(raw)
+        if (qty === 'invalid') {
+          alert(`Invalid quantity for ${r.operation_id || r.id} on ${formatDateDMY(date)}. Use numbers >= 0.`)
+          return
+        }
+        if (qty > 0 && bounds && !isDateInDueWindow(r, date)) {
+          alert(
+            `${r.operation_id || r.id}: ${formatDateDMY(date)} is outside the due delivery window (${formatDateDMY(bounds.start)} – ${formatDateDMY(bounds.end)}). Remove qty on that day or adjust Due End on the contract.`,
+          )
+          return
+        }
+      }
+    }
+
+    setCalendarSavingAll(true)
+    let saved = 0
+    let failed = 0
+    let lastError = ''
+
+    const updates = new Map<string, Array<{ date: string; quantity_delivered: number }>>()
+
+    try {
+      for (const id of dirtyRowIds) {
+        const row = calendarRows.find((r) => r.id === id)
+        if (!row) continue
+        try {
+          const next = buildRowDeliverablesFromDrafts(row, calendarMonth, calendarCellDrafts)
+          const res = await api.put(`/trucking/${id}/daily-planning-deliverables`, {
+            daily_deliverables: next,
+          })
+          if (res.data?.success) {
+            updates.set(id, res.data.data.daily_deliverables || next)
+            saved += 1
+          } else {
+            failed += 1
+            lastError = res.data?.error?.message || 'Save failed'
+          }
+        } catch (e: any) {
+          failed += 1
+          lastError = e?.response?.data?.error?.message || e?.message || 'Save failed'
+        }
+      }
+
+      if (updates.size > 0) {
+        setCalendarRows((prev) =>
+          prev.map((r) =>
+            updates.has(r.id) ? { ...r, daily_deliverables: updates.get(r.id)! } : r,
+          ),
+        )
+      }
+
+      if (failed === 0) {
+        if (saved > 0) {
+          alert(`Saved daily planning for ${saved} operation(s).`)
+        }
+      } else {
+        alert(
+          lastError
+            ? `Saved ${saved} operation(s); ${failed} failed. ${lastError}`
+            : `Saved ${saved} operation(s); ${failed} failed.`,
+        )
+        if (updates.size === 0) {
+          await fetchCalendarRows()
+        }
+      }
+    } finally {
+      setCalendarSavingAll(false)
+    }
+  }, [
+    calendarHasUnsavedChanges,
+    calendarRows,
+    calendarMonth,
+    calendarCellDrafts,
+    calendarSavedBaseline,
+    fetchCalendarRows,
+  ])
+
   const downloadDailyPlanningTemplate = async () => {
     try {
       const res = await api.get('/trucking/daily-planning-deliverables/template', { responseType: 'blob' })
@@ -722,8 +925,6 @@ function TruckingPageContent() {
   // Create new trucking operation modal
   const [showCreateForm, setShowCreateForm] = useState(false)
 
-  // Compact/Expand view state
-  const [expandedOperationIds, setExpandedOperationIds] = useState<Set<string>>(() => new Set())
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [sortKey, setSortKey] = useState<string>('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
@@ -787,7 +988,7 @@ function TruckingPageContent() {
   useEffect(() => {
     fetchTruckingOperations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir, selectedPlantSites])
+  }, [page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir, selectedPlantSites, dateFrom, dateTo, searchTerm])
 
   useEffect(() => {
     let cancelled = false
@@ -1141,12 +1342,48 @@ function TruckingPageContent() {
     }
   }
 
-  const handleFilterChange = () => {
-    setDateFrom(dateFromDraft)
-    setDateTo(dateToDraft)
+  const hasActiveTruckingFilters = useMemo(() => {
+    return (
+      searchDraft.trim() !== '' ||
+      searchTerm.trim() !== '' ||
+      statusFilter !== 'ALL' ||
+      lateIndicatorFilter !== 'ALL' ||
+      !!loadingLocationFilter.trim() ||
+      !!unloadingLocationFilter.trim() ||
+      selectedPlantSites.length > 0 ||
+      Object.keys(columnFilters).length > 0 ||
+      dateFrom !== defaultContractDateRange.from ||
+      dateTo !== defaultContractDateRange.to
+    )
+  }, [
+    searchDraft,
+    searchTerm,
+    statusFilter,
+    lateIndicatorFilter,
+    loadingLocationFilter,
+    unloadingLocationFilter,
+    selectedPlantSites,
+    columnFilters,
+    dateFrom,
+    dateTo,
+    defaultContractDateRange,
+  ])
+
+  const clearTruckingFilters = useCallback(() => {
+    setSearchDraft('')
+    setSearchTerm('')
+    setStatusFilter('ALL')
+    setLateIndicatorFilter('ALL')
+    setLoadingLocationFilter('')
+    setUnloadingLocationFilter('')
+    setSelectedPlantSites([])
+    setColumnFilters({})
+    setDateFrom(defaultContractDateRange.from)
+    setDateTo(defaultContractDateRange.to)
     setPage(1)
-    fetchTruckingOperations(1)
-  }
+    setTruckingOperations([])
+    setHasMore(true)
+  }, [defaultContractDateRange])
 
   // Excel-like filtering helpers
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
@@ -1230,10 +1467,9 @@ function TruckingPageContent() {
       sortable: true,
       getSortValue: (o) => o.operation_id || '',
       render: (o) => (
-        <div className="min-w-0 break-words">
-          <div className="font-semibold break-words">{o.operation_id}</div>
-          <div className="text-xs text-gray-600 break-words">{o.location || '-'} • {o.trucking_owner || '-'}</div>
-        </div>
+        <span className="text-sm break-words block" title={o.operation_id || ''}>
+          {o.operation_id || '-'}
+        </span>
       )
     },
     {
@@ -1630,30 +1866,6 @@ function TruckingPageContent() {
     return sorted
   }, [compactColumns, filteredOperations, sortDir, sortKey])
 
-  const allVisibleIds = useMemo(() => sortedOperations.map(o => o.id), [sortedOperations])
-  const expandedCount = expandedOperationIds.size
-  const allExpanded = expandedCount > 0 && expandedCount === allVisibleIds.length
-
-  const toggleExpand = (id: string) => {
-    setExpandedOperationIds(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
-      return next
-    })
-  }
-
-  const expandAll = (ids: string[]) => {
-    setExpandedOperationIds(new Set(ids))
-  }
-
-  const collapseAll = () => {
-    setExpandedOperationIds(new Set())
-  }
-
   const toggleColumn = (colId: string) => {
     setVisibleColumnIds(prev => {
       const next = new Set(prev)
@@ -1737,18 +1949,30 @@ function TruckingPageContent() {
     return widths[colId] || '120px'
   }
 
-  // Calculate table scroll width
+  const tableMinWidthPx = useMemo(() => {
+    const colSum = visibleColumns.reduce((sum, c) => sum + columnWidthToPx(getColumnWidth(c.id)), 0)
+    return colSum + TRUCKING_ACTIONS_COL_WIDTH
+  }, [visibleColumns])
+
+  // Calculate table scroll width (match semantic table width for top scrollbar sync)
   useEffect(() => {
     const calculateWidth = () => {
-      const bottom = bottomScrollRef.current
-      if (bottom) {
-        setTableScrollWidth(bottom.scrollWidth)
+      const table = bottomScrollRef.current?.querySelector('[data-trucking-list-table]') as HTMLElement | null
+      if (table) {
+        setTableScrollWidth(table.offsetWidth)
+        return
       }
+      const bottom = bottomScrollRef.current
+      if (bottom) setTableScrollWidth(bottom.scrollWidth)
     }
     calculateWidth()
+    const t = window.setTimeout(calculateWidth, 0)
     window.addEventListener('resize', calculateWidth)
-    return () => window.removeEventListener('resize', calculateWidth)
-  }, [visibleColumns, sortedOperations])
+    return () => {
+      window.clearTimeout(t)
+      window.removeEventListener('resize', calculateWidth)
+    }
+  }, [visibleColumns, sortedOperations, tableMinWidthPx, editingId])
 
   return (
     <Layout>
@@ -1806,10 +2030,38 @@ function TruckingPageContent() {
           <CardContent>
             <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto py-4 px-4">
               {[
-                { status: 'PLANNED', label: 'Planned', color: 'bg-blue-100', textColor: 'text-blue-800', badgeColor: 'bg-blue-600' },
-                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600' },
-                { status: 'COMPLETED', label: 'Completed', color: 'bg-green-100', textColor: 'text-green-800', badgeColor: 'bg-green-600' },
-                { status: 'CANCELLED', label: 'Cancelled', color: 'bg-red-100', textColor: 'text-red-800', badgeColor: 'bg-red-600' }
+                {
+                  status: 'PLANNED',
+                  label: 'Planned',
+                  color: 'bg-blue-100',
+                  textColor: 'text-blue-800',
+                  badgeColor: 'bg-blue-600',
+                  help: FIELD_HELP.truckingStatusPlanned,
+                },
+                {
+                  status: 'IN_PROGRESS',
+                  label: 'In Progress',
+                  color: 'bg-yellow-100',
+                  textColor: 'text-yellow-800',
+                  badgeColor: 'bg-yellow-600',
+                  help: FIELD_HELP.truckingStatusInProgress,
+                },
+                {
+                  status: 'COMPLETED',
+                  label: 'Completed',
+                  color: 'bg-green-100',
+                  textColor: 'text-green-800',
+                  badgeColor: 'bg-green-600',
+                  help: FIELD_HELP.truckingStatusCompleted,
+                },
+                {
+                  status: 'CANCELLED',
+                  label: 'Cancelled',
+                  color: 'bg-red-100',
+                  textColor: 'text-red-800',
+                  badgeColor: 'bg-red-600',
+                  help: FIELD_HELP.truckingStatusCancelled,
+                },
               ].map((statusInfo, index, array) => {
                 const s = truckingSummary?.status
                 const count =
@@ -1821,8 +2073,11 @@ function TruckingPageContent() {
                 return (
                   <div key={statusInfo.status} className="flex items-center flex-shrink-0">
                     <div className="relative">
-                      {/* Status Circle */}
-                      <div className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg hover:shadow-xl transition-shadow`}>
+                      {/* Status Circle — hover for help (title) */}
+                      <div
+                        title={statusInfo.help}
+                        className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg hover:shadow-xl transition-shadow cursor-help`}
+                      >
                         {/* Count Badge */}
                         <div className={`absolute -top-3 -right-3 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10`}>
                           {count}
@@ -1869,7 +2124,7 @@ function TruckingPageContent() {
           </div>
           {activeTab === 'calendar' ? (
             <div className="text-xs text-slate-500 w-full sm:w-auto sm:text-right">
-              Click a cell to edit daily deliverables.
+              Enter qty only on days within each row&apos;s Due Start – Due End (gray days are blocked). Amber = unsaved; click Save.
             </div>
           ) : null}
         </div>
@@ -1877,9 +2132,10 @@ function TruckingPageContent() {
         {/* Filters (list + daily planning) */}
         <Card>
           <CardContent className="pt-6">
-            <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:gap-4 xl:items-center">
-              <div className="flex-1 min-w-[280px] relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-4">
+              <div className="relative min-w-[12rem] flex-1">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
                 <Input
                   placeholder="Search by Operation ID, Contract Numbers, PO No, or Truck Loading/Discharge..."
                   value={searchDraft}
@@ -1893,13 +2149,10 @@ function TruckingPageContent() {
                   className="pl-10"
                 />
               </div>
-              <Button variant="outline" onClick={applySearch} disabled={loading}>
-                Apply
-              </Button>
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto"
+                className="rounded-lg border px-4 py-2"
               >
                 <option value="ALL">All Status</option>
                 <option value="PLANNED">Planned</option>
@@ -1910,7 +2163,7 @@ function TruckingPageContent() {
               <select
                 value={lateIndicatorFilter}
                 onChange={(e) => setLateIndicatorFilter(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto"
+                className="rounded-lg border px-4 py-2"
               >
                 <option value="ALL">All Late Indicator</option>
                 <option value="ON_TIME">On Time</option>
@@ -1929,13 +2182,9 @@ function TruckingPageContent() {
                 onChange={(e) => setUnloadingLocationFilter(e.target.value)}
                 className="w-full sm:w-48"
               />
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm text-gray-600">Contract Date:</span>
-                <Input type="date" value={dateFromDraft} onChange={(e) => setDateFromDraft(e.target.value)} className="w-40" />
-                <span className="text-gray-500">to</span>
-                <Input type="date" value={dateToDraft} onChange={(e) => setDateToDraft(e.target.value)} className="w-40" />
               </div>
-              <div className="min-w-[260px] w-full sm:w-auto">
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <SearchableMultiSelect
                   label="Plant/Site"
                   options={availablePlantSites}
@@ -1945,37 +2194,26 @@ function TruckingPageContent() {
                   emptyMessage="Loading plants..."
                 />
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button onClick={handleFilterChange} variant="outline" size="sm">
-                  <Filter className="h-4 w-4 mr-1" />
-                  Apply
-                </Button>
-                {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || loadingLocationFilter || unloadingLocationFilter || dateFromDraft || dateToDraft || selectedPlantSites.length > 0) && (
-                  <Button
-                    onClick={() => {
-                      setStatusFilter('ALL')
-                      setLateIndicatorFilter('ALL')
-                      setLoadingLocationFilter('')
-                      setUnloadingLocationFilter('')
-                      setSelectedPlantSites([])
-                      const now = new Date()
-                      const yyyy = now.getFullYear()
-                      const to = `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-                      setDateFromDraft(`${yyyy}-01-01`)
-                      setDateToDraft(to)
-                      setDateFrom(`${yyyy}-01-01`)
-                      setDateTo(to)
-                      setPage(1)
-                      fetchTruckingOperations(1)
-                    }}
-                    variant="ghost"
-                    size="sm"
-                    className="text-gray-500"
-                  >
-                    <X className="h-4 w-4 mr-1" />
-                    Clear
-                  </Button>
-                )}
+
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-sm font-medium text-gray-700">Contract Date:</label>
+                  <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={setDateFrom} className="w-40" />
+                  <span className="text-gray-500">to</span>
+                  <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={setDateTo} className="w-40" />
+                  {hasActiveTruckingFilters ? (
+                    <Button
+                      type="button"
+                      onClick={clearTruckingFilters}
+                      variant="ghost"
+                      size="sm"
+                      className="text-gray-500"
+                    >
+                      <X className="h-4 w-4 mr-1" />
+                      Clear
+                    </Button>
+                  ) : null}
+                </div>
               </div>
             </div>
           </CardContent>
@@ -2073,6 +2311,20 @@ function TruckingPageContent() {
                     )}
                     Upload
                   </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={!calendarHasUnsavedChanges || calendarSavingAll || calendarLoading}
+                    onClick={() => void saveAllCalendarDrafts()}
+                    className="bg-green-600 hover:bg-green-700 text-white"
+                  >
+                    {calendarSavingAll ? (
+                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    ) : (
+                      <Save className="h-4 w-4 mr-1" />
+                    )}
+                    Save
+                  </Button>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -2137,58 +2389,23 @@ function TruckingPageContent() {
                 month={calendarMonth}
                 rows={calendarRows}
                 loading={calendarLoading}
-                savingKey={calendarSavingKey}
-                editing={calendarEditing}
-                editValue={calendarEditValue}
+                savingAll={calendarSavingAll}
+                cellDrafts={calendarCellDrafts}
+                cellBaseline={calendarSavedBaseline}
                 formatQty={formatTruckingQtyPlain}
                 visibleMetaCols={calendarVisibleMetaCols}
                 metaOrderIds={calendarMetaOrderIds}
                 onReorderMetaCols={reorderCalendarMetaCols}
-                onEditStart={(id, date, initial) => {
-                  setCalendarEditing({ id, date })
-                  setCalendarEditValue(initial)
-                }}
-                onEditChange={setCalendarEditValue}
-                onEditCancel={() => {
-                  setCalendarEditing(null)
-                  setCalendarEditValue('')
-                }}
-                onEditCommit={async (id, date, rawValue) => {
+                onCellChange={(id, date, value) => {
                   const key = `${id}:${date}`
-                  setCalendarSavingKey(key)
-                  try {
-                    const q = rawValue.trim() === '' ? null : Number(String(rawValue).replace(/,/g, ''))
-                    if (q != null && (!Number.isFinite(q) || q < 0)) {
-                      alert('Quantity must be a valid number (>= 0)')
-                      return
-                    }
-                    const row = calendarRows.find((r) => r.id === id)
-                    if (!row) return
-                    const existing = (row.daily_deliverables || []).slice()
-                    const next = existing.filter((x) => (x?.date || '').slice(0, 10) !== date)
-                    if (q != null && q !== 0) {
-                      next.push({ date, quantity_delivered: q })
-                      next.sort((a, b) => (a.date || '').localeCompare(b.date || ''))
-                    }
-                    const res = await api.put(`/trucking/${id}/daily-planning-deliverables`, { daily_deliverables: next })
-                    if (res.data?.success) {
-                      setCalendarRows((prev) => prev.map((r) => (r.id === id ? { ...r, daily_deliverables: res.data.data.daily_deliverables || next } : r)))
-                      setCalendarEditing(null)
-                      setCalendarEditValue('')
-                    }
-                  } catch (e: any) {
-                    const msg = e?.response?.data?.error?.message || e?.message || 'Failed to update daily deliverables'
-                    alert(msg)
-                  } finally {
-                    setCalendarSavingKey(null)
-                  }
+                  setCalendarCellDrafts((prev) => ({ ...prev, [key]: value }))
                 }}
               />
             </CardContent>
           </Card>
 
           <Dialog open={planningUploadOpen} onOpenChange={setPlanningUploadOpen}>
-            <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto">
+            <DialogContent className="max-w-2xl max-h-[88vh]">
               <DialogHeader>
                 <DialogTitle>Daily planning upload result</DialogTitle>
               </DialogHeader>
@@ -2260,11 +2477,12 @@ function TruckingPageContent() {
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
+              <div>
                 <CardTitle>All Trucking Operations</CardTitle>
-                <Badge variant="outline" className="hidden md:inline-flex">
-                  Default view: Compact
-                </Badge>
+                <p className="text-sm text-gray-500 mt-1">
+                  {totalCount} total operations
+                  {truckingOperations.length > 0 ? ` | Showing ${truckingOperations.length} loaded` : ''}
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 <div className="relative">
@@ -2279,7 +2497,12 @@ function TruckingPageContent() {
                   </Button>
                   {showColumnsMenu && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
-                      <div className="text-xs font-semibold text-gray-600 mb-2">Visible columns</div>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="text-xs font-semibold text-gray-600">Visible columns</div>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setShowColumnsMenu(false)}>
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
                       <div className="space-y-2 max-h-72 overflow-auto pr-1">
                         {compactColumns
                           .filter(c => c.id !== 'operation_id' && c.id !== 'status')
@@ -2308,24 +2531,6 @@ function TruckingPageContent() {
                     </div>
                   )}
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => (allExpanded ? collapseAll() : expandAll(allVisibleIds))}
-                  disabled={loading || sortedOperations.length === 0}
-                >
-                  {allExpanded ? (
-                    <>
-                      <Minus className="h-4 w-4 mr-2" />
-                      Collapse All
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Expand All
-                    </>
-                  )}
-                </Button>
               </div>
             </div>
           </CardHeader>
@@ -2374,15 +2579,19 @@ function TruckingPageContent() {
                       })
                     }}
                   >
-                    <div className="min-w-[1100px]">
-                      {/* Header */}
-                      <div
-                        className="grid gap-3 px-3 py-2 text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10"
-                        style={{
-                          gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} 320px`
-                        }}
-                      >
-                        <div />
+                    <table
+                      data-trucking-list-table
+                      className="w-full table-fixed border-collapse"
+                      style={{ minWidth: tableMinWidthPx }}
+                    >
+                      <colgroup>
+                        {visibleColumns.map((c) => (
+                          <col key={c.id} style={{ width: getColumnWidth(c.id) }} />
+                        ))}
+                        <col style={{ width: TRUCKING_ACTIONS_COL_WIDTH }} />
+                      </colgroup>
+                      <thead>
+                      <tr className="text-xs font-semibold text-gray-600 bg-gray-50 border-b">
                         {visibleColumns.map(col => {
                           const active = sortKey === col.id
                           const filterActive = isColumnFilterActive(col.id)
@@ -2390,9 +2599,10 @@ function TruckingPageContent() {
                           const current = columnFilters[col.id]
 
                           return (
-                            <div
+                            <th
                               key={col.id}
-                              className={`relative min-w-0 cursor-move ${dragColId === col.id ? 'opacity-60' : ''}`}
+                              scope="col"
+                              className={`relative min-w-0 px-3 py-2 text-left align-bottom font-semibold cursor-move ${dragColId === col.id ? 'opacity-60' : ''}`}
                               draggable
                               onDragStart={(e) => {
                                 setDragColId(col.id)
@@ -2687,124 +2897,103 @@ function TruckingPageContent() {
                                   </div>
                                 </div>
                               )}
-                            </div>
+                            </th>
                           )
                         })}
-                        <div className="text-right sticky right-0 bg-gray-50 border-l pl-3 pr-2">Actions</div>
-                      </div>
+                        <th
+                          scope="col"
+                          className="text-center align-bottom font-semibold sticky right-0 z-20 bg-gray-50 border-l border-gray-200 px-2 py-2"
+                          style={{ width: TRUCKING_ACTIONS_COL_WIDTH }}
+                        >
+                          Actions
+                        </th>
+                      </tr>
+                      </thead>
 
-                      {/* Rows */}
-                      <div className="divide-y">
+                      <tbody className="divide-y divide-gray-200">
                         {sortedOperations.length === 0 ? (
-                          <div className="bg-white">
-                            <div className="px-4 py-10 text-center text-gray-500">
+                          <tr className="bg-white">
+                            <td colSpan={visibleColumns.length + 1} className="px-4 py-10 text-center text-gray-500">
                               <Truck className="h-16 w-16 text-gray-400 mx-auto mb-4" />
                               <p>No trucking operations found</p>
                               {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
-                            </div>
-                          </div>
+                            </td>
+                          </tr>
                         ) : sortedOperations.map((operation, idx) => {
                           const isEditing = editingId === operation.id
+                          const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                           return (
-                            <div key={operation.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                              <div className="px-3 py-2">
-                                <div
-                                  className="grid gap-3 items-center"
-                                  style={{
-                                    gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} 320px`
-                                  }}
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleExpand(operation.id)}
-                                    className="p-1 text-gray-500 hover:text-gray-800"
-                                    title={expandedOperationIds.has(operation.id) ? 'Collapse' : 'Expand'}
-                                  >
-                                    {expandedOperationIds.has(operation.id) ? (
-                                      <ChevronDown className="h-5 w-5" />
-                                    ) : (
-                                      <ChevronRight className="h-5 w-5" />
-                                    )}
-                                  </button>
-
-                                  {visibleColumns.map(col => (
-                                    <div key={col.id} className="min-w-0">
+                              <tr key={operation.id} className={stripeClass}>
+                                {visibleColumns.map(col => (
+                                  <td key={col.id} className={`min-w-0 px-3 py-2 align-middle ${stripeClass}`}>
+                                    <div className="flex min-h-[40px] items-center">
                                       {col.id === 'status' && isEditing ? (
-                                        <select
-                                          value={editedData.status ?? operation.status ?? ''}
-                                          onChange={(e) => handleFieldChange('status', e.target.value)}
-                                          className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full bg-white"
-                                        >
-                                          <option value="">Select Status</option>
-                                          <option value="PLANNED">PLANNED</option>
-                                          <option value="IN_PROGRESS">IN_PROGRESS</option>
-                                          <option value="COMPLETED">COMPLETED</option>
-                                          <option value="CANCELLED">CANCELLED</option>
-                                        </select>
+                                        operation.status === 'CANCELLED' ? (
+                                          <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
+                                        ) : (
+                                          <select
+                                            value={editedData.status === 'CANCELLED' ? 'CANCELLED' : ''}
+                                            onChange={(e) => handleFieldChange('status', e.target.value)}
+                                            className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full bg-white"
+                                          >
+                                            <option value="">Select Status</option>
+                                            <option value="CANCELLED">CANCELLED</option>
+                                          </select>
+                                        )
                                       ) : (
                                         col.render(operation)
                                       )}
                                     </div>
-                                  ))}
-
-                                  <div className="flex items-center justify-end gap-2 sticky right-0 bg-white border-l pl-3 pr-2 shadow-[-8px_0_12px_-12px_rgba(0,0,0,0.35)]">
+                                  </td>
+                                ))}
+                                <td
+                                  className={`sticky right-0 z-10 border-l border-gray-200 px-2 py-2 align-middle ${stripeClass}`}
+                                >
+                                  <div className="flex items-center justify-end gap-2">
                                     {isEditing ? (
                                       <>
                                         <Button
                                           variant="outline"
-                                          size="sm"
+                                          size="icon"
                                           onClick={handleCancelEdit}
                                           disabled={saving}
+                                          title="Cancel"
                                         >
-                                          <X className="h-4 w-4 mr-1" />
-                                          Cancel
+                                          <X className="h-4 w-4" />
                                         </Button>
                                         <Button
-                                          size="sm"
+                                          size="icon"
                                           onClick={() => handleSave(operation.id)}
                                           disabled={saving}
-                                          className="bg-green-600 hover:bg-green-700"
+                                          title="Save"
+                                          className="bg-green-600 hover:bg-green-700 text-white"
                                         >
                                           {saving ? (
-                                            <>
-                                              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                                              Saving...
-                                            </>
+                                            <Loader2 className="h-4 w-4 animate-spin" />
                                           ) : (
-                                            <>
-                                              <Save className="h-4 w-4 mr-1" />
-                                              Save
-                                            </>
+                                            <Save className="h-4 w-4" />
                                           )}
                                         </Button>
                                       </>
                                     ) : (
                                       <>
-                                        {(() => {
-                                          const hasData = !!(operation.trucking_owner && String(operation.trucking_owner).trim())
-                                          return (
-                                            <Button
-                                              variant="outline"
-                                              size="sm"
-                                              onClick={() => handleEdit(operation)}
-                                              className={hasData ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100' : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'}
-                                            >
-                                              {hasData ? (
-                                                <><Edit2 className="h-4 w-4 mr-1" />Edit</>
-                                              ) : (
-                                                <><Plus className="h-4 w-4 mr-1" />Add</>
-                                              )}
-                                            </Button>
-                                          )
-                                        })()}
                                         <Button
                                           variant="outline"
-                                          size="sm"
-                                          onClick={() => handleViewDocuments(operation)}
-                                          className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                          size="icon"
+                                          onClick={() => handleEdit(operation)}
+                                          title="Edit"
+                                          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
                                         >
-                                          <Package className="h-4 w-4 mr-1" />
-                                          Docs
+                                          <Pencil className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                          variant="outline"
+                                          size="icon"
+                                          onClick={() => handleViewDocuments(operation)}
+                                          title="Documents"
+                                          className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
+                                        >
+                                          <FileText className="h-4 w-4" />
                                         </Button>
                                         <input
                                           id={`trucking-file-${operation.id}`}
@@ -2815,115 +3004,27 @@ function TruckingPageContent() {
                                         />
                                         <Button
                                           variant="outline"
-                                          size="sm"
+                                          size="icon"
                                           onClick={() => document.getElementById(`trucking-file-${operation.id}`)?.click()}
                                           disabled={uploadingId === operation.id}
-                                          className="bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100"
+                                          title="Upload"
+                                          className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
                                         >
                                           {uploadingId === operation.id ? (
-                                            <>
-                                              <span className="h-4 w-4 mr-2 inline-block border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
-                                              Uploading...
-                                            </>
+                                            <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
                                           ) : (
-                                            <>
-                                              <Upload className="h-4 w-4 mr-1" />
-                                              Upload
-                                            </>
+                                            <Upload className="h-4 w-4" />
                                           )}
                                         </Button>
                                       </>
                                     )}
                                   </div>
-                                </div>
-
-                                {/* Expanded Details */}
-                                {expandedOperationIds.has(operation.id) && (
-                                  <div className="mt-3 p-3 border rounded bg-white">
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3 pb-3 border-b">
-                                      <div>
-                                        <div className="text-gray-500">Buyer</div>
-                                        <div className="font-medium">{operation.buyer || '-'}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Group Name</div>
-                                        <div className="font-medium">{operation.group_name || '-'}</div>
-                                      </div>
-                                    </div>
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3 pb-3 border-b">
-                                      <div>
-                                        <div className="text-gray-500">Truck Loading Location</div>
-                                        <div className="font-medium">{operation.loading_location || operation.location || '-'}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Truck Discharge Location</div>
-                                        <div className="font-medium">{operation.unloading_location || '-'}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Quantity Delivery (Kg)</div>
-                                        <div className="font-medium">{formatKg(operation.quantity_delivered)}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Quantity Receive (Kg)</div>
-                                        <div className="font-medium">{formatKg(operation.quantity_receive || operation.quantity_delivered)}</div>
-                                      </div>
-                                    </div>
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3 pb-3 border-b">
-                                      <div>
-                                        <div className="text-gray-500">Trucking OA Budget</div>
-                                        <div className="font-medium">{formatNumber(operation.oa_budget)}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Trucking OA Actual</div>
-                                        <div className="font-medium">{formatNumber(operation.oa_actual)}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Estimated KM</div>
-                                        <div className="font-medium">{operation.estimated_km ? `${formatNumber(operation.estimated_km)} km` : '-'}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Gain/Loss %</div>
-                                        <div className="font-medium">{formatNumber(operation.gain_loss_percentage)}%</div>
-                                      </div>
-                                    </div>
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3 pb-3 border-b">
-                                      <div>
-                                        <div className="text-gray-500">Gain/Loss Amount (Kg)</div>
-                                        {isEditing ? (
-                                          <Input
-                                            type="number"
-                                            step="0.01"
-                                            value={editedData.gain_loss_amount ?? operation.gain_loss_amount ?? ''}
-                                            onChange={(e) => handleFieldChange('gain_loss_amount', parseFloat(e.target.value) || 0)}
-                                            className="h-8 text-sm mt-1"
-                                          />
-                                        ) : (
-                                          <div className="font-medium">{formatKg(operation.gain_loss_amount)}</div>
-                                        )}
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Cargo Readiness Date</div>
-                                        {isEditing ? (
-                                          <Input
-                                            type="date"
-                                            value={editedData.cargo_readiness_date ? editedData.cargo_readiness_date.split('T')[0] : (operation.cargo_readiness_date ? operation.cargo_readiness_date.split('T')[0] : '')}
-                                            onChange={(e) => handleFieldChange('cargo_readiness_date', e.target.value)}
-                                            className="h-8 text-sm mt-1"
-                                          />
-                                        ) : (
-                                          <div className="font-medium">{formatDate(operation.cargo_readiness_date)}</div>
-                                        )}
-                                      </div>
-                                    </div>
-                                    {/* Removed Due Date Delivery Start/End and Late Indicator from expanded view as requested */}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
+                                </td>
+                              </tr>
                           )
                         })}
-                      </div>
-                    </div>
+                      </tbody>
+                    </table>
                   </div>
                 </div>
 
@@ -2944,16 +3045,18 @@ function TruckingPageContent() {
                           <div className="flex items-center gap-3">
                             <h3 className="font-semibold text-lg">{operation.operation_id}</h3>
                             {isEditing ? (
-                              <select
-                                value={currentData.status}
-                                onChange={(e) => handleFieldChange('status', e.target.value)}
-                                className="px-2 py-1 border border-gray-300 rounded text-sm"
-                              >
-                                <option value="PLANNED">Planned</option>
-                                <option value="IN_PROGRESS">In Progress</option>
-                                <option value="COMPLETED">Completed</option>
-                                <option value="CANCELLED">Cancelled</option>
-                              </select>
+                              operation.status === 'CANCELLED' ? (
+                                <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
+                              ) : (
+                                <select
+                                  value={editedData.status === 'CANCELLED' ? 'CANCELLED' : ''}
+                                  onChange={(e) => handleFieldChange('status', e.target.value)}
+                                  className="px-2 py-1 border border-gray-300 rounded text-sm"
+                                >
+                                  <option value="">Select Status</option>
+                                  <option value="CANCELLED">Cancelled</option>
+                                </select>
+                              )
                             ) : (
                               <Badge className={getStatusColor(operation.status)}>
                                 {operation.status}
@@ -2963,63 +3066,39 @@ function TruckingPageContent() {
                           <div className="flex gap-2">
                             {isEditing ? (
                               <>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={handleCancelEdit}
-                                  disabled={saving}
-                                >
-                                  <X className="h-4 w-4 mr-1" />
-                                  Cancel
+                                <Button variant="outline" size="icon" onClick={handleCancelEdit} disabled={saving} title="Cancel">
+                                  <X className="h-4 w-4" />
                                 </Button>
                                 <Button
-                                  size="sm"
+                                  size="icon"
                                   onClick={() => handleSave(operation.id)}
                                   disabled={saving}
-                                  className="bg-green-600 hover:bg-green-700"
+                                  title="Save"
+                                  className="bg-green-600 hover:bg-green-700 text-white"
                                 >
-                                  {saving ? (
-                                    <>
-                                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                                      Saving...
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Save className="h-4 w-4 mr-1" />
-                                      Save
-                                    </>
-                                  )}
+                                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                                 </Button>
                               </>
                             ) : (
                               <>
-                                {(() => {
-                                  const hasData = !!(operation.trucking_owner && String(operation.trucking_owner).trim())
-                                  return (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => handleEdit(operation)}
-                                      className={hasData ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100' : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'}
-                                    >
-                                      {hasData ? (
-                                        <><Edit2 className="h-4 w-4 mr-1" />Edit</>
-                                      ) : (
-                                        <><Plus className="h-4 w-4 mr-1" />Add</>
-                                      )}
-                                    </Button>
-                                  )
-                                })()}
                                 <Button
                                   variant="outline"
-                                  size="sm"
-                                  onClick={() => handleViewDocuments(operation)}
-                                  className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                  size="icon"
+                                  onClick={() => handleEdit(operation)}
+                                  title="Edit"
+                                  className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
                                 >
-                                  <Package className="h-4 w-4 mr-1" />
-                                  Documents
+                                  <Pencil className="h-4 w-4" />
                                 </Button>
-                                {/* Upload Document */}
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  onClick={() => handleViewDocuments(operation)}
+                                  title="Documents"
+                                  className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
+                                >
+                                  <FileText className="h-4 w-4" />
+                                </Button>
                                 <input
                                   id={`trucking-file-${operation.id}`}
                                   type="file"
@@ -3029,21 +3108,16 @@ function TruckingPageContent() {
                                 />
                                 <Button
                                   variant="outline"
-                                  size="sm"
+                                  size="icon"
                                   onClick={() => document.getElementById(`trucking-file-${operation.id}`)?.click()}
                                   disabled={uploadingId === operation.id}
-                                  className="bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100"
+                                  title="Upload"
+                                  className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
                                 >
                                   {uploadingId === operation.id ? (
-                                    <>
-                                      <span className="h-4 w-4 mr-2 inline-block border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
-                                      Uploading...
-                                    </>
+                                    <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
                                   ) : (
-                                    <>
-                                      <Upload className="h-4 w-4 mr-1" />
-                                      Upload
-                                    </>
+                                    <Upload className="h-4 w-4" />
                                   )}
                                 </Button>
                               </>
@@ -3245,14 +3319,15 @@ function TruckingPageContent() {
       {/* Documents Modal */}
       {showDocs && selectedOperation && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg p-6 max-h-[80vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="flex shrink-0 items-center justify-between border-b px-6 py-4">
               <h3 className="text-xl font-semibold">Documents — {selectedOperation.operation_id}</h3>
-              <Button variant="ghost" onClick={() => setShowDocs(false)}>
+              <Button variant="ghost" size="icon" className="shrink-0" aria-label="Close" onClick={() => setShowDocs(false)}>
                 <X className="h-5 w-5" />
               </Button>
             </div>
 
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
             {docsLoading ? (
               <div className="text-sm text-gray-500 py-8 text-center">Loading documents...</div>
             ) : operationDocs.length === 0 ? (
@@ -3279,6 +3354,7 @@ function TruckingPageContent() {
                 ))}
               </div>
             )}
+            </div>
           </div>
         </div>
       )}

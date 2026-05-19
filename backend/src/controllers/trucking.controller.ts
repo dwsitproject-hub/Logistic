@@ -15,6 +15,10 @@ import {
   buildSyntheticOperationId,
   formatDDMMYYYY,
 } from '../utils/operationId';
+import {
+  sqlEffectiveTruckingCompletionDate,
+  sqlEffectiveTruckingStartDate,
+} from '../utils/truckingSapDates';
 
 function deriveTruckingStatus(
   truckingStartDate: any,
@@ -136,52 +140,8 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
         t.trucking_owner,
         t.cargo_readiness_date,
         -- Use DB trucking dates, but fallback to SAP \"Trucking Start/Last Receive Date\" when DB is empty
-        COALESCE(
-          t.trucking_start_date,
-          (
-            SELECT (
-              CASE
-                WHEN trim(v.val) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(v.val)::date
-                WHEN trim(v.val) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(v.val), 'MM/DD/YY')
-                ELSE NULL
-              END
-            )
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Trucking Start Receive Date',
-                spd.data->>'Trucking Start Receive Date'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) v
-            WHERE v.val IS NOT NULL AND length(trim(v.val)) >= 6
-          )
-        ) AS trucking_start_date,
-        COALESCE(
-          t.trucking_completion_date,
-          (
-            SELECT (
-              CASE
-                WHEN trim(v.val) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(v.val)::date
-                WHEN trim(v.val) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(v.val), 'MM/DD/YY')
-                ELSE NULL
-              END
-            )
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Trucking Last Receive Date',
-                spd.data->>'Trucking Last Receive Date'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) v
-            WHERE v.val IS NOT NULL AND length(trim(v.val)) >= 6
-          )
-        ) AS trucking_completion_date,
+        ${sqlEffectiveTruckingStartDate('c')} AS trucking_start_date,
+        ${sqlEffectiveTruckingCompletionDate('c')} AS trucking_completion_date,
         t.eta_trucking_start_date,
         t.eta_trucking_completion_date,
         t.eta_delivery_start_date,
@@ -376,9 +336,18 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
     let paramIndex = 1;
 
     if (status) {
-      queryText += ` AND t.status = $${paramIndex}`;
-      queryParams.push(status);
-      paramIndex++;
+      const s = String(status).toUpperCase();
+      if (s === 'COMPLETED') {
+        queryText += ` AND COALESCE(t.status, '') <> 'CANCELLED' AND ${sqlEffectiveTruckingCompletionDate('c')} IS NOT NULL`;
+      } else if (s === 'IN_PROGRESS') {
+        queryText += ` AND COALESCE(t.status, '') <> 'CANCELLED' AND ${sqlEffectiveTruckingCompletionDate('c')} IS NULL AND ${sqlEffectiveTruckingStartDate('c')} IS NOT NULL`;
+      } else if (s === 'PLANNED') {
+        queryText += ` AND COALESCE(t.status, '') <> 'CANCELLED' AND ${sqlEffectiveTruckingCompletionDate('c')} IS NULL AND ${sqlEffectiveTruckingStartDate('c')} IS NULL`;
+      } else {
+        queryText += ` AND t.status = $${paramIndex}`;
+        queryParams.push(status);
+        paramIndex++;
+      }
     }
 
     if (location) {
@@ -483,12 +452,23 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
     const summaryQuery = `
       SELECT
         COUNT(*)::bigint AS total_count,
-        COUNT(*) FILTER (WHERE status = 'PLANNED')::bigint AS planned_count,
-        COUNT(*) FILTER (WHERE status = 'IN_PROGRESS')::bigint AS in_progress_count,
+        COUNT(*) FILTER (
+          WHERE COALESCE(status, '') <> 'CANCELLED'
+            AND trucking_completion_date IS NULL
+            AND trucking_start_date IS NULL
+        )::bigint AS planned_count,
+        COUNT(*) FILTER (
+          WHERE COALESCE(status, '') <> 'CANCELLED'
+            AND trucking_completion_date IS NULL
+            AND trucking_start_date IS NOT NULL
+        )::bigint AS in_progress_count,
         COUNT(*) FILTER (WHERE status = 'LOADING')::bigint AS loading_count,
         COUNT(*) FILTER (WHERE status = 'IN_TRANSIT')::bigint AS in_transit_count,
         COUNT(*) FILTER (WHERE status = 'UNLOADING')::bigint AS unloading_count,
-        COUNT(*) FILTER (WHERE status = 'COMPLETED')::bigint AS completed_count,
+        COUNT(*) FILTER (
+          WHERE COALESCE(status, '') <> 'CANCELLED'
+            AND trucking_completion_date IS NOT NULL
+        )::bigint AS completed_count,
         COUNT(*) FILTER (WHERE status = 'CANCELLED')::bigint AS cancelled_count
       FROM (${preOuterQuery}${outerSql}) AS _trucking_filtered
     `;

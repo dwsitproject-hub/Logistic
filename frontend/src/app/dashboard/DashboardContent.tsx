@@ -3510,8 +3510,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Plant Details Modal */}
       {selectedPlant && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
+            <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b bg-white px-6 py-4 mb-4">
               <div>
                 <h2 className="text-xl font-semibold">{selectedPlant.plant_location}</h2>
                 <p className="text-sm text-gray-500">{selectedPlant.contract_count} Contracts</p>
@@ -3607,8 +3607,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Supplier Details Modal */}
       {selectedSupplierName && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
+            <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b bg-white px-6 py-4 mb-4">
               <div>
                 <h2 className="text-xl font-semibold">Supplier — {selectedSupplierName}</h2>
               </div>
@@ -3654,8 +3654,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Trucking Owner Details Modal */}
       {selectedOwnerName && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-5xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white w-full max-w-5xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
+            <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b bg-white px-6 py-4 mb-4">
               <div>
                 <h2 className="text-xl font-semibold">Trucking Owner — {selectedOwnerName}</h2>
               </div>
@@ -3707,8 +3707,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Vessel Details Modal */}
       {selectedVesselName && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-5xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white w-full max-w-5xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
+            <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b bg-white px-6 py-4 mb-4">
               <div>
                 <h2 className="text-xl font-semibold">Vessel — {selectedVesselName}</h2>
               </div>
@@ -3758,7 +3758,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Universal Shipments Drilldown Modal (Shipment Performance card) */}
       {shipDrilldownTitle && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
             <div className="flex items-start justify-between mb-4 gap-4">
               <div className="min-w-0">
                 <h2 className="text-xl font-semibold truncate">{shipDrilldownTitle}</h2>
@@ -3887,7 +3887,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Universal Trucking Drilldown Modal (Trucking Performance card) */}
       {truckDrilldownTitle && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
             <div className="flex items-start justify-between mb-4 gap-4">
               <div className="min-w-0">
                 <h2 className="text-xl font-semibold truncate">{truckDrilldownTitle}</h2>
@@ -4007,7 +4007,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Universal Payments Drilldown Modal (Payment Performance card) */}
       {payDrilldownTitle && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
             <div className="flex items-start justify-between mb-4 gap-4">
               <div className="min-w-0">
                 <h2 className="text-xl font-semibold truncate">{payDrilldownTitle}</h2>
@@ -4231,7 +4231,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Universal Contracts Drilldown Modal (for performance cards) */}
       {drilldownTitle && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-[96vw] max-w-[96vw] rounded-lg shadow-lg p-4 md:p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white w-[96vw] max-w-[96vw] rounded-lg shadow-lg p-4 md:max-h-[90vh] overflow-y-auto px-6 pb-6">
             <div className="flex items-start justify-between mb-4 gap-4">
               <div className="min-w-0">
                 <h2 className="text-xl font-semibold truncate">{drilldownTitle}</h2>
@@ -4669,7 +4669,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
 
       {claimDrilldownKind && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-[96vw] max-w-[96vw] rounded-lg shadow-lg p-4 md:p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white w-[96vw] max-w-[96vw] rounded-lg shadow-lg p-4 md:max-h-[90vh] overflow-y-auto px-6 pb-6">
             <div className="flex items-start justify-between mb-4 gap-4">
               <div className="min-w-0">
                 <h2 className="text-xl font-semibold truncate">
