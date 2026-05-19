@@ -322,6 +322,8 @@ function ContractsPageContent() {
   const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
   const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
   const [uploadingId, setUploadingId] = useState<string>('')
+  const [csvCargoUploading, setCsvCargoUploading] = useState(false)
+  const [csvCargoResult, setCsvCargoResult] = useState<{ updated: number; notFound: number; errors: { po_number: string; reason: string }[] } | null>(null)
   const [docsLoading, setDocsLoading] = useState<boolean>(false)
   const [selectedContractDocs, setSelectedContractDocs] = useState<DocumentItem[]>([])
   const [docsModalContract, setDocsModalContract] = useState<Contract | null>(null)
@@ -1192,6 +1194,52 @@ function ContractsPageContent() {
       alert('Failed to update contract. Please try again.')
     } finally {
       setUpdatingContractId(null)
+    }
+  }
+
+  const downloadCargoReadinessTemplate = () => {
+    const rows = [
+      'po_number,cargo_readiness_date',
+      '# Example: 1001000001,2026-05-15',
+      '# cargo_readiness_date format: YYYY-MM-DD (leave blank to clear)',
+    ]
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'cargo_readiness_template.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleCargoReadinessUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setCsvCargoUploading(true)
+    setCsvCargoResult(null)
+    try {
+      const text = await file.text()
+      const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+      const [header, ...dataLines] = lines
+      const headers = header.split(',').map(h => h.trim().toLowerCase())
+      const poIdx = headers.indexOf('po_number')
+      const dateIdx = headers.indexOf('cargo_readiness_date')
+      if (poIdx === -1 || dateIdx === -1) {
+        alert('CSV must have columns: po_number, cargo_readiness_date')
+        return
+      }
+      const rows = dataLines.map(line => {
+        const cols = line.split(',')
+        return { po_number: cols[poIdx]?.trim() || '', cargo_readiness_date: cols[dateIdx]?.trim() || '' }
+      }).filter(r => r.po_number)
+      if (rows.length === 0) { alert('No valid rows found in CSV.'); return }
+      const res = await api.post('/contracts/bulk-cargo-readiness', { rows })
+      setCsvCargoResult(res.data.data)
+    } catch {
+      alert('Upload failed. Please try again.')
+    } finally {
+      setCsvCargoUploading(false)
+      e.target.value = ''
     }
   }
 
@@ -2986,7 +3034,7 @@ function ContractsPageContent() {
                 </CardContent>
               </Card>
               <Card
-                className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'mix' ? 'ring-2 ring-indigo-500 bg-indigo-50/50' : ''}`}
+                className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'mix' ? 'ring-2 ring-green-500 bg-green-50/50' : ''}`}
                 onClick={() => {
                   setUnassignedFilter(prev => (prev === 'mix' ? null : 'mix'))
                   if (unassignedFilter !== 'mix') setTimeout(() => contractsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
@@ -3002,8 +3050,8 @@ function ContractsPageContent() {
                       <div className="text-xs text-gray-400 mt-1">Click to view list</div>
                     </div>
                     <div className="flex items-center gap-1">
-                      <Ship className="h-7 w-7 text-indigo-500" />
-                      <Truck className="h-7 w-7 text-indigo-500" />
+                      <Ship className="h-7 w-7 text-green-500" />
+                      <Truck className="h-7 w-7 text-green-500" />
                     </div>
                   </div>
                 </CardContent>
@@ -3011,26 +3059,6 @@ function ContractsPageContent() {
             </div>
 
             {/* Active filter banner */}
-            {unassignedFilter && (
-              <div className="flex items-center justify-between gap-2 rounded-lg border bg-gray-50 px-4 py-2 text-sm">
-                <span className="text-gray-700">
-                  {unassignedFilter === 'sea'
-                    ? 'Showing SEA contracts without shipments'
-                    : unassignedFilter === 'land'
-                      ? 'Showing LAND contracts without trucking'
-                      : 'Showing MIX contracts without shipment or trucking'}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setUnassignedFilter(null)}
-                  className="text-gray-600 hover:text-gray-900"
-                >
-                  <X className="h-4 w-4 mr-1" />
-                  Clear filter
-                </Button>
-              </div>
-            )}
           </>
         )}
 
@@ -3063,7 +3091,7 @@ function ContractsPageContent() {
                         ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
                         : unassignedFilter === 'land'
                           ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                          : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                          : 'bg-green-100 text-green-700 hover:bg-green-200'
                     }`}
                     onClick={() => setUnassignedFilter(null)}
                   >
@@ -3073,6 +3101,36 @@ function ContractsPageContent() {
                 )}
               </div>
               <div className="flex items-center gap-2">
+                <div className="hidden">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={downloadCargoReadinessTemplate}
+                    className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Template
+                  </Button>
+                  <input
+                    id="cargo-readiness-upload"
+                    type="file"
+                    accept=".csv"
+                    onChange={handleCargoReadinessUpload}
+                    className="hidden"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={csvCargoUploading}
+                    onClick={() => document.getElementById('cargo-readiness-upload')?.click()}
+                  >
+                    {csvCargoUploading ? (
+                      <><span className="h-4 w-4 mr-2 inline-block border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />Uploading...</>
+                    ) : (
+                      <><Upload className="h-4 w-4 mr-2" />Upload CSV</>
+                    )}
+                  </Button>
+                </div>
                 <div className="relative">
                   <Button
                     variant="outline"
@@ -3153,56 +3211,64 @@ function ContractsPageContent() {
                     </div>
                   )}
                 </div>
-              </div>
-              {/* Pagination Controls - Top */}
-              {totalPages > 1 && (
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handlePageChange(currentPage - 1)}
-                    disabled={currentPage === 1 || loading}
-                  >
-                    Previous
-                  </Button>
-                  
-                  {/* Page Numbers */}
-                  <div className="flex items-center gap-1">
-                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                      let pageNum: number
-                      if (totalPages <= 5) {
-                        pageNum = i + 1
-                      } else if (currentPage <= 3) {
-                        pageNum = i + 1
-                      } else if (currentPage >= totalPages - 2) {
-                        pageNum = totalPages - 4 + i
-                      } else {
-                        pageNum = currentPage - 2 + i
-                      }
-                      
-                      return (
-                        <Button
-                          key={pageNum}
-                          variant={currentPage === pageNum ? "default" : "outline"}
-                          size="sm"
-                          onClick={() => handlePageChange(pageNum)}
-                          disabled={loading}
-                          className="min-w-[40px]"
-                        >
-                          {pageNum}
-                        </Button>
-                      )
-                    })}
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(currentPage - 1)}
+                      disabled={currentPage === 1 || loading}
+                    >
+                      Previous
+                    </Button>
+
+                    {/* Page Numbers */}
+                    <div className="flex items-center gap-1">
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum: number
+                        if (totalPages <= 5) {
+                          pageNum = i + 1
+                        } else if (currentPage <= 3) {
+                          pageNum = i + 1
+                        } else if (currentPage >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i
+                        } else {
+                          pageNum = currentPage - 2 + i
+                        }
+
+                        return (
+                          <Button
+                            key={pageNum}
+                            variant={currentPage === pageNum ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => handlePageChange(pageNum)}
+                            disabled={loading}
+                            className="min-w-[40px]"
+                          >
+                            {pageNum}
+                          </Button>
+                        )
+                      })}
+                    </div>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(currentPage + 1)}
+                      disabled={currentPage === totalPages || loading}
+                    >
+                      Next
+                    </Button>
                   </div>
-                  
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handlePageChange(currentPage + 1)}
-                    disabled={currentPage === totalPages || loading}
-                  >
-                    Next
-                  </Button>
+                )}
+              </div>
+              {csvCargoResult && (
+                <div className={`text-xs px-3 py-2 rounded border ${csvCargoResult.notFound > 0 ? 'bg-yellow-50 border-yellow-200 text-yellow-800' : 'bg-green-50 border-green-200 text-green-800'}`}>
+                  ✓ Updated: {csvCargoResult.updated} &nbsp;|&nbsp; Not found: {csvCargoResult.notFound}
+                  {csvCargoResult.errors.length > 0 && (
+                    <span className="ml-2 text-red-600">{csvCargoResult.errors.slice(0, 3).map(e => e.po_number).join(', ')}{csvCargoResult.errors.length > 3 ? ` +${csvCargoResult.errors.length - 3} more` : ''}</span>
+                  )}
+                  <button className="ml-3 underline" onClick={() => setCsvCargoResult(null)}>Dismiss</button>
                 </div>
               )}
             </div>
@@ -3654,7 +3720,7 @@ function ContractsPageContent() {
                                     return (
                                       <Button variant="outline" size="icon" onClick={() => handleShipIconClick(contract)}
                                         title={hasData ? 'Edit' : 'Add'}
-                                        className={hasData ? '' : 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'}>
+                                        className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100">
                                         {hasData ? <Pencil className="h-4 w-4" /> : <Ship className="h-4 w-4" />}
                                       </Button>
                                     )

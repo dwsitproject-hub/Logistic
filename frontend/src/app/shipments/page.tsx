@@ -1050,21 +1050,38 @@ function ShipmentsPageContent() {
   }
 
   const downloadTemplate = () => {
-    // Build CSV template with headers only (no data, just a clean template for import)
     const headers = [
-      'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Vessel Owner','Vessel Draft (m)','Vessel LOA (m)','Vessel Capacity (MT)','Hull Type','Charter Type','Vessel OA Budget','Vessel OA Actual','Estimated KM','Estimated NM','Average Vessel Speed','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','B/L Quantity (MT)','Actual Vessel Qty Receive (MT)','Difference Final Qty BL QTY','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID',
-      // Loading port groups (1..3)
-      'LP1 Port Name','LP1 Quantity (MT)','LP1 ETA Arrival','LP1 ATA Arrival','LP1 ETA Berthed','LP1 ATA Berthed','LP1 ETA Load Start','LP1 ATA Load Start','LP1 ETA Load Completed','LP1 ATA Load Completed','LP1 ETA Sailed','LP1 ATA Sailed','LP1 Loading Rate (MT/day)',
-      'LP2 Port Name','LP2 Quantity (MT)','LP2 ETA Arrival','LP2 ATA Arrival','LP2 ETA Berthed','LP2 ATA Berthed','LP2 ETA Load Start','LP2 ATA Load Start','LP2 ETA Load Completed','LP2 ATA Load Completed','LP2 ETA Sailed','LP2 ATA Sailed','LP2 Loading Rate (MT/day)',
-      'LP3 Port Name','LP3 Quantity (MT)','LP3 ETA Arrival','LP3 ATA Arrival','LP3 ETA Berthed','LP3 ATA Berthed','LP3 ETA Load Start','LP3 ATA Load Start','LP3 ETA Load Completed','LP3 ATA Load Completed','LP3 ETA Sailed','LP3 ATA Sailed','LP3 Loading Rate (MT/day)'
+      'PO Number',
+      'Vessel Name',
+      'Loading Port',
+      'Discharge Port',
+      'Qty Delivery',
+      'ETA Vessel Arrival at Loading Port',
+      'ETA Vessel Berthed at Loading Port',
+      'ETA Vessel Start Loading',
+      'ETA Vessel Completed Loading',
+      'ETA Vessel Sailed from Loading Port',
+      'ETA Vessel Arrive at Discharge Port',
+      'ETA Vessel Berthed at Discharge Port',
+      'ETA Vessel Start Discharging',
+      'ETA Vessel Complete Discharge',
     ]
 
-    // Sample row with STO Number and Contract Numbers
     const sampleRow = [
-      '2587817452','2313586719, 2313586720','PLANNED','MV Example','VES001','Example Shipping Co','12.5','210','50000','Single Hull','Time Charter','75000','72000','1200','650','12.5','Jakarta','Singapore','1000','950','940','930','-10','1000','980','0','0','2025-01-01','2025-01-05','5','FALSE','SAP001',
-      'Loading Port 1','500','2025-01-01T08:00','','2025-01-01T10:00','','2025-01-01T11:00','','2025-01-01T18:00','','2025-01-01T20:00','','71.43',
-      '','','','','','','','','','','','','',
-      '','','','','','','','','','','',''
+      'PO-2025-001',
+      'MV Example',
+      'Jakarta',
+      'Singapore',
+      '5000',
+      '2025-01-01',
+      '2025-01-02',
+      '2025-01-03',
+      '2025-01-04',
+      '2025-01-05',
+      '2025-01-08',
+      '2025-01-09',
+      '2025-01-10',
+      '2025-01-11',
     ].join(',')
 
     const csvContent = [headers.join(','), sampleRow].join('\n')
@@ -1229,13 +1246,56 @@ function ShipmentsPageContent() {
 
     setUploading(true)
     try {
+      // Pre-fetch all reference data in parallel
+      let masterVessels: Array<{ vessel_code: string; vessel_name: string }> = []
+      let masterPorts: Array<{ port: string; region: string | null }> = []
+      let allContracts: Array<{ contract_id: string; po_numbers: string }> = []
+      let allShipmentsForLookup: Shipment[] = []
+      try {
+        const [vRes, pRes, cRes, sRes] = await Promise.all([
+          api.get('/master-vessels', { params: { limit: 9999 } }),
+          api.get('/master-loading-ports', { params: { limit: 9999 } }),
+          api.get('/contracts', { params: { limit: 9999 } }),
+          api.get('/shipments', { params: { limit: 9999, compact: true, includeSummary: false } }),
+        ])
+        masterVessels = vRes.data?.data?.items ?? []
+        masterPorts = pRes.data?.data?.items ?? []
+        allContracts = cRes.data?.data?.contracts ?? []
+        allShipmentsForLookup = sRes.data?.data?.shipments ?? []
+      } catch {
+        alert('Gagal memuat data referensi. Silakan coba lagi.')
+        setUploading(false)
+        e.target.value = ''
+        return
+      }
+
+      // Build lookup maps
+      const vesselSet = new Set(masterVessels.map(v => v.vessel_name.toLowerCase()))
+      const portSet = new Set(masterPorts.map(p => p.port.toLowerCase()))
+
+      // po_number → contract (business contract_id)
+      // API returns po_numbers (plural, comma-separated STRING_AGG), not po_number
+      const contractByPo = new Map<string, { contract_id: string; po_numbers: string }>()
+      for (const c of allContracts) {
+        if (!(c as any).po_numbers) continue
+        for (const po of (c as any).po_numbers.split(',').map((p: string) => p.trim())) {
+          if (po) contractByPo.set(po, c)
+        }
+      }
+
+      // contract_id (business key) → existing shipment
+      const shipmentByContractId = new Map<string, Shipment>()
+      for (const s of allShipmentsForLookup) {
+        if (!s.contract_numbers) continue
+        for (const cid of s.contract_numbers.split(',').map((c: string) => c.trim())) {
+          if (cid) shipmentByContractId.set(cid, s)
+        }
+      }
+
       const text = await file.text()
       const lines = text.split('\n').filter(line => line.trim())
       const headers = parseCsvLine(lines[0])
-      
-      // Debug: Log headers to help identify the issue
-      console.log('CSV Headers found:', headers)
-      
+
       let createCount = 0
       let updateCount = 0
       let errorCount = 0
@@ -1243,98 +1303,134 @@ function ShipmentsPageContent() {
 
       for (let i = 1; i < lines.length; i++) {
         const values = parseCsvLine(lines[i])
-        if (values.length < 2) continue // At least need STO Number and one more field
+        if (values.length < 1) continue
 
         const row: any = {}
         headers.forEach((header, index) => {
           row[header.trim()] = values[index]?.trim() || ''
         })
 
-        // Support both old and new column names
-        const stoNumber = row['STO Number'] || row['Shipment ID']
-        const contractNumbers = row['Contract Numbers'] || row['Contract Number']
-        
-        // Debug: Log the first row to see what data we're getting
-        if (i === 1) {
-          console.log('First row data:', row)
-          console.log('STO Number value:', stoNumber)
-          console.log('Contract Numbers value:', contractNumbers)
-        }
-        
-        if (!stoNumber) {
-          errors.push(`Row ${i + 1}: Missing STO Number (found headers: ${headers.join(', ')})`)
-          console.log(`Row ${i + 1} data:`, row)
-          console.log(`Row ${i + 1} STO Number:`, stoNumber)
-          console.log(`Row ${i + 1} Contract Numbers:`, contractNumbers)
+        const poNumber = row['PO Number']
+        if (!poNumber) {
+          errors.push(`Row ${i + 1}: PO Number wajib diisi`)
           errorCount++
           continue
         }
 
-        // Check if STO exists
-        const existingShipment = shipments.find(s => s.sto_number === stoNumber)
-
-        // Prepare shipment data
-        const shipmentData = {
-          stoNumber: stoNumber,
-          contractNumbers: contractNumbers ? contractNumbers.split(',').map((c: string) => c.trim()).filter((c: string) => c) : [],
-          vesselName: row['Vessel Name'] || '',
-          vesselCode: row['Vessel Code'] || '',
-          vesselOwner: row['Vessel Owner'] || '',
-          vesselDraft: row['Vessel Draft (m)'] || '',
-          vesselCapacity: row['Vessel Capacity (MT)'] || '',
-          vesselHullType: row['Hull Type'] || '',
-          charterType: row['Charter Type'] || '',
-          portOfLoading: row['Port of Loading'] || '',
-          portOfDischarge: row['Port of Discharge'] || '',
-          quantityShipped: row['Quantity Shipped (MT)'] || '',
-          shipmentDate: row['Shipment Date (YYYY-MM-DD)'] || '',
-          arrivalDate: row['Arrival Date (YYYY-MM-DD)'] || ''
+        // Validate PO exists in contracts
+        const contract = contractByPo.get(poNumber)
+        if (!contract) {
+          errors.push(`Row ${i + 1}: PO Number "${poNumber}" tidak ditemukan di database contracts`)
+          errorCount++
+          continue
         }
+
+        // Validate vessel and port against master data
+        const rowErrors: string[] = []
+        if (row['Vessel Name'] && !vesselSet.has(row['Vessel Name'].toLowerCase())) {
+          rowErrors.push(`vessel "${row['Vessel Name']}" tidak ada di Master Vessel`)
+        }
+        if (row['Loading Port'] && !portSet.has(row['Loading Port'].toLowerCase())) {
+          rowErrors.push(`loading port "${row['Loading Port']}" tidak ada di Master Port`)
+        }
+        if (row['Discharge Port'] && !portSet.has(row['Discharge Port'].toLowerCase())) {
+          rowErrors.push(`discharge port "${row['Discharge Port']}" tidak ada di Master Port`)
+        }
+        if (rowErrors.length > 0) {
+          errors.push(`Row ${i + 1} (PO ${poNumber}): ${rowErrors.join('; ')}`)
+          errorCount++
+          continue
+        }
+
+        const contractId = contract.contract_id
+        const existingShipment = shipmentByContractId.get(contractId)
+        const toDate = (v: string) => (v ? v.substring(0, 10) : null)
 
         try {
           if (existingShipment) {
-            // UPDATE existing shipment
-            const updateData: any = {
-              shipment_id: existingShipment.shipment_id // Add required shipment_id field
-            }
-        if (row['Status']) updateData.status = row['Status']
-        if (row['Vessel Name']) updateData.vessel_name = row['Vessel Name']
-        if (row['Vessel Code']) updateData.vessel_code = row['Vessel Code']
-            if (row['Vessel Owner']) updateData.vessel_owner = row['Vessel Owner']
-            if (row['Vessel Draft (m)']) updateData.vessel_draft = parseFloat(row['Vessel Draft (m)'])
-            if (row['Vessel Capacity (MT)']) updateData.vessel_capacity = parseFloat(row['Vessel Capacity (MT)'])
-            if (row['Hull Type']) updateData.vessel_hull_type = row['Hull Type']
-            if (row['Charter Type']) updateData.charter_type = row['Charter Type']
-        if (row['Port of Loading']) updateData.port_of_loading = row['Port of Loading']
-        if (row['Port of Discharge']) updateData.port_of_discharge = row['Port of Discharge']
-        if (row['Quantity Shipped (MT)']) updateData.quantity_shipped = parseFloat(row['Quantity Shipped (MT)'])
-        if (row['Quantity Delivered (MT)']) updateData.quantity_delivered = parseFloat(row['Quantity Delivered (MT)'])
-        if (row['Shipment Date (YYYY-MM-DD)']) updateData.shipment_date = row['Shipment Date (YYYY-MM-DD)']
-        if (row['Arrival Date (YYYY-MM-DD)']) updateData.arrival_date = row['Arrival Date (YYYY-MM-DD)']
+            // UPDATE — shipment already exists for this contract
+            const updateData: any = { shipment_id: existingShipment.shipment_id }
+            if (row['Vessel Name']) updateData.vessel_name = row['Vessel Name']
+            if (row['Loading Port']) updateData.port_of_loading = row['Loading Port']
+            if (row['Discharge Port']) updateData.port_of_discharge = row['Discharge Port']
+            if (row['Qty Delivery']) updateData.quantity_delivered = parseFloat(row['Qty Delivery'])
 
-            console.log(`Updating shipment ${existingShipment.id} with data:`, updateData)
-            const response = await api.put(`/shipments/${existingShipment.id}`, updateData)
-          if (response.data.success) {
-              updateCount++
-          } else {
-              const errorMsg = response.data.error?.message || 'Update failed'
-              errors.push(`Row ${i + 1}: ${errorMsg} for STO ${stoNumber}`)
-              console.error(`Update failed for STO ${stoNumber}:`, response.data)
-            errorCount++
-          }
-          } else {
-            // CREATE new shipment
-            if (!contractNumbers || shipmentData.contractNumbers.length === 0) {
-              errors.push(`Row ${i + 1}: Missing Contract Numbers for new STO ${stoNumber}`)
-          errorCount++
+            const shipRes = await api.put(`/shipments/${existingShipment.id}`, updateData)
+            if (!shipRes.data.success) {
+              errors.push(`Row ${i + 1}: Gagal update shipment untuk PO ${poNumber}`)
+              errorCount++
               continue
             }
 
-            const response = await api.post('/shipments', shipmentData)
-            if (response.data.success) {
+            // Update ETA on loading port record
+            const etaPayload: Record<string, string | null> = {}
+            if (row['ETA Vessel Arrival at Loading Port']) etaPayload.eta_vessel_arrival = toDate(row['ETA Vessel Arrival at Loading Port'])
+            if (row['ETA Vessel Berthed at Loading Port']) {
+              const d = toDate(row['ETA Vessel Berthed at Loading Port'])
+              etaPayload.eta_vessel_berthed = d
+              etaPayload.eta_vessel_berthed_at_loading_port = d
+            }
+            if (row['ETA Vessel Start Loading']) etaPayload.eta_loading_start = toDate(row['ETA Vessel Start Loading'])
+            if (row['ETA Vessel Completed Loading']) etaPayload.eta_loading_completed = toDate(row['ETA Vessel Completed Loading'])
+            if (row['ETA Vessel Sailed from Loading Port']) etaPayload.eta_vessel_sailed = toDate(row['ETA Vessel Sailed from Loading Port'])
+            if (row['ETA Vessel Arrive at Discharge Port']) etaPayload.eta_vessel_arrive_at_discharge_port = toDate(row['ETA Vessel Arrive at Discharge Port'])
+            if (row['ETA Vessel Berthed at Discharge Port']) etaPayload.eta_vessel_berthed_at_discharge_port = toDate(row['ETA Vessel Berthed at Discharge Port'])
+            if (row['ETA Vessel Start Discharging']) etaPayload.eta_vessel_start_discharging = toDate(row['ETA Vessel Start Discharging'])
+            if (row['ETA Vessel Complete Discharge']) etaPayload.eta_vessel_complete_discharge = toDate(row['ETA Vessel Complete Discharge'])
+
+            if (Object.keys(etaPayload).length > 0) {
+              const portsRes = await api.get(`/shipments/${existingShipment.id}/loading-ports`)
+              const ports: VesselLoadingPort[] = portsRes.data.success ? portsRes.data.data : []
+              const lp1 = ports.find(p => !p.is_discharge_port && p.port_sequence === 1)
+              if (lp1?.id) {
+                await api.put(`/shipments/${existingShipment.id}/loading-ports/${lp1.id}`, { id: lp1.id, ...etaPayload })
+              } else {
+                await api.post(`/shipments/${existingShipment.id}/loading-ports`, {
+                  port_sequence: 1,
+                  port_name: row['Loading Port'] || '',
+                  quantity_at_loading_port: 0,
+                  is_discharge_port: false,
+                  ...etaPayload,
+                })
+              }
+            }
+            updateCount++
+          } else {
+            // CREATE — no shipment yet for this contract; mirror AddShipmentModal payload
+            const etaByContract = {
+              [contractId]: {
+                eta_arrival: toDate(row['ETA Vessel Arrival at Loading Port']),
+                eta_berthed: toDate(row['ETA Vessel Berthed at Loading Port']),
+                eta_loading_start: toDate(row['ETA Vessel Start Loading']),
+                eta_loading_complete: toDate(row['ETA Vessel Completed Loading']),
+                eta_sailed: toDate(row['ETA Vessel Sailed from Loading Port']),
+                eta_discharge_arrival: toDate(row['ETA Vessel Arrive at Discharge Port']),
+                eta_discharge_berthed: toDate(row['ETA Vessel Berthed at Discharge Port']),
+                eta_discharge_start: toDate(row['ETA Vessel Start Discharging']),
+                eta_discharge_complete: toDate(row['ETA Vessel Complete Discharge']),
+              },
+            }
+            const shipmentData = {
+              operationId: `OP-${contractId}-${Date.now().toString().slice(-8)}`,
+              stoNumber: '',
+              contractNumbers: [contractId],
+              contractQtyAssigned: { [contractId]: row['Qty Delivery'] || '0' },
+              etaByContract,
+              vesselName: row['Vessel Name'] || '',
+              vesselCode: '',
+              vesselOwner: '',
+              vesselDraft: '',
+              vesselCapacity: '',
+              vesselHullType: '',
+              charterType: '',
+              portOfLoading: row['Loading Port'] || '',
+              portOfDischarge: row['Discharge Port'] || '',
+            }
+            const createRes = await api.post('/shipments', shipmentData)
+            if (createRes.data.success) {
               createCount++
             } else {
-              errors.push(`Row ${i + 1}: ${response.data.error?.message || 'Create failed for STO ' + stoNumber}`)
+              errors.push(`Row ${i + 1}: Gagal buat shipment untuk PO ${poNumber}: ${createRes.data.error?.message || ''}`)
               errorCount++
             }
           }
@@ -1345,12 +1441,7 @@ function ShipmentsPageContent() {
         }
       }
 
-      // Show detailed results
-      let message = `Bulk operation completed!\n\n`
-      message += `âœ… Created: ${createCount}\n`
-      message += `âœ… Updated: ${updateCount}\n`
-      message += `âŒ Failed: ${errorCount}`
-      
+      let message = `Upload selesai!\n\nDibuat: ${createCount}\nDiperbarui: ${updateCount}\nGagal: ${errorCount}`
       if (errors.length > 0 && errors.length <= 10) {
         message += `\n\nErrors:\n${errors.join('\n')}`
       } else if (errors.length > 10) {
@@ -1358,10 +1449,10 @@ function ShipmentsPageContent() {
       }
 
       alert(message)
-      await fetchShipments() // Refresh the list
+      await fetchShipments()
     } catch (error) {
       console.error('Bulk upload error:', error)
-      alert('Failed to process bulk upload. Please check your CSV file format.')
+      alert('Gagal memproses file CSV. Periksa format file dan coba lagi.')
     } finally {
       setUploading(false)
       e.target.value = ''
@@ -1897,7 +1988,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.sto_number || '',
       render: (s) => (
-        <span className="text-sm font-semibold break-words block">
+        <span className="text-sm break-words block">
           {s.sto_number || ''}
         </span>
       )
@@ -2891,6 +2982,54 @@ function ShipmentsPageContent() {
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
+              size="sm"
+              variant="outline"
+              onClick={downloadTemplate}
+              className="border-green-600 text-green-700 hover:bg-green-50"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Download Template
+            </Button>
+            {canExportShipments && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={exportFilteredData}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export Data
+              </Button>
+            )}
+            <>
+              <input
+                type="file"
+                accept=".csv"
+                onChange={handleBulkUpload}
+                className="hidden"
+                disabled={uploading}
+                id="bulk-upload-input"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => document.getElementById('bulk-upload-input')?.click()}
+                disabled={uploading}
+              >
+                {uploading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-4 w-4 mr-2" />
+                    Upload CSV
+                  </>
+                )}
+              </Button>
+            </>
+            <Button
+              size="sm"
               onClick={() => {
                 // Allow opening the modal immediately; permissions load async and may fail open for admin workflows.
                 if (perms.loaded && !canOpenAddShipmentModal) {
@@ -2901,56 +3040,10 @@ function ShipmentsPageContent() {
                 }
                 setShowAddShipment(true)
               }}
-              className="bg-blue-600 hover:bg-blue-700"
             >
               <Plus className="h-4 w-4 mr-2" />
               Add New Shipment
             </Button>
-            <Button
-                onClick={downloadTemplate}
-                variant="outline"
-                className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Download Template
-              </Button>
-            {canExportShipments && (
-              <Button
-                onClick={exportFilteredData}
-                variant="outline"
-                className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Export Data
-              </Button>
-            )}
-            <>
-                <input
-                  type="file"
-                  accept=".csv"
-                  onChange={handleBulkUpload}
-                  className="hidden"
-                  disabled={uploading}
-                  id="bulk-upload-input"
-                />
-                <Button
-                  onClick={() => document.getElementById('bulk-upload-input')?.click()}
-                  disabled={uploading}
-                  className="bg-blue-600 hover:bg-blue-700"
-                >
-                  {uploading ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Uploading...
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="h-4 w-4 mr-2" />
-                      Upload CSV
-                    </>
-                  )}
-                </Button>
-              </>
           </div>
         </div>
 
@@ -3675,24 +3768,26 @@ function ShipmentsPageContent() {
                     </div>
                   )}
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => (allExpanded ? collapseAll() : expandAll(allVisibleIds))}
-                  disabled={loading || sortedShipments.length === 0}
-                >
-                  {allExpanded ? (
-                    <>
-                      <Minus className="h-4 w-4 mr-2" />
-                      Collapse All
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Expand All
-                    </>
-                  )}
-                </Button>
+                <div className="hidden">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => (allExpanded ? collapseAll() : expandAll(allVisibleIds))}
+                    disabled={loading || sortedShipments.length === 0}
+                  >
+                    {allExpanded ? (
+                      <>
+                        <Minus className="h-4 w-4 mr-2" />
+                        Collapse All
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="h-4 w-4 mr-2" />
+                        Expand All
+                      </>
+                    )}
+                  </Button>
+                </div>
                 {totalPages > 1 && (
                   <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
                     <Button
@@ -4125,18 +4220,20 @@ function ShipmentsPageContent() {
                             <>
                               <tr key={shipment.id} className={rowBg}>
                                 <td className="px-2 py-2 align-middle w-10">
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleExpanded(shipment.id)}
-                                    className="p-1 text-gray-500 hover:text-gray-800"
-                                    title={expandedShipmentIds.has(shipment.id) ? 'Collapse' : 'Expand'}
-                                  >
-                                    {expandedShipmentIds.has(shipment.id) ? (
-                                      <ChevronDown className="h-5 w-5" />
-                                    ) : (
-                                      <ChevronRight className="h-5 w-5" />
-                                    )}
-                                  </button>
+                                  <div className="hidden">
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleExpanded(shipment.id)}
+                                      className="p-1 text-gray-500 hover:text-gray-800"
+                                      title={expandedShipmentIds.has(shipment.id) ? 'Collapse' : 'Expand'}
+                                    >
+                                      {expandedShipmentIds.has(shipment.id) ? (
+                                        <ChevronDown className="h-5 w-5" />
+                                      ) : (
+                                        <ChevronRight className="h-5 w-5" />
+                                      )}
+                                    </button>
+                                  </div>
                                 </td>
 
                                   {visibleColumns.map(col => (
@@ -4360,7 +4457,7 @@ function ShipmentsPageContent() {
                                   </div>
                                   </td>
                               </tr>
-                              {expandedShipmentIds.has(shipment.id) && (
+                              {false && expandedShipmentIds.has(shipment.id) && (
                                 <tr key={`${shipment.id}-expanded`} className={rowBg}>
                                   <td colSpan={visibleColumns.length + 2} className="px-3 py-3">
                                   <div className="p-3 border rounded bg-white">
@@ -4499,18 +4596,20 @@ function ShipmentsPageContent() {
                         <div className="p-4">
                           <div className="flex items-center justify-between gap-3 mb-3">
                             <div className="flex items-center gap-3 min-w-0">
-                              <button
-                                type="button"
-                                onClick={() => toggleExpanded(shipment.id)}
-                                className="p-1 text-gray-500 hover:text-gray-800"
-                                title={expandedShipmentIds.has(shipment.id) ? 'Collapse' : 'Expand'}
-                              >
-                                {expandedShipmentIds.has(shipment.id) ? (
-                                  <ChevronDown className="h-5 w-5" />
-                                ) : (
-                                  <ChevronRight className="h-5 w-5" />
-                                )}
-                              </button>
+                              <div className="hidden">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleExpanded(shipment.id)}
+                                  className="p-1 text-gray-500 hover:text-gray-800"
+                                  title={expandedShipmentIds.has(shipment.id) ? 'Collapse' : 'Expand'}
+                                >
+                                  {expandedShipmentIds.has(shipment.id) ? (
+                                    <ChevronDown className="h-5 w-5" />
+                                  ) : (
+                                    <ChevronRight className="h-5 w-5" />
+                                  )}
+                                </button>
+                              </div>
                               <div className="min-w-0">
                                 <div className="font-semibold truncate">{shipment.sto_number || shipment.operation_id || ''}</div>
                                 <div className="text-xs text-gray-600 truncate">{shipment.vessel_name || '-'} • {shipment.contract_number || '-'}</div>
@@ -4581,7 +4680,7 @@ function ShipmentsPageContent() {
                           </div>
 
                           {/* Expanded Details */}
-                          {expandedShipmentIds.has(shipment.id) && (
+                          {false && expandedShipmentIds.has(shipment.id) && (
                             <div className="mt-4">
                               {/* Basic Info */}
                               <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mb-4 pb-4 border-b">

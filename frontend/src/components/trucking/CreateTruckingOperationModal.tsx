@@ -586,7 +586,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                 {step3Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="p-4 space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-3 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1.5">
                       Due Date Delivery Start
@@ -610,6 +610,19 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       disabled
                       className="bg-gray-100 cursor-not-allowed"
                     />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+                      Cargo Readiness Date
+                    </label>
+                    <DateInputDdMmYyyy
+                      valueIso={newOperation.cargo_readiness_date || ''}
+                      onChangeIso={(val) => setNewOperation((prev) => ({ ...prev, cargo_readiness_date: val }))}
+                      className={formErrors.cargo_readiness_date ? 'border-red-500' : ''}
+                    />
+                    {formErrors.cargo_readiness_date && (
+                      <p className="text-xs mt-1 text-red-600">{formErrors.cargo_readiness_date}</p>
+                    )}
                   </div>
                 </div>
 

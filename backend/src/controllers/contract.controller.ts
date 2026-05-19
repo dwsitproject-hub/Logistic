@@ -2102,3 +2102,34 @@ export const updateContract = async (req: AuthRequest, res: Response) => {
   }
 };
 
+export const bulkUpdateCargoReadiness = async (req: AuthRequest, res: Response) => {
+  const rows: { po_number: string; cargo_readiness_date: string }[] = req.body.rows;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ success: false, error: { message: 'rows array is required' } });
+  }
+
+  let updated = 0;
+  let notFound = 0;
+  const errors: { po_number: string; reason: string }[] = [];
+
+  for (const row of rows) {
+    if (!row.po_number) continue;
+    try {
+      const result = await query(
+        `UPDATE contracts SET cargo_readiness_date = $1, updated_at = CURRENT_TIMESTAMP WHERE po_number = $2 RETURNING id`,
+        [row.cargo_readiness_date || null, row.po_number]
+      );
+      if (result.rows.length > 0) {
+        updated++;
+      } else {
+        notFound++;
+        errors.push({ po_number: row.po_number, reason: 'Not found' });
+      }
+    } catch {
+      errors.push({ po_number: row.po_number, reason: 'Update failed' });
+    }
+  }
+
+  return res.json({ success: true, data: { updated, notFound, errors } });
+};
+

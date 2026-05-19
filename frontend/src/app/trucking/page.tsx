@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, ArrowUp, ArrowDown, Check, ArrowLeft, ArrowRight, FileText, Pencil } from 'lucide-react'
+import { Search, Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, ArrowUp, ArrowDown, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -538,6 +538,7 @@ function TruckingPageContent() {
   const [page, setPage] = useState<number>(1)
   const pageSize = 20
   const [totalCount, setTotalCount] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
   const [hasMore, setHasMore] = useState<boolean>(true)
   const [truckingSummary, setTruckingSummary] = useState<any>(null)
 
@@ -565,6 +566,17 @@ function TruckingPageContent() {
     operationLevelFailures: number
     rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[]
     operationFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string; operation_ids?: string[] }[]
+  } | null>(null)
+
+  const [bulkCreateUploadOpen, setBulkCreateUploadOpen] = useState(false)
+  const [bulkCreateUploading, setBulkCreateUploading] = useState(false)
+  const [bulkCreateSummary, setBulkCreateSummary] = useState<{
+    processedRows: number
+    operationsCreated: number
+    operationsFailed: number
+    succeededRows: number
+    rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[]
+    operationFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string }[]
   } | null>(null)
   const planningFileInputRef = useRef<HTMLInputElement | null>(null)
   const [calendarColumnsOpen, setCalendarColumnsOpen] = useState(false)
@@ -890,6 +902,44 @@ function TruckingPageContent() {
     }
   }
 
+  const downloadBulkCreateTemplate = async () => {
+    try {
+      const res = await api.get('/trucking/bulk-create/template', { responseType: 'blob' })
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv;charset=utf-8' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'bulk_create_trucking_template.csv'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      alert(e?.response?.data?.error?.message || (e as any)?.message || 'Failed to download template')
+    }
+  }
+
+  const handleBulkCreateFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setBulkCreateUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await api.post('/trucking/bulk-create', fd)
+      const data = res.data?.data
+      if (data) {
+        setBulkCreateSummary(data)
+        setBulkCreateUploadOpen(true)
+      }
+      await fetchTruckingOperations(1)
+    } catch (err: any) {
+      alert(err?.response?.data?.error?.message || err?.message || 'Upload failed')
+    } finally {
+      setBulkCreateUploading(false)
+    }
+  }
+
   const planningYearOptions = useMemo(() => {
     const y = new Date().getFullYear()
     return Array.from({ length: 18 }, (_, i) => y - 8 + i)
@@ -1064,12 +1114,13 @@ function TruckingPageContent() {
       
       const response = await api.get(`/trucking?${params.toString()}`)
       const items = response.data.data.truckingOperations || []
-      setTruckingOperations((prev) => (effectivePage === 1 ? items : [...prev, ...items]))
+      setTruckingOperations(items)
       setTruckingSummary(response.data.data.summary || null)
       const total = Number(response.data.data.pagination?.total ?? 0)
-      const totalPages = Number(response.data.data.pagination?.totalPages || 1)
+      const pages = Number(response.data.data.pagination?.totalPages || 1)
       setTotalCount(total)
-      setHasMore(effectivePage < totalPages)
+      setTotalPages(pages)
+      setHasMore(effectivePage < pages)
     } catch (error) {
       console.error('Failed to fetch trucking operations:', error)
       alert('Failed to load trucking operations. Please refresh the page.')
@@ -1796,6 +1847,12 @@ function TruckingPageContent() {
     return withStatus
   }, [columnOrderIds, compactColumns, editingId, visibleColumnIds])
 
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 1 || newPage > totalPages || loading) return
+    setPage(newPage)
+    fetchTruckingOperations(newPage)
+  }
+
   const reorderColumnByDrag = (dragId: string, dropId: string) => {
     if (dragId === dropId) return
     setColumnOrderIds((prev) => {
@@ -1960,11 +2017,37 @@ function TruckingPageContent() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold">Trucking Operations</h1>
-            <p className="text-gray-600 mt-1">
-              Manage and track all trucking operations - {totalCount || filteredOperations.length} total
-            </p>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-green-600 text-green-700 hover:bg-green-50"
+              onClick={downloadBulkCreateTemplate}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Download Template
+            </Button>
+            <input
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              className="hidden"
+              id="bulk-create-trucking-input"
+              onChange={handleBulkCreateFileChange}
+              disabled={bulkCreateUploading}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+              disabled={bulkCreateUploading}
+            >
+              {bulkCreateUploading ? (
+                <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
+              ) : (
+                <><Upload className="h-4 w-4 mr-2" />Upload CSV</>
+              )}
+            </Button>
             <Button
               size="sm"
               onClick={() => setShowCreateForm(true)}
@@ -2424,6 +2507,66 @@ function TruckingPageContent() {
           </>
         )}
 
+        {/* Bulk Create Trucking Result Modal */}
+        <Dialog open={bulkCreateUploadOpen} onOpenChange={setBulkCreateUploadOpen}>
+          <DialogContent className="max-w-2xl max-h-[88vh]">
+            <DialogHeader>
+              <DialogTitle>Bulk create trucking upload result</DialogTitle>
+            </DialogHeader>
+            {bulkCreateSummary ? (
+              <div className="space-y-4 text-sm">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <div className="rounded-md border bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Rows processed</div>
+                    <div className="text-lg font-semibold tabular-nums">{bulkCreateSummary.processedRows}</div>
+                  </div>
+                  <div className="rounded-md border bg-green-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Operations created</div>
+                    <div className="text-lg font-semibold tabular-nums text-green-800">{bulkCreateSummary.operationsCreated}</div>
+                  </div>
+                  <div className="rounded-md border bg-red-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Operations failed</div>
+                    <div className="text-lg font-semibold tabular-nums text-red-800">{bulkCreateSummary.operationsFailed}</div>
+                  </div>
+                  <div className="rounded-md border bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Rows applied (success)</div>
+                    <div className="text-lg font-semibold tabular-nums">{bulkCreateSummary.succeededRows}</div>
+                  </div>
+                </div>
+                {(bulkCreateSummary.rowParseFailures?.length ?? 0) > 0 && (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-2">Row issues</div>
+                    <ul className="max-h-40 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
+                      {bulkCreateSummary.rowParseFailures.map((f, i) => (
+                        <li key={`rpf-${i}`} className="text-gray-800">
+                          <span className="font-mono">Line {f.rowNumber}</span>
+                          {f.contract_ext_no ? ` · ${f.contract_ext_no}` : ''}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(bulkCreateSummary.operationFailures?.length ?? 0) > 0 && (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-2">Operation failures</div>
+                    <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-2 p-2">
+                      {bulkCreateSummary.operationFailures.map((f, i) => (
+                        <li key={`of-${i}`} className="text-gray-800">
+                          <span className="font-semibold">{f.contract_ext_no}</span>
+                          {f.rowNumbers?.length ? (
+                            <span className="text-gray-600"> (rows {f.rowNumbers.join(', ')})</span>
+                          ) : null}
+                          : {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </DialogContent>
+        </Dialog>
+
         {/* Trucking Operations List */}
         {activeTab === 'list' && (
         <Card>
@@ -2433,7 +2576,8 @@ function TruckingPageContent() {
                 <CardTitle>All Trucking Operations</CardTitle>
                 <p className="text-sm text-gray-500 mt-1">
                   {totalCount} total operations
-                  {truckingOperations.length > 0 ? ` | Showing ${truckingOperations.length} loaded` : ''}
+                  {truckingOperations.length > 0 && ` | Showing ${truckingOperations.length} on this page`}
+                  {totalPages > 1 && ` (Page ${page} of ${totalPages})`}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -2455,34 +2599,110 @@ function TruckingPageContent() {
                           <X className="h-3.5 w-3.5" />
                         </Button>
                       </div>
-                      <div className="space-y-2 max-h-72 overflow-auto pr-1">
-                        {compactColumns
-                          .filter(c => c.id !== 'operation_id' && c.id !== 'status')
-                          .map(col => (
-                            <label key={col.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                              <Checkbox
-                                checked={visibleColumnIds.has(col.id)}
-                                onCheckedChange={() => toggleColumn(col.id)}
-                              />
-                              <span>{col.label}</span>
-                            </label>
-                          ))}
-                      </div>
-                      <div className="mt-3 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1 mb-2">
                         <Button
                           variant="ghost"
                           size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() => setVisibleColumnIds(new Set(compactColumns.map(c => c.id)))}
+                        >
+                          Select All
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() => setVisibleColumnIds(new Set(['operation_id', 'status']))}
+                        >
+                          Unselect All
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
                           onClick={() => setVisibleColumnIds(new Set(defaultVisibleColumnIds))}
                         >
                           Reset
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => setShowColumnsMenu(false)}>
-                          Close
-                        </Button>
+                      </div>
+                      <div className="border-t pt-2 space-y-1 max-h-72 overflow-auto pr-1">
+                        {(() => {
+                          const excluded = new Set(['operation_id', 'status'])
+                          const byId = new Map(compactColumns.map(c => [c.id, c] as const))
+                          const orderedIds = columnOrderIds.length > 0 ? columnOrderIds : compactColumns.map(c => c.id)
+                          const visibleInMenu = orderedIds.map(id => byId.get(id)).filter((c): c is typeof compactColumns[0] => !!c && !excluded.has(c.id) && visibleColumnIds.has(c.id))
+                          const hiddenCols = orderedIds.map(id => byId.get(id)).filter((c): c is typeof compactColumns[0] => !!c && !excluded.has(c.id) && !visibleColumnIds.has(c.id)).sort((a, b) => a.label.localeCompare(b.label))
+                          return [...visibleInMenu, ...hiddenCols]
+                        })().map(col => (
+                          <div
+                            key={col.id}
+                            draggable
+                            onDragStart={() => setDragColId(col.id)}
+                            onDragEnd={() => setDragColId(null)}
+                            onDragOver={e => e.preventDefault()}
+                            onDrop={() => { if (dragColId && dragColId !== col.id) reorderColumnByDrag(dragColId, col.id) }}
+                            className={`flex items-center gap-2 text-sm cursor-grab select-none rounded px-1 py-0.5 ${dragColId === col.id ? 'opacity-40' : 'hover:bg-gray-50'}`}
+                          >
+                            <GripVertical className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                            <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                              <Checkbox
+                                checked={visibleColumnIds.has(col.id)}
+                                onCheckedChange={() => toggleColumn(col.id)}
+                              />
+                              <span className="truncate">{col.label}</span>
+                            </label>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
                 </div>
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(page - 1)}
+                      disabled={page <= 1 || loading}
+                    >
+                      Previous
+                    </Button>
+                    <div className="flex items-center gap-1">
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum: number
+                        if (totalPages <= 5) {
+                          pageNum = i + 1
+                        } else if (page <= 3) {
+                          pageNum = i + 1
+                        } else if (page >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i
+                        } else {
+                          pageNum = page - 2 + i
+                        }
+                        return (
+                          <Button
+                            key={pageNum}
+                            variant={page === pageNum ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => handlePageChange(pageNum)}
+                            disabled={loading}
+                            className="min-w-[40px]"
+                          >
+                            {pageNum}
+                          </Button>
+                        )
+                      })}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(page + 1)}
+                      disabled={page >= totalPages || loading}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           </CardHeader>
@@ -3249,16 +3469,55 @@ function TruckingPageContent() {
                 })}
               </div>
 
-                {hasMore && (
-                  <div className="flex justify-center pt-6">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={loading}
-                      onClick={() => setPage((p) => p + 1)}
-                    >
-                      {loading ? 'Loading…' : 'Load more'}
-                    </Button>
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-between pt-4 border-t mt-2">
+                    <div className="text-sm text-gray-700">
+                      Showing page {page} of {totalPages} ({totalCount} total operations)
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handlePageChange(page - 1)}
+                        disabled={page <= 1 || loading}
+                      >
+                        Previous
+                      </Button>
+                      <div className="flex items-center gap-1">
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                          let pageNum: number
+                          if (totalPages <= 5) {
+                            pageNum = i + 1
+                          } else if (page <= 3) {
+                            pageNum = i + 1
+                          } else if (page >= totalPages - 2) {
+                            pageNum = totalPages - 4 + i
+                          } else {
+                            pageNum = page - 2 + i
+                          }
+                          return (
+                            <Button
+                              key={pageNum}
+                              variant={page === pageNum ? 'default' : 'outline'}
+                              size="sm"
+                              onClick={() => handlePageChange(pageNum)}
+                              disabled={loading}
+                              className="min-w-[40px]"
+                            >
+                              {pageNum}
+                            </Button>
+                          )
+                        })}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handlePageChange(page + 1)}
+                        disabled={page >= totalPages || loading}
+                      >
+                        Next
+                      </Button>
+                    </div>
                   </div>
                 )}
                 </>

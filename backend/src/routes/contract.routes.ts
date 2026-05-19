@@ -11,6 +11,7 @@ import {
   getDistinctBuyers,
   createContract,
   updateContract,
+  bulkUpdateCargoReadiness,
 } from '../controllers/contract.controller';
 import { createContractRemark, getContractRemarks } from '../controllers/remarks.controller';
 import { authenticateToken, authorize } from '../middleware/auth';
@@ -141,6 +142,7 @@ router.get('/:id', getContract);
  *         description: Contract created successfully
  */
 router.post('/', authorize('ADMIN', 'TRADING'), auditLog('CREATE', 'CONTRACT'), createContract);
+router.post('/bulk-cargo-readiness', authorize('ADMIN', 'TRADING'), bulkUpdateCargoReadiness);
 
 /**
  * @swagger

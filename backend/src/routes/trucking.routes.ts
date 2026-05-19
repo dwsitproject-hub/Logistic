@@ -13,6 +13,8 @@ import {
   updateTruckingDailyDeliverables,
   downloadDailyPlanningDeliverablesTemplate,
   bulkUploadDailyPlanningDeliverables,
+  downloadBulkCreateTruckingTemplate,
+  bulkCreateTruckingOperations,
 } from '../controllers/trucking.controller';
 
 const router = express.Router();
@@ -50,6 +52,15 @@ router.get('/validate/contract', validateContractNumber);
 
 // Create trucking operation
 router.post('/', auditLog('CREATE', 'TRUCKING_OPERATION'), createTruckingOperation);
+
+// Bulk create trucking operations from CSV
+router.get('/bulk-create/template', downloadBulkCreateTruckingTemplate);
+router.post(
+  '/bulk-create',
+  planningUpload.single('file'),
+  auditLog('CREATE', 'TRUCKING_OPERATION'),
+  bulkCreateTruckingOperations,
+);
 
 // Calendar view: daily planning deliverables (specific paths before generic GET)
 router.get('/daily-planning-deliverables/template', downloadDailyPlanningDeliverablesTemplate);

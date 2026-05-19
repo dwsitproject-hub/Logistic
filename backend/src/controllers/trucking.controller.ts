@@ -1571,3 +1571,274 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
     return res.status(500).json({ success: false, error: { message: 'Failed to process upload' } });
   }
 };
+
+// ---------------------------------------------------------------------------
+// Bulk Create Trucking Operations from CSV
+// CSV columns: Contract Ext No | Date | Qty Delivery | Cargo Readiness Date
+// ---------------------------------------------------------------------------
+
+export const downloadBulkCreateTruckingTemplate = async (_req: AuthRequest, res: Response) => {
+  const header = 'Contract Ext No,Date,Qty Delivery,Cargo Readiness Date';
+  const examples = [
+    '01/HAP-PFAD/2026,15/04/2026,1000,10/04/2026',
+    '01/HAP-PFAD/2026,16/04/2026,1500,',
+    '002/KJG/CPO/2026,20/04/2026,2000,15/04/2026',
+  ].join('\n');
+  const bom = '﻿';
+  const body = `${bom}${header}\n${examples}\n`;
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="bulk_create_trucking_template.csv"');
+  return res.status(200).send(body);
+};
+
+export const bulkCreateTruckingOperations = async (req: AuthRequest, res: Response) => {
+  try {
+    const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+    if (!file?.buffer) {
+      return res.status(400).json({ success: false, error: { message: 'File is required (CSV or Excel)' } });
+    }
+
+    let matrix: unknown[][];
+    try {
+      matrix = parsePlanningSheetToMatrix(file.buffer);
+    } catch (e: any) {
+      return res.status(400).json({
+        success: false,
+        error: { message: e?.message || 'Could not read spreadsheet' },
+      });
+    }
+
+    if (matrix.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'File must include a header row and at least one data row' },
+      });
+    }
+
+    const headerRow = matrix[0];
+    const extIdx = findPlanningColumnIndex(headerRow, [
+      'contract_ext_no', 'contract ext no', 'contractextno', 'contract ext', 'ext no',
+    ]);
+    const dateIdx = findPlanningColumnIndex(headerRow, ['date', 'tanggal']);
+    const qtyIdx = findPlanningColumnIndex(headerRow, [
+      'qty_delivery', 'qty delivery', 'quantity_delivered', 'quantity delivered', 'quantity', 'qty',
+    ]);
+    const cargoIdx = findPlanningColumnIndex(headerRow, [
+      'cargo_readiness_date', 'cargo readiness date', 'cargo readiness', 'cargo date',
+    ]);
+
+    if (extIdx < 0 || dateIdx < 0 || qtyIdx < 0) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Missing required columns. Expected: "Contract Ext No", "Date", "Qty Delivery"' },
+      });
+    }
+
+    type ParsedLine = { lineNumber: number; contract_ext_no: string; dateRaw: unknown; qtyRaw: unknown; cargoRaw: unknown };
+    const lines: ParsedLine[] = [];
+    const rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[] = [];
+
+    for (let rIdx = 1; rIdx < matrix.length; rIdx++) {
+      const row = matrix[rIdx];
+      const ext = String(row[extIdx] ?? '').trim();
+      const dateRaw = row[dateIdx];
+      const qtyCell = row[qtyIdx];
+      const cargoCell = cargoIdx >= 0 ? row[cargoIdx] : undefined;
+
+      const emptyRow =
+        !ext &&
+        (dateRaw === undefined || dateRaw === null || String(dateRaw).trim() === '') &&
+        (qtyCell === undefined || qtyCell === null || String(qtyCell).trim() === '');
+      if (emptyRow) continue;
+
+      const lineNumber = rIdx + 1;
+      if (lines.length >= MAX_BULK_PLANNING_ROWS) {
+        rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext || '-', reason: `Exceeds max ${MAX_BULK_PLANNING_ROWS} rows` });
+        break;
+      }
+      if (!ext) {
+        rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: '-', reason: 'Contract Ext No is required' });
+        continue;
+      }
+      if (ext.toUpperCase() === 'TBA') {
+        rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext, reason: 'Contract Ext No "TBA" is not allowed — please fill in the actual contract number first' });
+        continue;
+      }
+      lines.push({ lineNumber, contract_ext_no: ext, dateRaw: dateRaw ?? '', qtyRaw: qtyCell, cargoRaw: cargoCell });
+    }
+
+    // Group rows by Contract Ext No
+    const byContractExt = new Map<string, ParsedLine[]>();
+    for (const ln of lines) {
+      const k = ln.contract_ext_no.trim().toLowerCase();
+      const list = byContractExt.get(k) || [];
+      list.push(ln);
+      byContractExt.set(k, list);
+    }
+
+    const opFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string }[] = [];
+    let operationsCreated = 0;
+    let rowsSucceeded = 0;
+
+    for (const [, groupLines] of byContractExt) {
+      const contractExtNo = groupLines[0].contract_ext_no;
+      const rowNumbers = groupLines.map((l) => l.lineNumber);
+
+      // Resolve contract via SAP ext no
+      const contractRes = await query(
+        `SELECT c.id, c.delivery_start_date, c.delivery_end_date
+         FROM trucking_operations t
+         LEFT JOIN contracts c ON t.contract_id = c.id
+         LEFT JOIN LATERAL (
+           SELECT NULLIF(trim(COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No')), '') AS ext_no
+           FROM sap_processed_data spd
+           WHERE spd.contract_number = c.contract_id
+           ORDER BY spd.created_at DESC NULLS LAST LIMIT 1
+         ) ext ON true
+         WHERE trim(upper(COALESCE(ext.ext_no, ''))) = trim(upper($1::text))
+         LIMIT 1`,
+        [contractExtNo],
+      );
+
+      if (contractRes.rows.length === 0) {
+        // Try resolving via contracts.contract_id directly or SAP lookup without existing trucking op
+        const contractDirectRes = await query(
+          `WITH latest_spd AS (
+             SELECT DISTINCT ON (spd.contract_number) spd.contract_number,
+               COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no
+             FROM sap_processed_data spd
+             WHERE spd.contract_number IS NOT NULL
+             ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+           )
+           SELECT c.id, c.delivery_start_date, c.delivery_end_date
+           FROM contracts c
+           LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+           WHERE trim(upper(COALESCE(l.contract_ext_no, ''))) = trim(upper($1::text))
+           LIMIT 1`,
+          [contractExtNo],
+        );
+
+        if (contractDirectRes.rows.length === 0) {
+          opFailures.push({
+            contract_ext_no: contractExtNo,
+            rowNumbers,
+            reason: 'Contract Ext No not found in SAP data. Ensure SAP data has been imported for this contract.',
+          });
+          continue;
+        }
+
+        // Contract found (no existing trucking op yet) — proceed with creation
+        const contract = contractDirectRes.rows[0];
+        try {
+          const ok = await createTruckingFromGroup(contract, contractExtNo, groupLines, rowNumbers, rowParseFailures, opFailures, groupLines[0].cargoRaw);
+          if (ok) { operationsCreated++; rowsSucceeded += groupLines.length; }
+        } catch (err) {
+          logger.error('createTruckingFromGroup error:', err);
+          opFailures.push({ contract_ext_no: contractExtNo, rowNumbers, reason: 'Internal error creating trucking operation' });
+        }
+        continue;
+      }
+
+      const contract = contractRes.rows[0];
+      try {
+        const ok = await createTruckingFromGroup(contract, contractExtNo, groupLines, rowNumbers, rowParseFailures, opFailures);
+        if (ok) { operationsCreated++; rowsSucceeded += groupLines.length; }
+      } catch (err) {
+        logger.error('createTruckingFromGroup error:', err);
+        opFailures.push({ contract_ext_no: contractExtNo, rowNumbers, reason: 'Internal error creating trucking operation' });
+      }
+    }
+
+    const processedRows = lines.length + rowParseFailures.length;
+
+    return res.json({
+      success: true,
+      data: {
+        processedRows,
+        operationsCreated,
+        operationsFailed: opFailures.length,
+        succeededRows: rowsSucceeded,
+        rowParseFailures,
+        operationFailures: opFailures,
+      },
+    });
+  } catch (error) {
+    logger.error('Bulk create trucking operations error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to process upload' } });
+  }
+};
+
+async function createTruckingFromGroup(
+  contract: { id: string; delivery_start_date?: unknown; delivery_end_date?: unknown },
+  contractExtNo: string,
+  groupLines: { lineNumber: number; contract_ext_no: string; dateRaw: unknown; qtyRaw: unknown; cargoRaw: unknown }[],
+  rowNumbers: number[],
+  rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[],
+  opFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string }[],
+  cargoRaw?: unknown,
+): Promise<boolean> {
+  // Parse daily deliverables from the group rows
+  const dailyRows: { date: string; quantity_delivered: number }[] = [];
+  for (const ln of groupLines) {
+    const ds = toIsoDate10FromCell(ln.dateRaw);
+    if (!ds) {
+      rowParseFailures.push({ rowNumber: ln.lineNumber, contract_ext_no: ln.contract_ext_no, reason: 'Invalid date' });
+      continue;
+    }
+    const qty = parseDailyDeliverableQuantity(ln.qtyRaw);
+    if (qty === null || qty < 0) {
+      rowParseFailures.push({ rowNumber: ln.lineNumber, contract_ext_no: ln.contract_ext_no, reason: 'Invalid quantity' });
+      continue;
+    }
+    dailyRows.push({ date: ds, quantity_delivered: qty });
+  }
+
+  if (dailyRows.length === 0) {
+    opFailures.push({ contract_ext_no: contractExtNo, rowNumbers, reason: 'No valid date/qty rows after parsing' });
+    return false;
+  }
+
+  const dmy = formatDDMMYYYY(new Date());
+  const seq = await allocateNextSyntheticSequenceDefault('trucking_operations', 'LAND', dmy);
+  const operationId = buildSyntheticOperationId('LAND', dmy, seq);
+
+  const sortedDates = dailyRows.map((r) => r.date).sort();
+  const minDate = sortedDates[0];
+  const maxDate = sortedDates[sortedDates.length - 1];
+
+  // Use toIsoDate10FromCell to handle both Date objects and ISO strings from pg
+  const etaStart = contract.delivery_start_date
+    ? (toIsoDate10FromCell(contract.delivery_start_date) ?? minDate)
+    : minDate;
+  const etaEnd = contract.delivery_end_date
+    ? (toIsoDate10FromCell(contract.delivery_end_date) ?? maxDate)
+    : maxDate;
+
+  const cargoDate = cargoRaw != null && String(cargoRaw).trim() !== ''
+    ? toIsoDate10FromCell(cargoRaw)
+    : null;
+
+  await query(
+    `INSERT INTO trucking_operations (
+       contract_id, operation_id,
+       eta_delivery_start_date, eta_delivery_end_date,
+       cargo_readiness_date,
+       status, daily_deliverables
+     ) VALUES (
+       $1::uuid, $2,
+       $3::date, $4::date,
+       $5::date,
+       $6, $7::jsonb
+     )`,
+    [
+      contract.id,
+      operationId,
+      etaStart,
+      etaEnd,
+      cargoDate,
+      'PLANNED',
+      JSON.stringify(dailyRows),
+    ],
+  );
+  return true;
+}
