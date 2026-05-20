@@ -368,6 +368,7 @@ function ContractsPageContent() {
     d31_60: TradeCycleBucket
     d61plus: TradeCycleBucket
   }
+  const [perfDashMode, setPerfDashMode] = useState<'late' | 'ontrack'>('late')
   const [latePerformanceTree, setLatePerformanceTree] = useState<LatePerfNode[]>([])
   const [latePerformanceSummary, setLatePerformanceSummary] = useState<{ count: number; totalDays: number; avgDays: number; maxDays: number; totalQtyDelivery?: number }>({
     count: 0,
@@ -375,6 +376,10 @@ function ContractsPageContent() {
     avgDays: 0,
     maxDays: 0,
     totalQtyDelivery: 0,
+  })
+  const [onTrackPerformanceTree, setOnTrackPerformanceTree] = useState<LatePerfNode[]>([])
+  const [onTrackPerformanceSummary, setOnTrackPerformanceSummary] = useState<{ count: number; totalDays: number; avgDays: number; maxDays: number; totalQtyDelivery?: number }>({
+    count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0,
   })
   const [tradeCycleDist, setTradeCycleDist] = useState<TradeCycleDist | null>(null)
   const [latePerfLoading, setLatePerfLoading] = useState(false)
@@ -391,8 +396,9 @@ function ContractsPageContent() {
   }
 
   const latePerfAllHotspots = useMemo((): LatePerfHotspot[] => {
+    const activeTree = perfDashMode === 'ontrack' ? onTrackPerformanceTree : latePerformanceTree
     const out: LatePerfHotspot[] = []
-    for (const inc of latePerformanceTree) {
+    for (const inc of activeTree) {
       for (const plant of inc.children || []) {
         for (const prod of plant.children || []) {
           for (const gn of prod.children || []) {
@@ -414,7 +420,7 @@ function ContractsPageContent() {
       }
     }
     return out
-  }, [latePerformanceTree])
+  }, [perfDashMode, latePerformanceTree, onTrackPerformanceTree])
 
   type LatePerfBranchNode = {
     id: string
@@ -844,11 +850,15 @@ function ContractsPageContent() {
       const data = resp.data?.data
       setLatePerformanceSummary(data?.summary ?? { count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0 })
       setLatePerformanceTree(Array.isArray(data?.tree) ? data.tree : [])
+      setOnTrackPerformanceSummary(data?.onTrackSummary ?? { count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0 })
+      setOnTrackPerformanceTree(Array.isArray(data?.onTrackTree) ? data.onTrackTree : [])
       setTradeCycleDist(data?.distribution ?? null)
     } catch (e) {
       console.error('Failed to load late performance dashboard:', e)
       setLatePerformanceSummary({ count: 0, totalDays: 0, avgDays: 0, maxDays: 0 })
       setLatePerformanceTree([])
+      setOnTrackPerformanceSummary({ count: 0, totalDays: 0, avgDays: 0, maxDays: 0 })
+      setOnTrackPerformanceTree([])
       setTradeCycleDist(null)
     } finally {
       setLatePerfLoading(false)
@@ -869,7 +879,7 @@ function ContractsPageContent() {
     (incotermKey: string, productKey: string, plantKey: string, supplierKey?: string) => {
       if (!isContractPerformance) return
 
-      setLateOnTimeFilter('LATE')
+      setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
       setPerfTransportMode('ALL')
 
       setSelectedIncoterms([incotermKey])
@@ -2518,47 +2528,90 @@ function ContractsPageContent() {
             <CardHeader className="pb-2">
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
-                  <CardTitle className="text-base">Late Performance (YTD)</CardTitle>
+                  {/* Mode toggle */}
+                  <div className="inline-flex rounded-lg border border-gray-200 bg-gray-100 p-1 mb-2">
+                    <button
+                      type="button"
+                      onClick={() => { setPerfDashMode('late'); resetLatePerfSelections(); setLateOnTimeFilter('LATE') }}
+                      className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'late' ? 'bg-white text-red-600 shadow-sm border border-red-200' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      🔴 Late
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setPerfDashMode('ontrack'); resetLatePerfSelections(); setLateOnTimeFilter('ON_TIME') }}
+                      className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'ontrack' ? 'bg-white text-green-600 shadow-sm border border-green-200' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      🟢 On Track
+                    </button>
+                  </div>
+                  <CardTitle className="text-base">
+                    {perfDashMode === 'late' ? 'Late Performance (YTD)' : 'On Track Performance (YTD)'}
+                  </CardTitle>
                   <div className="text-sm text-gray-600 mt-1">
-                    Management view of late contracts where <span className="font-medium">Trade Cycle &gt; 0</span>. Use hotspots to jump to the exact contracts list.
+                    {perfDashMode === 'late'
+                      ? <>Management view of late contracts where <span className="font-medium">Trade Cycle &gt; 0</span>. Use hotspots to jump to the exact contracts list.</>
+                      : <>Management view of on-track contracts where <span className="font-medium">Trade Cycle ≤ 0</span>. Use hotspots to jump to the exact contracts list.</>
+                    }
                   </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 w-full sm:w-auto">
-                  <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">Late contracts</div>
-                    <div className="text-lg font-semibold text-gray-900">{latePerformanceSummary.count.toLocaleString('en-US')}</div>
+                {perfDashMode === 'late' ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full sm:w-auto">
+                    <div className="rounded border bg-white px-3 py-2">
+                      <div className="text-[11px] text-gray-500">Late contracts</div>
+                      <div className="text-lg font-semibold text-red-600">{latePerformanceSummary.count.toLocaleString('en-US')}</div>
+                    </div>
+                    <div className="rounded border bg-white px-3 py-2">
+                      <div className="text-[11px] text-gray-500">Total late qty</div>
+                      <div className="text-lg font-semibold text-gray-900">{((latePerformanceSummary.totalQtyDelivery ?? 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
+                    </div>
+                    <div className="rounded border bg-white px-3 py-2">
+                      <div className="text-[11px] text-gray-500">Avg late days</div>
+                      <div className="text-lg font-semibold text-gray-900">{latePerformanceSummary.avgDays ? latePerformanceSummary.avgDays.toFixed(1) : '0.0'}</div>
+                    </div>
+                    <div className="rounded border bg-white px-3 py-2">
+                      <div className="text-[11px] text-gray-500">Max late days</div>
+                      <div className="text-lg font-semibold text-gray-900">{latePerformanceSummary.maxDays.toLocaleString('en-US')}</div>
+                    </div>
                   </div>
-                  <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">Total late qty</div>
-                    <div className="text-lg font-semibold text-gray-900">{((latePerformanceSummary.totalQtyDelivery ?? 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full sm:w-auto">
+                    <div className="rounded border bg-white px-3 py-2">
+                      <div className="text-[11px] text-gray-500">On Track contracts</div>
+                      <div className="text-lg font-semibold text-green-600">{onTrackPerformanceSummary.count.toLocaleString('en-US')}</div>
+                    </div>
+                    <div className="rounded border bg-white px-3 py-2">
+                      <div className="text-[11px] text-gray-500">Total on-track qty</div>
+                      <div className="text-lg font-semibold text-gray-900">{((onTrackPerformanceSummary.totalQtyDelivery ?? 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
+                    </div>
+                    <div className="rounded border bg-white px-3 py-2">
+                      <div className="text-[11px] text-gray-500">Avg days ahead</div>
+                      <div className="text-lg font-semibold text-gray-900">{onTrackPerformanceSummary.avgDays ? onTrackPerformanceSummary.avgDays.toFixed(1) : '0.0'}</div>
+                    </div>
+                    <div className="rounded border bg-white px-3 py-2">
+                      <div className="text-[11px] text-gray-500">Max days ahead</div>
+                      <div className="text-lg font-semibold text-gray-900">{onTrackPerformanceSummary.maxDays.toLocaleString('en-US')}</div>
+                    </div>
                   </div>
-                  <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">Avg late days</div>
-                    <div className="text-lg font-semibold text-gray-900">{latePerformanceSummary.avgDays ? latePerformanceSummary.avgDays.toFixed(1) : '0.0'}</div>
-                  </div>
-                  <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">Max late days</div>
-                    <div className="text-lg font-semibold text-gray-900">{latePerformanceSummary.maxDays.toLocaleString('en-US')}</div>
-                  </div>
-                </div>
+                )}
               </div>
             </CardHeader>
             <CardContent className="pt-2">
               {latePerfLoading ? (
-                <div className="text-sm text-gray-500">Loading Late Performance dashboard…</div>
-              ) : latePerformanceTree.length === 0 ? (
-                <div className="text-sm text-gray-500">No late contracts found in YTD.</div>
+                <div className="text-sm text-gray-500">Loading Performance dashboard…</div>
+              ) : (perfDashMode === 'late' ? latePerformanceTree : onTrackPerformanceTree).length === 0 ? (
+                <div className="text-sm text-gray-500">{perfDashMode === 'late' ? 'No late contracts found in YTD.' : 'No on-track contracts found in YTD.'}</div>
               ) : (
                 <div className="space-y-3">
                   <div className="text-sm text-gray-600">
-                    Navigate late issues as a tree: <span className="font-medium">Incoterm → Product → Plant → Supplier</span>.
-                    Choosing a node updates the contracts table below to the same <span className="font-medium">YTD late</span> scope (Trade Cycle &gt; 0) and your selection.
+                    Navigate as a tree: <span className="font-medium">Incoterm → Product → Plant → Supplier</span>.
+                    Choosing a node updates the contracts table below to the same <span className="font-medium">YTD {perfDashMode === 'late' ? 'late' : 'on-track'}</span> scope and your selection.
                     Click a <span className="font-medium">Plant</span> node to narrow further (Group Name is viewed in the table).
                   </div>
 
                   <div className="rounded-xl border bg-white p-4">
                     <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-                      <div className="text-sm font-semibold text-gray-900">Late Performance drilldown</div>
+                      <div className="text-sm font-semibold text-gray-900">{perfDashMode === 'late' ? 'Late' : 'On Track'} Performance drilldown</div>
                       <button
                         type="button"
                         onClick={resetLatePerfSelections}
@@ -2598,7 +2651,7 @@ function ContractsPageContent() {
                                     <div className="text-sm font-semibold text-gray-900 truncate">{node.label}</div>
                                     <div className="shrink-0 text-right leading-tight">
                                       <div className="text-[11px] font-bold text-gray-800 tabular-nums">{node.count > 0 ? (node.totalDays / node.count).toFixed(1) : '—'}</div>
-                                      <div className="text-[9px] text-gray-400 uppercase tracking-wide">avg days</div>
+                                      <div className="text-[9px] text-gray-400 uppercase tracking-wide">{perfDashMode === 'late' ? 'avg late' : 'avg ahead'}</div>
                                     </div>
                                   </div>
                                   <div className="mt-1 h-1.5 rounded bg-gray-100 overflow-hidden">
@@ -2629,7 +2682,7 @@ function ContractsPageContent() {
                               <div className="space-y-2">
                                 {latePerfIncotermNodes.slice(0, 30).map((n) =>
                                   renderItem(n, latePerfSelIncoterm === n.label, () => {
-                                    setLateOnTimeFilter('LATE')
+                                    setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
                                     setPerfTransportMode('ALL')
                                     setLatePerfSelIncoterm(n.label)
                                     setLatePerfSelProduct(null)
@@ -2654,7 +2707,7 @@ function ContractsPageContent() {
                               <div className="space-y-2">
                                 {latePerfProductNodes.slice(0, 30).map((n) =>
                                   renderItem(n, latePerfSelProduct === n.label, () => {
-                                    setLateOnTimeFilter('LATE')
+                                    setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
                                     setPerfTransportMode('ALL')
                                     setLatePerfSelProduct(n.label)
                                     setLatePerfSelPlant(null)
@@ -2679,7 +2732,7 @@ function ContractsPageContent() {
                                   n,
                                   latePerfSelPlant === n.label,
                                   () => {
-                                    setLateOnTimeFilter('LATE')
+                                    setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
                                     setPerfTransportMode('ALL')
                                     setLatePerfSelPlant(n.label)
                                     setLatePerfSelSupplier(null)

@@ -1194,6 +1194,12 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
     let lateMaxDays = 0;
     let lateTotalQtyDelivery = 0;
 
+    const onTrackRoot = new Map<string, AggNode>();
+    let onTrackCount = 0;
+    let onTrackTotalDaysAhead = 0;
+    let onTrackMaxDaysAhead = 0;
+    let onTrackTotalQtyDelivery = 0;
+
     type DistBucket = { count: number; qty: number };
     const dist: Record<string, DistBucket> = {
       noData:  { count: 0, qty: 0 },
@@ -1329,6 +1335,29 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         pushSample('tradeCycleNonPositive', `${String(row.contract_id || '')}:${tradeCycle}`);
         dist.onTime.count += 1;
         dist.onTime.qty += _outstandingQty;
+
+        const daysAhead = -tradeCycle; // 0 = exactly on time, positive = days ahead of deadline
+        onTrackCount += 1;
+        onTrackTotalDaysAhead += daysAhead;
+        onTrackMaxDaysAhead = Math.max(onTrackMaxDaysAhead, daysAhead);
+        onTrackTotalQtyDelivery += _outstandingQty;
+
+        const otInc = String(row.incoterm || '').trim() || 'Blank';
+        const otPl  = String(row.plant_site || '').trim() || 'Blank';
+        const otProd = String(row.product || '').trim() || 'Blank';
+        const otGn  = String(row.group_name || '').trim() || 'Blank';
+        const otSup = String(row.supplier || '').trim() || 'Blank';
+        const ot1 = add(onTrackRoot, otInc);
+        const ot2 = add(ot1.children, otPl);
+        const ot3 = add(ot2.children, otProd);
+        const ot4 = add(ot3.children, otGn);
+        const ot5 = add(ot4.children, otSup);
+        for (const n of [ot1, ot2, ot3, ot4, ot5]) {
+          n.count += 1;
+          n.totalDays += daysAhead;
+          n.maxDays = Math.max(n.maxDays, daysAhead);
+          n.totalQtyDelivery += _outstandingQty;
+        }
         continue;
       }
 
@@ -1390,8 +1419,16 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           maxDays: lateMaxDays,
           totalQtyDelivery: lateTotalQtyDelivery,
         },
+        onTrackSummary: {
+          count: onTrackCount,
+          totalDays: onTrackTotalDaysAhead,
+          avgDays: onTrackCount > 0 ? onTrackTotalDaysAhead / onTrackCount : 0,
+          maxDays: onTrackMaxDaysAhead,
+          totalQtyDelivery: onTrackTotalQtyDelivery,
+        },
         distribution: dist,
         tree: toSorted(root),
+        onTrackTree: toSorted(onTrackRoot),
         ...(debug
           ? {
               debug: {
