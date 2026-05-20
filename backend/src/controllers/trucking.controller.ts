@@ -1578,14 +1578,26 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
 // ---------------------------------------------------------------------------
 
 export const downloadBulkCreateTruckingTemplate = async (_req: AuthRequest, res: Response) => {
-  const header = 'Contract Ext No,Date,Qty Delivery';
-  const examples = [
-    '01/HAP-PFAD/2026,15/04/2026,1000',
-    '01/HAP-PFAD/2026,16/04/2026,1500',
-    '002/KJG/CPO/2026,20/04/2026,2000',
+  // Generate 14 date columns starting from today
+  const today = new Date();
+  const dateCols: string[] = [];
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    dateCols.push(`${dd}/${mm}/${d.getFullYear()}`);
+  }
+  const header = ['Contract Ext No', ...dateCols].join(',');
+  // Example: two contracts with some filled quantities
+  const row1Qty = dateCols.map((_, i) => (i === 0 ? '1000' : i === 1 ? '1500' : ''));
+  const row2Qty = dateCols.map((_, i) => (i === 2 ? '2000' : i === 3 ? '2000' : ''));
+  const rows = [
+    ['01/HAP-PFAD/2026', ...row1Qty].join(','),
+    ['002/KJG/CPO/2026', ...row2Qty].join(','),
   ].join('\n');
   const bom = '﻿';
-  const body = `${bom}${header}\n${examples}\n`;
+  const body = `${bom}${header}\n${rows}\n`;
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="bulk_create_trucking_template.csv"');
   return res.status(200).send(body);
@@ -1616,51 +1628,115 @@ export const bulkCreateTruckingOperations = async (req: AuthRequest, res: Respon
     }
 
     const headerRow = matrix[0];
-    const extIdx = findPlanningColumnIndex(headerRow, [
-      'contract_ext_no', 'contract ext no', 'contractextno', 'contract ext', 'ext no',
-    ]);
-    const dateIdx = findPlanningColumnIndex(headerRow, ['date', 'tanggal']);
-    const qtyIdx = findPlanningColumnIndex(headerRow, [
-      'qty_delivery', 'qty delivery', 'quantity_delivered', 'quantity delivered', 'quantity', 'qty',
-    ]);
 
-    if (extIdx < 0 || dateIdx < 0 || qtyIdx < 0) {
-      return res.status(400).json({
-        success: false,
-        error: { message: 'Missing required columns. Expected: "Contract Ext No", "Date", "Qty Delivery"' },
-      });
-    }
+    // Detect format: wide (pivot) if the 2nd column header parses as a date; otherwise long format
+    const secondColRaw = headerRow[1];
+    const secondColStr = String(secondColRaw ?? '').trim().toLowerCase();
+    const isWideFormat =
+      secondColStr !== 'date' &&
+      secondColStr !== 'tanggal' &&
+      secondColStr !== 'qty' &&
+      secondColStr !== 'qty delivery' &&
+      toIsoDate10FromCell(secondColRaw) !== null;
 
     type ParsedLine = { lineNumber: number; contract_ext_no: string; dateRaw: unknown; qtyRaw: unknown };
     const lines: ParsedLine[] = [];
     const rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[] = [];
 
-    for (let rIdx = 1; rIdx < matrix.length; rIdx++) {
-      const row = matrix[rIdx];
-      const ext = String(row[extIdx] ?? '').trim();
-      const dateRaw = row[dateIdx];
-      const qtyCell = row[qtyIdx];
+    if (isWideFormat) {
+      // Wide/pivot format: header row = [Contract Ext No, date1, date2, ...]
+      // Each data row: [contractExtNo, qty1, qty2, ...]
+      const dateColumns: { colIdx: number; dateRaw: unknown }[] = [];
+      for (let ci = 1; ci < headerRow.length; ci++) {
+        const cellVal = headerRow[ci];
+        if (cellVal !== null && cellVal !== undefined && String(cellVal).trim() !== '') {
+          dateColumns.push({ colIdx: ci, dateRaw: cellVal });
+        }
+      }
 
-      const emptyRow =
-        !ext &&
-        (dateRaw === undefined || dateRaw === null || String(dateRaw).trim() === '') &&
-        (qtyCell === undefined || qtyCell === null || String(qtyCell).trim() === '');
-      if (emptyRow) continue;
+      if (dateColumns.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: { message: 'Wide format detected but no date columns found in header row' },
+        });
+      }
 
-      const lineNumber = rIdx + 1;
-      if (lines.length >= MAX_BULK_PLANNING_ROWS) {
-        rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext || '-', reason: `Exceeds max ${MAX_BULK_PLANNING_ROWS} rows` });
-        break;
+      for (let rIdx = 1; rIdx < matrix.length; rIdx++) {
+        const row = matrix[rIdx];
+        const ext = String(row[0] ?? '').trim();
+        const hasAnyQty = dateColumns.some(({ colIdx }) => {
+          const v = row[colIdx];
+          return v !== undefined && v !== null && String(v).trim() !== '';
+        });
+        if (!ext && !hasAnyQty) continue;
+
+        const lineNumber = rIdx + 1;
+        if (!ext) {
+          rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: '-', reason: 'Contract Ext No is required' });
+          continue;
+        }
+        if (ext.toUpperCase() === 'TBA') {
+          rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext, reason: 'Contract Ext No "TBA" is not allowed — please fill in the actual contract number first' });
+          continue;
+        }
+
+        let rowLimitHit = false;
+        for (const { colIdx, dateRaw } of dateColumns) {
+          const qtyCell = row[colIdx];
+          if (qtyCell === undefined || qtyCell === null || String(qtyCell).trim() === '') continue;
+          if (lines.length >= MAX_BULK_PLANNING_ROWS) {
+            rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext, reason: `Exceeds max ${MAX_BULK_PLANNING_ROWS} rows` });
+            rowLimitHit = true;
+            break;
+          }
+          lines.push({ lineNumber, contract_ext_no: ext, dateRaw, qtyRaw: qtyCell });
+        }
+        if (rowLimitHit) break;
       }
-      if (!ext) {
-        rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: '-', reason: 'Contract Ext No is required' });
-        continue;
+    } else {
+      // Long format: Contract Ext No | Date | Qty Delivery
+      const extIdx = findPlanningColumnIndex(headerRow, [
+        'contract_ext_no', 'contract ext no', 'contractextno', 'contract ext', 'ext no',
+      ]);
+      const dateIdx = findPlanningColumnIndex(headerRow, ['date', 'tanggal']);
+      const qtyIdx = findPlanningColumnIndex(headerRow, [
+        'qty_delivery', 'qty delivery', 'quantity_delivered', 'quantity delivered', 'quantity', 'qty',
+      ]);
+
+      if (extIdx < 0 || dateIdx < 0 || qtyIdx < 0) {
+        return res.status(400).json({
+          success: false,
+          error: { message: 'Missing required columns. Expected: "Contract Ext No", "Date", "Qty Delivery"' },
+        });
       }
-      if (ext.toUpperCase() === 'TBA') {
-        rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext, reason: 'Contract Ext No "TBA" is not allowed — please fill in the actual contract number first' });
-        continue;
+
+      for (let rIdx = 1; rIdx < matrix.length; rIdx++) {
+        const row = matrix[rIdx];
+        const ext = String(row[extIdx] ?? '').trim();
+        const dateRaw = row[dateIdx];
+        const qtyCell = row[qtyIdx];
+
+        const emptyRow =
+          !ext &&
+          (dateRaw === undefined || dateRaw === null || String(dateRaw).trim() === '') &&
+          (qtyCell === undefined || qtyCell === null || String(qtyCell).trim() === '');
+        if (emptyRow) continue;
+
+        const lineNumber = rIdx + 1;
+        if (lines.length >= MAX_BULK_PLANNING_ROWS) {
+          rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext || '-', reason: `Exceeds max ${MAX_BULK_PLANNING_ROWS} rows` });
+          break;
+        }
+        if (!ext) {
+          rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: '-', reason: 'Contract Ext No is required' });
+          continue;
+        }
+        if (ext.toUpperCase() === 'TBA') {
+          rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext, reason: 'Contract Ext No "TBA" is not allowed — please fill in the actual contract number first' });
+          continue;
+        }
+        lines.push({ lineNumber, contract_ext_no: ext, dateRaw: dateRaw ?? '', qtyRaw: qtyCell });
       }
-      lines.push({ lineNumber, contract_ext_no: ext, dateRaw: dateRaw ?? '', qtyRaw: qtyCell });
     }
 
     // Group rows by Contract Ext No
