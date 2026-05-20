@@ -3655,42 +3655,6 @@ function ShipmentsPageContent() {
             </CardContent>
           </Card>
 
-          <Dialog open={!!bulkUploadResult} onOpenChange={(open) => { if (!open) setBulkUploadResult(null) }}>
-            <DialogContent className="max-w-2xl max-h-[88vh]">
-              <DialogHeader>
-                <DialogTitle>Shipment bulk upload result</DialogTitle>
-              </DialogHeader>
-              {bulkUploadResult && (
-                <div className="space-y-4 text-sm">
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="rounded-md border bg-green-50 px-3 py-2">
-                      <div className="text-xs text-muted-foreground">Created</div>
-                      <div className="text-lg font-semibold tabular-nums text-green-800">{bulkUploadResult!.created}</div>
-                    </div>
-                    <div className="rounded-md border bg-slate-50 px-3 py-2">
-                      <div className="text-xs text-muted-foreground">Updated</div>
-                      <div className="text-lg font-semibold tabular-nums">{bulkUploadResult!.updated}</div>
-                    </div>
-                    <div className="rounded-md border bg-red-50 px-3 py-2">
-                      <div className="text-xs text-muted-foreground">Failed</div>
-                      <div className="text-lg font-semibold tabular-nums text-red-800">{bulkUploadResult!.failed}</div>
-                    </div>
-                  </div>
-                  {bulkUploadResult!.errors.length > 0 && (
-                    <div>
-                      <div className="font-medium text-gray-900 mb-2">Row issues</div>
-                      <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
-                        {bulkUploadResult!.errors.map((e, i) => (
-                          <li key={i} className="text-gray-800">{e}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              )}
-            </DialogContent>
-          </Dialog>
-
           <Dialog open={shipPlanningUploadOpen} onOpenChange={setShipPlanningUploadOpen}>
             <DialogContent className="max-w-2xl max-h-[88vh]">
               <DialogHeader>
@@ -3745,6 +3709,42 @@ function ShipmentsPageContent() {
           </Dialog>
           </>
         )}
+
+        <Dialog open={!!bulkUploadResult} onOpenChange={(open) => { if (!open) setBulkUploadResult(null) }}>
+          <DialogContent className="max-w-2xl max-h-[88vh]">
+            <DialogHeader>
+              <DialogTitle>Shipment bulk upload result</DialogTitle>
+            </DialogHeader>
+            {bulkUploadResult && (
+              <div className="space-y-4 text-sm">
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="rounded-md border bg-green-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Created</div>
+                    <div className="text-lg font-semibold tabular-nums text-green-800">{bulkUploadResult!.created}</div>
+                  </div>
+                  <div className="rounded-md border bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Updated</div>
+                    <div className="text-lg font-semibold tabular-nums">{bulkUploadResult!.updated}</div>
+                  </div>
+                  <div className="rounded-md border bg-red-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Failed</div>
+                    <div className="text-lg font-semibold tabular-nums text-red-800">{bulkUploadResult!.failed}</div>
+                  </div>
+                </div>
+                {bulkUploadResult!.errors.length > 0 && (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-2">Row issues</div>
+                    <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
+                      {bulkUploadResult!.errors.map((e, i) => (
+                        <li key={i} className="text-gray-800">{e}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
 
         {/* Shipments List */}
         <Card>
