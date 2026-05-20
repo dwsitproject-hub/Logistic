@@ -2115,12 +2115,21 @@ export const bulkUpdateCargoReadiness = async (req: AuthRequest, res: Response) 
   for (const row of rows) {
     if (!row.po_number) continue;
     try {
+      const cargoDate = row.cargo_readiness_date || null;
       const result = await query(
         `UPDATE contracts SET cargo_readiness_date = $1, updated_at = CURRENT_TIMESTAMP WHERE po_number = $2 RETURNING id`,
-        [row.cargo_readiness_date || null, row.po_number]
+        [cargoDate, row.po_number]
       );
       if (result.rows.length > 0) {
         updated++;
+        // Also cascade to trucking_operations for LAND contracts so the Trucking page reflects the change
+        await query(
+          `UPDATE trucking_operations t
+           SET cargo_readiness_date = $1, updated_at = CURRENT_TIMESTAMP
+           FROM contracts c
+           WHERE t.contract_id = c.id AND c.po_number = $2`,
+          [cargoDate, row.po_number]
+        );
       } else {
         notFound++;
         errors.push({ po_number: row.po_number, reason: 'Not found' });
