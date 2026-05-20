@@ -591,7 +591,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                 <div className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-100 shrink-0">
                   <Clock className="h-3.5 w-3.5 text-violet-600" />
                 </div>
-                <h4 className="text-sm font-semibold text-gray-800">3. Shipment Detail</h4>
+                <h4 className="text-sm font-semibold text-gray-800">3. Trucking Detail</h4>
                 {step3Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="p-4 space-y-4">
@@ -641,6 +641,11 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                     <div>
                       <p className="text-xs font-semibold text-gray-700">Daily Planning Deliverables</p>
                       <p className="text-[10px] text-gray-400 mt-0.5">Opsional — validasi terhadap tanggal dan total Qty Delivered</p>
+                      {cd && Number.isFinite(Number(cd.outstanding_quantity)) && (
+                        <p className="text-[10px] text-amber-600 font-medium mt-0.5">
+                          Outstanding Qty: {fmtQty(Number(cd.outstanding_quantity))} Kg
+                        </p>
+                      )}
                     </div>
                     <Button
                       type="button"

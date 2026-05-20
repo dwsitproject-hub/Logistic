@@ -750,7 +750,26 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         c.delivery_end_date,
         c.plant_code,
         mp.plant_name,
-        mp.company_name AS plant_company_name
+        mp.company_name AS plant_company_name,
+        GREATEST(
+          COALESCE(c.quantity_ordered, 0)
+          - COALESCE((
+              SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
+              FROM (
+                SELECT COALESCE(
+                  spd.data->'raw'->>'Qty Receive',
+                  spd.data->'raw'->>'Quantity Receive',
+                  spd.data->>'quantity_delivered_via_trucking'
+                ) AS val
+                FROM sap_processed_data spd
+                WHERE spd.contract_number = c.contract_id
+                ORDER BY spd.created_at DESC NULLS LAST
+                LIMIT 1
+              ) q
+              WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\s]+$'
+            ), 0),
+          0
+        ) AS outstanding_quantity
       FROM matched c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       LEFT JOIN master_plants mp ON mp.plant_code = c.plant_code
