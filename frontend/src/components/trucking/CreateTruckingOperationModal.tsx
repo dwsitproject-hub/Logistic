@@ -22,6 +22,19 @@ import {
 import api from '@/lib/api'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 
+const fmtIsoDate = (iso: string) => {
+  const d = (iso || '').slice(0, 10)
+  if (d.length < 10) return iso
+  const [y, m, dd] = d.split('-')
+  return `${dd}/${m}/${y}`
+}
+
+const fmtQty = (val: string | number) => {
+  const n = typeof val === 'number' ? val : parseFloat(String(val).replace(/,/g, '').trim())
+  if (!Number.isFinite(n)) return String(val)
+  return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: true })
+}
+
 export const CreateTruckingOperationModal = memo(function CreateTruckingOperationModal({
   open,
   onClose,
@@ -692,6 +705,27 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                                       ),
                                     }))
                                   }
+                                  onBlur={() => {
+                                    const raw = String(row.quantity || '').replace(/,/g, '').trim()
+                                    const n = parseFloat(raw)
+                                    if (Number.isFinite(n)) {
+                                      setNewOperation((prev) => ({
+                                        ...prev,
+                                        daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
+                                          i === idx ? { ...r, quantity: fmtQty(n) } : r,
+                                        ),
+                                      }))
+                                    }
+                                  }}
+                                  onFocus={() => {
+                                    const raw = String(row.quantity || '').replace(/,/g, '').trim()
+                                    setNewOperation((prev) => ({
+                                      ...prev,
+                                      daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
+                                        i === idx ? { ...r, quantity: raw } : r,
+                                      ),
+                                    }))
+                                  }}
                                   placeholder="0"
                                   className="mt-1 h-9"
                                 />
@@ -717,11 +751,11 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                           <span className="text-gray-500">
                             Allowed range:{' '}
                             {cd?.delivery_start_date && cd?.delivery_end_date
-                              ? `${cd.delivery_start_date} — ${cd.delivery_end_date}`
+                              ? `${fmtIsoDate(cd.delivery_start_date)} — ${fmtIsoDate(cd.delivery_end_date)}`
                               : 'Set contract first'}
                           </span>
                           <span className={`font-semibold tabular-nums ${Number.isFinite(maxQty) && sumQty > maxQty ? 'text-red-600' : 'text-gray-700'}`}>
-                            Total: {sumQty}{Number.isFinite(maxQty) ? ` / ${maxQty} Kg` : ' Kg'}
+                            Total: {fmtQty(sumQty)}{Number.isFinite(maxQty) ? ` / ${fmtQty(maxQty)} Kg` : ' Kg'}
                           </span>
                         </div>
                       </div>
