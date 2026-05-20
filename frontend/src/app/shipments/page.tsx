@@ -1380,7 +1380,7 @@ function ShipmentsPageContent() {
 
             if (Object.keys(etaPayload).length > 0) {
               const portsRes = await api.get(`/shipments/${existingShipment.id}/loading-ports`)
-              const ports: VesselLoadingPort[] = portsRes.data.success ? portsRes.data.data : []
+              const ports: VesselLoadingPort[] = portsRes.data.success ? (portsRes.data.data?.ports ?? []) : []
               const lp1 = ports.find(p => !p.is_discharge_port && p.port_sequence === 1)
               if (lp1?.id) {
                 await api.put(`/shipments/${existingShipment.id}/loading-ports/${lp1.id}`, { id: lp1.id, ...etaPayload })
