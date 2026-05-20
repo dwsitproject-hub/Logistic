@@ -235,6 +235,8 @@ export default function UsersPage() {
 
   const openEditModal = (user: User) => {
     setSelectedUser(user)
+    setError('')
+    setSuccess('')
     setFormData({
       username: user.username,
       email: user.email,
@@ -476,6 +478,12 @@ export default function UsersPage() {
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleAddUser} autoComplete="off">
+              {error && (
+                <div className="mb-3 flex items-center gap-2 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  {error}
+                </div>
+              )}
               <div className="grid gap-4 py-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -667,6 +675,12 @@ export default function UsersPage() {
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleUpdateUser}>
+              {error && (
+                <div className="mb-3 flex items-center gap-2 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  {error}
+                </div>
+              )}
               <div className="grid gap-4 py-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
