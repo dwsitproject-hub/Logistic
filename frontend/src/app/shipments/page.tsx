@@ -1245,18 +1245,15 @@ function ShipmentsPageContent() {
     setUploading(true)
     try {
       // Pre-fetch all reference data in parallel
-      let masterVessels: Array<{ vessel_code: string; vessel_name: string }> = []
       let masterPorts: Array<{ port: string; region: string | null }> = []
       let allContracts: Array<{ contract_id: string; po_numbers: string }> = []
       let allShipmentsForLookup: Shipment[] = []
       try {
-        const [vRes, pRes, cRes, sRes] = await Promise.all([
-          api.get('/master-vessels', { params: { limit: 9999 } }),
+        const [pRes, cRes, sRes] = await Promise.all([
           api.get('/master-loading-ports', { params: { limit: 9999 } }),
           api.get('/contracts', { params: { limit: 9999 } }),
           api.get('/shipments', { params: { limit: 9999, compact: true, includeSummary: false } }),
         ])
-        masterVessels = vRes.data?.data?.items ?? []
         masterPorts = pRes.data?.data?.items ?? []
         allContracts = cRes.data?.data?.contracts ?? []
         allShipmentsForLookup = sRes.data?.data?.shipments ?? []
@@ -1268,7 +1265,6 @@ function ShipmentsPageContent() {
       }
 
       // Build lookup maps
-      const vesselSet = new Set(masterVessels.map(v => v.vessel_name.toLowerCase()))
       const portSet = new Set(masterPorts.map(p => p.port.toLowerCase()))
 
       // po_number → contract (business contract_id)
@@ -1325,14 +1321,8 @@ function ShipmentsPageContent() {
           continue
         }
 
-        // Validate vessel and port against master data
+        // Validate port against master data (Vessel Name & Loading Port validation temporarily disabled)
         const rowErrors: string[] = []
-        if (row['Vessel Name'] && !vesselSet.has(row['Vessel Name'].toLowerCase())) {
-          rowErrors.push(`vessel "${row['Vessel Name']}" tidak ada di Master Vessel`)
-        }
-        if (row['Loading Port'] && !portSet.has(row['Loading Port'].toLowerCase())) {
-          rowErrors.push(`loading port "${row['Loading Port']}" tidak ada di Master Port`)
-        }
         if (row['Discharge Port'] && !portSet.has(row['Discharge Port'].toLowerCase())) {
           rowErrors.push(`discharge port "${row['Discharge Port']}" tidak ada di Master Port`)
         }
