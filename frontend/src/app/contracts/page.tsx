@@ -2594,16 +2594,19 @@ function ContractsPageContent() {
                             <div key={node.id} className={itemClass(selected)}>
                               <div className="flex items-start justify-between gap-3">
                                 <button type="button" onClick={onClick} className="min-w-0 flex-1 text-left">
-                                  <div className="text-sm font-semibold text-gray-900 truncate">{node.label}</div>
+                                  <div className="flex items-start justify-between gap-1">
+                                    <div className="text-sm font-semibold text-gray-900 truncate">{node.label}</div>
+                                    <div className="shrink-0 text-right leading-tight">
+                                      <div className="text-[11px] font-bold text-gray-800 tabular-nums">{node.count > 0 ? (node.totalDays / node.count).toFixed(1) : '—'}</div>
+                                      <div className="text-[9px] text-gray-400 uppercase tracking-wide">avg days</div>
+                                    </div>
+                                  </div>
                                   <div className="mt-1 h-1.5 rounded bg-gray-100 overflow-hidden">
                                     <div className={`h-full ${style.bar}`} style={{ width: `${pct}%` }} />
                                   </div>
                                   <div className="mt-1 text-xs text-gray-700 flex items-center justify-between gap-2">
                                     <span className="font-semibold">{node.count.toLocaleString('en-US')}</span>
                                     <span className="text-gray-500">contracts</span>
-                                    <span className="text-gray-400">·</span>
-                                    <span className="text-gray-500">avg</span>
-                                    <span className="font-semibold">{node.count > 0 ? (node.totalDays / node.count).toFixed(1) : '—'} days</span>
                                     {rightStat ?? <span className="ml-auto font-semibold whitespace-nowrap">{(node.totalQtyDelivery / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>}
                                   </div>
                                 </button>
