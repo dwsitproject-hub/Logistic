@@ -1344,7 +1344,16 @@ function ShipmentsPageContent() {
 
         const contractId = contract.contract_id
         const existingShipment = shipmentByContractId.get(contractId)
-        const toDate = (v: string) => (v ? v.substring(0, 10) : null)
+        const toDate = (v: string): string | null => {
+          if (!v) return null
+          const s = v.trim()
+          const iso = /^(\d{4}-\d{2}-\d{2})/.exec(s)
+          if (iso) return iso[1]
+          // MM/DD/YYYY (Excel default format)
+          const mdy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s)
+          if (mdy) return `${mdy[3]}-${mdy[1].padStart(2, '0')}-${mdy[2].padStart(2, '0')}`
+          return s.substring(0, 10) || null
+        }
 
         try {
           if (existingShipment) {
@@ -1383,7 +1392,13 @@ function ShipmentsPageContent() {
               const ports: VesselLoadingPort[] = portsRes.data.success ? (portsRes.data.data?.ports ?? []) : []
               const lp1 = ports.find(p => !p.is_discharge_port && p.port_sequence === 1)
               if (lp1?.id) {
-                await api.put(`/shipments/${existingShipment.id}/loading-ports/${lp1.id}`, { id: lp1.id, ...etaPayload })
+                await api.put(`/shipments/${existingShipment.id}/loading-ports/${lp1.id}`, {
+                  id: lp1.id,
+                  port_name: lp1.port_name,
+                  port_sequence: lp1.port_sequence,
+                  is_discharge_port: lp1.is_discharge_port,
+                  ...etaPayload,
+                })
               } else {
                 await api.post(`/shipments/${existingShipment.id}/loading-ports`, {
                   port_sequence: 1,
