@@ -1200,8 +1200,8 @@ function ContractsPageContent() {
   const downloadCargoReadinessTemplate = () => {
     const rows = [
       'po_number,cargo_readiness_date',
-      '# Example: 1001000001,2026-05-15',
-      '# cargo_readiness_date format: YYYY-MM-DD (leave blank to clear)',
+      '# Example: 1001000001,05/15/2026',
+      '# cargo_readiness_date format: MM/DD/YYYY (leave blank to clear)',
     ]
     const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
@@ -1228,9 +1228,22 @@ function ContractsPageContent() {
         alert('CSV must have columns: po_number, cargo_readiness_date')
         return
       }
+      const parseDateMDY = (v: string): string => {
+        if (!v) return ''
+        const s = v.trim()
+        // MM/DD/YYYY → YYYY-MM-DD
+        const mdy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s)
+        if (mdy) return `${mdy[3]}-${mdy[1].padStart(2, '0')}-${mdy[2].padStart(2, '0')}`
+        // Already YYYY-MM-DD
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+        return ''
+      }
       const rows = dataLines.map(line => {
         const cols = line.split(',')
-        return { po_number: cols[poIdx]?.trim() || '', cargo_readiness_date: cols[dateIdx]?.trim() || '' }
+        return {
+          po_number: cols[poIdx]?.trim() || '',
+          cargo_readiness_date: parseDateMDY(cols[dateIdx]?.trim() || ''),
+        }
       }).filter(r => r.po_number)
       if (rows.length === 0) { alert('No valid rows found in CSV.'); return }
       const res = await api.post('/contracts/bulk-cargo-readiness', { rows })
