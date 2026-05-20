@@ -2493,6 +2493,9 @@ function ContractsPageContent() {
               <h1 className="text-3xl font-bold text-gray-900">Contracts</h1>
             </div>
             <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 font-medium border border-gray-200 rounded px-2 py-1 bg-gray-50">
+                Cargo Readiness Date
+              </span>
               <Button
                 variant="outline"
                 size="sm"
