@@ -389,6 +389,28 @@ export class SapDataDistributionService {
       throw new Error('Contract number or PO number is required');
     }
 
+    // When we have a proper contract_no, check if a PO-prefixed placeholder was created earlier
+    // for the same PO (e.g. from a row that had no contract_no). Migrate its FKs so we don't
+    // end up with two contracts for the same PO number.
+    if (contractNumber && poNumber) {
+      const placeholderId = `PO-${poNumber}`;
+      const placeholder = await client.query(
+        `SELECT id FROM contracts WHERE contract_id = $1 LIMIT 1`,
+        [placeholderId]
+      );
+      if (placeholder.rows.length > 0) {
+        const placeholderUuid = placeholder.rows[0].id;
+        logger.info(`Merging placeholder contract ${placeholderId} into ${contractNumber}`);
+        // Re-parent all dependent records
+        await client.query(`UPDATE shipments          SET contract_id = $1 WHERE contract_id = $2`, [placeholderUuid, placeholderUuid]);
+        await client.query(`UPDATE trucking_operations SET contract_id = $1 WHERE contract_id = $2`, [placeholderUuid, placeholderUuid]);
+        await client.query(`UPDATE quality_surveys    SET contract_id = $1 WHERE contract_id = $2`, [placeholderUuid, placeholderUuid]);
+        await client.query(`UPDATE payments           SET contract_id = $1 WHERE contract_id = $2`, [placeholderUuid, placeholderUuid]);
+        // Rename the placeholder's contract_id so the upcoming INSERT...ON CONFLICT fires the UPDATE path
+        await client.query(`UPDATE contracts SET contract_id = $1 WHERE id = $2`, [contractNumber, placeholderUuid]);
+      }
+    }
+
     const quantity = this.parseNumber(contractData.contract_quantity);
     const unitPrice = this.parseNumber(contractData.unit_price);
     const contractValue = (quantity && unitPrice) ? quantity * unitPrice : null;
@@ -1188,24 +1210,28 @@ export class SapDataDistributionService {
 
     // Try to find existing trucking operation by contract + similar trucking owner (>= 0.8)
     let targetTruckingId: string | null = null;
-    if (contractUuid && truckingOwner) {
+    if (contractUuid) {
       const existingForContract = await client.query(
         `SELECT id, trucking_owner FROM trucking_operations WHERE contract_id = $1`,
         [contractUuid]
       );
 
-      let bestId: string | null = null;
-      let bestScore = 0;
-      for (const row of existingForContract.rows) {
-        const score = this.stringSimilarity(truckingOwner, row.trucking_owner);
-        if (score > bestScore) {
-          bestScore = score;
-          bestId = row.id;
+      if (truckingOwner && existingForContract.rows.length > 0) {
+        let bestId: string | null = null;
+        let bestScore = 0;
+        for (const row of existingForContract.rows) {
+          const score = this.stringSimilarity(truckingOwner, row.trucking_owner);
+          if (score > bestScore) {
+            bestScore = score;
+            bestId = row.id;
+          }
         }
-      }
-
-      if (bestId && bestScore >= 0.8) {
-        targetTruckingId = bestId;
+        if (bestId && bestScore >= 0.8) {
+          targetTruckingId = bestId;
+        }
+      } else if (!truckingOwner && existingForContract.rows.length === 1) {
+        // No owner to match by but only one row for this contract — update it
+        targetTruckingId = existingForContract.rows[0].id;
       }
     }
 

@@ -225,9 +225,12 @@ export const updateRolePermissions = async (req: AuthRequest, res: Response): Pr
       [id, level, transportType]
     );
 
-    // Insert new permissions
+    // Insert new permissions.
+    // When scoped (level or transport_type is set), always insert — even all-false rows act as
+    // explicit denies that override the broader unscoped grant for the same permission.
+    const isScoped = level !== null || transportType !== null;
     for (const perm of permissions) {
-      if (perm.can_view || perm.can_create || perm.can_edit || perm.can_delete) {
+      if (isScoped || perm.can_view || perm.can_create || perm.can_edit || perm.can_delete) {
         await query(
           `INSERT INTO role_permissions (role_id, permission_id, can_view, can_create, can_edit, can_delete, level, transport_type)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,

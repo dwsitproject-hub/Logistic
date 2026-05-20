@@ -81,7 +81,7 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
     const normLevel = String(level || '').trim();
     const requiresTransport = normRole === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(normLevel);
     if (requiresTransport) {
-      const validTransport = ['SEA', 'LAND'];
+      const validTransport = ['SEA', 'LAND', 'ALL', 'MIX'];
       if (!validTransport.includes(String(transport_type || '').toUpperCase())) {
         res.status(400).json({
           success: false,
@@ -91,14 +91,6 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
       }
     }
 
-    const requiresPlant = ['LOGISTICS', 'TRADING'].includes(normRole);
-    if (requiresPlant && !String(plant || '').trim()) {
-      res.status(400).json({
-        success: false,
-        error: { message: 'Plant is required for LOGISTICS and TRADING users' },
-      });
-      return;
-    }
 
     if (!validRoles.includes(role)) {
       res.status(400).json({
@@ -202,23 +194,13 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
     const requiresTransport = nextRole === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(nextLevel);
     if (requiresTransport) {
       const t = String(transport_type ?? existingUser.rows[0].transport_type ?? '').toUpperCase();
-      if (!['SEA', 'LAND'].includes(t)) {
+      if (!['SEA', 'LAND', 'ALL', 'MIX'].includes(t)) {
         res.status(400).json({
           success: false,
           error: { message: 'Transport Type is required for LOGISTICS with Section Head/Staff/Admin level' },
         });
         return;
       }
-    }
-
-    const requiresPlant = ['LOGISTICS', 'TRADING'].includes(nextRole);
-    const nextPlant = String(plant ?? existingUser.rows[0].plant ?? '').trim();
-    if (requiresPlant && !nextPlant) {
-      res.status(400).json({
-        success: false,
-        error: { message: 'Plant is required for LOGISTICS and TRADING users' },
-      });
-      return;
     }
 
     // Check for duplicate username/email

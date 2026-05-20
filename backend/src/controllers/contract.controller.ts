@@ -622,16 +622,18 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       const payoffDate = row.payoff_date ? due(row.payoff_date) : null;
       let tradeCycle: number | null = null;
       if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
+        // positive = delivered AFTER due date (LATE), negative = delivered before due date (ON TIME)
         if (deliveryEnd) {
           if (transport.startsWith('LAND')) {
-            const d = diffInDays(lastTruck, deliveryEnd);
+            const d = diffInDays(deliveryEnd, lastTruck);
             if (d != null) tradeCycle = d;
           } else if (transport.startsWith('SEA')) {
-            const d = diffInDays(lastAtaDischarge, deliveryEnd);
+            const d = diffInDays(deliveryEnd, lastAtaDischarge);
             if (d != null) tradeCycle = d;
           }
         }
       } else if (statusText === 'OPEN' || statusText === 'ACTIVE') {
+        // positive = projected completion AFTER due date (LATE), negative = on track
         if (deliveryEnd) {
           if (transport.startsWith('LAND')) {
             const d = diffInDays(deliveryEnd, lastTruckDeliverable);
@@ -1809,7 +1811,22 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         ), 0) AS quantity_delivered_sap,
         t.trucking_owner,
         t.eta_trucking_completion_date,
-        t.trucking_completion_date
+        COALESCE(t.trucking_completion_date, (
+          SELECT NULLIF(TRIM(COALESCE(
+            NULLIF(spd.data->>'trucking_last_receive_date', ''),
+            NULLIF(spd.data->'raw'->>'Trucking Last Receive Date', ''),
+            NULLIF(spd.data->'raw'->>'trucking last receive date', '')
+          )), '')::date
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = c.contract_id
+            AND COALESCE(
+              NULLIF(spd.data->>'trucking_last_receive_date', ''),
+              NULLIF(spd.data->'raw'->>'Trucking Last Receive Date', ''),
+              NULLIF(spd.data->'raw'->>'trucking last receive date', '')
+            ) IS NOT NULL
+          ORDER BY spd.created_at DESC
+          LIMIT 1
+        )) AS trucking_completion_date
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
       LEFT JOIN sto_agg sa ON sa.contract_number = c.contract_id
@@ -1835,6 +1852,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         quantity_receive: Number(r.quantity_receive) || 0,
         vessel_name: r.vessel_name || '-',
         eta_vessel_arrival_loading_port: r.eta_vessel_arrival_loading_port || null,
+        ata_discharge_complete: r.ata_discharge_complete || null,
       };
     });
 
@@ -1855,6 +1873,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         quantity_delivered: Number(r.quantity_delivered_sap ?? r.quantity_delivered_db) || 0,
         trucking_owner: r.trucking_owner || '-',
         eta_trucking_completion_date: r.eta_trucking_completion_date || null,
+        trucking_completion_date: r.trucking_completion_date || null,
       };
     });
 

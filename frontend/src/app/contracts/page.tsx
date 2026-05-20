@@ -201,6 +201,8 @@ interface StoInfoRow {
   trucking_owner?: string
   eta_vessel_arrival_loading_port?: string | null
   eta_trucking_completion_date?: string | null
+  ata_discharge_complete?: string | null
+  trucking_completion_date?: string | null
 }
 
 type B2bPartyRow = {
@@ -4188,16 +4190,22 @@ function ContractsPageContent() {
                           Trade Cycle
                           <FieldHelp text={FIELD_HELP.tradeCycle} />
                         </div>
-                        <div
-                          className={`font-medium mt-1 ${
-                            typeof selectedContract.trade_cycle_days === 'number'
-                              ? selectedContract.trade_cycle_days > 0
+                        <div className={`font-medium mt-1 ${
+                          typeof selectedContract.trade_cycle_days === 'number'
+                            ? selectedContract.trade_cycle_days === 0
+                              ? 'text-gray-500'
+                              : selectedContract.trade_cycle_days > 0
                                 ? 'text-red-600'
                                 : 'text-green-600'
-                              : ''
-                          }`}
-                        >
-                          {selectedContract.trade_cycle_days != null ? `${selectedContract.trade_cycle_days} days` : '-'}
+                            : ''
+                        }`}>
+                          {selectedContract.trade_cycle_days != null
+                            ? selectedContract.trade_cycle_days === 0
+                              ? '0 days'
+                              : selectedContract.trade_cycle_days > 0
+                                ? `${selectedContract.trade_cycle_days} days overdue`
+                                : `${Math.abs(selectedContract.trade_cycle_days)} days left`
+                            : '-'}
                         </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
@@ -4205,16 +4213,22 @@ function ContractsPageContent() {
                           Cash Cycle
                           <FieldHelp text={FIELD_HELP.cashCycle} />
                         </div>
-                        <div
-                          className={`font-medium mt-1 ${
-                            typeof selectedContract.cash_cycle_days === 'number'
-                              ? selectedContract.cash_cycle_days > 0
+                        <div className={`font-medium mt-1 ${
+                          typeof selectedContract.cash_cycle_days === 'number'
+                            ? selectedContract.cash_cycle_days === 0
+                              ? 'text-gray-500'
+                              : selectedContract.cash_cycle_days > 0
                                 ? 'text-red-600'
                                 : 'text-green-600'
-                              : ''
-                          }`}
-                        >
-                          {selectedContract.cash_cycle_days != null ? `${selectedContract.cash_cycle_days} days` : '-'}
+                            : ''
+                        }`}>
+                          {selectedContract.cash_cycle_days != null
+                            ? selectedContract.cash_cycle_days === 0
+                              ? '0 days'
+                              : selectedContract.cash_cycle_days > 0
+                                ? `${selectedContract.cash_cycle_days} days overdue`
+                                : `${Math.abs(selectedContract.cash_cycle_days)} days left`
+                            : '-'}
                         </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded col-span-2">
@@ -4381,6 +4395,7 @@ function ContractsPageContent() {
                               <th className="text-left p-2 font-medium">Quantity Received (Kg)</th>
                               <th className="text-left p-2 font-medium">Vessel Name / Trucking Owner</th>
                               <th className="text-left p-2 font-medium">ETA Vessel Arrival at Loading Port / ETA Trucking Completion Date</th>
+                              <th className="text-left p-2 font-medium">ATA Vessel Complete Discharge / Trucking Last Receive Date</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -4429,6 +4444,11 @@ function ContractsPageContent() {
                                   {row.type === 'shipment'
                                     ? (row.eta_vessel_arrival_loading_port ? formatDate(row.eta_vessel_arrival_loading_port) : '-')
                                     : (row.eta_trucking_completion_date ? formatDate(row.eta_trucking_completion_date) : '-')}
+                                </td>
+                                <td className="p-2">
+                                  {row.type === 'shipment'
+                                    ? (row.ata_discharge_complete ? formatDate(row.ata_discharge_complete) : '-')
+                                    : (row.trucking_completion_date ? formatDate(row.trucking_completion_date) : '-')}
                                 </td>
                               </tr>
                             ))}

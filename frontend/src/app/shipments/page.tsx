@@ -4947,30 +4947,14 @@ function ShipmentsPageContent() {
 
             <div className="flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto px-6 py-4">
               {/* Combined Shipment Information and Loading Ports */}
-              <div
-                className={[
-                  'rounded-xl border border-gray-200 shadow-sm flex flex-col min-h-0',
-                  portsListExpanded ? 'flex-1' : 'flex-none'
-                ].join(' ')}
-              >
-                <div
-                  className="flex items-center justify-between px-4 py-2.5 bg-gradient-to-r from-blue-50 to-white cursor-pointer hover:from-blue-100 rounded-t-xl border-b border-gray-200 transition-colors"
-                  onClick={() => setPortsListExpanded(!portsListExpanded)}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100 shrink-0">
-                      <FileText className="h-3.5 w-3.5 text-blue-600" />
-                    </div>
-                    <h4 className="font-semibold text-sm text-gray-800">Shipment Information</h4>
+              <div className="rounded-xl border border-gray-200 shadow-sm">
+                <div className="flex items-center gap-2.5 px-4 py-2.5 bg-gray-50 rounded-t-xl border-b border-gray-200">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100 shrink-0">
+                    <FileText className="h-3.5 w-3.5 text-blue-600" />
                   </div>
-                  {portsListExpanded ? (
-                    <ChevronUp className="h-4.5 w-4.5 text-gray-400" />
-                  ) : (
-                    <ChevronDown className="h-4.5 w-4.5 text-gray-400" />
-                  )}
+                  <h4 className="font-semibold text-sm text-gray-800">Shipment Information</h4>
                 </div>
-                {portsListExpanded && (
-                <div className="space-y-4 overflow-auto p-4 flex-1 min-h-0">
+                <div className="space-y-4 p-4">
                   {/* Shipment-Level Information */}
                   {shipmentInfo ? (
                     <div className="rounded-xl border border-gray-200 bg-white overflow-hidden mb-2">
@@ -5148,7 +5132,7 @@ function ShipmentsPageContent() {
                       </div>
 
                       {/* ATA Fields Section */}
-                      <div className="border-t pt-4">
+                      <div className="border-t pt-4 px-4 pb-4">
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">ATA &mdash; Actual Time of Arrival</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           {[
@@ -5171,7 +5155,7 @@ function ShipmentsPageContent() {
                       </div>
 
                       {/* ETA Fields Section */}
-                      <div className="border-t pt-4">
+                      <div className="border-t pt-4 px-4 pb-4">
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">ETA — Estimated Time of Arrival</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           <div>
@@ -5286,7 +5270,7 @@ function ShipmentsPageContent() {
                       </div>
                       
                       {/* Quality Fields Section */}
-                      <div className="border-t pt-4">
+                      <div className="border-t pt-4 px-4 pb-4">
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quality at Loading Loc 1</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           <div>
@@ -5424,7 +5408,7 @@ function ShipmentsPageContent() {
                         </div>
                       </div>
 
-                      <div className="border-t pt-4">
+                      <div className="border-t pt-4 px-4 pb-4">
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quality at Discharge Loc 1</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           <div>
@@ -5772,34 +5756,17 @@ function ShipmentsPageContent() {
                   )
                 })()}
                 </div>
-                )}
               </div>
 
               {/* Add / Edit Loading Port */}
-              <div
-                className={[
-                  'rounded-xl border border-gray-200 shadow-sm flex flex-col min-h-0',
-                  addPortExpanded ? 'flex-1' : 'flex-none'
-                ].join(' ')}
-              >
-                <div
-                  className="flex items-center justify-between px-4 py-2.5 bg-gradient-to-r from-green-50 to-white cursor-pointer hover:from-green-100 rounded-t-xl border-b border-gray-200 transition-colors"
-                  onClick={() => setAddPortExpanded(!addPortExpanded)}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-green-100 shrink-0">
-                      <Plus className="h-3.5 w-3.5 text-green-600" />
-                    </div>
-                    <h4 className="font-semibold text-sm text-gray-800">Add Loading Port</h4>
+              <div className="rounded-xl border border-gray-200 shadow-sm">
+                <div className="flex items-center gap-2.5 px-4 py-2.5 bg-gray-50 rounded-t-xl border-b border-gray-200">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-green-100 shrink-0">
+                    <Plus className="h-3.5 w-3.5 text-green-600" />
                   </div>
-                  {addPortExpanded ? (
-                    <ChevronUp className="h-4.5 w-4.5 text-gray-400" />
-                  ) : (
-                    <ChevronDown className="h-4.5 w-4.5 text-gray-400" />
-                  )}
+                  <h4 className="font-semibold text-sm text-gray-800">Add Loading Port</h4>
                 </div>
-                {addPortExpanded && (
-                <div className="p-4 overflow-auto flex-1 min-h-0 space-y-4">
+                <div className="p-4 space-y-4">
 
                   {/* Basic Info */}
                   <div>
@@ -5924,7 +5891,6 @@ function ShipmentsPageContent() {
                     </div>
                   </div>
                 </div>
-                )}
               </div>
             </div>
           </div>

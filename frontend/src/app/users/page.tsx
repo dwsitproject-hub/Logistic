@@ -301,7 +301,12 @@ export default function UsersPage() {
               <Settings className="h-4 w-4 mr-2" />
               Manage Roles
             </Button>
-            <Button onClick={() => setShowAddModal(true)}>
+            <Button onClick={() => {
+              setFormData({ username: '', email: '', password: '', full_name: '', role: 'TRADING', level: 'Staff', transport_type: '', plant: '', phone: '', department: '' })
+              setError('')
+              setSuccess('')
+              setShowAddModal(true)
+            }}>
               <UserPlus className="h-4 w-4 mr-2" />
               Add User
             </Button>
@@ -470,7 +475,7 @@ export default function UsersPage() {
                 Create a new user account with a default password
               </DialogDescription>
             </DialogHeader>
-            <form onSubmit={handleAddUser}>
+            <form onSubmit={handleAddUser} autoComplete="off">
               <div className="grid gap-4 py-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -479,6 +484,7 @@ export default function UsersPage() {
                       id="username"
                       value={formData.username}
                       onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                      autoComplete="off"
                       required
                     />
                   </div>
@@ -513,6 +519,7 @@ export default function UsersPage() {
                       value={formData.password}
                       onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                       placeholder="User will change this on first login"
+                      autoComplete="new-password"
                       required
                       className="pr-10"
                     />
@@ -602,13 +609,15 @@ export default function UsersPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">-</SelectItem>
+                        <SelectItem value="ALL">ALL</SelectItem>
                         <SelectItem value="SEA">SEA</SelectItem>
                         <SelectItem value="LAND">LAND</SelectItem>
+                        <SelectItem value="MIX">MIX</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="plant">Plant {showPlant ? '*' : ''}</Label>
+                    <Label htmlFor="plant">Plant</Label>
                     <Input
                       id="plant"
                       value={formData.plant}
@@ -758,13 +767,15 @@ export default function UsersPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">-</SelectItem>
+                        <SelectItem value="ALL">ALL</SelectItem>
                         <SelectItem value="SEA">SEA</SelectItem>
                         <SelectItem value="LAND">LAND</SelectItem>
+                        <SelectItem value="MIX">MIX</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="edit_plant">Plant {showPlant ? '*' : ''}</Label>
+                    <Label htmlFor="edit_plant">Plant</Label>
                     <Input
                       id="edit_plant"
                       value={formData.plant}

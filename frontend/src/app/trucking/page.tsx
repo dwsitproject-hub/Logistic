@@ -1521,7 +1521,7 @@ function TruckingPageContent() {
       sortable: true,
       getSortValue: (o) => o.contract_ext_no || o.contract_number || '',
       render: (o) => (
-        <span className="text-sm break-words block" title={(o.contract_ext_no || o.contract_number || '') as string}>
+        <span className="text-sm truncate block max-w-full" title={(o.contract_ext_no || o.contract_number || '') as string}>
           {o.contract_ext_no || o.contract_number || '-'}
         </span>
       )
@@ -1533,7 +1533,7 @@ function TruckingPageContent() {
       sortable: true,
       getSortValue: (o) => o.po_number || '',
       render: (o) => (
-        <span className="text-sm break-words block" title={o.po_number || ''}>
+        <span className="text-sm truncate block max-w-full" title={o.po_number || ''}>
           {o.po_number || '-'}
         </span>
       )
@@ -1545,7 +1545,7 @@ function TruckingPageContent() {
       sortable: true,
       getSortValue: (o) => o.sto_number || '',
       render: (o) => (
-        <span className="text-sm break-words block" title={o.sto_number || ''}>
+        <span className="text-sm truncate block max-w-full" title={o.sto_number || ''}>
           {o.sto_number || '-'}
         </span>
       )
@@ -1952,12 +1952,12 @@ function TruckingPageContent() {
 
   const getColumnWidth = (colId: string): string => {
     const widths: { [key: string]: string } = {
-      'late_indicator': '130px',
+      'late_indicator': '110px',
       'operation_id': '180px',
-      'status': '120px',
-      'contract_number': '160px',
-      'po_number': '120px',
-      'sto_number': '120px',
+      'status': '110px',
+      'contract_number': '210px',
+      'po_number': '130px',
+      'sto_number': '130px',
       'sto_quantity': '130px',
       'location': '150px',
       'loading_location': '170px',
@@ -3097,7 +3097,7 @@ function TruckingPageContent() {
                           return (
                               <tr key={operation.id} className={stripeClass}>
                                 {visibleColumns.map(col => (
-                                  <td key={col.id} className={`min-w-0 px-3 py-2 align-middle ${stripeClass}`}>
+                                  <td key={col.id} className={`min-w-0 overflow-hidden px-3 py-2 align-middle ${stripeClass}`}>
                                     <div className="flex min-h-[40px] items-center">
                                       {col.id === 'status' && isEditing ? (
                                         operation.status === 'CANCELLED' ? (
