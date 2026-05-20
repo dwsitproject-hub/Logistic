@@ -1339,9 +1339,9 @@ function ShipmentsPageContent() {
           const s = v.trim()
           const iso = /^(\d{4}-\d{2}-\d{2})/.exec(s)
           if (iso) return iso[1]
-          // MM/DD/YYYY (Excel default format)
-          const mdy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s)
-          if (mdy) return `${mdy[3]}-${mdy[1].padStart(2, '0')}-${mdy[2].padStart(2, '0')}`
+          // DD/MM/YYYY format (Indonesian locale standard)
+          const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s)
+          if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`
           return s.substring(0, 10) || null
         }
 
