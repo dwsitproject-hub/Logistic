@@ -2533,10 +2533,6 @@ function ContractsPageContent() {
                     <div className="text-lg font-semibold text-gray-900">{((latePerformanceSummary.totalQtyDelivery ?? 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
                   </div>
                   <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">Total late days</div>
-                    <div className="text-lg font-semibold text-gray-900">{Math.round(latePerformanceSummary.totalDays).toLocaleString('en-US')}</div>
-                  </div>
-                  <div className="rounded border bg-white px-3 py-2">
                     <div className="text-[11px] text-gray-500">Avg late days</div>
                     <div className="text-lg font-semibold text-gray-900">{latePerformanceSummary.avgDays ? latePerformanceSummary.avgDays.toFixed(1) : '0.0'}</div>
                   </div>
@@ -2605,6 +2601,9 @@ function ContractsPageContent() {
                                   <div className="mt-1 text-xs text-gray-700 flex items-center justify-between gap-2">
                                     <span className="font-semibold">{node.count.toLocaleString('en-US')}</span>
                                     <span className="text-gray-500">contracts</span>
+                                    <span className="text-gray-400">·</span>
+                                    <span className="text-gray-500">avg</span>
+                                    <span className="font-semibold">{node.count > 0 ? (node.totalDays / node.count).toFixed(1) : '—'} days</span>
                                     {rightStat ?? <span className="ml-auto font-semibold whitespace-nowrap">{(node.totalQtyDelivery / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>}
                                   </div>
                                 </button>
