@@ -1578,10 +1578,10 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
 // ---------------------------------------------------------------------------
 
 export const downloadBulkCreateTruckingTemplate = async (_req: AuthRequest, res: Response) => {
-  // Generate 14 date columns starting from today
+  // Generate 60 date columns starting from today
   const today = new Date();
   const dateCols: string[] = [];
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 60; i++) {
     const d = new Date(today);
     d.setDate(today.getDate() + i);
     const dd = String(d.getDate()).padStart(2, '0');
