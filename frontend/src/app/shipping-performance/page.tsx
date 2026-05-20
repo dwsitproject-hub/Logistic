@@ -221,50 +221,48 @@ export default function ShippingPerformancePage() {
     })
   }, [rows, statusFilter, selectedIncoterms, selectedPlantSites, dateFrom, dateTo, lateOnTimeFilter])
 
-  const lateTree = useMemo(() => {
-    type PlantMap = Map<string, { count: number; totalQty: number }>
+  const buildPerfTree = (rows: typeof filteredByTopFilters, isLate: boolean): LatePerfNode[] => {
+    type VesMap   = Map<string, { count: number; totalQty: number }>
+    type IncMap   = Map<string, { count: number; totalQty: number; vessels: VesMap }>
+    type PlantMap = Map<string, { count: number; totalQty: number; incoterms: IncMap }>
     type ProdMap  = Map<string, { count: number; totalQty: number; plants: PlantMap }>
-    type IncMap   = Map<string, { count: number; totalQty: number; products: ProdMap }>
-    type VesMap   = Map<string, { count: number; totalQty: number; incoterms: IncMap }>
-    const root: VesMap = new Map()
-    for (const row of filteredByTopFilters) {
-      if (Number(row.total_delta_days ?? 0) <= 0) continue
+    const root: ProdMap = new Map()
+    for (const row of rows) {
+      const delta = Number(row.total_delta_days ?? 0)
+      if (isLate ? delta <= 0 : delta > 0) continue
       if (row.status === 'COMPLETED') continue
       const qty = Number(row.outstanding_qty ?? 0)
       if (qty <= 0) continue
-      const ves  = String(row.vessel_name || '').trim() || 'Unknown'
-      const inc  = String(row.incoterm    || '').trim() || 'Blank'
-      const prod = String(row.product     || '').trim() || 'Blank'
-      const plant = String(row.plant_site || '').trim() || 'Blank'
-      if (!root.has(ves)) root.set(ves, { count: 0, totalQty: 0, incoterms: new Map() })
-      const vesNode = root.get(ves)!
-      vesNode.count += 1; vesNode.totalQty += qty
-      if (!vesNode.incoterms.has(inc)) vesNode.incoterms.set(inc, { count: 0, totalQty: 0, products: new Map() })
-      const incNode = vesNode.incoterms.get(inc)!
-      incNode.count += 1; incNode.totalQty += qty
-      if (!incNode.products.has(prod)) incNode.products.set(prod, { count: 0, totalQty: 0, plants: new Map() })
-      const prodNode = incNode.products.get(prod)!
-      prodNode.count += 1; prodNode.totalQty += qty
-      if (!prodNode.plants.has(plant)) prodNode.plants.set(plant, { count: 0, totalQty: 0 })
-      const plantNode = prodNode.plants.get(plant)!
-      plantNode.count += 1; plantNode.totalQty += qty
+      const prod  = String(row.product     || '').trim() || 'Blank'
+      const plant = String(row.plant_site  || '').trim() || 'Blank'
+      const inc   = String(row.incoterm    || '').trim() || 'Blank'
+      const ves   = String(row.vessel_name || '').trim() || 'Unknown'
+      if (!root.has(prod))  root.set(prod, { count: 0, totalQty: 0, plants: new Map() })
+      const pN = root.get(prod)!; pN.count += 1; pN.totalQty += qty
+      if (!pN.plants.has(plant)) pN.plants.set(plant, { count: 0, totalQty: 0, incoterms: new Map() })
+      const plN = pN.plants.get(plant)!; plN.count += 1; plN.totalQty += qty
+      if (!plN.incoterms.has(inc)) plN.incoterms.set(inc, { count: 0, totalQty: 0, vessels: new Map() })
+      const iN = plN.incoterms.get(inc)!; iN.count += 1; iN.totalQty += qty
+      if (!iN.vessels.has(ves)) iN.vessels.set(ves, { count: 0, totalQty: 0 })
+      const vN = iN.vessels.get(ves)!; vN.count += 1; vN.totalQty += qty
     }
     const srt = <T,>(m: Map<string, T & { totalQty: number }>) =>
       [...m.entries()].sort((a, b) => b[1].totalQty - a[1].totalQty)
-    const out: LatePerfNode[] = srt(root).map(([ves, vn]) => ({
-      key: ves, count: vn.count, totalQty: vn.totalQty,
-      children: srt(vn.incoterms).map(([inc, iN]) => ({
-        key: inc, count: iN.count, totalQty: iN.totalQty,
-        children: srt(iN.products).map(([prod, pN]) => ({
-          key: prod, count: pN.count, totalQty: pN.totalQty,
-          children: srt(pN.plants).map(([plant, plN]) => ({
-            key: plant, count: plN.count, totalQty: plN.totalQty, children: [],
+    return srt(root).map(([prod, pN]) => ({
+      key: prod, count: pN.count, totalQty: pN.totalQty,
+      children: srt(pN.plants).map(([plant, plN]) => ({
+        key: plant, count: plN.count, totalQty: plN.totalQty,
+        children: srt(plN.incoterms).map(([inc, iN]) => ({
+          key: inc, count: iN.count, totalQty: iN.totalQty,
+          children: srt(iN.vessels).map(([ves, vN]) => ({
+            key: ves, count: vN.count, totalQty: vN.totalQty, children: [],
           })),
         })),
       })),
     }))
-    return out
-  }, [filteredByTopFilters])
+  }
+
+  const lateTree = useMemo(() => buildPerfTree(filteredByTopFilters, true), [filteredByTopFilters])
 
   const lateSummary = useMemo(() => {
     let count = 0, totalQty = 0, totalDays = 0, maxDays = 0
@@ -281,49 +279,7 @@ export default function ShippingPerformancePage() {
     return { count, totalQty, totalDays, avgDays: count > 0 ? totalDays / count : 0, maxDays }
   }, [filteredByTopFilters])
 
-  const onTrackTree = useMemo(() => {
-    type PlantMap = Map<string, { count: number; totalQty: number }>
-    type ProdMap  = Map<string, { count: number; totalQty: number; plants: PlantMap }>
-    type IncMap   = Map<string, { count: number; totalQty: number; products: ProdMap }>
-    type VesMap   = Map<string, { count: number; totalQty: number; incoterms: IncMap }>
-    const root: VesMap = new Map()
-    for (const row of filteredByTopFilters) {
-      if (Number(row.total_delta_days ?? 0) > 0) continue
-      if (row.status === 'COMPLETED') continue
-      const qty = Number(row.outstanding_qty ?? 0)
-      if (qty <= 0) continue
-      const ves  = String(row.vessel_name || '').trim() || 'Unknown'
-      const inc  = String(row.incoterm    || '').trim() || 'Blank'
-      const prod = String(row.product     || '').trim() || 'Blank'
-      const plant = String(row.plant_site || '').trim() || 'Blank'
-      if (!root.has(ves)) root.set(ves, { count: 0, totalQty: 0, incoterms: new Map() })
-      const vesNode = root.get(ves)!
-      vesNode.count += 1; vesNode.totalQty += qty
-      if (!vesNode.incoterms.has(inc)) vesNode.incoterms.set(inc, { count: 0, totalQty: 0, products: new Map() })
-      const incNode = vesNode.incoterms.get(inc)!
-      incNode.count += 1; incNode.totalQty += qty
-      if (!incNode.products.has(prod)) incNode.products.set(prod, { count: 0, totalQty: 0, plants: new Map() })
-      const prodNode = incNode.products.get(prod)!
-      prodNode.count += 1; prodNode.totalQty += qty
-      if (!prodNode.plants.has(plant)) prodNode.plants.set(plant, { count: 0, totalQty: 0 })
-      const plantNode = prodNode.plants.get(plant)!
-      plantNode.count += 1; plantNode.totalQty += qty
-    }
-    const srt = <T,>(m: Map<string, T & { totalQty: number }>) =>
-      [...m.entries()].sort((a, b) => b[1].totalQty - a[1].totalQty)
-    return srt(root).map(([ves, vn]) => ({
-      key: ves, count: vn.count, totalQty: vn.totalQty,
-      children: srt(vn.incoterms).map(([inc, iN]) => ({
-        key: inc, count: iN.count, totalQty: iN.totalQty,
-        children: srt(iN.products).map(([prod, pN]) => ({
-          key: prod, count: pN.count, totalQty: pN.totalQty,
-          children: srt(pN.plants).map(([plant, plN]) => ({
-            key: plant, count: plN.count, totalQty: plN.totalQty, children: [],
-          })),
-        })),
-      })),
-    }))
-  }, [filteredByTopFilters])
+  const onTrackTree = useMemo(() => buildPerfTree(filteredByTopFilters, false), [filteredByTopFilters])
 
   const onTrackSummary = useMemo(() => {
     let count = 0, totalQty = 0, totalDaysAhead = 0, maxDaysAhead = 0
@@ -643,20 +599,17 @@ export default function ShippingPerformancePage() {
                       Reset selection
                     </button>
                   </div>
-                  <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+                  <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
                     {([
-                      { title: 'Total',    subtitle: perfDashMode === 'late' ? 'All late' : 'All on track',                            level: 'total'    as const },
-                      { title: 'Vessel',   subtitle: 'Pick one',                                                                       level: 'vessel'   as const },
-                      { title: 'Incoterm', subtitle: lateSelVessel  ? `Under ${lateSelVessel}`  : 'Pick vessel first',                 level: 'incoterm' as const },
-                      { title: 'Product',  subtitle: lateSelIncoterm ? `Under ${lateSelIncoterm}` : 'Pick incoterm first',             level: 'product'  as const },
+                      { title: 'Product',  subtitle: 'Pick one',                                                                       level: 'product'  as const },
                       { title: 'Plant',    subtitle: lateSelProduct  ? `Under ${lateSelProduct}`  : 'Pick product first',              level: 'plant'    as const },
+                      { title: 'Incoterm', subtitle: lateSelPlant    ? `Under ${lateSelPlant}`    : 'Pick plant first',                level: 'incoterm' as const },
+                      { title: 'Vessel',   subtitle: lateSelIncoterm ? `Under ${lateSelIncoterm}` : 'Pick incoterm first',             level: 'vessel'   as const },
                     ] as const).map((col) => {
                       const activeTree = perfDashMode === 'ontrack' ? onTrackTree : lateTree
-                      const totalLateCount = activeTree.reduce((s, n) => s + n.count, 0)
-                      const totalLateQty   = activeTree.reduce((s, n) => s + n.totalQty, 0)
-                      const denom = totalLateQty || 1
+                      const totalQty   = activeTree.reduce((s, n) => s + n.totalQty, 0)
+                      const denom = totalQty || 1
                       const levelStyles: Record<string, { headerBg: string; badge: string; bar: string; border: string }> = {
-                        total:   { headerBg: 'bg-blue-50',    badge: 'bg-blue-100 text-blue-800',      bar: 'bg-blue-600',    border: 'border-blue-200' },
                         vessel:  { headerBg: 'bg-sky-50',     badge: 'bg-sky-100 text-sky-800',        bar: 'bg-sky-600',     border: 'border-sky-200' },
                         incoterm:{ headerBg: 'bg-violet-50',  badge: 'bg-violet-100 text-violet-800',  bar: 'bg-violet-600',  border: 'border-violet-200' },
                         product: { headerBg: 'bg-amber-50',   badge: 'bg-amber-100 text-amber-800',    bar: 'bg-amber-600',   border: 'border-amber-200' },
@@ -699,19 +652,23 @@ export default function ShippingPerformancePage() {
                         </div>
                       )
 
-                      const vesselNode = activeTree.find((n) => n.key === lateSelVessel)
-                      const incotermNode = vesselNode?.children.find((n) => n.key === lateSelIncoterm)
-                      const productNode  = incotermNode?.children.find((n) => n.key === lateSelProduct)
+                      const productNode  = activeTree.find((n) => n.key === lateSelProduct)
+                      const plantNode    = productNode?.children.find((n) => n.key === lateSelPlant)
+                      const incotermNode = plantNode?.children.find((n) => n.key === lateSelIncoterm)
 
                       const body = (() => {
-                        if (col.level === 'total') {
-                          const totalNode: LatePerfNode = { key: 'Total', count: totalLateCount, totalQty: totalLateQty, children: [] }
-                          return renderNode(totalNode, true, () => { setLateSelVessel(null); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }, true)
-                        }
-                        if (col.level === 'vessel') {
+                        if (col.level === 'product') {
                           return (
                             <div className="space-y-2">
-                              {activeTree.map((n) => renderNode(n, lateSelVessel === n.key, () => { setLateSelVessel(n.key); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }))}
+                              {activeTree.map((n) => renderNode(n, lateSelProduct === n.key, () => { setLateSelProduct(n.key); setLateSelPlant(null); setLateSelIncoterm(null); setLateSelVessel(null) }))}
+                            </div>
+                          )
+                        }
+                        if (col.level === 'plant') {
+                          if (!lateSelProduct) return <div className="text-sm text-gray-500">Select a product to see plants.</div>
+                          return (
+                            <div className="space-y-2">
+                              {(productNode?.children || []).map((n) => renderNode(n, lateSelPlant === n.key, () => { setLateSelPlant(n.key); setLateSelIncoterm(null); setLateSelVessel(null) }))}
                             </div>
                           )
                         }
@@ -723,18 +680,18 @@ export default function ShippingPerformancePage() {
                             </div>
                           )
                         }
-                        if (col.level === 'product') {
-                          if (!lateSelIncoterm) return <div className="text-sm text-gray-500">Select an incoterm to see products.</div>
+                        if (col.level === 'incoterm') {
+                          if (!lateSelPlant) return <div className="text-sm text-gray-500">Select a plant to see incoterms.</div>
                           return (
                             <div className="space-y-2">
-                              {(incotermNode?.children || []).map((n) => renderNode(n, lateSelProduct === n.key, () => { setLateSelProduct(n.key); setLateSelPlant(null) }))}
+                              {(plantNode?.children || []).map((n) => renderNode(n, lateSelIncoterm === n.key, () => { setLateSelIncoterm(n.key); setLateSelVessel(null) }))}
                             </div>
                           )
                         }
-                        if (!lateSelProduct) return <div className="text-sm text-gray-500">Select a product to see plants.</div>
+                        if (!lateSelIncoterm) return <div className="text-sm text-gray-500">Select an incoterm to see vessels.</div>
                         return (
                           <div className="space-y-2">
-                            {(productNode?.children || []).map((n) => renderNode(n, lateSelPlant === n.key, () => setLateSelPlant(n.key)))}
+                            {(incotermNode?.children || []).map((n) => renderNode(n, lateSelVessel === n.key, () => setLateSelVessel(n.key)))}
                           </div>
                         )
                       })()
