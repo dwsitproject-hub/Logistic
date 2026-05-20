@@ -152,6 +152,7 @@ export default function ShippingPerformancePage() {
     const day = String(d.getDate()).padStart(2, '0')
     return `${d.getFullYear()}-${m}-${day}`
   })
+  const [perfDashMode, setPerfDashMode] = useState<'late' | 'ontrack'>('late')
   const [lateOnTimeFilter, setLateOnTimeFilter] = useState<'ALL' | 'LATE' | 'ON_TIME'>('ALL')
   const [lateSelVessel, setLateSelVessel] = useState<string | null>(null)
   const [lateSelIncoterm, setLateSelIncoterm] = useState<string | null>(null)
@@ -278,6 +279,66 @@ export default function ShippingPerformancePage() {
       maxDays = Math.max(maxDays, days)
     }
     return { count, totalQty, totalDays, avgDays: count > 0 ? totalDays / count : 0, maxDays }
+  }, [filteredByTopFilters])
+
+  const onTrackTree = useMemo(() => {
+    type PlantMap = Map<string, { count: number; totalQty: number }>
+    type ProdMap  = Map<string, { count: number; totalQty: number; plants: PlantMap }>
+    type IncMap   = Map<string, { count: number; totalQty: number; products: ProdMap }>
+    type VesMap   = Map<string, { count: number; totalQty: number; incoterms: IncMap }>
+    const root: VesMap = new Map()
+    for (const row of filteredByTopFilters) {
+      if (Number(row.total_delta_days ?? 0) > 0) continue
+      if (row.status === 'COMPLETED') continue
+      const qty = Number(row.outstanding_qty ?? 0)
+      if (qty <= 0) continue
+      const ves  = String(row.vessel_name || '').trim() || 'Unknown'
+      const inc  = String(row.incoterm    || '').trim() || 'Blank'
+      const prod = String(row.product     || '').trim() || 'Blank'
+      const plant = String(row.plant_site || '').trim() || 'Blank'
+      if (!root.has(ves)) root.set(ves, { count: 0, totalQty: 0, incoterms: new Map() })
+      const vesNode = root.get(ves)!
+      vesNode.count += 1; vesNode.totalQty += qty
+      if (!vesNode.incoterms.has(inc)) vesNode.incoterms.set(inc, { count: 0, totalQty: 0, products: new Map() })
+      const incNode = vesNode.incoterms.get(inc)!
+      incNode.count += 1; incNode.totalQty += qty
+      if (!incNode.products.has(prod)) incNode.products.set(prod, { count: 0, totalQty: 0, plants: new Map() })
+      const prodNode = incNode.products.get(prod)!
+      prodNode.count += 1; prodNode.totalQty += qty
+      if (!prodNode.plants.has(plant)) prodNode.plants.set(plant, { count: 0, totalQty: 0 })
+      const plantNode = prodNode.plants.get(plant)!
+      plantNode.count += 1; plantNode.totalQty += qty
+    }
+    const srt = <T,>(m: Map<string, T & { totalQty: number }>) =>
+      [...m.entries()].sort((a, b) => b[1].totalQty - a[1].totalQty)
+    return srt(root).map(([ves, vn]) => ({
+      key: ves, count: vn.count, totalQty: vn.totalQty,
+      children: srt(vn.incoterms).map(([inc, iN]) => ({
+        key: inc, count: iN.count, totalQty: iN.totalQty,
+        children: srt(iN.products).map(([prod, pN]) => ({
+          key: prod, count: pN.count, totalQty: pN.totalQty,
+          children: srt(pN.plants).map(([plant, plN]) => ({
+            key: plant, count: plN.count, totalQty: plN.totalQty, children: [],
+          })),
+        })),
+      })),
+    }))
+  }, [filteredByTopFilters])
+
+  const onTrackSummary = useMemo(() => {
+    let count = 0, totalQty = 0, totalDaysAhead = 0, maxDaysAhead = 0
+    for (const row of filteredByTopFilters) {
+      const days = Number(row.total_delta_days ?? 0)
+      if (days > 0) continue
+      if (row.status === 'COMPLETED') continue
+      if (Number(row.outstanding_qty ?? 0) <= 0) continue
+      const daysAhead = -days
+      count++
+      totalQty += Number(row.outstanding_qty ?? 0)
+      totalDaysAhead += daysAhead
+      maxDaysAhead = Math.max(maxDaysAhead, daysAhead)
+    }
+    return { count, totalQty, totalDays: totalDaysAhead, avgDays: count > 0 ? totalDaysAhead / count : 0, maxDays: maxDaysAhead }
   }, [filteredByTopFilters])
 
   const visibleOrderedColumns = useMemo(
@@ -491,51 +552,89 @@ export default function ShippingPerformancePage() {
           </div>
         </div>
 
-        {/* Section 1: Late Performance */}
+        {/* Section 1: Performance */}
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div>
-                <CardTitle className="text-base">Late Performance (YTD)</CardTitle>
+                <div className="inline-flex rounded-lg border bg-white p-1 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => { setPerfDashMode('late'); setLateOnTimeFilter('LATE'); setLateSelVessel(null); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }}
+                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'late' ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+                  >
+                    Late
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setPerfDashMode('ontrack'); setLateOnTimeFilter('ON_TIME'); setLateSelVessel(null); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }}
+                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'ontrack' ? 'bg-green-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+                  >
+                    On Track
+                  </button>
+                </div>
+                <CardTitle className="text-base">
+                  {perfDashMode === 'late' ? 'Late Performance (YTD)' : 'On Track Performance (YTD)'}
+                </CardTitle>
                 <div className="text-sm text-gray-600 mt-1">
-                  Management view of late shipping where <span className="font-medium">Total delta &gt; 0</span>. Use drilldown to filter the table below.
+                  {perfDashMode === 'late'
+                    ? <>Management view of late shipping where <span className="font-medium">Total delta &gt; 0</span>. Use drilldown to filter the table below.</>
+                    : <>Management view of on-track shipping where <span className="font-medium">Total delta ≤ 0</span>. Use drilldown to filter the table below.</>
+                  }
                 </div>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 w-full sm:w-auto">
-                <div className="rounded border bg-white px-3 py-2">
-                  <div className="text-[11px] text-gray-500">Late shipments</div>
-                  <div className="text-lg font-semibold text-gray-900">{lateSummary.count.toLocaleString('en-US')}</div>
+              {perfDashMode === 'late' ? (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full sm:w-auto">
+                  <div className="rounded border bg-white px-3 py-2">
+                    <div className="text-[11px] text-gray-500">Late shipments</div>
+                    <div className="text-lg font-semibold text-red-600">{lateSummary.count.toLocaleString('en-US')}</div>
+                  </div>
+                  <div className="rounded border bg-white px-3 py-2">
+                    <div className="text-[11px] text-gray-500">Total late qty</div>
+                    <div className="text-lg font-semibold text-gray-900">{(lateSummary.totalQty / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
+                  </div>
+                  <div className="rounded border bg-white px-3 py-2">
+                    <div className="text-[11px] text-gray-500">Avg late days</div>
+                    <div className="text-lg font-semibold text-gray-900">{lateSummary.avgDays ? lateSummary.avgDays.toFixed(1) : '0.0'}</div>
+                  </div>
+                  <div className="rounded border bg-white px-3 py-2">
+                    <div className="text-[11px] text-gray-500">Max late days</div>
+                    <div className="text-lg font-semibold text-gray-900">{lateSummary.maxDays.toLocaleString('en-US')}</div>
+                  </div>
                 </div>
-                <div className="rounded border bg-white px-3 py-2">
-                  <div className="text-[11px] text-gray-500">Total late qty</div>
-                  <div className="text-lg font-semibold text-gray-900">{(lateSummary.totalQty / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full sm:w-auto">
+                  <div className="rounded border bg-white px-3 py-2">
+                    <div className="text-[11px] text-gray-500">On Track shipments</div>
+                    <div className="text-lg font-semibold text-green-600">{onTrackSummary.count.toLocaleString('en-US')}</div>
+                  </div>
+                  <div className="rounded border bg-white px-3 py-2">
+                    <div className="text-[11px] text-gray-500">Total on-track qty</div>
+                    <div className="text-lg font-semibold text-gray-900">{(onTrackSummary.totalQty / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
+                  </div>
+                  <div className="rounded border bg-white px-3 py-2">
+                    <div className="text-[11px] text-gray-500">Avg days ahead</div>
+                    <div className="text-lg font-semibold text-gray-900">{onTrackSummary.avgDays ? onTrackSummary.avgDays.toFixed(1) : '0.0'}</div>
+                  </div>
+                  <div className="rounded border bg-white px-3 py-2">
+                    <div className="text-[11px] text-gray-500">Max days ahead</div>
+                    <div className="text-lg font-semibold text-gray-900">{onTrackSummary.maxDays.toLocaleString('en-US')}</div>
+                  </div>
                 </div>
-                <div className="rounded border bg-white px-3 py-2">
-                  <div className="text-[11px] text-gray-500">Total late days</div>
-                  <div className="text-lg font-semibold text-gray-900">{Math.round(lateSummary.totalDays).toLocaleString('en-US')}</div>
-                </div>
-                <div className="rounded border bg-white px-3 py-2">
-                  <div className="text-[11px] text-gray-500">Avg late days</div>
-                  <div className="text-lg font-semibold text-gray-900">{lateSummary.avgDays ? lateSummary.avgDays.toFixed(1) : '0.0'}</div>
-                </div>
-                <div className="rounded border bg-white px-3 py-2">
-                  <div className="text-[11px] text-gray-500">Max late days</div>
-                  <div className="text-lg font-semibold text-gray-900">{lateSummary.maxDays.toLocaleString('en-US')}</div>
-                </div>
-              </div>
+              )}
             </div>
           </CardHeader>
           <CardContent className="pt-2">
-            {lateTree.length === 0 ? (
-              <div className="text-sm text-gray-500">No late shipments found.</div>
+            {(perfDashMode === 'late' ? lateTree : onTrackTree).length === 0 ? (
+              <div className="text-sm text-gray-500">{perfDashMode === 'late' ? 'No late shipments found.' : 'No on-track shipments found.'}</div>
             ) : (
               <div className="space-y-3">
                 <div className="text-sm text-gray-600">
-                  Navigate late issues as a tree: <span className="font-medium">Total → Vessel → Incoterm → Product → Plant</span>. Click a node to filter the table below.
+                  Navigate as a tree: <span className="font-medium">Total → Vessel → Incoterm → Product → Plant</span>. Click a node to filter the table below.
                 </div>
                 <div className="rounded-xl border bg-white p-4">
                   <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-                    <div className="text-sm font-semibold text-gray-900">Late Performance drilldown</div>
+                    <div className="text-sm font-semibold text-gray-900">{perfDashMode === 'late' ? 'Late' : 'On Track'} Performance drilldown</div>
                     <button
                       type="button"
                       onClick={() => { setLateSelVessel(null); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }}
@@ -546,14 +645,15 @@ export default function ShippingPerformancePage() {
                   </div>
                   <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
                     {([
-                      { title: 'Total',    subtitle: 'All late',                                                                       level: 'total'    as const },
+                      { title: 'Total',    subtitle: perfDashMode === 'late' ? 'All late' : 'All on track',                            level: 'total'    as const },
                       { title: 'Vessel',   subtitle: 'Pick one',                                                                       level: 'vessel'   as const },
                       { title: 'Incoterm', subtitle: lateSelVessel  ? `Under ${lateSelVessel}`  : 'Pick vessel first',                 level: 'incoterm' as const },
                       { title: 'Product',  subtitle: lateSelIncoterm ? `Under ${lateSelIncoterm}` : 'Pick incoterm first',             level: 'product'  as const },
                       { title: 'Plant',    subtitle: lateSelProduct  ? `Under ${lateSelProduct}`  : 'Pick product first',              level: 'plant'    as const },
                     ] as const).map((col) => {
-                      const totalLateCount = lateTree.reduce((s, n) => s + n.count, 0)
-                      const totalLateQty   = lateTree.reduce((s, n) => s + n.totalQty, 0)
+                      const activeTree = perfDashMode === 'ontrack' ? onTrackTree : lateTree
+                      const totalLateCount = activeTree.reduce((s, n) => s + n.count, 0)
+                      const totalLateQty   = activeTree.reduce((s, n) => s + n.totalQty, 0)
                       const denom = totalLateQty || 1
                       const levelStyles: Record<string, { headerBg: string; badge: string; bar: string; border: string }> = {
                         total:   { headerBg: 'bg-blue-50',    badge: 'bg-blue-100 text-blue-800',      bar: 'bg-blue-600',    border: 'border-blue-200' },
@@ -599,7 +699,7 @@ export default function ShippingPerformancePage() {
                         </div>
                       )
 
-                      const vesselNode = lateTree.find((n) => n.key === lateSelVessel)
+                      const vesselNode = activeTree.find((n) => n.key === lateSelVessel)
                       const incotermNode = vesselNode?.children.find((n) => n.key === lateSelIncoterm)
                       const productNode  = incotermNode?.children.find((n) => n.key === lateSelProduct)
 
@@ -611,7 +711,7 @@ export default function ShippingPerformancePage() {
                         if (col.level === 'vessel') {
                           return (
                             <div className="space-y-2">
-                              {lateTree.map((n) => renderNode(n, lateSelVessel === n.key, () => { setLateSelVessel(n.key); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }))}
+                              {activeTree.map((n) => renderNode(n, lateSelVessel === n.key, () => { setLateSelVessel(n.key); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }))}
                             </div>
                           )
                         }
