@@ -2497,10 +2497,10 @@ function ContractsPageContent() {
                 variant="outline"
                 size="sm"
                 onClick={downloadCargoReadinessTemplate}
-                className="border-orange-400 text-orange-600 hover:bg-orange-50"
+                className="border-green-600 text-green-700 hover:bg-green-50"
               >
                 <Download className="h-4 w-4 mr-2" />
-                Cargo Readiness Template
+                Download Template
               </Button>
               <input
                 id="cargo-readiness-upload"
@@ -2513,13 +2513,12 @@ function ContractsPageContent() {
                 variant="outline"
                 size="sm"
                 disabled={csvCargoUploading}
-                className="border-orange-400 text-orange-600 hover:bg-orange-50"
                 onClick={() => document.getElementById('cargo-readiness-upload')?.click()}
               >
                 {csvCargoUploading ? (
-                  <><span className="h-4 w-4 mr-2 inline-block border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />Uploading...</>
+                  <><span className="h-4 w-4 mr-2 inline-block border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />Uploading...</>
                 ) : (
-                  <><Upload className="h-4 w-4 mr-2" />Upload Cargo Readiness</>
+                  <><Upload className="h-4 w-4 mr-2" />Upload CSV</>
                 )}
               </Button>
             </div>
