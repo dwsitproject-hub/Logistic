@@ -1209,26 +1209,23 @@ function ShipmentsPageContent() {
     document.body.removeChild(link)
   }
 
-  const parseCsvLine = (line: string): string[] => {
+  const parseCsvLine = (line: string, delimiter = ','): string[] => {
     const result: string[] = []
     let current = ''
     let inQuotes = false
-    
+
     for (let i = 0; i < line.length; i++) {
       const char = line[i]
       const nextChar = line[i + 1]
-      
+
       if (char === '"') {
         if (inQuotes && nextChar === '"') {
-          // Escaped quote ("")
           current += '"'
-          i++ // Skip next quote
+          i++
         } else {
-          // Toggle quote mode
           inQuotes = !inQuotes
         }
-      } else if (char === ',' && !inQuotes) {
-        // Field delimiter
+      } else if (char === delimiter && !inQuotes) {
         result.push(current.trim())
         current = ''
       } else {
@@ -1295,7 +1292,9 @@ function ShipmentsPageContent() {
 
       const text = await file.text()
       const lines = text.split('\n').filter(line => line.trim())
-      const headers = parseCsvLine(lines[0])
+      const firstLine = lines[0] ?? ''
+      const delimiter = (firstLine.split(';').length > firstLine.split(',').length) ? ';' : ','
+      const headers = parseCsvLine(firstLine, delimiter)
 
       let createCount = 0
       let updateCount = 0
@@ -1303,7 +1302,7 @@ function ShipmentsPageContent() {
       const errors: string[] = []
 
       for (let i = 1; i < lines.length; i++) {
-        const values = parseCsvLine(lines[i])
+        const values = parseCsvLine(lines[i], delimiter)
         if (values.length < 1) continue
 
         const row: any = {}
