@@ -1425,6 +1425,7 @@ function ShipmentsPageContent() {
               charterType: '',
               portOfLoading: row['Loading Port'] || '',
               portOfDischarge: row['Discharge Port'] || '',
+              quantityDelivered: row['Qty Delivery'] ? parseFloat(row['Qty Delivery']) : undefined,
             }
             const createRes = await api.post('/shipments', shipmentData)
             if (createRes.data.success) {

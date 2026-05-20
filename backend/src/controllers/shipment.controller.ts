@@ -2553,6 +2553,169 @@ export const bulkUploadShipmentDailyDeliverables = async (req: AuthRequest, res:
   }
 };
 
+export const bulkUpdateShipments = async (req: AuthRequest, res: Response) => {
+  try {
+    const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+    if (!file?.buffer) {
+      return res.status(400).json({ success: false, error: { message: 'File is required (CSV or Excel)' } });
+    }
+
+    let matrix: unknown[][];
+    try {
+      matrix = parsePlanningSheetToMatrix(file.buffer);
+    } catch (e: any) {
+      return res.status(400).json({ success: false, error: { message: e?.message || 'Could not read file' } });
+    }
+    if (matrix.length < 2) {
+      return res.status(400).json({ success: false, error: { message: 'File must include a header row and at least one data row' } });
+    }
+
+    const headerRow = matrix[0];
+    const poIdx       = findPlanningColumnIndex(headerRow, ['po number', 'po_number', 'sto number', 'sto_number']);
+    const vesselIdx   = findPlanningColumnIndex(headerRow, ['vessel name', 'vessel_name']);
+    const lpPortIdx   = findPlanningColumnIndex(headerRow, ['loading port', 'loading_port']);
+    const dpPortIdx   = findPlanningColumnIndex(headerRow, ['discharge port', 'discharge_port']);
+    const qtyIdx      = findPlanningColumnIndex(headerRow, ['qty delivery', 'qty_delivery', 'quantity delivered', 'quantity_delivered']);
+    const etaLpArrIdx = findPlanningColumnIndex(headerRow, ['eta vessel arrival at loading port', 'eta_vessel_arrival']);
+    const etaLpBrtIdx = findPlanningColumnIndex(headerRow, ['eta vessel berthed at loading port', 'eta_vessel_berthed']);
+    const etaLpStaIdx = findPlanningColumnIndex(headerRow, ['eta vessel start loading', 'eta_loading_start']);
+    const etaLpCmpIdx = findPlanningColumnIndex(headerRow, ['eta vessel completed loading', 'eta_loading_completed']);
+    const etaLpSalIdx = findPlanningColumnIndex(headerRow, ['eta vessel sailed from loading port', 'eta_vessel_sailed']);
+    const etaDpArrIdx = findPlanningColumnIndex(headerRow, ['eta vessel arrive at discharge port', 'eta_discharge_arrival']);
+    const etaDpBrtIdx = findPlanningColumnIndex(headerRow, ['eta vessel berthed at discharge port', 'eta_discharge_berthed']);
+    const etaDpStaIdx = findPlanningColumnIndex(headerRow, ['eta vessel start discharging', 'eta_discharge_start']);
+    const etaDpCmpIdx = findPlanningColumnIndex(headerRow, ['eta vessel complete discharge', 'eta_discharge_complete']);
+
+    if (poIdx < 0) {
+      return res.status(400).json({ success: false, error: { message: 'Missing required column: "PO Number"' } });
+    }
+
+    const successes: string[] = [];
+    const failures: { poNumber: string; reason: string }[] = [];
+
+    for (let rIdx = 1; rIdx < matrix.length; rIdx++) {
+      const row = matrix[rIdx];
+      const poNumber = String(row[poIdx] ?? '').trim();
+      if (!poNumber) continue;
+
+      // Find shipment by STO number (contracts) or shipment_id
+      let shipRes: any;
+      try {
+        shipRes = await query(
+          `SELECT DISTINCT s.id
+           FROM shipments s
+           JOIN contracts c ON s.contract_id = c.id
+           WHERE TRIM(COALESCE(c.sto_number::text, '')) = $1
+              OR TRIM(s.shipment_id) = $1
+           LIMIT 2`,
+          [poNumber],
+        );
+      } catch {
+        failures.push({ poNumber, reason: 'Database error during lookup' });
+        continue;
+      }
+
+      if (shipRes.rows.length === 0) {
+        failures.push({ poNumber, reason: 'Shipment not found' });
+        continue;
+      }
+      if (shipRes.rows.length > 1) {
+        failures.push({ poNumber, reason: 'Multiple shipments found for this PO Number — cannot update automatically' });
+        continue;
+      }
+      const shipUuid = shipRes.rows[0].id;
+
+      // --- Update shipments table ---
+      const shipCols: string[] = [];
+      const shipVals: any[] = [];
+
+      const addShipText = (idx: number, col: string) => {
+        const v = String(row[idx] ?? '').trim();
+        if (v) { shipCols.push(col); shipVals.push(v); }
+      };
+      const addShipDate = (idx: number, col: string) => {
+        if (idx < 0) return;
+        const iso = toIsoDate10FromCell(row[idx]);
+        if (iso) { shipCols.push(col); shipVals.push(iso); }
+      };
+      const addShipNum = (idx: number, col: string) => {
+        if (idx < 0) return;
+        const n = parseFloat(String(row[idx] ?? '').replace(/,/g, ''));
+        if (!isNaN(n) && n >= 0) { shipCols.push(col); shipVals.push(n); }
+      };
+
+      if (vesselIdx >= 0) addShipText(vesselIdx, 'vessel_name');
+      if (dpPortIdx >= 0) addShipText(dpPortIdx, 'plant_site');
+      addShipNum(qtyIdx, 'quantity_delivered');
+      addShipDate(etaDpArrIdx, 'eta_discharge_arrival');
+      addShipDate(etaDpBrtIdx, 'eta_discharge_berthed');
+      addShipDate(etaDpStaIdx, 'eta_discharge_start');
+      addShipDate(etaDpCmpIdx, 'eta_discharge_complete');
+
+      if (shipCols.length > 0) {
+        const setClauses = shipCols.map((c, i) => `${c} = $${i + 2}`).join(', ');
+        await query(
+          `UPDATE shipments SET ${setClauses}, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+          [shipUuid, ...shipVals],
+        );
+      }
+
+      // --- Update vessel_loading_ports (port_sequence=1, not discharge) ---
+      const lpCols: string[] = [];
+      const lpVals: any[] = [];
+
+      const addLpText = (idx: number, col: string) => {
+        const v = String(row[idx] ?? '').trim();
+        if (v) { lpCols.push(col); lpVals.push(v); }
+      };
+      const addLpDate = (idx: number, col: string) => {
+        if (idx < 0) return;
+        const iso = toIsoDate10FromCell(row[idx]);
+        if (iso) { lpCols.push(col); lpVals.push(iso); }
+      };
+
+      if (lpPortIdx >= 0) addLpText(lpPortIdx, 'port_name');
+      addLpDate(etaLpArrIdx, 'eta_vessel_arrival');
+      addLpDate(etaLpBrtIdx, 'eta_vessel_berthed');
+      addLpDate(etaLpStaIdx, 'eta_loading_start');
+      addLpDate(etaLpCmpIdx, 'eta_loading_completed');
+      addLpDate(etaLpSalIdx, 'eta_vessel_sailed');
+
+      if (lpCols.length > 0) {
+        const setClauses = lpCols.map((c, i) => `${c} = $${i + 2}`).join(', ');
+        const upd = await query(
+          `UPDATE vessel_loading_ports SET ${setClauses}, updated_at = CURRENT_TIMESTAMP
+           WHERE shipment_id = $1 AND port_sequence = 1 AND COALESCE(is_discharge_port, false) = false`,
+          [shipUuid, ...lpVals],
+        );
+        if ((upd.rowCount ?? 0) === 0) {
+          const allCols = ['shipment_id', 'port_sequence', 'is_discharge_port', ...lpCols];
+          const allVals = [shipUuid, 1, false, ...lpVals];
+          const placeholders = allVals.map((_, i) => `$${i + 1}`).join(', ');
+          await query(
+            `INSERT INTO vessel_loading_ports (${allCols.join(', ')}) VALUES (${placeholders})`,
+            allVals,
+          );
+        }
+      }
+
+      successes.push(poNumber);
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        updated: successes.length,
+        failed: failures.length,
+        failures,
+      },
+    });
+  } catch (error) {
+    logger.error('Bulk update shipments error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to process bulk update' } });
+  }
+};
+
 // Get contract suggestions for auto-complete
 export const getContractSuggestions = async (req: AuthRequest, res: Response) => {
   try {
@@ -2997,15 +3160,15 @@ export const updateStoQtyAssigned = async (req: AuthRequest, res: Response) => {
 
 export const createShipment = async (req: AuthRequest, res: Response) => {
   try {
-    const { 
+    const {
       operationId,
-      stoNumber, 
-      contractNumbers, 
+      stoNumber,
+      contractNumbers,
       contractQtyAssigned,
       poQtyAssigned,
-      vesselName, 
-      vesselCode, 
-      voyageNo, 
+      vesselName,
+      vesselCode,
+      voyageNo,
       vesselOwner,
       vesselDraft,
       vesselCapacity,
@@ -3014,6 +3177,7 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       portOfLoading,
       portOfDischarge,
       quantityShipped,
+      quantityDelivered,
       eta_arrival,
       eta_berthed,
       eta_loading_start,
@@ -3150,13 +3314,13 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
         INSERT INTO shipments (
           shipment_id, operation_id, contract_id, vessel_name, vessel_code, voyage_no, vessel_owner,
           vessel_draft, vessel_capacity, vessel_hull_type, charter_type,
-          port_of_loading, port_of_discharge, quantity_shipped,
+          port_of_loading, port_of_discharge, quantity_shipped, quantity_delivered,
           eta_arrival, eta_berthed, eta_loading_start, eta_loading_complete, eta_sailed,
           eta_discharge_arrival, eta_discharge_berthed, eta_discharge_start, eta_discharge_complete,
           status
         ) VALUES (
           $1, $2, $3::uuid, $4, $5, $6, $7, $8::numeric, $9::numeric, $10, $11,
-          $12, $13, $14::numeric,
+          $12, $13, $14::numeric, $25::numeric,
           $15::date, $16::date, $17::date, $18::date, $19::date,
           $20::date, $21::date, $22::date, $23::date,
           $24
@@ -3186,6 +3350,7 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
         perContractEta.eta_discharge_start || null,
         perContractEta.eta_discharge_complete || null,
         derivedStatus,
+        quantityDelivered ? parseFloat(String(quantityDelivered)) : null,
       ]);
 
       shipmentIds.push(result.rows[0].id);

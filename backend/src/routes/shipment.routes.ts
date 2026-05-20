@@ -2,14 +2,15 @@ import express from 'express';
 import multer from 'multer';
 import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
-import { 
-  getShipments, 
-  getShipmentById, 
+import {
+  getShipments,
+  getShipmentById,
   updateShipment,
   getShipmentDailyDeliverablesCalendar,
   updateShipmentDailyDeliverables,
   downloadShipmentDailyPlanningDeliverablesTemplate,
   bulkUploadShipmentDailyDeliverables,
+  bulkUpdateShipments,
   getVesselLoadingPorts,
   upsertVesselLoadingPort,
   deleteVesselLoadingPort,
@@ -52,6 +53,9 @@ router.get('/contracts/details', getContractDetailsForSto);
 router.put('/contracts/sto-qty', auditLog('UPDATE', 'STO_QTY_ASSIGNED'), updateStoQtyAssigned);
 router.get('/check-sto/:stoNumber', checkStoExists);
 router.post('/', auditLog('CREATE', 'SHIPMENT'), createShipment);
+
+// Bulk update shipments from template CSV
+router.post('/bulk-update', shipmentPlanningUpload.single('file'), auditLog('UPDATE', 'SHIPMENT'), bulkUpdateShipments);
 
 // Daily planning deliverables (SEA Shipments)
 router.get('/daily-planning-deliverables/template', downloadShipmentDailyPlanningDeliverablesTemplate);
