@@ -30,7 +30,6 @@ const API_SORTABLE_COLUMN_IDS = new Set([
   'contract_id',
   'status',
   'supplier',
-  'supplier_name',
   'buyer',
   'product',
   'group_name',
@@ -1639,16 +1638,6 @@ function ContractsPageContent() {
             ),
           },
           poNumberColumn,
-          {
-            id: 'supplier_name',
-            label: 'Supplier',
-            defaultVisible: true,
-            sortable: true,
-            getSortValue: (c: Contract) => c.supplier || '',
-            render: (c: Contract) => (
-              <span className="text-sm truncate block">{c.supplier || '-'}</span>
-            ),
-          },
         ] as CompactColumn[]),
     {
       id: 'contract_aging',
@@ -2244,7 +2233,6 @@ function ContractsPageContent() {
     const H = {
       contract_date: 'Contract Date',
       contract_id: 'Contract',
-      supplier_name: 'Supplier',
       supplier: 'Supplier',
       group_name: 'Group',
       contract_aging: 'Contract Aging',
@@ -2374,7 +2362,6 @@ function ContractsPageContent() {
     return {
       contract_id: track(H.contract_id, contractIdLen, 76, 280, 8, 52),
       contract_date: track(H.contract_date, contractDateLen, 96, 140),
-      supplier_name: supplierTrack,
       supplier: supplierTrack,
       group_name: track(H.group_name, groupLen, 96, 260),
       contract_aging: track(H.contract_aging, agingContentLen, 108, 180),
