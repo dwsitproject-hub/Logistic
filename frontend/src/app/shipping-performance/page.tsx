@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { ArrowDown, ArrowUp, Filter, Search, SlidersHorizontal, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Filter, GripVertical, Search, SlidersHorizontal, X } from 'lucide-react'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FieldHelp } from '@/components/FieldHelp'
@@ -124,6 +124,7 @@ export default function ShippingPerformancePage() {
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(
     Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultVisible !== false]))
   )
+  const [dragColId, setDragColId] = useState<string | null>(null)
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({})
   const [columnFilterDrafts, setColumnFilterDrafts] = useState<Record<string, string>>({})
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
@@ -446,6 +447,18 @@ export default function ShippingPerformancePage() {
     })
   }
 
+  const reorderColumnByDrag = (fromId: string, toId: string) => {
+    setColumnOrder((prev) => {
+      const next = [...prev]
+      const fromIdx = next.indexOf(fromId as keyof ShippingPerformanceRow)
+      const toIdx = next.indexOf(toId as keyof ShippingPerformanceRow)
+      if (fromIdx < 0 || toIdx < 0) return prev
+      next.splice(fromIdx, 1)
+      next.splice(toIdx, 0, fromId as keyof ShippingPerformanceRow)
+      return next
+    })
+  }
+
   const onHeaderSort = (key: keyof ShippingPerformanceRow) => {
     if (sortBy === key) {
       setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))
@@ -752,31 +765,62 @@ export default function ShippingPerformancePage() {
                   </Button>
                   {showColumnManager && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
-                      <div className="text-xs font-semibold text-gray-600 mb-2">Visible columns</div>
-                      <div className="space-y-2 max-h-72 overflow-auto pr-1">
-                        {COLUMN_DEFS.map((col) => (
-                          <label key={String(col.key)} className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                            <Checkbox
-                              checked={Boolean(visibleColumns[String(col.key)])}
-                              onCheckedChange={() => onToggleColumn(col.key)}
-                            />
-                            <span>{col.label}</span>
-                          </label>
-                        ))}
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="text-xs font-semibold text-gray-600">Visible columns</div>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setShowColumnManager(false)}>
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
                       </div>
-                      <div className="mt-3 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1 mb-2">
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() =>
-                            setVisibleColumns(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultVisible !== false])))
-                          }
+                          className="flex-1 text-xs h-7"
+                          onClick={() => setVisibleColumns(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, true])))}
+                        >
+                          Select All
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() => setVisibleColumns(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, false])))}
+                        >
+                          Unselect All
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() => setVisibleColumns(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultVisible !== false])))}
                         >
                           Reset
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => setShowColumnManager(false)}>
-                          Close
-                        </Button>
+                      </div>
+                      <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
+                        {columnOrder
+                          .map((key) => COLUMN_DEFS.find((c) => c.key === key))
+                          .filter((col): col is ColumnDef => !!col)
+                          .map((col) => (
+                            <div
+                              key={String(col.key)}
+                              draggable
+                              onDragStart={() => setDragColId(String(col.key))}
+                              onDragEnd={() => setDragColId(null)}
+                              onDragOver={(e) => e.preventDefault()}
+                              onDrop={() => { if (dragColId && dragColId !== String(col.key)) reorderColumnByDrag(dragColId, String(col.key)) }}
+                              className={`flex items-center gap-2 text-sm cursor-grab select-none rounded px-1 py-0.5 ${dragColId === String(col.key) ? 'opacity-40' : 'hover:bg-gray-50'}`}
+                            >
+                              <GripVertical className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                              <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                                <Checkbox
+                                  checked={Boolean(visibleColumns[String(col.key)])}
+                                  onCheckedChange={() => onToggleColumn(col.key)}
+                                />
+                                <span className="truncate">{col.label}</span>
+                              </label>
+                            </div>
+                          ))}
                       </div>
                     </div>
                   )}
