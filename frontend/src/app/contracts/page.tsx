@@ -2492,6 +2492,37 @@ function ContractsPageContent() {
             <div>
               <h1 className="text-3xl font-bold text-gray-900">Contracts</h1>
             </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={downloadCargoReadinessTemplate}
+                className="border-orange-400 text-orange-600 hover:bg-orange-50"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Cargo Readiness Template
+              </Button>
+              <input
+                id="cargo-readiness-upload"
+                type="file"
+                accept=".csv"
+                onChange={handleCargoReadinessUpload}
+                className="hidden"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={csvCargoUploading}
+                className="border-orange-400 text-orange-600 hover:bg-orange-50"
+                onClick={() => document.getElementById('cargo-readiness-upload')?.click()}
+              >
+                {csvCargoUploading ? (
+                  <><span className="h-4 w-4 mr-2 inline-block border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />Uploading...</>
+                ) : (
+                  <><Upload className="h-4 w-4 mr-2" />Upload Cargo Readiness</>
+                )}
+              </Button>
+            </div>
           </div>
         )}
 
@@ -3109,36 +3140,6 @@ function ContractsPageContent() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <div className="hidden">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={downloadCargoReadinessTemplate}
-                    className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-                  >
-                    <Download className="h-4 w-4 mr-2" />
-                    Template
-                  </Button>
-                  <input
-                    id="cargo-readiness-upload"
-                    type="file"
-                    accept=".csv"
-                    onChange={handleCargoReadinessUpload}
-                    className="hidden"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={csvCargoUploading}
-                    onClick={() => document.getElementById('cargo-readiness-upload')?.click()}
-                  >
-                    {csvCargoUploading ? (
-                      <><span className="h-4 w-4 mr-2 inline-block border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />Uploading...</>
-                    ) : (
-                      <><Upload className="h-4 w-4 mr-2" />Upload CSV</>
-                    )}
-                  </Button>
-                </div>
                 <div className="relative">
                   <Button
                     variant="outline"

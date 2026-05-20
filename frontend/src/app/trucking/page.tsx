@@ -578,11 +578,6 @@ function TruckingPageContent() {
     rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[]
     operationFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string }[]
   } | null>(null)
-  const [cargoReadinessUploading, setCargoReadinessUploading] = useState(false)
-  const [cargoReadinessSummary, setCargoReadinessSummary] = useState<{
-    updated: number
-    errors: string[]
-  } | null>(null)
   const planningFileInputRef = useRef<HTMLInputElement | null>(null)
   const [calendarColumnsOpen, setCalendarColumnsOpen] = useState(false)
   const calendarColumnsRef = useRef<HTMLDivElement | null>(null)
@@ -942,41 +937,6 @@ function TruckingPageContent() {
       alert(err?.response?.data?.error?.message || err?.message || 'Upload failed')
     } finally {
       setBulkCreateUploading(false)
-    }
-  }
-
-  const downloadCargoReadinessTemplate = async () => {
-    try {
-      const res = await api.get('/trucking/cargo-readiness/template', { responseType: 'blob' })
-      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv;charset=utf-8' }))
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'cargo_readiness_template.csv'
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-    } catch (e: any) {
-      alert(e?.response?.data?.error?.message || (e as any)?.message || 'Failed to download template')
-    }
-  }
-
-  const handleCargoReadinessFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    setCargoReadinessUploading(true)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const res = await api.post('/trucking/cargo-readiness/bulk-update', fd)
-      const data = res.data?.data
-      setCargoReadinessSummary(data ?? { updated: 0, errors: [] })
-      await fetchTruckingOperations(1)
-    } catch (err: any) {
-      alert(err?.response?.data?.error?.message || err?.message || 'Upload failed')
-    } finally {
-      setCargoReadinessUploading(false)
     }
   }
 
@@ -2088,38 +2048,6 @@ function TruckingPageContent() {
                 <><Upload className="h-4 w-4 mr-2" />Upload CSV</>
               )}
             </Button>
-            <div className="border-l border-gray-200 pl-2 ml-1 flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-orange-500 text-orange-600 hover:bg-orange-50"
-                onClick={downloadCargoReadinessTemplate}
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Cargo Readiness Template
-              </Button>
-              <input
-                type="file"
-                accept=".csv,.xlsx,.xls"
-                className="hidden"
-                id="cargo-readiness-input"
-                onChange={handleCargoReadinessFileChange}
-                disabled={cargoReadinessUploading}
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-orange-500 text-orange-600 hover:bg-orange-50"
-                onClick={() => document.getElementById('cargo-readiness-input')?.click()}
-                disabled={cargoReadinessUploading}
-              >
-                {cargoReadinessUploading ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
-                ) : (
-                  <><Upload className="h-4 w-4 mr-2" />Upload Cargo Readiness</>
-                )}
-              </Button>
-            </div>
             <Button
               size="sm"
               onClick={() => setShowCreateForm(true)}
@@ -2577,42 +2505,6 @@ function TruckingPageContent() {
             </DialogContent>
           </Dialog>
           </>
-        )}
-
-        {/* Cargo Readiness Upload Result */}
-        {cargoReadinessSummary && (
-          <Dialog open={!!cargoReadinessSummary} onOpenChange={() => setCargoReadinessSummary(null)}>
-            <DialogContent className="max-w-lg">
-              <DialogHeader>
-                <DialogTitle>Upload Cargo Readiness — Hasil</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 text-sm">
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-md border bg-green-50 px-3 py-2">
-                    <div className="text-xs text-muted-foreground">Diperbarui</div>
-                    <div className="text-lg font-semibold tabular-nums text-green-700">{cargoReadinessSummary.updated}</div>
-                  </div>
-                  <div className="rounded-md border bg-red-50 px-3 py-2">
-                    <div className="text-xs text-muted-foreground">Gagal</div>
-                    <div className="text-lg font-semibold tabular-nums text-red-700">{cargoReadinessSummary.errors.length}</div>
-                  </div>
-                </div>
-                {cargoReadinessSummary.errors.length > 0 && (
-                  <div>
-                    <div className="font-medium text-red-700 mb-1">Errors:</div>
-                    <ul className="space-y-1 max-h-48 overflow-y-auto">
-                      {cargoReadinessSummary.errors.map((e, i) => (
-                        <li key={i} className="text-red-600 text-xs">{e}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-              <div className="flex justify-end pt-2">
-                <Button size="sm" onClick={() => setCargoReadinessSummary(null)}>Tutup</Button>
-              </div>
-            </DialogContent>
-          </Dialog>
         )}
 
         {/* Bulk Create Trucking Result Modal */}
