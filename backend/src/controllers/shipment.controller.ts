@@ -1457,17 +1457,18 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       ata_complete_discharge: updated.ata_discharge_complete,
     });
 
+    const VALID_AUTO_STATUSES = ['PLANNED', 'IN_TRANSIT', 'ARRIVED', 'UNLOADING', 'COMPLETED'];
     const persistedStatus = String(updated.status || '').trim().toUpperCase();
     if (persistedStatus === 'CANCELLED') {
       updated.status = 'CANCELLED';
-    } else if (persistedStatus !== autoStatus) {
+    } else if (VALID_AUTO_STATUSES.includes(autoStatus) && persistedStatus !== autoStatus) {
       const sRes = await query(
         `UPDATE shipments SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING status`,
         [autoStatus, shipmentId]
       );
       updated.status = sRes.rows?.[0]?.status ?? autoStatus;
     } else {
-      updated.status = autoStatus;
+      updated.status = persistedStatus || 'PLANNED';
     }
 
     if (etaFieldsUpdated) {
