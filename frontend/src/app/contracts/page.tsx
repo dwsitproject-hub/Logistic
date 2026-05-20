@@ -22,6 +22,7 @@ import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY, toSortableTimestamp } from '@/lib/dateFormat'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 /** Column ids sorted on the API (see GET /contracts allowedSort). */
 const API_SORTABLE_COLUMN_IDS = new Set([
@@ -1218,35 +1219,9 @@ function ContractsPageContent() {
     setCsvCargoUploading(true)
     setCsvCargoResult(null)
     try {
-      const text = await file.text()
-      const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
-      const [header, ...dataLines] = lines
-      const headers = header.split(',').map(h => h.trim().toLowerCase())
-      const poIdx = headers.indexOf('po_number')
-      const dateIdx = headers.indexOf('cargo_readiness_date')
-      if (poIdx === -1 || dateIdx === -1) {
-        alert('CSV must have columns: po_number, cargo_readiness_date')
-        return
-      }
-      const parseDateMDY = (v: string): string => {
-        if (!v) return ''
-        const s = v.trim()
-        // MM/DD/YYYY → YYYY-MM-DD
-        const mdy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s)
-        if (mdy) return `${mdy[3]}-${mdy[1].padStart(2, '0')}-${mdy[2].padStart(2, '0')}`
-        // Already YYYY-MM-DD
-        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
-        return ''
-      }
-      const rows = dataLines.map(line => {
-        const cols = line.split(',')
-        return {
-          po_number: cols[poIdx]?.trim() || '',
-          cargo_readiness_date: parseDateMDY(cols[dateIdx]?.trim() || ''),
-        }
-      }).filter(r => r.po_number)
-      if (rows.length === 0) { alert('No valid rows found in CSV.'); return }
-      const res = await api.post('/contracts/bulk-cargo-readiness', { rows })
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await api.post('/contracts/bulk-cargo-readiness', fd)
       setCsvCargoResult(res.data.data)
     } catch {
       alert('Upload failed. Please try again.')
@@ -3286,15 +3261,6 @@ function ContractsPageContent() {
                   </div>
                 )}
               </div>
-              {csvCargoResult && (
-                <div className={`text-xs px-3 py-2 rounded border ${csvCargoResult.notFound > 0 ? 'bg-yellow-50 border-yellow-200 text-yellow-800' : 'bg-green-50 border-green-200 text-green-800'}`}>
-                  ✓ Updated: {csvCargoResult.updated} &nbsp;|&nbsp; Not found: {csvCargoResult.notFound}
-                  {csvCargoResult.errors.length > 0 && (
-                    <span className="ml-2 text-red-600">{csvCargoResult.errors.slice(0, 3).map(e => e.po_number).join(', ')}{csvCargoResult.errors.length > 3 ? ` +${csvCargoResult.errors.length - 3} more` : ''}</span>
-                  )}
-                  <button className="ml-3 underline" onClick={() => setCsvCargoResult(null)}>Dismiss</button>
-                </div>
-              )}
             </div>
           </CardHeader>
           <CardContent>
@@ -4825,6 +4791,44 @@ function ContractsPageContent() {
           contractId={contractLogisticsUi?.kind === 'ship-detail' ? contractLogisticsUi.contractId : null}
           onClose={() => setContractLogisticsUi(null)}
         />
+
+        <Dialog open={!!csvCargoResult} onOpenChange={(open) => { if (!open) setCsvCargoResult(null) }}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Cargo Readiness Upload Result</DialogTitle>
+            </DialogHeader>
+            {csvCargoResult && (
+              <div className="space-y-4 text-sm">
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="rounded-md border bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Updated</div>
+                    <div className="text-lg font-semibold tabular-nums text-green-700">{csvCargoResult.updated}</div>
+                  </div>
+                  <div className="rounded-md border bg-yellow-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Not Found</div>
+                    <div className="text-lg font-semibold tabular-nums text-yellow-700">{csvCargoResult.notFound}</div>
+                  </div>
+                  <div className="rounded-md border bg-red-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Errors</div>
+                    <div className="text-lg font-semibold tabular-nums text-red-700">{csvCargoResult.errors.length}</div>
+                  </div>
+                </div>
+                {csvCargoResult.errors.length > 0 && (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-2">Failed rows</div>
+                    <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
+                      {csvCargoResult.errors.map((e, i) => (
+                        <li key={i}>
+                          <span className="font-mono font-semibold">{e.po_number}</span>: {e.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </Layout>
   )

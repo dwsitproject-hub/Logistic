@@ -1,4 +1,5 @@
 import express from 'express';
+import multer from 'multer';
 import {
   getContracts,
   getUnassignedCounts,
@@ -16,6 +17,19 @@ import {
 import { createContractRemark, getContractRemarks } from '../controllers/remarks.controller';
 import { authenticateToken, authorize } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
+
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok =
+      /\.(csv|xlsx|xls)$/i.test(file.originalname) ||
+      ['text/csv', 'application/vnd.ms-excel',
+       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+       'application/octet-stream', 'text/plain'].includes(file.mimetype);
+    cb(null, ok);
+  },
+});
 
 const router = express.Router();
 
@@ -142,7 +156,7 @@ router.get('/:id', getContract);
  *         description: Contract created successfully
  */
 router.post('/', authorize('ADMIN', 'TRADING'), auditLog('CREATE', 'CONTRACT'), createContract);
-router.post('/bulk-cargo-readiness', authorize('ADMIN', 'TRADING'), bulkUpdateCargoReadiness);
+router.post('/bulk-cargo-readiness', authorize('ADMIN', 'TRADING'), csvUpload.single('file'), auditLog('UPDATE', 'CONTRACT'), bulkUpdateCargoReadiness);
 
 /**
  * @swagger

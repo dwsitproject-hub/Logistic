@@ -414,6 +414,7 @@ function ShipmentsPageContent() {
     return () => window.removeEventListener('mousedown', onMouseDown)
   }, [openHeaderFilterId])
   const [uploading, setUploading] = useState(false)
+  const [bulkUploadResult, setBulkUploadResult] = useState<{ created: number; updated: number; failed: number; errors: string[] } | null>(null)
   const [dateFrom, setDateFrom] = useState(() => {
     const now = new Date()
     const yyyy = now.getFullYear()
@@ -1457,14 +1458,7 @@ function ShipmentsPageContent() {
         }
       }
 
-      let message = `Upload selesai!\n\nDibuat: ${createCount}\nDiperbarui: ${updateCount}\nGagal: ${errorCount}`
-      if (errors.length > 0 && errors.length <= 10) {
-        message += `\n\nErrors:\n${errors.join('\n')}`
-      } else if (errors.length > 10) {
-        message += `\n\nShowing first 10 errors:\n${errors.slice(0, 10).join('\n')}`
-      }
-
-      alert(message)
+      setBulkUploadResult({ created: createCount, updated: updateCount, failed: errorCount, errors })
       await fetchShipments()
     } catch (error) {
       console.error('Bulk upload error:', error)
@@ -3661,34 +3655,70 @@ function ShipmentsPageContent() {
             </CardContent>
           </Card>
 
+          <Dialog open={!!bulkUploadResult} onOpenChange={(open) => { if (!open) setBulkUploadResult(null) }}>
+            <DialogContent className="max-w-2xl max-h-[88vh]">
+              <DialogHeader>
+                <DialogTitle>Shipment bulk upload result</DialogTitle>
+              </DialogHeader>
+              {bulkUploadResult && (
+                <div className="space-y-4 text-sm">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-md border bg-green-50 px-3 py-2">
+                      <div className="text-xs text-muted-foreground">Created</div>
+                      <div className="text-lg font-semibold tabular-nums text-green-800">{bulkUploadResult.created}</div>
+                    </div>
+                    <div className="rounded-md border bg-slate-50 px-3 py-2">
+                      <div className="text-xs text-muted-foreground">Updated</div>
+                      <div className="text-lg font-semibold tabular-nums">{bulkUploadResult.updated}</div>
+                    </div>
+                    <div className="rounded-md border bg-red-50 px-3 py-2">
+                      <div className="text-xs text-muted-foreground">Failed</div>
+                      <div className="text-lg font-semibold tabular-nums text-red-800">{bulkUploadResult.failed}</div>
+                    </div>
+                  </div>
+                  {bulkUploadResult.errors.length > 0 && (
+                    <div>
+                      <div className="font-medium text-gray-900 mb-2">Row issues</div>
+                      <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
+                        {bulkUploadResult.errors.map((e, i) => (
+                          <li key={i} className="text-gray-800">{e}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
           <Dialog open={shipPlanningUploadOpen} onOpenChange={setShipPlanningUploadOpen}>
             <DialogContent className="max-w-2xl max-h-[88vh]">
               <DialogHeader>
                 <DialogTitle>Shipment daily planning upload result</DialogTitle>
               </DialogHeader>
               {shipPlanningUploadSummary ? (
-                <div className="space-y-3 text-sm">
+                <div className="space-y-4 text-sm">
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                     <div className="rounded-md border bg-slate-50 px-3 py-2">
                       <div className="text-xs text-muted-foreground">Rows processed</div>
                       <div className="text-lg font-semibold tabular-nums">{shipPlanningUploadSummary.processedRows}</div>
                     </div>
                     <div className="rounded-md border bg-green-50 px-3 py-2">
-                      <div className="text-xs text-muted-foreground">Succeeded</div>
+                      <div className="text-xs text-muted-foreground">Operations succeeded</div>
                       <div className="text-lg font-semibold tabular-nums text-green-800">{shipPlanningUploadSummary.succeededOperations}</div>
                     </div>
                     <div className="rounded-md border bg-red-50 px-3 py-2">
-                      <div className="text-xs text-muted-foreground">Failed</div>
+                      <div className="text-xs text-muted-foreground">Operations failed</div>
                       <div className="text-lg font-semibold tabular-nums text-red-800">{shipPlanningUploadSummary.failedOperations}</div>
                     </div>
                   </div>
                   {(shipPlanningUploadSummary.rowParseFailures?.length ?? 0) > 0 ? (
                     <div>
-                      <div className="font-medium text-gray-900 mb-2">Row issues</div>
+                      <div className="font-medium text-gray-900 mb-2">Row issues (file line #)</div>
                       <ul className="max-h-40 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
                         {shipPlanningUploadSummary.rowParseFailures.map((f: any, i: number) => (
-                          <li key={`spr-${i}`}>
-                            <span className="font-mono">Line {f.rowNumber}</span>{f.contract_ext_no ? ` Â· ${f.contract_ext_no}` : ''}: {f.reason}
+                          <li key={`spr-${i}`} className="text-gray-800">
+                            <span className="font-mono">Line {f.rowNumber}</span>{f.contract_ext_no ? ` · ${f.contract_ext_no}` : ''}: {f.reason}
                           </li>
                         ))}
                       </ul>
@@ -3696,12 +3726,12 @@ function ShipmentsPageContent() {
                   ) : null}
                   {(shipPlanningUploadSummary.operationFailures?.length ?? 0) > 0 ? (
                     <div>
-                      <div className="font-medium text-gray-900 mb-2">Failures</div>
+                      <div className="font-medium text-gray-900 mb-2">Operation failures</div>
                       <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-2 p-2">
                         {shipPlanningUploadSummary.operationFailures.map((f: any, i: number) => (
-                          <li key={`spf-${i}`}>
+                          <li key={`spf-${i}`} className="text-gray-800">
                             <span className="font-semibold">{f.contract_ext_no}</span>
-                            {f.shipment_ids?.length ? <span className="text-gray-600"> Â· Shipments: {f.shipment_ids.join(', ')}</span> : null}
+                            {f.shipment_ids?.length ? <span className="text-gray-600"> · Shipments: {f.shipment_ids.join(', ')}</span> : null}
                             {f.rowNumbers?.length ? <span className="text-gray-600"> (rows {f.rowNumbers.join(', ')})</span> : null}
                             : {f.reason}
                           </li>

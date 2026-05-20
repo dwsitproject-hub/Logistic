@@ -1574,15 +1574,15 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
 
 // ---------------------------------------------------------------------------
 // Bulk Create Trucking Operations from CSV
-// CSV columns: Contract Ext No | Date | Qty Delivery | Cargo Readiness Date
+// CSV columns: Contract Ext No | Date | Qty Delivery
 // ---------------------------------------------------------------------------
 
 export const downloadBulkCreateTruckingTemplate = async (_req: AuthRequest, res: Response) => {
-  const header = 'Contract Ext No,Date,Qty Delivery,Cargo Readiness Date';
+  const header = 'Contract Ext No,Date,Qty Delivery';
   const examples = [
-    '01/HAP-PFAD/2026,15/04/2026,1000,10/04/2026',
-    '01/HAP-PFAD/2026,16/04/2026,1500,',
-    '002/KJG/CPO/2026,20/04/2026,2000,15/04/2026',
+    '01/HAP-PFAD/2026,15/04/2026,1000',
+    '01/HAP-PFAD/2026,16/04/2026,1500',
+    '002/KJG/CPO/2026,20/04/2026,2000',
   ].join('\n');
   const bom = '﻿';
   const body = `${bom}${header}\n${examples}\n`;
@@ -1623,9 +1623,6 @@ export const bulkCreateTruckingOperations = async (req: AuthRequest, res: Respon
     const qtyIdx = findPlanningColumnIndex(headerRow, [
       'qty_delivery', 'qty delivery', 'quantity_delivered', 'quantity delivered', 'quantity', 'qty',
     ]);
-    const cargoIdx = findPlanningColumnIndex(headerRow, [
-      'cargo_readiness_date', 'cargo readiness date', 'cargo readiness', 'cargo date',
-    ]);
 
     if (extIdx < 0 || dateIdx < 0 || qtyIdx < 0) {
       return res.status(400).json({
@@ -1634,7 +1631,7 @@ export const bulkCreateTruckingOperations = async (req: AuthRequest, res: Respon
       });
     }
 
-    type ParsedLine = { lineNumber: number; contract_ext_no: string; dateRaw: unknown; qtyRaw: unknown; cargoRaw: unknown };
+    type ParsedLine = { lineNumber: number; contract_ext_no: string; dateRaw: unknown; qtyRaw: unknown };
     const lines: ParsedLine[] = [];
     const rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[] = [];
 
@@ -1643,7 +1640,6 @@ export const bulkCreateTruckingOperations = async (req: AuthRequest, res: Respon
       const ext = String(row[extIdx] ?? '').trim();
       const dateRaw = row[dateIdx];
       const qtyCell = row[qtyIdx];
-      const cargoCell = cargoIdx >= 0 ? row[cargoIdx] : undefined;
 
       const emptyRow =
         !ext &&
@@ -1664,7 +1660,7 @@ export const bulkCreateTruckingOperations = async (req: AuthRequest, res: Respon
         rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext, reason: 'Contract Ext No "TBA" is not allowed — please fill in the actual contract number first' });
         continue;
       }
-      lines.push({ lineNumber, contract_ext_no: ext, dateRaw: dateRaw ?? '', qtyRaw: qtyCell, cargoRaw: cargoCell });
+      lines.push({ lineNumber, contract_ext_no: ext, dateRaw: dateRaw ?? '', qtyRaw: qtyCell });
     }
 
     // Group rows by Contract Ext No
@@ -1730,7 +1726,7 @@ export const bulkCreateTruckingOperations = async (req: AuthRequest, res: Respon
         // Contract found (no existing trucking op yet) — proceed with creation
         const contract = contractDirectRes.rows[0];
         try {
-          const ok = await createTruckingFromGroup(contract, contractExtNo, groupLines, rowNumbers, rowParseFailures, opFailures, groupLines[0].cargoRaw);
+          const ok = await createTruckingFromGroup(contract, contractExtNo, groupLines, rowNumbers, rowParseFailures, opFailures);
           if (ok) { operationsCreated++; rowsSucceeded += groupLines.length; }
         } catch (err) {
           logger.error('createTruckingFromGroup error:', err);
@@ -1771,11 +1767,10 @@ export const bulkCreateTruckingOperations = async (req: AuthRequest, res: Respon
 async function createTruckingFromGroup(
   contract: { id: string; delivery_start_date?: unknown; delivery_end_date?: unknown },
   contractExtNo: string,
-  groupLines: { lineNumber: number; contract_ext_no: string; dateRaw: unknown; qtyRaw: unknown; cargoRaw: unknown }[],
+  groupLines: { lineNumber: number; contract_ext_no: string; dateRaw: unknown; qtyRaw: unknown }[],
   rowNumbers: number[],
   rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[],
   opFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string }[],
-  cargoRaw?: unknown,
 ): Promise<boolean> {
   // Parse daily deliverables from the group rows
   const dailyRows: { date: string; quantity_delivered: number }[] = [];
@@ -1814,28 +1809,21 @@ async function createTruckingFromGroup(
     ? (toIsoDate10FromCell(contract.delivery_end_date) ?? maxDate)
     : maxDate;
 
-  const cargoDate = cargoRaw != null && String(cargoRaw).trim() !== ''
-    ? toIsoDate10FromCell(cargoRaw)
-    : null;
-
   await query(
     `INSERT INTO trucking_operations (
        contract_id, operation_id,
        eta_delivery_start_date, eta_delivery_end_date,
-       cargo_readiness_date,
        status, daily_deliverables
      ) VALUES (
        $1::uuid, $2,
        $3::date, $4::date,
-       $5::date,
-       $6, $7::jsonb
+       $5, $6::jsonb
      )`,
     [
       contract.id,
       operationId,
       etaStart,
       etaEnd,
-      cargoDate,
       'PLANNED',
       JSON.stringify(dailyRows),
     ],

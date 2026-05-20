@@ -8,6 +8,7 @@ import {
   parseColumnFiltersQuery,
 } from '../utils/contractListFilters';
 import { CONTRACTS_LIST_OUTER_SQL } from './contractsListOuterSql';
+import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 
 export const getContracts = async (req: AuthRequest, res: Response) => {
   try {
@@ -2102,40 +2103,79 @@ export const updateContract = async (req: AuthRequest, res: Response) => {
   }
 };
 
-export const bulkUpdateCargoReadiness = async (req: AuthRequest, res: Response) => {
-  const rows: { po_number: string; cargo_readiness_date: string }[] = req.body.rows;
-  if (!Array.isArray(rows) || rows.length === 0) {
-    return res.status(400).json({ success: false, error: { message: 'rows array is required' } });
+function normalizePlanningHeader(v: unknown): string {
+  return String(v ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function findCargoColumnIndex(headers: unknown[], candidates: string[]): number {
+  const norm = headers.map(normalizePlanningHeader);
+  const candNorm = candidates.map(s => s.toLowerCase().replace(/[\s_-]+/g, ''));
+  for (const c of candNorm) {
+    const idx = norm.indexOf(c);
+    if (idx !== -1) return idx;
+  }
+  return -1;
+}
+
+export const bulkUpdateCargoReadiness = async (req: AuthRequest & { file?: Express.Multer.File }, res: Response) => {
+  const file = req.file;
+  if (!file?.buffer) {
+    return res.status(400).json({ success: false, error: { message: 'File is required' } });
+  }
+
+  let matrix: unknown[][];
+  try {
+    matrix = parsePlanningSheetToMatrix(file.buffer);
+  } catch (e: any) {
+    return res.status(400).json({ success: false, error: { message: e?.message || 'Could not read file' } });
+  }
+
+  if (matrix.length < 2) {
+    return res.status(400).json({ success: false, error: { message: 'File must have a header row and at least one data row' } });
+  }
+
+  const headerRow = matrix[0];
+  const poIdx = findCargoColumnIndex(headerRow, ['po_number', 'po number', 'po']);
+  const dateIdx = findCargoColumnIndex(headerRow, ['cargo_readiness_date', 'cargo readiness date', 'cargo readiness', 'date', 'tanggal']);
+
+  if (poIdx === -1 || dateIdx === -1) {
+    return res.status(400).json({ success: false, error: { message: 'CSV must have columns: po_number, cargo_readiness_date' } });
   }
 
   let updated = 0;
   let notFound = 0;
   const errors: { po_number: string; reason: string }[] = [];
 
-  for (const row of rows) {
-    if (!row.po_number) continue;
+  for (let i = 1; i < matrix.length; i++) {
+    const row = matrix[i];
+    const po = String(row[poIdx] ?? '').trim();
+    if (!po) continue;
+
+    const dateRaw = row[dateIdx];
+    const cargoDate = dateRaw != null && String(dateRaw).trim() !== ''
+      ? toIsoDate10FromCell(dateRaw)
+      : null;
+
     try {
-      const cargoDate = row.cargo_readiness_date || null;
       const result = await query(
         `UPDATE contracts SET cargo_readiness_date = $1, updated_at = CURRENT_TIMESTAMP WHERE po_number = $2 RETURNING id`,
-        [cargoDate, row.po_number]
+        [cargoDate, po]
       );
       if (result.rows.length > 0) {
         updated++;
-        // Also cascade to trucking_operations for LAND contracts so the Trucking page reflects the change
         await query(
           `UPDATE trucking_operations t
            SET cargo_readiness_date = $1, updated_at = CURRENT_TIMESTAMP
            FROM contracts c
            WHERE t.contract_id = c.id AND c.po_number = $2`,
-          [cargoDate, row.po_number]
+          [cargoDate, po]
         );
       } else {
         notFound++;
-        errors.push({ po_number: row.po_number, reason: 'Not found' });
+        errors.push({ po_number: po, reason: 'Not found' });
       }
     } catch {
-      errors.push({ po_number: row.po_number, reason: 'Update failed' });
+      errors.push({ po_number: po, reason: 'Update failed' });
     }
   }
 
