@@ -15,6 +15,8 @@ import {
   bulkUploadDailyPlanningDeliverables,
   downloadBulkCreateTruckingTemplate,
   bulkCreateTruckingOperations,
+  downloadCargoReadinessTemplate,
+  bulkUpdateCargoReadiness,
 } from '../controllers/trucking.controller';
 
 const router = express.Router();
@@ -60,6 +62,15 @@ router.post(
   planningUpload.single('file'),
   auditLog('CREATE', 'TRUCKING_OPERATION'),
   bulkCreateTruckingOperations,
+);
+
+// Bulk update cargo readiness date
+router.get('/cargo-readiness/template', downloadCargoReadinessTemplate);
+router.post(
+  '/cargo-readiness/bulk-update',
+  planningUpload.single('file'),
+  auditLog('UPDATE', 'TRUCKING_OPERATION'),
+  bulkUpdateCargoReadiness,
 );
 
 // Calendar view: daily planning deliverables (specific paths before generic GET)

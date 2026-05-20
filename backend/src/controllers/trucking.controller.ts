@@ -1842,3 +1842,90 @@ async function createTruckingFromGroup(
   );
   return true;
 }
+
+export const downloadCargoReadinessTemplate = async (_req: AuthRequest, res: Response) => {
+  const header = 'PO,Date';
+  const examples = [
+    'OP-LAND-15042026001,15/04/2026',
+    'OP-LAND-16042026002,16/04/2026',
+  ].join('\n');
+  const bom = '﻿';
+  const body = `${bom}${header}\n${examples}\n`;
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="cargo_readiness_template.csv"');
+  return res.status(200).send(body);
+};
+
+export const bulkUpdateCargoReadiness = async (req: AuthRequest, res: Response) => {
+  try {
+    const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+    if (!file?.buffer) {
+      return res.status(400).json({ success: false, error: { message: 'File is required (CSV or Excel)' } });
+    }
+
+    let matrix: unknown[][];
+    try {
+      matrix = parsePlanningSheetToMatrix(file.buffer);
+    } catch (e: any) {
+      return res.status(400).json({ success: false, error: { message: e?.message || 'Could not read file' } });
+    }
+
+    if (matrix.length < 2) {
+      return res.status(400).json({ success: false, error: { message: 'File must include a header row and at least one data row' } });
+    }
+
+    const headerRow = matrix[0];
+    const poIdx = findPlanningColumnIndex(headerRow, ['po', 'operation_id', 'operation id', 'op id']);
+    const dateIdx = findPlanningColumnIndex(headerRow, [
+      'date', 'cargo readiness date', 'cargo_readiness_date', 'cargo date', 'tanggal',
+    ]);
+
+    if (poIdx < 0) {
+      return res.status(400).json({ success: false, error: { message: 'Missing required column: PO' } });
+    }
+    if (dateIdx < 0) {
+      return res.status(400).json({ success: false, error: { message: 'Missing required column: Date' } });
+    }
+
+    let updated = 0;
+    const errors: string[] = [];
+
+    for (let i = 1; i < matrix.length; i++) {
+      const row = matrix[i];
+      const po = String(row[poIdx] ?? '').trim();
+      const dateRaw = row[dateIdx];
+      const cargoDate = toIsoDate10FromCell(dateRaw);
+
+      if (!po && !dateRaw) continue;
+      if (!po) { errors.push(`Row ${i + 1}: Missing PO`); continue; }
+      if (!cargoDate) { errors.push(`Row ${i + 1}: Invalid date "${dateRaw}"`); continue; }
+
+      // Match by operation_id first, then po_number from linked contract
+      const result = await query(
+        `UPDATE trucking_operations t
+         SET cargo_readiness_date = $2, updated_at = CURRENT_TIMESTAMP
+         WHERE t.operation_id = $1
+            OR EXISTS (
+              SELECT 1 FROM contracts c
+              WHERE c.id = t.contract_id AND c.po_number = $1
+            )`,
+        [po, cargoDate],
+      );
+
+      if ((result.rowCount ?? 0) === 0) {
+        errors.push(`Row ${i + 1}: No trucking operation found for PO "${po}"`);
+      } else {
+        updated += result.rowCount ?? 0;
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: { updated, errors },
+      message: `Updated ${updated} operation(s)`,
+    });
+  } catch (error) {
+    logger.error('Bulk update cargo readiness error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to update cargo readiness dates' } });
+  }
+};
