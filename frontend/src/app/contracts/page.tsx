@@ -2529,20 +2529,20 @@ function ContractsPageContent() {
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
                   {/* Mode toggle */}
-                  <div className="inline-flex rounded-lg border border-gray-200 bg-gray-100 p-1 mb-2">
+                  <div className="inline-flex rounded-lg border bg-white p-1 mb-2">
                     <button
                       type="button"
                       onClick={() => { setPerfDashMode('late'); resetLatePerfSelections(); setLateOnTimeFilter('LATE') }}
-                      className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'late' ? 'bg-white text-red-600 shadow-sm border border-red-200' : 'text-gray-500 hover:text-gray-700'}`}
+                      className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'late' ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
                     >
-                      🔴 Late
+                      Late
                     </button>
                     <button
                       type="button"
                       onClick={() => { setPerfDashMode('ontrack'); resetLatePerfSelections(); setLateOnTimeFilter('ON_TIME') }}
-                      className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'ontrack' ? 'bg-white text-green-600 shadow-sm border border-green-200' : 'text-gray-500 hover:text-gray-700'}`}
+                      className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'ontrack' ? 'bg-green-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
                     >
-                      🟢 On Track
+                      On Track
                     </button>
                   </div>
                   <CardTitle className="text-base">
