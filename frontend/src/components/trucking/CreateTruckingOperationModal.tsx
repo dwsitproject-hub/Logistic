@@ -271,10 +271,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         showNotification('warning', 'Delivery dates required', 'Due Date Delivery Start and End are required when daily deliverables are provided.')
         return
       }
-      if (!Number.isFinite(maxQty)) {
-        showNotification('warning', 'Quantity Delivered required', 'Quantity Delivered (Kg) is required when daily deliverables are provided.')
-        return
-      }
       let sum = 0
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i]
@@ -284,9 +280,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         if (!Number.isFinite(qn) || qn < 0) { showNotification('error', `Row ${i + 1}: Quantity must be a valid number`); return }
         if (d < start) { showNotification('error', `Row ${i + 1}: Date cannot be before Delivery Start`); return }
         if (d > end) { showNotification('error', `Row ${i + 1}: Date cannot be after Delivery End`); return }
-        if (qn > maxQty) { showNotification('error', `Row ${i + 1}: Quantity cannot exceed Quantity Delivered (Kg)`); return }
+        if (Number.isFinite(maxQty) && qn > maxQty) { showNotification('error', `Row ${i + 1}: Quantity cannot exceed Quantity Delivered (Kg)`); return }
         sum += qn
-        if (sum > maxQty) { showNotification('error', 'Sum of daily quantities cannot exceed Quantity Delivered (Kg)'); return }
+        if (Number.isFinite(maxQty) && sum > maxQty) { showNotification('error', 'Sum of daily quantities cannot exceed Quantity Delivered (Kg)'); return }
       }
     }
 
