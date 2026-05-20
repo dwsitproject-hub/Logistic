@@ -2651,7 +2651,7 @@ function ContractsPageContent() {
                                     <div className="text-sm font-semibold text-gray-900 truncate">{node.label}</div>
                                     <div className="shrink-0 text-right leading-tight">
                                       <div className="text-[11px] font-bold text-gray-800 tabular-nums">{node.count > 0 ? (node.totalDays / node.count).toFixed(1) : '—'}</div>
-                                      <div className="text-[9px] text-gray-400 uppercase tracking-wide">{perfDashMode === 'late' ? 'avg late' : 'avg ahead'}</div>
+                                      <div className="text-xs text-gray-500">{perfDashMode === 'late' ? 'avg late' : 'avg ahead'}</div>
                                     </div>
                                   </div>
                                   <div className="mt-1 h-1.5 rounded bg-gray-100 overflow-hidden">
