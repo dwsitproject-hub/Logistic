@@ -89,7 +89,7 @@ const PURCHASE_ORDER_LINES_SQL = `
       0,
       COALESCE(c.quantity_ordered, 0)::numeric
       - COALESCE((
-          SELECT SUM(u.sto_qty_assigned * 1000)
+          SELECT SUM(u.sto_qty_assigned)
           FROM user_sto_contract_assignments u
           WHERE u.contract_number = c.contract_id
             AND COALESCE(u.po_number, '') = COALESCE(c.po_number, '')
@@ -3311,50 +3311,129 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
         eta_complete_discharge: perContractEta.eta_discharge_complete,
       });
 
-      const result = await query(`
-        INSERT INTO shipments (
-          shipment_id, operation_id, contract_id, vessel_name, vessel_code, voyage_no, vessel_owner,
-          vessel_draft, vessel_capacity, vessel_hull_type, charter_type,
-          port_of_loading, port_of_discharge, quantity_shipped, quantity_delivered,
-          eta_arrival, eta_berthed, eta_loading_start, eta_loading_complete, eta_sailed,
-          eta_discharge_arrival, eta_discharge_berthed, eta_discharge_start, eta_discharge_complete,
-          status
-        ) VALUES (
-          $1, $2, $3::uuid, $4, $5, $6, $7, $8::numeric, $9::numeric, $10, $11,
-          $12, $13, $14::numeric, $25::numeric,
-          $15::date, $16::date, $17::date, $18::date, $19::date,
-          $20::date, $21::date, $22::date, $23::date,
-          $24
-        ) RETURNING id
-      `, [
-        shipmentId,
-        resolvedOperationId,
-        contract.id,
-        vesselName || null,
-        vesselCode || null,
-        voyageNo || null,
-        vesselOwner || null,
-        vesselDraft ? parseFloat(String(vesselDraft)) : null,
-        vesselCapacity ? parseFloat(String(vesselCapacity)) : null,
-        vesselHullType || null,
-        charterType || null,
-        portOfLoading || null,
-        portOfDischarge || null,
-        quantityShipped ? parseFloat(String(quantityShipped)) : null,
-        perContractEta.eta_arrival || null,
-        perContractEta.eta_berthed || null,
-        perContractEta.eta_loading_start || null,
-        perContractEta.eta_loading_complete || null,
-        perContractEta.eta_sailed || null,
-        perContractEta.eta_discharge_arrival || null,
-        perContractEta.eta_discharge_berthed || null,
-        perContractEta.eta_discharge_start || null,
-        perContractEta.eta_discharge_complete || null,
-        derivedStatus,
-        quantityDelivered ? parseFloat(String(quantityDelivered)) : null,
-      ]);
+      // Guard: avoid creating a duplicate shipment for the same contract.
+      // Check 1: same operation_id + contract (re-submit of same planned operation).
+      // Check 2: same vessel name (case-insensitive) + contract (vessel already assigned here).
+      let existingShipmentId: string | null = null;
+      if (resolvedOperationId) {
+        const byOp = await query(
+          `SELECT id FROM shipments WHERE contract_id = $1::uuid AND operation_id = $2 LIMIT 1`,
+          [contract.id, resolvedOperationId]
+        );
+        if (byOp.rows.length > 0) existingShipmentId = byOp.rows[0].id;
+      }
+      if (!existingShipmentId && vesselName) {
+        const byVessel = await query(
+          `SELECT id FROM shipments WHERE contract_id = $1::uuid AND LOWER(TRIM(vessel_name)) = LOWER(TRIM($2)) LIMIT 1`,
+          [contract.id, vesselName]
+        );
+        if (byVessel.rows.length > 0) existingShipmentId = byVessel.rows[0].id;
+      }
 
-      shipmentIds.push(result.rows[0].id);
+      let resultId: string;
+      if (existingShipmentId) {
+        // Update existing instead of inserting a duplicate
+        await query(`
+          UPDATE shipments SET
+            operation_id  = COALESCE($1, operation_id),
+            vessel_name   = COALESCE($2, vessel_name),
+            vessel_code   = COALESCE($3, vessel_code),
+            voyage_no     = COALESCE($4, voyage_no),
+            vessel_owner  = COALESCE($5, vessel_owner),
+            vessel_draft  = COALESCE($6::numeric, vessel_draft),
+            vessel_capacity = COALESCE($7::numeric, vessel_capacity),
+            vessel_hull_type = COALESCE($8, vessel_hull_type),
+            charter_type  = COALESCE($9, charter_type),
+            port_of_loading = COALESCE($10, port_of_loading),
+            port_of_discharge = COALESCE($11, port_of_discharge),
+            quantity_shipped = COALESCE($12::numeric, quantity_shipped),
+            quantity_delivered = COALESCE($13::numeric, quantity_delivered),
+            eta_arrival   = COALESCE($14::date, eta_arrival),
+            eta_berthed   = COALESCE($15::date, eta_berthed),
+            eta_loading_start = COALESCE($16::date, eta_loading_start),
+            eta_loading_complete = COALESCE($17::date, eta_loading_complete),
+            eta_sailed    = COALESCE($18::date, eta_sailed),
+            eta_discharge_arrival = COALESCE($19::date, eta_discharge_arrival),
+            eta_discharge_berthed = COALESCE($20::date, eta_discharge_berthed),
+            eta_discharge_start = COALESCE($21::date, eta_discharge_start),
+            eta_discharge_complete = COALESCE($22::date, eta_discharge_complete),
+            status        = $23,
+            updated_at    = CURRENT_TIMESTAMP
+          WHERE id = $24
+        `, [
+          resolvedOperationId,
+          vesselName || null,
+          vesselCode || null,
+          voyageNo || null,
+          vesselOwner || null,
+          vesselDraft ? parseFloat(String(vesselDraft)) : null,
+          vesselCapacity ? parseFloat(String(vesselCapacity)) : null,
+          vesselHullType || null,
+          charterType || null,
+          portOfLoading || null,
+          portOfDischarge || null,
+          quantityShipped ? parseFloat(String(quantityShipped)) : null,
+          quantityDelivered ? parseFloat(String(quantityDelivered)) : null,
+          perContractEta.eta_arrival || null,
+          perContractEta.eta_berthed || null,
+          perContractEta.eta_loading_start || null,
+          perContractEta.eta_loading_complete || null,
+          perContractEta.eta_sailed || null,
+          perContractEta.eta_discharge_arrival || null,
+          perContractEta.eta_discharge_berthed || null,
+          perContractEta.eta_discharge_start || null,
+          perContractEta.eta_discharge_complete || null,
+          derivedStatus,
+          existingShipmentId,
+        ]);
+        resultId = existingShipmentId;
+      } else {
+        const result = await query(`
+          INSERT INTO shipments (
+            shipment_id, operation_id, contract_id, vessel_name, vessel_code, voyage_no, vessel_owner,
+            vessel_draft, vessel_capacity, vessel_hull_type, charter_type,
+            port_of_loading, port_of_discharge, quantity_shipped, quantity_delivered,
+            eta_arrival, eta_berthed, eta_loading_start, eta_loading_complete, eta_sailed,
+            eta_discharge_arrival, eta_discharge_berthed, eta_discharge_start, eta_discharge_complete,
+            status
+          ) VALUES (
+            $1, $2, $3::uuid, $4, $5, $6, $7, $8::numeric, $9::numeric, $10, $11,
+            $12, $13, $14::numeric, $25::numeric,
+            $15::date, $16::date, $17::date, $18::date, $19::date,
+            $20::date, $21::date, $22::date, $23::date,
+            $24
+          ) RETURNING id
+        `, [
+          shipmentId,
+          resolvedOperationId,
+          contract.id,
+          vesselName || null,
+          vesselCode || null,
+          voyageNo || null,
+          vesselOwner || null,
+          vesselDraft ? parseFloat(String(vesselDraft)) : null,
+          vesselCapacity ? parseFloat(String(vesselCapacity)) : null,
+          vesselHullType || null,
+          charterType || null,
+          portOfLoading || null,
+          portOfDischarge || null,
+          quantityShipped ? parseFloat(String(quantityShipped)) : null,
+          perContractEta.eta_arrival || null,
+          perContractEta.eta_berthed || null,
+          perContractEta.eta_loading_start || null,
+          perContractEta.eta_loading_complete || null,
+          perContractEta.eta_sailed || null,
+          perContractEta.eta_discharge_arrival || null,
+          perContractEta.eta_discharge_berthed || null,
+          perContractEta.eta_discharge_start || null,
+          perContractEta.eta_discharge_complete || null,
+          derivedStatus,
+          quantityDelivered ? parseFloat(String(quantityDelivered)) : null,
+        ]);
+        resultId = result.rows[0].id;
+      }
+
+      shipmentIds.push(resultId);
     }
 
     // Persist user contract qty assignment (keyed by STO if exists; else operationId; else shipment_id)

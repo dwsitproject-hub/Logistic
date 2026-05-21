@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
+import { CONTRACTS_QTY_MOVE_CTE } from './contractsQtyMoveSql';
 
 // Normalize query param to string[] (Express sends array for ?key=a&key=b)
 const toFilterArray = (v: unknown): string[] => {
@@ -297,51 +298,56 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
     // - paid: has at least one non-empty payoff_date
     // - outstanding payment: has at least one empty payoff_date
     const outstandingStats = await query(`
-      WITH contract_qty AS (
+      WITH contract_scope AS (
+        SELECT DISTINCT c.contract_id
+        FROM contracts c
+        WHERE 1=1 ${contractFilter}
+      ),
+      ${CONTRACTS_QTY_MOVE_CTE},
+      sto_agg AS (
+        SELECT x.contract_number,
+          SUM(x.sto_quantity_num) AS total_sto_quantity
+        FROM (
+          SELECT DISTINCT ON (spd.contract_number, effective_sto)
+            spd.contract_number,
+            effective_sto,
+            sto_quantity_num
+          FROM (
+            SELECT spd.contract_number,
+              NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') AS effective_sto,
+              CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', '0'), ',', ''), ' ', '') AS NUMERIC) AS sto_quantity_num,
+              spd.created_at
+            FROM sap_processed_data spd
+            INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
+            WHERE ((spd.sto_number IS NOT NULL AND spd.sto_number::text != '') OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') IS NOT NULL)
+              AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+          ) spd
+          WHERE effective_sto IS NOT NULL AND effective_sto != ''
+          ORDER BY contract_number, effective_sto, created_at DESC NULLS LAST
+        ) x
+        GROUP BY x.contract_number
+      ),
+      contract_qty AS (
         SELECT 
           c.id AS contract_pk,
           c.contract_id,
           MAX(c.quantity_ordered) AS contract_quantity,
           MAX(COALESCE(c.contract_value, 0)) AS contract_value,
           MAX(COALESCE(c.incoterm, '')) AS incoterm,
-          COALESCE((
-            SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC))
-            FROM sap_processed_data spd
-            WHERE spd.contract_number = c.contract_id
-              AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
-          ), 0) AS quantity_delivery,
-          COALESCE((
-            SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC))
-            FROM sap_processed_data spd
-            WHERE spd.contract_number = c.contract_id
-              AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
-          ), 0) AS quantity_receive,
-          -- “Delivered quantity” for dashboard = the basis that drives Outstanding Quantity by Incoterm rule
+          COALESCE(MAX(qm.quantity_delivery), 0) AS quantity_delivery,
+          COALESCE(MAX(qm.quantity_receive), 0) AS quantity_receive,
           COALESCE(
             CASE
-              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE((
-                SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC))
-                FROM sap_processed_data spd
-                WHERE spd.contract_number = c.contract_id
-                  AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
-              ), 0)
-              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('LCO', 'FOB') THEN COALESCE((
-                SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC))
-                FROM sap_processed_data spd
-                WHERE spd.contract_number = c.contract_id
-                  AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
-              ), 0)
-              ELSE COALESCE((
-                SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
-                FROM sap_processed_data spd
-                WHERE spd.contract_number = c.contract_id 
-                  AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-              ), 0)
+              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('FRC', 'CIF', 'CFR') THEN MAX(qm.quantity_receive)
+              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('LCO', 'FOB') THEN MAX(qm.quantity_delivery)
+              ELSE MAX(sa.total_sto_quantity)
             END,
             0
           ) AS delivered_quantity
         FROM contracts c
-        WHERE 1=1 ${contractFilter}
+        INNER JOIN contract_scope cs ON cs.contract_id = c.contract_id
+        LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
+        LEFT JOIN sto_agg sa ON sa.contract_number = c.contract_id
         GROUP BY c.id, c.contract_id
       ),
       payment_status_per_contract AS (

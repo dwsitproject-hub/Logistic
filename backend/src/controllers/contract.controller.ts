@@ -8,6 +8,7 @@ import {
   parseColumnFiltersQuery,
 } from '../utils/contractListFilters';
 import { CONTRACTS_LIST_OUTER_SQL } from './contractsListOuterSql';
+import { CONTRACTS_QTY_MOVE_CTE } from './contractsQtyMoveSql';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 
 export const getContracts = async (req: AuthRequest, res: Response) => {
@@ -57,39 +58,30 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
       ),
-      qty_move AS (
-        SELECT
-          spd.contract_number,
-          COALESCE(SUM(
-            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC)
-          ) FILTER (
-            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
-          ), 0)::numeric AS quantity_delivery,
-          COALESCE(SUM(
-            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC)
-          ) FILTER (
-            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
-          ), 0)::numeric AS quantity_receive
-        FROM sap_processed_data spd
-        INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
-        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        GROUP BY spd.contract_number
-      ),
+      ${CONTRACTS_QTY_MOVE_CTE},
       sto_agg AS (
         SELECT x.contract_number,
           STRING_AGG(DISTINCT x.effective_sto, ', ' ORDER BY x.effective_sto) AS sto_numbers,
           SUM(x.sto_quantity_num) AS total_sto_quantity,
           COUNT(DISTINCT x.effective_sto) AS sto_count
         FROM (
-          SELECT spd.contract_number,
-            NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') AS effective_sto,
-            CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', '0'), ',', ''), ' ', '') AS NUMERIC) AS sto_quantity_num
-          FROM sap_processed_data spd
-          INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
-          WHERE ((spd.sto_number IS NOT NULL AND spd.sto_number::text != '') OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') IS NOT NULL)
-            AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+          SELECT DISTINCT ON (spd.contract_number, effective_sto)
+            spd.contract_number,
+            effective_sto,
+            sto_quantity_num
+          FROM (
+            SELECT spd.contract_number,
+              NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') AS effective_sto,
+              CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', '0'), ',', ''), ' ', '') AS NUMERIC) AS sto_quantity_num,
+              spd.created_at
+            FROM sap_processed_data spd
+            INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
+            WHERE ((spd.sto_number IS NOT NULL AND spd.sto_number::text != '') OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') IS NOT NULL)
+              AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+          ) spd
+          WHERE effective_sto IS NOT NULL AND effective_sto != ''
+          ORDER BY contract_number, effective_sto, created_at DESC NULLS LAST
         ) x
-        WHERE x.effective_sto IS NOT NULL AND x.effective_sto != ''
         GROUP BY x.contract_number
       ),
       base AS (
@@ -287,7 +279,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           0
         )
         - COALESCE((
-          SELECT SUM(u.sto_qty_assigned * 1000)
+          SELECT SUM(u.sto_qty_assigned)
           FROM user_sto_contract_assignments u
           WHERE u.contract_number = base.contract_id
         ), 0)
@@ -370,7 +362,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         0
       )
       - COALESCE((
-        SELECT SUM(u.sto_qty_assigned * 1000)
+        SELECT SUM(u.sto_qty_assigned)
         FROM user_sto_contract_assignments u
         WHERE u.contract_number = contract_id
       ), 0)
@@ -846,37 +838,28 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
       ),
-      qty_move AS (
-        SELECT
-          spd.contract_number,
-          COALESCE(SUM(
-            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC)
-          ) FILTER (
-            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
-          ), 0)::numeric AS quantity_delivery,
-          COALESCE(SUM(
-            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC)
-          ) FILTER (
-            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
-          ), 0)::numeric AS quantity_receive
-        FROM sap_processed_data spd
-        INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
-        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        GROUP BY spd.contract_number
-      ),
+      ${CONTRACTS_QTY_MOVE_CTE},
       sto_agg AS (
         SELECT x.contract_number,
           SUM(x.sto_quantity_num) AS total_sto_quantity
         FROM (
-          SELECT spd.contract_number,
-            NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') AS effective_sto,
-            CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', '0'), ',', ''), ' ', '') AS NUMERIC) AS sto_quantity_num
-          FROM sap_processed_data spd
-          INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
-          WHERE ((spd.sto_number IS NOT NULL AND spd.sto_number::text != '') OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') IS NOT NULL)
-            AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+          SELECT DISTINCT ON (spd.contract_number, effective_sto)
+            spd.contract_number,
+            effective_sto,
+            sto_quantity_num
+          FROM (
+            SELECT spd.contract_number,
+              NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') AS effective_sto,
+              CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', '0'), ',', ''), ' ', '') AS NUMERIC) AS sto_quantity_num,
+              spd.created_at
+            FROM sap_processed_data spd
+            INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
+            WHERE ((spd.sto_number IS NOT NULL AND spd.sto_number::text != '') OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') IS NOT NULL)
+              AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+          ) spd
+          WHERE effective_sto IS NOT NULL AND effective_sto != ''
+          ORDER BY contract_number, effective_sto, created_at DESC NULLS LAST
         ) x
-        WHERE x.effective_sto IS NOT NULL AND x.effective_sto != ''
         GROUP BY x.contract_number
       ),
       base AS (

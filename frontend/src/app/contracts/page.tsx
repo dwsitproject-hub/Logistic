@@ -1805,11 +1805,18 @@ function ContractsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : 0,
-      render: (c) => (
-        <span className={`text-sm truncate ${c.outstanding_quantity < 0 ? 'text-red-600' : ''}`}>
-          {((Number(c.outstanding_quantity) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT
-        </span>
-      )
+      render: (c) => {
+        const oqMt = (Number(c.outstanding_quantity) || 0) / 1000
+        const isOver = oqMt < 0
+        const isUnder = oqMt > 0
+        return (
+          <span className={`text-sm truncate font-medium ${isOver ? 'text-green-600' : isUnder ? 'text-red-600' : 'text-gray-500'}`}>
+            {isOver
+              ? `+${Math.abs(oqMt).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+              : `${oqMt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`}
+          </span>
+        )
+      }
     },
     {
       id: 'trade_cycle_days',
@@ -3856,8 +3863,10 @@ function ContractsPageContent() {
                               {contract.product || '-'}
                               {' • '}
                               <span className="text-gray-500">Outstanding:</span>{' '}
-                              <span className={contract.outstanding_quantity < 0 ? 'text-red-600' : 'text-gray-800'}>
-                                {formatNumber(contract.outstanding_quantity)} {contract.unit}
+                              <span className={contract.outstanding_quantity < 0 ? 'text-green-600 font-medium' : contract.outstanding_quantity > 0 ? 'text-red-600 font-medium' : 'text-gray-800'}>
+                                {contract.outstanding_quantity < 0
+                                  ? `+${formatNumber(Math.abs(contract.outstanding_quantity))} ${contract.unit}`
+                                  : `${formatNumber(contract.outstanding_quantity)} ${contract.unit}`}
                               </span>
                             </div>
                           </div>
@@ -4394,16 +4403,21 @@ function ContractsPageContent() {
                         <div className="text-gray-500">Total STO Quantity ({selectedContract.sto_count || 0} STO{selectedContract.sto_count > 1 ? 's' : ''})</div>
                         <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.total_sto_quantity)} Kg</div>
                       </div>
-                      <div className={`p-3 rounded border-2 ${selectedContract.outstanding_quantity < 0 ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
-                        <div className={`font-semibold flex items-center gap-1 ${selectedContract.outstanding_quantity < 0 ? 'text-red-700' : 'text-blue-700'}`}>
+                      <div className={`p-3 rounded border-2 ${selectedContract.outstanding_quantity < 0 ? 'bg-green-50 border-green-200' : selectedContract.outstanding_quantity > 0 ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}>
+                        <div className={`font-semibold flex items-center gap-1 ${selectedContract.outstanding_quantity < 0 ? 'text-green-700' : selectedContract.outstanding_quantity > 0 ? 'text-red-700' : 'text-gray-700'}`}>
                           Outstanding Quantity
                           <FieldHelp text={FIELD_HELP.outstandingQty} />
                         </div>
-                        <div className={`font-bold text-xl mt-1 ${selectedContract.outstanding_quantity < 0 ? 'text-red-600' : 'text-blue-600'}`}>
-                          {formatNumber(selectedContract.outstanding_quantity)} Kg
+                        <div className={`font-bold text-xl mt-1 ${selectedContract.outstanding_quantity < 0 ? 'text-green-600' : selectedContract.outstanding_quantity > 0 ? 'text-red-600' : 'text-gray-500'}`}>
+                          {selectedContract.outstanding_quantity < 0
+                            ? `+${formatNumber(Math.abs(selectedContract.outstanding_quantity))} Kg`
+                            : `${formatNumber(selectedContract.outstanding_quantity)} Kg`}
                         </div>
                         {selectedContract.outstanding_quantity < 0 && (
-                          <div className="text-xs text-red-500 mt-1">Overshipped</div>
+                          <div className="text-xs text-green-600 mt-1">Over Delivered</div>
+                        )}
+                        {selectedContract.outstanding_quantity > 0 && (
+                          <div className="text-xs text-red-500 mt-1">Belum selesai</div>
                         )}
                       </div>
                       <div className="p-3 bg-gray-50 rounded">

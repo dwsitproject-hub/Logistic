@@ -404,8 +404,9 @@ export class SapDataDistributionService {
         // Re-parent all dependent records
         await client.query(`UPDATE shipments          SET contract_id = $1 WHERE contract_id = $2`, [placeholderUuid, placeholderUuid]);
         await client.query(`UPDATE trucking_operations SET contract_id = $1 WHERE contract_id = $2`, [placeholderUuid, placeholderUuid]);
-        await client.query(`UPDATE quality_surveys    SET contract_id = $1 WHERE contract_id = $2`, [placeholderUuid, placeholderUuid]);
         await client.query(`UPDATE payments           SET contract_id = $1 WHERE contract_id = $2`, [placeholderUuid, placeholderUuid]);
+        await client.query(`UPDATE documents          SET contract_id = $1 WHERE contract_id = $2`, [placeholderUuid, placeholderUuid]);
+        // quality_surveys links via shipment_id (not contract_id directly) — no re-parenting needed here
         // Rename the placeholder's contract_id so the upcoming INSERT...ON CONFLICT fires the UPDATE path
         await client.query(`UPDATE contracts SET contract_id = $1 WHERE id = $2`, [contractNumber, placeholderUuid]);
       }
@@ -479,7 +480,34 @@ export class SapDataDistributionService {
         userId
       ]
     );
-    return result.rows[0].id;
+    const contractUuid = result.rows[0].id as string;
+
+    // Persist each STO as a separate row in contract_stos to support multiple STOs per contract.
+    const stoNo = contractData.sto_no != null ? String(contractData.sto_no).trim() || null : null;
+    if (stoNo) {
+      await client.query(
+        `INSERT INTO contract_stos (contract_id, sto_number, sto_quantity, sto_type, sto_item, sto_classification, plant_code)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (contract_id, sto_number) DO UPDATE SET
+           sto_quantity     = COALESCE(EXCLUDED.sto_quantity, contract_stos.sto_quantity),
+           sto_type         = COALESCE(EXCLUDED.sto_type, contract_stos.sto_type),
+           sto_item         = COALESCE(EXCLUDED.sto_item, contract_stos.sto_item),
+           sto_classification = COALESCE(EXCLUDED.sto_classification, contract_stos.sto_classification),
+           plant_code       = COALESCE(EXCLUDED.plant_code, contract_stos.plant_code),
+           updated_at       = CURRENT_TIMESTAMP`,
+        [
+          contractUuid,
+          stoNo,
+          this.parseNumber(contractData.sto_quantity),
+          contractData.sto_type || null,
+          contractData.sto_item || null,
+          contractData.sto_classification || contractData.po_classification || null,
+          contractData.plant_code || null
+        ]
+      );
+    }
+
+    return contractUuid;
   }
   
   /**
@@ -623,6 +651,28 @@ export class SapDataDistributionService {
       }
     }
 
+    // 3rd fallback: SAP row has no vessel name, but a single PLANNED/MNL shipment already
+    // exists for this contract (e.g. user pre-planned before SAP delivery data arrived).
+    // Update it instead of creating a duplicate with no vessel info.
+    if (!targetShipmentId && contractUuid && !vesselName && shipmentIdFromSap) {
+      const existingPlanned = await client.query(
+        `SELECT id FROM shipments
+         WHERE contract_id = $1
+           AND status IN ('PLANNED', 'UNPLANNED')
+           AND (shipment_id LIKE 'MNL-%' OR shipment_id LIKE 'MSEA-%')
+         ORDER BY created_at DESC LIMIT 1`,
+        [contractUuid]
+      );
+      if (existingPlanned.rows.length === 1) {
+        targetShipmentId = existingPlanned.rows[0].id;
+        logger.info('upsertShipment: matched planned shipment (no vessel name in SAP)', {
+          contractId,
+          existingShipmentId: targetShipmentId,
+          sapShipmentId: shipmentIdFromSap,
+        });
+      }
+    }
+
     if (targetShipmentId) {
       const id = targetShipmentId;
       await client.query(
@@ -747,7 +797,57 @@ export class SapDataDistributionService {
           $31::numeric, $32::numeric, $33::numeric, $34::date, $35::date, $36::date, $37::date,
           $38::date, $39::date, $40::date, $41::date, $42::date, $43::date, $44::numeric, $45::numeric,
           $46::int, $47::int, $48::int
-        ) RETURNING id`,
+        )
+        ON CONFLICT (shipment_id) DO UPDATE SET
+          contract_id   = COALESCE(EXCLUDED.contract_id, shipments.contract_id),
+          voyage_no     = COALESCE(EXCLUDED.voyage_no, shipments.voyage_no),
+          vessel_code   = COALESCE(EXCLUDED.vessel_code, shipments.vessel_code),
+          vessel_name   = COALESCE(EXCLUDED.vessel_name, shipments.vessel_name),
+          vessel_owner  = COALESCE(EXCLUDED.vessel_owner, shipments.vessel_owner),
+          vessel_draft  = COALESCE(EXCLUDED.vessel_draft, shipments.vessel_draft),
+          vessel_loa    = COALESCE(EXCLUDED.vessel_loa, shipments.vessel_loa),
+          vessel_capacity = COALESCE(EXCLUDED.vessel_capacity, shipments.vessel_capacity),
+          vessel_hull_type = COALESCE(EXCLUDED.vessel_hull_type, shipments.vessel_hull_type),
+          vessel_registration_year = COALESCE(EXCLUDED.vessel_registration_year, shipments.vessel_registration_year),
+          charter_type  = COALESCE(EXCLUDED.charter_type, shipments.charter_type),
+          loading_method  = COALESCE(EXCLUDED.loading_method, shipments.loading_method),
+          discharge_method = COALESCE(EXCLUDED.discharge_method, shipments.discharge_method),
+          port_of_loading = CASE WHEN NULLIF(TRIM(EXCLUDED.port_of_loading), '') IS NOT NULL AND TRIM(EXCLUDED.port_of_loading) != '0.00' THEN EXCLUDED.port_of_loading ELSE shipments.port_of_loading END,
+          port_of_discharge = CASE WHEN NULLIF(TRIM(EXCLUDED.port_of_discharge), '') IS NOT NULL AND TRIM(EXCLUDED.port_of_discharge) != '0.00' THEN EXCLUDED.port_of_discharge ELSE shipments.port_of_discharge END,
+          eta_arrival   = COALESCE(EXCLUDED.eta_arrival, shipments.eta_arrival),
+          ata_arrival   = COALESCE(EXCLUDED.ata_arrival, shipments.ata_arrival),
+          eta_sailed    = COALESCE(EXCLUDED.eta_sailed, shipments.eta_sailed),
+          ata_sailed    = COALESCE(EXCLUDED.ata_sailed, shipments.ata_sailed),
+          shipment_date = COALESCE(EXCLUDED.shipment_date, shipments.shipment_date),
+          arrival_date  = COALESCE(EXCLUDED.arrival_date, shipments.arrival_date),
+          quantity_shipped = COALESCE(EXCLUDED.quantity_shipped, shipments.quantity_shipped),
+          quantity_delivered = COALESCE(EXCLUDED.quantity_delivered, shipments.quantity_delivered),
+          bl_quantity   = COALESCE(EXCLUDED.bl_quantity, shipments.bl_quantity),
+          actual_vessel_qty_receive = COALESCE(EXCLUDED.actual_vessel_qty_receive, shipments.actual_vessel_qty_receive),
+          difference_final_qty_vs_bl_qty = COALESCE(EXCLUDED.difference_final_qty_vs_bl_qty, shipments.difference_final_qty_vs_bl_qty),
+          estimated_km  = COALESCE(EXCLUDED.estimated_km, shipments.estimated_km),
+          estimated_nautical_miles = COALESCE(EXCLUDED.estimated_nautical_miles, shipments.estimated_nautical_miles),
+          vessel_oa_budget = COALESCE(EXCLUDED.vessel_oa_budget, shipments.vessel_oa_budget),
+          vessel_oa_actual = COALESCE(EXCLUDED.vessel_oa_actual, shipments.vessel_oa_actual),
+          average_vessel_speed = COALESCE(EXCLUDED.average_vessel_speed, shipments.average_vessel_speed),
+          eta_loading_start = COALESCE(EXCLUDED.eta_loading_start, shipments.eta_loading_start),
+          ata_loading_start = COALESCE(EXCLUDED.ata_loading_start, shipments.ata_loading_start),
+          eta_loading_complete = COALESCE(EXCLUDED.eta_loading_complete, shipments.eta_loading_complete),
+          ata_loading_complete = COALESCE(EXCLUDED.ata_loading_complete, shipments.ata_loading_complete),
+          eta_discharge_arrival = COALESCE(EXCLUDED.eta_discharge_arrival, shipments.eta_discharge_arrival),
+          ata_discharge_arrival = COALESCE(EXCLUDED.ata_discharge_arrival, shipments.ata_discharge_arrival),
+          eta_discharge_start = COALESCE(EXCLUDED.eta_discharge_start, shipments.eta_discharge_start),
+          ata_discharge_start = COALESCE(EXCLUDED.ata_discharge_start, shipments.ata_discharge_start),
+          eta_discharge_complete = COALESCE(EXCLUDED.eta_discharge_complete, shipments.eta_discharge_complete),
+          ata_discharge_complete = COALESCE(EXCLUDED.ata_discharge_complete, shipments.ata_discharge_complete),
+          loading_rate  = COALESCE(EXCLUDED.loading_rate, shipments.loading_rate),
+          discharge_rate = COALESCE(EXCLUDED.discharge_rate, shipments.discharge_rate),
+          loading_duration_days = COALESCE(EXCLUDED.loading_duration_days, shipments.loading_duration_days),
+          discharge_duration_days = COALESCE(EXCLUDED.discharge_duration_days, shipments.discharge_duration_days),
+          total_lead_time_days = COALESCE(EXCLUDED.total_lead_time_days, shipments.total_lead_time_days),
+          status        = EXCLUDED.status,
+          updated_at    = CURRENT_TIMESTAMP
+        RETURNING id`,
         [
           shipmentIdFromSap,
           contractUuid,

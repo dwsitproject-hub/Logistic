@@ -65,7 +65,7 @@ export const CONTRACTS_LIST_OUTER_SQL = `
               0
             )
           - COALESCE((
-              SELECT SUM(u.sto_qty_assigned * 1000)
+              SELECT SUM(u.sto_qty_assigned)
               FROM user_sto_contract_assignments u
               WHERE u.contract_number = base.contract_id
             ), 0)

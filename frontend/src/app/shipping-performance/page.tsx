@@ -673,14 +673,6 @@ export default function ShippingPerformancePage() {
                           )
                         }
                         if (col.level === 'incoterm') {
-                          if (!lateSelVessel) return <div className="text-sm text-gray-500">Select a vessel to see incoterms.</div>
-                          return (
-                            <div className="space-y-2">
-                              {(vesselNode?.children || []).map((n) => renderNode(n, lateSelIncoterm === n.key, () => { setLateSelIncoterm(n.key); setLateSelProduct(null); setLateSelPlant(null) }))}
-                            </div>
-                          )
-                        }
-                        if (col.level === 'incoterm') {
                           if (!lateSelPlant) return <div className="text-sm text-gray-500">Select a plant to see incoterms.</div>
                           return (
                             <div className="space-y-2">
