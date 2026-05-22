@@ -3,6 +3,8 @@ import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import { CONTRACTS_QTY_MOVE_CTE } from './contractsQtyMoveSql';
+import { diffCalendarDays } from '../utils/calendarDays';
+import { shipmentIsLateSql } from '../utils/shipmentListFilters';
 
 // Normalize query param to string[] (Express sends array for ?key=a&key=b)
 const toFilterArray = (v: unknown): string[] => {
@@ -525,20 +527,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         COUNT(*) FILTER (WHERE effective_status = 'UNLOADING') as unloading_shipments,
         COUNT(*) FILTER (WHERE effective_status = 'COMPLETED') as completed_shipments,
         COUNT(*) FILTER (WHERE effective_status = 'CANCELLED') as cancelled_shipments,
-        COUNT(*) FILTER (
-          WHERE
-            delivery_end_date IS NOT NULL
-            AND (
-              delivery_end_date::date < CURRENT_DATE
-              OR (
-                (ata_discharge_complete IS NOT NULL OR eta_discharge_complete IS NOT NULL)
-                AND (
-                  (ata_discharge_complete IS NOT NULL AND delivery_end_date::date < ata_discharge_complete::date)
-                  OR (eta_discharge_complete IS NOT NULL AND delivery_end_date::date < eta_discharge_complete::date)
-                )
-              )
-            )
-        ) as late_shipments
+        COUNT(*) FILTER (WHERE ${shipmentIsLateSql('ship', { ata: 'ship.ata_discharge_complete', eta: 'ship.eta_discharge_complete' })}) as late_shipments
       FROM ship
       `,
       params,
@@ -603,10 +592,10 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         COUNT(*) FILTER (WHERE status = 'CANCELLED') as cancelled_trucking_operations,
         COUNT(DISTINCT late_key) FILTER (WHERE
           delivery_end_date IS NOT NULL
-          AND (eta_trucking_completion_date IS NOT NULL OR effective_completion_date IS NOT NULL)
-          AND NOT (
-            (eta_trucking_completion_date IS NOT NULL AND delivery_end_date::date >= eta_trucking_completion_date::date)
-            OR (effective_completion_date IS NOT NULL AND delivery_end_date::date >= effective_completion_date::date)
+          AND (
+            (effective_completion_date IS NOT NULL AND delivery_end_date::date < effective_completion_date::date)
+            OR (effective_completion_date IS NULL AND eta_trucking_completion_date IS NOT NULL AND delivery_end_date::date < eta_trucking_completion_date::date)
+            OR (effective_completion_date IS NULL AND eta_trucking_completion_date IS NULL AND delivery_end_date::date < CURRENT_DATE)
           )
         ) as late_trucking_operations
       FROM trucking_with_completion
@@ -1787,16 +1776,17 @@ export const getShipmentsByStatus = async (req: AuthRequest, res: Response) => {
           END AS status,
           CASE
             WHEN sb.delivery_end_date IS NULL THEN '-'
-            WHEN (
-              sb.delivery_end_date::date < CURRENT_DATE
-              OR (
-                (sb.ata_discharge_complete IS NOT NULL OR sb.eta_discharge_complete IS NOT NULL)
-                AND (
-                  (sb.ata_discharge_complete IS NOT NULL AND sb.delivery_end_date::date < sb.ata_discharge_complete::date)
-                  OR (sb.eta_discharge_complete IS NOT NULL AND sb.delivery_end_date::date < sb.eta_discharge_complete::date)
-                )
-              )
-            ) THEN 'Late'
+            WHEN sb.ata_discharge_complete IS NOT NULL THEN
+              CASE
+                WHEN sb.delivery_end_date::date < sb.ata_discharge_complete::date THEN 'Late'
+                ELSE 'On Time'
+              END
+            WHEN sb.eta_discharge_complete IS NOT NULL THEN
+              CASE
+                WHEN sb.delivery_end_date::date < sb.eta_discharge_complete::date THEN 'Late'
+                ELSE 'On Time'
+              END
+            WHEN sb.delivery_end_date::date < CURRENT_DATE THEN 'Late'
             ELSE 'On Time'
           END AS late_indicator
         FROM ship_base sb
@@ -3952,16 +3942,6 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
     const totalCount = Number(row0?.total_count) || 0;
     const rows = Array.isArray(row0?.rows) ? row0.rows : [];
 
-    const asDate = (d: unknown): Date | null => {
-      if (d == null) return null;
-      if (d instanceof Date) return d;
-      if (typeof d === 'string') {
-        const t = Date.parse(d);
-        if (Number.isNaN(t)) return null;
-        return new Date(t);
-      }
-      return null;
-    };
     const parseFlexibleDate = (v: unknown): Date | null => {
       if (v == null) return null;
       if (v instanceof Date) return v;
@@ -3987,15 +3967,7 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
       if (!Number.isNaN(t)) return new Date(t);
       return null;
     };
-    const diffInDays = (start: unknown, end: unknown): number | null => {
-      const s = asDate(start);
-      const e = asDate(end);
-      if (!s || !e) return null;
-      const msPerDay = 24 * 60 * 60 * 1000;
-      const sMid = new Date(s.getFullYear(), s.getMonth(), s.getDate());
-      const eMid = new Date(e.getFullYear(), e.getMonth(), e.getDate());
-      return Math.round((eMid.getTime() - sMid.getTime()) / msPerDay);
-    };
+    const diffInDays = (start: unknown, end: unknown): number | null => diffCalendarDays(start, end);
 
     // Compute log_cycle_days + cash_cycle_days for drilldown weighted averages
     const today = new Date();

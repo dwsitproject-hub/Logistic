@@ -6,19 +6,51 @@ import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilt
 
 export { parseColumnFiltersQuery }
 
-/** Late indicator aligned with frontend `getLateIndicator` (shipments page). */
+/** Late indicator: compare actual/ETA first; same calendar day = On Time. */
 function lateIndicatorExpr(alias: string): string {
+  return shipmentLateIndicatorCaseSql(alias);
+}
+
+export function shipmentLateIndicatorCaseSql(
+  alias: string,
+  cols: { ata?: string; eta?: string } = {},
+): string {
+  const ata = cols.ata ?? `${alias}.ata_vessel_complete_discharge`;
+  const eta = cols.eta ?? `${alias}.eta_vessel_complete_discharge`;
   return `(
   CASE
     WHEN ${alias}.delivery_end_date IS NULL THEN '-'
+    WHEN ${ata} IS NOT NULL THEN
+      CASE
+        WHEN (${alias}.delivery_end_date::date) < (${ata}::date) THEN 'Late'
+        ELSE 'On Time'
+      END
+    WHEN ${eta} IS NOT NULL THEN
+      CASE
+        WHEN (${alias}.delivery_end_date::date) < (${eta}::date) THEN 'Late'
+        ELSE 'On Time'
+      END
     WHEN (${alias}.delivery_end_date::date) < CURRENT_DATE THEN 'Late'
-    WHEN ${alias}.ata_vessel_complete_discharge IS NULL AND ${alias}.eta_vessel_complete_discharge IS NULL THEN '-'
-    WHEN (${alias}.ata_vessel_complete_discharge IS NOT NULL AND (${alias}.delivery_end_date::date) < (${alias}.ata_vessel_complete_discharge::date))
-      OR (${alias}.eta_vessel_complete_discharge IS NOT NULL AND (${alias}.delivery_end_date::date) < (${alias}.eta_vessel_complete_discharge::date))
-    THEN 'Late'
     ELSE 'On Time'
   END
 )`;
+}
+
+/** Boolean late filter for dashboard aggregates (matches lateIndicatorExpr). */
+export function shipmentIsLateSql(
+  alias: string,
+  cols: { ata?: string; eta?: string } = {},
+): string {
+  const ata = cols.ata ?? `${alias}.ata_vessel_complete_discharge`;
+  const eta = cols.eta ?? `${alias}.eta_vessel_complete_discharge`;
+  return `(
+    ${alias}.delivery_end_date IS NOT NULL
+    AND (
+      (${ata} IS NOT NULL AND (${alias}.delivery_end_date::date) < (${ata}::date))
+      OR (${ata} IS NULL AND ${eta} IS NOT NULL AND (${alias}.delivery_end_date::date) < (${eta}::date))
+      OR (${ata} IS NULL AND ${eta} IS NULL AND (${alias}.delivery_end_date::date) < CURRENT_DATE)
+    )
+  )`;
 }
 
 const SB_COL: Record<string, string> = {

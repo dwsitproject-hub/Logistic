@@ -13,6 +13,14 @@ import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import {
+  avgDaysMetricLabel,
+  contextPerformanceClass,
+  formatAvgDays,
+  formatSignedCycleDays,
+  formatSignedDeltaDays,
+  signedCycleDaysClass,
+} from '@/lib/cycleDaysDisplay'
 
 interface ShippingPerformanceRow {
   id: string
@@ -37,6 +45,7 @@ interface ShippingPerformanceRow {
   sto_qty?: number | null
   received_qty?: number | null
   outstanding_qty?: number | null
+  shipment_count?: number | null
   cargo_readiness_date?: string | null
   loading_eta_arrival?: string | null
   loading_eta_berthed?: string | null
@@ -44,6 +53,85 @@ interface ShippingPerformanceRow {
   discharge_eta_arrival?: string | null
   discharge_eta_berthed?: string | null
   discharge_eta_completed?: string | null
+}
+
+type TableViewMode = 'all' | 'vessel_group'
+
+type TableColumnKey = keyof ShippingPerformanceRow
+
+/** Shipment-level columns hidden in vessel-group summary view. */
+const DETAIL_COLUMN_KEYS = new Set<string>([
+  'shipment_id',
+  'status',
+  'po_number',
+  'contract_ext_no',
+  'contract_number',
+  'sto_number',
+  'vessel_name',
+  'incoterm',
+  'product',
+  'plant_site',
+  'contract_date',
+])
+
+function vesselGroupKey(row: ShippingPerformanceRow): string {
+  return String(row.group_name ?? '').trim() || 'Blank'
+}
+
+function avgMetric(rows: ShippingPerformanceRow[], key: TableColumnKey): number | null {
+  const vals = rows
+    .map((r) => r[key])
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+  if (vals.length === 0) return null
+  const avg = vals.reduce((sum, v) => sum + v, 0) / vals.length
+  return Math.round(avg * 10) / 10
+}
+
+function sumMetric(rows: ShippingPerformanceRow[], key: TableColumnKey): number {
+  return rows.reduce((sum, r) => sum + Number(r[key] ?? 0), 0)
+}
+
+function aggregateByVesselGroup(rows: ShippingPerformanceRow[]): ShippingPerformanceRow[] {
+  const groups = new Map<string, ShippingPerformanceRow[]>()
+  for (const row of rows) {
+    const key = vesselGroupKey(row)
+    const bucket = groups.get(key)
+    if (bucket) bucket.push(row)
+    else groups.set(key, [row])
+  }
+
+  return [...groups.entries()].map(([groupKey, groupRows]) => ({
+    id: `vessel-group:${groupKey}`,
+    shipment_id: '',
+    contract_number: '',
+    group_name: groupKey,
+    vessel_name: null,
+    po_number: null,
+    contract_ext_no: null,
+    sto_number: null,
+    contract_date: null,
+    incoterm: null,
+    product: null,
+    status: null,
+    plant_site: null,
+    shipment_count: groupRows.length,
+    sto_qty: sumMetric(groupRows, 'sto_qty'),
+    received_qty: sumMetric(groupRows, 'received_qty'),
+    outstanding_qty: sumMetric(groupRows, 'outstanding_qty'),
+    loading_delta_eta_etr_days: avgMetric(groupRows, 'loading_delta_eta_etr_days'),
+    loading_delta_eta_etb_days: avgMetric(groupRows, 'loading_delta_eta_etb_days'),
+    loading_delta_etb_etc_days: avgMetric(groupRows, 'loading_delta_etb_etc_days'),
+    discharge_delta_eta_etb_days: avgMetric(groupRows, 'discharge_delta_eta_etb_days'),
+    discharge_delta_etb_etc_days: avgMetric(groupRows, 'discharge_delta_etb_etc_days'),
+    total_delta_days: avgMetric(groupRows, 'total_delta_days'),
+    cargo_readiness_date: null,
+    loading_eta_arrival: null,
+    loading_eta_berthed: null,
+    loading_eta_completed: null,
+    discharge_eta_arrival: null,
+    discharge_eta_berthed: null,
+    discharge_eta_completed: null,
+  }))
 }
 
 type LatePerfNode = {
@@ -61,6 +149,86 @@ function matchesPerfDrilldownRow(row: ShippingPerformanceRow, isLate: boolean): 
   return true
 }
 
+type ShippingPerfSummary = {
+  count: number
+  totalQty: number
+  avgLoadingEtaEtr: number
+  avgLoadingEtaEtb: number
+  avgLoadingEtbEtc: number
+  avgDischargeEtaEtb: number
+  avgDischargeEtbEtc: number
+  avgTotalDelta: number
+  openOutstandingQty: number
+  closeOutstandingQty: number
+}
+
+const EMPTY_SHIPPING_SUMMARY: ShippingPerfSummary = {
+  count: 0,
+  totalQty: 0,
+  avgLoadingEtaEtr: 0,
+  avgLoadingEtaEtb: 0,
+  avgLoadingEtbEtc: 0,
+  avgDischargeEtaEtb: 0,
+  avgDischargeEtbEtc: 0,
+  avgTotalDelta: 0,
+  openOutstandingQty: 0,
+  closeOutstandingQty: 0,
+}
+
+function buildShippingPerfSummary(rows: ShippingPerformanceRow[], isLate: boolean): ShippingPerfSummary {
+  let count = 0
+  let totalQty = 0
+  let openOutstandingQty = 0
+  let closeOutstandingQty = 0
+  let sumLoadingEtaEtr = 0
+  let sumLoadingEtaEtb = 0
+  let sumLoadingEtbEtc = 0
+  let sumDischargeEtaEtb = 0
+  let sumDischargeEtbEtc = 0
+  let sumTotalDelta = 0
+
+  for (const row of rows) {
+    const total = Number(row.total_delta_days ?? 0)
+    if (isLate ? total <= 0 : total > 0) continue
+    count++
+    const qty = Number(row.outstanding_qty ?? 0)
+    totalQty += qty
+    const status = String(row.status || '').trim().toUpperCase()
+    if (status === 'COMPLETED') closeOutstandingQty += qty
+    else openOutstandingQty += qty
+
+    sumLoadingEtaEtr += Number(row.loading_delta_eta_etr_days ?? 0)
+    sumLoadingEtaEtb += Number(row.loading_delta_eta_etb_days ?? 0)
+    sumLoadingEtbEtc += Number(row.loading_delta_etb_etc_days ?? 0)
+    sumDischargeEtaEtb += Number(row.discharge_delta_eta_etb_days ?? 0)
+    sumDischargeEtbEtc += Number(row.discharge_delta_etb_etc_days ?? 0)
+    sumTotalDelta += total
+  }
+
+  if (count === 0) return EMPTY_SHIPPING_SUMMARY
+
+  return {
+    count,
+    totalQty,
+    openOutstandingQty,
+    closeOutstandingQty,
+    avgLoadingEtaEtr: sumLoadingEtaEtr / count,
+    avgLoadingEtaEtb: sumLoadingEtaEtb / count,
+    avgLoadingEtbEtc: sumLoadingEtbEtc / count,
+    avgDischargeEtaEtb: sumDischargeEtaEtb / count,
+    avgDischargeEtbEtc: sumDischargeEtbEtc / count,
+    avgTotalDelta: sumTotalDelta / count,
+  }
+}
+
+function matchesShipmentStatusFilter(status: string, filter: string): boolean {
+  const normalized = String(status || '').trim().toUpperCase()
+  if (filter === 'ALL') return true
+  if (filter === 'Open') return normalized !== 'COMPLETED' && normalized !== 'CANCELLED' && normalized !== 'CANCELED'
+  if (filter === 'Close') return normalized === 'COMPLETED'
+  return normalized === filter.toUpperCase()
+}
+
 type ColumnType = 'text' | 'number'
 
 type ColumnDef = {
@@ -72,7 +240,8 @@ type ColumnDef = {
 }
 
 const COLUMN_DEFS: ColumnDef[] = [
-  { key: 'group_name', label: 'Group', type: 'text', defaultVisible: true },
+  { key: 'group_name', label: 'Vessel Group', type: 'text', defaultVisible: true },
+  { key: 'shipment_count', label: 'Shipments', type: 'number', defaultVisible: false },
   { key: 'vessel_name', label: 'Vessel', type: 'text', defaultVisible: true },
   { key: 'shipment_id', label: 'Shipment ID', type: 'text', defaultVisible: true },
   { key: 'status', label: 'Status', type: 'text', defaultVisible: true },
@@ -113,10 +282,25 @@ function asDisplayValue(value: unknown): string {
   return String(value)
 }
 
-function NumberCell({ value }: { value: unknown }) {
+function NumberCell({
+  value,
+  isDeltaDays = false,
+  decimalPlaces,
+}: {
+  value: unknown
+  isDeltaDays?: boolean
+  decimalPlaces?: number
+}) {
   if (value === null || value === undefined || value === '') return <span className="text-gray-400">-</span>
   const n = Number(value)
   if (Number.isNaN(n)) return <span className="text-gray-400">-</span>
+  if (isDeltaDays) {
+    const formatted =
+      decimalPlaces != null
+        ? (n === 0 ? (0).toFixed(decimalPlaces) : Math.abs(n).toFixed(decimalPlaces))
+        : formatSignedDeltaDays(n)
+    return <span className={`font-semibold ${signedCycleDaysClass(n)}`}>{formatted}</span>
+  }
   return <span>{n}</span>
 }
 
@@ -166,6 +350,7 @@ export default function ShippingPerformancePage() {
   const [lateSelIncoterm, setLateSelIncoterm] = useState<string | null>(null)
   const [lateSelProduct, setLateSelProduct] = useState<string | null>(null)
   const [lateSelPlant, setLateSelPlant] = useState<string | null>(null)
+  const [tableViewMode, setTableViewMode] = useState<TableViewMode>('all')
 
   useEffect(() => {
     const fetchData = async () => {
@@ -209,12 +394,9 @@ export default function ShippingPerformancePage() {
     [rows]
   )
 
-  const filteredByTopFilters = useMemo(() => {
+  const summaryBaseRows = useMemo(() => {
     return rows.filter((row) => {
-      if (statusFilter !== 'ALL') {
-        const status = String(row.status || '').trim().toUpperCase()
-        if (status !== statusFilter.toUpperCase()) return false
-      }
+      if (!matchesShipmentStatusFilter(String(row.status || ''), statusFilter)) return false
       const inc = String(row.incoterm || '').trim() || 'Blank'
       if (selectedIncoterms.length > 0 && !selectedIncoterms.includes(inc)) return false
       const plant = String(row.plant_site || '').trim() || 'Blank'
@@ -222,12 +404,28 @@ export default function ShippingPerformancePage() {
       const cDate = String(row.contract_date || '').slice(0, 10)
       if (dateFrom && cDate && cDate < dateFrom) return false
       if (dateTo && cDate && cDate > dateTo) return false
+      return true
+    })
+  }, [rows, statusFilter, selectedIncoterms, selectedPlantSites, dateFrom, dateTo])
+
+  const latePerformanceSummary = useMemo(
+    () => buildShippingPerfSummary(summaryBaseRows, true),
+    [summaryBaseRows],
+  )
+
+  const onTrackPerformanceSummary = useMemo(
+    () => buildShippingPerfSummary(summaryBaseRows, false),
+    [summaryBaseRows],
+  )
+
+  const filteredByTopFilters = useMemo(() => {
+    return summaryBaseRows.filter((row) => {
       const total = Number(row.total_delta_days ?? 0)
       if (lateOnTimeFilter === 'LATE' && !(total > 0)) return false
       if (lateOnTimeFilter === 'ON_TIME' && !(total <= 0)) return false
       return true
     })
-  }, [rows, statusFilter, selectedIncoterms, selectedPlantSites, dateFrom, dateTo, lateOnTimeFilter])
+  }, [summaryBaseRows, lateOnTimeFilter])
 
   const buildPerfTree = (rows: typeof filteredByTopFilters, isLate: boolean): LatePerfNode[] => {
     type VesMap   = Map<string, { count: number; totalQty: number }>
@@ -269,44 +467,73 @@ export default function ShippingPerformancePage() {
 
   const lateTree = useMemo(() => buildPerfTree(filteredByTopFilters, true), [filteredByTopFilters])
 
-  const lateSummary = useMemo(() => {
-    let count = 0, totalQty = 0, totalDays = 0, maxDays = 0
-    for (const row of filteredByTopFilters) {
-      if (!matchesPerfDrilldownRow(row, true)) continue
-      const days = Number(row.total_delta_days ?? 0)
-      count++
-      totalQty += Number(row.outstanding_qty ?? 0)
-      totalDays += days
-      maxDays = Math.max(maxDays, days)
-    }
-    return { count, totalQty, totalDays, avgDays: count > 0 ? totalDays / count : 0, maxDays }
-  }, [filteredByTopFilters])
-
   const onTrackTree = useMemo(() => buildPerfTree(filteredByTopFilters, false), [filteredByTopFilters])
-
-  const onTrackSummary = useMemo(() => {
-    let count = 0, totalQty = 0, totalDaysAhead = 0, maxDaysAhead = 0
-    for (const row of filteredByTopFilters) {
-      if (!matchesPerfDrilldownRow(row, false)) continue
-      const days = Number(row.total_delta_days ?? 0)
-      const daysAhead = -days
-      count++
-      totalQty += Number(row.outstanding_qty ?? 0)
-      totalDaysAhead += daysAhead
-      maxDaysAhead = Math.max(maxDaysAhead, daysAhead)
-    }
-    return { count, totalQty, totalDays: totalDaysAhead, avgDays: count > 0 ? totalDaysAhead / count : 0, maxDays: maxDaysAhead }
-  }, [filteredByTopFilters])
-
-  const visibleOrderedColumns = useMemo(
-    () => columnOrder.filter((key) => visibleColumns[String(key)] && COLUMN_MAP[String(key)]),
-    [columnOrder, visibleColumns]
-  )
 
   const scrollTableIntoView = useCallback(() => {
     setCurrentPage(1)
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [])
+
+  const resetPerfSelections = useCallback(() => {
+    setLateSelVessel(null)
+    setLateSelIncoterm(null)
+    setLateSelProduct(null)
+    setLateSelPlant(null)
+    setLateOnTimeFilter('ALL')
+    setCurrentPage(1)
+  }, [])
+
+  const applySummaryStatusFocus = useCallback(
+    (mode: 'ontrack' | 'late', shipmentStatus: 'Open' | 'Close') => {
+      setPerfDashMode(mode)
+      setLateOnTimeFilter(mode === 'ontrack' ? 'ON_TIME' : 'LATE')
+      setStatusFilter(shipmentStatus)
+      setLateSelVessel(null)
+      setLateSelIncoterm(null)
+      setLateSelProduct(null)
+      setLateSelPlant(null)
+      setCurrentPage(1)
+      scrollTableIntoView()
+    },
+    [scrollTableIntoView],
+  )
+
+  const isSummaryStatusSelected = useCallback(
+    (mode: 'ontrack' | 'late', shipmentStatus: 'Open' | 'Close') =>
+      !lateSelProduct &&
+      !lateSelPlant &&
+      !lateSelIncoterm &&
+      !lateSelVessel &&
+      lateOnTimeFilter === (mode === 'ontrack' ? 'ON_TIME' : 'LATE') &&
+      statusFilter === shipmentStatus,
+    [lateSelProduct, lateSelPlant, lateSelIncoterm, lateSelVessel, lateOnTimeFilter, statusFilter],
+  )
+
+  const summaryStatusBoxClass = useCallback(
+    (mode: 'ontrack' | 'late', shipmentStatus: 'Open' | 'Close', palette: string) => {
+      const selected = isSummaryStatusSelected(mode, shipmentStatus)
+      const ring = mode === 'ontrack' ? 'ring-green-500' : 'ring-red-500'
+      return `${palette} flex-1 rounded-lg border px-3 py-2 text-left transition-all hover:shadow-md cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-300 ${
+        selected ? `ring-2 ${ring} shadow-sm` : ''
+      }`
+    },
+    [isSummaryStatusSelected],
+  )
+
+  const renderSummaryGapMetrics = (summary: ShippingPerfSummary, isLate: boolean) => {
+    const metricClass = contextPerformanceClass(isLate)
+    const fmt = (days: number) => formatAvgDays(isLate ? days : Math.abs(days))
+    return (
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-4">
+        <span>Avg Loading ETA-ETR: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtaEtr)}</span></span>
+        <span>Avg Loading ETA-ETB: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtaEtb)}</span></span>
+        <span>Avg Loading ETB-ETC: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtbEtc)}</span></span>
+        <span>Avg Discharge ETA-ETB: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgDischargeEtaEtb)}</span></span>
+        <span>Avg Discharge ETB-ETC: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgDischargeEtbEtc)}</span></span>
+        <span>Avg Total: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgTotalDelta)}</span></span>
+      </div>
+    )
+  }
 
   const applyPerfDrilldownClick = useCallback(
     (next: {
@@ -445,10 +672,27 @@ export default function ShippingPerformancePage() {
     return sorted
   }, [tableScopeRows, lateSelVessel, lateSelIncoterm, lateSelProduct, lateSelPlant, searchTerm, columnFilters, sortBy, sortDirection])
 
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize))
+  const tableRows = useMemo(() => {
+    if (tableViewMode === 'all') return filteredRows
+    return aggregateByVesselGroup(filteredRows)
+  }, [filteredRows, tableViewMode])
+
+  const tableColumnKeys = useMemo((): TableColumnKey[] => {
+    const ordered = columnOrder.filter((key) => visibleColumns[String(key)] && COLUMN_MAP[String(key)])
+    if (tableViewMode === 'all') {
+      return ordered.filter((key) => String(key) !== 'shipment_count')
+    }
+    const summaryKeys: TableColumnKey[] = ['group_name', 'shipment_count']
+    const metricKeys = ordered.filter(
+      (key) => !DETAIL_COLUMN_KEYS.has(String(key)) && !summaryKeys.includes(key),
+    )
+    return [...summaryKeys, ...metricKeys]
+  }, [columnOrder, visibleColumns, tableViewMode])
+
+  const totalPages = Math.max(1, Math.ceil(tableRows.length / pageSize))
   const paginatedRows = useMemo(
-    () => filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize),
-    [filteredRows, currentPage, pageSize]
+    () => tableRows.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [tableRows, currentPage, pageSize]
   )
 
   useEffect(() => {
@@ -466,6 +710,7 @@ export default function ShippingPerformancePage() {
     lateSelIncoterm,
     lateSelProduct,
     lateSelPlant,
+    tableViewMode,
   ])
 
   useEffect(() => {
@@ -477,7 +722,7 @@ export default function ShippingPerformancePage() {
     calc()
     window.addEventListener('resize', calc)
     return () => window.removeEventListener('resize', calc)
-  }, [visibleOrderedColumns, paginatedRows.length])
+  }, [tableColumnKeys, paginatedRows.length])
 
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) {
@@ -539,6 +784,135 @@ export default function ShippingPerformancePage() {
           </div>
         </div>
 
+        {/* Summary */}
+        {(() => {
+          const totalOsQty = (latePerformanceSummary.totalQty ?? 0) + (onTrackPerformanceSummary.totalQty ?? 0)
+          const latePct = totalOsQty > 0 ? ((latePerformanceSummary.totalQty ?? 0) / totalOsQty) * 100 : 0
+          const onTrackPct = totalOsQty > 0 ? ((onTrackPerformanceSummary.totalQty ?? 0) / totalOsQty) * 100 : 0
+          const fmtMT = (v: number) => (v / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' MT'
+          const onTimeAvgClass = contextPerformanceClass(false)
+          const lateAvgClass = contextPerformanceClass(true)
+
+          if (loading) {
+            return (
+              <div className="space-y-2">
+                <div className="flex items-center justify-end">
+                  <button
+                    type="button"
+                    onClick={resetPerfSelections}
+                    className="text-sm text-blue-700 hover:underline"
+                  >
+                    Reset selection
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {[0, 1].map((i) => (
+                    <div key={i} className="rounded-xl border bg-white p-5 shadow-sm animate-pulse">
+                      <div className="h-5 bg-gray-200 rounded w-24 mb-4" />
+                      <div className="h-8 bg-gray-200 rounded w-32 mb-3" />
+                      <div className="h-6 bg-gray-100 rounded mb-3" />
+                      <div className="h-16 bg-gray-100 rounded" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          }
+
+          return (
+            <div className="space-y-2">
+              <div className="flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={resetPerfSelections}
+                  className="text-sm text-blue-700 hover:underline"
+                >
+                  Reset selection
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="rounded-xl border bg-white p-5 shadow-sm">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-base font-semibold text-gray-800">On Time</span>
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">{onTrackPct.toFixed(1)}%</span>
+                  </div>
+                  <div className="text-sm text-gray-500 mb-1">Outstanding Qty</div>
+                  <div className="text-xl font-bold text-gray-900 mb-3">{fmtMT(onTrackPerformanceSummary.totalQty ?? 0)}</div>
+                  <div className="w-full h-6 rounded-md bg-gray-100 overflow-hidden mb-3">
+                    <div className="h-full bg-green-500 flex items-center justify-end pr-2 transition-all duration-500" style={{ width: `${onTrackPct}%` }}>
+                      <span className="text-xs font-bold text-white">{onTrackPct.toFixed(0)}%</span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
+                    <span>{avgDaysMetricLabel(false)}: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(Math.abs(onTrackPerformanceSummary.avgTotalDelta))}</span></span>
+                    <span>Shipments: <span className="font-semibold text-gray-700">{onTrackPerformanceSummary.count.toLocaleString('en-US')}</span></span>
+                  </div>
+                  {renderSummaryGapMetrics(onTrackPerformanceSummary, false)}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      title="View On Time open shipments in the table below"
+                      onClick={() => applySummaryStatusFocus('ontrack', 'Open')}
+                      className={summaryStatusBoxClass('ontrack', 'Open', 'bg-blue-50 border-blue-100')}
+                    >
+                      <div className="text-[11px] font-medium text-blue-600 mb-1">Open</div>
+                      <div className="text-sm font-semibold text-gray-800">{fmtMT(onTrackPerformanceSummary.openOutstandingQty ?? 0)}</div>
+                    </button>
+                    <button
+                      type="button"
+                      title="View On Time closed shipments in the table below"
+                      onClick={() => applySummaryStatusFocus('ontrack', 'Close')}
+                      className={summaryStatusBoxClass('ontrack', 'Close', 'bg-orange-50 border-orange-100')}
+                    >
+                      <div className="text-[11px] font-medium text-orange-600 mb-1">Close</div>
+                      <div className="text-sm font-semibold text-gray-800">{fmtMT(onTrackPerformanceSummary.closeOutstandingQty ?? 0)}</div>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border bg-white p-5 shadow-sm">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-base font-semibold text-gray-800">Late</span>
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">{latePct.toFixed(1)}%</span>
+                  </div>
+                  <div className="text-sm text-gray-500 mb-1">Outstanding Qty</div>
+                  <div className="text-xl font-bold text-gray-900 mb-3">{fmtMT(latePerformanceSummary.totalQty ?? 0)}</div>
+                  <div className="w-full h-6 rounded-md bg-gray-100 overflow-hidden mb-3">
+                    <div className="h-full bg-red-500 flex items-center justify-end pr-2 transition-all duration-500" style={{ width: `${latePct}%` }}>
+                      <span className="text-xs font-bold text-white">{latePct.toFixed(0)}%</span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
+                    <span>{avgDaysMetricLabel(true)}: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(latePerformanceSummary.avgTotalDelta)}</span></span>
+                    <span>Shipments: <span className="font-semibold text-gray-700">{latePerformanceSummary.count.toLocaleString('en-US')}</span></span>
+                  </div>
+                  {renderSummaryGapMetrics(latePerformanceSummary, true)}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      title="View Late open shipments in the table below"
+                      onClick={() => applySummaryStatusFocus('late', 'Open')}
+                      className={summaryStatusBoxClass('late', 'Open', 'bg-blue-50 border-blue-100')}
+                    >
+                      <div className="text-[11px] font-medium text-blue-600 mb-1">Open</div>
+                      <div className="text-sm font-semibold text-gray-800">{fmtMT(latePerformanceSummary.openOutstandingQty ?? 0)}</div>
+                    </button>
+                    <button
+                      type="button"
+                      title="View Late closed shipments in the table below"
+                      onClick={() => applySummaryStatusFocus('late', 'Close')}
+                      className={summaryStatusBoxClass('late', 'Close', 'bg-orange-50 border-orange-100')}
+                    >
+                      <div className="text-[11px] font-medium text-orange-600 mb-1">Close</div>
+                      <div className="text-sm font-semibold text-gray-800">{fmtMT(latePerformanceSummary.closeOutstandingQty ?? 0)}</div>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
         {/* Section 1: Performance */}
         <Card>
           <CardHeader className="pb-2">
@@ -570,45 +944,6 @@ export default function ShippingPerformancePage() {
                   }
                 </div>
               </div>
-              {perfDashMode === 'late' ? (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full sm:w-auto">
-                  <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">Late shipments</div>
-                    <div className="text-lg font-semibold text-red-600">{lateSummary.count.toLocaleString('en-US')}</div>
-                  </div>
-                  <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">Total late qty</div>
-                    <div className="text-lg font-semibold text-gray-900">{(lateSummary.totalQty / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
-                  </div>
-                  <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">Avg late days</div>
-                    <div className="text-lg font-semibold text-gray-900">{lateSummary.avgDays ? lateSummary.avgDays.toFixed(1) : '0.0'}</div>
-                  </div>
-                  <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">Max late days</div>
-                    <div className="text-lg font-semibold text-gray-900">{lateSummary.maxDays.toLocaleString('en-US')}</div>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full sm:w-auto">
-                  <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">On Time shipments</div>
-                    <div className="text-lg font-semibold text-green-600">{onTrackSummary.count.toLocaleString('en-US')}</div>
-                  </div>
-                  <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">Total on-time qty</div>
-                    <div className="text-lg font-semibold text-gray-900">{(onTrackSummary.totalQty / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
-                  </div>
-                  <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">Avg days ahead</div>
-                    <div className="text-lg font-semibold text-gray-900">{onTrackSummary.avgDays ? onTrackSummary.avgDays.toFixed(1) : '0.0'}</div>
-                  </div>
-                  <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">Max days ahead</div>
-                    <div className="text-lg font-semibold text-gray-900">{onTrackSummary.maxDays.toLocaleString('en-US')}</div>
-                  </div>
-                </div>
-              )}
             </div>
           </CardHeader>
           <CardContent className="pt-2">
@@ -617,7 +952,7 @@ export default function ShippingPerformancePage() {
             ) : (
               <div className="space-y-3">
                 <div className="text-sm text-gray-600">
-                  Navigate as a tree: <span className="font-medium">Total → Vessel → Incoterm → Product → Plant</span>. Click a node to filter the table below.
+                  Navigate as a tree: <span className="font-medium">Product → Plant → Incoterm → Vessel</span>. Click a node to filter the table below.
                 </div>
                 <div className="rounded-xl border bg-white p-4">
                   <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
@@ -625,12 +960,7 @@ export default function ShippingPerformancePage() {
                     <button
                       type="button"
                       onClick={() => {
-                        setLateSelVessel(null)
-                        setLateSelIncoterm(null)
-                        setLateSelProduct(null)
-                        setLateSelPlant(null)
-                        setLateOnTimeFilter('ALL')
-                        setCurrentPage(1)
+                        resetPerfSelections()
                       }}
                       className="text-sm text-blue-700 hover:underline"
                     >
@@ -774,6 +1104,8 @@ export default function ShippingPerformancePage() {
                   className="rounded-lg border px-4 py-2"
                 >
                   <option value="ALL">All Status</option>
+                  <option value="Open">Open</option>
+                  <option value="Close">Close</option>
                   <option value="PLANNED">PLANNED</option>
                   <option value="IN_PROGRESS">IN_PROGRESS</option>
                   <option value="LOADING">LOADING</option>
@@ -838,110 +1170,125 @@ export default function ShippingPerformancePage() {
 
         {/* Section 3: Table */}
         <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div>
-                  <CardTitle>All Shipments</CardTitle>
-                  <p className="text-sm text-gray-500 mt-1">
-                    {filteredRows.length} total shipments | Showing {paginatedRows.length} on this page
-                    {totalPages > 1 && ` (Page ${currentPage} of ${totalPages})`}
-                  </p>
-                </div>
-                <Badge variant="outline" className="hidden">
-                  Default view: Compact
-                </Badge>
+          <CardHeader className="space-y-3">
+            <div>
+              <CardTitle>{tableViewMode === 'all' ? 'All Shipments' : 'By Vessel Group'}</CardTitle>
+              <p className="text-sm text-gray-500 mt-1">
+                {tableViewMode === 'all'
+                  ? `${tableRows.length} total shipments | Showing ${paginatedRows.length} on this page`
+                  : `${tableRows.length} vessel group${tableRows.length === 1 ? '' : 's'} | Showing ${paginatedRows.length} on this page`}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="inline-flex rounded-lg border bg-white p-1">
+                <button
+                  type="button"
+                  onClick={() => { setTableViewMode('all'); setCurrentPage(1) }}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tableViewMode === 'all' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+                >
+                  All Shipment
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setTableViewMode('vessel_group'); setCurrentPage(1) }}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tableViewMode === 'vessel_group' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+                >
+                  By Vessel Group
+                </button>
               </div>
-              <div className="flex items-center gap-2">
-                <div ref={columnsMenuRef} className="relative">
-                  <Button variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)}>
-                    <SlidersHorizontal className="h-4 w-4 mr-2" />
-                    Columns
-                  </Button>
-                  {showColumnManager && (
-                    <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
-                      <div className="flex items-center justify-between gap-2 mb-2">
-                        <div className="text-xs font-semibold text-gray-600">Visible columns</div>
-                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setShowColumnManager(false)}>
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                      <div className="flex items-center gap-1 mb-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="flex-1 text-xs h-7"
-                          onClick={() => setVisibleColumns(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, true])))}
-                        >
-                          Select All
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="flex-1 text-xs h-7"
-                          onClick={() => setVisibleColumns(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, false])))}
-                        >
-                          Unselect All
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="flex-1 text-xs h-7"
-                          onClick={() => setVisibleColumns(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultVisible !== false])))}
-                        >
-                          Reset
-                        </Button>
-                      </div>
-                      <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
-                        {columnOrder
-                          .map((key) => COLUMN_DEFS.find((c) => c.key === key))
-                          .filter((col): col is ColumnDef => !!col)
-                          .map((col) => (
-                            <div
-                              key={String(col.key)}
-                              draggable
-                              onDragStart={() => setDragColId(String(col.key))}
-                              onDragEnd={() => setDragColId(null)}
-                              onDragOver={(e) => e.preventDefault()}
-                              onDrop={() => { if (dragColId && dragColId !== String(col.key)) reorderColumnByDrag(dragColId, String(col.key)) }}
-                              className={`flex items-center gap-2 text-sm cursor-grab select-none rounded px-1 py-0.5 ${dragColId === String(col.key) ? 'opacity-40' : 'hover:bg-gray-50'}`}
-                            >
-                              <GripVertical className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-                              <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
-                                <Checkbox
-                                  checked={Boolean(visibleColumns[String(col.key)])}
-                                  onCheckedChange={() => onToggleColumn(col.key)}
-                                />
-                                <span className="truncate">{col.label}</span>
-                              </label>
-                            </div>
-                          ))}
-                      </div>
+              <div className="flex flex-wrap items-center gap-2 ml-auto">
+              <div ref={columnsMenuRef} className="relative">
+                <Button variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)}>
+                  <SlidersHorizontal className="h-4 w-4 mr-2" />
+                  Columns
+                </Button>
+                {showColumnManager && (
+                  <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="text-xs font-semibold text-gray-600">Visible columns</div>
+                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setShowColumnManager(false)}>
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
                     </div>
-                  )}
-                </div>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-1">
-                    <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1}>
-                      Previous
-                    </Button>
-                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                      let pageNum: number
-                      if (totalPages <= 5) { pageNum = i + 1 }
-                      else if (currentPage <= 3) { pageNum = i + 1 }
-                      else if (currentPage >= totalPages - 2) { pageNum = totalPages - 4 + i }
-                      else { pageNum = currentPage - 2 + i }
-                      return (
-                        <Button key={pageNum} variant={currentPage === pageNum ? 'default' : 'outline'} size="sm" onClick={() => handlePageChange(pageNum)} className="min-w-[36px]">
-                          {pageNum}
-                        </Button>
-                      )
-                    })}
-                    <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages}>
-                      Next
-                    </Button>
+                    <div className="flex items-center gap-1 mb-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="flex-1 text-xs h-7"
+                        onClick={() => setVisibleColumns(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, true])))}
+                      >
+                        Select All
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="flex-1 text-xs h-7"
+                        onClick={() => setVisibleColumns(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, false])))}
+                      >
+                        Unselect All
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="flex-1 text-xs h-7"
+                        onClick={() => setVisibleColumns(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultVisible !== false])))}
+                      >
+                        Reset
+                      </Button>
+                    </div>
+                    <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
+                      {columnOrder
+                        .map((key) => COLUMN_DEFS.find((c) => c.key === key))
+                        .filter((col): col is ColumnDef => !!col)
+                        .map((col) => (
+                          <div
+                            key={String(col.key)}
+                            draggable
+                            onDragStart={() => setDragColId(String(col.key))}
+                            onDragEnd={() => setDragColId(null)}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={() => { if (dragColId && dragColId !== String(col.key)) reorderColumnByDrag(dragColId, String(col.key)) }}
+                            className={`flex items-center gap-2 text-sm cursor-grab select-none rounded px-1 py-0.5 ${dragColId === String(col.key) ? 'opacity-40' : 'hover:bg-gray-50'}`}
+                          >
+                            <GripVertical className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                            <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                              <Checkbox
+                                checked={Boolean(visibleColumns[String(col.key)])}
+                                onCheckedChange={() => onToggleColumn(col.key)}
+                              />
+                              <span className="truncate">{col.label}</span>
+                            </label>
+                          </div>
+                        ))}
+                    </div>
                   </div>
                 )}
+              </div>
+              {totalPages > 1 && (
+                <div className="flex flex-wrap items-center gap-1">
+                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1}>
+                    Previous
+                  </Button>
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum: number
+                    if (totalPages <= 5) { pageNum = i + 1 }
+                    else if (currentPage <= 3) { pageNum = i + 1 }
+                    else if (currentPage >= totalPages - 2) { pageNum = totalPages - 4 + i }
+                    else { pageNum = currentPage - 2 + i }
+                    return (
+                      <Button key={pageNum} variant={currentPage === pageNum ? 'default' : 'outline'} size="sm" onClick={() => handlePageChange(pageNum)} className="min-w-[36px]">
+                        {pageNum}
+                      </Button>
+                    )
+                  })}
+                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages}>
+                    Next
+                  </Button>
+                  <span className="text-sm text-gray-500 ml-1">
+                    Page {currentPage} of {totalPages}
+                  </span>
+                </div>
+              )}
               </div>
             </div>
           </CardHeader>
@@ -981,7 +1328,7 @@ export default function ShippingPerformancePage() {
                 <table className="min-w-[1300px] w-full text-sm">
                   <thead className="bg-gray-50">
                     <tr className="border-b">
-                      {visibleOrderedColumns.map((key) => {
+                      {tableColumnKeys.map((key) => {
                         const col = COLUMN_MAP[String(key)]
                         const isSorted = sortBy === key
                         return (
@@ -1095,20 +1442,20 @@ export default function ShippingPerformancePage() {
                   <tbody>
                     {loading ? (
                       <tr>
-                        <td colSpan={visibleOrderedColumns.length || 1} className="px-3 py-6 text-center text-gray-500">
+                        <td colSpan={tableColumnKeys.length || 1} className="px-3 py-6 text-center text-gray-500">
                           Loading shipping performance...
                         </td>
                       </tr>
-                    ) : filteredRows.length === 0 ? (
+                    ) : tableRows.length === 0 ? (
                       <tr>
-                        <td colSpan={visibleOrderedColumns.length || 1} className="px-3 py-6 text-center text-gray-500">
+                        <td colSpan={tableColumnKeys.length || 1} className="px-3 py-6 text-center text-gray-500">
                           No data found
                         </td>
                       </tr>
                     ) : (
                       paginatedRows.map((row) => (
                         <tr key={row.id} className="border-t hover:bg-gray-50">
-                          {visibleOrderedColumns.map((key) => {
+                          {tableColumnKeys.map((key) => {
                             const col = COLUMN_MAP[String(key)]
                             const rawValue = row[key]
                             return (
@@ -1117,11 +1464,21 @@ export default function ShippingPerformancePage() {
                                   ? (rawValue === null || rawValue === undefined
                                       ? <span className="text-gray-400">-</span>
                                       : <span>{(Number(rawValue) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>)
+                                  : key === 'shipment_count'
+                                  ? <span className="font-medium">{Number(rawValue ?? 0).toLocaleString('en-US')}</span>
                                   : key === 'status'
                                   ? (rawValue
                                       ? <Badge className={getStatusColor(String(rawValue))}>{String(rawValue)}</Badge>
                                       : <span className="text-gray-400">-</span>)
-                                  : col.type === 'number' ? <NumberCell value={rawValue} /> : asDisplayValue(rawValue) || '-'}
+                                  : col.type === 'number'
+                                  ? (
+                                    <NumberCell
+                                      value={rawValue}
+                                      isDeltaDays={String(key).includes('delta')}
+                                      decimalPlaces={tableViewMode === 'vessel_group' && String(key).includes('delta') ? 1 : undefined}
+                                    />
+                                  )
+                                  : asDisplayValue(rawValue) || '-'}
                               </td>
                             )
                           })}
@@ -1132,35 +1489,6 @@ export default function ShippingPerformancePage() {
                 </table>
               </div>
             </div>
-
-            {/* Bottom pagination */}
-            {totalPages > 1 && (
-              <div className="mt-4 flex items-center justify-between border-t pt-4">
-                <div className="text-sm text-gray-700">
-                  Showing page {currentPage} of {totalPages} ({filteredRows.length} total shipments)
-                </div>
-                <div className="flex items-center gap-1">
-                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1}>
-                    Previous
-                  </Button>
-                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                    let pageNum: number
-                    if (totalPages <= 5) { pageNum = i + 1 }
-                    else if (currentPage <= 3) { pageNum = i + 1 }
-                    else if (currentPage >= totalPages - 2) { pageNum = totalPages - 4 + i }
-                    else { pageNum = currentPage - 2 + i }
-                    return (
-                      <Button key={pageNum} variant={currentPage === pageNum ? 'default' : 'outline'} size="sm" onClick={() => handlePageChange(pageNum)} className="min-w-[36px]">
-                        {pageNum}
-                      </Button>
-                    )
-                  })}
-                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages}>
-                    Next
-                  </Button>
-                </div>
-              </div>
-            )}
 
             <p className="text-xs text-gray-500 mt-3">
               Delta unit is day difference. Records include transport mode SEA or MIX only.

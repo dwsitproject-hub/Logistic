@@ -1,5 +1,10 @@
 import { Response } from 'express';
 import { query } from '../database/connection';
+import {
+  diffCalendarDays,
+  isCompletionLateVsDue,
+  isDueDatePastToday,
+} from '../utils/calendarDays';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import {
@@ -12,10 +17,7 @@ import { CONTRACTS_QTY_MOVE_CTE } from './contractsQtyMoveSql';
 import { B2B_CHILD_EXCLUSION_SQL } from './contractSqlFragments';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import {
-  buildLatePerformanceQuery,
-  parseLatePerformanceFilters,
   runLatePerformance,
-  type LatePerformancePart,
 } from '../services/latePerformance.service';
 
 export { B2B_CHILD_EXCLUSION_SQL };
@@ -488,10 +490,14 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       if (typeof d !== 'string') return null;
       const s = d.trim();
       if (!s) return null;
-      // YYYY-MM-DD (or full ISO) -> native parse
+      // YYYY-MM-DD (or full ISO) -> local calendar date (avoid UTC date-only drift)
       if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
-        const dt = new Date(s);
-        return Number.isNaN(dt.getTime()) ? null : dt;
+        const [y, mo, d] = s.slice(0, 10).split('-').map(Number);
+        if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+          const cal = new Date(y, mo - 1, d);
+          if (cal.getFullYear() === y && cal.getMonth() === mo - 1 && cal.getDate() === d) return cal;
+        }
+        return null;
       }
       // DD/MM/YYYY (or DD-MM-YYYY, DD.MM.YYYY) -> day-first parse (Indonesia templates)
       const dmy = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/.exec(s);
@@ -523,15 +529,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       out.setUTCDate(out.getUTCDate() + days);
       return out;
     };
-    const diffInDays = (start: unknown, end: unknown): number | null => {
-      const s = due(start);
-      const e = due(end);
-      if (!s || !e) return null;
-      const msPerDay = 24 * 60 * 60 * 1000;
-      const sMid = new Date(s.getFullYear(), s.getMonth(), s.getDate());
-      const eMid = new Date(e.getFullYear(), e.getMonth(), e.getDate());
-      return Math.round((eMid.getTime() - sMid.getTime()) / msPerDay);
-    };
+    const diffInDays = (start: unknown, end: unknown): number | null => diffCalendarDays(start, end);
 
     // Apply B2B origin company name override (in-memory) so UI sees correct company_name even before backfill runs.
     const b2bOriginPoNumbers: string[] = [];
@@ -676,10 +674,10 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         // positive = delivered AFTER due date (LATE), negative = delivered before due date (ON TIME)
         if (deliveryEnd) {
           if (transport.startsWith('LAND')) {
-            const d = diffInDays(deliveryEnd, lastTruck);
+            const d = diffCalendarDays(row.delivery_end_date, lastTruck);
             if (d != null) tradeCycle = d;
           } else if (transport.startsWith('SEA')) {
-            const d = diffInDays(deliveryEnd, lastAtaDischarge);
+            const d = diffCalendarDays(row.delivery_end_date, lastAtaDischarge);
             if (d != null) tradeCycle = d;
           }
         }
@@ -687,10 +685,10 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         // positive = projected completion AFTER due date (LATE), negative = on track
         if (deliveryEnd) {
           if (transport.startsWith('LAND')) {
-            const d = diffInDays(deliveryEnd, lastTruckDeliverable);
+            const d = diffCalendarDays(row.delivery_end_date, lastTruckDeliverable);
             if (d != null) tradeCycle = d;
           } else if (transport.startsWith('SEA')) {
-            const d = diffInDays(deliveryEnd, lastEtaDischarge);
+            const d = diffCalendarDays(row.delivery_end_date, lastEtaDischarge);
             if (d != null) tradeCycle = d;
           }
         }
@@ -840,28 +838,723 @@ export const getContractFilterB2bFlags = async (_req: AuthRequest, res: Response
 };
 
 /**
- * Contract Performance dashboard — full payload (summary + drilldown tree).
- * Prefer /late-performance/summary then /late-performance/tree for staged loading.
+ * Contract Performance: Late Performance dashboard aggregation.
+ * Includes only contracts where computed trade_cycle_days > 0 (Late).
+ * Drilldown levels: Incoterm -> Plant/Site -> Product -> Group Name.
+ *
+ * IMPORTANT: This endpoint aggregates across the full filtered dataset (no pagination),
+ * so the frontend dashboard is not limited to "current page" rows.
  */
-const handleLatePerformance = async (req: AuthRequest, res: Response, part: LatePerformancePart) => {
+export const getLatePerformance = async (req: AuthRequest, res: Response) => {
   let queryText = '';
   try {
+    // Prevent browser/proxy caching (this endpoint is used for dashboards and must be fresh).
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.setHeader('Pragma', 'no-cache');
-    const data = await runLatePerformance(req, part);
-    return res.json({ success: true, data });
+    const {
+      status,
+      supplier,
+      buyer,
+      dateFrom,
+      dateTo,
+      companyCode,
+    } = req.query as any;
+
+    const scope = String((req.query as any).scope ?? 'ytd').toLowerCase(); // 'ytd' | 'filtered'
+    const debug = String((req.query as any).debug ?? '').toLowerCase() === '1' || String((req.query as any).debug ?? '').toLowerCase() === 'true';
+    const transportMode = (req.query as any).transportMode as string | undefined;
+    const plant = (req.query as any).plant as string | string[] | undefined;
+    const globalSearch = typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';
+    const selectedIncoterms = (req.query as any).incoterms as string | undefined; // comma-separated
+    const b2bFlag = (req.query as any).b2bFlag as string | undefined;
+    const productFilter = (req.query as any).product as string | undefined;
+
+    const now = new Date();
+    const y = now.getFullYear();
+    const ytdFrom = `${y}-01-01`;
+    const ytdTo = `${y}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const effectiveDateFrom = scope === 'filtered' ? dateFrom : (dateFrom || ytdFrom);
+    const effectiveDateTo = scope === 'filtered' ? dateTo : (dateTo || ytdTo);
+
+    // Reuse the same contract_scope narrowing logic as GET /contracts but return all rows needed for aggregation.
+    const queryParams: any[] = [];
+    let paramIndex = 1;
+    let contractScopeWhere = '';
+
+    if (effectiveDateFrom) {
+      contractScopeWhere += ` AND c.contract_date >= $${paramIndex}`;
+      queryParams.push(effectiveDateFrom);
+      paramIndex++;
+    }
+    if (effectiveDateTo) {
+      contractScopeWhere += ` AND c.contract_date <= $${paramIndex}`;
+      queryParams.push(effectiveDateTo);
+      paramIndex++;
+    }
+
+    let queryText = `
+      WITH contract_scope AS (
+        SELECT DISTINCT c.contract_id
+        FROM contracts c
+        WHERE 1=1
+        ${contractScopeWhere}
+      ),
+      latest_spd AS (
+        SELECT DISTINCT ON (spd.contract_number) spd.contract_number, spd.data, spd.created_at
+        FROM sap_processed_data spd
+        INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      ),
+      ${CONTRACTS_QTY_MOVE_CTE},
+      sto_agg AS (
+        SELECT x.contract_number,
+          SUM(x.sto_quantity_num) AS total_sto_quantity
+        FROM (
+          SELECT DISTINCT ON (spd.contract_number, effective_sto)
+            spd.contract_number,
+            effective_sto,
+            sto_quantity_num
+          FROM (
+            SELECT spd.contract_number,
+              NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') AS effective_sto,
+              CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', '0'), ',', ''), ' ', '') AS NUMERIC) AS sto_quantity_num,
+              spd.created_at
+            FROM sap_processed_data spd
+            INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
+            WHERE ((spd.sto_number IS NOT NULL AND spd.sto_number::text != '') OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') IS NOT NULL)
+              AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
+          ) spd
+          WHERE effective_sto IS NOT NULL AND effective_sto != ''
+          ORDER BY contract_number, effective_sto, created_at DESC NULLS LAST
+        ) x
+        GROUP BY x.contract_number
+      ),
+      base AS (
+        SELECT
+          c.contract_id,
+          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
+          MAX(c.product) AS product,
+          MAX(c.group_name) AS group_name,
+          MAX(c.supplier) AS supplier,
+          MAX(c.incoterm) AS incoterm,
+          MAX(c.quantity_ordered) AS quantity_ordered,
+          MAX(c.transport_mode) AS transport_mode,
+          MAX(c.status) AS status,
+          MAX(c.plant_code) AS plant_code,
+          MAX(c.company_name) AS company_name,
+          -- Align with GET /contracts: SAP import status is the primary "open/close" signal in Contract Performance.
+          (array_agg(l.data->'contract'->>'status' ORDER BY l.created_at DESC NULLS LAST))[1] AS import_status,
+          MAX(c.delivery_end_date) AS delivery_end_date,
+          MAX(c.cargo_readiness_date) AS cargo_readiness_date,
+          (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
+          (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
+          (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery,
+          (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
+          -- For Trade Cycle (LAND open): latest date in daily_deliverables JSONB
+          (
+            SELECT MAX((dd->>'date')::date)
+            FROM trucking_operations tdd
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(tdd.daily_deliverables, '[]'::jsonb)) AS dd
+            WHERE tdd.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+              AND (dd->>'date') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          ) AS last_trucking_daily_deliverable_date,
+          -- For Log/Trade Cycle calculation (LAND): latest trucking completion with SAP fallback
+          (
+            WITH trucking_contract AS (
+              SELECT (array_agg(c.contract_id ORDER BY c.created_at DESC))[1] AS contract_number
+            ),
+            latest_spd AS (
+              SELECT DISTINCT ON (spd.contract_number)
+                spd.contract_number,
+                COALESCE(spd.data->'raw'->>'Trucking Last Receive Date', spd.data->>'Trucking Last Receive Date') AS last_receive_raw
+              FROM sap_processed_data spd
+              JOIN trucking_contract tc ON tc.contract_number = spd.contract_number
+              ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+            ),
+            latest_receive AS (
+              SELECT
+                contract_number,
+                CASE
+                  WHEN last_receive_raw IS NULL OR length(trim(last_receive_raw)) < 6 THEN NULL
+                  WHEN trim(last_receive_raw) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(last_receive_raw)::date
+                  WHEN trim(last_receive_raw) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(last_receive_raw), 'MM/DD/YY')
+                  ELSE NULL
+                END AS trucking_last_receive_date
+              FROM latest_spd
+            )
+            SELECT MAX(
+              COALESCE(
+                t.trucking_completion_date,
+                lr.trucking_last_receive_date,
+                t.eta_trucking_completion_date,
+                t.eta_delivery_end_date
+              )
+            )
+            FROM trucking_operations t
+            LEFT JOIN latest_receive lr ON lr.contract_number = (array_agg(c.contract_id ORDER BY c.created_at DESC))[1]
+            WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+          ) AS last_trucking_completion_date,
+          -- For Trade Cycle (SEA closed): latest ATA discharge complete
+          (
+            SELECT MAX(
+              COALESCE(
+                s2.ata_discharge_complete::date,
+                s2.arrival_date::date,
+                s2.eta_discharge_complete::date
+              )
+            )
+            FROM shipments s2
+            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+          ) AS last_ata_vessel_complete_discharge,
+          -- For Trade Cycle (SEA open): latest ETA vessel complete discharge
+          (
+            SELECT MAX(
+              COALESCE(
+                s2.eta_discharge_complete::date,
+                (
+                  SELECT vlpd.eta_vessel_complete_discharge::date
+                  FROM vessel_loading_ports vlpd
+                  WHERE vlpd.shipment_id = s2.id
+                    AND vlpd.is_discharge_port = true
+                  ORDER BY vlpd.updated_at DESC NULLS LAST, vlpd.created_at DESC NULLS LAST
+                  LIMIT 1
+                )
+              )
+            )
+            FROM shipments s2
+            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+          ) AS last_eta_vessel_complete_discharge
+        FROM contract_scope cs
+        INNER JOIN contracts c ON c.contract_id = cs.contract_id
+        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
+        LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
+        WHERE 1=1
+        GROUP BY c.contract_id
+      )
+      SELECT
+        base.*,
+        COALESCE(
+          NULLIF(TRIM(pnc.group_plant), ''),
+          NULLIF(TRIM(pna.group_plant), ''),
+          'Blank'
+        ) AS plant_site
+      FROM base
+      LEFT JOIN LATERAL (
+        SELECT mp.group_plant, mp.plant_name
+        FROM master_plants mp
+        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(base.plant_code, '')))
+          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
+          AND NULLIF(TRIM(base.company_name), '') IS NOT NULL
+          AND TRIM(UPPER(COALESCE(mp.company_name, ''))) = TRIM(UPPER(COALESCE(base.company_name, '')))
+        ORDER BY mp.updated_at DESC NULLS LAST
+        LIMIT 1
+      ) pnc ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT mp.group_plant, mp.plant_name
+        FROM master_plants mp
+        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(base.plant_code, '')))
+          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
+        ORDER BY mp.updated_at DESC NULLS LAST
+        LIMIT 1
+      ) pna ON TRUE
+      WHERE 1=1
+      ${B2B_CHILD_EXCLUSION_SQL}
+    `;
+
+    const statusNorm = scope === 'filtered' && typeof status === 'string' ? status.trim() : '';
+    if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {
+      if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
+        queryText += ` AND (
+          (base.latest_spd_data->'contract'->>'status' = 'Open' OR UPPER(base.latest_spd_data->'contract'->>'status') = 'ACTIVE')
+          OR (base.latest_spd_data IS NULL AND UPPER(base.status) IN ('OPEN', 'ACTIVE'))
+        )`;
+      } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
+        queryText += ` AND (
+          (base.latest_spd_data->'contract'->>'status' = 'Close' OR UPPER(base.latest_spd_data->'contract'->>'status') IN ('CLOSE', 'COMPLETED', 'CLOSED'))
+          OR (base.latest_spd_data IS NULL AND UPPER(base.status) IN ('CLOSE', 'COMPLETED', 'CLOSED'))
+        )`;
+      } else {
+        queryText += ` AND (base.status = $${paramIndex} OR base.latest_spd_data->'contract'->>'status' = $${paramIndex})`;
+        queryParams.push(statusNorm);
+        paramIndex++;
+      }
+    }
+
+    if (scope === 'filtered' && supplier) {
+      queryText += ` AND (base.latest_spd_data->'raw'->>'Supplier' ILIKE $${paramIndex} OR base.latest_spd_data->>'Supplier' ILIKE $${paramIndex} OR $${paramIndex}::text IS NULL)`;
+      queryParams.push(`%${supplier}%`);
+      paramIndex++;
+    }
+    if (scope === 'filtered' && buyer) {
+      queryText += ` AND (base.latest_spd_data->'raw'->>'Buyer' ILIKE $${paramIndex} OR base.latest_spd_data->>'Buyer' ILIKE $${paramIndex} OR $${paramIndex}::text IS NULL)`;
+      queryParams.push(`%${buyer}%`);
+      paramIndex++;
+    }
+    if (scope === 'filtered' && companyCode) {
+      queryText += ` AND (
+        COALESCE(base.latest_spd_data->'contract'->>'company_code', base.latest_spd_data->'raw'->>'Company Code', base.latest_spd_data->'raw'->>'company code', base.latest_spd_data->>'Company Code', base.latest_spd_data->>'company code', '') = $${paramIndex}
+      )`;
+      queryParams.push(companyCode);
+      paramIndex++;
+    }
+
+    if (transportMode && String(transportMode).toUpperCase() !== 'ALL') {
+      queryText += ` AND UPPER(COALESCE(NULLIF(TRIM(base.transport_mode), ''), '')) LIKE $${paramIndex}`;
+      queryParams.push(`${String(transportMode).toUpperCase()}%`);
+      paramIndex++;
+    }
+
+    if (b2bFlag && b2bFlag.toUpperCase() !== 'ALL') {
+      if (b2bFlag.toUpperCase() === 'B2B') {
+        queryText += ` AND UPPER(COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag', '')) = 'B2B'`;
+      } else {
+        queryText += ` AND UPPER(COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag', '')) != 'B2B'`;
+      }
+    }
+
+    if (productFilter && productFilter.toUpperCase() !== 'ALL') {
+      queryText += ` AND UPPER(COALESCE(base.product, '')) = UPPER($${paramIndex})`;
+      queryParams.push(productFilter);
+      paramIndex++;
+    }
+
+    // Plant filter is same as GET /contracts: exists in SEA discharge port or LAND location.
+    const plantArr = scope === 'filtered' ? (Array.isArray(plant) ? plant : (plant ? [plant] : [])) : [];
+    const plants = plantArr.map((p) => String(p)).filter((p) => p.trim() !== '');
+    if (plants.length > 0) {
+      const blankIncluded = plants.some((p) => p === 'Blank');
+      const nonBlank = plants.filter((p) => p !== 'Blank');
+      const parts: string[] = [];
+      if (blankIncluded) parts.push(`(base.plant_code IS NULL OR TRIM(base.plant_code) = '')`);
+      if (nonBlank.length > 0) {
+        const ph = nonBlank.map(() => `$${paramIndex++}`).join(', ');
+        parts.push(
+          `COALESCE(NULLIF(TRIM(pnc.group_plant), ''), NULLIF(TRIM(pna.group_plant), ''), 'Blank') IN (${ph})`
+        );
+        queryParams.push(...nonBlank);
+      }
+      queryText += ` AND (${parts.join(' OR ')})`;
+    }
+
+    if (scope === 'filtered' && selectedIncoterms) {
+      const incs = selectedIncoterms.split(',').map((s) => s.trim()).filter(Boolean);
+      if (incs.length > 0) {
+        const blankIncluded = incs.some((v) => v === 'Blank');
+        const nonBlank = incs.filter((v) => v !== 'Blank');
+        const parts: string[] = [];
+        if (blankIncluded) parts.push(`(base.incoterm IS NULL OR TRIM(base.incoterm) = '')`);
+        if (nonBlank.length > 0) {
+          const ph = nonBlank.map(() => `$${paramIndex++}`).join(', ');
+          parts.push(`base.incoterm IN (${ph})`);
+          queryParams.push(...nonBlank);
+        }
+        queryText += ` AND (${parts.join(' OR ')})`;
+      }
+    }
+
+    if (scope === 'filtered' && globalSearch.length >= 2) {
+      queryText += ` AND (
+        base.contract_id ILIKE $${paramIndex}
+        OR COALESCE(base.product, '') ILIKE $${paramIndex}
+        OR COALESCE(base.group_name, '') ILIKE $${paramIndex}
+        OR COALESCE(NULLIF(TRIM(pnc.plant_name), ''), NULLIF(TRIM(pna.plant_name), ''), base.plant_code, '') ILIKE $${paramIndex}
+      )`;
+      queryParams.push(`%${globalSearch}%`);
+      paramIndex++;
+    }
+
+    const result = await query(queryText, queryParams);
+
+    // Use the same due()/diffInDays() helpers as GET /contracts.
+    // Important: SAP-derived strings can be DD/MM/YYYY, MM/DD/YY, etc.
+    const due = (v: unknown): Date | null => {
+      if (v == null) return null;
+      if (v instanceof Date && !Number.isNaN(v.getTime())) return v;
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        const dt = new Date(v);
+        return Number.isNaN(dt.getTime()) ? null : dt;
+      }
+      const s0 = String(v).trim();
+      if (!s0) return null;
+      const s = s0.replace(/\u200e|\u200f/g, '').trim();
+
+      // YYYY-MM-DD
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+        const dt = new Date(`${s}T00:00:00`);
+        return Number.isNaN(dt.getTime()) ? null : dt;
+      }
+
+      // DD/MM/YYYY (or DD-MM-YYYY, DD.MM.YYYY) -> day-first parse
+      const dmy = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/.exec(s);
+      if (dmy) {
+        const dd = Number(dmy[1]);
+        const mm = Number(dmy[2]);
+        const yyyy = Number(dmy[3]);
+        if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+          const cal = new Date(yyyy, mm - 1, dd);
+          if (cal.getFullYear() === yyyy && cal.getMonth() === mm - 1 && cal.getDate() === dd) return cal;
+        }
+        return null;
+      }
+
+      // MM/DD/YY (SAP exports sometimes)
+      const mdy2 = /^(\d{1,2})\/(\d{1,2})\/(\d{2})$/.exec(s);
+      if (mdy2) {
+        const mm = Number(mdy2[1]);
+        const dd = Number(mdy2[2]);
+        const yy = Number(mdy2[3]);
+        const yyyy = yy >= 70 ? 1900 + yy : 2000 + yy;
+        if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+          const cal = new Date(yyyy, mm - 1, dd);
+          if (cal.getFullYear() === yyyy && cal.getMonth() === mm - 1 && cal.getDate() === dd) return cal;
+        }
+        return null;
+      }
+
+      // Month-name strings etc.
+      const dt = new Date(s);
+      return Number.isNaN(dt.getTime()) ? null : dt;
+    };
+    const diffInDays = (start: unknown, end: unknown): number | null => diffCalendarDays(start, end);
+    const todayMid = new Date();
+    todayMid.setHours(0, 0, 0, 0);
+
+    type AggNode = { key: string; count: number; totalDays: number; maxDays: number; totalQtyDelivery: number; children: Map<string, AggNode> };
+    const root = new Map<string, AggNode>();
+    const add = (m: Map<string, AggNode>, key: string) => {
+      const k = key && key.trim() ? key.trim() : 'Blank';
+      const ex = m.get(k);
+      if (ex) return ex;
+      const node: AggNode = { key: k, count: 0, totalDays: 0, maxDays: 0, totalQtyDelivery: 0, children: new Map() };
+      m.set(k, node);
+      return node;
+    };
+
+    let lateCount = 0;
+    let lateTotalDays = 0;
+    let lateMaxDays = 0;
+    let lateTotalQtyDelivery = 0;
+    let lateTotalLogCycle = 0;
+    let lateLogCycleCount = 0;
+    let lateTotalCashCycle = 0;
+    let lateCashCycleCount = 0;
+    let lateOpenOutstandingQty = 0;
+    let lateCloseOutstandingQty = 0;
+
+    const onTrackRoot = new Map<string, AggNode>();
+    let onTrackCount = 0;
+    let onTrackTotalDaysAhead = 0;
+    let onTrackMaxDaysAhead = 0;
+    let onTrackTotalQtyDelivery = 0;
+    let onTrackTotalLogCycle = 0;
+    let onTrackLogCycleCount = 0;
+    let onTrackTotalCashCycle = 0;
+    let onTrackCashCycleCount = 0;
+    let onTrackOpenOutstandingQty = 0;
+    let onTrackCloseOutstandingQty = 0;
+
+    type DistBucket = { count: number; qty: number };
+    const dist: Record<string, DistBucket> = {
+      noData:  { count: 0, qty: 0 },
+      onTime:  { count: 0, qty: 0 },
+      d1_7:    { count: 0, qty: 0 },
+      d8_14:   { count: 0, qty: 0 },
+      d15_30:  { count: 0, qty: 0 },
+      d31_60:  { count: 0, qty: 0 },
+      d61plus: { count: 0, qty: 0 },
+    };
+
+    const debugCounts = {
+      totalRows: 0,
+      missingDeliveryEnd: 0,
+      missingStatus: 0,
+      unknownStatus: 0,
+      missingCompletionDate: 0,
+      tradeCycleNull: 0,
+      tradeCycleNonPositive: 0,
+      includedLate: 0,
+      branchClosedLand: 0,
+      branchClosedSea: 0,
+      branchOpenLand: 0,
+      branchOpenSea: 0,
+      haveLastTruckCompletion: 0,
+      haveLastTruckDeliverable: 0,
+      haveLastAtaDischarge: 0,
+      haveLastEtaDischarge: 0,
+      blankPlantSite: 0,
+      nonBlankPlantSite: 0,
+    };
+    const debugSamples: Record<string, string[]> = {
+      missingDeliveryEnd: [],
+      missingStatus: [],
+      unknownStatus: [],
+      missingCompletionDate: [],
+      tradeCycleNull: [],
+      tradeCycleNonPositive: [],
+      includedLate: [],
+    };
+    const pushSample = (k: keyof typeof debugSamples, contractId: string) => {
+      const arr = debugSamples[k];
+      if (arr.length < 8) arr.push(contractId);
+    };
+
+    for (const row of result.rows as any[]) {
+      debugCounts.totalRows += 1;
+      const plantSiteText = String(row.plant_site || '').trim();
+      if (plantSiteText) debugCounts.nonBlankPlantSite += 1;
+      else debugCounts.blankPlantSite += 1;
+      // Match GET /contracts SQL late/on-time filter: SAP import status first, then contracts.status.
+      const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
+      const transport = String(row.transport_mode || '').trim().toUpperCase();
+      const deliveryEnd = due(row.delivery_end_date);
+      if (!deliveryEnd) {
+        debugCounts.missingDeliveryEnd += 1;
+        pushSample('missingDeliveryEnd', String(row.contract_id || ''));
+        continue;
+      }
+
+      if (!statusText) {
+        debugCounts.missingStatus += 1;
+        pushSample('missingStatus', String(row.contract_id || ''));
+        continue;
+      }
+
+      const isClosed = statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED';
+      const isOpen = statusText === 'OPEN' || statusText === 'ACTIVE';
+      if (!isClosed && !isOpen) {
+        debugCounts.unknownStatus += 1;
+        pushSample('unknownStatus', `${String(row.contract_id || '')}:${statusText}`);
+        continue;
+      }
+
+      let tradeCycle: number | null = null;
+      if (isClosed) {
+        if (transport.startsWith('LAND')) {
+          debugCounts.branchClosedLand += 1;
+          if (row.last_trucking_completion_date) debugCounts.haveLastTruckCompletion += 1;
+          if (!row.last_trucking_completion_date) {
+            debugCounts.missingCompletionDate += 1;
+            pushSample('missingCompletionDate', String(row.contract_id || ''));
+          }
+          // positive = delivered AFTER due date (LATE), negative = on / ahead of schedule
+          tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_trucking_completion_date);
+        } else {
+          debugCounts.branchClosedSea += 1;
+          if (row.last_ata_vessel_complete_discharge) debugCounts.haveLastAtaDischarge += 1;
+          if (!row.last_ata_vessel_complete_discharge) {
+            debugCounts.missingCompletionDate += 1;
+            pushSample('missingCompletionDate', String(row.contract_id || ''));
+          }
+          tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_ata_vessel_complete_discharge);
+        }
+      } else if (isOpen) {
+        if (transport.startsWith('LAND')) {
+          debugCounts.branchOpenLand += 1;
+          if (row.last_trucking_daily_deliverable_date) debugCounts.haveLastTruckDeliverable += 1;
+          if (!row.last_trucking_daily_deliverable_date) {
+            debugCounts.missingCompletionDate += 1;
+            pushSample('missingCompletionDate', String(row.contract_id || ''));
+          }
+          tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_trucking_daily_deliverable_date);
+        } else {
+          debugCounts.branchOpenSea += 1;
+          if (row.last_eta_vessel_complete_discharge) debugCounts.haveLastEtaDischarge += 1;
+          if (!row.last_eta_vessel_complete_discharge) {
+            debugCounts.missingCompletionDate += 1;
+            pushSample('missingCompletionDate', String(row.contract_id || ''));
+          }
+          tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_eta_vessel_complete_discharge);
+        }
+      }
+
+      const _inc = String(row.incoterm || '').trim().toUpperCase();
+      const _qtyOrdered = Number(row.quantity_ordered || 0);
+      const _subtracted = ['FRC', 'CIF', 'CFR'].includes(_inc)
+        ? Number(row.quantity_receive || 0)
+        : ['LCO', 'FOB'].includes(_inc)
+        ? Number(row.quantity_delivery || 0)
+        : Number(row.total_sto_quantity || 0);
+      const _outstandingQty = Math.max(0, _qtyOrdered - _subtracted);
+
+      // Log Cycle: Cargo Readiness → completion (closed) or today (open)
+      const cargoReady = row.cargo_readiness_date;
+      let logCycle: number | null = null;
+      if (cargoReady) {
+        if (transport.startsWith('LAND')) {
+          logCycle = isClosed
+            ? diffInDays(cargoReady, row.last_trucking_completion_date)
+            : diffInDays(cargoReady, todayMid);
+        } else {
+          logCycle = isClosed
+            ? diffInDays(cargoReady, row.last_ata_vessel_complete_discharge)
+            : diffInDays(cargoReady, todayMid);
+        }
+      }
+
+      // Cash Cycle: extract payoff_date from SAP JSON, then compute
+      const spd = row.latest_spd_data as any;
+      const payoffRaw =
+        (spd?.payment?.payoff_date && String(spd.payment.payoff_date).trim()) ||
+        (spd?.raw?.['Payoff Date'] && String(spd.raw['Payoff Date']).trim()) ||
+        null;
+      const payoffDate = payoffRaw ? due(payoffRaw) : null;
+      let cashCycle: number | null = null;
+      if (payoffDate) {
+        if (isClosed) {
+          cashCycle = transport.startsWith('LAND')
+            ? diffInDays(row.last_trucking_completion_date, payoffDate)
+            : diffInDays(row.last_ata_vessel_complete_discharge, payoffDate);
+        } else if (isOpen) {
+          cashCycle = transport.startsWith('LAND')
+            ? diffInDays(payoffDate, row.last_trucking_daily_deliverable_date)
+            : diffInDays(payoffDate, row.last_eta_vessel_complete_discharge);
+        }
+      }
+
+      if (tradeCycle == null) {
+        debugCounts.tradeCycleNull += 1;
+        pushSample('tradeCycleNull', String(row.contract_id || ''));
+        dist.noData.count += 1;
+        dist.noData.qty += _outstandingQty;
+        continue;
+      }
+      if (tradeCycle <= 0) {
+        debugCounts.tradeCycleNonPositive += 1;
+        pushSample('tradeCycleNonPositive', `${String(row.contract_id || '')}:${tradeCycle}`);
+        dist.onTime.count += 1;
+        dist.onTime.qty += _outstandingQty;
+
+        const daysAhead = -tradeCycle; // 0 = exactly on time, positive = days ahead of deadline
+        onTrackCount += 1;
+        onTrackTotalDaysAhead += daysAhead;
+        onTrackMaxDaysAhead = Math.max(onTrackMaxDaysAhead, daysAhead);
+        onTrackTotalQtyDelivery += _outstandingQty;
+        if (logCycle != null) { onTrackTotalLogCycle += logCycle; onTrackLogCycleCount++; }
+        if (cashCycle != null) { onTrackTotalCashCycle += cashCycle; onTrackCashCycleCount++; }
+        if (isOpen) onTrackOpenOutstandingQty += _outstandingQty;
+        else onTrackCloseOutstandingQty += _outstandingQty;
+
+        const otInc = String(row.incoterm || '').trim() || 'Blank';
+        const otPl  = String(row.plant_site || '').trim() || 'Blank';
+        const otProd = String(row.product || '').trim() || 'Blank';
+        const otGn  = String(row.group_name || '').trim() || 'Blank';
+        const otSup = String(row.supplier || '').trim() || 'Blank';
+        const ot1 = add(onTrackRoot, otInc);
+        const ot2 = add(ot1.children, otPl);
+        const ot3 = add(ot2.children, otProd);
+        const ot4 = add(ot3.children, otGn);
+        const ot5 = add(ot4.children, otSup);
+        for (const n of [ot1, ot2, ot3, ot4, ot5]) {
+          n.count += 1;
+          n.totalDays += daysAhead;
+          n.maxDays = Math.max(n.maxDays, daysAhead);
+          n.totalQtyDelivery += _outstandingQty;
+        }
+        continue;
+      }
+
+      if (tradeCycle <= 7)       { dist.d1_7.count    += 1; dist.d1_7.qty    += _outstandingQty; }
+      else if (tradeCycle <= 14) { dist.d8_14.count   += 1; dist.d8_14.qty   += _outstandingQty; }
+      else if (tradeCycle <= 30) { dist.d15_30.count  += 1; dist.d15_30.qty  += _outstandingQty; }
+      else if (tradeCycle <= 60) { dist.d31_60.count  += 1; dist.d31_60.qty  += _outstandingQty; }
+      else                       { dist.d61plus.count += 1; dist.d61plus.qty += _outstandingQty; }
+
+      lateCount += 1;
+      lateTotalDays += tradeCycle;
+      lateMaxDays = Math.max(lateMaxDays, tradeCycle);
+      lateTotalQtyDelivery += _outstandingQty;
+      if (logCycle != null) { lateTotalLogCycle += logCycle; lateLogCycleCount++; }
+      if (cashCycle != null) { lateTotalCashCycle += cashCycle; lateCashCycleCount++; }
+      if (isOpen) lateOpenOutstandingQty += _outstandingQty;
+      else lateCloseOutstandingQty += _outstandingQty;
+      debugCounts.includedLate += 1;
+      pushSample('includedLate', `${String(row.contract_id || '')}:${tradeCycle}`);
+
+      const inc = String(row.incoterm || '').trim() || 'Blank';
+      const pl = String(row.plant_site || '').trim() || 'Blank';
+      const prod = String(row.product || '').trim() || 'Blank';
+      const gn = String(row.group_name || '').trim() || 'Blank';
+      const sup = String(row.supplier || '').trim() || 'Blank';
+
+      const n1 = add(root, inc);
+      const n2 = add(n1.children, pl);
+      const n3 = add(n2.children, prod);
+      const n4 = add(n3.children, gn);
+      const n5 = add(n4.children, sup);
+      for (const n of [n1, n2, n3, n4, n5]) {
+        n.count += 1;
+        n.totalDays += tradeCycle;
+        n.maxDays = Math.max(n.maxDays, tradeCycle);
+        n.totalQtyDelivery += _outstandingQty;
+      }
+    }
+
+    const toSorted = (m: Map<string, AggNode>): any[] =>
+      [...m.values()]
+        .sort((a, b) => b.totalQtyDelivery - a.totalQtyDelivery || b.count - a.count || a.key.localeCompare(b.key))
+        .map((n) => ({ key: n.key, count: n.count, totalDays: n.totalDays, maxDays: n.maxDays, totalQtyDelivery: n.totalQtyDelivery, children: toSorted(n.children) }));
+
+    if (process.env.NODE_ENV === 'development') {
+      logger.info('Late Performance debug', {
+        scope: scope === 'filtered' ? 'filtered' : 'ytd',
+        ytd_range: { dateFrom: effectiveDateFrom, dateTo: effectiveDateTo },
+        counts: debugCounts,
+        samples: debugSamples,
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        scope: scope === 'filtered' ? 'filtered' : 'ytd',
+        ytd_range: { dateFrom: effectiveDateFrom, dateTo: effectiveDateTo },
+        summary: {
+          count: lateCount,
+          totalDays: lateTotalDays,
+          avgDays: lateCount > 0 ? lateTotalDays / lateCount : 0,
+          maxDays: lateMaxDays,
+          totalQtyDelivery: lateTotalQtyDelivery,
+          avgLogCycle: lateLogCycleCount > 0 ? Math.round(lateTotalLogCycle / lateLogCycleCount) : null,
+          avgCashCycle: lateCashCycleCount > 0 ? Math.round(lateTotalCashCycle / lateCashCycleCount) : null,
+          openOutstandingQty: lateOpenOutstandingQty,
+          closeOutstandingQty: lateCloseOutstandingQty,
+        },
+        onTrackSummary: {
+          count: onTrackCount,
+          totalDays: onTrackTotalDaysAhead,
+          avgDays: onTrackCount > 0 ? onTrackTotalDaysAhead / onTrackCount : 0,
+          maxDays: onTrackMaxDaysAhead,
+          totalQtyDelivery: onTrackTotalQtyDelivery,
+          avgLogCycle: onTrackLogCycleCount > 0 ? Math.round(onTrackTotalLogCycle / onTrackLogCycleCount) : null,
+          avgCashCycle: onTrackCashCycleCount > 0 ? Math.round(onTrackTotalCashCycle / onTrackCashCycleCount) : null,
+          openOutstandingQty: onTrackOpenOutstandingQty,
+          closeOutstandingQty: onTrackCloseOutstandingQty,
+        },
+        distribution: dist,
+        tree: toSorted(root),
+        onTrackTree: toSorted(onTrackRoot),
+        ...(debug
+          ? {
+              debug: {
+                counts: debugCounts,
+                samples: debugSamples,
+              },
+            }
+          : {}),
+      },
+    });
   } catch (error) {
+    // Helpful SQL context for debugging (kept small to avoid huge logs).
     try {
       const anyErr = error as any;
-      const built = buildLatePerformanceQuery(parseLatePerformanceFilters(req));
-      queryText = built.queryText;
       const pos = typeof anyErr?.position === 'string' || typeof anyErr?.position === 'number' ? Number(anyErr.position) : null;
       if (pos && typeof queryText === 'string') {
-        const snippetStart = Math.max(0, pos - 200);
-        const snippetEnd = Math.min(queryText.length, pos + 200);
+        const start = Math.max(0, pos - 200);
+        const end = Math.min(queryText.length, pos + 200);
         logger.error('Get late performance SQL near position', {
           pos,
-          snippet: queryText.slice(snippetStart, snippetEnd),
+          snippet: queryText.slice(start, end),
         });
       }
     } catch {
@@ -875,9 +1568,35 @@ const handleLatePerformance = async (req: AuthRequest, res: Response, part: Late
   }
 };
 
-export const getLatePerformanceSummary = (req: AuthRequest, res: Response) => handleLatePerformance(req, res, 'summary');
-export const getLatePerformanceTree = (req: AuthRequest, res: Response) => handleLatePerformance(req, res, 'tree');
-export const getLatePerformance = (req: AuthRequest, res: Response) => handleLatePerformance(req, res, 'all');
+export const getLatePerformanceSummary = async (req: AuthRequest, res: Response) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    const data = await runLatePerformance(req, 'summary');
+    return res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Get late performance summary error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch late performance summary' },
+    });
+  }
+};
+
+export const getLatePerformanceTree = async (req: AuthRequest, res: Response) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    const data = await runLatePerformance(req, 'tree');
+    return res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Get late performance tree error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch late performance tree' },
+    });
+  }
+};
 
 /** Get counts of SEA/LAND/MIX contracts missing required logistics (for dashboard cards) */
 export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
@@ -1128,20 +1847,15 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
 
     const computeLateIndicator = (endDate: Date | null, ataDate: string | null, etaDate: string | null): string => {
       if (!endDate) return '-';
-      const end = new Date(endDate);
-      end.setHours(0, 0, 0, 0);
       if (ataDate) {
-        const ata = new Date(ataDate);
-        ata.setHours(0, 0, 0, 0);
-        if (end < ata) return 'Late';
+        const late = isCompletionLateVsDue(endDate, ataDate);
+        return late == null ? '-' : late ? 'Late' : 'On Time';
       }
       if (etaDate) {
-        const eta = new Date(etaDate);
-        eta.setHours(0, 0, 0, 0);
-        if (end < eta) return 'Late';
+        const late = isCompletionLateVsDue(endDate, etaDate);
+        return late == null ? '-' : late ? 'Late' : 'On Time';
       }
-      if (end < today) return 'Late';
-      return 'On Time';
+      return isDueDatePastToday(endDate, today) ? 'Late' : 'On Time';
     };
 
     // Shipment STOs: group by effective STO (prefer contracts.sto_number, then latest SAP STO, then operation/shipment ids)

@@ -33,6 +33,7 @@ import {
 import api from '@/lib/api'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { durationCycleDaysClass } from '@/lib/cycleDaysDisplay'
 import { formatDateDMY } from '@/lib/dateFormat'
 
 interface DashboardStats {
@@ -4558,10 +4559,10 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                               {formatNumber(g.qtyOutstanding)}
                             </button>
                           </td>
-                          <td className="px-4 py-3 text-right tabular-nums">
+                          <td className={`px-4 py-3 text-right tabular-nums font-semibold ${durationCycleDaysClass(g.weightedAvgDeliveryDays)}`}>
                             {g.weightedAvgDeliveryDays != null ? formatNumber(Math.round(g.weightedAvgDeliveryDays)) : '-'}
                           </td>
-                          <td className="px-4 py-3 text-right tabular-nums">
+                          <td className={`px-4 py-3 text-right tabular-nums font-semibold ${durationCycleDaysClass(g.weightedAvgPaymentDays)}`}>
                             {g.weightedAvgPaymentDays != null ? formatNumber(Math.round(g.weightedAvgPaymentDays)) : '-'}
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums">

@@ -1,3 +1,4 @@
+import { diffCalendarDays } from '../utils/calendarDays';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
@@ -471,15 +472,7 @@ const due = (v: unknown): Date | null => {
   return Number.isNaN(dt.getTime()) ? null : dt;
 };
 
-const diffInDays = (start: unknown, end: unknown): number | null => {
-  const s = due(start);
-  const e = due(end);
-  if (!s || !e) return null;
-  const msPerDay = 24 * 60 * 60 * 1000;
-  const sMid = new Date(s.getFullYear(), s.getMonth(), s.getDate());
-  const eMid = new Date(e.getFullYear(), e.getMonth(), e.getDate());
-  return Math.round((eMid.getTime() - sMid.getTime()) / msPerDay);
-};
+const diffInDays = (start: unknown, end: unknown): number | null => diffCalendarDays(start, end);
 
 type AggNode = {
   key: string;
@@ -640,7 +633,7 @@ export function aggregateLatePerformanceRows(
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
         }
-        tradeCycle = diffInDays(deliveryEnd, row.last_trucking_completion_date);
+        tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_trucking_completion_date);
       } else {
         if (includeSummary) {
           debugCounts.branchClosedSea += 1;
@@ -650,7 +643,7 @@ export function aggregateLatePerformanceRows(
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
         }
-        tradeCycle = diffInDays(deliveryEnd, row.last_ata_vessel_complete_discharge);
+        tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_ata_vessel_complete_discharge);
       }
     } else if (isOpen) {
       if (transport.startsWith('LAND')) {
@@ -662,7 +655,7 @@ export function aggregateLatePerformanceRows(
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
         }
-        tradeCycle = diffInDays(deliveryEnd, row.last_trucking_daily_deliverable_date);
+        tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_trucking_daily_deliverable_date);
       } else {
         if (includeSummary) {
           debugCounts.branchOpenSea += 1;
@@ -672,7 +665,7 @@ export function aggregateLatePerformanceRows(
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
         }
-        tradeCycle = diffInDays(deliveryEnd, row.last_eta_vessel_complete_discharge);
+        tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_eta_vessel_complete_discharge);
       }
     }
 

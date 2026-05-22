@@ -14,6 +14,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
+import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { format } from 'date-fns'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
@@ -51,6 +52,7 @@ interface TruckingOperation {
   cargo_readiness_date: string
   trucking_start_date: string
   trucking_completion_date: string
+  eta_trucking_completion_date?: string | null
   quantity_sent: number
   quantity_delivered: number
   quantity_receive?: number
@@ -1349,28 +1351,12 @@ function TruckingPageContent() {
   const formatShortDate = (dateStr: string) => formatDateDMY(dateStr)
 
   // Helper function to calculate late indicator
-  const getLateIndicator = (operation: TruckingOperation): { color: string; text: string } => {
-    if (!operation.delivery_end_date) {
-      return { color: 'bg-gray-100 text-gray-800', text: '-' }
-    }
-    
-    const deliveryEnd = new Date(operation.delivery_end_date).getTime()
-    const actualCompletion = operation.trucking_completion_date ? new Date(operation.trucking_completion_date).getTime() : null
-    
-    // If completion date is null, cannot determine
-    if (actualCompletion === null) {
-      return { color: 'bg-gray-100 text-gray-800', text: '-' }
-    }
-    
-    // Green if delivery_end >= actual completion; red otherwise
-    const isOnTime = deliveryEnd >= actualCompletion
-    
-    if (isOnTime) {
-      return { color: 'bg-green-100 text-green-800', text: 'On Time' }
-    } else {
-      return { color: 'bg-red-100 text-red-800', text: 'Late' }
-    }
-  }
+  const getLateIndicator = (operation: TruckingOperation): { color: string; text: string } =>
+    computeLateIndicatorDisplay(
+      operation.delivery_end_date,
+      operation.trucking_completion_date,
+      operation.eta_trucking_completion_date,
+    )
 
   const hasActiveTruckingFilters = useMemo(() => {
     return (

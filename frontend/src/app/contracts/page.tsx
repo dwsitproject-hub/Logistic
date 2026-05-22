@@ -17,9 +17,21 @@ import {
   ContractShipmentDetailModal,
 } from '@/components/contracts/ContractLogisticsDetailModals'
 import { Checkbox } from '@/components/ui/checkbox'
-import { formatKgFromMt, formatRupiah, toKgFromMt } from '@/lib/utils'
+import { formatOutstandingQtyMtFromKg, formatQtyMtFromKg, formatRupiah } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import {
+  CYCLE_DAYS_LATE_CLASS,
+  CYCLE_DAYS_ON_TIME_CLASS,
+  contextPerformanceClass,
+  avgDaysMetricLabel,
+  formatAvgDays,
+  formatContractAgingDays,
+  formatLogCycleDays,
+  formatSignedCycleDays,
+  logCycleDaysClass,
+  signedCycleDaysClass,
+} from '@/lib/cycleDaysDisplay'
 import { formatDateDMY, toSortableTimestamp } from '@/lib/dateFormat'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -1756,21 +1768,9 @@ function ContractsPageContent() {
         if (!info) {
           return <span className="text-xs text-gray-500">-</span>
         }
-        const absDays = Math.abs(info.days)
-        const daysLabel = `${absDays} day${absDays === 1 ? '' : 's'}`
-        const text =
-          info.days === 0
-            ? 'Due today'
-            : info.isOverdue
-              ? `${daysLabel} overdue`
-              : `${daysLabel} left`
         return (
-          <span
-            className={`text-xs font-semibold ${
-              info.isOverdue ? 'text-red-600' : 'text-green-600'
-            }`}
-          >
-            {text}
+          <span className={`text-xs font-semibold ${signedCycleDaysClass(info.days)}`}>
+            {formatContractAgingDays(info.days)}
           </span>
         )
       },
@@ -1932,13 +1932,9 @@ function ContractsPageContent() {
       getSortValue: (c) => c.trade_cycle_days ?? 0,
       render: (c) => {
         if (c.trade_cycle_days == null) return <span className="text-xs">-</span>
-        const abs = Math.abs(c.trade_cycle_days)
-        const unit = abs === 1 ? 'day' : 'days'
-        const isOver = c.trade_cycle_days > 0
-        const isZero = c.trade_cycle_days === 0
         return (
-          <span className={`text-xs font-semibold ${isZero ? 'text-gray-500' : isOver ? 'text-red-600' : 'text-green-600'}`}>
-            {isZero ? '0 days' : isOver ? `${abs} ${unit} overdue` : `${abs} ${unit} left`}
+          <span className={`text-xs font-semibold ${signedCycleDaysClass(c.trade_cycle_days)}`}>
+            {formatSignedCycleDays(c.trade_cycle_days)}
           </span>
         )
       },
@@ -1953,13 +1949,9 @@ function ContractsPageContent() {
       getSortValue: (c) => c.cash_cycle_days ?? 0,
       render: (c) => {
         if (c.cash_cycle_days == null) return <span className="text-xs">-</span>
-        const abs = Math.abs(c.cash_cycle_days)
-        const unit = abs === 1 ? 'day' : 'days'
-        const isOver = c.cash_cycle_days > 0
-        const isZero = c.cash_cycle_days === 0
         return (
-          <span className={`text-xs font-semibold ${isZero ? 'text-gray-500' : isOver ? 'text-red-600' : 'text-green-600'}`}>
-            {isZero ? '0 days' : isOver ? `${abs} ${unit} overdue` : `${abs} ${unit} left`}
+          <span className={`text-xs font-semibold ${signedCycleDaysClass(c.cash_cycle_days)}`}>
+            {formatSignedCycleDays(c.cash_cycle_days)}
           </span>
         )
       },
@@ -1972,11 +1964,14 @@ function ContractsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.log_cycle_days ?? 0,
-      render: (c) => (
-        <span className="text-xs font-semibold">
-          {c.log_cycle_days != null ? `${c.log_cycle_days} days` : '-'}
-        </span>
-      ),
+      render: (c) => {
+        if (c.log_cycle_days == null) return <span className="text-xs">-</span>
+        return (
+          <span className={`text-xs font-semibold ${logCycleDaysClass(c.log_cycle_days, c.trade_cycle_days)}`}>
+            {formatLogCycleDays(c.log_cycle_days, c.trade_cycle_days)}
+          </span>
+        )
+      },
       className: 'whitespace-nowrap'
     },
     {
@@ -2445,33 +2440,19 @@ function ContractsPageContent() {
 
       const info = getContractAgingInfo(c)
       if (info) {
-        const absDays = Math.abs(info.days)
-        const daysLabel = `${absDays} day${absDays === 1 ? '' : 's'}`
-        const text =
-          info.days === 0 ? 'Due today' : info.isOverdue ? `${daysLabel} overdue` : `${daysLabel} left`
-        agingContentLen = Math.max(agingContentLen, text.length)
+        agingContentLen = Math.max(agingContentLen, formatContractAgingDays(info.days).length)
       } else {
         agingContentLen = Math.max(agingContentLen, 1)
       }
 
       if (c.trade_cycle_days != null) {
-        const abs = Math.abs(c.trade_cycle_days)
-        const unit = abs === 1 ? 'day' : 'days'
-        const isOver = c.trade_cycle_days > 0
-        const isZero = c.trade_cycle_days === 0
-        const t = isZero ? '0 days' : isOver ? `${abs} ${unit} overdue` : `${abs} ${unit} left`
-        tradeLen = Math.max(tradeLen, t.length)
+        tradeLen = Math.max(tradeLen, formatSignedCycleDays(c.trade_cycle_days).length)
       }
       if (c.cash_cycle_days != null) {
-        const abs = Math.abs(c.cash_cycle_days)
-        const unit = abs === 1 ? 'day' : 'days'
-        const isOver = c.cash_cycle_days > 0
-        const isZero = c.cash_cycle_days === 0
-        const t = isZero ? '0 days' : isOver ? `${abs} ${unit} overdue` : `${abs} ${unit} left`
-        cashLen = Math.max(cashLen, t.length)
+        cashLen = Math.max(cashLen, formatSignedCycleDays(c.cash_cycle_days).length)
       }
       if (c.log_cycle_days != null) {
-        logCycleLen = Math.max(logCycleLen, `${c.log_cycle_days} days`.length)
+        logCycleLen = Math.max(logCycleLen, formatLogCycleDays(c.log_cycle_days, c.trade_cycle_days).length)
       }
 
       dsLen = Math.max(dsLen, formatDateDMY(c.delivery_start_date || '').length)
@@ -2641,7 +2622,8 @@ function ContractsPageContent() {
           const latePct   = totalOsQty > 0 ? ((latePerformanceSummary.totalQtyDelivery ?? 0) / totalOsQty) * 100 : 0
           const onTrackPct = totalOsQty > 0 ? ((onTrackPerformanceSummary.totalQtyDelivery ?? 0) / totalOsQty) * 100 : 0
           const fmtMT = (v: number) => (v / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' MT'
-          const fmtDays = (v: number | null | undefined) => v != null ? `${Math.round(v)} days` : '0 days'
+          const onTimeAvgClass = contextPerformanceClass(false)
+          const lateAvgClass = contextPerformanceClass(true)
           if (latePerfSummaryLoading) {
             return (
               <div className="space-y-2">
@@ -2695,10 +2677,10 @@ function ContractsPageContent() {
                 </div>
                 {/* Avg metrics */}
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-4">
-                  <span>Avg Late: <span className="font-semibold text-gray-700">{fmtDays(latePerformanceSummary.avgDays)}</span></span>
-                  <span>Avg Trade: <span className="font-semibold text-gray-700">{fmtDays(onTrackPerformanceSummary.avgDays)}</span></span>
-                  <span>Avg Cash: <span className="font-semibold text-gray-700">{fmtDays(onTrackPerformanceSummary.avgCashCycle)}</span></span>
-                  <span>Avg Log: <span className="font-semibold text-gray-700">{fmtDays(onTrackPerformanceSummary.avgLogCycle)}</span></span>
+                  <span>{avgDaysMetricLabel(false)}: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackPerformanceSummary.avgDays)}</span></span>
+                  <span>Avg Trade: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackPerformanceSummary.avgDays)}</span></span>
+                  <span>Avg Cash: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackPerformanceSummary.avgCashCycle)}</span></span>
+                  <span>Avg Log: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackPerformanceSummary.avgLogCycle)}</span></span>
                 </div>
                 {/* Open / Close breakdown */}
                 <div className="flex gap-2">
@@ -2739,10 +2721,10 @@ function ContractsPageContent() {
                 </div>
                 {/* Avg metrics */}
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-4">
-                  <span>Avg Late: <span className="font-semibold text-gray-700">{fmtDays(latePerformanceSummary.avgDays)}</span></span>
-                  <span>Avg Trade: <span className="font-semibold text-gray-700">{fmtDays(latePerformanceSummary.avgDays)}</span></span>
-                  <span>Avg Cash: <span className="font-semibold text-gray-700">{fmtDays(latePerformanceSummary.avgCashCycle)}</span></span>
-                  <span>Avg Log: <span className="font-semibold text-gray-700">{fmtDays(latePerformanceSummary.avgLogCycle)}</span></span>
+                  <span>{avgDaysMetricLabel(true)}: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(latePerformanceSummary.avgDays)}</span></span>
+                  <span>Avg Trade: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(latePerformanceSummary.avgDays)}</span></span>
+                  <span>Avg Cash: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(latePerformanceSummary.avgCashCycle)}</span></span>
+                  <span>Avg Log: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(latePerformanceSummary.avgLogCycle)}</span></span>
                 </div>
                 {/* Open / Close breakdown */}
                 <div className="flex gap-2">
@@ -2776,7 +2758,6 @@ function ContractsPageContent() {
             <CardHeader className="pb-2">
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
-                  {/* Mode toggle */}
                   <div className="inline-flex rounded-lg border bg-white p-1 mb-2">
                     <button
                       type="button"
@@ -2887,8 +2868,8 @@ function ContractsPageContent() {
                                   <div className="flex items-start justify-between gap-1">
                                     <div className="text-sm font-semibold text-gray-900 truncate">{node.label}</div>
                                     <div className="shrink-0 text-right leading-tight">
-                                      <div className="text-[11px] font-bold text-gray-800 tabular-nums">{node.count > 0 ? (node.totalDays / node.count).toFixed(1) : '—'}</div>
-                                      <div className="text-xs text-gray-500">{perfDashMode === 'late' ? 'avg late' : 'avg ahead'}</div>
+                                      <div className={`text-[11px] font-bold tabular-nums ${perfDashMode === 'late' ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS}`}>{node.count > 0 ? (node.totalDays / node.count).toFixed(1) : '—'}</div>
+                                      <div className={`text-xs ${perfDashMode === 'late' ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS}`}>{perfDashMode === 'late' ? 'avg late' : 'avg ahead'}</div>
                                     </div>
                                   </div>
                                   <div className="mt-1 h-1.5 rounded bg-gray-100 overflow-hidden">
@@ -3128,7 +3109,7 @@ function ContractsPageContent() {
                     </div>
                     <div className="flex items-center gap-1.5">
                       <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500" />
-                      <span className="text-gray-600">Result &gt; 0 = Late (days overdue)</span>
+                      <span className="text-gray-600">Result &gt; 0 = Late · Result &lt; 0 = Ahead</span>
                     </div>
                   </div>
                 </div>
@@ -4421,7 +4402,7 @@ function ContractsPageContent() {
                       <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
                         <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Contract Qty</div>
                         <div className="font-semibold text-gray-900 mt-0.5">
-                          {((Number(selectedContract.quantity_ordered) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT
+                          {formatQtyMtFromKg(selectedContract.quantity_ordered)}
                         </div>
                       </div>
                       <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
@@ -4511,8 +4492,8 @@ function ContractsPageContent() {
                           Log Cycle
                           <FieldHelp text={FIELD_HELP.logCycle} />
                         </div>
-                        <div className="font-medium mt-1">
-                          {selectedContract.log_cycle_days != null ? `${selectedContract.log_cycle_days} days` : '-'}
+                        <div className={`font-medium mt-1 ${logCycleDaysClass(selectedContract.log_cycle_days, selectedContract.trade_cycle_days)}`}>
+                          {formatLogCycleDays(selectedContract.log_cycle_days, selectedContract.trade_cycle_days)}
                         </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
@@ -4520,22 +4501,8 @@ function ContractsPageContent() {
                           Trade Cycle
                           <FieldHelp text={FIELD_HELP.tradeCycle} />
                         </div>
-                        <div className={`font-medium mt-1 ${
-                          typeof selectedContract.trade_cycle_days === 'number'
-                            ? selectedContract.trade_cycle_days === 0
-                              ? 'text-gray-500'
-                              : selectedContract.trade_cycle_days > 0
-                                ? 'text-red-600'
-                                : 'text-green-600'
-                            : ''
-                        }`}>
-                          {selectedContract.trade_cycle_days != null
-                            ? selectedContract.trade_cycle_days === 0
-                              ? '0 days'
-                              : selectedContract.trade_cycle_days > 0
-                                ? `${selectedContract.trade_cycle_days} days overdue`
-                                : `${Math.abs(selectedContract.trade_cycle_days)} days left`
-                            : '-'}
+                        <div className={`font-medium mt-1 ${signedCycleDaysClass(selectedContract.trade_cycle_days)}`}>
+                          {formatSignedCycleDays(selectedContract.trade_cycle_days)}
                         </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
@@ -4543,22 +4510,8 @@ function ContractsPageContent() {
                           Cash Cycle
                           <FieldHelp text={FIELD_HELP.cashCycle} />
                         </div>
-                        <div className={`font-medium mt-1 ${
-                          typeof selectedContract.cash_cycle_days === 'number'
-                            ? selectedContract.cash_cycle_days === 0
-                              ? 'text-gray-500'
-                              : selectedContract.cash_cycle_days > 0
-                                ? 'text-red-600'
-                                : 'text-green-600'
-                            : ''
-                        }`}>
-                          {selectedContract.cash_cycle_days != null
-                            ? selectedContract.cash_cycle_days === 0
-                              ? '0 days'
-                              : selectedContract.cash_cycle_days > 0
-                                ? `${selectedContract.cash_cycle_days} days overdue`
-                                : `${Math.abs(selectedContract.cash_cycle_days)} days left`
-                            : '-'}
+                        <div className={`font-medium mt-1 ${signedCycleDaysClass(selectedContract.cash_cycle_days)}`}>
+                          {formatSignedCycleDays(selectedContract.cash_cycle_days)}
                         </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded col-span-2">
@@ -4655,19 +4608,19 @@ function ContractsPageContent() {
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Contract Quantity</div>
-                        <div className="font-medium mt-1 text-base">{((Number(selectedContract.quantity_ordered) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
+                        <div className="font-medium mt-1 text-base">{formatQtyMtFromKg(selectedContract.quantity_ordered)}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Quantity Delivery</div>
-                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.quantity_delivery ?? 0)} Kg</div>
+                        <div className="font-medium mt-1 text-base">{formatQtyMtFromKg(selectedContract.quantity_delivery ?? 0)}</div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Quantity Receive</div>
-                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.quantity_receive ?? 0)} Kg</div>
+                        <div className="font-medium mt-1 text-base">{formatQtyMtFromKg(selectedContract.quantity_receive ?? 0)}</div>
                       </div>
                       <div className="p-3 bg-blue-50 rounded border-2 border-blue-200">
                         <div className="text-gray-500">Total STO Quantity ({selectedContract.sto_count || 0} STO{selectedContract.sto_count > 1 ? 's' : ''})</div>
-                        <div className="font-medium mt-1 text-base">{formatNumber(selectedContract.total_sto_quantity)} Kg</div>
+                        <div className="font-medium mt-1 text-base">{formatQtyMtFromKg(selectedContract.total_sto_quantity)}</div>
                       </div>
                       <div className={`p-3 rounded border-2 ${selectedContract.outstanding_quantity < 0 ? 'bg-green-50 border-green-200' : selectedContract.outstanding_quantity > 0 ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}>
                         <div className={`font-semibold flex items-center gap-1 ${selectedContract.outstanding_quantity < 0 ? 'text-green-700' : selectedContract.outstanding_quantity > 0 ? 'text-red-700' : 'text-gray-700'}`}>
@@ -4675,9 +4628,7 @@ function ContractsPageContent() {
                           <FieldHelp text={FIELD_HELP.outstandingQty} />
                         </div>
                         <div className={`font-bold text-xl mt-1 ${selectedContract.outstanding_quantity < 0 ? 'text-green-600' : selectedContract.outstanding_quantity > 0 ? 'text-red-600' : 'text-gray-500'}`}>
-                          {selectedContract.outstanding_quantity < 0
-                            ? `+${formatNumber(Math.abs(selectedContract.outstanding_quantity))} Kg`
-                            : `${formatNumber(selectedContract.outstanding_quantity)} Kg`}
+                          {formatOutstandingQtyMtFromKg(selectedContract.outstanding_quantity)}
                         </div>
                         {selectedContract.outstanding_quantity < 0 && (
                           <div className="text-xs text-green-600 mt-1">Over Delivered</div>
@@ -4725,9 +4676,9 @@ function ContractsPageContent() {
                               <th className="text-left p-2 font-medium">Type</th>
                               <th className="text-left p-2 font-medium">Late Indicator</th>
                               <th className="text-left p-2 font-medium">Status</th>
-                              <th className="text-left p-2 font-medium">STO Quantity</th>
-                              <th className="text-left p-2 font-medium">Quantity Delivered (Kg)</th>
-                              <th className="text-left p-2 font-medium">Quantity Received (Kg)</th>
+                              <th className="text-left p-2 font-medium">STO Quantity (MT)</th>
+                              <th className="text-left p-2 font-medium">Quantity Delivered (MT)</th>
+                              <th className="text-left p-2 font-medium">Quantity Received (MT)</th>
                               <th className="text-left p-2 font-medium">Vessel Name / Trucking Owner</th>
                               <th className="text-left p-2 font-medium">ETA Vessel Arrival at Loading Port / ETA Trucking Completion Date</th>
                               <th className="text-left p-2 font-medium">ATA Vessel Complete Discharge / Trucking Last Receive Date</th>
@@ -4765,13 +4716,9 @@ function ContractsPageContent() {
                                   </Badge>
                                 </td>
                                 <td className="p-2">{row.status}</td>
-                                <td className="p-2">{formatNumber(row.sto_quantity)}</td>
-                                <td className="p-2">
-                                  {formatNumber(row.quantity_delivered ?? 0)}
-                                </td>
-                                <td className="p-2">
-                                  {formatNumber(row.quantity_receive ?? 0)}
-                                </td>
+                                <td className="p-2">{formatQtyMtFromKg(row.sto_quantity)}</td>
+                                <td className="p-2">{formatQtyMtFromKg(row.quantity_delivered ?? 0)}</td>
+                                <td className="p-2">{formatQtyMtFromKg(row.quantity_receive ?? 0)}</td>
                                 <td className="p-2">
                                   {row.type === 'shipment' ? (row.vessel_name ?? '-') : (row.trucking_owner ?? '-')}
                                 </td>
@@ -5065,8 +5012,8 @@ function ContractsPageContent() {
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Contract(s)</span><div className="font-medium mt-1">{stoDetailData.contract_numbers ?? '-'}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Port of Loading</span><div className="font-medium mt-1">{stoDetailData.port_of_loading ?? '-'}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Port of Discharge</span><div className="font-medium mt-1">{stoDetailData.port_of_discharge ?? '-'}</div></div>
-                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">STO Quantity</span><div className="font-medium mt-1">{formatNumber(stoDetailData.sto_quantity ?? 0)}</div></div>
-                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Quantity Delivered</span><div className="font-medium mt-1">{formatNumber(stoDetailData.quantity_delivered ?? 0)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">STO Quantity (MT)</span><div className="font-medium mt-1">{formatQtyMtFromKg(stoDetailData.sto_quantity ?? 0)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Quantity Delivered (MT)</span><div className="font-medium mt-1">{formatQtyMtFromKg(stoDetailData.quantity_delivered ?? 0)}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Due Date Delivery Start</span><div className="font-medium mt-1">{formatDate(stoDetailData.delivery_start_date)}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Due Date Delivery End</span><div className="font-medium mt-1">{formatDate(stoDetailData.delivery_end_date)}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">ATA Vessel Completed Loading</span><div className="font-medium mt-1">{formatDate(stoDetailData.ata_vessel_completed_loading)}</div></div>
@@ -5083,8 +5030,8 @@ function ContractsPageContent() {
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Contract</span><div className="font-medium mt-1">{stoDetailData.contract_number ?? '-'}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Loading Location</span><div className="font-medium mt-1">{stoDetailData.loading_location ?? '-'}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Unloading Location</span><div className="font-medium mt-1">{stoDetailData.unloading_location ?? '-'}</div></div>
-                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Contract Qty</span><div className="font-medium mt-1">{formatNumber(stoDetailData.contract_qty ?? stoDetailData.sto_quantity ?? 0)}</div></div>
-                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Quantity Receive (Kg)</span><div className="font-medium mt-1">{formatNumber(toKgFromMt(stoDetailData.quantity_delivered ?? 0))}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Contract Qty (MT)</span><div className="font-medium mt-1">{formatQtyMtFromKg(stoDetailData.contract_qty ?? stoDetailData.sto_quantity ?? 0)}</div></div>
+                    <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Quantity Receive (MT)</span><div className="font-medium mt-1">{formatQtyMtFromKg(stoDetailData.quantity_delivered ?? 0)}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Due Date Delivery Start</span><div className="font-medium mt-1">{formatDate(stoDetailData.delivery_start_date)}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Due Date Delivery End</span><div className="font-medium mt-1">{formatDate(stoDetailData.delivery_end_date)}</div></div>
                     <div className="p-3 bg-gray-50 rounded"><span className="text-gray-500">Trucking Start Receive Date</span><div className="font-medium mt-1">{formatDate(stoDetailData.trucking_start_date)}</div></div>

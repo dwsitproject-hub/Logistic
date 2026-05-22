@@ -10,11 +10,18 @@ function lateIndicatorTruckingExpr(): string {
   return `(
   CASE
     WHEN c.delivery_end_date IS NULL THEN '-'
-    WHEN t.eta_trucking_completion_date IS NULL AND t.trucking_completion_date IS NULL THEN '-'
-    WHEN (t.eta_trucking_completion_date IS NOT NULL AND c.delivery_end_date::date >= t.eta_trucking_completion_date::date)
-      OR (t.trucking_completion_date IS NOT NULL AND c.delivery_end_date::date >= t.trucking_completion_date::date)
-    THEN 'On Time'
-    ELSE 'Late'
+    WHEN t.trucking_completion_date IS NOT NULL THEN
+      CASE
+        WHEN c.delivery_end_date::date < t.trucking_completion_date::date THEN 'Late'
+        ELSE 'On Time'
+      END
+    WHEN t.eta_trucking_completion_date IS NOT NULL THEN
+      CASE
+        WHEN c.delivery_end_date::date < t.eta_trucking_completion_date::date THEN 'Late'
+        ELSE 'On Time'
+      END
+    WHEN c.delivery_end_date::date < CURRENT_DATE THEN 'Late'
+    ELSE 'On Time'
   END
 )`;
 }

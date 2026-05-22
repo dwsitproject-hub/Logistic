@@ -15,6 +15,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
+import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -1538,38 +1539,12 @@ function ShipmentsPageContent() {
   }, [])
 
   // Helper function to calculate late indicator for shipments
-  const getLateIndicator = (shipment: Shipment): { color: string; text: string } => {
-    if (!shipment.delivery_end_date) {
-      return { color: 'bg-gray-100 text-gray-800', text: '-' }
-    }
-    
-    const deliveryEnd = new Date(shipment.delivery_end_date).getTime()
-    const today = new Date().setHours(0, 0, 0, 0)
-    const ataDischarge = shipment.ata_vessel_complete_discharge ? new Date(shipment.ata_vessel_complete_discharge).getTime() : null
-    const etaDischarge = shipment.eta_vessel_complete_discharge ? new Date(shipment.eta_vessel_complete_discharge).getTime() : null
-    
-    // Red if delivery_end < Today
-    if (deliveryEnd < today) {
-      return { color: 'bg-red-100 text-red-800', text: 'Late' }
-    }
-    
-    // If both discharge dates are null, cannot determine (but check if past due date)
-    if (ataDischarge === null && etaDischarge === null) {
-      return { color: 'bg-gray-100 text-gray-800', text: '-' }
-    }
-    
-    // Red if delivery_end < ata_discharge OR delivery_end < eta_discharge
-    // Green if delivery_end >= ata_discharge OR delivery_end >= eta_discharge
-    const isLate = 
-      (ataDischarge !== null && deliveryEnd < ataDischarge) ||
-      (etaDischarge !== null && deliveryEnd < etaDischarge)
-    
-    if (isLate) {
-      return { color: 'bg-red-100 text-red-800', text: 'Late' }
-    } else {
-      return { color: 'bg-green-100 text-green-800', text: 'On Time' }
-    }
-  }
+  const getLateIndicator = (shipment: Shipment): { color: string; text: string } =>
+    computeLateIndicatorDisplay(
+      shipment.delivery_end_date,
+      shipment.ata_vessel_complete_discharge,
+      shipment.eta_vessel_complete_discharge,
+    )
 
   // Excel-like filtering helpers
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {

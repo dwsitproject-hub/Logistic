@@ -28,3 +28,23 @@ export function formatKgFromMt(mt: number | string | null | undefined) {
   return `${formatNumber(toKgFromMt(mt))} Kg`
 }
 
+/** Contract/shipment quantities are stored in kg; display as MT. */
+export function formatQtyMtFromKg(kg: number | string | null | undefined, opts?: { maxFractionDigits?: number }) {
+  if (kg === null || kg === undefined || kg === '') return '-'
+  const n = typeof kg === 'string' ? Number(kg) : kg
+  if (!Number.isFinite(n)) return '-'
+  const maxFractionDigits = opts?.maxFractionDigits ?? 2
+  return `${(n / 1000).toLocaleString('en-US', { maximumFractionDigits: maxFractionDigits })} MT`
+}
+
+/** Outstanding qty in kg; over-delivery (negative kg) shows +MT in green styling context. */
+export function formatOutstandingQtyMtFromKg(kg: number | string | null | undefined) {
+  if (kg === null || kg === undefined || kg === '') return '-'
+  const n = typeof kg === 'string' ? Number(kg) : kg
+  if (!Number.isFinite(n)) return '-'
+  const mt = n / 1000
+  const absFmt = Math.abs(mt).toLocaleString('en-US', { maximumFractionDigits: 2 })
+  if (n < 0) return `+${absFmt} MT`
+  return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+}
+

@@ -1033,6 +1033,64 @@ export const getShippingPerformance = async (_req: AuthRequest, res: Response) =
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
       ),
+      ship_keys AS (
+        SELECT
+          s.id AS shipment_pk,
+          c.contract_id,
+          COALESCE(
+            NULLIF(TRIM(c.sto_number::text), ''),
+            NULLIF(TRIM(s.operation_id), ''),
+            NULLIF(TRIM(s.shipment_id), ''),
+            s.id::text
+          ) AS sto_key
+        FROM shipments s
+        INNER JOIN contracts c ON s.contract_id = c.id
+        WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
+      ),
+      spd_keyed AS (
+        SELECT
+          sk.shipment_pk,
+          spd.data
+        FROM ship_keys sk
+        INNER JOIN sap_processed_data spd ON
+          NULLIF(TRIM(COALESCE(
+            spd.sto_number::text,
+            spd.data->'raw'->>'STO No.',
+            spd.data->'raw'->>'STO Number',
+            spd.data->'shipment'->>'sto_no',
+            spd.data->'contract'->>'sto_no'
+          )), '') = TRIM(sk.sto_key::text)
+      ),
+      sap_agg AS (
+        SELECT
+          sk.shipment_pk,
+          COALESCE(SUM(
+            NULLIF(regexp_replace(COALESCE(
+              NULLIF(TRIM(sk2.data->'contract'->>'sto_quantity'), ''),
+              NULLIF(TRIM(sk2.data->'shipment'->>'sto_quantity'), ''),
+              NULLIF(TRIM(sk2.data->'raw'->>'STO Quantity'), ''),
+              NULLIF(TRIM(sk2.data->'raw'->>'sto quantity'), ''),
+              ''
+            ), '[^0-9\\.-]', '', 'g'), '')::numeric
+          ), 0) AS sto_quantity,
+          COALESCE(SUM(
+            NULLIF(regexp_replace(COALESCE(
+              NULLIF(TRIM(sk2.data->'raw'->>'Quantity Receive'), ''),
+              NULLIF(TRIM(sk2.data->'raw'->>'Qty Receive'), ''),
+              ''
+            ), '[^0-9\\.-]', '', 'g'), '')::numeric
+          ), 0) AS quantity_receive,
+          COALESCE(SUM(
+            NULLIF(regexp_replace(COALESCE(
+              NULLIF(TRIM(sk2.data->'raw'->>'Quantity Delivered'), ''),
+              NULLIF(TRIM(sk2.data->'raw'->>'Quantity Delivery'), ''),
+              ''
+            ), '[^0-9\\.-]', '', 'g'), '')::numeric
+          ), 0) AS quantity_delivered_sap
+        FROM ship_keys sk
+        LEFT JOIN spd_keyed sk2 ON sk2.shipment_pk = sk.shipment_pk
+        GROUP BY sk.shipment_pk
+      ),
       loading_port AS (
         SELECT DISTINCT ON (vlp.shipment_id)
           vlp.shipment_id,
@@ -1087,15 +1145,33 @@ export const getShippingPerformance = async (_req: AuthRequest, res: Response) =
           COALESCE((COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) - COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date)), 0) +
           COALESCE((COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date)), 0)
         )::int AS total_delta_days,
-        COALESCE(c.sto_quantity, 0)::numeric AS sto_qty,
-        COALESCE(s.actual_vessel_qty_receive, s.bl_quantity, 0)::numeric AS received_qty,
-        CASE
-          WHEN s.status = 'COMPLETED' THEN 0
-          ELSE (COALESCE(c.sto_quantity, 0) - COALESCE(s.actual_vessel_qty_receive, s.bl_quantity, 0))
-        END::numeric AS outstanding_qty
+        COALESCE(NULLIF(sa.sto_quantity, 0), c.sto_quantity, 0)::numeric AS sto_qty,
+        COALESCE(
+          CASE
+            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN sa.quantity_receive
+            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN sa.quantity_delivered_sap
+            ELSE COALESCE(NULLIF(sa.quantity_receive, 0), sa.quantity_delivered_sap)
+          END,
+          s.actual_vessel_qty_receive,
+          s.bl_quantity,
+          0
+        )::numeric AS received_qty,
+        GREATEST(
+          COALESCE(NULLIF(sa.sto_quantity, 0), c.sto_quantity, 0)::numeric
+          - COALESCE(
+            CASE
+              WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN sa.quantity_receive
+              WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN sa.quantity_delivered_sap
+              ELSE COALESCE(NULLIF(sa.quantity_receive, 0), sa.quantity_delivered_sap, COALESCE(s.actual_vessel_qty_receive, s.bl_quantity, 0))
+            END,
+            0
+          ),
+          0
+        )::numeric AS outstanding_qty
       FROM shipments s
       INNER JOIN contracts c ON s.contract_id = c.id
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      LEFT JOIN sap_agg sa ON sa.shipment_pk = s.id
       LEFT JOIN loading_port lp ON lp.shipment_id = s.id
       LEFT JOIN discharge_port dp ON dp.shipment_id = s.id
       WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')

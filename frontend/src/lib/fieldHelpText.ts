@@ -59,7 +59,7 @@ export const FIELD_HELP = {
 
   shipmentStoQty: `STO Quantity from the linked contract in SAP (in MT). Represents the planned quantity allocated to this shipment.`,
   shipmentReceivedQty: `Actual quantity received at destination (actual_vessel_qty_receive or BL quantity as fallback), in MT.`,
-  shipmentOutstandingQty: `STO Qty minus Received Qty. Shows how much quantity is still outstanding for this shipment.`,
+  shipmentOutstandingQty: `SAP STO Qty minus Qty Receive/Delivered (per incoterm) for this shipment/STO. Same for Open and Close; Close = status COMPLETED.`,
 
   // Shipments
   shipmentLateIndicator: `On Time / Late is based on SLA days and actual vessel milestone dates. If key dates are missing, this shows "-".`,
