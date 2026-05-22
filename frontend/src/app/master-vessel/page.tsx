@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -28,17 +29,18 @@ export default function MasterVesselPage() {
   const [items, setItems] = useState<MasterVessel[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [editing, setEditing] = useState<MasterVessel | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [form, setForm] = useState<Partial<MasterVessel>>({})
   const [isAdmin, setIsAdmin] = useState(false)
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async (searchQuery: string) => {
     try {
       setLoading(true)
       const params = new URLSearchParams()
-      if (search.trim().length >= 2) {
-        params.set('search', search.trim())
+      if (searchQuery.length >= 2) {
+        params.set('search', searchQuery)
       }
       const res = await api.get('/master-vessels', { params })
       setItems(res.data?.data?.items || [])
@@ -48,18 +50,20 @@ export default function MasterVesselPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
-    fetchData()
     try {
       const u = JSON.parse(localStorage.getItem('user') || 'null')
       setIsAdmin(String(u?.role || '').toUpperCase() === 'ADMIN')
     } catch {
       setIsAdmin(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    void fetchData(debouncedSearch)
+  }, [debouncedSearch, fetchData])
 
   const openNew = () => {
     setEditing(null)
@@ -112,7 +116,7 @@ export default function MasterVesselPage() {
       setEditing(null)
       setForm({})
       setIsFormOpen(false)
-      fetchData()
+      void fetchData(debouncedSearch)
     } catch (err: any) {
       console.error('Save master vessel error', err)
       const msg = err?.response?.data?.error?.message || 'Failed to save master vessel'
@@ -193,7 +197,7 @@ export default function MasterVesselPage() {
 
       await api.post('/master-vessels/upload', { rows: payloadRows })
       alert('Master vessel data uploaded')
-      fetchData()
+      void fetchData(debouncedSearch)
     } catch (err) {
       console.error('Upload master vessel file error', err)
       alert('Failed to parse or upload file. Please upload CSV exported from Master Vessel.xlsx')
@@ -208,7 +212,7 @@ export default function MasterVesselPage() {
     if (!ok) return
     try {
       await api.delete(`/master-vessels/${v.id}`)
-      await fetchData()
+      await fetchData(debouncedSearch)
     } catch (err: any) {
       console.error('Delete master vessel error', err)
       const msg = err?.response?.data?.error?.message || 'Failed to delete master vessel'
@@ -257,9 +261,6 @@ export default function MasterVesselPage() {
                 onChange={(e) => setSearch(e.target.value)}
                 className="max-w-sm"
               />
-              <Button variant="outline" size="sm" onClick={fetchData} disabled={loading}>
-                Apply
-              </Button>
             </div>
           </CardContent>
         </Card>

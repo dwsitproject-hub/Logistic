@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -42,6 +43,7 @@ export default function MasterLoadingPortPage() {
   const [items, setItems] = useState<MasterLoadingPort[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [editing, setEditing] = useState<MasterLoadingPort | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [form, setForm] = useState<Partial<MasterLoadingPort>>({})
@@ -55,12 +57,12 @@ export default function MasterLoadingPortPage() {
     errors: Array<{ row: number; port: string; reason: string }>
   } | null>(null)
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async (searchQuery: string) => {
     try {
       setLoading(true)
       const params = new URLSearchParams()
-      if (search.trim().length >= 2) {
-        params.set('search', search.trim())
+      if (searchQuery.length >= 2) {
+        params.set('search', searchQuery)
       }
       const res = await api.get('/master-loading-ports', { params })
       setItems(res.data?.data?.items || [])
@@ -70,18 +72,20 @@ export default function MasterLoadingPortPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
-    fetchData()
     try {
       const u = JSON.parse(localStorage.getItem('user') || 'null')
       setIsAdmin(String(u?.role || '').toUpperCase() === 'ADMIN')
     } catch {
       setIsAdmin(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    void fetchData(debouncedSearch)
+  }, [debouncedSearch, fetchData])
 
   const openNew = () => {
     setEditing(null)
@@ -150,7 +154,7 @@ export default function MasterLoadingPortPage() {
       setEditing(null)
       setForm({})
       setIsFormOpen(false)
-      fetchData()
+      void fetchData(debouncedSearch)
     } catch (err: any) {
       console.error('Save master loading port error', err)
       const msg = err?.response?.data?.error?.message || 'Failed to save master loading port'
@@ -272,7 +276,7 @@ export default function MasterLoadingPortPage() {
           errors: [],
         })
       }
-      fetchData()
+      void fetchData(debouncedSearch)
     } catch (err) {
       console.error('Upload master loading port file error', err)
       alert('Failed to parse or upload file. Please upload CSV exported from Master Loading Port.xlsx')
@@ -287,7 +291,7 @@ export default function MasterLoadingPortPage() {
     if (!ok) return
     try {
       await api.delete(`/master-loading-ports/${p.id}`)
-      await fetchData()
+      await fetchData(debouncedSearch)
     } catch (err: any) {
       console.error('Delete master loading port error', err)
       const msg = err?.response?.data?.error?.message || 'Failed to delete master loading port'
@@ -336,9 +340,6 @@ export default function MasterLoadingPortPage() {
                 onChange={(e) => setSearch(e.target.value)}
                 className="max-w-sm"
               />
-              <Button variant="outline" size="sm" onClick={fetchData} disabled={loading}>
-                Apply
-              </Button>
             </div>
           </CardContent>
         </Card>

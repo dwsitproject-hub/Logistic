@@ -44,7 +44,15 @@ export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Resp
       WITH latest_spd AS (
         SELECT DISTINCT ON (spd.contract_number)
           spd.contract_number,
-          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no
+          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no,
+          COALESCE(spd.data->'contract'->>'contract_type', spd.data->>'B2B Flag') AS b2b_flag,
+          COALESCE(
+            spd.data->'contract'->>'contract_reference_po',
+            spd.data->>'CONTRACT REFF PO',
+            spd.data->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'CONTRACT REFF PO'
+          ) AS contract_reference_po
         FROM sap_processed_data spd
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
@@ -59,10 +67,15 @@ export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Resp
         c.sto_number
       FROM contracts c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-      WHERE
+      WHERE (
         COALESCE(l.contract_ext_no, '') ILIKE $1
         OR c.contract_id ILIKE $1
         OR COALESCE(c.sto_number, '') ILIKE $1
+      )
+      AND NOT (
+        UPPER(TRIM(COALESCE(l.b2b_flag, c.contract_type::text, ''))) = 'B2B'
+        AND NULLIF(TRIM(COALESCE(l.contract_reference_po, '')), '') IS NOT NULL
+      )
       ORDER BY COALESCE(l.contract_ext_no, c.contract_id)
       LIMIT 10
       `,

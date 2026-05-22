@@ -8,7 +8,10 @@ import {
   getContractActivityLog,
   getB2bPartiesForContract,
   getContractFilterIncoterms,
+  getContractFilterB2bFlags,
   getLatePerformance,
+  getLatePerformanceSummary,
+  getLatePerformanceTree,
   getDistinctBuyers,
   createContract,
   updateContract,
@@ -66,8 +69,11 @@ router.use(authenticateToken);
  *         description: Contracts retrieved successfully
  */
 router.get('/', getContracts);
+router.get('/late-performance/summary', getLatePerformanceSummary);
+router.get('/late-performance/tree', getLatePerformanceTree);
 router.get('/late-performance', getLatePerformance);
 router.get('/filter-options/incoterms', getContractFilterIncoterms);
+router.get('/filter-options/b2b-flags', getContractFilterB2bFlags);
 router.get('/unassigned-counts', getUnassignedCounts);
 router.get('/buyers', getDistinctBuyers);
 

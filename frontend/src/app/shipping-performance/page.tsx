@@ -53,6 +53,14 @@ type LatePerfNode = {
   children: LatePerfNode[]
 }
 
+function matchesPerfDrilldownRow(row: ShippingPerformanceRow, isLate: boolean): boolean {
+  const delta = Number(row.total_delta_days ?? 0)
+  if (isLate ? delta <= 0 : delta > 0) return false
+  if (String(row.status || '').trim().toUpperCase() === 'COMPLETED') return false
+  if (Number(row.outstanding_qty ?? 0) <= 0) return false
+  return true
+}
+
 type ColumnType = 'text' | 'number'
 
 type ColumnDef = {
@@ -152,7 +160,7 @@ export default function ShippingPerformancePage() {
     const day = String(d.getDate()).padStart(2, '0')
     return `${d.getFullYear()}-${m}-${day}`
   })
-  const [perfDashMode, setPerfDashMode] = useState<'late' | 'ontrack'>('late')
+  const [perfDashMode, setPerfDashMode] = useState<'late' | 'ontrack'>('ontrack')
   const [lateOnTimeFilter, setLateOnTimeFilter] = useState<'ALL' | 'LATE' | 'ON_TIME'>('ALL')
   const [lateSelVessel, setLateSelVessel] = useState<string | null>(null)
   const [lateSelIncoterm, setLateSelIncoterm] = useState<string | null>(null)
@@ -228,15 +236,12 @@ export default function ShippingPerformancePage() {
     type ProdMap  = Map<string, { count: number; totalQty: number; plants: PlantMap }>
     const root: ProdMap = new Map()
     for (const row of rows) {
-      const delta = Number(row.total_delta_days ?? 0)
-      if (isLate ? delta <= 0 : delta > 0) continue
-      if (row.status === 'COMPLETED') continue
-      const qty = Number(row.outstanding_qty ?? 0)
-      if (qty <= 0) continue
+      if (!matchesPerfDrilldownRow(row, isLate)) continue
       const prod  = String(row.product     || '').trim() || 'Blank'
       const plant = String(row.plant_site  || '').trim() || 'Blank'
       const inc   = String(row.incoterm    || '').trim() || 'Blank'
       const ves   = String(row.vessel_name || '').trim() || 'Unknown'
+      const qty = Number(row.outstanding_qty ?? 0)
       if (!root.has(prod))  root.set(prod, { count: 0, totalQty: 0, plants: new Map() })
       const pN = root.get(prod)!; pN.count += 1; pN.totalQty += qty
       if (!pN.plants.has(plant)) pN.plants.set(plant, { count: 0, totalQty: 0, incoterms: new Map() })
@@ -267,10 +272,8 @@ export default function ShippingPerformancePage() {
   const lateSummary = useMemo(() => {
     let count = 0, totalQty = 0, totalDays = 0, maxDays = 0
     for (const row of filteredByTopFilters) {
+      if (!matchesPerfDrilldownRow(row, true)) continue
       const days = Number(row.total_delta_days ?? 0)
-      if (days <= 0) continue
-      if (row.status === 'COMPLETED') continue
-      if (Number(row.outstanding_qty ?? 0) <= 0) continue
       count++
       totalQty += Number(row.outstanding_qty ?? 0)
       totalDays += days
@@ -284,10 +287,8 @@ export default function ShippingPerformancePage() {
   const onTrackSummary = useMemo(() => {
     let count = 0, totalQty = 0, totalDaysAhead = 0, maxDaysAhead = 0
     for (const row of filteredByTopFilters) {
+      if (!matchesPerfDrilldownRow(row, false)) continue
       const days = Number(row.total_delta_days ?? 0)
-      if (days > 0) continue
-      if (row.status === 'COMPLETED') continue
-      if (Number(row.outstanding_qty ?? 0) <= 0) continue
       const daysAhead = -days
       count++
       totalQty += Number(row.outstanding_qty ?? 0)
@@ -300,6 +301,28 @@ export default function ShippingPerformancePage() {
   const visibleOrderedColumns = useMemo(
     () => columnOrder.filter((key) => visibleColumns[String(key)] && COLUMN_MAP[String(key)]),
     [columnOrder, visibleColumns]
+  )
+
+  const scrollTableIntoView = useCallback(() => {
+    setCurrentPage(1)
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [])
+
+  const applyPerfDrilldownClick = useCallback(
+    (next: {
+      product?: string | null
+      plant?: string | null
+      incoterm?: string | null
+      vessel?: string | null
+    }) => {
+      setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
+      if ('product' in next) setLateSelProduct(next.product ?? null)
+      if ('plant' in next) setLateSelPlant(next.plant ?? null)
+      if ('incoterm' in next) setLateSelIncoterm(next.incoterm ?? null)
+      if ('vessel' in next) setLateSelVessel(next.vessel ?? null)
+      scrollTableIntoView()
+    },
+    [perfDashMode, scrollTableIntoView],
   )
 
   const applySearch = useCallback(() => {
@@ -354,9 +377,17 @@ export default function ShippingPerformancePage() {
     setCurrentPage(1)
   }, [])
 
+  const isPerfDrilldownActive =
+    lateSelVessel !== null || lateSelIncoterm !== null || lateSelProduct !== null || lateSelPlant !== null
+
+  const tableScopeRows = useMemo(() => {
+    if (!isPerfDrilldownActive) return filteredByTopFilters
+    return filteredByTopFilters.filter((row) => matchesPerfDrilldownRow(row, perfDashMode === 'late'))
+  }, [filteredByTopFilters, isPerfDrilldownActive, perfDashMode])
+
   const filteredRows = useMemo(() => {
     const q = searchTerm.trim().toLowerCase()
-    const scoped = filteredByTopFilters.filter((row) => {
+    const scoped = tableScopeRows.filter((row) => {
       if (lateSelVessel  && (String(row.vessel_name || '').trim() || 'Unknown') !== lateSelVessel) return false
       if (lateSelIncoterm && (String(row.incoterm || '').trim() || 'Blank') !== lateSelIncoterm) return false
       if (lateSelProduct && (String(row.product || '').trim() || 'Blank') !== lateSelProduct) return false
@@ -412,7 +443,7 @@ export default function ShippingPerformancePage() {
       return 0
     })
     return sorted
-  }, [filteredByTopFilters, lateSelVessel, lateSelIncoterm, lateSelProduct, lateSelPlant, searchTerm, columnFilters, sortBy, sortDirection])
+  }, [tableScopeRows, lateSelVessel, lateSelIncoterm, lateSelProduct, lateSelPlant, searchTerm, columnFilters, sortBy, sortDirection])
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize))
   const paginatedRows = useMemo(
@@ -516,26 +547,26 @@ export default function ShippingPerformancePage() {
                 <div className="inline-flex rounded-lg border bg-white p-1 mb-2">
                   <button
                     type="button"
+                    onClick={() => { setPerfDashMode('ontrack'); setLateOnTimeFilter('ON_TIME'); setLateSelVessel(null); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }}
+                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'ontrack' ? 'bg-green-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+                  >
+                    On Time
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => { setPerfDashMode('late'); setLateOnTimeFilter('LATE'); setLateSelVessel(null); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }}
                     className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'late' ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
                   >
                     Late
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => { setPerfDashMode('ontrack'); setLateOnTimeFilter('ON_TIME'); setLateSelVessel(null); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'ontrack' ? 'bg-green-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-                  >
-                    On Track
-                  </button>
                 </div>
                 <CardTitle className="text-base">
-                  {perfDashMode === 'late' ? 'Late Performance (YTD)' : 'On Track Performance (YTD)'}
+                  {perfDashMode === 'late' ? 'Late Performance (YTD)' : 'On Time Performance (YTD)'}
                 </CardTitle>
                 <div className="text-sm text-gray-600 mt-1">
                   {perfDashMode === 'late'
                     ? <>Management view of late shipping where <span className="font-medium">Total delta &gt; 0</span>. Use drilldown to filter the table below.</>
-                    : <>Management view of on-track shipping where <span className="font-medium">Total delta ≤ 0</span>. Use drilldown to filter the table below.</>
+                    : <>Management view of on-time shipping where <span className="font-medium">Total delta ≤ 0</span>. Use drilldown to filter the table below.</>
                   }
                 </div>
               </div>
@@ -561,11 +592,11 @@ export default function ShippingPerformancePage() {
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full sm:w-auto">
                   <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">On Track shipments</div>
+                    <div className="text-[11px] text-gray-500">On Time shipments</div>
                     <div className="text-lg font-semibold text-green-600">{onTrackSummary.count.toLocaleString('en-US')}</div>
                   </div>
                   <div className="rounded border bg-white px-3 py-2">
-                    <div className="text-[11px] text-gray-500">Total on-track qty</div>
+                    <div className="text-[11px] text-gray-500">Total on-time qty</div>
                     <div className="text-lg font-semibold text-gray-900">{(onTrackSummary.totalQty / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
                   </div>
                   <div className="rounded border bg-white px-3 py-2">
@@ -582,7 +613,7 @@ export default function ShippingPerformancePage() {
           </CardHeader>
           <CardContent className="pt-2">
             {(perfDashMode === 'late' ? lateTree : onTrackTree).length === 0 ? (
-              <div className="text-sm text-gray-500">{perfDashMode === 'late' ? 'No late shipments found.' : 'No on-track shipments found.'}</div>
+              <div className="text-sm text-gray-500">{perfDashMode === 'late' ? 'No late shipments found.' : 'No on-time shipments found.'}</div>
             ) : (
               <div className="space-y-3">
                 <div className="text-sm text-gray-600">
@@ -590,10 +621,17 @@ export default function ShippingPerformancePage() {
                 </div>
                 <div className="rounded-xl border bg-white p-4">
                   <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-                    <div className="text-sm font-semibold text-gray-900">{perfDashMode === 'late' ? 'Late' : 'On Track'} Performance drilldown</div>
+                    <div className="text-sm font-semibold text-gray-900">{perfDashMode === 'late' ? 'Late' : 'On Time'} Performance drilldown</div>
                     <button
                       type="button"
-                      onClick={() => { setLateSelVessel(null); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }}
+                      onClick={() => {
+                        setLateSelVessel(null)
+                        setLateSelIncoterm(null)
+                        setLateSelProduct(null)
+                        setLateSelPlant(null)
+                        setLateOnTimeFilter('ALL')
+                        setCurrentPage(1)
+                      }}
                       className="text-sm text-blue-700 hover:underline"
                     >
                       Reset selection
@@ -660,7 +698,9 @@ export default function ShippingPerformancePage() {
                         if (col.level === 'product') {
                           return (
                             <div className="space-y-2">
-                              {activeTree.map((n) => renderNode(n, lateSelProduct === n.key, () => { setLateSelProduct(n.key); setLateSelPlant(null); setLateSelIncoterm(null); setLateSelVessel(null) }))}
+                              {activeTree.map((n) => renderNode(n, lateSelProduct === n.key, () => {
+                                applyPerfDrilldownClick({ product: n.key, plant: null, incoterm: null, vessel: null })
+                              }))}
                             </div>
                           )
                         }
@@ -668,7 +708,9 @@ export default function ShippingPerformancePage() {
                           if (!lateSelProduct) return <div className="text-sm text-gray-500">Select a product to see plants.</div>
                           return (
                             <div className="space-y-2">
-                              {(productNode?.children || []).map((n) => renderNode(n, lateSelPlant === n.key, () => { setLateSelPlant(n.key); setLateSelIncoterm(null); setLateSelVessel(null) }))}
+                              {(productNode?.children || []).map((n) => renderNode(n, lateSelPlant === n.key, () => {
+                                applyPerfDrilldownClick({ plant: n.key, incoterm: null, vessel: null })
+                              }))}
                             </div>
                           )
                         }
@@ -676,14 +718,18 @@ export default function ShippingPerformancePage() {
                           if (!lateSelPlant) return <div className="text-sm text-gray-500">Select a plant to see incoterms.</div>
                           return (
                             <div className="space-y-2">
-                              {(plantNode?.children || []).map((n) => renderNode(n, lateSelIncoterm === n.key, () => { setLateSelIncoterm(n.key); setLateSelVessel(null) }))}
+                              {(plantNode?.children || []).map((n) => renderNode(n, lateSelIncoterm === n.key, () => {
+                                applyPerfDrilldownClick({ incoterm: n.key, vessel: null })
+                              }))}
                             </div>
                           )
                         }
                         if (!lateSelIncoterm) return <div className="text-sm text-gray-500">Select an incoterm to see vessels.</div>
                         return (
                           <div className="space-y-2">
-                            {(incotermNode?.children || []).map((n) => renderNode(n, lateSelVessel === n.key, () => setLateSelVessel(n.key)))}
+                            {(incotermNode?.children || []).map((n) => renderNode(n, lateSelVessel === n.key, () => {
+                              applyPerfDrilldownClick({ vessel: n.key })
+                            }))}
                           </div>
                         )
                       })()

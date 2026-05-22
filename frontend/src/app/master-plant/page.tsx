@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -24,12 +25,14 @@ interface MasterPlant {
   postal_code: string | null
   city: string | null
   plant_type: string | null
+  group_plant: string | null
 }
 
 export default function MasterPlantPage() {
   const [items, setItems] = useState<MasterPlant[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [isAdmin, setIsAdmin] = useState(false)
   const [editing, setEditing] = useState<MasterPlant | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
@@ -43,11 +46,11 @@ export default function MasterPlantPage() {
     errors: Array<{ row: number; plant_code: string; reason: string }>
   } | null>(null)
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async (searchQuery: string) => {
     try {
       setLoading(true)
       const params = new URLSearchParams()
-      if (search.trim().length >= 2) params.set('search', search.trim())
+      if (searchQuery.length >= 2) params.set('search', searchQuery)
       const res = await api.get('/master-plants', { params })
       setItems(res.data?.data?.items || [])
     } catch (err) {
@@ -56,21 +59,23 @@ export default function MasterPlantPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
-    void fetchData()
     try {
       const u = JSON.parse(localStorage.getItem('user') || 'null')
       setIsAdmin(String(u?.role || '').toUpperCase() === 'ADMIN')
     } catch {
       setIsAdmin(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    void fetchData(debouncedSearch)
+  }, [debouncedSearch, fetchData])
+
   const templateHint = useMemo(() => {
-    return 'Use template: docs/Master Plant DWS.xlsx (Row 1 = header, columns A–F)'
+    return 'Template: Row 1 = header, columns A–G (Company Name, Plant Code, Plant Name, Postal Code, City, Plant Type, Group Plant)'
   }, [])
 
   const normalize = (v: any) => String(v ?? '').trim()
@@ -84,6 +89,7 @@ export default function MasterPlantPage() {
       postal_code: p.postal_code ?? '',
       city: p.city ?? '',
       plant_type: p.plant_type ?? '',
+      group_plant: p.group_plant ?? '',
     })
     setIsFormOpen(true)
   }
@@ -110,12 +116,13 @@ export default function MasterPlantPage() {
         postal_code: String(form.postal_code ?? '').trim() || null,
         city: String(form.city ?? '').trim() || null,
         plant_type: String(form.plant_type ?? '').trim() || null,
+        group_plant: String(form.group_plant ?? '').trim() || null,
       }
       await api.put(`/master-plants/${editing.id}`, payload)
       setEditing(null)
       setForm({})
       setIsFormOpen(false)
-      await fetchData()
+      await fetchData(debouncedSearch)
     } catch (err: any) {
       console.error('Save master plant error', err)
       const msg = err?.response?.data?.error?.message || 'Failed to save master plant'
@@ -129,7 +136,7 @@ export default function MasterPlantPage() {
     if (!ok) return
     try {
       await api.delete(`/master-plants/${p.id}`)
-      await fetchData()
+      await fetchData(debouncedSearch)
     } catch (err: any) {
       console.error('Delete master plant error', err)
       const msg = err?.response?.data?.error?.message || 'Failed to delete master plant'
@@ -144,31 +151,57 @@ export default function MasterPlantPage() {
       const buf = await file.arrayBuffer()
       const wb = XLSX.read(buf, { type: 'array' })
       const ws = wb.Sheets[wb.SheetNames[0]]
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true }) as any[][]
-      if (!Array.isArray(rows) || rows.length <= 1) {
+      const raw = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true }) as any[][]
+
+      // Auto-detect header row (first row with "Company" or "Plant" in any cell)
+      let headerRowIdx = 0
+      for (let i = 0; i < Math.min(raw.length, 5); i++) {
+        const rowStr = (raw[i] || []).map((c: any) => String(c ?? '').toLowerCase()).join(' ')
+        if (rowStr.includes('company') || rowStr.includes('plant')) {
+          headerRowIdx = i
+          break
+        }
+      }
+
+      const headers = (raw[headerRowIdx] || []).map((h: any) => String(h ?? '').toLowerCase().trim())
+      const dataRows = raw.slice(headerRowIdx + 1)
+
+      if (dataRows.length === 0) {
         alert('File has no data rows')
         return
       }
 
-      const dataRows = rows.slice(1) // row 1 is header
+      // Map columns by header name first, then fall back to positional (A–G)
+      const colIdx = (names: string[], fallback: number): number => {
+        const idx = headers.findIndex((h) => names.some((n) => h.includes(n)))
+        return idx >= 0 ? idx : fallback
+      }
 
-      // Column mapping (A=0..F=5) as per template request.
+      const iCompany   = colIdx(['company'], 0)
+      const iCode      = colIdx(['plant code', 'code'], 1)
+      const iName      = colIdx(['plant name', 'name'], 2)
+      const iPostal    = colIdx(['postal'], 3)
+      const iCity      = colIdx(['city'], 4)
+      const iType      = colIdx(['plant type', 'type'], 5)
+      const iGroup     = colIdx(['group'], 6)
+
       const parsed = dataRows.map((r, idx) => {
         const col = (i: number) => normalize(r?.[i])
         return {
-          _row: idx + 2, // excel row number
-          company_name: col(0),
-          plant_code: col(1),
-          plant_name: col(2) || null,
-          postal_code: col(3) || null,
-          city: col(4) || null,
-          plant_type: col(5) || null,
+          _row: headerRowIdx + idx + 2,
+          company_name: col(iCompany),
+          plant_code:   col(iCode),
+          plant_name:   col(iName)   || null,
+          postal_code:  col(iPostal) || null,
+          city:         col(iCity)   || null,
+          plant_type:   col(iType)   || null,
+          group_plant:  col(iGroup)  || null,
         }
       })
 
       const payloadRows = parsed
-        .filter((r) => r.company_name || r.plant_code || r.plant_name || r.postal_code || r.city || r.plant_type)
-        .filter((r) => (r.company_name || '').trim() !== '' || (r.plant_code || '').trim() !== '')
+        .filter((r) => r.company_name || r.plant_code)
+        .filter((r) => r.company_name.trim() !== '' || r.plant_code.trim() !== '')
         .map(({ _row, ...rest }) => rest)
 
       if (payloadRows.length === 0) {
@@ -198,7 +231,7 @@ export default function MasterPlantPage() {
         })
       }
 
-      await fetchData()
+      await fetchData(debouncedSearch)
     } catch (err: any) {
       console.error('Upload master plant file error', err)
       const msg = err?.response?.data?.error?.message || 'Failed to parse or upload file'
@@ -214,7 +247,7 @@ export default function MasterPlantPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Master Plant</h1>
-            <p className="text-gray-600 mt-2">{templateHint}</p>
+            <p className="text-gray-500 text-sm mt-1">{templateHint}</p>
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -228,7 +261,7 @@ export default function MasterPlantPage() {
             <input
               id="master-plant-upload"
               type="file"
-              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
               className="hidden"
               onChange={handleUpload}
             />
@@ -242,14 +275,11 @@ export default function MasterPlantPage() {
           <CardContent>
             <div className="flex gap-3 items-center">
               <Input
-                placeholder="Search by Company / Plant Code / Plant Name / City / Type..."
+                placeholder="Search by Company / Plant Code / Plant Name / City / Type / Group..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="max-w-xl"
               />
-              <Button variant="outline" size="sm" onClick={fetchData} disabled={loading}>
-                Apply
-              </Button>
             </div>
           </CardContent>
         </Card>
@@ -274,6 +304,7 @@ export default function MasterPlantPage() {
                       <th className="text-left px-3 py-2 font-medium">Postal Code</th>
                       <th className="text-left px-3 py-2 font-medium">City</th>
                       <th className="text-left px-3 py-2 font-medium">Plant Type</th>
+                      <th className="text-left px-3 py-2 font-medium">Group Plant</th>
                       <th className="text-right px-3 py-2 font-medium">Actions</th>
                     </tr>
                   </thead>
@@ -286,6 +317,7 @@ export default function MasterPlantPage() {
                         <td className="px-3 py-2">{p.postal_code || '-'}</td>
                         <td className="px-3 py-2">{p.city || '-'}</td>
                         <td className="px-3 py-2">{p.plant_type || '-'}</td>
+                        <td className="px-3 py-2">{p.group_plant || '-'}</td>
                         <td className="px-3 py-2 text-right">
                           <div className="inline-flex gap-2">
                             <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
@@ -310,27 +342,19 @@ export default function MasterPlantPage() {
         </Card>
       </div>
 
+      {/* Upload result dialog */}
       <Dialog open={!!uploadResult} onOpenChange={(open) => !open && setUploadResult(null)}>
         <DialogContent className="sm:max-w-xl max-h-[85vh]">
           <DialogHeader>
-            <DialogTitle>Upload result</DialogTitle>
+            <DialogTitle>Upload Result</DialogTitle>
           </DialogHeader>
           {uploadResult && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-2 text-sm">
-                <div>
-                  <span className="text-gray-600">Records found:</span> <strong>{uploadResult.total}</strong>
-                </div>
-                <div>
-                  <span className="text-gray-600">Success:</span>{' '}
-                  <strong className="text-green-600">{uploadResult.success}</strong>
-                </div>
-                <div>
-                  <span className="text-gray-600">Inserted:</span> {uploadResult.inserted}
-                </div>
-                <div>
-                  <span className="text-gray-600">Updated:</span> {uploadResult.updated}
-                </div>
+                <div><span className="text-gray-600">Records found:</span> <strong>{uploadResult.total}</strong></div>
+                <div><span className="text-gray-600">Success:</span>{' '}<strong className="text-green-600">{uploadResult.success}</strong></div>
+                <div><span className="text-gray-600">Inserted:</span> {uploadResult.inserted}</div>
+                <div><span className="text-gray-600">Updated:</span> {uploadResult.updated}</div>
                 <div>
                   <span className="text-gray-600">Failed:</span>{' '}
                   <strong className={uploadResult.failed ? 'text-red-600' : ''}>{uploadResult.failed}</strong>
@@ -364,21 +388,16 @@ export default function MasterPlantPage() {
             </div>
           )}
           <DialogFooter>
-            <Button type="button" onClick={() => setUploadResult(null)}>
-              Close
-            </Button>
+            <Button type="button" onClick={() => setUploadResult(null)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
+      {/* Edit dialog */}
       <Dialog
         open={isFormOpen}
         onOpenChange={(open) => {
-          if (!open) {
-            setIsFormOpen(false)
-            setEditing(null)
-            setForm({})
-          }
+          if (!open) { setIsFormOpen(false); setEditing(null); setForm({}) }
         }}
       >
         <DialogContent className="sm:max-w-xl">
@@ -387,11 +406,11 @@ export default function MasterPlantPage() {
           </DialogHeader>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Company Name</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Company Name <span className="text-red-500">*</span></label>
               <Input value={form.company_name || ''} onChange={(e) => handleChange('company_name', e.target.value)} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Plant Code</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Plant Code <span className="text-red-500">*</span></label>
               <Input value={form.plant_code || ''} onChange={(e) => handleChange('plant_code', e.target.value)} />
             </div>
             <div>
@@ -410,26 +429,23 @@ export default function MasterPlantPage() {
               <label className="block text-sm font-medium text-gray-700 mb-1">Plant Type</label>
               <Input value={form.plant_type || ''} onChange={(e) => handleChange('plant_type', e.target.value)} />
             </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Group Plant</label>
+              <Input value={form.group_plant || ''} onChange={(e) => handleChange('group_plant', e.target.value)} />
+            </div>
           </div>
           <DialogFooter>
             <Button
               type="button"
               variant="ghost"
-              onClick={() => {
-                setIsFormOpen(false)
-                setEditing(null)
-                setForm({})
-              }}
+              onClick={() => { setIsFormOpen(false); setEditing(null); setForm({}) }}
             >
               Cancel
             </Button>
-            <Button type="button" onClick={handleSubmit}>
-              Save
-            </Button>
+            <Button type="button" onClick={handleSubmit}>Save</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </Layout>
   )
 }
-

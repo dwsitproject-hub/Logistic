@@ -21,11 +21,11 @@ export const FIELD_HELP = {
 
   cashCycle: `Closed: latest receive/discharge → Payoff Date (Land: Trucking Last Receive; SEA: ATA Vessel Complete Discharge). Open: Land uses latest Daily Planning Deliverables date; SEA uses ETA Vessel Complete Discharge.`,
 
-  outstandingQty: `Remaining quantity yet to be delivered. Positive = still outstanding; negative = over-delivered.`,
+  outstandingQty: `Remaining quantity yet to be delivered. Green = Over Delivered; Red = Still Outstanding.`,
 
   receivedQty: `Actual quantity received based on contract data (quantity_receive). For sea shipments: received at destination. For land shipments: quantity delivered to plant/site.`,
 
-  outstandingQtyMt: `Remaining quantity yet to be delivered (in MT). Positive = still outstanding; negative = over-delivered.`,
+  outstandingQtyMt: `Remaining quantity yet to be delivered (in MT). Green = Over Delivered; Red = Still Outstanding.`,
 
   companyName: `From Buyer in latest SAP data. For B2B "origin" contracts (empty Contract Reff PO), Company Name may follow linked B2B child contracts per business rules.`,
 

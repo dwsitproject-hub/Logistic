@@ -18,6 +18,7 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
         OR plant_name ILIKE $${params.length}
         OR city ILIKE $${params.length}
         OR plant_type ILIKE $${params.length}
+        OR group_plant ILIKE $${params.length}
       )`;
     }
 
@@ -30,6 +31,7 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
         postal_code,
         city,
         plant_type,
+        group_plant,
         created_at,
         updated_at
       FROM master_plants
@@ -67,7 +69,7 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
 
 export const createMasterPlant = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { company_name, plant_code, plant_name, postal_code, city, plant_type } = req.body as any;
+    const { company_name, plant_code, plant_name, postal_code, city, plant_type, group_plant } = req.body as any;
 
     const company = typeof company_name === 'string' ? company_name.trim() : String(company_name ?? '').trim();
     const code = typeof plant_code === 'string' ? plant_code.trim() : String(plant_code ?? '').trim();
@@ -82,8 +84,8 @@ export const createMasterPlant = async (req: AuthRequest, res: Response): Promis
 
     const insertSql = `
       INSERT INTO master_plants (
-        company_name, plant_code, plant_name, postal_code, city, plant_type
-      ) VALUES ($1,$2,$3,$4,$5,$6)
+        company_name, plant_code, plant_name, postal_code, city, plant_type, group_plant
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7)
       RETURNING *
     `;
     const result = await query(insertSql, [
@@ -93,6 +95,7 @@ export const createMasterPlant = async (req: AuthRequest, res: Response): Promis
       postal_code ?? null,
       city ?? null,
       plant_type ?? null,
+      group_plant ?? null,
     ]);
 
     res.status(201).json({ success: true, data: result.rows[0] });
@@ -105,7 +108,7 @@ export const createMasterPlant = async (req: AuthRequest, res: Response): Promis
 export const updateMasterPlant = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params as any;
-    const { company_name, plant_code, plant_name, postal_code, city, plant_type } = req.body as any;
+    const { company_name, plant_code, plant_name, postal_code, city, plant_type, group_plant } = req.body as any;
 
     const updateSql = `
       UPDATE master_plants
@@ -116,8 +119,9 @@ export const updateMasterPlant = async (req: AuthRequest, res: Response): Promis
         postal_code = COALESCE($4, postal_code),
         city = COALESCE($5, city),
         plant_type = COALESCE($6, plant_type),
+        group_plant = $7,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $7
+      WHERE id = $8
       RETURNING *
     `;
     const result = await query(updateSql, [
@@ -127,6 +131,7 @@ export const updateMasterPlant = async (req: AuthRequest, res: Response): Promis
       postal_code ?? null,
       city ?? null,
       plant_type ?? null,
+      group_plant ?? null,
       id,
     ]);
 
@@ -164,6 +169,7 @@ export const bulkUploadMasterPlants = async (req: AuthRequest, res: Response): P
       const postal = r.postal_code == null ? null : String(r.postal_code).trim();
       const city = typeof r.city === 'string' ? r.city.trim() : (r.city == null ? null : String(r.city).trim());
       const type = typeof r.plant_type === 'string' ? r.plant_type.trim() : (r.plant_type == null ? null : String(r.plant_type).trim());
+      const groupPlant = typeof r.group_plant === 'string' ? r.group_plant.trim() : (r.group_plant == null ? null : String(r.group_plant).trim());
 
       if (!company) {
         errors.push({ row: rowNum, plant_code: code || '(empty)', reason: 'Missing company_name' });
@@ -181,23 +187,25 @@ export const bulkUploadMasterPlants = async (req: AuthRequest, res: Response): P
         );
 
         if (existing.rows.length > 0) {
+          // Only fill NULL fields — never overwrite data that already has a value.
           await query(
             `UPDATE master_plants SET
-              plant_name = $1,
-              postal_code = $2,
-              city = $3,
-              plant_type = $4,
-              updated_at = CURRENT_TIMESTAMP
-             WHERE id = $5`,
-            [name ?? null, postal ?? null, city ?? null, type ?? null, existing.rows[0].id]
+              plant_name  = COALESCE(plant_name,  $1),
+              postal_code = COALESCE(postal_code, $2),
+              city        = COALESCE(city,        $3),
+              plant_type  = COALESCE(plant_type,  $4),
+              group_plant = COALESCE(group_plant, $5),
+              updated_at  = CURRENT_TIMESTAMP
+             WHERE id = $6`,
+            [name ?? null, postal ?? null, city ?? null, type ?? null, groupPlant ?? null, existing.rows[0].id]
           );
           updated += 1;
         } else {
           await query(
             `INSERT INTO master_plants (
-              company_name, plant_code, plant_name, postal_code, city, plant_type
-            ) VALUES ($1,$2,$3,$4,$5,$6)`,
-            [company, code, name ?? null, postal ?? null, city ?? null, type ?? null]
+              company_name, plant_code, plant_name, postal_code, city, plant_type, group_plant
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+            [company, code, name ?? null, postal ?? null, city ?? null, type ?? null, groupPlant ?? null]
           );
           inserted += 1;
         }
@@ -239,4 +247,3 @@ export const deleteMasterPlant = async (req: AuthRequest, res: Response): Promis
     res.status(500).json({ success: false, error: { message: 'Failed to delete master plant' } });
   }
 };
-

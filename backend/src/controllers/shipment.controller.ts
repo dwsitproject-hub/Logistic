@@ -2755,10 +2755,29 @@ export const getContractSuggestions = async (req: AuthRequest, res: Response) =>
         ) AS sto_number,
         c.sto_quantity
       FROM contracts c
+      LEFT JOIN LATERAL (
+        SELECT
+          COALESCE(spd.data->'contract'->>'contract_type', spd.data->>'B2B Flag') AS b2b_flag,
+          COALESCE(
+            spd.data->'contract'->>'contract_reference_po',
+            spd.data->>'CONTRACT REFF PO',
+            spd.data->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'CONTRACT REFF PO'
+          ) AS contract_reference_po
+        FROM sap_processed_data spd
+        WHERE spd.contract_number = c.contract_id
+        ORDER BY spd.created_at DESC NULLS LAST
+        LIMIT 1
+      ) spd_b2b ON TRUE
       WHERE UPPER(COALESCE(c.status, '')) IN ('OPEN', 'ACTIVE')
         AND (
           c.po_number ILIKE $1
           OR c.contract_id ILIKE $1
+        )
+        AND NOT (
+          UPPER(TRIM(COALESCE(spd_b2b.b2b_flag, c.contract_type::text, ''))) = 'B2B'
+          AND NULLIF(TRIM(COALESCE(spd_b2b.contract_reference_po, '')), '') IS NOT NULL
         )
       ORDER BY COALESCE(NULLIF(TRIM(c.po_number), ''), c.contract_id)
       LIMIT 10

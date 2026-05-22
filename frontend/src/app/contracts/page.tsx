@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, Database } from 'lucide-react'
 import api from '@/lib/api'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
@@ -262,6 +262,7 @@ function defaultCompactVisibleColumnIds(isContractPerformance: boolean): string[
       'contract_id',
       'group_name',
       'supplier',
+      'qty_delivery',
       'outstanding_qty_mt',
       'trade_cycle_days',
       'cash_cycle_days',
@@ -277,7 +278,9 @@ function ContractsPageContent() {
   const pathname = usePathname()
   const isContractPerformance = pathname === '/contract-performance'
   const [contracts, setContracts] = useState<Contract[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(() => pathname !== '/contract-performance')
+  /** Contract Performance: table list is opt-in (All Data) to avoid slow initial load. */
+  const [contractPerfTableEnabled, setContractPerfTableEnabled] = useState(false)
   const [authReady, setAuthReady] = useState(false)
   // Search should apply only on Enter / Apply (not per keystroke)
   const [searchDraft, setSearchDraft] = useState('')
@@ -323,6 +326,7 @@ function ContractsPageContent() {
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
   const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
+  const [selectedProducts, setSelectedProducts] = useState<string[]>([])
   const [uploadingId, setUploadingId] = useState<string>('')
   const [csvCargoUploading, setCsvCargoUploading] = useState(false)
   const [csvCargoResult, setCsvCargoResult] = useState<{ updated: number; notFound: number; errors: { po_number: string; reason: string }[] } | null>(null)
@@ -368,21 +372,23 @@ function ContractsPageContent() {
     d31_60: TradeCycleBucket
     d61plus: TradeCycleBucket
   }
-  const [perfDashMode, setPerfDashMode] = useState<'late' | 'ontrack'>('late')
+  const [perfDashMode, setPerfDashMode] = useState<'late' | 'ontrack'>('ontrack')
   const [latePerformanceTree, setLatePerformanceTree] = useState<LatePerfNode[]>([])
-  const [latePerformanceSummary, setLatePerformanceSummary] = useState<{ count: number; totalDays: number; avgDays: number; maxDays: number; totalQtyDelivery?: number }>({
-    count: 0,
-    totalDays: 0,
-    avgDays: 0,
-    maxDays: 0,
-    totalQtyDelivery: 0,
+  type PerfSummary = {
+    count: number; totalDays: number; avgDays: number; maxDays: number
+    totalQtyDelivery?: number; avgLogCycle?: number | null; avgCashCycle?: number | null
+    openOutstandingQty?: number; closeOutstandingQty?: number
+  }
+  const [latePerformanceSummary, setLatePerformanceSummary] = useState<PerfSummary>({
+    count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0,
   })
   const [onTrackPerformanceTree, setOnTrackPerformanceTree] = useState<LatePerfNode[]>([])
-  const [onTrackPerformanceSummary, setOnTrackPerformanceSummary] = useState<{ count: number; totalDays: number; avgDays: number; maxDays: number; totalQtyDelivery?: number }>({
+  const [onTrackPerformanceSummary, setOnTrackPerformanceSummary] = useState<PerfSummary>({
     count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0,
   })
   const [tradeCycleDist, setTradeCycleDist] = useState<TradeCycleDist | null>(null)
-  const [latePerfLoading, setLatePerfLoading] = useState(false)
+  const [latePerfSummaryLoading, setLatePerfSummaryLoading] = useState(false)
+  const [latePerfTreeLoading, setLatePerfTreeLoading] = useState(false)
   type LatePerfHotspot = {
     incoterm: string
     product: string
@@ -452,16 +458,17 @@ function ContractsPageContent() {
       const qty = Number(h.totalQtyDelivery) || 0
       const sup = norm(h.supplier)
 
-      const nInc = root.children.get(inc) ?? mk()
-      root.children.set(inc, nInc)
-      const nProd = nInc.children.get(prod) ?? mk()
-      nInc.children.set(prod, nProd)
+      // Tree order: Product → Plant → Incoterm → Supplier
+      const nProd = root.children.get(prod) ?? mk()
+      root.children.set(prod, nProd)
       const nPlant = nProd.children.get(plant) ?? mk()
       nProd.children.set(plant, nPlant)
-      const nSup = nPlant.children.get(sup) ?? mk()
-      nPlant.children.set(sup, nSup)
+      const nInc = nPlant.children.get(inc) ?? mk()
+      nPlant.children.set(inc, nInc)
+      const nSup = nInc.children.get(sup) ?? mk()
+      nInc.children.set(sup, nSup)
 
-      for (const n of [root, nInc, nProd, nPlant, nSup]) {
+      for (const n of [root, nProd, nPlant, nInc, nSup]) {
         n.count += cnt
         n.totalDays += days
         n.maxDays = Math.max(n.maxDays, maxd)
@@ -474,7 +481,7 @@ function ContractsPageContent() {
       for (const [k, a] of m.entries()) {
         const id = `${parentId}__${k}`
         const nextLevel: LatePerfBranchNode['level'] =
-          level === 'incoterm' ? 'product' : level === 'product' ? 'plant' : level === 'plant' ? 'supplier' : 'supplier'
+          level === 'product' ? 'plant' : level === 'plant' ? 'incoterm' : level === 'incoterm' ? 'supplier' : 'supplier'
         const children =
           level === 'supplier'
             ? []
@@ -502,7 +509,7 @@ function ContractsPageContent() {
       totalDays: root.totalDays,
       maxDays: root.maxDays,
       totalQtyDelivery: root.totalQtyDelivery,
-      children: toNodes(root.children, 'total', 'incoterm'),
+      children: toNodes(root.children, 'total', 'product'),
     }
   }, [latePerfAllHotspots])
 
@@ -518,8 +525,10 @@ function ContractsPageContent() {
     setLatePerfSelSupplier(null)
     setLateOnTimeFilter('ALL')
     setPerfTransportMode('ALL')
+    setStatusFilter('All Status')
     setSelectedIncoterms([])
     setSelectedPlantSites([])
+    setSelectedProducts([])
     setColumnFilters(prev => {
       const next = { ...prev }
       delete next.product
@@ -534,13 +543,14 @@ function ContractsPageContent() {
     return nodes.find((n) => n.label === label) ?? null
   }, [])
 
-  const latePerfIncotermNodes = latePerfBranchTree.children
-  const latePerfSelectedIncNode = findChild(latePerfIncotermNodes, latePerfSelIncoterm)
-  const latePerfProductNodes = latePerfSelectedIncNode?.children ?? []
+  // Tree order: Product → Plant → Incoterm → Supplier
+  const latePerfProductNodes = latePerfBranchTree.children
   const latePerfSelectedProdNode = findChild(latePerfProductNodes, latePerfSelProduct)
   const latePerfPlantNodes = latePerfSelectedProdNode?.children ?? []
   const latePerfSelectedPlantNode = findChild(latePerfPlantNodes, latePerfSelPlant)
-  const latePerfSupplierNodes = latePerfSelectedPlantNode?.children ?? []
+  const latePerfIncotermNodes = latePerfSelectedPlantNode?.children ?? []
+  const latePerfSelectedIncNode = findChild(latePerfIncotermNodes, latePerfSelIncoterm)
+  const latePerfSupplierNodes = latePerfSelectedIncNode?.children ?? []
 
   type ContractLogisticsUi =
     | { kind: 'truck-create'; contract: Contract }
@@ -652,6 +662,7 @@ function ContractsPageContent() {
 
   useEffect(() => {
     if (!authReady) return
+    if (isContractPerformance && !contractPerfTableEnabled) return
     // Read URL parameters
     const statusParam = searchParams.get('status')
     if (statusParam) {
@@ -675,9 +686,12 @@ function ContractsPageContent() {
     unassignedFilter,
     selectedIncoterms,
     selectedPlantSites,
+    selectedProducts,
     columnFilters,
     sortKey,
     sortDir,
+    contractPerfTableEnabled,
+    isContractPerformance,
   ])
 
   // Debounced refetch: global search runs on the server (full dataset), not only the current page
@@ -711,10 +725,10 @@ function ContractsPageContent() {
   const collapseAll = () => setExpandedContractIds(new Set())
 
   const columnStorageKey = isContractPerformance
-    ? 'contract-performance.compact.visibleColumns.v10'
+    ? 'contract-performance.compact.visibleColumns.v11'
     : 'contracts.compact.visibleColumns.v8'
   const columnOrderStorageKey = isContractPerformance
-    ? 'contract-performance.compact.columnOrder.v7'
+    ? 'contract-performance.compact.columnOrder.v8'
     : 'contracts.compact.columnOrder.v9'
   // v4: default column order puts Contract Date first (ignore stale v3 saved order).
   // Bumped so saved "created_at" default does not fight API order (newest contract_date first).
@@ -723,6 +737,7 @@ function ContractsPageContent() {
   const fetchContracts = async (page: number = currentPage, searchOverride?: string, sortKeyOverride?: string, sortDirOverride?: 'asc' | 'desc') => {
     try {
       if (!authReady) return
+      if (isContractPerformance && !contractPerfTableEnabled) return
       setLoading(true)
       const params = new URLSearchParams()
       params.append('page', page.toString())
@@ -737,6 +752,11 @@ function ContractsPageContent() {
           const includeBlank = selectedIncoterms.includes('Blank')
           const values = selectedIncoterms.filter((v) => v !== 'Blank')
           mergedColumnFilters.incoterm = { type: 'multi', values, includeBlank }
+        }
+        if (selectedProducts.length > 0) {
+          const includeBlank = selectedProducts.includes('Blank')
+          const values = selectedProducts.filter((v) => v !== 'Blank')
+          mergedColumnFilters.product = { type: 'multi', values, includeBlank }
         }
       }
       const cfKeys = Object.keys(mergedColumnFilters)
@@ -794,20 +814,6 @@ function ContractsPageContent() {
 
       const response = await api.get(`/contracts?${params.toString()}`)
       const loadedContracts: Contract[] = response.data?.data?.contracts || []
-      console.log('Contracts loaded:', loadedContracts.length)
-      console.log('Pagination:', response.data?.data?.pagination)
-      // Debug: payment dates from API (in Network tab filter by "contracts" to see this request)
-      const sample = loadedContracts.find(c => c.contract_id === '1004020799') || loadedContracts[0]
-      if (sample) {
-        console.log('Payment fields from API (sample):', {
-          contract_id: sample.contract_id,
-          due_date_payment: sample.due_date_payment,
-          dp_date: sample.dp_date,
-          payoff_date: sample.payoff_date,
-          dp_date_deviation_days: sample.dp_date_deviation_days,
-          payoff_date_deviation_days: sample.payoff_date_deviation_days,
-        })
-      }
       setContracts(loadedContracts)
       
       // Update pagination state
@@ -834,88 +840,174 @@ function ContractsPageContent() {
     }
   }
 
-  const fetchLatePerformance = useCallback(async () => {
+  const buildLatePerfParams = useCallback(() => {
+    const params = new URLSearchParams()
+    params.append('scope', 'ytd')
+    params.append('_ts', String(Date.now()))
+    if (dateFrom) params.append('dateFrom', dateFrom)
+    if (dateTo) params.append('dateTo', dateTo)
+    if (perfTransportMode && perfTransportMode !== 'ALL') params.append('transportMode', perfTransportMode)
+    if (productFilter && productFilter !== 'ALL') params.append('product', productFilter)
+    if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
+    return params
+  }, [dateFrom, dateTo, perfTransportMode, productFilter, b2bFlagFilter])
+
+  const fetchLatePerformanceSummary = useCallback(async () => {
     if (!authReady || !isContractPerformance) return
     try {
-      setLatePerfLoading(true)
-      const params = new URLSearchParams()
-      params.append('scope', 'ytd')
-      params.append('_ts', String(Date.now()))
-
-      if (transportModeFilter && transportModeFilter !== 'ALL') params.append('transportMode', transportModeFilter)
-      if (productFilter && productFilter !== 'ALL') params.append('product', productFilter)
-      if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
-
-      const resp = await api.get(`/contracts/late-performance?${params.toString()}`)
+      setLatePerfSummaryLoading(true)
+      const resp = await api.get(`/contracts/late-performance/summary?${buildLatePerfParams().toString()}`)
       const data = resp.data?.data
       setLatePerformanceSummary(data?.summary ?? { count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0 })
-      setLatePerformanceTree(Array.isArray(data?.tree) ? data.tree : [])
       setOnTrackPerformanceSummary(data?.onTrackSummary ?? { count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0 })
-      setOnTrackPerformanceTree(Array.isArray(data?.onTrackTree) ? data.onTrackTree : [])
       setTradeCycleDist(data?.distribution ?? null)
     } catch (e) {
-      console.error('Failed to load late performance dashboard:', e)
+      console.error('Failed to load late performance summary:', e)
       setLatePerformanceSummary({ count: 0, totalDays: 0, avgDays: 0, maxDays: 0 })
-      setLatePerformanceTree([])
       setOnTrackPerformanceSummary({ count: 0, totalDays: 0, avgDays: 0, maxDays: 0 })
-      setOnTrackPerformanceTree([])
       setTradeCycleDist(null)
     } finally {
-      setLatePerfLoading(false)
+      setLatePerfSummaryLoading(false)
     }
-  }, [
-    authReady,
-    isContractPerformance,
-    transportModeFilter,
-    productFilter,
-    b2bFlagFilter,
-  ])
+  }, [authReady, isContractPerformance, buildLatePerfParams])
+
+  const fetchLatePerformanceTree = useCallback(async () => {
+    if (!authReady || !isContractPerformance) return
+    try {
+      setLatePerfTreeLoading(true)
+      const resp = await api.get(`/contracts/late-performance/tree?${buildLatePerfParams().toString()}`)
+      const data = resp.data?.data
+      setLatePerformanceTree(Array.isArray(data?.tree) ? data.tree : [])
+      setOnTrackPerformanceTree(Array.isArray(data?.onTrackTree) ? data.onTrackTree : [])
+    } catch (e) {
+      console.error('Failed to load late performance drilldown:', e)
+      setLatePerformanceTree([])
+      setOnTrackPerformanceTree([])
+    } finally {
+      setLatePerfTreeLoading(false)
+    }
+  }, [authReady, isContractPerformance, buildLatePerfParams])
+
+  const fetchLatePerformanceDashboard = useCallback(async () => {
+    await fetchLatePerformanceSummary()
+    await fetchLatePerformanceTree()
+  }, [fetchLatePerformanceSummary, fetchLatePerformanceTree])
 
   useEffect(() => {
-    void fetchLatePerformance()
-  }, [fetchLatePerformance])
+    void fetchLatePerformanceDashboard()
+  }, [fetchLatePerformanceDashboard])
+
+  const loadContractPerfTableData = useCallback(() => {
+    setContractPerfTableEnabled(true)
+    setCurrentPage(1)
+  }, [])
+
+  const focusContractPerformanceTable = useCallback(() => {
+    setContractPerfTableEnabled(true)
+    setTimeout(
+      () => contractsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      100,
+    )
+  }, [])
+
+  const applySummaryStatusFocus = useCallback(
+    (mode: 'ontrack' | 'late', contractStatus: 'Open' | 'Close') => {
+      if (!isContractPerformance) return
+      setPerfDashMode(mode)
+      setLateOnTimeFilter(mode === 'ontrack' ? 'ON_TIME' : 'LATE')
+      setStatusFilter(contractStatus)
+      setLatePerfSelIncoterm(null)
+      setLatePerfSelProduct(null)
+      setLatePerfSelPlant(null)
+      setLatePerfSelSupplier(null)
+      setPerfTransportMode('ALL')
+      setSelectedIncoterms([])
+      setSelectedPlantSites([])
+      setSelectedProducts([])
+      setColumnFilters((prev) => {
+        const next = { ...prev }
+        delete next.product
+        delete next.supplier
+        return next
+      })
+      setCurrentPage(1)
+      collapseAll()
+      focusContractPerformanceTable()
+    },
+    [collapseAll, focusContractPerformanceTable, isContractPerformance],
+  )
+
+  const isSummaryStatusSelected = useCallback(
+    (mode: 'ontrack' | 'late', contractStatus: 'Open' | 'Close') =>
+      !latePerfSelProduct &&
+      !latePerfSelPlant &&
+      !latePerfSelIncoterm &&
+      !latePerfSelSupplier &&
+      lateOnTimeFilter === (mode === 'ontrack' ? 'ON_TIME' : 'LATE') &&
+      statusFilter === contractStatus,
+    [
+      latePerfSelProduct,
+      latePerfSelPlant,
+      latePerfSelIncoterm,
+      latePerfSelSupplier,
+      lateOnTimeFilter,
+      statusFilter,
+    ],
+  )
+
+  const summaryStatusBoxClass = useCallback(
+    (mode: 'ontrack' | 'late', contractStatus: 'Open' | 'Close', palette: string) => {
+      const selected = isSummaryStatusSelected(mode, contractStatus)
+      const ring = mode === 'ontrack' ? 'ring-green-500' : 'ring-red-500'
+      return `${palette} flex-1 rounded-lg border px-3 py-2 text-left transition-all hover:shadow-md cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-300 ${
+        selected ? `ring-2 ${ring} shadow-sm` : ''
+      }`
+    },
+    [isSummaryStatusSelected],
+  )
 
   const applyLatePerformanceFocus = useCallback(
     (incotermKey: string, productKey: string, plantKey: string, supplierKey?: string) => {
       if (!isContractPerformance) return
 
+      setContractPerfTableEnabled(true)
       setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
       setPerfTransportMode('ALL')
+      setStatusFilter('All Status')
 
+      setSelectedProducts([productKey])
       setSelectedIncoterms([incotermKey])
       setSelectedPlantSites([plantKey])
 
-      setColumnFilters((prev) => ({
-        ...prev,
-        product: { type: 'text', value: productKey === 'Blank' ? '' : productKey, exact: true },
-        ...(supplierKey && supplierKey !== 'Blank'
-          ? { supplier: { type: 'text', value: supplierKey, exact: true } }
-          : {}),
-      }))
+      setColumnFilters((prev) => {
+        const next = { ...prev }
+        delete next.product
+        if (supplierKey && supplierKey !== 'Blank') {
+          next.supplier = { type: 'text', value: supplierKey, exact: true }
+        } else {
+          delete next.supplier
+        }
+        return next
+      })
 
       setCurrentPage(1)
       collapseAll()
-      if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
+      focusContractPerformanceTable()
     },
-    [collapseAll, isContractPerformance],
+    [collapseAll, focusContractPerformanceTable, isContractPerformance, perfDashMode],
   )
   
-  // Fetch filter options on mount
+  // Fetch b2b flag filter options on mount (lightweight dedicated endpoint)
   useEffect(() => {
     if (!authReady) return
-    const fetchFilterOptions = async () => {
-      try {
-        // Fetch all contracts to get unique values (with a higher limit)
-        const response = await api.get('/contracts?limit=10000')
-        const allContracts: Contract[] = response.data.data.contracts || []
-        
-        const b2bFlags = [...new Set(allContracts.map((c) => c.b2b_flag).filter((v): v is string => typeof v === 'string' && v.length > 0))].sort()
-        setAvailableB2bFlags(b2bFlags)
-      } catch (error) {
-        console.error('Failed to fetch filter options:', error)
-      }
-    }
-    fetchFilterOptions()
+    api.get('/contracts/filter-options/b2b-flags')
+      .then((res) => {
+        const flags: string[] = res.data?.data?.b2bFlags || []
+        setAvailableB2bFlags(flags)
+      })
+      .catch((error) => {
+        console.error('Failed to fetch b2b flag filter options:', error)
+      })
   }, [authReady])
 
   // Contract Performance: filter options (Incoterm + Plant/Site) use the same sources as Dashboard
@@ -988,8 +1080,9 @@ function ContractsPageContent() {
   ])
 
   useEffect(() => {
+    if (isContractPerformance) return
     fetchUnassignedCounts()
-  }, [fetchUnassignedCounts])
+  }, [fetchUnassignedCounts, isContractPerformance])
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -1799,6 +1892,18 @@ function ContractsPageContent() {
       render: (c) => <span className="text-sm">{c.supplier || '-'}</span>,
     },
     {
+      id: 'qty_delivery',
+      label: 'Contract Qty (MT)',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => Number(c.quantity_ordered) || 0,
+      render: (c) => (
+        <span className="text-sm truncate">
+          {((Number(c.quantity_ordered) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT
+        </span>
+      )
+    },
+    {
       id: 'outstanding_qty_mt',
       label: 'Outstanding Qty (MT)',
       formulaHelp: FIELD_HELP.outstandingQtyMt,
@@ -2263,6 +2368,7 @@ function ContractsPageContent() {
       log_cycle_days: 'Log Cycle',
       contract_qty: 'Contract Qty (MT)',
       received_qty: 'Received Qty (MT)',
+      qty_delivery: 'Contract Qty (MT)',
       outstanding_qty: 'Outstanding Qty',
       outstanding_qty_mt: 'Outstanding Qty (MT)',
       trade_cycle_days: 'Trade Cycle',
@@ -2530,6 +2636,141 @@ function ContractsPageContent() {
           </div>
         )}
 
+        {isContractPerformance && (() => {
+          const totalOsQty = (latePerformanceSummary.totalQtyDelivery ?? 0) + (onTrackPerformanceSummary.totalQtyDelivery ?? 0)
+          const latePct   = totalOsQty > 0 ? ((latePerformanceSummary.totalQtyDelivery ?? 0) / totalOsQty) * 100 : 0
+          const onTrackPct = totalOsQty > 0 ? ((onTrackPerformanceSummary.totalQtyDelivery ?? 0) / totalOsQty) * 100 : 0
+          const fmtMT = (v: number) => (v / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' MT'
+          const fmtDays = (v: number | null | undefined) => v != null ? `${Math.round(v)} days` : '0 days'
+          if (latePerfSummaryLoading) {
+            return (
+              <div className="space-y-2">
+                <div className="flex items-center justify-end">
+                  <button
+                    type="button"
+                    onClick={resetLatePerfSelections}
+                    className="text-sm text-blue-700 hover:underline"
+                  >
+                    Reset selection
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {[0, 1].map((i) => (
+                    <div key={i} className="rounded-xl border bg-white p-5 shadow-sm animate-pulse">
+                      <div className="h-5 bg-gray-200 rounded w-24 mb-4" />
+                      <div className="h-8 bg-gray-200 rounded w-32 mb-3" />
+                      <div className="h-6 bg-gray-100 rounded mb-3" />
+                      <div className="h-16 bg-gray-100 rounded" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          }
+          return (
+            <div className="space-y-2">
+              <div className="flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={resetLatePerfSelections}
+                  className="text-sm text-blue-700 hover:underline"
+                >
+                  Reset selection
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* On Track card */}
+              <div className="rounded-xl border bg-white p-5 shadow-sm">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-base font-semibold text-gray-800">On Time</span>
+                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">{onTrackPct.toFixed(1)}%</span>
+                </div>
+                <div className="text-sm text-gray-500 mb-1">Outstanding Qty</div>
+                <div className="text-xl font-bold text-gray-900 mb-3">{fmtMT(onTrackPerformanceSummary.totalQtyDelivery ?? 0)}</div>
+                {/* Progress bar */}
+                <div className="w-full h-6 rounded-md bg-gray-100 overflow-hidden mb-3">
+                  <div className="h-full bg-green-500 flex items-center justify-end pr-2 transition-all duration-500" style={{ width: `${onTrackPct}%` }}>
+                    <span className="text-xs font-bold text-white">{onTrackPct.toFixed(0)}%</span>
+                  </div>
+                </div>
+                {/* Avg metrics */}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-4">
+                  <span>Avg Late: <span className="font-semibold text-gray-700">{fmtDays(latePerformanceSummary.avgDays)}</span></span>
+                  <span>Avg Trade: <span className="font-semibold text-gray-700">{fmtDays(onTrackPerformanceSummary.avgDays)}</span></span>
+                  <span>Avg Cash: <span className="font-semibold text-gray-700">{fmtDays(onTrackPerformanceSummary.avgCashCycle)}</span></span>
+                  <span>Avg Log: <span className="font-semibold text-gray-700">{fmtDays(onTrackPerformanceSummary.avgLogCycle)}</span></span>
+                </div>
+                {/* Open / Close breakdown */}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    title="View On Time open contracts in the table below"
+                    onClick={() => applySummaryStatusFocus('ontrack', 'Open')}
+                    className={summaryStatusBoxClass('ontrack', 'Open', 'bg-blue-50 border-blue-100')}
+                  >
+                    <div className="text-[11px] font-medium text-blue-600 mb-1">Open</div>
+                    <div className="text-sm font-semibold text-gray-800">{fmtMT(onTrackPerformanceSummary.openOutstandingQty ?? 0)}</div>
+                  </button>
+                  <button
+                    type="button"
+                    title="View On Time closed contracts in the table below"
+                    onClick={() => applySummaryStatusFocus('ontrack', 'Close')}
+                    className={summaryStatusBoxClass('ontrack', 'Close', 'bg-orange-50 border-orange-100')}
+                  >
+                    <div className="text-[11px] font-medium text-orange-600 mb-1">Close</div>
+                    <div className="text-sm font-semibold text-gray-800">{fmtMT(onTrackPerformanceSummary.closeOutstandingQty ?? 0)}</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Late card */}
+              <div className="rounded-xl border bg-white p-5 shadow-sm">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-base font-semibold text-gray-800">Late</span>
+                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">{latePct.toFixed(1)}%</span>
+                </div>
+                <div className="text-sm text-gray-500 mb-1">Outstanding Qty</div>
+                <div className="text-xl font-bold text-gray-900 mb-3">{fmtMT(latePerformanceSummary.totalQtyDelivery ?? 0)}</div>
+                {/* Progress bar */}
+                <div className="w-full h-6 rounded-md bg-gray-100 overflow-hidden mb-3">
+                  <div className="h-full bg-red-500 flex items-center justify-end pr-2 transition-all duration-500" style={{ width: `${latePct}%` }}>
+                    <span className="text-xs font-bold text-white">{latePct.toFixed(0)}%</span>
+                  </div>
+                </div>
+                {/* Avg metrics */}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-4">
+                  <span>Avg Late: <span className="font-semibold text-gray-700">{fmtDays(latePerformanceSummary.avgDays)}</span></span>
+                  <span>Avg Trade: <span className="font-semibold text-gray-700">{fmtDays(latePerformanceSummary.avgDays)}</span></span>
+                  <span>Avg Cash: <span className="font-semibold text-gray-700">{fmtDays(latePerformanceSummary.avgCashCycle)}</span></span>
+                  <span>Avg Log: <span className="font-semibold text-gray-700">{fmtDays(latePerformanceSummary.avgLogCycle)}</span></span>
+                </div>
+                {/* Open / Close breakdown */}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    title="View Late open contracts in the table below"
+                    onClick={() => applySummaryStatusFocus('late', 'Open')}
+                    className={summaryStatusBoxClass('late', 'Open', 'bg-blue-50 border-blue-100')}
+                  >
+                    <div className="text-[11px] font-medium text-blue-600 mb-1">Open</div>
+                    <div className="text-sm font-semibold text-gray-800">{fmtMT(latePerformanceSummary.openOutstandingQty ?? 0)}</div>
+                  </button>
+                  <button
+                    type="button"
+                    title="View Late closed contracts in the table below"
+                    onClick={() => applySummaryStatusFocus('late', 'Close')}
+                    className={summaryStatusBoxClass('late', 'Close', 'bg-orange-50 border-orange-100')}
+                  >
+                    <div className="text-[11px] font-medium text-orange-600 mb-1">Close</div>
+                    <div className="text-sm font-semibold text-gray-800">{fmtMT(latePerformanceSummary.closeOutstandingQty ?? 0)}</div>
+                  </button>
+                </div>
+              </div>
+            </div>
+            </div>
+          )
+        })()}
+
         {isContractPerformance && (
           <Card>
             <CardHeader className="pb-2">
@@ -2539,86 +2780,75 @@ function ContractsPageContent() {
                   <div className="inline-flex rounded-lg border bg-white p-1 mb-2">
                     <button
                       type="button"
+                      onClick={() => { setPerfDashMode('ontrack'); resetLatePerfSelections(); setLateOnTimeFilter('ON_TIME') }}
+                      className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'ontrack' ? 'bg-green-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+                    >
+                      On Time
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => { setPerfDashMode('late'); resetLatePerfSelections(); setLateOnTimeFilter('LATE') }}
                       className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'late' ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
                     >
                       Late
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => { setPerfDashMode('ontrack'); resetLatePerfSelections(); setLateOnTimeFilter('ON_TIME') }}
-                      className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'ontrack' ? 'bg-green-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-                    >
-                      On Track
-                    </button>
                   </div>
                   <CardTitle className="text-base">
-                    {perfDashMode === 'late' ? 'Late Performance (YTD)' : 'On Track Performance (YTD)'}
+                    {perfDashMode === 'late' ? 'Late Performance (YTD)' : 'On Time Performance (YTD)'}
                   </CardTitle>
                   <div className="text-sm text-gray-600 mt-1">
                     {perfDashMode === 'late'
                       ? <>Management view of late contracts where <span className="font-medium">Trade Cycle &gt; 0</span>. Use hotspots to jump to the exact contracts list.</>
-                      : <>Management view of on-track contracts where <span className="font-medium">Trade Cycle ≤ 0</span>. Use hotspots to jump to the exact contracts list.</>
+                      : <>Management view of on-time contracts where <span className="font-medium">Trade Cycle ≤ 0</span>. Use hotspots to jump to the exact contracts list.</>
                     }
                   </div>
                 </div>
-                {perfDashMode === 'late' ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full sm:w-auto">
-                    <div className="rounded border bg-white px-3 py-2">
-                      <div className="text-[11px] text-gray-500">Late contracts</div>
-                      <div className="text-lg font-semibold text-red-600">{latePerformanceSummary.count.toLocaleString('en-US')}</div>
-                    </div>
-                    <div className="rounded border bg-white px-3 py-2">
-                      <div className="text-[11px] text-gray-500">Total late qty</div>
-                      <div className="text-lg font-semibold text-gray-900">{((latePerformanceSummary.totalQtyDelivery ?? 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
-                    </div>
-                    <div className="rounded border bg-white px-3 py-2">
-                      <div className="text-[11px] text-gray-500">Avg late days</div>
-                      <div className="text-lg font-semibold text-gray-900">{latePerformanceSummary.avgDays ? latePerformanceSummary.avgDays.toFixed(1) : '0.0'}</div>
-                    </div>
-                    <div className="rounded border bg-white px-3 py-2">
-                      <div className="text-[11px] text-gray-500">Max late days</div>
-                      <div className="text-lg font-semibold text-gray-900">{latePerformanceSummary.maxDays.toLocaleString('en-US')}</div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full sm:w-auto">
-                    <div className="rounded border bg-white px-3 py-2">
-                      <div className="text-[11px] text-gray-500">On Track contracts</div>
-                      <div className="text-lg font-semibold text-green-600">{onTrackPerformanceSummary.count.toLocaleString('en-US')}</div>
-                    </div>
-                    <div className="rounded border bg-white px-3 py-2">
-                      <div className="text-[11px] text-gray-500">Total on-track qty</div>
-                      <div className="text-lg font-semibold text-gray-900">{((onTrackPerformanceSummary.totalQtyDelivery ?? 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</div>
-                    </div>
-                    <div className="rounded border bg-white px-3 py-2">
-                      <div className="text-[11px] text-gray-500">Avg days ahead</div>
-                      <div className="text-lg font-semibold text-gray-900">{onTrackPerformanceSummary.avgDays ? onTrackPerformanceSummary.avgDays.toFixed(1) : '0.0'}</div>
-                    </div>
-                    <div className="rounded border bg-white px-3 py-2">
-                      <div className="text-[11px] text-gray-500">Max days ahead</div>
-                      <div className="text-lg font-semibold text-gray-900">{onTrackPerformanceSummary.maxDays.toLocaleString('en-US')}</div>
-                    </div>
-                  </div>
-                )}
               </div>
             </CardHeader>
             <CardContent className="pt-2">
-              {latePerfLoading ? (
-                <div className="text-sm text-gray-500">Loading Performance dashboard…</div>
+              {latePerfTreeLoading ? (
+                <div className="space-y-3 animate-pulse">
+                  <div className="h-4 bg-gray-100 rounded w-full max-w-3xl" />
+                  <div className="rounded-xl border bg-white p-4 shadow-sm">
+                    <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+                      <div className="h-5 bg-gray-200 rounded w-52" />
+                      <div className="h-4 bg-gray-100 rounded w-28" />
+                    </div>
+                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+                      {[0, 1, 2, 3].map((i) => (
+                        <div key={i} className="space-y-2">
+                          <div className="rounded-lg border border-gray-200 px-3 py-2 bg-gray-50">
+                            <div className="h-4 bg-gray-200 rounded w-20 mb-2" />
+                            <div className="h-3 bg-gray-100 rounded w-32" />
+                          </div>
+                          {[0, 1, 2].map((j) => (
+                            <div key={j} className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                              <div className="h-4 bg-gray-200 rounded w-full mb-2" />
+                              <div className="h-1.5 bg-gray-100 rounded mb-2" />
+                              <div className="flex justify-between gap-2">
+                                <div className="h-3 bg-gray-100 rounded w-12" />
+                                <div className="h-3 bg-gray-100 rounded w-16" />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               ) : (perfDashMode === 'late' ? latePerformanceTree : onTrackPerformanceTree).length === 0 ? (
-                <div className="text-sm text-gray-500">{perfDashMode === 'late' ? 'No late contracts found in YTD.' : 'No on-track contracts found in YTD.'}</div>
+                <div className="text-sm text-gray-500">{perfDashMode === 'late' ? 'No late contracts found in YTD.' : 'No on-time contracts found in YTD.'}</div>
               ) : (
                 <div className="space-y-3">
                   <div className="text-sm text-gray-600">
-                    Navigate as a tree: <span className="font-medium">Incoterm → Product → Plant → Supplier</span>.
-                    Choosing a node updates the contracts table below to the same <span className="font-medium">YTD {perfDashMode === 'late' ? 'late' : 'on-track'}</span> scope and your selection.
-                    Click a <span className="font-medium">Plant</span> node to narrow further (Group Name is viewed in the table).
+                    Navigate as a tree: <span className="font-medium">Product → Plant → Incoterm → Supplier</span>.
+                    Choosing a node updates the contracts table below to the same <span className="font-medium">YTD {perfDashMode === 'late' ? 'late' : 'on-time'}</span> scope and your selection.
+                    Click a <span className="font-medium">Incoterm</span> node to narrow further (Group Name is viewed in the table).
                   </div>
 
                   <div className="rounded-xl border bg-white p-4">
                     <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-                      <div className="text-sm font-semibold text-gray-900">{perfDashMode === 'late' ? 'Late' : 'On Track'} Performance drilldown</div>
+                      <div className="text-sm font-semibold text-gray-900">{perfDashMode === 'late' ? 'Late' : 'On Time'} Performance drilldown</div>
                       <button
                         type="button"
                         onClick={resetLatePerfSelections}
@@ -2630,10 +2860,10 @@ function ContractsPageContent() {
 
                     <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
                       {([
-                        { title: 'Incoterm', subtitle: 'Pick one', level: 'incoterm' as const },
-                        { title: 'Product', subtitle: latePerfSelIncoterm ? `Under ${latePerfSelIncoterm}` : 'Pick incoterm first', level: 'product' as const },
+                        { title: 'Product', subtitle: 'Pick one', level: 'product' as const },
                         { title: 'Plant', subtitle: latePerfSelProduct ? `Under ${latePerfSelProduct}` : 'Pick product first', level: 'plant' as const },
-                        { title: 'Supplier', subtitle: latePerfSelPlant ? `Under ${latePerfSelPlant}` : 'Pick plant first', level: 'supplier' as const },
+                        { title: 'Incoterm', subtitle: latePerfSelPlant ? `Under ${latePerfSelPlant}` : 'Pick plant first', level: 'incoterm' as const },
+                        { title: 'Supplier', subtitle: latePerfSelIncoterm ? `Under ${latePerfSelIncoterm}` : 'Pick incoterm first', level: 'supplier' as const },
                       ] as const).map((col) => {
                         const denom = latePerformanceSummary.totalDays || 1
                         const levelStyles: Record<string, { headerBg: string; badge: string; bar: string; border: string }> = {
@@ -2684,18 +2914,21 @@ function ContractsPageContent() {
                         )
 
                         const body = (() => {
-                          if (col.level === 'incoterm') {
+                          // Column order: Product → Plant → Incoterm → Supplier
+                          if (col.level === 'product') {
                             return (
                               <div className="space-y-2">
-                                {latePerfIncotermNodes.slice(0, 30).map((n) =>
-                                  renderItem(n, latePerfSelIncoterm === n.label, () => {
+                                {latePerfProductNodes.slice(0, 30).map((n) =>
+                                  renderItem(n, latePerfSelProduct === n.label, () => {
                                     setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
                                     setPerfTransportMode('ALL')
-                                    setLatePerfSelIncoterm(n.label)
-                                    setLatePerfSelProduct(null)
+                                    setStatusFilter('All Status')
+                                    setLatePerfSelProduct(n.label)
                                     setLatePerfSelPlant(null)
+                                    setLatePerfSelIncoterm(null)
                                     setLatePerfSelSupplier(null)
-                                    setSelectedIncoterms([n.label])
+                                    setSelectedProducts([n.label])
+                                    setSelectedIncoterms([])
                                     setSelectedPlantSites([])
                                     setColumnFilters((prev) => {
                                       const next = { ...prev }
@@ -2703,52 +2936,64 @@ function ContractsPageContent() {
                                       delete next.supplier
                                       return next
                                     })
+                                    setCurrentPage(1)
+                                    collapseAll()
+                                    focusContractPerformanceTable()
                                   }),
                                 )}
                               </div>
                             )
                           }
-                          if (col.level === 'product') {
-                            if (!latePerfSelIncoterm) return <div className="text-sm text-gray-500">Select an incoterm to see products.</div>
+                          if (col.level === 'plant') {
+                            if (!latePerfSelProduct) return <div className="text-sm text-gray-500">Select a product to see plants.</div>
                             return (
                               <div className="space-y-2">
-                                {latePerfProductNodes.slice(0, 30).map((n) =>
-                                  renderItem(n, latePerfSelProduct === n.label, () => {
+                                {latePerfPlantNodes.slice(0, 30).map((n) =>
+                                  renderItem(n, latePerfSelPlant === n.label, () => {
                                     setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
                                     setPerfTransportMode('ALL')
-                                    setLatePerfSelProduct(n.label)
-                                    setLatePerfSelPlant(null)
-                                    setLatePerfSelSupplier(null)
-                                    setSelectedPlantSites([])
-                                    setColumnFilters((prev) => {
-                                      const next: Record<string, ColumnFilter> = { ...prev, product: { type: 'text', value: n.label === 'Blank' ? '' : n.label, exact: true } as ColumnFilter }
-                                      delete next.supplier
-                                      return next
-                                    })
-                                  }),
-                                )}
-                              </div>
-                            )
-                          }
-                          // plant
-                          if (!latePerfSelProduct || !latePerfSelIncoterm) return <div className="text-sm text-gray-500">Select a product to see plants.</div>
-                          return (
-                            <div className="space-y-2">
-                              {latePerfPlantNodes.slice(0, 30).map((n) =>
-                                renderItem(
-                                  n,
-                                  latePerfSelPlant === n.label,
-                                  () => {
-                                    setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
-                                    setPerfTransportMode('ALL')
+                                    setStatusFilter('All Status')
                                     setLatePerfSelPlant(n.label)
+                                    setLatePerfSelIncoterm(null)
                                     setLatePerfSelSupplier(null)
-                                    setSelectedPlantSites([n.label === 'Blank' ? '' : n.label])
+                                    setSelectedIncoterms([])
+                                    setSelectedPlantSites([n.label])
                                     setColumnFilters((prev) => {
                                       const next = { ...prev }
                                       delete next.supplier
                                       return next
                                     })
+                                    setCurrentPage(1)
+                                    collapseAll()
+                                    focusContractPerformanceTable()
+                                  }),
+                                )}
+                              </div>
+                            )
+                          }
+                          // incoterm
+                          if (!latePerfSelPlant || !latePerfSelProduct) return <div className="text-sm text-gray-500">Select a plant to see incoterms.</div>
+                          return (
+                            <div className="space-y-2">
+                              {latePerfIncotermNodes.slice(0, 30).map((n) =>
+                                renderItem(
+                                  n,
+                                  latePerfSelIncoterm === n.label,
+                                  () => {
+                                    setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
+                                    setPerfTransportMode('ALL')
+                                    setStatusFilter('All Status')
+                                    setLatePerfSelIncoterm(n.label)
+                                    setLatePerfSelSupplier(null)
+                                    setSelectedIncoterms([n.label])
+                                    setColumnFilters((prev) => {
+                                      const next = { ...prev }
+                                      delete next.supplier
+                                      return next
+                                    })
+                                    setCurrentPage(1)
+                                    collapseAll()
+                                    focusContractPerformanceTable()
                                   },
                                 ),
                               )}
@@ -2759,7 +3004,7 @@ function ContractsPageContent() {
                         // supplier column body (resolved above via col.level check below)
                         const supplierBody = (() => {
                           if (col.level !== 'supplier') return null
-                          if (!latePerfSelPlant || !latePerfSelProduct || !latePerfSelIncoterm) return <div className="text-sm text-gray-500">Select a plant to see suppliers.</div>
+                          if (!latePerfSelIncoterm || !latePerfSelPlant || !latePerfSelProduct) return <div className="text-sm text-gray-500">Select an incoterm to see suppliers.</div>
                           return (
                             <div className="space-y-2">
                               {latePerfSupplierNodes.slice(0, 30).map((n) =>
@@ -3032,7 +3277,8 @@ function ContractsPageContent() {
                       (lateOnTimeFilter !== 'ALL' ||
                         perfTransportMode !== 'ALL' ||
                         selectedIncoterms.length > 0 ||
-                        selectedPlantSites.length > 0))) && (
+                        selectedPlantSites.length > 0 ||
+                        selectedProducts.length > 0))) && (
                     <Button
                       onClick={() => {
                         setDateFrom('')
@@ -3047,13 +3293,12 @@ function ContractsPageContent() {
                         if (!isContractPerformance) {
                           setUnassignedFilter(null)
                         } else {
-                          setLateOnTimeFilter('ALL')
-                          setPerfTransportMode('ALL')
-                          setSelectedIncoterms([])
-                          setSelectedPlantSites([])
+                          resetLatePerfSelections()
                         }
                         setCurrentPage(1)
-                        fetchContracts(1, '')
+                        if (!isContractPerformance || contractPerfTableEnabled) {
+                          fetchContracts(1, '')
+                        }
                       }}
                       variant="ghost"
                       size="sm"
@@ -3160,8 +3405,12 @@ function ContractsPageContent() {
                       : 'All Contracts'}
                   </CardTitle>
                   <p className="text-sm text-gray-500 mt-1">
-                    {totalContracts} total contracts | Showing {filteredContracts.length} on this page
-                    {totalPages > 1 && ` (Page ${currentPage} of ${totalPages})`}
+                    {isContractPerformance && !contractPerfTableEnabled
+                      ? 'Click All Data to load the contract list'
+                      : <>
+                          {totalContracts} total contracts | Showing {filteredContracts.length} on this page
+                          {totalPages > 1 && ` (Page ${currentPage} of ${totalPages})`}
+                        </>}
                   </p>
                 </div>
                 {unassignedFilter && (
@@ -3181,6 +3430,13 @@ function ContractsPageContent() {
                 )}
               </div>
               <div className="flex items-center gap-2">
+                {isContractPerformance && !contractPerfTableEnabled && (
+                  <Button size="sm" onClick={loadContractPerfTableData}>
+                    <Database className="h-4 w-4 mr-2" />
+                    All Data
+                    <ChevronRight className="h-4 w-4 ml-1" />
+                  </Button>
+                )}
                 <div className="relative">
                   <Button
                     variant="outline"
@@ -3261,7 +3517,7 @@ function ContractsPageContent() {
                     </div>
                   )}
                 </div>
-                {totalPages > 1 && (
+                {(!isContractPerformance || contractPerfTableEnabled) && totalPages > 1 && (
                   <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
                     <Button
                       variant="outline"
@@ -3315,7 +3571,17 @@ function ContractsPageContent() {
             </div>
           </CardHeader>
           <CardContent>
-            {loading ? (
+            {isContractPerformance && !contractPerfTableEnabled ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <Database className="h-12 w-12 text-gray-300 mb-4" />
+                <p className="text-gray-600 mb-1">Contract list is not loaded yet.</p>
+                <p className="text-sm text-gray-500 mb-4">Load all data to view the full table — this may take a moment.</p>
+                <Button onClick={loadContractPerfTableData}>
+                  All Data
+                  <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+              </div>
+            ) : loading ? (
               <div className="text-center py-8">Loading contracts...</div>
             ) : (
               <>

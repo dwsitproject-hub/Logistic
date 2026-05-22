@@ -689,8 +689,8 @@ export class SapDataDistributionService {
           charter_type = COALESCE($10, charter_type),
           loading_method = COALESCE($11, loading_method),
           discharge_method = COALESCE($12, discharge_method),
-          port_of_loading = CASE WHEN $13::text IS NOT NULL AND trim(COALESCE($13::text, '')) != '' AND trim(COALESCE($13::text, '')) != '0.00' THEN $13::text ELSE port_of_loading END,
-          port_of_discharge = CASE WHEN $14::text IS NOT NULL AND trim(COALESCE($14::text, '')) != '' AND trim(COALESCE($14::text, '')) != '0.00' THEN $14::text ELSE port_of_discharge END,
+          port_of_loading = COALESCE(port_of_loading, NULLIF(NULLIF(TRIM(COALESCE($13::text, '')), ''), '0.00')),
+          port_of_discharge = COALESCE(port_of_discharge, NULLIF(NULLIF(TRIM(COALESCE($14::text, '')), ''), '0.00')),
           shipment_date = COALESCE($15::date, shipment_date),
           arrival_date = COALESCE($16::date, arrival_date),
           quantity_shipped = COALESCE($17::numeric, quantity_shipped),
@@ -722,7 +722,18 @@ export class SapDataDistributionService {
           ata_discharge_start = COALESCE($43::date, ata_discharge_start),
           eta_discharge_complete = COALESCE($44::date, eta_discharge_complete),
           ata_discharge_complete = COALESCE($45::date, ata_discharge_complete),
-          status = $46,
+          status = CASE
+            WHEN (CASE $46::text
+              WHEN 'UNPLANNED' THEN 0 WHEN 'PLANNED' THEN 1 WHEN 'IN_PROGRESS' THEN 2
+              WHEN 'LOADING' THEN 3 WHEN 'IN_TRANSIT' THEN 4 WHEN 'ARRIVED' THEN 5
+              WHEN 'UNLOADING' THEN 6 WHEN 'COMPLETED' THEN 7 ELSE 0 END)
+            > (CASE status
+              WHEN 'UNPLANNED' THEN 0 WHEN 'PLANNED' THEN 1 WHEN 'IN_PROGRESS' THEN 2
+              WHEN 'LOADING' THEN 3 WHEN 'IN_TRANSIT' THEN 4 WHEN 'ARRIVED' THEN 5
+              WHEN 'UNLOADING' THEN 6 WHEN 'COMPLETED' THEN 7 ELSE 0 END)
+            THEN $46
+            ELSE status
+          END,
           updated_at = CURRENT_TIMESTAMP
          WHERE id = $47`,
         [
@@ -812,8 +823,8 @@ export class SapDataDistributionService {
           charter_type  = COALESCE(EXCLUDED.charter_type, shipments.charter_type),
           loading_method  = COALESCE(EXCLUDED.loading_method, shipments.loading_method),
           discharge_method = COALESCE(EXCLUDED.discharge_method, shipments.discharge_method),
-          port_of_loading = CASE WHEN NULLIF(TRIM(EXCLUDED.port_of_loading), '') IS NOT NULL AND TRIM(EXCLUDED.port_of_loading) != '0.00' THEN EXCLUDED.port_of_loading ELSE shipments.port_of_loading END,
-          port_of_discharge = CASE WHEN NULLIF(TRIM(EXCLUDED.port_of_discharge), '') IS NOT NULL AND TRIM(EXCLUDED.port_of_discharge) != '0.00' THEN EXCLUDED.port_of_discharge ELSE shipments.port_of_discharge END,
+          port_of_loading = COALESCE(shipments.port_of_loading, NULLIF(NULLIF(TRIM(COALESCE(EXCLUDED.port_of_loading, '')), ''), '0.00')),
+          port_of_discharge = COALESCE(shipments.port_of_discharge, NULLIF(NULLIF(TRIM(COALESCE(EXCLUDED.port_of_discharge, '')), ''), '0.00')),
           eta_arrival   = COALESCE(EXCLUDED.eta_arrival, shipments.eta_arrival),
           ata_arrival   = COALESCE(EXCLUDED.ata_arrival, shipments.ata_arrival),
           eta_sailed    = COALESCE(EXCLUDED.eta_sailed, shipments.eta_sailed),
@@ -845,7 +856,18 @@ export class SapDataDistributionService {
           loading_duration_days = COALESCE(EXCLUDED.loading_duration_days, shipments.loading_duration_days),
           discharge_duration_days = COALESCE(EXCLUDED.discharge_duration_days, shipments.discharge_duration_days),
           total_lead_time_days = COALESCE(EXCLUDED.total_lead_time_days, shipments.total_lead_time_days),
-          status        = EXCLUDED.status,
+          status = CASE
+            WHEN (CASE EXCLUDED.status
+              WHEN 'UNPLANNED' THEN 0 WHEN 'PLANNED' THEN 1 WHEN 'IN_PROGRESS' THEN 2
+              WHEN 'LOADING' THEN 3 WHEN 'IN_TRANSIT' THEN 4 WHEN 'ARRIVED' THEN 5
+              WHEN 'UNLOADING' THEN 6 WHEN 'COMPLETED' THEN 7 ELSE 0 END)
+            > (CASE shipments.status
+              WHEN 'UNPLANNED' THEN 0 WHEN 'PLANNED' THEN 1 WHEN 'IN_PROGRESS' THEN 2
+              WHEN 'LOADING' THEN 3 WHEN 'IN_TRANSIT' THEN 4 WHEN 'ARRIVED' THEN 5
+              WHEN 'UNLOADING' THEN 6 WHEN 'COMPLETED' THEN 7 ELSE 0 END)
+            THEN EXCLUDED.status
+            ELSE shipments.status
+          END,
           updated_at    = CURRENT_TIMESTAMP
         RETURNING id`,
         [
