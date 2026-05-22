@@ -21,6 +21,8 @@ import {
   createShipment,
   getContractDetailsForSto,
   getShippingPerformance,
+  getShippingPerformanceSummary,
+  getShippingPerformanceTree,
   updateStoQtyAssigned
 } from '../controllers/shipment.controller';
 
@@ -68,6 +70,8 @@ router.post(
 router.get('/daily-planning-deliverables', getShipmentDailyDeliverablesCalendar);
 router.put('/:id/daily-planning-deliverables', auditLog('UPDATE', 'SHIPMENT'), updateShipmentDailyDeliverables);
 
+router.get('/performance/summary', getShippingPerformanceSummary);
+router.get('/performance/tree', getShippingPerformanceTree);
 router.get('/performance', getShippingPerformance);
 // Get all shipments
 router.get('/', getShipments);

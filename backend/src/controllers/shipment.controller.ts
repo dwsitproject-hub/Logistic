@@ -3,6 +3,7 @@ import { Response } from 'express';
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
+import { runShippingPerformance } from '../services/shippingPerformance.service';
 import { normalizeAndValidateShipmentDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/shipmentDailyDeliverables';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
@@ -1022,165 +1023,44 @@ ${contractMetaSelect}
   }
 };
 
-export const getShippingPerformance = async (_req: AuthRequest, res: Response) => {
+export const getShippingPerformanceSummary = async (req: AuthRequest, res: Response) => {
   try {
-    const result = await query(
-      `WITH latest_spd_contract AS (
-        SELECT DISTINCT ON (spd.contract_number)
-          spd.contract_number,
-          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no
-        FROM sap_processed_data spd
-        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      ),
-      ship_keys AS (
-        SELECT
-          s.id AS shipment_pk,
-          c.contract_id,
-          COALESCE(
-            NULLIF(TRIM(c.sto_number::text), ''),
-            NULLIF(TRIM(s.operation_id), ''),
-            NULLIF(TRIM(s.shipment_id), ''),
-            s.id::text
-          ) AS sto_key
-        FROM shipments s
-        INNER JOIN contracts c ON s.contract_id = c.id
-        WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
-      ),
-      spd_keyed AS (
-        SELECT
-          sk.shipment_pk,
-          spd.data
-        FROM ship_keys sk
-        INNER JOIN sap_processed_data spd ON
-          NULLIF(TRIM(COALESCE(
-            spd.sto_number::text,
-            spd.data->'raw'->>'STO No.',
-            spd.data->'raw'->>'STO Number',
-            spd.data->'shipment'->>'sto_no',
-            spd.data->'contract'->>'sto_no'
-          )), '') = TRIM(sk.sto_key::text)
-      ),
-      sap_agg AS (
-        SELECT
-          sk.shipment_pk,
-          COALESCE(SUM(
-            NULLIF(regexp_replace(COALESCE(
-              NULLIF(TRIM(sk2.data->'contract'->>'sto_quantity'), ''),
-              NULLIF(TRIM(sk2.data->'shipment'->>'sto_quantity'), ''),
-              NULLIF(TRIM(sk2.data->'raw'->>'STO Quantity'), ''),
-              NULLIF(TRIM(sk2.data->'raw'->>'sto quantity'), ''),
-              ''
-            ), '[^0-9\\.-]', '', 'g'), '')::numeric
-          ), 0) AS sto_quantity,
-          COALESCE(SUM(
-            NULLIF(regexp_replace(COALESCE(
-              NULLIF(TRIM(sk2.data->'raw'->>'Quantity Receive'), ''),
-              NULLIF(TRIM(sk2.data->'raw'->>'Qty Receive'), ''),
-              ''
-            ), '[^0-9\\.-]', '', 'g'), '')::numeric
-          ), 0) AS quantity_receive,
-          COALESCE(SUM(
-            NULLIF(regexp_replace(COALESCE(
-              NULLIF(TRIM(sk2.data->'raw'->>'Quantity Delivered'), ''),
-              NULLIF(TRIM(sk2.data->'raw'->>'Quantity Delivery'), ''),
-              ''
-            ), '[^0-9\\.-]', '', 'g'), '')::numeric
-          ), 0) AS quantity_delivered_sap
-        FROM ship_keys sk
-        LEFT JOIN spd_keyed sk2 ON sk2.shipment_pk = sk.shipment_pk
-        GROUP BY sk.shipment_pk
-      ),
-      loading_port AS (
-        SELECT DISTINCT ON (vlp.shipment_id)
-          vlp.shipment_id,
-          vlp.eta_vessel_arrival::date AS load_eta_arrival,
-          vlp.eta_vessel_berthed_at_loading_port::date AS load_eta_berthed,
-          vlp.eta_loading_completed::date AS load_eta_completed
-        FROM vessel_loading_ports vlp
-        WHERE COALESCE(vlp.is_discharge_port, false) = false
-        ORDER BY vlp.shipment_id, vlp.port_sequence NULLS LAST, vlp.id
-      ),
-      discharge_port AS (
-        SELECT DISTINCT ON (vlp.shipment_id)
-          vlp.shipment_id,
-          vlp.eta_vessel_arrive_at_discharge_port::date AS discharge_eta_arrival,
-          vlp.eta_vessel_berthed_at_discharge_port::date AS discharge_eta_berthed,
-          vlp.eta_vessel_complete_discharge::date AS discharge_eta_completed
-        FROM vessel_loading_ports vlp
-        WHERE COALESCE(vlp.is_discharge_port, false) = true
-        ORDER BY vlp.shipment_id, vlp.port_sequence NULLS LAST, vlp.id
-      )
-      SELECT
-        s.id,
-        s.shipment_id,
-        c.contract_id AS contract_number,
-        c.po_number,
-        c.sto_number,
-        l.contract_ext_no,
-        c.contract_date::date AS contract_date,
-        c.incoterm,
-        c.product,
-        s.vessel_name,
-        s.status,
-        COALESCE(NULLIF(TRIM(s.port_of_discharge), ''), 'Blank') AS plant_site,
-        c.group_name,
-        c.transport_mode,
-        c.cargo_readiness_date::date AS cargo_readiness_date,
-        COALESCE(lp.load_eta_arrival, s.eta_arrival::date) AS loading_eta_arrival,
-        COALESCE(lp.load_eta_berthed, s.eta_berthed::date) AS loading_eta_berthed,
-        COALESCE(lp.load_eta_completed, s.eta_loading_complete::date) AS loading_eta_completed,
-        COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) AS discharge_eta_arrival,
-        COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) AS discharge_eta_berthed,
-        COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date) AS discharge_eta_completed,
-        (COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - c.cargo_readiness_date::date)::int AS loading_delta_eta_etr_days,
-        (COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - COALESCE(lp.load_eta_berthed, s.eta_berthed::date))::int AS loading_delta_eta_etb_days,
-        (COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date))::int AS loading_delta_etb_etc_days,
-        (COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) - COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date))::int AS discharge_delta_eta_etb_days,
-        (COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date))::int AS discharge_delta_etb_etc_days,
-        (
-          COALESCE((COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - c.cargo_readiness_date::date), 0) +
-          COALESCE((COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - COALESCE(lp.load_eta_berthed, s.eta_berthed::date)), 0) +
-          COALESCE((COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date)), 0) +
-          COALESCE((COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) - COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date)), 0) +
-          COALESCE((COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date)), 0)
-        )::int AS total_delta_days,
-        COALESCE(NULLIF(sa.sto_quantity, 0), c.sto_quantity, 0)::numeric AS sto_qty,
-        COALESCE(
-          CASE
-            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN sa.quantity_receive
-            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN sa.quantity_delivered_sap
-            ELSE COALESCE(NULLIF(sa.quantity_receive, 0), sa.quantity_delivered_sap)
-          END,
-          s.actual_vessel_qty_receive,
-          s.bl_quantity,
-          0
-        )::numeric AS received_qty,
-        GREATEST(
-          COALESCE(NULLIF(sa.sto_quantity, 0), c.sto_quantity, 0)::numeric
-          - COALESCE(
-            CASE
-              WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN sa.quantity_receive
-              WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN sa.quantity_delivered_sap
-              ELSE COALESCE(NULLIF(sa.quantity_receive, 0), sa.quantity_delivered_sap, COALESCE(s.actual_vessel_qty_receive, s.bl_quantity, 0))
-            END,
-            0
-          ),
-          0
-        )::numeric AS outstanding_qty
-      FROM shipments s
-      INNER JOIN contracts c ON s.contract_id = c.id
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      LEFT JOIN sap_agg sa ON sa.shipment_pk = s.id
-      LEFT JOIN loading_port lp ON lp.shipment_id = s.id
-      LEFT JOIN discharge_port dp ON dp.shipment_id = s.id
-      WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
-      ORDER BY s.created_at DESC`
-    );
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    const data = await runShippingPerformance(req, 'summary');
+    return res.json({ success: true, data });
+  } catch (error: any) {
+    logger.error('Get shipping performance summary error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch shipping performance summary' },
+    });
+  }
+};
 
+export const getShippingPerformanceTree = async (req: AuthRequest, res: Response) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    const data = await runShippingPerformance(req, 'tree');
+    return res.json({ success: true, data });
+  } catch (error: any) {
+    logger.error('Get shipping performance tree error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch shipping performance drilldown' },
+    });
+  }
+};
+
+export const getShippingPerformance = async (req: AuthRequest, res: Response) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    const data = await runShippingPerformance(req, 'rows');
     return res.json({
       success: true,
-      data: result.rows,
+      data: data.rows,
     });
   } catch (error: any) {
     logger.error('Get shipping performance error:', error);

@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { ArrowDown, ArrowUp, Filter, GripVertical, Search, SlidersHorizontal, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronRight, Database, Filter, GripVertical, Search, SlidersHorizontal, X } from 'lucide-react'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FieldHelp } from '@/components/FieldHelp'
@@ -175,52 +175,6 @@ const EMPTY_SHIPPING_SUMMARY: ShippingPerfSummary = {
   closeOutstandingQty: 0,
 }
 
-function buildShippingPerfSummary(rows: ShippingPerformanceRow[], isLate: boolean): ShippingPerfSummary {
-  let count = 0
-  let totalQty = 0
-  let openOutstandingQty = 0
-  let closeOutstandingQty = 0
-  let sumLoadingEtaEtr = 0
-  let sumLoadingEtaEtb = 0
-  let sumLoadingEtbEtc = 0
-  let sumDischargeEtaEtb = 0
-  let sumDischargeEtbEtc = 0
-  let sumTotalDelta = 0
-
-  for (const row of rows) {
-    const total = Number(row.total_delta_days ?? 0)
-    if (isLate ? total <= 0 : total > 0) continue
-    count++
-    const qty = Number(row.outstanding_qty ?? 0)
-    totalQty += qty
-    const status = String(row.status || '').trim().toUpperCase()
-    if (status === 'COMPLETED') closeOutstandingQty += qty
-    else openOutstandingQty += qty
-
-    sumLoadingEtaEtr += Number(row.loading_delta_eta_etr_days ?? 0)
-    sumLoadingEtaEtb += Number(row.loading_delta_eta_etb_days ?? 0)
-    sumLoadingEtbEtc += Number(row.loading_delta_etb_etc_days ?? 0)
-    sumDischargeEtaEtb += Number(row.discharge_delta_eta_etb_days ?? 0)
-    sumDischargeEtbEtc += Number(row.discharge_delta_etb_etc_days ?? 0)
-    sumTotalDelta += total
-  }
-
-  if (count === 0) return EMPTY_SHIPPING_SUMMARY
-
-  return {
-    count,
-    totalQty,
-    openOutstandingQty,
-    closeOutstandingQty,
-    avgLoadingEtaEtr: sumLoadingEtaEtr / count,
-    avgLoadingEtaEtb: sumLoadingEtaEtb / count,
-    avgLoadingEtbEtc: sumLoadingEtbEtc / count,
-    avgDischargeEtaEtb: sumDischargeEtaEtb / count,
-    avgDischargeEtbEtc: sumDischargeEtbEtc / count,
-    avgTotalDelta: sumTotalDelta / count,
-  }
-}
-
 function matchesShipmentStatusFilter(status: string, filter: string): boolean {
   const normalized = String(status || '').trim().toUpperCase()
   if (filter === 'ALL') return true
@@ -306,7 +260,17 @@ function NumberCell({
 
 export default function ShippingPerformancePage() {
   const [rows, setRows] = useState<ShippingPerformanceRow[]>([])
-  const [loading, setLoading] = useState(true)
+  const [summaryLoading, setSummaryLoading] = useState(true)
+  const [treeLoading, setTreeLoading] = useState(true)
+  const [tableLoading, setTableLoading] = useState(false)
+  const [shippingTableEnabled, setShippingTableEnabled] = useState(false)
+  const [authReady, setAuthReady] = useState(false)
+  const [latePerformanceSummary, setLatePerformanceSummary] = useState<ShippingPerfSummary>(EMPTY_SHIPPING_SUMMARY)
+  const [onTrackPerformanceSummary, setOnTrackPerformanceSummary] = useState<ShippingPerfSummary>(EMPTY_SHIPPING_SUMMARY)
+  const [lateTree, setLateTree] = useState<LatePerfNode[]>([])
+  const [onTrackTree, setOnTrackTree] = useState<LatePerfNode[]>([])
+  const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
+  const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
   const [searchDraft, setSearchDraft] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [showColumnManager, setShowColumnManager] = useState(false)
@@ -353,20 +317,116 @@ export default function ShippingPerformancePage() {
   const [tableViewMode, setTableViewMode] = useState<TableViewMode>('all')
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true)
-        const res = await api.get('/shipments/performance')
-        setRows(Array.isArray(res.data?.data) ? res.data.data : [])
-      } catch (error) {
-        console.error('Failed to load shipping performance:', error)
-        setRows([])
-      } finally {
-        setLoading(false)
-      }
+    if (typeof window === 'undefined') return
+    const hasToken = () => Boolean(localStorage.getItem('token'))
+    if (hasToken()) {
+      setAuthReady(true)
+      return
     }
-    fetchData()
+    const startedAt = Date.now()
+    const interval = window.setInterval(() => {
+      if (hasToken()) {
+        window.clearInterval(interval)
+        setAuthReady(true)
+      } else if (Date.now() - startedAt > 3000) {
+        window.clearInterval(interval)
+      }
+    }, 150)
+    return () => window.clearInterval(interval)
   }, [])
+
+  const buildShippingPerfParams = useCallback(() => {
+    const params = new URLSearchParams()
+    params.append('scope', 'ytd')
+    params.append('_ts', String(Date.now()))
+    if (dateFrom) params.append('dateFrom', dateFrom)
+    if (dateTo) params.append('dateTo', dateTo)
+    if (statusFilter && statusFilter !== 'ALL') params.append('status', statusFilter)
+    if (lateOnTimeFilter && lateOnTimeFilter !== 'ALL') params.append('lateOnTimeFilter', lateOnTimeFilter)
+    selectedIncoterms.forEach((v) => params.append('incoterm', v))
+    selectedPlantSites.forEach((v) => params.append('plant', v))
+    return params
+  }, [dateFrom, dateTo, statusFilter, lateOnTimeFilter, selectedIncoterms, selectedPlantSites])
+
+  const fetchShippingPerformanceSummary = useCallback(async () => {
+    if (!authReady) return
+    try {
+      setSummaryLoading(true)
+      const resp = await api.get(`/shipments/performance/summary?${buildShippingPerfParams().toString()}`)
+      const data = resp.data?.data
+      setLatePerformanceSummary(data?.summary ?? EMPTY_SHIPPING_SUMMARY)
+      setOnTrackPerformanceSummary(data?.onTrackSummary ?? EMPTY_SHIPPING_SUMMARY)
+      if (Array.isArray(data?.meta?.incoterms)) setAvailableIncoterms(data.meta.incoterms)
+      if (Array.isArray(data?.meta?.plantSites)) setAvailablePlantSites(data.meta.plantSites)
+    } catch (error) {
+      console.error('Failed to load shipping performance summary:', error)
+      setLatePerformanceSummary(EMPTY_SHIPPING_SUMMARY)
+      setOnTrackPerformanceSummary(EMPTY_SHIPPING_SUMMARY)
+    } finally {
+      setSummaryLoading(false)
+    }
+  }, [authReady, buildShippingPerfParams])
+
+  const fetchShippingPerformanceTree = useCallback(async () => {
+    if (!authReady) return
+    try {
+      setTreeLoading(true)
+      const resp = await api.get(`/shipments/performance/tree?${buildShippingPerfParams().toString()}`)
+      const data = resp.data?.data
+      setLateTree(Array.isArray(data?.tree) ? data.tree : [])
+      setOnTrackTree(Array.isArray(data?.onTrackTree) ? data.onTrackTree : [])
+    } catch (error) {
+      console.error('Failed to load shipping performance drilldown:', error)
+      setLateTree([])
+      setOnTrackTree([])
+    } finally {
+      setTreeLoading(false)
+    }
+  }, [authReady, buildShippingPerfParams])
+
+  const fetchShippingPerformanceDashboard = useCallback(async () => {
+    await fetchShippingPerformanceSummary()
+    await fetchShippingPerformanceTree()
+  }, [fetchShippingPerformanceSummary, fetchShippingPerformanceTree])
+
+  const fetchShippingPerformanceTable = useCallback(async () => {
+    if (!authReady) return
+    try {
+      setTableLoading(true)
+      const params = buildShippingPerfParams()
+      params.delete('lateOnTimeFilter')
+      const res = await api.get(`/shipments/performance?${params.toString()}`)
+      setRows(Array.isArray(res.data?.data) ? res.data.data : [])
+    } catch (error) {
+      console.error('Failed to load shipping performance table:', error)
+      setRows([])
+    } finally {
+      setTableLoading(false)
+    }
+  }, [authReady, buildShippingPerfParams])
+
+  const loadShippingTableData = useCallback(() => {
+    setShippingTableEnabled(true)
+    setCurrentPage(1)
+  }, [])
+
+  const focusShippingTable = useCallback(() => {
+    setShippingTableEnabled(true)
+    setTimeout(() => {
+      tableSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 100)
+  }, [])
+
+  useEffect(() => {
+    void fetchShippingPerformanceDashboard()
+  }, [fetchShippingPerformanceDashboard])
+
+  useEffect(() => {
+    if (!authReady || !shippingTableEnabled) return
+    void fetchShippingPerformanceTable()
+  }, [authReady, shippingTableEnabled, fetchShippingPerformanceTable])
+
+  const tableSectionRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const onDocClick = (ev: MouseEvent) => {
@@ -382,19 +442,7 @@ export default function ShippingPerformancePage() {
     return () => document.removeEventListener('mousedown', onDocClick)
   }, [showColumnManager, openHeaderFilterId])
 
-  const availableIncoterms = useMemo(
-    () =>
-      [...new Set(rows.map((r) => String(r.incoterm || '').trim() || 'Blank'))].sort((a, b) => a.localeCompare(b)),
-    [rows]
-  )
-
-  const availablePlantSites = useMemo(
-    () =>
-      [...new Set(rows.map((r) => String(r.plant_site || '').trim() || 'Blank'))].sort((a, b) => a.localeCompare(b)),
-    [rows]
-  )
-
-  const summaryBaseRows = useMemo(() => {
+  const filteredByTopFilters = useMemo(() => {
     return rows.filter((row) => {
       if (!matchesShipmentStatusFilter(String(row.status || ''), statusFilter)) return false
       const inc = String(row.incoterm || '').trim() || 'Blank'
@@ -404,75 +452,12 @@ export default function ShippingPerformancePage() {
       const cDate = String(row.contract_date || '').slice(0, 10)
       if (dateFrom && cDate && cDate < dateFrom) return false
       if (dateTo && cDate && cDate > dateTo) return false
-      return true
-    })
-  }, [rows, statusFilter, selectedIncoterms, selectedPlantSites, dateFrom, dateTo])
-
-  const latePerformanceSummary = useMemo(
-    () => buildShippingPerfSummary(summaryBaseRows, true),
-    [summaryBaseRows],
-  )
-
-  const onTrackPerformanceSummary = useMemo(
-    () => buildShippingPerfSummary(summaryBaseRows, false),
-    [summaryBaseRows],
-  )
-
-  const filteredByTopFilters = useMemo(() => {
-    return summaryBaseRows.filter((row) => {
       const total = Number(row.total_delta_days ?? 0)
       if (lateOnTimeFilter === 'LATE' && !(total > 0)) return false
       if (lateOnTimeFilter === 'ON_TIME' && !(total <= 0)) return false
       return true
     })
-  }, [summaryBaseRows, lateOnTimeFilter])
-
-  const buildPerfTree = (rows: typeof filteredByTopFilters, isLate: boolean): LatePerfNode[] => {
-    type VesMap   = Map<string, { count: number; totalQty: number }>
-    type IncMap   = Map<string, { count: number; totalQty: number; vessels: VesMap }>
-    type PlantMap = Map<string, { count: number; totalQty: number; incoterms: IncMap }>
-    type ProdMap  = Map<string, { count: number; totalQty: number; plants: PlantMap }>
-    const root: ProdMap = new Map()
-    for (const row of rows) {
-      if (!matchesPerfDrilldownRow(row, isLate)) continue
-      const prod  = String(row.product     || '').trim() || 'Blank'
-      const plant = String(row.plant_site  || '').trim() || 'Blank'
-      const inc   = String(row.incoterm    || '').trim() || 'Blank'
-      const ves   = String(row.vessel_name || '').trim() || 'Unknown'
-      const qty = Number(row.outstanding_qty ?? 0)
-      if (!root.has(prod))  root.set(prod, { count: 0, totalQty: 0, plants: new Map() })
-      const pN = root.get(prod)!; pN.count += 1; pN.totalQty += qty
-      if (!pN.plants.has(plant)) pN.plants.set(plant, { count: 0, totalQty: 0, incoterms: new Map() })
-      const plN = pN.plants.get(plant)!; plN.count += 1; plN.totalQty += qty
-      if (!plN.incoterms.has(inc)) plN.incoterms.set(inc, { count: 0, totalQty: 0, vessels: new Map() })
-      const iN = plN.incoterms.get(inc)!; iN.count += 1; iN.totalQty += qty
-      if (!iN.vessels.has(ves)) iN.vessels.set(ves, { count: 0, totalQty: 0 })
-      const vN = iN.vessels.get(ves)!; vN.count += 1; vN.totalQty += qty
-    }
-    const srt = <T,>(m: Map<string, T & { totalQty: number }>) =>
-      [...m.entries()].sort((a, b) => b[1].totalQty - a[1].totalQty)
-    return srt(root).map(([prod, pN]) => ({
-      key: prod, count: pN.count, totalQty: pN.totalQty,
-      children: srt(pN.plants).map(([plant, plN]) => ({
-        key: plant, count: plN.count, totalQty: plN.totalQty,
-        children: srt(plN.incoterms).map(([inc, iN]) => ({
-          key: inc, count: iN.count, totalQty: iN.totalQty,
-          children: srt(iN.vessels).map(([ves, vN]) => ({
-            key: ves, count: vN.count, totalQty: vN.totalQty, children: [],
-          })),
-        })),
-      })),
-    }))
-  }
-
-  const lateTree = useMemo(() => buildPerfTree(filteredByTopFilters, true), [filteredByTopFilters])
-
-  const onTrackTree = useMemo(() => buildPerfTree(filteredByTopFilters, false), [filteredByTopFilters])
-
-  const scrollTableIntoView = useCallback(() => {
-    setCurrentPage(1)
-    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
-  }, [])
+  }, [rows, statusFilter, selectedIncoterms, selectedPlantSites, dateFrom, dateTo, lateOnTimeFilter])
 
   const resetPerfSelections = useCallback(() => {
     setLateSelVessel(null)
@@ -493,9 +478,9 @@ export default function ShippingPerformancePage() {
       setLateSelProduct(null)
       setLateSelPlant(null)
       setCurrentPage(1)
-      scrollTableIntoView()
+      focusShippingTable()
     },
-    [scrollTableIntoView],
+    [focusShippingTable],
   )
 
   const isSummaryStatusSelected = useCallback(
@@ -547,9 +532,9 @@ export default function ShippingPerformancePage() {
       if ('plant' in next) setLateSelPlant(next.plant ?? null)
       if ('incoterm' in next) setLateSelIncoterm(next.incoterm ?? null)
       if ('vessel' in next) setLateSelVessel(next.vessel ?? null)
-      scrollTableIntoView()
+      focusShippingTable()
     },
-    [perfDashMode, scrollTableIntoView],
+    [perfDashMode, focusShippingTable],
   )
 
   const applySearch = useCallback(() => {
@@ -793,7 +778,7 @@ export default function ShippingPerformancePage() {
           const onTimeAvgClass = contextPerformanceClass(false)
           const lateAvgClass = contextPerformanceClass(true)
 
-          if (loading) {
+          if (summaryLoading) {
             return (
               <div className="space-y-2">
                 <div className="flex items-center justify-end">
@@ -947,7 +932,16 @@ export default function ShippingPerformancePage() {
             </div>
           </CardHeader>
           <CardContent className="pt-2">
-            {(perfDashMode === 'late' ? lateTree : onTrackTree).length === 0 ? (
+            {treeLoading ? (
+              <div className="rounded-xl border bg-white p-6 animate-pulse">
+                <div className="h-5 bg-gray-200 rounded w-48 mb-4" />
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+                  {[0, 1, 2, 3].map((i) => (
+                    <div key={i} className="h-40 bg-gray-100 rounded-lg" />
+                  ))}
+                </div>
+              </div>
+            ) : (perfDashMode === 'late' ? lateTree : onTrackTree).length === 0 ? (
               <div className="text-sm text-gray-500">{perfDashMode === 'late' ? 'No late shipments found.' : 'No on-time shipments found.'}</div>
             ) : (
               <div className="space-y-3">
@@ -1169,12 +1163,15 @@ export default function ShippingPerformancePage() {
         </Card>
 
         {/* Section 3: Table */}
+        <div ref={tableSectionRef}>
         <Card>
           <CardHeader className="space-y-3">
             <div>
               <CardTitle>{tableViewMode === 'all' ? 'All Shipments' : 'By Vessel Group'}</CardTitle>
               <p className="text-sm text-gray-500 mt-1">
-                {tableViewMode === 'all'
+                {!shippingTableEnabled
+                  ? 'Click All Data to load the shipment list'
+                  : tableViewMode === 'all'
                   ? `${tableRows.length} total shipments | Showing ${paginatedRows.length} on this page`
                   : `${tableRows.length} vessel group${tableRows.length === 1 ? '' : 's'} | Showing ${paginatedRows.length} on this page`}
               </p>
@@ -1197,8 +1194,15 @@ export default function ShippingPerformancePage() {
                 </button>
               </div>
               <div className="flex flex-wrap items-center gap-2 ml-auto">
+              {!shippingTableEnabled && (
+                <Button size="sm" onClick={loadShippingTableData}>
+                  <Database className="h-4 w-4 mr-2" />
+                  All Data
+                  <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+              )}
               <div ref={columnsMenuRef} className="relative">
-                <Button variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)}>
+                <Button variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)} disabled={!shippingTableEnabled || tableLoading}>
                   <SlidersHorizontal className="h-4 w-4 mr-2" />
                   Columns
                 </Button>
@@ -1264,7 +1268,7 @@ export default function ShippingPerformancePage() {
                   </div>
                 )}
               </div>
-              {totalPages > 1 && (
+              {shippingTableEnabled && totalPages > 1 && (
                 <div className="flex flex-wrap items-center gap-1">
                   <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1}>
                     Previous
@@ -1293,6 +1297,18 @@ export default function ShippingPerformancePage() {
             </div>
           </CardHeader>
           <CardContent>
+            {!shippingTableEnabled ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <Database className="h-12 w-12 text-gray-300 mb-4" />
+                <p className="text-gray-600 mb-1">Shipment list is not loaded yet.</p>
+                <p className="text-sm text-gray-500 mb-4">Load all data to view the full table — this may take a moment.</p>
+                <Button onClick={loadShippingTableData}>
+                  All Data
+                  <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+              </div>
+            ) : (
+            <>
             <div className="border rounded-md">
               {/* Top scrollbar */}
               <div
@@ -1440,7 +1456,7 @@ export default function ShippingPerformancePage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {loading ? (
+                    {tableLoading ? (
                       <tr>
                         <td colSpan={tableColumnKeys.length || 1} className="px-3 py-6 text-center text-gray-500">
                           Loading shipping performance...
@@ -1493,8 +1509,11 @@ export default function ShippingPerformancePage() {
             <p className="text-xs text-gray-500 mt-3">
               Delta unit is day difference. Records include transport mode SEA or MIX only.
             </p>
+            </>
+            )}
           </CardContent>
         </Card>
+        </div>
       </div>
     </Layout>
   )
