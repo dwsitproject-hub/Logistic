@@ -3631,7 +3631,7 @@ function ContractsPageContent() {
                           action()
                         }
 
-                        const renderItem = (node: LatePerfBranchNode, selected: boolean, onClick: () => void, rightAction?: React.ReactNode, rightStat?: React.ReactNode) => {
+                        const renderItem = (node: ContractPerfBranchNode, selected: boolean, onClick: () => void, rightAction?: React.ReactNode, rightStat?: React.ReactNode) => {
                           const pct = Math.max(1, Math.round((Number(node.totalDays || 0) / denom) * 100))
                           return (
                             <div key={node.id} className={itemClass(selected)}>
