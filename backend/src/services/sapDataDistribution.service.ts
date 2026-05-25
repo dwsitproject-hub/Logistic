@@ -374,6 +374,90 @@ export class SapDataDistributionService {
   }
   
   /**
+   * Move dependent rows from one contract UUID to another (placeholder → real contract).
+   */
+  private static async mergeContractRecords(
+    client: PoolClient,
+    fromContractUuid: string,
+    toContractUuid: string
+  ): Promise<void> {
+    if (fromContractUuid === toContractUuid) return;
+
+    await client.query(
+      `UPDATE shipments SET contract_id = $1 WHERE contract_id = $2`,
+      [toContractUuid, fromContractUuid]
+    );
+    await client.query(
+      `UPDATE trucking_operations SET contract_id = $1 WHERE contract_id = $2`,
+      [toContractUuid, fromContractUuid]
+    );
+    await client.query(
+      `UPDATE payments SET contract_id = $1 WHERE contract_id = $2`,
+      [toContractUuid, fromContractUuid]
+    );
+    await client.query(
+      `UPDATE documents SET contract_id = $1 WHERE contract_id = $2`,
+      [toContractUuid, fromContractUuid]
+    );
+    await client.query(
+      `INSERT INTO contract_stos (
+         contract_id, sto_number, sto_quantity, sto_type, sto_item, sto_classification, plant_code
+       )
+       SELECT $1, sto_number, sto_quantity, sto_type, sto_item, sto_classification, plant_code
+       FROM contract_stos
+       WHERE contract_id = $2
+       ON CONFLICT (contract_id, sto_number) DO UPDATE SET
+         sto_quantity = COALESCE(EXCLUDED.sto_quantity, contract_stos.sto_quantity),
+         sto_type = COALESCE(EXCLUDED.sto_type, contract_stos.sto_type),
+         sto_item = COALESCE(EXCLUDED.sto_item, contract_stos.sto_item),
+         sto_classification = COALESCE(EXCLUDED.sto_classification, contract_stos.sto_classification),
+         plant_code = COALESCE(EXCLUDED.plant_code, contract_stos.plant_code),
+         updated_at = CURRENT_TIMESTAMP`,
+      [toContractUuid, fromContractUuid]
+    );
+    await client.query(`DELETE FROM contracts WHERE id = $1`, [fromContractUuid]);
+  }
+
+  /**
+   * When SAP rows arrive with contract_no + po_no, reconcile any PO-prefixed placeholder.
+   * If the real contract_id already exists, merge the placeholder into it instead of renaming
+   * (renaming would violate contracts_contract_id_key).
+   */
+  private static async reconcilePoPlaceholder(
+    client: PoolClient,
+    contractNumber: string,
+    poNumber: string
+  ): Promise<void> {
+    const placeholderId = `PO-${poNumber}`;
+    const placeholder = await client.query(
+      `SELECT id FROM contracts WHERE contract_id = $1 LIMIT 1`,
+      [placeholderId]
+    );
+    if (placeholder.rows.length === 0) return;
+
+    const placeholderUuid = placeholder.rows[0].id as string;
+    const existingReal = await client.query(
+      `SELECT id FROM contracts WHERE contract_id = $1 LIMIT 1`,
+      [contractNumber]
+    );
+
+    if (existingReal.rows.length > 0) {
+      const realUuid = existingReal.rows[0].id as string;
+      if (realUuid !== placeholderUuid) {
+        logger.info(`Merging placeholder contract ${placeholderId} into existing ${contractNumber}`);
+        await this.mergeContractRecords(client, placeholderUuid, realUuid);
+      }
+      return;
+    }
+
+    logger.info(`Renaming placeholder contract ${placeholderId} to ${contractNumber}`);
+    await client.query(
+      `UPDATE contracts SET contract_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [contractNumber, placeholderUuid]
+    );
+  }
+
+  /**
    * Create or update contract
    */
   private static async upsertContract(
@@ -389,27 +473,12 @@ export class SapDataDistributionService {
       throw new Error('Contract number or PO number is required');
     }
 
-    // When we have a proper contract_no, check if a PO-prefixed placeholder was created earlier
-    // for the same PO (e.g. from a row that had no contract_no). Migrate its FKs so we don't
-    // end up with two contracts for the same PO number.
+    // Serialize upserts for the same business contract_id within this transaction (batch + concurrent imports).
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1::text))`, [effectiveContractId]);
+
+    // When we have a proper contract_no, reconcile PO-prefixed placeholder rows for the same PO.
     if (contractNumber && poNumber) {
-      const placeholderId = `PO-${poNumber}`;
-      const placeholder = await client.query(
-        `SELECT id FROM contracts WHERE contract_id = $1 LIMIT 1`,
-        [placeholderId]
-      );
-      if (placeholder.rows.length > 0) {
-        const placeholderUuid = placeholder.rows[0].id;
-        logger.info(`Merging placeholder contract ${placeholderId} into ${contractNumber}`);
-        // Re-parent all dependent records
-        await client.query(`UPDATE shipments          SET contract_id = $1 WHERE contract_id = $2`, [placeholderUuid, placeholderUuid]);
-        await client.query(`UPDATE trucking_operations SET contract_id = $1 WHERE contract_id = $2`, [placeholderUuid, placeholderUuid]);
-        await client.query(`UPDATE payments           SET contract_id = $1 WHERE contract_id = $2`, [placeholderUuid, placeholderUuid]);
-        await client.query(`UPDATE documents          SET contract_id = $1 WHERE contract_id = $2`, [placeholderUuid, placeholderUuid]);
-        // quality_surveys links via shipment_id (not contract_id directly) — no re-parenting needed here
-        // Rename the placeholder's contract_id so the upcoming INSERT...ON CONFLICT fires the UPDATE path
-        await client.query(`UPDATE contracts SET contract_id = $1 WHERE id = $2`, [contractNumber, placeholderUuid]);
-      }
+      await this.reconcilePoPlaceholder(client, contractNumber, poNumber);
     }
 
     const quantity = this.parseNumber(contractData.contract_quantity);
