@@ -8,6 +8,7 @@ import {
   getContractActivityLog,
   getB2bPartiesForContract,
   getContractFilterIncoterms,
+  getContractFilterGroupPlants,
   getContractFilterB2bFlags,
   getLatePerformance,
   getLatePerformanceSummary,
@@ -73,6 +74,7 @@ router.get('/late-performance/summary', getLatePerformanceSummary);
 router.get('/late-performance/tree', getLatePerformanceTree);
 router.get('/late-performance', getLatePerformance);
 router.get('/filter-options/incoterms', getContractFilterIncoterms);
+router.get('/filter-options/group-plants', getContractFilterGroupPlants);
 router.get('/filter-options/b2b-flags', getContractFilterB2bFlags);
 router.get('/unassigned-counts', getUnassignedCounts);
 router.get('/buyers', getDistinctBuyers);

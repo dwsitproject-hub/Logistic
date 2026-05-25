@@ -1744,24 +1744,18 @@ function ContractsPageContent() {
       })
   }, [authReady])
 
-  // Contract Performance: filter options (Incoterm + Plant/Site) use the same sources as Dashboard
+  // Contract Performance: Incoterm from contracts; Group Plant from master_plants (matches filter logic)
   useEffect(() => {
     if (!authReady || !isContractPerformance) return
     let cancelled = false
     Promise.all([
       api.get('/contracts/filter-options/incoterms'),
-      api.get('/dashboard/filter-options/plants'),
+      api.get('/contracts/filter-options/group-plants'),
     ])
       .then(([incRes, plantRes]) => {
         if (cancelled) return
         const incs = (incRes.data?.data?.incoterms || []) as string[]
-        // Dashboard API returns { data: string[] } (array of plant names), not data.plants
-        const plantPayload = plantRes.data?.data
-        const plants = (Array.isArray(plantPayload)
-          ? plantPayload
-          : plantPayload && typeof plantPayload === 'object' && 'plants' in plantPayload
-            ? (plantPayload as { plants?: string[] }).plants
-            : []) as string[]
+        const plants = (plantRes.data?.data?.groupPlants || []) as string[]
         setAvailableIncoterms(Array.isArray(incs) ? incs : [])
         setAvailablePlantSites(Array.isArray(plants) ? plants : [])
       })
@@ -3959,7 +3953,7 @@ function ContractsPageContent() {
               {isContractPerformance && (
                 <PerformanceScopeFilters
                   hidePlantFilter={false}
-                  plantLabel="Plant/Site"
+                  plantLabel="Group Plant"
                   incotermOptions={availableIncoterms}
                   selectedIncoterms={selectedIncoterms}
                   onIncotermsChange={(selected) => {
@@ -3984,7 +3978,8 @@ function ContractsPageContent() {
                   }}
                   showDateRange={false}
                   incotermEmptyMessage="Loading incoterms..."
-                  plantEmptyMessage="Loading plants..."
+                  plantPlaceholder="Select group plant(s)"
+                  plantEmptyMessage="No group plants"
                 />
               )}
               

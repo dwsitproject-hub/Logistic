@@ -816,6 +816,27 @@ export const getContractFilterIncoterms = async (_req: AuthRequest, res: Respons
   }
 };
 
+/** Contract Performance — Group Plant options from master_plants (same source as plant_site filter logic). */
+export const getContractFilterGroupPlants = async (_req: AuthRequest, res: Response) => {
+  try {
+    const r = await query(
+      `
+      SELECT DISTINCT COALESCE(NULLIF(TRIM(group_plant), ''), 'Blank') AS group_plant
+      FROM master_plants
+      WHERE group_plant IS NOT NULL
+      ORDER BY group_plant
+      `,
+    );
+    return res.json({
+      success: true,
+      data: { groupPlants: r.rows.map((x: { group_plant: string }) => String(x.group_plant)) },
+    });
+  } catch (error) {
+    logger.error('Get contract group plant filter options error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to fetch group plant filter options' } });
+  }
+};
+
 export const getContractFilterB2bFlags = async (_req: AuthRequest, res: Response) => {
   try {
     const r = await query(
