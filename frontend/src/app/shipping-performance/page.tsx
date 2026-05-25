@@ -856,13 +856,13 @@ export default function ShippingPerformancePage() {
       parts.push(`Incoterm: ${selectedIncoterms.map(displayGroupLabel).join(', ')}`)
     }
     if (selectedPlantSites.length > 0) {
-      parts.push(`Plant: ${selectedPlantSites.map(displayGroupLabel).join(', ')}`)
+      parts.push(`Group Plant: ${selectedPlantSites.map(displayGroupLabel).join(', ')}`)
     }
     if (dateFrom || dateTo) {
       parts.push(`Contract date: ${dateFrom || '…'} to ${dateTo || '…'}`)
     }
     if (drilldownFilters.product) parts.push(`Product: ${displayGroupLabel(drilldownFilters.product)}`)
-    if (drilldownFilters.plant) parts.push(`Plant node: ${displayGroupLabel(drilldownFilters.plant)}`)
+    if (drilldownFilters.plant) parts.push(`Group Plant node: ${displayGroupLabel(drilldownFilters.plant)}`)
     if (drilldownFilters.incoterm) parts.push(`Incoterm node: ${displayGroupLabel(drilldownFilters.incoterm)}`)
     if (drilldownFilters.vessel) parts.push(`Vessel: ${drilldownFilters.vessel}`)
     if (statusFilter !== 'All') parts.push(`Status: ${statusFilter}`)
@@ -1142,7 +1142,7 @@ export default function ShippingPerformancePage() {
                 {perfDashMode === 'eta' ? 'Performance Drilldown (ETA)' : 'Performance Drilldown (ATA)'}
               </CardTitle>
               <div className="text-sm text-gray-600 mt-1">
-                Navigate as a tree: <span className="font-medium">Product → Plant → Incoterm → Vessel</span>.
+                Navigate as a tree: <span className="font-medium">Product → Group Plant → Incoterm → Vessel</span>.
                 Click a node to filter the table below.
               </div>
             </div>
@@ -1179,9 +1179,9 @@ export default function ShippingPerformancePage() {
                 </div>
                 <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
                   {([
-                      { title: 'Product',  subtitle: drilldownFilters.product  ? `Under ${displayGroupLabel(drilldownFilters.product)}`  : 'Pick one',                          level: 'product'  as const },
-                      { title: 'Plant',    subtitle: drilldownFilters.product  ? `Under ${displayGroupLabel(drilldownFilters.product)}`  : 'Pick product first',              level: 'plant'    as const },
-                      { title: 'Incoterm', subtitle: drilldownFilters.plant    ? `Under ${displayGroupLabel(drilldownFilters.plant)}`    : 'Pick plant first',                level: 'incoterm' as const },
+                      { title: 'Product',     subtitle: drilldownFilters.product  ? `Under ${displayGroupLabel(drilldownFilters.product)}`  : 'Pick one',                             level: 'product'  as const },
+                      { title: 'Group Plant', subtitle: drilldownFilters.product  ? `Under ${displayGroupLabel(drilldownFilters.product)}`  : 'Pick product first',                 level: 'plant'    as const },
+                      { title: 'Incoterm',    subtitle: drilldownFilters.plant    ? `Under ${displayGroupLabel(drilldownFilters.plant)}`    : 'Pick group plant first',             level: 'incoterm' as const },
                       { title: 'Vessel',   subtitle: drilldownFilters.incoterm ? `Under ${displayGroupLabel(drilldownFilters.incoterm)}` : 'Pick incoterm first',             level: 'vessel'   as const },
                     ] as const).map((col) => {
                       const activeTree = perfTree
@@ -1248,7 +1248,7 @@ export default function ShippingPerformancePage() {
                           )
                         }
                         if (col.level === 'plant') {
-                          if (!drilldownFilters.product) return <div className="text-sm text-gray-500">Select a product to see plants.</div>
+                          if (!drilldownFilters.product) return <div className="text-sm text-gray-500">Select a product to see group plants.</div>
                           return (
                             <div className="space-y-2">
                               {(productNode?.children || []).map((n) => renderNode(n, drilldownFilters.plant === n.key, () => {
@@ -1258,7 +1258,7 @@ export default function ShippingPerformancePage() {
                           )
                         }
                         if (col.level === 'incoterm') {
-                          if (!drilldownFilters.plant) return <div className="text-sm text-gray-500">Select a plant to see incoterms.</div>
+                          if (!drilldownFilters.plant) return <div className="text-sm text-gray-500">Select a group plant to see incoterms.</div>
                           return (
                             <div className="space-y-2">
                               {(plantNode?.children || []).map((n) => renderNode(n, drilldownFilters.incoterm === n.key, () => {
@@ -1295,7 +1295,7 @@ export default function ShippingPerformancePage() {
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Filters</CardTitle>
             <p className="text-sm text-gray-600 mt-1">
-              Apply incoterm, plant/site, and contract date filters to the summary, drilldown, and shipment table.
+              Apply incoterm, group plant, and contract date filters to the summary, drilldown, and shipment table.
             </p>
           </CardHeader>
           <CardContent className="pt-2">
@@ -1313,15 +1313,15 @@ export default function ShippingPerformancePage() {
                   emptyMessage="No incoterms"
                 />
                 <SearchableMultiSelect
-                  label="Plant/Site"
+                  label="Group Plant"
                   options={availablePlantSites}
                   selected={selectedPlantSites}
                   onChange={(values) => {
                     setSelectedPlantSites(values)
                     revealTableView()
                   }}
-                  placeholder="Select plant/site(s)"
-                  emptyMessage="No plants"
+                  placeholder="Select group plant(s)"
+                  emptyMessage="No group plants"
                 />
               </div>
               <div className="flex items-center gap-4 flex-wrap">

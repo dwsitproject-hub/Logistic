@@ -52,7 +52,7 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const ROW_CACHE_KEY = 'shipping-performance-rows-v2';
+const ROW_CACHE_KEY = 'shipping-performance-rows-v3';
 
 const SHIPPING_PERFORMANCE_SQL = `
       WITH latest_spd_contract AS (
@@ -165,7 +165,11 @@ const SHIPPING_PERFORMANCE_SQL = `
         c.product,
         s.vessel_name,
         s.status,
-        COALESCE(NULLIF(TRIM(s.port_of_discharge), ''), 'Blank') AS plant_site,
+        COALESCE(
+          NULLIF(TRIM(pnc.group_plant), ''),
+          NULLIF(TRIM(pna.group_plant), ''),
+          'Blank'
+        ) AS plant_site,
         COALESCE(NULLIF(TRIM(s.port_of_loading), ''), 'Blank') AS loading_port,
         COALESCE(NULLIF(TRIM(s.port_of_discharge), ''), 'Blank') AS discharge_port,
         c.group_name,
@@ -237,6 +241,24 @@ const SHIPPING_PERFORMANCE_SQL = `
       LEFT JOIN sap_agg sa ON sa.shipment_pk = s.id
       LEFT JOIN loading_port lp ON lp.shipment_id = s.id
       LEFT JOIN discharge_port dp ON dp.shipment_id = s.id
+      LEFT JOIN LATERAL (
+        SELECT mp.group_plant
+        FROM master_plants mp
+        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(c.plant_code, '')))
+          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
+          AND NULLIF(TRIM(c.company_name), '') IS NOT NULL
+          AND TRIM(UPPER(COALESCE(mp.company_name, ''))) = TRIM(UPPER(COALESCE(c.company_name, '')))
+        ORDER BY mp.updated_at DESC NULLS LAST
+        LIMIT 1
+      ) pnc ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT mp.group_plant
+        FROM master_plants mp
+        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(c.plant_code, '')))
+          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
+        ORDER BY mp.updated_at DESC NULLS LAST
+        LIMIT 1
+      ) pna ON TRUE
       WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
       ORDER BY s.created_at DESC`;
 
