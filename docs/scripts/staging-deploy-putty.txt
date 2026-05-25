@@ -51,7 +51,12 @@ http://8.215.6.189
 http://8.215.6.189/api/health
 
 Contract Performance: Section 2 drilldown → Apply → Section 3 table loads
-Shipping Performance: All Shipments / By Vessel tabs
+Shipping Performance:
+  - UNPLANNED shipments hidden from all sections
+  - Global Filters: Incoterm, Group Plant, Vessel, Status, Contract Date
+  - Section order: Summary → Drilldown → Filters → Table
+  - Table: Incoterm/Product columns, column reorder in Columns menu
+  - Delta column header tooltips (Loading/Discharge ETA-ETR/ETB/ETC)
 
 --------------------------------------------------------------------------------
 D) Rollback (either server)

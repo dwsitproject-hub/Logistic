@@ -33,7 +33,7 @@ import {
   signedCycleDaysClass,
 } from '@/lib/cycleDaysDisplay'
 import { formatDateDMY, toSortableTimestamp } from '@/lib/dateFormat'
-import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 /** Column ids sorted on the API (see GET /contracts allowedSort). */
@@ -3957,30 +3957,35 @@ function ContractsPageContent() {
               </div>
 
               {isContractPerformance && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <SearchableMultiSelect
-                    label="Incoterm"
-                    options={availableIncoterms}
-                    selected={selectedIncoterms}
-                    onChange={(selected) => {
-                      lockSection1FilterChange()
-                      setSelectedIncoterms(selected)
-                    }}
-                    placeholder="Select incoterm(s)"
-                    emptyMessage="Loading incoterms..."
-                  />
-                  <SearchableMultiSelect
-                    label="Plant/Site"
-                    options={availablePlantSites}
-                    selected={selectedPlantSites}
-                    onChange={(selected) => {
-                      lockSection1FilterChange()
-                      setSelectedPlantSites(selected)
-                    }}
-                    placeholder="Select plant/site(s)"
-                    emptyMessage="Loading plants..."
-                  />
-                </div>
+                <PerformanceScopeFilters
+                  hidePlantFilter={false}
+                  plantLabel="Plant/Site"
+                  incotermOptions={availableIncoterms}
+                  selectedIncoterms={selectedIncoterms}
+                  onIncotermsChange={(selected) => {
+                    lockSection1FilterChange()
+                    setSelectedIncoterms(selected)
+                  }}
+                  plantOptions={availablePlantSites}
+                  selectedPlantSites={selectedPlantSites}
+                  onPlantSitesChange={(selected) => {
+                    lockSection1FilterChange()
+                    setSelectedPlantSites(selected)
+                  }}
+                  dateFrom={dateFrom}
+                  dateTo={dateTo}
+                  onDateFromChange={(iso) => {
+                    lockSection1FilterChange()
+                    setDateFrom(iso)
+                  }}
+                  onDateToChange={(iso) => {
+                    lockSection1FilterChange()
+                    setDateTo(iso)
+                  }}
+                  showDateRange={false}
+                  incotermEmptyMessage="Loading incoterms..."
+                  plantEmptyMessage="Loading plants..."
+                />
               )}
               
               {/* Date Range Filter */}

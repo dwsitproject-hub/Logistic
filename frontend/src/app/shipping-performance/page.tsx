@@ -4,15 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Layout from '@/components/Layout'
 import api from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { ArrowDown, ArrowUp, ChevronRight, Database, Filter, GripVertical, Search, SlidersHorizontal, X } from 'lucide-react'
-import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
-import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
-import { FieldHelp } from '@/components/FieldHelp'
-import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { ArrowDown, ArrowUp, ChevronRight, Database, GripVertical, SlidersHorizontal, X } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import {
   contextPerformanceClass,
   formatAvgDays,
@@ -92,9 +89,6 @@ const DETAIL_COLUMN_KEYS = new Set<string>([
   'discharge_port',
 ])
 
-const ALL_SHIPMENT_REQUIRED_COLUMNS = new Set<string>(['loading_port', 'discharge_port'])
-
-/** Hidden in the All Shipments table. */
 const ALL_SHIPMENTS_HIDDEN_COLUMNS = new Set<string>(['group_name'])
 
 /** Hidden in the By Vessel summary table. */
@@ -107,8 +101,16 @@ const OPEN_TABLE_STATUSES = new Set([
   'IN_TRANSIT',
   'ARRIVED',
   'UNLOADING',
-  'UNPLANNED',
 ])
+
+function isUnplannedShippingStatus(status: string | null | undefined): boolean {
+  return String(status ?? '').trim().toUpperCase() === 'UNPLANNED'
+}
+
+/** Shipping Performance page only — excludes UNPLANNED from all sections. */
+function excludeUnplannedShippingRows(rows: ShippingPerformanceRow[]): ShippingPerformanceRow[] {
+  return rows.filter((row) => !isUnplannedShippingStatus(row.status))
+}
 
 function avgMetric(rows: ShippingPerformanceRow[], key: TableColumnKey): number | null {
   const vals = rows
@@ -298,11 +300,21 @@ function distinctFieldValues(
   return [...values].sort((a, b) => a.localeCompare(b))
 }
 
+function distinctVesselNames(rows: ShippingPerformanceRow[]): string[] {
+  const values = new Set<string>()
+  for (const row of rows) {
+    values.add(normalizeVesselKey(row.vessel_name))
+  }
+  return [...values].sort((a, b) => a.localeCompare(b))
+}
+
 function applyGlobalFiltersToRows(
   sourceRows: ShippingPerformanceRow[],
   filters: {
     selectedIncoterms: string[]
     selectedPlantSites: string[]
+    selectedVessels: string[]
+    statusFilter: TableStatusFilter
     dateFrom: string
     dateTo: string
   },
@@ -312,6 +324,9 @@ function applyGlobalFiltersToRows(
     if (filters.selectedIncoterms.length > 0 && !filters.selectedIncoterms.includes(inc)) return false
     const plant = normalizeGroupKey(row.plant_site)
     if (filters.selectedPlantSites.length > 0 && !filters.selectedPlantSites.includes(plant)) return false
+    const vessel = normalizeVesselKey(row.vessel_name)
+    if (filters.selectedVessels.length > 0 && !filters.selectedVessels.includes(vessel)) return false
+    if (!matchesTableStatusFilter(String(row.status || ''), filters.statusFilter)) return false
     const cDate = String(row.contract_date || '').slice(0, 10)
     if (filters.dateFrom && cDate && cDate < filters.dateFrom) return false
     if (filters.dateTo && cDate && cDate > filters.dateTo) return false
@@ -498,10 +513,26 @@ type ColumnDef = {
   tooltip?: string
 }
 
+/** Shipping Performance Section 3 only — SAP delta column header tooltips. */
+const SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS: Partial<Record<keyof ShippingPerformanceRow, string>> = {
+  loading_delta_eta_etr_days:
+    'This metric represents the duration calculated as: ETA Vessel Arrival at Loading Port − Cargo Readiness Date (ETR) based on SAP tables VBEP/LIPS/VTTK.',
+  loading_delta_eta_etb_days:
+    'This metric represents the duration calculated as: ETA Vessel Arrival at Loading Port − ETA Vessel Berthed at Loading Port based on SAP tables VBEP/LIPS/VTTK.',
+  loading_delta_etb_etc_days:
+    'This metric represents the duration calculated as: ETA Vessel Berthed at Loading Port − ETA Loading Completed based on SAP tables VBEP/LIPS/VTTK.',
+  discharge_delta_eta_etb_days:
+    'This metric represents the duration calculated as: ETA Vessel Arrive at Discharge Port − ETA Vessel Berthed at Discharge Port based on SAP tables VBEP/LIPS/VTTK.',
+  discharge_delta_etb_etc_days:
+    'This metric represents the duration calculated as: ETA Vessel Berthed at Discharge Port − ETA Vessel Complete Discharge based on SAP tables VBEP/LIPS/VTTK.',
+}
+
 const COLUMN_DEFS: ColumnDef[] = [
   { key: 'vessel_name', label: 'Vessel', type: 'text', defaultVisible: true },
   { key: 'loading_port', label: 'Loading Port', type: 'text', defaultVisible: true },
   { key: 'discharge_port', label: 'Discharge Port', type: 'text', defaultVisible: true },
+  { key: 'incoterm', label: 'Incoterm', type: 'text', defaultVisible: true },
+  { key: 'product', label: 'Product', type: 'text', defaultVisible: true },
   { key: 'group_name', label: 'Supplier Group', type: 'text', defaultVisible: false },
   { key: 'shipment_count', label: 'Shipments', type: 'number', defaultVisible: false },
   { key: 'shipment_id', label: 'Shipment ID', type: 'text', defaultVisible: true },
@@ -512,16 +543,92 @@ const COLUMN_DEFS: ColumnDef[] = [
   { key: 'sto_number', label: 'STO No', type: 'text', defaultVisible: false },
   { key: 'sto_qty', label: 'STO Qty (MT)', type: 'number', defaultVisible: false },
   { key: 'received_qty', label: 'Received Qty (MT)', type: 'number', defaultVisible: false },
-  { key: 'outstanding_qty', label: 'Outstanding Qty (MT)', type: 'number', defaultVisible: true, tooltip: FIELD_HELP.shipmentOutstandingQty },
-  { key: 'loading_delta_eta_etr_days', label: 'Loading ETA-ETR', type: 'number', defaultVisible: true },
-  { key: 'loading_delta_eta_etb_days', label: 'Loading ETA-ETB', type: 'number', defaultVisible: true },
-  { key: 'loading_delta_etb_etc_days', label: 'Loading ETB-ETC', type: 'number', defaultVisible: true },
-  { key: 'discharge_delta_eta_etb_days', label: 'Discharge ETA-ETB', type: 'number', defaultVisible: true },
-  { key: 'discharge_delta_etb_etc_days', label: 'Discharge ETB-ETC', type: 'number', defaultVisible: true },
-  { key: 'total_delta_days', label: 'Total', type: 'number', defaultVisible: true, tooltip: FIELD_HELP.shipmentTotalDelta },
+  { key: 'outstanding_qty', label: 'Outstanding Qty (MT)', type: 'number', defaultVisible: true },
+  {
+    key: 'loading_delta_eta_etr_days',
+    label: 'Loading ETA-ETR',
+    type: 'number',
+    defaultVisible: true,
+    tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.loading_delta_eta_etr_days,
+  },
+  {
+    key: 'loading_delta_eta_etb_days',
+    label: 'Loading ETA-ETB',
+    type: 'number',
+    defaultVisible: true,
+    tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.loading_delta_eta_etb_days,
+  },
+  {
+    key: 'loading_delta_etb_etc_days',
+    label: 'Loading ETB-ETC',
+    type: 'number',
+    defaultVisible: true,
+    tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.loading_delta_etb_etc_days,
+  },
+  {
+    key: 'discharge_delta_eta_etb_days',
+    label: 'Discharge ETA-ETB',
+    type: 'number',
+    defaultVisible: true,
+    tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.discharge_delta_eta_etb_days,
+  },
+  {
+    key: 'discharge_delta_etb_etc_days',
+    label: 'Discharge ETB-ETC',
+    type: 'number',
+    defaultVisible: true,
+    tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.discharge_delta_etb_etc_days,
+  },
+  { key: 'total_delta_days', label: 'Total', type: 'number', defaultVisible: true },
 ]
 
 const COLUMN_MAP = Object.fromEntries(COLUMN_DEFS.map((col) => [col.key, col])) as Record<string, ColumnDef>
+
+function isColumnEligibleForView(key: string, tableViewMode: TableViewMode): boolean {
+  if (tableViewMode === 'all') {
+    if (ALL_SHIPMENTS_HIDDEN_COLUMNS.has(key)) return false
+    if (key === 'shipment_count') return false
+    return true
+  }
+  if (BY_VESSEL_HIDDEN_COLUMNS.has(key)) return false
+  if (DETAIL_COLUMN_KEYS.has(key)) return false
+  return true
+}
+
+function resolveManageableColumnKeys(
+  columnOrder: Array<keyof ShippingPerformanceRow>,
+  tableViewMode: TableViewMode,
+): TableColumnKey[] {
+  return columnOrder.filter((key) => {
+    const id = String(key)
+    return Boolean(COLUMN_MAP[id]) && isColumnEligibleForView(id, tableViewMode)
+  })
+}
+
+function resolveVisibleTableColumnKeys(
+  columnOrder: Array<keyof ShippingPerformanceRow>,
+  visibleColumns: Record<string, boolean>,
+  tableViewMode: TableViewMode,
+): TableColumnKey[] {
+  return resolveManageableColumnKeys(columnOrder, tableViewMode).filter(
+    (key) => visibleColumns[String(key)],
+  )
+}
+
+function reorderColumnsInOrder(
+  order: Array<keyof ShippingPerformanceRow>,
+  fromKey: string,
+  toKey: string,
+): Array<keyof ShippingPerformanceRow> {
+  if (!fromKey || !toKey || fromKey === toKey) return order
+  const fromIdx = order.findIndex((key) => String(key) === fromKey)
+  const toIdx = order.findIndex((key) => String(key) === toKey)
+  if (fromIdx < 0 || toIdx < 0) return order
+  const next = [...order]
+  const [moved] = next.splice(fromIdx, 1)
+  next.splice(toIdx, 0, moved)
+  return next
+}
 
 function getStatusColor(status: string): string {
   switch (status) {
@@ -570,8 +677,6 @@ export default function ShippingPerformancePage() {
   const [summaryLoading, setSummaryLoading] = useState(true)
   const [shippingTableEnabled, setShippingTableEnabled] = useState(false)
   const [authReady, setAuthReady] = useState(false)
-  const [searchDraft, setSearchDraft] = useState('')
-  const [searchTerm, setSearchTerm] = useState('')
   const [showColumnManager, setShowColumnManager] = useState(false)
   const [columnOrder, setColumnOrder] = useState<Array<keyof ShippingPerformanceRow>>(
     COLUMN_DEFS.map((c) => c.key)
@@ -580,16 +685,12 @@ export default function ShippingPerformancePage() {
     Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultVisible !== false]))
   )
   const [dragColId, setDragColId] = useState<string | null>(null)
-  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({})
-  const [columnFilterDrafts, setColumnFilterDrafts] = useState<Record<string, string>>({})
-  const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
   const [draggingColumn, setDraggingColumn] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<keyof ShippingPerformanceRow>('total_delta_days')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
   const [currentPage, setCurrentPage] = useState(1)
   const pageSize = 20
   const columnsMenuRef = useRef<HTMLDivElement | null>(null)
-  const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
   const topScrollRef = useRef<HTMLDivElement | null>(null)
   const bottomScrollRef = useRef<HTMLDivElement | null>(null)
   const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
@@ -597,6 +698,7 @@ export default function ShippingPerformancePage() {
   const [statusFilter, setStatusFilter] = useState<TableStatusFilter>('All')
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
+  const [selectedVessels, setSelectedVessels] = useState<string[]>([])
   const [dateFrom, setDateFrom] = useState(() => {
     const d = new Date()
     return `${d.getFullYear()}-01-01`
@@ -671,19 +773,34 @@ export default function ShippingPerformancePage() {
     if (!summaryLoading) setShippingTableEnabled(true)
   }, [summaryLoading])
 
-  const availableIncoterms = useMemo(() => distinctFieldValues(rows, 'incoterm'), [rows])
-  const availablePlantSites = useMemo(() => distinctFieldValues(rows, 'plant_site'), [rows])
+  // Step A: exclude UNPLANNED at base — single source of truth for Sections 1–3
+  const baseFilteredRows = useMemo(() => excludeUnplannedShippingRows(rows), [rows])
 
-  // Step B: apply global filters (incoterm, plant, contract date)
+  const availableIncoterms = useMemo(
+    () => distinctFieldValues(baseFilteredRows, 'incoterm'),
+    [baseFilteredRows],
+  )
+  const availablePlantSites = useMemo(
+    () => distinctFieldValues(baseFilteredRows, 'plant_site'),
+    [baseFilteredRows],
+  )
+  const availableVessels = useMemo(
+    () => distinctVesselNames(baseFilteredRows),
+    [baseFilteredRows],
+  )
+
+  // Step B: apply global filters (incoterm, group plant, vessel, status, contract date)
   const globallyFilteredRows = useMemo(
     () =>
-      applyGlobalFiltersToRows(rows, {
+      applyGlobalFiltersToRows(baseFilteredRows, {
         selectedIncoterms,
         selectedPlantSites,
+        selectedVessels,
+        statusFilter,
         dateFrom,
         dateTo,
       }),
-    [rows, selectedIncoterms, selectedPlantSites, dateFrom, dateTo],
+    [baseFilteredRows, selectedIncoterms, selectedPlantSites, selectedVessels, statusFilter, dateFrom, dateTo],
   )
 
   const etaFilteredData = useMemo(
@@ -705,15 +822,6 @@ export default function ShippingPerformancePage() {
   const drilldownFilteredRows = useMemo(
     () => applyDrilldownFiltersToRows(perfModeFilteredRows, drilldownFilters),
     [perfModeFilteredRows, drilldownFilters],
-  )
-
-  // Step D: apply Section 3 status filter (All / Open / Closed)
-  const statusFilteredRows = useMemo(
-    () =>
-      drilldownFilteredRows.filter((row) =>
-        matchesTableStatusFilter(String(row.status || ''), statusFilter),
-      ),
-    [drilldownFilteredRows, statusFilter],
   )
 
   const etaDatasetBundle = useMemo(
@@ -739,7 +847,18 @@ export default function ShippingPerformancePage() {
   useEffect(() => {
     setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
     setCurrentPage(1)
-  }, [perfDashMode, selectedIncoterms, selectedPlantSites, dateFrom, dateTo])
+  }, [perfDashMode, selectedIncoterms, selectedPlantSites, selectedVessels, statusFilter, dateFrom, dateTo])
+
+  useEffect(() => {
+    const allKeys = COLUMN_DEFS.map((col) => col.key)
+    setColumnOrder((prev) => {
+      const deduped = prev.filter((key) => allKeys.includes(key))
+      const missing = allKeys.filter((key) => !deduped.includes(key))
+      const next = [...deduped, ...missing]
+      if (prev.length === next.length && prev.every((key, index) => key === next[index])) return prev
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     const onDocClick = (ev: MouseEvent) => {
@@ -747,13 +866,10 @@ export default function ShippingPerformancePage() {
       if (showColumnManager && columnsMenuRef.current && !columnsMenuRef.current.contains(t)) {
         setShowColumnManager(false)
       }
-      if (openHeaderFilterId && headerFilterPopoverRef.current && !headerFilterPopoverRef.current.contains(t)) {
-        setOpenHeaderFilterId(null)
-      }
     }
     document.addEventListener('mousedown', onDocClick)
     return () => document.removeEventListener('mousedown', onDocClick)
-  }, [showColumnManager, openHeaderFilterId])
+  }, [showColumnManager])
 
   const resetPerfSelections = useCallback(() => {
     setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
@@ -798,56 +914,6 @@ export default function ShippingPerformancePage() {
     )
   }
 
-  const applySearch = useCallback(() => {
-    setSearchTerm(searchDraft)
-    setCurrentPage(1)
-  }, [searchDraft])
-
-  const applyColumnFilter = useCallback((key: string) => {
-    const value = (columnFilterDrafts[key] || '').trim()
-    setColumnFilters((prev) => {
-      const next = { ...prev }
-      if (value) next[key] = value
-      else delete next[key]
-      return next
-    })
-    setOpenHeaderFilterId(null)
-    setCurrentPage(1)
-  }, [columnFilterDrafts])
-
-  const hasActiveColumnFilters = useCallback((filters: Record<string, string>): boolean => {
-    return Object.values(filters).some((v) => (v || '').trim().length > 0)
-  }, [])
-
-  const hasActiveDrilldownFilters =
-    drilldownFilters.vessel !== null ||
-    drilldownFilters.incoterm !== null ||
-    drilldownFilters.product !== null ||
-    drilldownFilters.plant !== null
-
-  const hasActiveFilters =
-    Boolean(searchDraft || searchTerm) ||
-    statusFilter !== 'All' ||
-    selectedIncoterms.length > 0 ||
-    selectedPlantSites.length > 0 ||
-    Boolean(dateFrom || dateTo) ||
-    hasActiveColumnFilters(columnFilters) ||
-    hasActiveDrilldownFilters
-
-  const clearAllFilters = useCallback(() => {
-    setSearchDraft('')
-    setSearchTerm('')
-    setStatusFilter('All')
-    setSelectedIncoterms([])
-    setSelectedPlantSites([])
-    setDateFrom('')
-    setDateTo('')
-    setColumnFilters({})
-    setColumnFilterDrafts({})
-    setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
-    setCurrentPage(1)
-  }, [])
-
   const tableScopeDescription = useMemo(() => {
     const parts: string[] = [
       perfDashMode === 'eta' ? 'Per Vessel by ETA' : 'Per Vessel by ATA',
@@ -857,6 +923,9 @@ export default function ShippingPerformancePage() {
     }
     if (selectedPlantSites.length > 0) {
       parts.push(`Group Plant: ${selectedPlantSites.map(displayGroupLabel).join(', ')}`)
+    }
+    if (selectedVessels.length > 0) {
+      parts.push(`Vessel: ${selectedVessels.map(displayGroupLabel).join(', ')}`)
     }
     if (dateFrom || dateTo) {
       parts.push(`Contract date: ${dateFrom || '…'} to ${dateTo || '…'}`)
@@ -871,52 +940,16 @@ export default function ShippingPerformancePage() {
     perfDashMode,
     selectedIncoterms,
     selectedPlantSites,
+    selectedVessels,
     dateFrom,
     dateTo,
     drilldownFilters,
     statusFilter,
   ])
 
-  // Step E: apply Section 3 search, column filters, and sorting
+  // Step D: apply Section 3 sorting
   const filteredRows = useMemo(() => {
-    const q = searchTerm.trim().toLowerCase()
-    const base = !q
-      ? statusFilteredRows
-      : statusFilteredRows.filter((row) => {
-      const vessel = row.vessel_name?.toLowerCase() ?? ''
-      const group = row.group_name?.toLowerCase() ?? ''
-      const loadingPort = row.loading_port?.toLowerCase() ?? ''
-      const dischargePort = row.discharge_port?.toLowerCase() ?? ''
-      const shipmentId = row.shipment_id?.toLowerCase() ?? ''
-      const contractNumber = row.contract_number?.toLowerCase() ?? ''
-      const poNo = row.po_number?.toLowerCase() ?? ''
-      const extNo = row.contract_ext_no?.toLowerCase() ?? ''
-      const sto = row.sto_number?.toLowerCase() ?? ''
-      return (
-        vessel.includes(q) ||
-        group.includes(q) ||
-        loadingPort.includes(q) ||
-        dischargePort.includes(q) ||
-        shipmentId.includes(q) ||
-        contractNumber.includes(q) ||
-        poNo.includes(q) ||
-        extNo.includes(q) ||
-        sto.includes(q)
-      )
-    })
-
-    const byColumns = base.filter((row) => {
-      return COLUMN_DEFS.every((colDef) => {
-        const key = colDef.key
-        const filterText = (columnFilters[String(key)] || '').trim().toLowerCase()
-        if (!filterText) return true
-        const rowValue = row[key]
-        const display = asDisplayValue(rowValue).toLowerCase()
-        return display.includes(filterText)
-      })
-    })
-
-    const sorted = [...byColumns].sort((a, b) => {
+    const sorted = [...drilldownFilteredRows].sort((a, b) => {
       const aVal = a[sortBy]
       const bVal = b[sortBy]
       const colType = COLUMN_MAP[String(sortBy)]?.type ?? 'text'
@@ -932,31 +965,22 @@ export default function ShippingPerformancePage() {
       return 0
     })
     return sorted
-  }, [statusFilteredRows, searchTerm, columnFilters, sortBy, sortDirection])
+  }, [drilldownFilteredRows, sortBy, sortDirection])
 
   const tableRows = useMemo(() => {
     if (tableViewMode === 'all') return filteredRows
     return aggregateByVessel(filteredRows)
   }, [filteredRows, tableViewMode])
 
-  const tableColumnKeys = useMemo((): TableColumnKey[] => {
-    const ordered = columnOrder.filter((key) => visibleColumns[String(key)] && COLUMN_MAP[String(key)])
-    if (tableViewMode === 'all') {
-      const withRequired = [...new Set<TableColumnKey>([
-        ...ordered.filter(
-          (key) => String(key) !== 'shipment_count' && !ALL_SHIPMENTS_HIDDEN_COLUMNS.has(String(key)),
-        ),
-        'loading_port' as TableColumnKey,
-        'discharge_port' as TableColumnKey,
-      ])]
-      return withRequired
-    }
-    const summaryKeys: TableColumnKey[] = ['vessel_name', 'shipment_count']
-    const metricKeys = ordered.filter(
-      (key) => !DETAIL_COLUMN_KEYS.has(String(key)) && !summaryKeys.includes(key) && !ALL_SHIPMENT_REQUIRED_COLUMNS.has(String(key)),
-    )
-    return [...summaryKeys, ...metricKeys]
-  }, [columnOrder, visibleColumns, tableViewMode])
+  const manageableColumnKeys = useMemo(
+    () => resolveManageableColumnKeys(columnOrder, tableViewMode),
+    [columnOrder, tableViewMode],
+  )
+
+  const tableColumnKeys = useMemo(
+    () => resolveVisibleTableColumnKeys(columnOrder, visibleColumns, tableViewMode),
+    [columnOrder, visibleColumns, tableViewMode],
+  )
 
   const totalPages = Math.max(1, Math.ceil(tableRows.length / pageSize))
   const paginatedRows = useMemo(
@@ -970,12 +994,13 @@ export default function ShippingPerformancePage() {
     statusFilter,
     selectedIncoterms,
     selectedPlantSites,
+    selectedVessels,
     dateFrom,
     dateTo,
-    searchTerm,
-    columnFilters,
     drilldownFilters,
     tableViewMode,
+    sortBy,
+    sortDirection,
   ])
 
   useEffect(() => {
@@ -1006,15 +1031,7 @@ export default function ShippingPerformancePage() {
   }
 
   const reorderColumnByDrag = (fromId: string, toId: string) => {
-    setColumnOrder((prev) => {
-      const next = [...prev]
-      const fromIdx = next.indexOf(fromId as keyof ShippingPerformanceRow)
-      const toIdx = next.indexOf(toId as keyof ShippingPerformanceRow)
-      if (fromIdx < 0 || toIdx < 0) return prev
-      next.splice(fromIdx, 1)
-      next.splice(toIdx, 0, fromId as keyof ShippingPerformanceRow)
-      return next
-    })
+    setColumnOrder((prev) => reorderColumnsInOrder(prev, fromId, toId))
   }
 
   const onHeaderSort = (key: keyof ShippingPerformanceRow) => {
@@ -1027,16 +1044,7 @@ export default function ShippingPerformancePage() {
   }
 
   const moveColumn = (fromKey: string, toKey: string) => {
-    if (!fromKey || !toKey || fromKey === toKey) return
-    setColumnOrder((prev) => {
-      const next = [...prev]
-      const fromIdx = next.findIndex((k) => String(k) === fromKey)
-      const toIdx = next.findIndex((k) => String(k) === toKey)
-      if (fromIdx < 0 || toIdx < 0) return prev
-      const [moved] = next.splice(fromIdx, 1)
-      next.splice(toIdx, 0, moved)
-      return next
-    })
+    setColumnOrder((prev) => reorderColumnsInOrder(prev, fromKey, toKey))
   }
 
   return (
@@ -1290,70 +1298,72 @@ export default function ShippingPerformancePage() {
           </CardContent>
         </Card>
 
-        {/* Global Filters — before View Table (matches Contract Performance layout) */}
+        {/* Global Filters — above table (matches Contract Performance layout) */}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Filters</CardTitle>
             <p className="text-sm text-gray-600 mt-1">
-              Apply incoterm, group plant, and contract date filters to the summary, drilldown, and shipment table.
+              Apply incoterm, group plant, vessel, status, and contract date filters to the summary, drilldown, and shipment table.
             </p>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <SearchableMultiSelect
-                  label="Incoterm"
-                  options={availableIncoterms}
-                  selected={selectedIncoterms}
-                  onChange={(values) => {
-                    setSelectedIncoterms(values)
-                    revealTableView()
-                  }}
-                  placeholder="Select incoterm(s)"
-                  emptyMessage="No incoterms"
-                />
-                <SearchableMultiSelect
-                  label="Group Plant"
-                  options={availablePlantSites}
-                  selected={selectedPlantSites}
-                  onChange={(values) => {
-                    setSelectedPlantSites(values)
-                    revealTableView()
-                  }}
-                  placeholder="Select group plant(s)"
-                  emptyMessage="No group plants"
-                />
-              </div>
-              <div className="flex items-center gap-4 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <label className="text-sm font-medium text-gray-700">Contract Date:</label>
-                  <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={(value) => { setDateFrom(value); revealTableView() }} className="w-40" />
-                  <span className="text-gray-500">to</span>
-                  <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={(value) => { setDateTo(value); revealTableView() }} className="w-40" />
-                </div>
-                {(selectedIncoterms.length > 0 || selectedPlantSites.length > 0 || dateFrom || dateTo) && (
-                  <Button
-                    type="button"
-                    onClick={() => {
-                      setSelectedIncoterms([])
-                      setSelectedPlantSites([])
-                      setDateFrom('')
-                      setDateTo('')
-                    }}
-                    variant="ghost"
-                    size="sm"
-                    className="text-gray-500"
-                  >
-                    <X className="h-4 w-4 mr-1" />
-                    Clear filters
-                  </Button>
-                )}
-              </div>
-            </div>
+            <PerformanceScopeFilters
+              hidePlantFilter={false}
+              plantLabel="Group Plant"
+              incotermOptions={availableIncoterms}
+              selectedIncoterms={selectedIncoterms}
+              onIncotermsChange={(values) => {
+                setSelectedIncoterms(values)
+                revealTableView()
+              }}
+              plantOptions={availablePlantSites}
+              selectedPlantSites={selectedPlantSites}
+              onPlantSitesChange={(values) => {
+                setSelectedPlantSites(values)
+                revealTableView()
+              }}
+              showVesselFilter
+              vesselOptions={availableVessels}
+              selectedVessels={selectedVessels}
+              onVesselsChange={(values) => {
+                setSelectedVessels(values)
+                revealTableView()
+              }}
+              showStatusFilter
+              statusFilter={statusFilter}
+              onStatusFilterChange={(value) => {
+                setStatusFilter(value)
+                revealTableView()
+              }}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              onDateFromChange={(value) => {
+                setDateFrom(value)
+                revealTableView()
+              }}
+              onDateToChange={(value) => {
+                setDateTo(value)
+                revealTableView()
+              }}
+              showClearButton
+              onClear={() => {
+                setSelectedIncoterms([])
+                setSelectedPlantSites([])
+                setSelectedVessels([])
+                setStatusFilter('All')
+                setDateFrom('')
+                setDateTo('')
+              }}
+              incotermEmptyMessage="No incoterms"
+              plantPlaceholder="Select group plant(s)"
+              plantEmptyMessage="No group plants"
+              vesselPlaceholder="Select vessel(s)"
+              vesselEmptyMessage="No vessels"
+            />
           </CardContent>
         </Card>
 
-        {/* Section 3: View Table */}
+        {/* Section 3: View Table — scope filters use global section above */}
         <div>
         <Card>
           <CardHeader className="space-y-3">
@@ -1390,48 +1400,6 @@ export default function ShippingPerformancePage() {
                 >
                   By Vessel
                 </button>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="relative min-w-[12rem] flex-1">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
-                  <Input
-                    placeholder="Search vessel, supplier group, shipment ID, or contract..."
-                    value={searchDraft}
-                    onChange={(e) => setSearchDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        applySearch()
-                      }
-                    }}
-                    className="pl-10"
-                  />
-                </div>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => {
-                    setStatusFilter(e.target.value as TableStatusFilter)
-                    setCurrentPage(1)
-                  }}
-                  className="rounded-lg border px-4 py-2"
-                  title="Section 3 status filter"
-                >
-                  <option value="All">All</option>
-                  <option value="Open">Open</option>
-                  <option value="Closed">Closed</option>
-                </select>
-                {hasActiveFilters && (
-                  <Button
-                    type="button"
-                    onClick={clearAllFilters}
-                    variant="ghost"
-                    size="sm"
-                    className="text-gray-500"
-                  >
-                    <X className="h-4 w-4 mr-1" />
-                    Clear
-                  </Button>
-                )}
               </div>
               <div className="flex flex-wrap items-center gap-2 ml-auto">
               {!shippingTableEnabled && (
@@ -1481,26 +1449,32 @@ export default function ShippingPerformancePage() {
                       </Button>
                     </div>
                     <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
-                      {columnOrder
-                        .map((key) => COLUMN_DEFS.find((c) => c.key === key))
-                        .filter((col): col is ColumnDef => !!col)
-                        .filter((col) => {
-                          const key = String(col.key)
-                          if (tableViewMode === 'all' && ALL_SHIPMENTS_HIDDEN_COLUMNS.has(key)) return false
-                          if (tableViewMode === 'by_vessel' && BY_VESSEL_HIDDEN_COLUMNS.has(key)) return false
-                          return true
-                        })
-                        .map((col) => (
+                      {manageableColumnKeys.map((key) => {
+                        const col = COLUMN_MAP[String(key)]
+                        if (!col) return null
+                        return (
                           <div
                             key={String(col.key)}
-                            draggable
-                            onDragStart={() => setDragColId(String(col.key))}
-                            onDragEnd={() => setDragColId(null)}
                             onDragOver={(e) => e.preventDefault()}
-                            onDrop={() => { if (dragColId && dragColId !== String(col.key)) reorderColumnByDrag(dragColId, String(col.key)) }}
-                            className={`flex items-center gap-2 text-sm cursor-grab select-none rounded px-1 py-0.5 ${dragColId === String(col.key) ? 'opacity-40' : 'hover:bg-gray-50'}`}
+                            onDrop={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              if (dragColId && dragColId !== String(col.key)) {
+                                reorderColumnByDrag(dragColId, String(col.key))
+                              }
+                              setDragColId(null)
+                            }}
+                            className={`flex items-center gap-2 text-sm select-none rounded px-1 py-0.5 ${dragColId === String(col.key) ? 'bg-slate-100' : 'hover:bg-gray-50'}`}
                           >
-                            <GripVertical className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                            <span
+                              draggable
+                              onDragStart={() => setDragColId(String(col.key))}
+                              onDragEnd={() => setDragColId(null)}
+                              className={`cursor-grab active:cursor-grabbing shrink-0 ${dragColId === String(col.key) ? 'opacity-40' : ''}`}
+                              title="Drag to reorder"
+                            >
+                              <GripVertical className="h-3.5 w-3.5 text-gray-400" />
+                            </span>
                             <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
                               <Checkbox
                                 checked={Boolean(visibleColumns[String(col.key)])}
@@ -1509,7 +1483,8 @@ export default function ShippingPerformancePage() {
                               <span className="truncate">{col.label}</span>
                             </label>
                           </div>
-                        ))}
+                        )
+                      })}
                     </div>
                   </div>
                 )}
@@ -1593,108 +1568,42 @@ export default function ShippingPerformancePage() {
                       {tableColumnKeys.map((key) => {
                         const col = COLUMN_MAP[String(key)]
                         const isSorted = sortBy === key
+                        const headerButton = (
+                          <button
+                            type="button"
+                            className={`inline-flex items-center gap-1 ${col.tooltip ? 'cursor-help' : ''}`}
+                            onClick={() => onHeaderSort(key)}
+                            title={col.tooltip ? undefined : 'Click to sort, drag to reorder'}
+                          >
+                            <span>{col.label}</span>
+                            <span className="text-xs text-gray-500">
+                              {isSorted ? (sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : null}
+                            </span>
+                          </button>
+                        )
                         return (
                           <th
                             key={String(key)}
                             className="relative px-3 py-2 text-left font-medium whitespace-nowrap cursor-move select-none"
                             draggable
                             onDragStart={() => setDraggingColumn(String(key))}
+                            onDragEnd={() => setDraggingColumn(null)}
                             onDragOver={(e) => e.preventDefault()}
-                            onDrop={() => {
+                            onDrop={(e) => {
+                              e.preventDefault()
                               if (draggingColumn) moveColumn(draggingColumn, String(key))
                               setDraggingColumn(null)
                             }}
                           >
-                            <button
-                              type="button"
-                              className="inline-flex items-center gap-1"
-                              onClick={() => onHeaderSort(key)}
-                              title="Click to sort, drag to reorder"
-                            >
-                              <span>{col.label}</span>
-                              <span className="text-xs text-gray-500">
-                                {isSorted ? (sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : null}
-                              </span>
-                            </button>
                             {col.tooltip ? (
-                              <span className="shrink-0 inline-flex items-center">
-                                <FieldHelp text={col.tooltip} />
-                              </span>
-                            ) : null}
-                            <button
-                              type="button"
-                              className={`ml-1 p-1 rounded hover:bg-gray-100 ${columnFilters[String(key)] ? 'text-blue-700' : 'text-gray-400'}`}
-                              title="Filter"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                const colKey = String(key)
-                                setColumnFilterDrafts((prev) => ({
-                                  ...prev,
-                                  [colKey]: columnFilters[colKey] || '',
-                                }))
-                                setOpenHeaderFilterId((prev) => (prev === colKey ? null : colKey))
-                              }}
-                            >
-                              <Filter className="h-3.5 w-3.5" />
-                            </button>
-                            {openHeaderFilterId === String(key) && (
-                              <div
-                                ref={headerFilterPopoverRef}
-                                className="absolute left-0 top-full mt-2 w-[240px] bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-30"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <div className="flex items-center justify-between mb-2">
-                                  <div className="text-xs font-semibold text-gray-700 truncate">{col.label} Filter</div>
-                                  <button
-                                    type="button"
-                                    className="text-xs text-gray-500 hover:text-gray-800"
-                                    onClick={() => setOpenHeaderFilterId(null)}
-                                  >
-                                    Close
-                                  </button>
-                                </div>
-                                <Input
-                                  value={columnFilterDrafts[String(key)] ?? columnFilters[String(key)] ?? ''}
-                                  onChange={(e) =>
-                                    setColumnFilterDrafts((prev) => ({
-                                      ...prev,
-                                      [String(key)]: e.target.value,
-                                    }))
-                                  }
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      e.preventDefault()
-                                      applyColumnFilter(String(key))
-                                    }
-                                  }}
-                                  placeholder={col.type === 'number' ? 'Type number (Enter to apply)' : 'Type to filter (Enter to apply)'}
-                                  className="h-8 text-sm"
-                                />
-                                <div className="mt-2 flex justify-end">
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => {
-                                      const colKey = String(key)
-                                      setColumnFilters((prev) => {
-                                        const next = { ...prev }
-                                        delete next[colKey]
-                                        return next
-                                      })
-                                      setColumnFilterDrafts((prev) => {
-                                        const next = { ...prev }
-                                        delete next[colKey]
-                                        return next
-                                      })
-                                      setOpenHeaderFilterId(null)
-                                      setCurrentPage(1)
-                                    }}
-                                  >
-                                    Clear
-                                  </Button>
-                                </div>
-                              </div>
+                              <Tooltip delayDuration={200}>
+                                <TooltipTrigger asChild>{headerButton}</TooltipTrigger>
+                                <TooltipContent side="top" className="text-xs leading-relaxed max-w-sm">
+                                  {col.tooltip}
+                                </TooltipContent>
+                              </Tooltip>
+                            ) : (
+                              headerButton
                             )}
                           </th>
                         )
