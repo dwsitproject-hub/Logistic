@@ -406,31 +406,6 @@ function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): P
   }
 }
 
-function buildVesselPrimaryProductMap(rows: ShippingPerformanceRow[]): Map<string, string> {
-  const counts = new Map<string, Map<string, number>>()
-  for (const row of rows) {
-    const prod = normalizeGroupKey(row.product)
-    const ves = normalizeVesselKey(row.vessel_name)
-    if (!counts.has(ves)) counts.set(ves, new Map())
-    const prodMap = counts.get(ves)!
-    prodMap.set(prod, (prodMap.get(prod) || 0) + 1)
-  }
-
-  const primary = new Map<string, string>()
-  for (const [ves, prodMap] of counts) {
-    let bestProd = 'Blank'
-    let bestCount = -1
-    for (const [prod, count] of prodMap) {
-      if (count > bestCount || (count === bestCount && prod.localeCompare(bestProd) < 0)) {
-        bestCount = count
-        bestProd = prod
-      }
-    }
-    primary.set(ves, bestProd)
-  }
-  return primary
-}
-
 function buildPerfTree(rows: ShippingPerformanceRow[]): LatePerfNode[] {
   type VesAcc = { count: number; vessels: Set<string> }
   type VesMap = Map<string, VesAcc>
@@ -441,7 +416,6 @@ function buildPerfTree(rows: ShippingPerformanceRow[]): LatePerfNode[] {
   type ProdAcc = { count: number; vessels: Set<string>; plants: PlantMap }
   type ProdMap = Map<string, ProdAcc>
   const root: ProdMap = new Map()
-  const vesselPrimaryProduct = buildVesselPrimaryProductMap(rows)
 
   for (const row of rows) {
     const prod = normalizeGroupKey(row.product)
@@ -452,7 +426,7 @@ function buildPerfTree(rows: ShippingPerformanceRow[]): LatePerfNode[] {
     if (!root.has(prod)) root.set(prod, { count: 0, vessels: new Set(), plants: new Map() })
     const pN = root.get(prod)!
     pN.count += 1
-    if (vesselPrimaryProduct.get(ves) === prod) pN.vessels.add(ves)
+    pN.vessels.add(ves)
     if (!pN.plants.has(plant)) pN.plants.set(plant, { count: 0, vessels: new Set(), incoterms: new Map() })
     const plN = pN.plants.get(plant)!
     plN.count += 1
