@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, Database } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, Loader2, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download } from 'lucide-react'
 import api from '@/lib/api'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
@@ -246,6 +246,441 @@ const CONTRACTS_DEFAULT_COLUMN_ORDER: string[] = [
   'outstanding_qty_mt',
 ]
 
+/** Contract Performance page-only product tabs (Section 1–3). */
+type ContractPerfProductTab = 'All' | 'CPO' | 'PK' | 'POME' | 'Shell Palm'
+const CONTRACT_PERF_PRODUCT_TABS: ContractPerfProductTab[] = ['All', 'CPO', 'PK', 'POME', 'Shell Palm']
+
+function contractPerfProductQueryValue(tab: ContractPerfProductTab): string | undefined {
+  if (tab === 'All') return undefined
+  return tab
+}
+
+type ContractPerfHotspot = {
+  contract_id?: string
+  incoterm: string
+  product: string
+  plant_site: string
+  group_name: string
+  supplier: string
+  count: number
+  totalDays: number
+  maxDays: number
+  totalQtyDelivery: number
+}
+
+type ContractPerfDrilldownRow = {
+  contract_id: string
+  incoterm: string
+  product: string
+  plant_site: string
+  supplier: string
+  totalDays: number
+  maxDays: number
+  totalQtyDelivery: number
+}
+
+type ContractPerfBranchNode = {
+  id: string
+  label: string
+  level: 'total' | 'incoterm' | 'product' | 'plant' | 'supplier'
+  count: number
+  totalDays: number
+  maxDays: number
+  totalQtyDelivery: number
+  children: ContractPerfBranchNode[]
+}
+
+type ContractPerfDrilldownFilters = {
+  product: string | null
+  plant: string | null
+  incoterm: string | null
+  supplier: string | null
+}
+
+const EMPTY_CONTRACT_PERF_DRILLDOWN: ContractPerfDrilldownFilters = {
+  product: null,
+  plant: null,
+  incoterm: null,
+  supplier: null,
+}
+
+function contractPerfDrilldownSelectionsEqual(
+  a: ContractPerfDrilldownFilters,
+  b: ContractPerfDrilldownFilters,
+): boolean {
+  return (
+    a.product === b.product &&
+    a.plant === b.plant &&
+    a.incoterm === b.incoterm &&
+    a.supplier === b.supplier
+  )
+}
+
+function hasContractPerfDrilldownSelection(selection: ContractPerfDrilldownFilters): boolean {
+  return Boolean(selection.product || selection.plant || selection.incoterm || selection.supplier)
+}
+
+function normalizePerfGroupKey(value: unknown): string {
+  const trimmed = String(value ?? '').trim()
+  return trimmed || 'Blank'
+}
+
+/** Product grouping key — missing values become "Uncategorized" so tonnage is not dropped. */
+function normalizePerfProductGroupKey(value: unknown): string {
+  const trimmed = String(value ?? '').trim()
+  return trimmed || 'Uncategorized'
+}
+
+/** Contract Performance — display-only outstanding qty (kg input, whole-number MT output). */
+function formatContractPerfOutstandingMt(kg: number): string {
+  return `${(kg / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 })} MT`
+}
+
+/** Step A: apply Section 1 global filters to performance hotspot rows. */
+function applyContractPerfGlobalFiltersToHotspots(
+  hotspots: ContractPerfHotspot[],
+  filters: {
+    selectedIncoterms: string[]
+    selectedPlantSites: string[]
+    productQuery: string | undefined
+  },
+): ContractPerfHotspot[] {
+  return hotspots.filter((row) => {
+    const inc = normalizePerfGroupKey(row.incoterm)
+    if (filters.selectedIncoterms.length > 0 && !filters.selectedIncoterms.includes(inc)) return false
+    const plant = normalizePerfGroupKey(row.plant_site)
+    if (filters.selectedPlantSites.length > 0 && !filters.selectedPlantSites.includes(plant)) return false
+    if (filters.productQuery && normalizePerfProductGroupKey(row.product) !== filters.productQuery) return false
+    return true
+  })
+}
+
+function contractPerfTradeCycleDaysForAgg(tradeCycle: number | null | undefined): number {
+  if (tradeCycle == null || Number.isNaN(tradeCycle)) return 0
+  return Math.abs(tradeCycle)
+}
+
+function contractToDrilldownRow(contract: Contract): ContractPerfDrilldownRow {
+  const tradeCycleDays = contract.trade_cycle_days
+  const days = contractPerfTradeCycleDaysForAgg(tradeCycleDays)
+  const qty =
+    Number(contract.outstanding_quantity ?? contract.quantity_delivery ?? contract.quantity_ordered ?? 0) || 0
+  return {
+    contract_id: contract.contract_id,
+    incoterm: normalizePerfGroupKey(contract.incoterm),
+    product: normalizePerfProductGroupKey(contract.product),
+    plant_site: normalizePerfGroupKey(contract.plant_site),
+    supplier: normalizePerfGroupKey(contract.supplier),
+    totalDays: days,
+    maxDays: days,
+    totalQtyDelivery: qty,
+  }
+}
+
+function mergeUniqueContractCountsIntoBranchTree(
+  mtTree: ContractPerfBranchNode,
+  countTree: ContractPerfBranchNode,
+): ContractPerfBranchNode {
+  const countChild = (nodes: ContractPerfBranchNode[], label: string) =>
+    nodes.find((n) => n.label === label)
+
+  const mergeNode = (mtNode: ContractPerfBranchNode, countNode: ContractPerfBranchNode | undefined): ContractPerfBranchNode => ({
+    ...mtNode,
+    count: countNode?.count ?? mtNode.count,
+    children: mtNode.children.map((child) => mergeNode(child, countChild(countNode?.children ?? [], child.label))),
+  })
+
+  return mergeNode(mtTree, countTree)
+}
+
+function dedupeContractPerfDrilldownRows(rows: ContractPerfDrilldownRow[]): ContractPerfDrilldownRow[] {
+  const byContractId = new Map<string, ContractPerfDrilldownRow>()
+  for (const row of rows) {
+    const contractId = String(row.contract_id || '').trim()
+    if (!contractId || byContractId.has(contractId)) continue
+    byContractId.set(contractId, row)
+  }
+  return [...byContractId.values()]
+}
+
+/** Build drilldown tree with unique contract_id counts at every node (Set-based aggregation). */
+function buildLatePerfBranchTreeFromDrilldownRows(rows: ContractPerfDrilldownRow[]): ContractPerfBranchNode {
+  type Agg = {
+    contractIds: Set<string>
+    totalDays: number
+    maxDays: number
+    totalQtyDelivery: number
+    children: Map<string, Agg>
+  }
+  const mk = (): Agg => ({
+    contractIds: new Set(),
+    totalDays: 0,
+    maxDays: 0,
+    totalQtyDelivery: 0,
+    children: new Map(),
+  })
+
+  const addRowToAgg = (agg: Agg, row: ContractPerfDrilldownRow) => {
+    const isNewContract = !agg.contractIds.has(row.contract_id)
+    agg.totalQtyDelivery += row.totalQtyDelivery
+    if (isNewContract) {
+      agg.contractIds.add(row.contract_id)
+      agg.totalDays += row.totalDays
+      agg.maxDays = Math.max(agg.maxDays, row.maxDays)
+    }
+  }
+
+  const root = mk()
+  for (const row of rows) {
+    const prod = row.product
+    const plant = row.plant_site
+    const inc = row.incoterm
+    const sup = row.supplier
+
+    const nProd = root.children.get(prod) ?? mk()
+    root.children.set(prod, nProd)
+    const nPlant = nProd.children.get(plant) ?? mk()
+    nProd.children.set(plant, nPlant)
+    const nInc = nPlant.children.get(inc) ?? mk()
+    nPlant.children.set(inc, nInc)
+    const nSup = nInc.children.get(sup) ?? mk()
+    nInc.children.set(sup, nSup)
+
+    for (const n of [root, nProd, nPlant, nInc, nSup]) {
+      addRowToAgg(n, row)
+    }
+  }
+
+  const toNodes = (m: Map<string, Agg>, parentId: string, level: ContractPerfBranchNode['level']): ContractPerfBranchNode[] => {
+    const nodes: ContractPerfBranchNode[] = []
+    for (const [k, a] of m.entries()) {
+      const id = `${parentId}__${k}`
+      const nextLevel: ContractPerfBranchNode['level'] =
+        level === 'product' ? 'plant' : level === 'plant' ? 'incoterm' : level === 'incoterm' ? 'supplier' : 'supplier'
+      const children = level === 'supplier' ? [] : toNodes(a.children, id, nextLevel)
+      nodes.push({
+        id,
+        label: k,
+        level,
+        count: a.contractIds.size,
+        totalDays: a.totalDays,
+        maxDays: a.maxDays,
+        totalQtyDelivery: a.totalQtyDelivery,
+        children,
+      })
+    }
+    nodes.sort((a, b) => b.totalQtyDelivery - a.totalQtyDelivery || b.count - a.count || a.label.localeCompare(b.label))
+    return nodes
+  }
+
+  return {
+    id: 'total',
+    label: 'Total',
+    level: 'total',
+    count: root.contractIds.size,
+    totalDays: root.totalDays,
+    maxDays: root.maxDays,
+    totalQtyDelivery: root.totalQtyDelivery,
+    children: toNodes(root.children, 'total', 'product'),
+  }
+}
+
+function buildLatePerfBranchTreeFromHotspots(hotspots: ContractPerfHotspot[]): ContractPerfBranchNode {
+  const rows: ContractPerfDrilldownRow[] = []
+  for (const h of hotspots) {
+    const contractId = String(h.contract_id || '').trim()
+    if (!contractId) continue
+    rows.push({
+      contract_id: contractId,
+      incoterm: normalizePerfGroupKey(h.incoterm),
+      product: normalizePerfProductGroupKey(h.product),
+      plant_site: normalizePerfGroupKey(h.plant_site),
+      supplier: normalizePerfGroupKey(h.supplier),
+      totalDays: Number(h.totalDays) || 0,
+      maxDays: Number(h.maxDays) || 0,
+      totalQtyDelivery: Number(h.totalQtyDelivery) || 0,
+    })
+  }
+  if (rows.length > 0) {
+    return buildLatePerfBranchTreeFromDrilldownRows(rows)
+  }
+
+  // Fallback when contract_id is unavailable (legacy API tree leaves).
+  type Agg = { count: number; totalDays: number; maxDays: number; totalQtyDelivery: number; children: Map<string, Agg> }
+  const mk = (): Agg => ({ count: 0, totalDays: 0, maxDays: 0, totalQtyDelivery: 0, children: new Map() })
+  const root = mk()
+
+  for (const h of hotspots) {
+    const inc = normalizePerfGroupKey(h.incoterm)
+    const prod = normalizePerfProductGroupKey(h.product)
+    const plant = normalizePerfGroupKey(h.plant_site)
+    const days = Number(h.totalDays) || 0
+    const cnt = Number(h.count) || 0
+    const maxd = Number(h.maxDays) || 0
+    const qty = Number(h.totalQtyDelivery) || 0
+    const sup = normalizePerfGroupKey(h.supplier)
+
+    const nProd = root.children.get(prod) ?? mk()
+    root.children.set(prod, nProd)
+    const nPlant = nProd.children.get(plant) ?? mk()
+    nProd.children.set(plant, nPlant)
+    const nInc = nPlant.children.get(inc) ?? mk()
+    nPlant.children.set(inc, nInc)
+    const nSup = nInc.children.get(sup) ?? mk()
+    nInc.children.set(sup, nSup)
+
+    for (const n of [root, nProd, nPlant, nInc, nSup]) {
+      n.count += cnt
+      n.totalDays += days
+      n.maxDays = Math.max(n.maxDays, maxd)
+      n.totalQtyDelivery += qty
+    }
+  }
+
+  const toNodes = (m: Map<string, Agg>, parentId: string, level: ContractPerfBranchNode['level']): ContractPerfBranchNode[] => {
+    const nodes: ContractPerfBranchNode[] = []
+    for (const [k, a] of m.entries()) {
+      const id = `${parentId}__${k}`
+      const nextLevel: ContractPerfBranchNode['level'] =
+        level === 'product' ? 'plant' : level === 'plant' ? 'incoterm' : level === 'incoterm' ? 'supplier' : 'supplier'
+      const children = level === 'supplier' ? [] : toNodes(a.children, id, nextLevel)
+      nodes.push({
+        id,
+        label: k,
+        level,
+        count: a.count,
+        totalDays: a.totalDays,
+        maxDays: a.maxDays,
+        totalQtyDelivery: a.totalQtyDelivery,
+        children,
+      })
+    }
+    nodes.sort((a, b) => b.totalQtyDelivery - a.totalQtyDelivery || b.count - a.count || a.label.localeCompare(b.label))
+    return nodes
+  }
+
+  return {
+    id: 'total',
+    label: 'Total',
+    level: 'total',
+    count: root.count,
+    totalDays: root.totalDays,
+    maxDays: root.maxDays,
+    totalQtyDelivery: root.totalQtyDelivery,
+    children: toNodes(root.children, 'total', 'product'),
+  }
+}
+
+/** Merge global + drilldown filters into GET /contracts columnFilters payload. */
+function buildContractPerfTableColumnFilters(
+  baseColumnFilters: Record<string, unknown>,
+  global: { selectedIncoterms: string[] },
+  drilldown: ContractPerfDrilldownFilters,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...baseColumnFilters }
+
+  const applyMulti = (field: string, key: string | null) => {
+    if (!key) return
+    const includeBlank = key === 'Blank'
+    const values = includeBlank ? [] : [key]
+    merged[field] = { type: 'multi', values, includeBlank }
+  }
+
+  if (drilldown.product) {
+    applyMulti('product', drilldown.product)
+  }
+  if (drilldown.incoterm) {
+    applyMulti('incoterm', drilldown.incoterm)
+  } else if (global.selectedIncoterms.length > 0) {
+    const includeBlank = global.selectedIncoterms.includes('Blank')
+    const values = global.selectedIncoterms.filter((v) => v !== 'Blank')
+    merged.incoterm = { type: 'multi', values, includeBlank }
+  }
+
+  if (drilldown.supplier) {
+    if (drilldown.supplier === 'Blank') {
+      merged.supplier = { type: 'text', value: '', emptyOnly: true }
+    } else {
+      merged.supplier = { type: 'text', value: drilldown.supplier, exact: true }
+    }
+  }
+
+  return merged
+}
+
+/** Merge global + drilldown plant filters for GET /contracts. */
+function resolveContractPerfTablePlants(
+  globalPlants: string[],
+  drilldownPlant: string | null,
+): string[] {
+  if (drilldownPlant) {
+    if (globalPlants.length === 0) return [drilldownPlant]
+    return globalPlants.includes(drilldownPlant) ? [drilldownPlant] : [drilldownPlant]
+  }
+  return globalPlants
+}
+
+/** Merge global + drilldown incoterm filters for GET /contracts and late-performance APIs. */
+function resolveContractPerfIncoterms(
+  globalIncoterms: string[],
+  drilldownIncoterm: string | null,
+): string[] {
+  if (drilldownIncoterm) return [drilldownIncoterm]
+  return globalIncoterms
+}
+
+/** Merge global product tab + drilldown product for GET /contracts. */
+function resolveContractPerfTableProduct(
+  productTabQuery: string | undefined,
+  drilldownProduct: string | null,
+): string | undefined {
+  if (drilldownProduct && drilldownProduct !== 'Blank') return drilldownProduct
+  return productTabQuery
+}
+
+/** Append shared Section 1 + Section 3 filter params for late-performance API endpoints. */
+function appendContractPerfBaseParams(
+  params: URLSearchParams,
+  filters: {
+    dateFrom: string
+    dateTo: string
+    perfTransportMode: 'ALL' | 'SEA' | 'LAND'
+    resolvedProduct: string | undefined
+    b2bFlagFilter: string
+    resolvedIncoterms: string[]
+    resolvedPlants: string[]
+    contractStatus: 'All' | 'Open' | 'Close'
+    search: string
+    drilldownSupplier: string | null
+  },
+): void {
+  const searchTrim = filters.search.trim()
+  const useFilteredScope =
+    filters.contractStatus !== 'All' ||
+    filters.resolvedIncoterms.length > 0 ||
+    filters.resolvedPlants.length > 0 ||
+    searchTrim.length >= 2 ||
+    Boolean(filters.drilldownSupplier) ||
+    Boolean(filters.resolvedProduct)
+
+  params.append('scope', useFilteredScope ? 'filtered' : 'ytd')
+  params.append('_ts', String(Date.now()))
+  if (filters.dateFrom) params.append('dateFrom', filters.dateFrom)
+  if (filters.dateTo) params.append('dateTo', filters.dateTo)
+  if (filters.perfTransportMode !== 'ALL') params.append('transportMode', filters.perfTransportMode)
+  if (filters.resolvedProduct) params.append('product', filters.resolvedProduct)
+  if (filters.b2bFlagFilter !== 'ALL') params.append('b2bFlag', filters.b2bFlagFilter)
+  if (filters.contractStatus !== 'All') params.append('status', filters.contractStatus)
+  if (searchTrim.length >= 2) params.append('search', searchTrim)
+  if (filters.drilldownSupplier && filters.drilldownSupplier !== 'Blank') {
+    params.append('supplier', filters.drilldownSupplier)
+  }
+  if (filters.resolvedIncoterms.length > 0) {
+    params.append('incoterms', filters.resolvedIncoterms.join(','))
+  }
+  filters.resolvedPlants.forEach((plant) => params.append('plant', plant))
+}
+
 /** Merge preferred Contracts order with any extra compact column ids (append unknown). Contract Performance: keep schema order. */
 function compactColumnFallbackOrder(isContractPerformance: boolean, allIds: string[]): string[] {
   if (isContractPerformance) return [...allIds]
@@ -291,8 +726,6 @@ function ContractsPageContent() {
   const isContractPerformance = pathname === '/contract-performance'
   const [contracts, setContracts] = useState<Contract[]>([])
   const [loading, setLoading] = useState(() => pathname !== '/contract-performance')
-  /** Contract Performance: table list is opt-in (All Data) to avoid slow initial load. */
-  const [contractPerfTableEnabled, setContractPerfTableEnabled] = useState(false)
   const [authReady, setAuthReady] = useState(false)
   // Search should apply only on Enter / Apply (not per keystroke)
   const [searchDraft, setSearchDraft] = useState('')
@@ -300,6 +733,9 @@ function ContractsPageContent() {
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null)
   // Default view: compact (1 line per contract)
   const [expandedContractIds, setExpandedContractIds] = useState<Set<string>>(() => new Set())
+  const collapseAll = useCallback(() => {
+    setExpandedContractIds(new Set())
+  }, [])
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [sortKey, setSortKey] = useState<string>('contract_date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
@@ -330,15 +766,16 @@ function ContractsPageContent() {
   })
   const [availableB2bFlags, setAvailableB2bFlags] = useState<string[]>([])
   const [productFilter, setProductFilter] = useState<string>('ALL')
+  const [selectedProductTab, setSelectedProductTab] = useState<ContractPerfProductTab>('All')
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const [transportModeFilter, setTransportModeFilter] = useState<string>('ALL')
   const [perfTransportMode, setPerfTransportMode] = useState<'ALL' | 'SEA' | 'LAND'>('ALL')
   const [lateOnTimeFilter, setLateOnTimeFilter] = useState<'ALL' | 'LATE' | 'ON_TIME'>('ALL')
+  const [summaryCardStatus, setSummaryCardStatus] = useState<'All' | 'Open' | 'Close'>('All')
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
   const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
-  const [selectedProducts, setSelectedProducts] = useState<string[]>([])
   const [uploadingId, setUploadingId] = useState<string>('')
   const [csvCargoUploading, setCsvCargoUploading] = useState(false)
   const [csvCargoResult, setCsvCargoResult] = useState<{ updated: number; notFound: number; errors: { po_number: string; reason: string }[] } | null>(null)
@@ -401,20 +838,105 @@ function ContractsPageContent() {
   const [tradeCycleDist, setTradeCycleDist] = useState<TradeCycleDist | null>(null)
   const [latePerfSummaryLoading, setLatePerfSummaryLoading] = useState(false)
   const [latePerfTreeLoading, setLatePerfTreeLoading] = useState(false)
-  type LatePerfHotspot = {
-    incoterm: string
-    product: string
-    plant_site: string
-    group_name: string
-    supplier: string
-    count: number
-    totalDays: number
-    maxDays: number
-    totalQtyDelivery: number
-  }
+  const [isTableLoading, setIsTableLoading] = useState(false)
+  const contractPerfPendingLoadsRef = useRef(0)
+  const [contractPerfDrilldownScopeContracts, setContractPerfDrilldownScopeContracts] = useState<Contract[]>([])
+  const [contractPerfScopeLoading, setContractPerfScopeLoading] = useState(false)
+  type LatePerfHotspot = ContractPerfHotspot
+
+  const contractPerfProductQuery = useMemo(
+    () => contractPerfProductQueryValue(selectedProductTab),
+    [selectedProductTab],
+  )
+
+  /** Section 1 filter state — independent from Section 2 drilldown selection. */
+  const section1FilterState = useMemo(
+    () => ({
+      dateFrom,
+      dateTo,
+      selectedIncoterms,
+      selectedPlantSites,
+      productQuery: contractPerfProductQuery,
+      summaryCardStatus,
+      lateOnTimeFilter,
+      perfDashMode,
+      perfTransportMode,
+      b2bFlagFilter,
+    }),
+    [
+      dateFrom,
+      dateTo,
+      selectedIncoterms,
+      selectedPlantSites,
+      contractPerfProductQuery,
+      summaryCardStatus,
+      lateOnTimeFilter,
+      perfDashMode,
+      perfTransportMode,
+      b2bFlagFilter,
+    ],
+  )
+
+  const [draftDrilldownSelection, setDraftDrilldownSelection] = useState<ContractPerfDrilldownFilters>(
+    EMPTY_CONTRACT_PERF_DRILLDOWN,
+  )
+  const [appliedDrilldownSelection, setAppliedDrilldownSelection] = useState<ContractPerfDrilldownFilters>(
+    EMPTY_CONTRACT_PERF_DRILLDOWN,
+  )
+
+  /** Resolved scope shared by Section 2 drilldown API and Section 3 table (applied Section 2 selection only). */
+  const contractPerfResolvedScope = useMemo(
+    () => ({
+      resolvedProduct: resolveContractPerfTableProduct(contractPerfProductQuery, appliedDrilldownSelection.product),
+      resolvedPlants: resolveContractPerfTablePlants(selectedPlantSites, appliedDrilldownSelection.plant),
+      resolvedIncoterms: resolveContractPerfIncoterms(selectedIncoterms, appliedDrilldownSelection.incoterm),
+      drilldownSupplier: appliedDrilldownSelection.supplier,
+      search: searchTerm.trim(),
+    }),
+    [
+      contractPerfProductQuery,
+      appliedDrilldownSelection.product,
+      selectedPlantSites,
+      appliedDrilldownSelection.plant,
+      selectedIncoterms,
+      appliedDrilldownSelection.incoterm,
+      appliedDrilldownSelection.supplier,
+      searchTerm,
+    ],
+  )
+
+  /** Memo 1 — Section 1 card totals: global filters only, never Open/Close sub-status. */
+  const cardTotalsData = useMemo(
+    () => ({
+      late: latePerformanceSummary,
+      onTrack: onTrackPerformanceSummary,
+      tradeCycleDist,
+    }),
+    [latePerformanceSummary, onTrackPerformanceSummary, tradeCycleDist],
+  )
+
+  /** Memo 2 — Section 2 drilldown source: Section 1 + Section 3 filtered API trees. */
+  const filteredDrilldownData = useMemo(() => {
+    const activeBranch =
+      section1FilterState.lateOnTimeFilter === 'ON_TIME'
+        ? 'ontrack'
+        : section1FilterState.lateOnTimeFilter === 'LATE'
+          ? 'late'
+          : section1FilterState.perfDashMode
+    return {
+      lateTree: latePerformanceTree,
+      onTrackTree: onTrackPerformanceTree,
+      activeTree: activeBranch === 'ontrack' ? onTrackPerformanceTree : latePerformanceTree,
+    }
+  }, [
+    latePerformanceTree,
+    onTrackPerformanceTree,
+    section1FilterState.lateOnTimeFilter,
+    section1FilterState.perfDashMode,
+  ])
 
   const latePerfAllHotspots = useMemo((): LatePerfHotspot[] => {
-    const activeTree = perfDashMode === 'ontrack' ? onTrackPerformanceTree : latePerformanceTree
+    const activeTree = filteredDrilldownData.activeTree
     const out: LatePerfHotspot[] = []
     for (const inc of activeTree) {
       for (const plant of inc.children || []) {
@@ -423,7 +945,7 @@ function ContractsPageContent() {
             for (const sup of gn.children || []) {
               out.push({
                 incoterm: inc.key,
-                product: prod.key,
+                product: normalizePerfProductGroupKey(prod.key),
                 plant_site: plant.key,
                 group_name: gn.key,
                 supplier: sup.key,
@@ -438,130 +960,222 @@ function ContractsPageContent() {
       }
     }
     return out
-  }, [perfDashMode, latePerformanceTree, onTrackPerformanceTree])
+  }, [filteredDrilldownData.activeTree])
 
-  type LatePerfBranchNode = {
-    id: string
-    label: string
-    level: 'total' | 'incoterm' | 'product' | 'plant' | 'supplier'
-    count: number
-    totalDays: number
-    maxDays: number
-    totalQtyDelivery: number
-    children: LatePerfBranchNode[]
-  }
-
-  const latePerfBranchTree = useMemo((): LatePerfBranchNode => {
-    const norm = (v: unknown) => {
-      const s = String(v ?? '').trim()
-      return s ? s : 'Blank'
+  /** Unified filtered rows: Raw API tree → Section 1 + Section 3 + Section 2 scope (single pipeline). */
+  const contractPerfUnifiedFilteredHotspots = useMemo(() => {
+    let rows = latePerfAllHotspots
+    rows = applyContractPerfGlobalFiltersToHotspots(rows, {
+      selectedIncoterms: contractPerfResolvedScope.resolvedIncoterms,
+      selectedPlantSites: contractPerfResolvedScope.resolvedPlants,
+      productQuery: contractPerfResolvedScope.resolvedProduct,
+    })
+    if (contractPerfResolvedScope.drilldownSupplier) {
+      const supplierKey = normalizePerfGroupKey(contractPerfResolvedScope.drilldownSupplier)
+      rows = rows.filter((row) => normalizePerfGroupKey(row.supplier) === supplierKey)
     }
-    type Agg = { count: number; totalDays: number; maxDays: number; totalQtyDelivery: number; children: Map<string, Agg> }
-    const mk = (): Agg => ({ count: 0, totalDays: 0, maxDays: 0, totalQtyDelivery: 0, children: new Map() })
-    const root = mk()
+    return rows
+  }, [latePerfAllHotspots, contractPerfResolvedScope])
 
-    for (const h of latePerfAllHotspots) {
-      const inc = norm(h.incoterm)
-      const prod = norm(h.product)
-      const plant = norm(h.plant_site)
-      const days = Number(h.totalDays) || 0
-      const cnt = Number(h.count) || 0
-      const maxd = Number(h.maxDays) || 0
-      const qty = Number(h.totalQtyDelivery) || 0
-      const sup = norm(h.supplier)
+  /** Applied Section 2 drilldown — drives Section 3 table and scoped fetches only. */
+  const contractPerfDrilldownFilters = useMemo(
+    (): ContractPerfDrilldownFilters => ({ ...appliedDrilldownSelection }),
+    [appliedDrilldownSelection],
+  )
 
-      // Tree order: Product → Plant → Incoterm → Supplier
-      const nProd = root.children.get(prod) ?? mk()
-      root.children.set(prod, nProd)
-      const nPlant = nProd.children.get(plant) ?? mk()
-      nProd.children.set(plant, nPlant)
-      const nInc = nPlant.children.get(inc) ?? mk()
-      nPlant.children.set(inc, nInc)
-      const nSup = nInc.children.get(sup) ?? mk()
-      nInc.children.set(sup, nSup)
+  const hasPendingDrilldownChanges = useMemo(
+    () => !contractPerfDrilldownSelectionsEqual(draftDrilldownSelection, appliedDrilldownSelection),
+    [draftDrilldownSelection, appliedDrilldownSelection],
+  )
 
-      for (const n of [root, nProd, nPlant, nInc, nSup]) {
-        n.count += cnt
-        n.totalDays += days
-        n.maxDays = Math.max(n.maxDays, maxd)
-        n.totalQtyDelivery += qty
-      }
-    }
+  const contractPerfTablePlants = useMemo(
+    () => contractPerfResolvedScope.resolvedPlants,
+    [contractPerfResolvedScope.resolvedPlants],
+  )
 
-    const toNodes = (m: Map<string, Agg>, parentId: string, level: LatePerfBranchNode['level']): LatePerfBranchNode[] => {
-      const nodes: LatePerfBranchNode[] = []
-      for (const [k, a] of m.entries()) {
-        const id = `${parentId}__${k}`
-        const nextLevel: LatePerfBranchNode['level'] =
-          level === 'product' ? 'plant' : level === 'plant' ? 'incoterm' : level === 'incoterm' ? 'supplier' : 'supplier'
-        const children =
-          level === 'supplier'
-            ? []
-            : toNodes(a.children, id, nextLevel)
-        nodes.push({
-          id,
-          label: k,
-          level,
-          count: a.count,
-          totalDays: a.totalDays,
-          maxDays: a.maxDays,
-          totalQtyDelivery: a.totalQtyDelivery,
-          children,
-        })
-      }
-      nodes.sort((a, b) => b.totalQtyDelivery - a.totalQtyDelivery || b.count - a.count || a.label.localeCompare(b.label))
-      return nodes
-    }
-
-    return {
-      id: 'total',
-      label: 'Total',
-      level: 'total',
-      count: root.count,
-      totalDays: root.totalDays,
-      maxDays: root.maxDays,
-      totalQtyDelivery: root.totalQtyDelivery,
-      children: toNodes(root.children, 'total', 'product'),
-    }
-  }, [latePerfAllHotspots])
-
-  const [latePerfSelIncoterm, setLatePerfSelIncoterm] = useState<string | null>(null)
-  const [latePerfSelProduct, setLatePerfSelProduct] = useState<string | null>(null)
-  const [latePerfSelPlant, setLatePerfSelPlant] = useState<string | null>(null)
-  const [latePerfSelSupplier, setLatePerfSelSupplier] = useState<string | null>(null)
+  const contractPerfTableProduct = useMemo(
+    () => contractPerfResolvedScope.resolvedProduct,
+    [contractPerfResolvedScope.resolvedProduct],
+  )
 
   const resetLatePerfSelections = useCallback(() => {
-    setLatePerfSelIncoterm(null)
-    setLatePerfSelProduct(null)
-    setLatePerfSelPlant(null)
-    setLatePerfSelSupplier(null)
-    setLateOnTimeFilter('ALL')
-    setPerfTransportMode('ALL')
-    setStatusFilter('All Status')
-    setSelectedIncoterms([])
-    setSelectedPlantSites([])
-    setSelectedProducts([])
-    setColumnFilters(prev => {
+    setDraftDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
+    setAppliedDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
+    setColumnFilters((prev) => {
       const next = { ...prev }
-      delete next.product
       delete next.supplier
       return next
     })
     setCurrentPage(1)
   }, [])
 
-  const findChild = useCallback((nodes: LatePerfBranchNode[], label: string | null) => {
+  const updateDraftDrilldownSelection = useCallback(
+    (level: 'product' | 'plant' | 'incoterm' | 'supplier', label: string) => {
+      if (!isContractPerformance) return
+      setDraftDrilldownSelection((prev) => {
+        if (level === 'product') {
+          return { product: label, plant: null, incoterm: null, supplier: null }
+        }
+        if (level === 'plant') {
+          return { ...prev, plant: label, incoterm: null, supplier: null }
+        }
+        if (level === 'incoterm') {
+          return { ...prev, incoterm: label, supplier: null }
+        }
+        return { ...prev, supplier: label }
+      })
+    },
+    [isContractPerformance],
+  )
+
+  const shouldLoadTableData = useMemo(() => {
+    if (!isContractPerformance) return true
+    if (hasContractPerfDrilldownSelection(appliedDrilldownSelection)) return true
+    const isSummaryCardSelected =
+      (lateOnTimeFilter === 'ON_TIME' || lateOnTimeFilter === 'LATE') &&
+      (summaryCardStatus === 'Open' || summaryCardStatus === 'Close')
+    return isSummaryCardSelected
+  }, [
+    isContractPerformance,
+    appliedDrilldownSelection,
+    lateOnTimeFilter,
+    summaryCardStatus,
+  ])
+
+  /** Scoped contract rows for drilldown — same filter scope as Section 3 table, one row per contract_id. */
+  const contractPerfDrilldownRows = useMemo(() => {
+    if (!isContractPerformance || !shouldLoadTableData) return []
+    const tradeCycleByContractId = new Map(
+      contractPerfDrilldownScopeContracts.map((c) => [c.contract_id, c.trade_cycle_days] as const),
+    )
+    let rows = contractPerfDrilldownScopeContracts.map(contractToDrilldownRow)
+    if (section1FilterState.lateOnTimeFilter === 'LATE') {
+      rows = rows.filter((row) => {
+        const tradeCycle = tradeCycleByContractId.get(row.contract_id)
+        return typeof tradeCycle === 'number' && tradeCycle > 0
+      })
+    } else if (section1FilterState.lateOnTimeFilter === 'ON_TIME') {
+      rows = rows.filter((row) => {
+        const tradeCycle = tradeCycleByContractId.get(row.contract_id)
+        return typeof tradeCycle === 'number' && tradeCycle <= 0
+      })
+    } else {
+      const wantLateBranch = section1FilterState.perfDashMode === 'late'
+      rows = rows.filter((row) => {
+        const tradeCycle = tradeCycleByContractId.get(row.contract_id)
+        if (typeof tradeCycle !== 'number') return false
+        return wantLateBranch ? tradeCycle > 0 : tradeCycle <= 0
+      })
+    }
+    return rows
+  }, [
+    isContractPerformance,
+    shouldLoadTableData,
+    contractPerfDrilldownScopeContracts,
+    section1FilterState.lateOnTimeFilter,
+    section1FilterState.perfDashMode,
+  ])
+
+  /** Section 2 drilldown tree — MT from late-performance hotspots (Section 1 source); unique counts from scoped contracts. */
+  const latePerfBranchTree = useMemo(() => {
+    const mtTree = buildLatePerfBranchTreeFromHotspots(contractPerfUnifiedFilteredHotspots)
+    if (isContractPerformance && shouldLoadTableData && contractPerfDrilldownRows.length > 0) {
+      const countTree = buildLatePerfBranchTreeFromDrilldownRows(contractPerfDrilldownRows)
+      return mergeUniqueContractCountsIntoBranchTree(mtTree, countTree)
+    }
+    return mtTree
+  }, [
+    isContractPerformance,
+    shouldLoadTableData,
+    contractPerfDrilldownRows,
+    contractPerfUnifiedFilteredHotspots,
+  ])
+
+  /** Unique contract count from unified drilldown tree (root node). */
+  const contractPerfDrilldownUniqueCount = useMemo(
+    () => latePerfBranchTree.count,
+    [latePerfBranchTree.count],
+  )
+
+  /** Authoritative total — table pagination when loaded, otherwise drilldown root count. */
+  const contractPerfDisplayTotalCount = useMemo(() => {
+    if (!isContractPerformance || !shouldLoadTableData) return contractPerfDrilldownUniqueCount
+    return totalContracts
+  }, [isContractPerformance, shouldLoadTableData, contractPerfDrilldownUniqueCount, totalContracts])
+
+  const startContractPerfTableLoad = useCallback(() => {
+    if (!isContractPerformance) return
+    contractPerfPendingLoadsRef.current += 1
+    setIsTableLoading(true)
+  }, [isContractPerformance])
+
+  const finishContractPerfTableLoad = useCallback(() => {
+    if (!isContractPerformance) return
+    contractPerfPendingLoadsRef.current = Math.max(0, contractPerfPendingLoadsRef.current - 1)
+    if (contractPerfPendingLoadsRef.current === 0) {
+      setIsTableLoading(false)
+    }
+  }, [isContractPerformance])
+
+  /** Immediate lock when Section 1 filters change, before async fetches begin. */
+  const lockSection1FilterChange = useCallback(() => {
+    if (!isContractPerformance) return
+    setIsTableLoading(true)
+  }, [isContractPerformance])
+
+  const commitDrilldownSelection = useCallback(() => {
+    if (!isContractPerformance) return
+    if (!hasPendingDrilldownChanges) return
+
+    lockSection1FilterChange()
+    setAppliedDrilldownSelection({ ...draftDrilldownSelection })
+    setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
+    setCurrentPage(1)
+    collapseAll()
+    setColumnFilters((prev) => {
+      const next = { ...prev }
+      const supplier = draftDrilldownSelection.supplier
+      if (supplier && supplier !== 'Blank') {
+        next.supplier = { type: 'text', value: supplier, exact: true }
+      } else {
+        delete next.supplier
+      }
+      return next
+    })
+  }, [
+    collapseAll,
+    draftDrilldownSelection,
+    hasPendingDrilldownChanges,
+    isContractPerformance,
+    lockSection1FilterChange,
+    perfDashMode,
+  ])
+
+  useEffect(() => {
+    if (!isContractPerformance) return
+    if (!shouldLoadTableData && !latePerfTreeLoading && contractPerfPendingLoadsRef.current === 0) {
+      setIsTableLoading(false)
+    }
+  }, [isContractPerformance, shouldLoadTableData, latePerfTreeLoading])
+
+  /** Section 2 lock: only while the drilldown tree API refreshes (Section 1 scope). Table loads do not block Section 2. */
+  const isSection2TreeLoading = latePerfTreeLoading
+
+  const isDrilldownApplyLoading =
+    (isTableLoading || contractPerfScopeLoading) && !hasPendingDrilldownChanges
+
+  const findChild = useCallback((nodes: ContractPerfBranchNode[], label: string | null) => {
     if (!label) return null
     return nodes.find((n) => n.label === label) ?? null
   }, [])
 
   // Tree order: Product → Plant → Incoterm → Supplier
   const latePerfProductNodes = latePerfBranchTree.children
-  const latePerfSelectedProdNode = findChild(latePerfProductNodes, latePerfSelProduct)
+  const latePerfSelectedProdNode = findChild(latePerfProductNodes, draftDrilldownSelection.product)
   const latePerfPlantNodes = latePerfSelectedProdNode?.children ?? []
-  const latePerfSelectedPlantNode = findChild(latePerfPlantNodes, latePerfSelPlant)
+  const latePerfSelectedPlantNode = findChild(latePerfPlantNodes, draftDrilldownSelection.plant)
   const latePerfIncotermNodes = latePerfSelectedPlantNode?.children ?? []
-  const latePerfSelectedIncNode = findChild(latePerfIncotermNodes, latePerfSelIncoterm)
+  const latePerfSelectedIncNode = findChild(latePerfIncotermNodes, draftDrilldownSelection.incoterm)
   const latePerfSupplierNodes = latePerfSelectedIncNode?.children ?? []
 
   type ContractLogisticsUi =
@@ -581,6 +1195,13 @@ function ContractsPageContent() {
   const [columnFilters, setColumnFilters] = useState<Record<string, ColumnFilter>>({})
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
   const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
+
+  /** Step D: merged filters passed to Section 3 table fetch. */
+  const contractPerfTableColumnFilters = useMemo(
+    () =>
+      buildContractPerfTableColumnFilters(columnFilters, { selectedIncoterms }, contractPerfDrilldownFilters),
+    [columnFilters, selectedIncoterms, contractPerfDrilldownFilters],
+  )
 
   /** Column IDs handled by GET /contracts?columnFilters= (server); others stay client-only */
   const SERVER_COLUMN_FILTER_IDS = useMemo(
@@ -674,7 +1295,7 @@ function ContractsPageContent() {
 
   useEffect(() => {
     if (!authReady) return
-    if (isContractPerformance && !contractPerfTableEnabled) return
+    if (isContractPerformance && !shouldLoadTableData) return
     // Read URL parameters
     const statusParam = searchParams.get('status')
     if (statusParam) {
@@ -698,11 +1319,36 @@ function ContractsPageContent() {
     unassignedFilter,
     selectedIncoterms,
     selectedPlantSites,
-    selectedProducts,
     columnFilters,
     sortKey,
     sortDir,
-    contractPerfTableEnabled,
+    shouldLoadTableData,
+    isContractPerformance,
+    selectedProductTab,
+    appliedDrilldownSelection,
+    contractPerfTableColumnFilters,
+    contractPerfTablePlants,
+    contractPerfTableProduct,
+    searchTerm,
+  ])
+
+  useEffect(() => {
+    if (!isContractPerformance) return
+    setDraftDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
+    setAppliedDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
+    setColumnFilters((prev) => {
+      const next = { ...prev }
+      delete next.supplier
+      return next
+    })
+    setCurrentPage(1)
+  }, [
+    selectedProductTab,
+    selectedIncoterms,
+    selectedPlantSites,
+    dateFrom,
+    dateTo,
+    perfTransportMode,
     isContractPerformance,
   ])
 
@@ -734,8 +1380,6 @@ function ContractsPageContent() {
     })
   }
 
-  const collapseAll = () => setExpandedContractIds(new Set())
-
   const columnStorageKey = isContractPerformance
     ? 'contract-performance.compact.visibleColumns.v11'
     : 'contracts.compact.visibleColumns.v8'
@@ -747,9 +1391,12 @@ function ContractsPageContent() {
   const sortStorageKey = isContractPerformance ? 'contract-performance.compact.sort' : 'contracts.compact.sort.v2'
 
   const fetchContracts = async (page: number = currentPage, searchOverride?: string, sortKeyOverride?: string, sortDirOverride?: 'asc' | 'desc') => {
+    let trackContractPerfTableLoad = false
     try {
       if (!authReady) return
-      if (isContractPerformance && !contractPerfTableEnabled) return
+      if (isContractPerformance && !shouldLoadTableData) return
+      trackContractPerfTableLoad = isContractPerformance && shouldLoadTableData
+      if (trackContractPerfTableLoad) startContractPerfTableLoad()
       setLoading(true)
       const params = new URLSearchParams()
       params.append('page', page.toString())
@@ -758,18 +1405,11 @@ function ContractsPageContent() {
       if (searchTrim.length >= 2) {
         params.append('search', searchTrim)
       }
-      const mergedColumnFilters: Record<string, any> = { ...columnFilters }
-      if (isContractPerformance) {
-        if (selectedIncoterms.length > 0) {
-          const includeBlank = selectedIncoterms.includes('Blank')
-          const values = selectedIncoterms.filter((v) => v !== 'Blank')
-          mergedColumnFilters.incoterm = { type: 'multi', values, includeBlank }
-        }
-        if (selectedProducts.length > 0) {
-          const includeBlank = selectedProducts.includes('Blank')
-          const values = selectedProducts.filter((v) => v !== 'Blank')
-          mergedColumnFilters.product = { type: 'multi', values, includeBlank }
-        }
+      const mergedColumnFilters: Record<string, any> = isContractPerformance
+        ? (contractPerfTableColumnFilters as Record<string, any>)
+        : { ...columnFilters }
+      if (!isContractPerformance) {
+        // non-performance page keeps legacy inline filters below
       }
       const cfKeys = Object.keys(mergedColumnFilters)
       if (cfKeys.length > 0) {
@@ -810,11 +1450,14 @@ function ContractsPageContent() {
       if (unassignedFilter) {
         params.append('unassigned', unassignedFilter)
       }
-      if (isContractPerformance && selectedPlantSites.length > 0) {
-        selectedPlantSites.forEach((p) => params.append('plant', p))
+      if (isContractPerformance && contractPerfTablePlants.length > 0) {
+        contractPerfTablePlants.forEach((p) => params.append('plant', p))
       }
       if (isContractPerformance && lateOnTimeFilter !== 'ALL') {
         params.append('lateOnTimeFilter', lateOnTimeFilter)
+      }
+      if (isContractPerformance && contractPerfTableProduct) {
+        params.append('product', contractPerfTableProduct)
       }
       const activeSortCol = sortKeyOverride || sortKey
       const activeSortDir = sortDirOverride || sortDir
@@ -849,26 +1492,127 @@ function ContractsPageContent() {
       alert('Failed to load contracts. Please try again.')
     } finally {
       setLoading(false)
+      if (trackContractPerfTableLoad) finishContractPerfTableLoad()
     }
   }
 
-  const buildLatePerfParams = useCallback(() => {
-    const params = new URLSearchParams()
-    params.append('scope', 'ytd')
-    params.append('_ts', String(Date.now()))
-    if (dateFrom) params.append('dateFrom', dateFrom)
-    if (dateTo) params.append('dateTo', dateTo)
-    if (perfTransportMode && perfTransportMode !== 'ALL') params.append('transportMode', perfTransportMode)
-    if (productFilter && productFilter !== 'ALL') params.append('product', productFilter)
-    if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
-    return params
-  }, [dateFrom, dateTo, perfTransportMode, productFilter, b2bFlagFilter])
+  /** Fetch full scoped contract list for Section 2 unique-count drilldown aggregation (table pagination unchanged). */
+  const fetchContractPerfDrilldownScope = useCallback(async () => {
+    if (!authReady || !isContractPerformance || !shouldLoadTableData) {
+      setContractPerfDrilldownScopeContracts([])
+      return
+    }
+    try {
+      setContractPerfScopeLoading(true)
+      const params = new URLSearchParams()
+      params.append('page', '1')
+      params.append('limit', '10000')
+      const searchTrim = searchTerm.trim()
+      if (searchTrim.length >= 2) {
+        params.append('search', searchTrim)
+      }
+      const cfKeys = Object.keys(contractPerfTableColumnFilters)
+      if (cfKeys.length > 0) {
+        params.append('columnFilters', JSON.stringify(contractPerfTableColumnFilters))
+      }
+      if (statusFilter && statusFilter !== 'All Status') {
+        params.append('status', statusFilter)
+      }
+      if (perfTransportMode !== 'ALL') {
+        params.append('transportMode', perfTransportMode)
+      }
+      if (dateFrom) params.append('dateFrom', dateFrom)
+      if (dateTo) params.append('dateTo', dateTo)
+      if (contractPerfTablePlants.length > 0) {
+        contractPerfTablePlants.forEach((p) => params.append('plant', p))
+      }
+      if (lateOnTimeFilter !== 'ALL') {
+        params.append('lateOnTimeFilter', lateOnTimeFilter)
+      }
+      if (contractPerfTableProduct) {
+        params.append('product', contractPerfTableProduct)
+      }
 
-  const fetchLatePerformanceSummary = useCallback(async () => {
+      const response = await api.get(`/contracts?${params.toString()}`)
+      const scopedContracts: Contract[] = response.data?.data?.contracts || []
+      setContractPerfDrilldownScopeContracts(scopedContracts)
+    } catch (error) {
+      console.error('Failed to fetch contract performance drilldown scope:', error)
+      setContractPerfDrilldownScopeContracts([])
+    } finally {
+      setContractPerfScopeLoading(false)
+    }
+  }, [
+    authReady,
+    isContractPerformance,
+    shouldLoadTableData,
+    searchTerm,
+    contractPerfTableColumnFilters,
+    statusFilter,
+    perfTransportMode,
+    dateFrom,
+    dateTo,
+    contractPerfTablePlants,
+    lateOnTimeFilter,
+    contractPerfTableProduct,
+  ])
+
+  useEffect(() => {
+    void fetchContractPerfDrilldownScope()
+  }, [fetchContractPerfDrilldownScope])
+
+  const buildContractPerfLatePerfParams = useCallback(
+    (contractStatus: 'All' | 'Open' | 'Close', includeLocalFilters: boolean) => {
+      const params = new URLSearchParams()
+      appendContractPerfBaseParams(params, {
+        dateFrom,
+        dateTo,
+        perfTransportMode,
+        resolvedProduct: includeLocalFilters
+          ? contractPerfResolvedScope.resolvedProduct
+          : contractPerfProductQuery,
+        b2bFlagFilter,
+        resolvedIncoterms: includeLocalFilters
+          ? contractPerfResolvedScope.resolvedIncoterms
+          : selectedIncoterms,
+        resolvedPlants: includeLocalFilters
+          ? contractPerfResolvedScope.resolvedPlants
+          : selectedPlantSites,
+        contractStatus,
+        search: includeLocalFilters ? contractPerfResolvedScope.search : '',
+        drilldownSupplier: includeLocalFilters ? contractPerfResolvedScope.drilldownSupplier : null,
+      })
+      return params
+    },
+    [
+      dateFrom,
+      dateTo,
+      perfTransportMode,
+      contractPerfProductQuery,
+      b2bFlagFilter,
+      selectedIncoterms,
+      selectedPlantSites,
+      contractPerfResolvedScope,
+    ],
+  )
+
+  /** Base params for Section 1 cards — global filters only, never Open/Close sub-status or Section 3 local filters. */
+  const buildLatePerfBaseParams = useCallback(
+    () => buildContractPerfLatePerfParams('All', false),
+    [buildContractPerfLatePerfParams],
+  )
+
+  /** Drilldown params for Section 2/3 — full unified filter scope. */
+  const buildLatePerfDrilldownParams = useCallback(
+    () => buildContractPerfLatePerfParams(summaryCardStatus, true),
+    [buildContractPerfLatePerfParams, summaryCardStatus],
+  )
+
+  const fetchLatePerformanceBaseSummary = useCallback(async () => {
     if (!authReady || !isContractPerformance) return
     try {
       setLatePerfSummaryLoading(true)
-      const resp = await api.get(`/contracts/late-performance/summary?${buildLatePerfParams().toString()}`)
+      const resp = await api.get(`/contracts/late-performance/summary?${buildLatePerfBaseParams().toString()}`)
       const data = resp.data?.data
       setLatePerformanceSummary(data?.summary ?? { count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0 })
       setOnTrackPerformanceSummary(data?.onTrackSummary ?? { count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0 })
@@ -881,13 +1625,13 @@ function ContractsPageContent() {
     } finally {
       setLatePerfSummaryLoading(false)
     }
-  }, [authReady, isContractPerformance, buildLatePerfParams])
+  }, [authReady, isContractPerformance, buildLatePerfBaseParams])
 
-  const fetchLatePerformanceTree = useCallback(async () => {
+  const fetchLatePerformanceDrilldownTree = useCallback(async () => {
     if (!authReady || !isContractPerformance) return
     try {
       setLatePerfTreeLoading(true)
-      const resp = await api.get(`/contracts/late-performance/tree?${buildLatePerfParams().toString()}`)
+      const resp = await api.get(`/contracts/late-performance/tree?${buildLatePerfDrilldownParams().toString()}`)
       const data = resp.data?.data
       setLatePerformanceTree(Array.isArray(data?.tree) ? data.tree : [])
       setOnTrackPerformanceTree(Array.isArray(data?.onTrackTree) ? data.onTrackTree : [])
@@ -898,72 +1642,74 @@ function ContractsPageContent() {
     } finally {
       setLatePerfTreeLoading(false)
     }
-  }, [authReady, isContractPerformance, buildLatePerfParams])
-
-  const fetchLatePerformanceDashboard = useCallback(async () => {
-    await fetchLatePerformanceSummary()
-    await fetchLatePerformanceTree()
-  }, [fetchLatePerformanceSummary, fetchLatePerformanceTree])
+  }, [authReady, isContractPerformance, buildLatePerfDrilldownParams])
 
   useEffect(() => {
-    void fetchLatePerformanceDashboard()
-  }, [fetchLatePerformanceDashboard])
+    void fetchLatePerformanceBaseSummary()
+  }, [fetchLatePerformanceBaseSummary])
 
-  const loadContractPerfTableData = useCallback(() => {
-    setContractPerfTableEnabled(true)
-    setCurrentPage(1)
-  }, [])
+  useEffect(() => {
+    void fetchLatePerformanceDrilldownTree()
+  }, [fetchLatePerformanceDrilldownTree])
 
-  const focusContractPerformanceTable = useCallback(() => {
-    setContractPerfTableEnabled(true)
-    setTimeout(
-      () => contractsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
-      100,
-    )
-  }, [])
+  const isSummaryStatusSelected = useCallback(
+    (mode: 'ontrack' | 'late', contractStatus: 'Open' | 'Close') =>
+      section1FilterState.perfDashMode === mode &&
+      section1FilterState.lateOnTimeFilter === (mode === 'ontrack' ? 'ON_TIME' : 'LATE') &&
+      section1FilterState.summaryCardStatus === contractStatus,
+    [section1FilterState],
+  )
 
   const applySummaryStatusFocus = useCallback(
     (mode: 'ontrack' | 'late', contractStatus: 'Open' | 'Close') => {
       if (!isContractPerformance) return
+      lockSection1FilterChange()
+
+      const alreadySelected =
+        !hasContractPerfDrilldownSelection(appliedDrilldownSelection) &&
+        perfDashMode === mode &&
+        lateOnTimeFilter === (mode === 'ontrack' ? 'ON_TIME' : 'LATE') &&
+        summaryCardStatus === contractStatus
+
+      if (alreadySelected) {
+        setSummaryCardStatus('All')
+        setStatusFilter('All Status')
+        setLateOnTimeFilter('ALL')
+        setDraftDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
+        setAppliedDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
+        setColumnFilters((prev) => {
+          const next = { ...prev }
+          delete next.supplier
+          return next
+        })
+        setCurrentPage(1)
+        collapseAll()
+        return
+      }
+
+      setSummaryCardStatus(contractStatus)
       setPerfDashMode(mode)
       setLateOnTimeFilter(mode === 'ontrack' ? 'ON_TIME' : 'LATE')
       setStatusFilter(contractStatus)
-      setLatePerfSelIncoterm(null)
-      setLatePerfSelProduct(null)
-      setLatePerfSelPlant(null)
-      setLatePerfSelSupplier(null)
+      setDraftDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
+      setAppliedDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
       setPerfTransportMode('ALL')
-      setSelectedIncoterms([])
-      setSelectedPlantSites([])
-      setSelectedProducts([])
       setColumnFilters((prev) => {
         const next = { ...prev }
-        delete next.product
         delete next.supplier
         return next
       })
       setCurrentPage(1)
       collapseAll()
-      focusContractPerformanceTable()
     },
-    [collapseAll, focusContractPerformanceTable, isContractPerformance],
-  )
-
-  const isSummaryStatusSelected = useCallback(
-    (mode: 'ontrack' | 'late', contractStatus: 'Open' | 'Close') =>
-      !latePerfSelProduct &&
-      !latePerfSelPlant &&
-      !latePerfSelIncoterm &&
-      !latePerfSelSupplier &&
-      lateOnTimeFilter === (mode === 'ontrack' ? 'ON_TIME' : 'LATE') &&
-      statusFilter === contractStatus,
     [
-      latePerfSelProduct,
-      latePerfSelPlant,
-      latePerfSelIncoterm,
-      latePerfSelSupplier,
+      appliedDrilldownSelection,
+      collapseAll,
+      isContractPerformance,
       lateOnTimeFilter,
-      statusFilter,
+      lockSection1FilterChange,
+      perfDashMode,
+      summaryCardStatus,
     ],
   )
 
@@ -978,38 +1724,14 @@ function ContractsPageContent() {
     [isSummaryStatusSelected],
   )
 
-  const applyLatePerformanceFocus = useCallback(
-    (incotermKey: string, productKey: string, plantKey: string, supplierKey?: string) => {
-      if (!isContractPerformance) return
-
-      setContractPerfTableEnabled(true)
-      setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
-      setPerfTransportMode('ALL')
-      setStatusFilter('All Status')
-
-      setSelectedProducts([productKey])
-      setSelectedIncoterms([incotermKey])
-      setSelectedPlantSites([plantKey])
-
-      setColumnFilters((prev) => {
-        const next = { ...prev }
-        delete next.product
-        if (supplierKey && supplierKey !== 'Blank') {
-          next.supplier = { type: 'text', value: supplierKey, exact: true }
-        } else {
-          delete next.supplier
-        }
-        return next
-      })
-
-      setCurrentPage(1)
-      collapseAll()
-      focusContractPerformanceTable()
+  /** Section 2 node click — updates draft drilldown selection only; Section 3 loads on Apply. */
+  const applyDrilldownNodeSelection = useCallback(
+    (level: 'product' | 'plant' | 'incoterm' | 'supplier', label: string) => {
+      updateDraftDrilldownSelection(level, label)
     },
-    [collapseAll, focusContractPerformanceTable, isContractPerformance, perfDashMode],
+    [updateDraftDrilldownSelection],
   )
-  
-  // Fetch b2b flag filter options on mount (lightweight dedicated endpoint)
+
   useEffect(() => {
     if (!authReady) return
     api.get('/contracts/filter-options/b2b-flags')
@@ -2617,25 +3339,47 @@ function ContractsPageContent() {
           </div>
         )}
 
+        {isContractPerformance && (
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="inline-flex rounded-lg border bg-white p-1 flex-wrap gap-1">
+              {CONTRACT_PERF_PRODUCT_TABS.map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => {
+                    lockSection1FilterChange()
+                    setSelectedProductTab(tab)
+                  }}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                    selectedProductTab === tab
+                      ? 'bg-slate-800 text-white'
+                      : 'text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={resetLatePerfSelections}
+              className="text-sm text-blue-700 hover:underline shrink-0"
+            >
+              Reset selection
+            </button>
+          </div>
+        )}
+
         {isContractPerformance && (() => {
-          const totalOsQty = (latePerformanceSummary.totalQtyDelivery ?? 0) + (onTrackPerformanceSummary.totalQtyDelivery ?? 0)
-          const latePct   = totalOsQty > 0 ? ((latePerformanceSummary.totalQtyDelivery ?? 0) / totalOsQty) * 100 : 0
-          const onTrackPct = totalOsQty > 0 ? ((onTrackPerformanceSummary.totalQtyDelivery ?? 0) / totalOsQty) * 100 : 0
-          const fmtMT = (v: number) => (v / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' MT'
+          const { late: lateCardTotals, onTrack: onTrackCardTotals } = cardTotalsData
+          const totalOsQty = (lateCardTotals.totalQtyDelivery ?? 0) + (onTrackCardTotals.totalQtyDelivery ?? 0)
+          const latePct   = totalOsQty > 0 ? ((lateCardTotals.totalQtyDelivery ?? 0) / totalOsQty) * 100 : 0
+          const onTrackPct = totalOsQty > 0 ? ((onTrackCardTotals.totalQtyDelivery ?? 0) / totalOsQty) * 100 : 0
           const onTimeAvgClass = contextPerformanceClass(false)
           const lateAvgClass = contextPerformanceClass(true)
           if (latePerfSummaryLoading) {
             return (
               <div className="space-y-2">
-                <div className="flex items-center justify-end">
-                  <button
-                    type="button"
-                    onClick={resetLatePerfSelections}
-                    className="text-sm text-blue-700 hover:underline"
-                  >
-                    Reset selection
-                  </button>
-                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {[0, 1].map((i) => (
                     <div key={i} className="rounded-xl border bg-white p-5 shadow-sm animate-pulse">
@@ -2651,15 +3395,6 @@ function ContractsPageContent() {
           }
           return (
             <div className="space-y-2">
-              <div className="flex items-center justify-end">
-                <button
-                  type="button"
-                  onClick={resetLatePerfSelections}
-                  className="text-sm text-blue-700 hover:underline"
-                >
-                  Reset selection
-                </button>
-              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* On Track card */}
               <div className="rounded-xl border bg-white p-5 shadow-sm">
@@ -2668,7 +3403,7 @@ function ContractsPageContent() {
                   <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">{onTrackPct.toFixed(1)}%</span>
                 </div>
                 <div className="text-sm text-gray-500 mb-1">Outstanding Qty</div>
-                <div className="text-xl font-bold text-gray-900 mb-3">{fmtMT(onTrackPerformanceSummary.totalQtyDelivery ?? 0)}</div>
+                <div className="text-xl font-bold text-gray-900 mb-3">{formatContractPerfOutstandingMt(onTrackCardTotals.totalQtyDelivery ?? 0)}</div>
                 {/* Progress bar */}
                 <div className="w-full h-6 rounded-md bg-gray-100 overflow-hidden mb-3">
                   <div className="h-full bg-green-500 flex items-center justify-end pr-2 transition-all duration-500" style={{ width: `${onTrackPct}%` }}>
@@ -2677,10 +3412,10 @@ function ContractsPageContent() {
                 </div>
                 {/* Avg metrics */}
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-4">
-                  <span>{avgDaysMetricLabel(false)}: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackPerformanceSummary.avgDays)}</span></span>
-                  <span>Avg Trade: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackPerformanceSummary.avgDays)}</span></span>
-                  <span>Avg Cash: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackPerformanceSummary.avgCashCycle)}</span></span>
-                  <span>Avg Log: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackPerformanceSummary.avgLogCycle)}</span></span>
+                  <span>{avgDaysMetricLabel(false)}: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackCardTotals.avgDays)}</span></span>
+                  <span>Avg Trade: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackCardTotals.avgDays)}</span></span>
+                  <span>Avg Cash: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackCardTotals.avgCashCycle)}</span></span>
+                  <span>Avg Log: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackCardTotals.avgLogCycle)}</span></span>
                 </div>
                 {/* Open / Close breakdown */}
                 <div className="flex gap-2">
@@ -2691,7 +3426,7 @@ function ContractsPageContent() {
                     className={summaryStatusBoxClass('ontrack', 'Open', 'bg-blue-50 border-blue-100')}
                   >
                     <div className="text-[11px] font-medium text-blue-600 mb-1">Open</div>
-                    <div className="text-sm font-semibold text-gray-800">{fmtMT(onTrackPerformanceSummary.openOutstandingQty ?? 0)}</div>
+                    <div className="text-sm font-semibold text-gray-800">{formatContractPerfOutstandingMt(onTrackCardTotals.openOutstandingQty ?? 0)}</div>
                   </button>
                   <button
                     type="button"
@@ -2700,7 +3435,7 @@ function ContractsPageContent() {
                     className={summaryStatusBoxClass('ontrack', 'Close', 'bg-orange-50 border-orange-100')}
                   >
                     <div className="text-[11px] font-medium text-orange-600 mb-1">Close</div>
-                    <div className="text-sm font-semibold text-gray-800">{fmtMT(onTrackPerformanceSummary.closeOutstandingQty ?? 0)}</div>
+                    <div className="text-sm font-semibold text-gray-800">{formatContractPerfOutstandingMt(onTrackCardTotals.closeOutstandingQty ?? 0)}</div>
                   </button>
                 </div>
               </div>
@@ -2712,7 +3447,7 @@ function ContractsPageContent() {
                   <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">{latePct.toFixed(1)}%</span>
                 </div>
                 <div className="text-sm text-gray-500 mb-1">Outstanding Qty</div>
-                <div className="text-xl font-bold text-gray-900 mb-3">{fmtMT(latePerformanceSummary.totalQtyDelivery ?? 0)}</div>
+                <div className="text-xl font-bold text-gray-900 mb-3">{formatContractPerfOutstandingMt(lateCardTotals.totalQtyDelivery ?? 0)}</div>
                 {/* Progress bar */}
                 <div className="w-full h-6 rounded-md bg-gray-100 overflow-hidden mb-3">
                   <div className="h-full bg-red-500 flex items-center justify-end pr-2 transition-all duration-500" style={{ width: `${latePct}%` }}>
@@ -2721,10 +3456,10 @@ function ContractsPageContent() {
                 </div>
                 {/* Avg metrics */}
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-4">
-                  <span>{avgDaysMetricLabel(true)}: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(latePerformanceSummary.avgDays)}</span></span>
-                  <span>Avg Trade: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(latePerformanceSummary.avgDays)}</span></span>
-                  <span>Avg Cash: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(latePerformanceSummary.avgCashCycle)}</span></span>
-                  <span>Avg Log: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(latePerformanceSummary.avgLogCycle)}</span></span>
+                  <span>{avgDaysMetricLabel(true)}: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(lateCardTotals.avgDays)}</span></span>
+                  <span>Avg Trade: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(lateCardTotals.avgDays)}</span></span>
+                  <span>Avg Cash: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(lateCardTotals.avgCashCycle)}</span></span>
+                  <span>Avg Log: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(lateCardTotals.avgLogCycle)}</span></span>
                 </div>
                 {/* Open / Close breakdown */}
                 <div className="flex gap-2">
@@ -2735,7 +3470,7 @@ function ContractsPageContent() {
                     className={summaryStatusBoxClass('late', 'Open', 'bg-blue-50 border-blue-100')}
                   >
                     <div className="text-[11px] font-medium text-blue-600 mb-1">Open</div>
-                    <div className="text-sm font-semibold text-gray-800">{fmtMT(latePerformanceSummary.openOutstandingQty ?? 0)}</div>
+                    <div className="text-sm font-semibold text-gray-800">{formatContractPerfOutstandingMt(lateCardTotals.openOutstandingQty ?? 0)}</div>
                   </button>
                   <button
                     type="button"
@@ -2744,7 +3479,7 @@ function ContractsPageContent() {
                     className={summaryStatusBoxClass('late', 'Close', 'bg-orange-50 border-orange-100')}
                   >
                     <div className="text-[11px] font-medium text-orange-600 mb-1">Close</div>
-                    <div className="text-sm font-semibold text-gray-800">{fmtMT(latePerformanceSummary.closeOutstandingQty ?? 0)}</div>
+                    <div className="text-sm font-semibold text-gray-800">{formatContractPerfOutstandingMt(lateCardTotals.closeOutstandingQty ?? 0)}</div>
                   </button>
                 </div>
               </div>
@@ -2817,36 +3552,66 @@ function ContractsPageContent() {
                     </div>
                   </div>
                 </div>
-              ) : (perfDashMode === 'late' ? latePerformanceTree : onTrackPerformanceTree).length === 0 ? (
+              ) : filteredDrilldownData.activeTree.length === 0 ? (
                 <div className="text-sm text-gray-500">{perfDashMode === 'late' ? 'No late contracts found in YTD.' : 'No on-time contracts found in YTD.'}</div>
               ) : (
                 <div className="space-y-3">
                   <div className="text-sm text-gray-600">
                     Navigate as a tree: <span className="font-medium">Product → Plant → Incoterm → Supplier</span>.
-                    Choosing a node updates the contracts table below to the same <span className="font-medium">YTD {perfDashMode === 'late' ? 'late' : 'on-time'}</span> scope and your selection.
-                    Click a <span className="font-medium">Incoterm</span> node to narrow further (Group Name is viewed in the table).
+                    Use the drilldown to explore <span className="font-medium">YTD {perfDashMode === 'late' ? 'late' : 'on-time'}</span> contracts by dimension.
+                    Click <span className="font-medium">Apply</span> to load the contract list in Section 3 with your drilldown selection.
                   </div>
 
-                  <div className="rounded-xl border bg-white p-4">
+                  <div className="rounded-xl border bg-white p-4 relative">
+                    {isSection2TreeLoading && (
+                      <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-white/60">
+                        <span className="text-sm font-medium text-gray-600">Updating drilldown tree...</span>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-                      <div className="text-sm font-semibold text-gray-900">{perfDashMode === 'late' ? 'Late' : 'On Time'} Performance drilldown</div>
-                      <button
-                        type="button"
-                        onClick={resetLatePerfSelections}
-                        className="text-sm text-blue-700 hover:underline"
-                      >
-                        Reset selection
-                      </button>
+                      <div>
+                        <div className="text-sm font-semibold text-gray-900">{perfDashMode === 'late' ? 'Late' : 'On Time'} Performance drilldown</div>
+                        <div className="text-xs text-gray-500 mt-0.5">
+                          {contractPerfDisplayTotalCount.toLocaleString('en-US')} unique contracts in current scope
+                          {hasPendingDrilldownChanges ? (
+                            <span className="ml-2 text-amber-700"> · Unapplied selection</span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={commitDrilldownSelection}
+                          disabled={!hasPendingDrilldownChanges || isDrilldownApplyLoading}
+                        >
+                          {isDrilldownApplyLoading ? (
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          ) : null}
+                          Apply
+                        </Button>
+                        <button
+                          type="button"
+                          onClick={resetLatePerfSelections}
+                          disabled={isSection2TreeLoading}
+                          className={`text-sm text-blue-700 hover:underline ${isSection2TreeLoading ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''}`}
+                        >
+                          Reset selection
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+                    <div
+                      className={`grid grid-cols-1 lg:grid-cols-4 gap-3 ${isSection2TreeLoading ? 'opacity-50 pointer-events-none cursor-not-allowed' : ''}`}
+                      aria-busy={isSection2TreeLoading}
+                    >
                       {([
                         { title: 'Product', subtitle: 'Pick one', level: 'product' as const },
-                        { title: 'Plant', subtitle: latePerfSelProduct ? `Under ${latePerfSelProduct}` : 'Pick product first', level: 'plant' as const },
-                        { title: 'Incoterm', subtitle: latePerfSelPlant ? `Under ${latePerfSelPlant}` : 'Pick plant first', level: 'incoterm' as const },
-                        { title: 'Supplier', subtitle: latePerfSelIncoterm ? `Under ${latePerfSelIncoterm}` : 'Pick incoterm first', level: 'supplier' as const },
+                        { title: 'Plant', subtitle: draftDrilldownSelection.product ? `Under ${draftDrilldownSelection.product}` : 'Pick product first', level: 'plant' as const },
+                        { title: 'Incoterm', subtitle: draftDrilldownSelection.plant ? `Under ${draftDrilldownSelection.plant}` : 'Pick plant first', level: 'incoterm' as const },
+                        { title: 'Supplier', subtitle: draftDrilldownSelection.incoterm ? `Under ${draftDrilldownSelection.incoterm}` : 'Pick incoterm first', level: 'supplier' as const },
                       ] as const).map((col) => {
-                        const denom = latePerformanceSummary.totalDays || 1
+                        const denom = filteredDrilldownData.activeTree.reduce((sum, node) => sum + (node.totalDays || 0), 0) || 1
                         const levelStyles: Record<string, { headerBg: string; badge: string; bar: string; border: string }> = {
                           incoterm: { headerBg: 'bg-violet-50', badge: 'bg-violet-100 text-violet-800', bar: 'bg-violet-600', border: 'border-violet-200' },
                           product: { headerBg: 'bg-amber-50', badge: 'bg-amber-100 text-amber-800', bar: 'bg-amber-600', border: 'border-amber-200' },
@@ -2855,16 +3620,28 @@ function ContractsPageContent() {
                         }
                         const style = levelStyles[col.level] ?? levelStyles.incoterm
                         const itemClass = (selected: boolean) =>
-                          `w-full text-left rounded-lg border px-3 py-2 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-200 ${
-                            selected ? `bg-white ${style.border}` : 'bg-white border-gray-200'
-                          }`
+                          `w-full text-left rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-200 ${
+                            isSection2TreeLoading
+                              ? 'cursor-not-allowed bg-white border-gray-200'
+                              : 'hover:bg-gray-50 cursor-pointer'
+                          } ${selected ? `bg-white ${style.border}` : 'bg-white border-gray-200'}`
+
+                        const runDrilldownNodeAction = (action: () => void) => {
+                          if (isSection2TreeLoading) return
+                          action()
+                        }
 
                         const renderItem = (node: LatePerfBranchNode, selected: boolean, onClick: () => void, rightAction?: React.ReactNode, rightStat?: React.ReactNode) => {
                           const pct = Math.max(1, Math.round((Number(node.totalDays || 0) / denom) * 100))
                           return (
                             <div key={node.id} className={itemClass(selected)}>
                               <div className="flex items-start justify-between gap-3">
-                                <button type="button" onClick={onClick} className="min-w-0 flex-1 text-left">
+                                <button
+                                  type="button"
+                                  disabled={isSection2TreeLoading}
+                                  onClick={() => runDrilldownNodeAction(onClick)}
+                                  className="min-w-0 flex-1 text-left disabled:cursor-not-allowed"
+                                >
                                   <div className="flex items-start justify-between gap-1">
                                     <div className="text-sm font-semibold text-gray-900 truncate">{node.label}</div>
                                     <div className="shrink-0 text-right leading-tight">
@@ -2878,7 +3655,7 @@ function ContractsPageContent() {
                                   <div className="mt-1 text-xs text-gray-700 flex items-center justify-between gap-2">
                                     <span className="font-semibold">{node.count.toLocaleString('en-US')}</span>
                                     <span className="text-gray-500">contracts</span>
-                                    {rightStat ?? <span className="ml-auto font-semibold whitespace-nowrap">{(node.totalQtyDelivery / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>}
+                                    {rightStat ?? <span className="ml-auto font-semibold whitespace-nowrap">{formatContractPerfOutstandingMt(node.totalQtyDelivery)}</span>}
                                   </div>
                                 </button>
                                 {rightAction ? <div className="shrink-0">{rightAction}</div> : null}
@@ -2900,81 +3677,35 @@ function ContractsPageContent() {
                             return (
                               <div className="space-y-2">
                                 {latePerfProductNodes.slice(0, 30).map((n) =>
-                                  renderItem(n, latePerfSelProduct === n.label, () => {
-                                    setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
-                                    setPerfTransportMode('ALL')
-                                    setStatusFilter('All Status')
-                                    setLatePerfSelProduct(n.label)
-                                    setLatePerfSelPlant(null)
-                                    setLatePerfSelIncoterm(null)
-                                    setLatePerfSelSupplier(null)
-                                    setSelectedProducts([n.label])
-                                    setSelectedIncoterms([])
-                                    setSelectedPlantSites([])
-                                    setColumnFilters((prev) => {
-                                      const next = { ...prev }
-                                      delete next.product
-                                      delete next.supplier
-                                      return next
-                                    })
-                                    setCurrentPage(1)
-                                    collapseAll()
-                                    focusContractPerformanceTable()
+                                  renderItem(n, draftDrilldownSelection.product === n.label, () => {
+                                    applyDrilldownNodeSelection('product', n.label)
                                   }),
                                 )}
                               </div>
                             )
                           }
                           if (col.level === 'plant') {
-                            if (!latePerfSelProduct) return <div className="text-sm text-gray-500">Select a product to see plants.</div>
+                            if (!draftDrilldownSelection.product) return <div className="text-sm text-gray-500">Select a product to see plants.</div>
                             return (
                               <div className="space-y-2">
                                 {latePerfPlantNodes.slice(0, 30).map((n) =>
-                                  renderItem(n, latePerfSelPlant === n.label, () => {
-                                    setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
-                                    setPerfTransportMode('ALL')
-                                    setStatusFilter('All Status')
-                                    setLatePerfSelPlant(n.label)
-                                    setLatePerfSelIncoterm(null)
-                                    setLatePerfSelSupplier(null)
-                                    setSelectedIncoterms([])
-                                    setSelectedPlantSites([n.label])
-                                    setColumnFilters((prev) => {
-                                      const next = { ...prev }
-                                      delete next.supplier
-                                      return next
-                                    })
-                                    setCurrentPage(1)
-                                    collapseAll()
-                                    focusContractPerformanceTable()
+                                  renderItem(n, draftDrilldownSelection.plant === n.label, () => {
+                                    applyDrilldownNodeSelection('plant', n.label)
                                   }),
                                 )}
                               </div>
                             )
                           }
                           // incoterm
-                          if (!latePerfSelPlant || !latePerfSelProduct) return <div className="text-sm text-gray-500">Select a plant to see incoterms.</div>
+                          if (!draftDrilldownSelection.plant || !draftDrilldownSelection.product) return <div className="text-sm text-gray-500">Select a plant to see incoterms.</div>
                           return (
                             <div className="space-y-2">
                               {latePerfIncotermNodes.slice(0, 30).map((n) =>
                                 renderItem(
                                   n,
-                                  latePerfSelIncoterm === n.label,
+                                  draftDrilldownSelection.incoterm === n.label,
                                   () => {
-                                    setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
-                                    setPerfTransportMode('ALL')
-                                    setStatusFilter('All Status')
-                                    setLatePerfSelIncoterm(n.label)
-                                    setLatePerfSelSupplier(null)
-                                    setSelectedIncoterms([n.label])
-                                    setColumnFilters((prev) => {
-                                      const next = { ...prev }
-                                      delete next.supplier
-                                      return next
-                                    })
-                                    setCurrentPage(1)
-                                    collapseAll()
-                                    focusContractPerformanceTable()
+                                    applyDrilldownNodeSelection('incoterm', n.label)
                                   },
                                 ),
                               )}
@@ -2985,16 +3716,15 @@ function ContractsPageContent() {
                         // supplier column body (resolved above via col.level check below)
                         const supplierBody = (() => {
                           if (col.level !== 'supplier') return null
-                          if (!latePerfSelIncoterm || !latePerfSelPlant || !latePerfSelProduct) return <div className="text-sm text-gray-500">Select an incoterm to see suppliers.</div>
+                          if (!draftDrilldownSelection.incoterm || !draftDrilldownSelection.plant || !draftDrilldownSelection.product) return <div className="text-sm text-gray-500">Select an incoterm to see suppliers.</div>
                           return (
                             <div className="space-y-2">
                               {latePerfSupplierNodes.slice(0, 30).map((n) =>
                                 renderItem(
                                   n,
-                                  latePerfSelSupplier === n.label,
+                                  draftDrilldownSelection.supplier === n.label,
                                   () => {
-                                    setLatePerfSelSupplier(n.label)
-                                    applyLatePerformanceFocus(latePerfSelIncoterm!, latePerfSelProduct!, latePerfSelPlant!, n.label)
+                                    applyDrilldownNodeSelection('supplier', n.label)
                                   },
                                 ),
                               )}
@@ -3140,7 +3870,15 @@ function ContractsPageContent() {
                 </div>
                 <select
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    if (isContractPerformance) lockSection1FilterChange()
+                    setStatusFilter(value)
+                    if (isContractPerformance) {
+                      setSummaryCardStatus(value === 'Open' || value === 'Close' ? value : 'All')
+                      setCurrentPage(1)
+                    }
+                  }}
                   className="px-4 py-2 border rounded-lg"
                 >
                   <option value="All Status">All Status</option>
@@ -3186,7 +3924,14 @@ function ContractsPageContent() {
                 {isContractPerformance && (
                   <select
                     value={lateOnTimeFilter}
-                    onChange={(e) => setLateOnTimeFilter(e.target.value as any)}
+                    onChange={(e) => {
+                      const value = e.target.value as 'ALL' | 'LATE' | 'ON_TIME'
+                      lockSection1FilterChange()
+                      setLateOnTimeFilter(value)
+                      if (value === 'ON_TIME') setPerfDashMode('ontrack')
+                      else if (value === 'LATE') setPerfDashMode('late')
+                      setCurrentPage(1)
+                    }}
                     className="px-4 py-2 border rounded-lg"
                     title="Late: Trade Cycle > 0. On Time: Trade Cycle ≤ 0."
                   >
@@ -3198,7 +3943,10 @@ function ContractsPageContent() {
                 {isContractPerformance && (
                   <select
                     value={perfTransportMode}
-                    onChange={(e) => setPerfTransportMode(e.target.value as any)}
+                    onChange={(e) => {
+                      if (isContractPerformance) lockSection1FilterChange()
+                      setPerfTransportMode(e.target.value as 'ALL' | 'SEA' | 'LAND')
+                    }}
                     className="px-4 py-2 border rounded-lg"
                   >
                     <option value="ALL">Transport Mode: All</option>
@@ -3214,7 +3962,10 @@ function ContractsPageContent() {
                     label="Incoterm"
                     options={availableIncoterms}
                     selected={selectedIncoterms}
-                    onChange={setSelectedIncoterms}
+                    onChange={(selected) => {
+                      lockSection1FilterChange()
+                      setSelectedIncoterms(selected)
+                    }}
                     placeholder="Select incoterm(s)"
                     emptyMessage="Loading incoterms..."
                   />
@@ -3222,7 +3973,10 @@ function ContractsPageContent() {
                     label="Plant/Site"
                     options={availablePlantSites}
                     selected={selectedPlantSites}
-                    onChange={setSelectedPlantSites}
+                    onChange={(selected) => {
+                      lockSection1FilterChange()
+                      setSelectedPlantSites(selected)
+                    }}
                     placeholder="Select plant/site(s)"
                     emptyMessage="Loading plants..."
                   />
@@ -3235,13 +3989,19 @@ function ContractsPageContent() {
                   <label className="text-sm font-medium text-gray-700">Contract Date:</label>
                   <DateInputDdMmYyyy
                     valueIso={dateFrom}
-                    onChangeIso={setDateFrom}
+                    onChangeIso={(iso) => {
+                      lockSection1FilterChange()
+                      setDateFrom(iso)
+                    }}
                     className="w-40"
                   />
                   <span className="text-gray-500">to</span>
                   <DateInputDdMmYyyy
                     valueIso={dateTo}
-                    onChangeIso={setDateTo}
+                    onChangeIso={(iso) => {
+                      lockSection1FilterChange()
+                      setDateTo(iso)
+                    }}
                     className="w-40"
                   />
                   {(dateFrom ||
@@ -3252,24 +4012,32 @@ function ContractsPageContent() {
                     productFilter !== 'ALL' ||
                     b2bFlagFilter !== 'ALL' ||
                     statusFilter !== 'All Status' ||
+                    summaryCardStatus !== 'All' ||
                     (!isContractPerformance && unassignedFilter) ||
                     hasActiveSectionOneColumnFilters(columnFilters) ||
                     (isContractPerformance &&
                       (lateOnTimeFilter !== 'ALL' ||
                         perfTransportMode !== 'ALL' ||
+                        selectedProductTab !== 'All' ||
                         selectedIncoterms.length > 0 ||
                         selectedPlantSites.length > 0 ||
-                        selectedProducts.length > 0))) && (
+                        Boolean(
+                          hasContractPerfDrilldownSelection(appliedDrilldownSelection) ||
+                            hasContractPerfDrilldownSelection(draftDrilldownSelection),
+                        )))) && (
                     <Button
                       onClick={() => {
+                        lockSection1FilterChange()
                         setDateFrom('')
                         setDateTo('')
                         setSearchDraft('')
                         setSearchTerm('')
                         setTransportModeFilter('ALL')
                         setProductFilter('ALL')
+                        setSelectedProductTab('All')
                         setB2bFlagFilter('ALL')
                         setStatusFilter('All Status')
+                        setSummaryCardStatus('All')
                         setColumnFilters({})
                         if (!isContractPerformance) {
                           setUnassignedFilter(null)
@@ -3277,7 +4045,7 @@ function ContractsPageContent() {
                           resetLatePerfSelections()
                         }
                         setCurrentPage(1)
-                        if (!isContractPerformance || contractPerfTableEnabled) {
+                        if (!isContractPerformance || shouldLoadTableData) {
                           fetchContracts(1, '')
                         }
                       }}
@@ -3386,10 +4154,13 @@ function ContractsPageContent() {
                       : 'All Contracts'}
                   </CardTitle>
                   <p className="text-sm text-gray-500 mt-1">
-                    {isContractPerformance && !contractPerfTableEnabled
-                      ? 'Click All Data to load the contract list'
+                    {isContractPerformance && !shouldLoadTableData
+                      ? 'Please select at least one card in Section 1, or choose drilldown filters in Section 2 and click Apply, to view detailed data.'
                       : <>
-                          {totalContracts} total contracts | Showing {filteredContracts.length} on this page
+                          {isContractPerformance
+                            ? contractPerfDisplayTotalCount.toLocaleString('en-US')
+                            : totalContracts}{' '}
+                          total contracts | Showing {filteredContracts.length} on this page
                           {totalPages > 1 && ` (Page ${currentPage} of ${totalPages})`}
                         </>}
                   </p>
@@ -3411,19 +4182,12 @@ function ContractsPageContent() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                {isContractPerformance && !contractPerfTableEnabled && (
-                  <Button size="sm" onClick={loadContractPerfTableData}>
-                    <Database className="h-4 w-4 mr-2" />
-                    All Data
-                    <ChevronRight className="h-4 w-4 ml-1" />
-                  </Button>
-                )}
                 <div className="relative">
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => setShowColumnsMenu(v => !v)}
-                    disabled={loading}
+                    disabled={loading || (isContractPerformance && !shouldLoadTableData)}
                   >
                     <SlidersHorizontal className="h-4 w-4 mr-2" />
                     Columns
@@ -3498,7 +4262,7 @@ function ContractsPageContent() {
                     </div>
                   )}
                 </div>
-                {(!isContractPerformance || contractPerfTableEnabled) && totalPages > 1 && (
+                {(!isContractPerformance || shouldLoadTableData) && totalPages > 1 && (
                   <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
                     <Button
                       variant="outline"
@@ -3552,15 +4316,11 @@ function ContractsPageContent() {
             </div>
           </CardHeader>
           <CardContent>
-            {isContractPerformance && !contractPerfTableEnabled ? (
+            {isContractPerformance && !shouldLoadTableData ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
-                <Database className="h-12 w-12 text-gray-300 mb-4" />
-                <p className="text-gray-600 mb-1">Contract list is not loaded yet.</p>
-                <p className="text-sm text-gray-500 mb-4">Load all data to view the full table — this may take a moment.</p>
-                <Button onClick={loadContractPerfTableData}>
-                  All Data
-                  <ChevronRight className="h-4 w-4 ml-1" />
-                </Button>
+                <p className="text-gray-600 max-w-md">
+                  Please select at least one card in Section 1 or Section 2 to view detailed data.
+                </p>
               </div>
             ) : loading ? (
               <div className="text-center py-8">Loading contracts...</div>

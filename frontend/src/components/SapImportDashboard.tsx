@@ -46,19 +46,44 @@ const SapImportDashboard: React.FC = () => {
   const [importing, setImporting] = useState(false);
   const [showFileDialog, setShowFileDialog] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const pollTimerRef = React.useRef<number | null>(null);
+
+  const stopImportPolling = () => {
+    if (pollTimerRef.current != null) {
+      window.clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  };
+
+  const startImportPolling = () => {
+    stopImportPolling();
+    pollTimerRef.current = window.setInterval(() => {
+      void loadImports(true);
+    }, 5000);
+  };
 
   useEffect(() => {
     loadImports();
+    return () => stopImportPolling();
   }, []);
 
-  const loadImports = async () => {
+  const loadImports = async (fromPoll = false) => {
     try {
       const response = await api.get('/sap-master-v2/imports');
-      setImports(response.data.data);
+      const nextImports: SapImport[] = response.data.data;
+      setImports(nextImports);
+
+      const hasProcessing = nextImports.some((imp) => imp.status === 'processing');
+      if (hasProcessing) {
+        if (!fromPoll) startImportPolling();
+      } else {
+        stopImportPolling();
+        if (fromPoll) setImporting(false);
+      }
     } catch (error) {
       console.error('Failed to load imports:', error);
     } finally {
-      setLoading(false);
+      if (!fromPoll) setLoading(false);
     }
   };
 
@@ -95,10 +120,25 @@ const SapImportDashboard: React.FC = () => {
 
       // Do not set Content-Type: FormData needs multipart boundary from the browser/axios.
       const response = await api.post('/sap-master-v2/import-upload', formData, {
-        timeout: 0,
+        timeout: 120000,
       });
-      
-      alert(`Import started successfully!\nFile: ${file.name}\nImport ID: ${response.data.data.importId}\nTotal Records: ${response.data.data.totalRecords}`);
+
+      const data = response.data?.data;
+      const importId = data?.importId ?? '—';
+      const totalRecords = data?.totalRecords ?? '—';
+      const startedAsync = response.status === 202 || data?.status === 'processing';
+
+      if (startedAsync) {
+        alert(
+          `Import started in background.\nFile: ${file.name}\nImport ID: ${importId}\nTotal Records: ${totalRecords}\n\nProgress will update automatically in Import History.`
+        );
+        startImportPolling();
+      } else {
+        alert(
+          `Import completed.\nFile: ${file.name}\nImport ID: ${importId}\nTotal Records: ${totalRecords}`
+        );
+        setImporting(false);
+      }
       loadImports();
     } catch (error: unknown) {
       const err = error as { response?: { status?: number; data?: unknown }; message?: string };

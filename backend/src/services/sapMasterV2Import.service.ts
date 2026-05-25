@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import * as fs from 'fs';
 import pool from '../database/connection';
 import logger from '../utils/logger';
 import { SapDataDistributionService } from './sapDataDistribution.service';
@@ -43,6 +44,12 @@ export interface FieldMetadata {
   isCalculated: boolean;
 }
 
+interface MasterV2WorkbookData {
+  fieldMetadata: FieldMetadata[];
+  validDataRows: any[][];
+  sheetName: string;
+}
+
 export class SapMasterV2ImportService {
   
   private static DEFAULT_CONFIG: MasterV2Config = {
@@ -57,68 +64,141 @@ export class SapMasterV2ImportService {
   };
   
   /**
-   * Import data from SAP MASTER v2 Excel file
+   * Parse workbook from disk (throws on invalid file/sheet before any DB write).
+   */
+  private static loadMasterV2WorkbookData(filePath: string): MasterV2WorkbookData {
+    const workbook = XLSX.readFile(filePath);
+    let sheetName = this.DEFAULT_CONFIG.sheetName;
+    if (!workbook.SheetNames.includes(sheetName)) {
+      sheetName = workbook.SheetNames.includes('MASTER v2')
+        ? 'MASTER v2'
+        : workbook.SheetNames[0];
+    }
+    const worksheet = workbook.Sheets[sheetName];
+    if (!worksheet) {
+      throw new Error(`Sheet "${sheetName}" not found`);
+    }
+
+    const jsonData = XLSX.utils.sheet_to_json(worksheet, {
+      header: 1,
+      defval: null,
+      raw: false,
+    }) as any[][];
+
+    const fieldMetadata = this.parseFieldMetadata(jsonData);
+    const dataRows = jsonData.slice(this.DEFAULT_CONFIG.dataStartRow);
+    const validDataRows = dataRows.filter(
+      (row) => row && row.some((cell) => cell !== null && cell !== undefined && cell !== '')
+    );
+
+    logger.info('Excel file loaded', { totalRows: jsonData.length, sheetName, dataRows: validDataRows.length });
+
+    return { fieldMetadata, validDataRows, sheetName };
+  }
+
+  private static async markImportFailed(importId: string, error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      await pool.query(
+        `UPDATE sap_data_imports
+         SET status = 'failed', error_log = $1
+         WHERE id = $2`,
+        [JSON.stringify([message]), importId]
+      );
+    } catch (updateErr) {
+      logger.error('Failed to mark SAP import as failed', { importId, updateErr });
+    }
+  }
+
+  /**
+   * Queue a file import: validate + create DB record, then process rows in the background.
+   * Returns quickly so nginx/proxy timeouts do not abort long imports (~5000+ rows).
+   */
+  static async queueMasterV2FileImport(filePath: string): Promise<{ importId: string; totalRecords: number }> {
+    const { fieldMetadata, validDataRows } = this.loadMasterV2WorkbookData(filePath);
+
+    const client = await pool.connect();
+    let importId: string;
+    try {
+      await client.query('BEGIN');
+      const importResult = await client.query(
+        `INSERT INTO sap_data_imports (import_date, status, total_records)
+         VALUES (CURRENT_DATE, 'processing', $1)
+         RETURNING id`,
+        [validDataRows.length]
+      );
+      importId = importResult.rows[0].id;
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    setImmediate(() => {
+      void (async () => {
+        try {
+          await this.processMasterV2Import(importId, validDataRows, fieldMetadata);
+          logger.info('SAP MASTER v2 background import completed', { importId });
+        } catch (error) {
+          logger.error('SAP MASTER v2 background import failed', { importId, error });
+          await this.markImportFailed(importId, error);
+        } finally {
+          if (fs.existsSync(filePath)) {
+            try {
+              fs.unlinkSync(filePath);
+            } catch (unlinkErr) {
+              logger.warn('Failed to delete temp SAP upload file', { filePath, unlinkErr });
+            }
+          }
+        }
+      })();
+    });
+
+    return { importId, totalRecords: validDataRows.length };
+  }
+
+  /**
+   * Import data from SAP MASTER v2 Excel file (blocks until all rows are processed).
    */
   static async importMasterV2File(filePath: string): Promise<SapMasterV2ImportResult> {
+    const { fieldMetadata, validDataRows } = this.loadMasterV2WorkbookData(filePath);
+
     const client = await pool.connect();
-    
+    let importId: string;
     try {
-      logger.info('Starting SAP MASTER v2 import', { filePath });
-      
       await client.query('BEGIN');
-      
-      // 1. Create import record
       const importResult = await client.query(
-        `INSERT INTO sap_data_imports (import_date, status, total_records) 
-         VALUES (CURRENT_DATE, 'processing', 0) 
+        `INSERT INTO sap_data_imports (import_date, status, total_records)
+         VALUES (CURRENT_DATE, 'processing', $1)
          RETURNING id`,
-        []
+        [validDataRows.length]
       );
-      const importId = importResult.rows[0].id;
-      
-      // 2. Read and parse Excel file
-      const workbook = XLSX.readFile(filePath);
-      // Try to find the sheet by name (supports both "Logistic Report" and "MASTER v2" for backward compatibility)
-      let sheetName = this.DEFAULT_CONFIG.sheetName;
-      if (!workbook.SheetNames.includes(sheetName)) {
-        // Fallback to MASTER v2 or first sheet
-        sheetName = workbook.SheetNames.includes('MASTER v2') 
-          ? 'MASTER v2' 
-          : workbook.SheetNames[0];
-      }
-      const worksheet = workbook.Sheets[sheetName];
-      
-      if (!worksheet) {
-        throw new Error(`Sheet "${sheetName}" not found`);
-      }
-      
-      // 3. Convert to JSON array
-      const jsonData = XLSX.utils.sheet_to_json(worksheet, {
-        header: 1,
-        defval: null,
-        raw: false
-      }) as any[][];
-      
-      logger.info('Excel file loaded', { totalRows: jsonData.length, sheetName });
-      
-      // 4. Parse metadata from header rows
-      const fieldMetadata = this.parseFieldMetadata(jsonData);
-      logger.info('Field metadata parsed', { totalFields: fieldMetadata.length });
-      
-      // 5. Extract data rows
-      const dataRows = jsonData.slice(this.DEFAULT_CONFIG.dataStartRow);
-      const validDataRows = dataRows.filter(row => 
-        row && row.some(cell => cell !== null && cell !== undefined && cell !== '')
-      );
-      
-      logger.info('Data rows extracted', { totalDataRows: validDataRows.length });
-      
-      // Update total records
-      await client.query(
-        'UPDATE sap_data_imports SET total_records = $1 WHERE id = $2',
-        [validDataRows.length, importId]
-      );
-      
+      importId = importResult.rows[0].id;
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return this.processMasterV2Import(importId, validDataRows, fieldMetadata);
+  }
+
+  private static async processMasterV2Import(
+    importId: string,
+    validDataRows: any[][],
+    fieldMetadata: FieldMetadata[]
+  ): Promise<SapMasterV2ImportResult> {
+    const client = await pool.connect();
+
+    try {
+      logger.info('Processing SAP MASTER v2 import rows', { importId, totalRows: validDataRows.length });
+
+      await client.query('BEGIN');
+
       // 6. Process each data row
       let processedRecords = 0;
       let failedRecords = 0;
@@ -251,6 +331,10 @@ export class SapMasterV2ImportService {
           // Log progress every 100 records
           if ((i + 1) % 100 === 0) {
             logger.info(`Progress: ${i + 1}/${validDataRows.length} records processed`);
+            await pool.query(
+              `UPDATE sap_data_imports SET processed_records = $1, failed_records = $2 WHERE id = $3`,
+              [processedRecords, failedRecords, importId]
+            );
           }
 
         } catch (error) {
@@ -320,7 +404,8 @@ export class SapMasterV2ImportService {
       
     } catch (error) {
       await client.query('ROLLBACK');
-      logger.error('SAP MASTER v2 import failed', error);
+      logger.error('SAP MASTER v2 import failed', { importId, error });
+      await this.markImportFailed(importId, error);
       throw error;
     } finally {
       client.release();

@@ -1,21 +1,20 @@
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
-
+import { toIsoDate10FromCell } from '../utils/planningSheetDate';
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
 export interface ShippingPerformanceFilters {
   scope: string;
   dateFrom: string;
   dateTo: string;
-  statusFilter: string;
   incoterms: string[];
   plants: string[];
-  lateOnTimeFilter: string;
   cacheKey: string;
 }
 
-export interface ShippingPerfSummary {
-  count: number;
+export interface PerVesselPerfSummary {
+  vesselCount: number;
+  shipmentCount: number;
   totalQty: number;
   avgLoadingEtaEtr: number;
   avgLoadingEtaEtb: number;
@@ -23,8 +22,6 @@ export interface ShippingPerfSummary {
   avgDischargeEtaEtb: number;
   avgDischargeEtbEtc: number;
   avgTotalDelta: number;
-  openOutstandingQty: number;
-  closeOutstandingQty: number;
 }
 
 export interface ShippingPerfTreeNode {
@@ -34,8 +31,16 @@ export interface ShippingPerfTreeNode {
   children: ShippingPerfTreeNode[];
 }
 
-const EMPTY_SUMMARY: ShippingPerfSummary = {
-  count: 0,
+export interface ShippingPerfRemark {
+  shipment_id: string;
+  vessel_name: string;
+  contract_number: string;
+  remark: string;
+}
+
+const EMPTY_SUMMARY: PerVesselPerfSummary = {
+  vesselCount: 0,
+  shipmentCount: 0,
   totalQty: 0,
   avgLoadingEtaEtr: 0,
   avgLoadingEtaEtb: 0,
@@ -43,12 +48,11 @@ const EMPTY_SUMMARY: ShippingPerfSummary = {
   avgDischargeEtaEtb: 0,
   avgDischargeEtbEtc: 0,
   avgTotalDelta: 0,
-  openOutstandingQty: 0,
-  closeOutstandingQty: 0,
 };
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const ROW_CACHE_KEY = 'shipping-performance-rows-v2';
 
 const SHIPPING_PERFORMANCE_SQL = `
       WITH latest_spd_contract AS (
@@ -112,7 +116,13 @@ const SHIPPING_PERFORMANCE_SQL = `
               NULLIF(TRIM(sk2.data->'raw'->>'Quantity Delivery'), ''),
               ''
             ), '[^0-9\\.-]', '', 'g'), '')::numeric
-          ), 0) AS quantity_delivered_sap
+          ), 0) AS quantity_delivered_sap,
+          MAX(NULLIF(TRIM(COALESCE(
+            sk2.data->'raw'->>'Remarks',
+            sk2.data->>'Remarks',
+            sk2.data->'raw'->>'Remark',
+            sk2.data->>'Remark'
+          )), '')) AS remark
         FROM ship_keys sk
         LEFT JOIN spd_keyed sk2 ON sk2.shipment_pk = sk.shipment_pk
         GROUP BY sk.shipment_pk
@@ -122,7 +132,10 @@ const SHIPPING_PERFORMANCE_SQL = `
           vlp.shipment_id,
           vlp.eta_vessel_arrival::date AS load_eta_arrival,
           vlp.eta_vessel_berthed_at_loading_port::date AS load_eta_berthed,
-          vlp.eta_loading_completed::date AS load_eta_completed
+          vlp.eta_loading_completed::date AS load_eta_completed,
+          vlp.ata_vessel_arrival::date AS load_ata_arrival,
+          vlp.ata_vessel_berthed::date AS load_ata_berthed,
+          vlp.ata_loading_completed::date AS load_ata_completed
         FROM vessel_loading_ports vlp
         WHERE COALESCE(vlp.is_discharge_port, false) = false
         ORDER BY vlp.shipment_id, vlp.port_sequence NULLS LAST, vlp.id
@@ -132,7 +145,10 @@ const SHIPPING_PERFORMANCE_SQL = `
           vlp.shipment_id,
           vlp.eta_vessel_arrive_at_discharge_port::date AS discharge_eta_arrival,
           vlp.eta_vessel_berthed_at_discharge_port::date AS discharge_eta_berthed,
-          vlp.eta_vessel_complete_discharge::date AS discharge_eta_completed
+          vlp.eta_vessel_complete_discharge::date AS discharge_eta_completed,
+          vlp.ata_vessel_arrival::date AS discharge_ata_arrival,
+          vlp.ata_vessel_berthed::date AS discharge_ata_berthed,
+          vlp.ata_loading_completed::date AS discharge_ata_completed
         FROM vessel_loading_ports vlp
         WHERE COALESCE(vlp.is_discharge_port, false) = true
         ORDER BY vlp.shipment_id, vlp.port_sequence NULLS LAST, vlp.id
@@ -150,6 +166,8 @@ const SHIPPING_PERFORMANCE_SQL = `
         s.vessel_name,
         s.status,
         COALESCE(NULLIF(TRIM(s.port_of_discharge), ''), 'Blank') AS plant_site,
+        COALESCE(NULLIF(TRIM(s.port_of_loading), ''), 'Blank') AS loading_port,
+        COALESCE(NULLIF(TRIM(s.port_of_discharge), ''), 'Blank') AS discharge_port,
         c.group_name,
         c.transport_mode,
         c.cargo_readiness_date::date AS cargo_readiness_date,
@@ -159,6 +177,12 @@ const SHIPPING_PERFORMANCE_SQL = `
         COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) AS discharge_eta_arrival,
         COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) AS discharge_eta_berthed,
         COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date) AS discharge_eta_completed,
+        COALESCE(lp.load_ata_arrival, s.ata_arrival::date) AS loading_ata_arrival,
+        COALESCE(lp.load_ata_berthed, s.ata_berthed::date) AS loading_ata_berthed,
+        COALESCE(lp.load_ata_completed, s.ata_loading_complete::date) AS loading_ata_completed,
+        COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) AS discharge_ata_arrival,
+        COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) AS discharge_ata_berthed,
+        COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date) AS discharge_ata_completed,
         (COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - c.cargo_readiness_date::date)::int AS loading_delta_eta_etr_days,
         (COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - COALESCE(lp.load_eta_berthed, s.eta_berthed::date))::int AS loading_delta_eta_etb_days,
         (COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date))::int AS loading_delta_etb_etc_days,
@@ -171,6 +195,19 @@ const SHIPPING_PERFORMANCE_SQL = `
           COALESCE((COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) - COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date)), 0) +
           COALESCE((COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date)), 0)
         )::int AS total_delta_days,
+        (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - c.cargo_readiness_date::date)::int AS ata_loading_delta_eta_etr_days,
+        (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - COALESCE(lp.load_ata_berthed, s.ata_berthed::date))::int AS ata_loading_delta_eta_etb_days,
+        (COALESCE(lp.load_ata_berthed, s.ata_berthed::date) - COALESCE(lp.load_ata_completed, s.ata_loading_complete::date))::int AS ata_loading_delta_etb_etc_days,
+        (COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) - COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date))::int AS ata_discharge_delta_eta_etb_days,
+        (COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) - COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date))::int AS ata_discharge_delta_etb_etc_days,
+        (
+          COALESCE((COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - c.cargo_readiness_date::date), 0) +
+          COALESCE((COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - COALESCE(lp.load_ata_berthed, s.ata_berthed::date)), 0) +
+          COALESCE((COALESCE(lp.load_ata_berthed, s.ata_berthed::date) - COALESCE(lp.load_ata_completed, s.ata_loading_complete::date)), 0) +
+          COALESCE((COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) - COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date)), 0) +
+          COALESCE((COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) - COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date)), 0)
+        )::int AS ata_total_delta_days,
+        sa.remark,
         COALESCE(NULLIF(sa.sto_quantity, 0), c.sto_quantity, 0)::numeric AS sto_qty,
         COALESCE(
           CASE
@@ -222,52 +259,44 @@ export function parseShippingPerformanceFilters(req: AuthRequest): ShippingPerfo
 
   const dateFrom = String((req.query as any).dateFrom ?? ytdFrom).slice(0, 10);
   const dateTo = String((req.query as any).dateTo ?? ytdTo).slice(0, 10);
-  const statusFilter = String((req.query as any).status ?? 'ALL');
-  const lateOnTimeFilter = String((req.query as any).lateOnTimeFilter ?? 'ALL');
   const incoterms = parseStringArray((req.query as any).incoterm ?? (req.query as any).incoterms);
   const plants = parseStringArray((req.query as any).plant ?? (req.query as any).plants);
 
-  const cacheKey = JSON.stringify({ scope, dateFrom, dateTo, statusFilter, incoterms: [...incoterms].sort(), plants: [...plants].sort(), lateOnTimeFilter });
+  const cacheKey = JSON.stringify({ scope, dateFrom, dateTo, incoterms: [...incoterms].sort(), plants: [...plants].sort() });
 
-  return { scope, dateFrom, dateTo, statusFilter, incoterms, plants, lateOnTimeFilter, cacheKey };
+  return { scope, dateFrom, dateTo, incoterms, plants, cacheKey };
 }
 
-function matchesShipmentStatusFilter(status: string, filter: string): boolean {
-  const normalized = String(status || '').trim().toUpperCase();
-  if (filter === 'ALL') return true;
-  if (filter === 'Open') return normalized !== 'COMPLETED' && normalized !== 'CANCELLED' && normalized !== 'CANCELED';
-  if (filter === 'Close') return normalized === 'COMPLETED';
-  return normalized === filter.toUpperCase();
-}
-
-function filterSummaryBaseRows(rows: Record<string, unknown>[], filters: ShippingPerformanceFilters): Record<string, unknown>[] {
+function filterGlobalRows(rows: Record<string, unknown>[], filters: ShippingPerformanceFilters): Record<string, unknown>[] {
   return rows.filter((row) => {
-    if (!matchesShipmentStatusFilter(String(row.status || ''), filters.statusFilter)) return false;
     const inc = String(row.incoterm || '').trim() || 'Blank';
     if (filters.incoterms.length > 0 && !filters.incoterms.includes(inc)) return false;
     const plant = String(row.plant_site || '').trim() || 'Blank';
     if (filters.plants.length > 0 && !filters.plants.includes(plant)) return false;
-    const cDate = String(row.contract_date || '').slice(0, 10);
+    const cDate = toIsoDate10FromCell(row.contract_date) ?? '';
     if (filters.dateFrom && cDate && cDate < filters.dateFrom) return false;
     if (filters.dateTo && cDate && cDate > filters.dateTo) return false;
     return true;
   });
 }
 
-function filterTreeBaseRows(rows: Record<string, unknown>[], filters: ShippingPerformanceFilters): Record<string, unknown>[] {
-  return filterSummaryBaseRows(rows, filters).filter((row) => {
-    const total = Number(row.total_delta_days ?? 0);
-    if (filters.lateOnTimeFilter === 'LATE' && !(total > 0)) return false;
-    if (filters.lateOnTimeFilter === 'ON_TIME' && !(total <= 0)) return false;
-    return true;
-  });
+type SummaryMode = 'eta' | 'ata';
+
+function deltaField(mode: SummaryMode, etaField: string): string {
+  return mode === 'ata' ? `ata_${etaField}` : etaField;
 }
 
-function buildShippingPerfSummary(rows: Record<string, unknown>[], isLate: boolean): ShippingPerfSummary {
-  let count = 0;
+function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMode): PerVesselPerfSummary {
+  const byVessel = new Map<string, Record<string, unknown>[]>();
+  for (const row of rows) {
+    const vessel = String(row.vessel_name || '').trim() || 'Unknown';
+    const bucket = byVessel.get(vessel);
+    if (bucket) bucket.push(row);
+    else byVessel.set(vessel, [row]);
+  }
+
+  let shipmentCount = 0;
   let totalQty = 0;
-  let openOutstandingQty = 0;
-  let closeOutstandingQty = 0;
   let sumLoadingEtaEtr = 0;
   let sumLoadingEtaEtb = 0;
   let sumLoadingEtbEtc = 0;
@@ -275,49 +304,41 @@ function buildShippingPerfSummary(rows: Record<string, unknown>[], isLate: boole
   let sumDischargeEtbEtc = 0;
   let sumTotalDelta = 0;
 
-  for (const row of rows) {
-    const total = Number(row.total_delta_days ?? 0);
-    if (isLate ? total <= 0 : total > 0) continue;
-    count += 1;
-    const qty = Number(row.outstanding_qty ?? 0);
-    totalQty += qty;
-    const status = String(row.status || '').trim().toUpperCase();
-    if (status === 'COMPLETED') closeOutstandingQty += qty;
-    else openOutstandingQty += qty;
-
-    sumLoadingEtaEtr += Number(row.loading_delta_eta_etr_days ?? 0);
-    sumLoadingEtaEtb += Number(row.loading_delta_eta_etb_days ?? 0);
-    sumLoadingEtbEtc += Number(row.loading_delta_etb_etc_days ?? 0);
-    sumDischargeEtaEtb += Number(row.discharge_delta_eta_etb_days ?? 0);
-    sumDischargeEtbEtc += Number(row.discharge_delta_etb_etc_days ?? 0);
-    sumTotalDelta += total;
+  for (const vesselRows of byVessel.values()) {
+    for (const row of vesselRows) {
+      shipmentCount += 1;
+      totalQty += Number(row.outstanding_qty ?? 0);
+      sumLoadingEtaEtr += Number(row[deltaField(mode, 'loading_delta_eta_etr_days')] ?? 0);
+      sumLoadingEtaEtb += Number(row[deltaField(mode, 'loading_delta_eta_etb_days')] ?? 0);
+      sumLoadingEtbEtc += Number(row[deltaField(mode, 'loading_delta_etb_etc_days')] ?? 0);
+      sumDischargeEtaEtb += Number(row[deltaField(mode, 'discharge_delta_eta_etb_days')] ?? 0);
+      sumDischargeEtbEtc += Number(row[deltaField(mode, 'discharge_delta_etb_etc_days')] ?? 0);
+      sumTotalDelta += Number(row[mode === 'ata' ? 'ata_total_delta_days' : 'total_delta_days'] ?? 0);
+    }
   }
 
-  if (count === 0) return { ...EMPTY_SUMMARY };
+  if (shipmentCount === 0) return { ...EMPTY_SUMMARY };
 
   return {
-    count,
+    vesselCount: byVessel.size,
+    shipmentCount,
     totalQty,
-    openOutstandingQty,
-    closeOutstandingQty,
-    avgLoadingEtaEtr: sumLoadingEtaEtr / count,
-    avgLoadingEtaEtb: sumLoadingEtaEtb / count,
-    avgLoadingEtbEtc: sumLoadingEtbEtc / count,
-    avgDischargeEtaEtb: sumDischargeEtaEtb / count,
-    avgDischargeEtbEtc: sumDischargeEtbEtc / count,
-    avgTotalDelta: sumTotalDelta / count,
+    avgLoadingEtaEtr: sumLoadingEtaEtr / shipmentCount,
+    avgLoadingEtaEtb: sumLoadingEtaEtb / shipmentCount,
+    avgLoadingEtbEtc: sumLoadingEtbEtc / shipmentCount,
+    avgDischargeEtaEtb: sumDischargeEtaEtb / shipmentCount,
+    avgDischargeEtbEtc: sumDischargeEtbEtc / shipmentCount,
+    avgTotalDelta: sumTotalDelta / shipmentCount,
   };
 }
 
-function matchesPerfDrilldownRow(row: Record<string, unknown>, isLate: boolean): boolean {
-  const delta = Number(row.total_delta_days ?? 0);
-  if (isLate ? delta <= 0 : delta > 0) return false;
+function matchesPerfDrilldownRow(row: Record<string, unknown>): boolean {
   if (String(row.status || '').trim().toUpperCase() === 'COMPLETED') return false;
   if (Number(row.outstanding_qty ?? 0) <= 0) return false;
   return true;
 }
 
-function buildPerfTree(rows: Record<string, unknown>[], isLate: boolean): ShippingPerfTreeNode[] {
+function buildPerfTree(rows: Record<string, unknown>[]): ShippingPerfTreeNode[] {
   type VesMap = Map<string, { count: number; totalQty: number }>;
   type IncMap = Map<string, { count: number; totalQty: number; vessels: VesMap }>;
   type PlantMap = Map<string, { count: number; totalQty: number; incoterms: IncMap }>;
@@ -325,7 +346,7 @@ function buildPerfTree(rows: Record<string, unknown>[], isLate: boolean): Shippi
   const root: ProdMap = new Map();
 
   for (const row of rows) {
-    if (!matchesPerfDrilldownRow(row, isLate)) continue;
+    if (!matchesPerfDrilldownRow(row)) continue;
     const prod = String(row.product || '').trim() || 'Blank';
     const plant = String(row.plant_site || '').trim() || 'Blank';
     const inc = String(row.incoterm || '').trim() || 'Blank';
@@ -376,15 +397,27 @@ function buildPerfTree(rows: Record<string, unknown>[], isLate: boolean): Shippi
   }));
 }
 
-async function loadShippingPerformanceRows(cacheKey: string): Promise<Record<string, unknown>[]> {
-  const cached = ROW_CACHE.get(cacheKey);
+function buildRemarksList(rows: Record<string, unknown>[]): ShippingPerfRemark[] {
+  return rows
+    .map((row) => ({
+      shipment_id: String(row.shipment_id || ''),
+      vessel_name: String(row.vessel_name || '').trim() || 'Unknown',
+      contract_number: String(row.contract_number || ''),
+      remark: String(row.remark || '').trim(),
+    }))
+    .filter((item) => item.remark)
+    .sort((a, b) => a.vessel_name.localeCompare(b.vessel_name) || a.shipment_id.localeCompare(b.shipment_id));
+}
+
+async function loadShippingPerformanceRows(): Promise<Record<string, unknown>[]> {
+  const cached = ROW_CACHE.get(ROW_CACHE_KEY);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.rows;
   }
 
   const result = await query(SHIPPING_PERFORMANCE_SQL);
   const rows = result.rows as Record<string, unknown>[];
-  ROW_CACHE.set(cacheKey, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
+  ROW_CACHE.set(ROW_CACHE_KEY, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
   return rows;
 }
 
@@ -394,17 +427,17 @@ function distinctValues(rows: Record<string, unknown>[], key: string): string[] 
 
 export async function runShippingPerformance(req: AuthRequest, part: ShippingPerformancePart) {
   const filters = parseShippingPerformanceFilters(req);
-  const rows = await loadShippingPerformanceRows('shipping-performance-rows-v1');
-  const summaryBase = filterSummaryBaseRows(rows, filters);
+  const rows = await loadShippingPerformanceRows();
+  const filteredRows = filterGlobalRows(rows, filters);
 
   if (part === 'rows') {
-    return { rows: summaryBase };
+    return { rows: filteredRows };
   }
 
   if (part === 'summary') {
     return {
-      summary: buildShippingPerfSummary(summaryBase, true),
-      onTrackSummary: buildShippingPerfSummary(summaryBase, false),
+      etaSummary: buildPerVesselSummary(filteredRows, 'eta'),
+      ataSummary: buildPerVesselSummary(filteredRows, 'ata'),
       meta: {
         incoterms: distinctValues(rows, 'incoterm'),
         plantSites: distinctValues(rows, 'plant_site'),
@@ -412,9 +445,8 @@ export async function runShippingPerformance(req: AuthRequest, part: ShippingPer
     };
   }
 
-  const treeBase = filterTreeBaseRows(rows, filters);
   return {
-    tree: buildPerfTree(treeBase, true),
-    onTrackTree: buildPerfTree(treeBase, false),
+    tree: buildPerfTree(filteredRows),
+    remarks: buildRemarksList(filteredRows),
   };
 }

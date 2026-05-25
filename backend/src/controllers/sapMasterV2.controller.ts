@@ -238,44 +238,38 @@ export const getPendingEntries = async (_req: Request, res: Response): Promise<v
  */
 export const importMasterV2Upload = async (req: Request, res: Response): Promise<void> => {
   try {
-    // Check if file was uploaded
     if (!req.file) {
       res.status(400).json({
         success: false,
-        error: { message: 'No file uploaded' }
+        error: { message: 'No file uploaded' },
       });
       return;
     }
 
     const filePath = req.file.path;
-    logger.info('Starting SAP MASTER v2 import from uploaded file', { 
+    logger.info('Queueing SAP MASTER v2 import from uploaded file', {
       fileName: req.file.originalname,
-      filePath 
+      filePath,
     });
-    
-    const result = await SapMasterV2ImportService.importMasterV2File(filePath);
-    
-    // Clean up uploaded file
-    fs.unlinkSync(filePath);
-    
-    res.json({
+
+    const queued = await SapMasterV2ImportService.queueMasterV2FileImport(filePath);
+
+    res.status(202).json({
       success: true,
       data: {
-        ...result,
-        message: result.failedRecords > 0
-          ? `Import completed with ${result.processedRecords} processed and ${result.failedRecords} failed.`
-          : `Import completed successfully with ${result.processedRecords} records processed.`
-      }
+        importId: queued.importId,
+        totalRecords: queued.totalRecords,
+        status: 'processing',
+        message: `Import started for ${queued.totalRecords.toLocaleString()} records. Monitor progress in Import History.`,
+      },
     });
-    
   } catch (error) {
     logger.error('SAP MASTER v2 upload import failed', error);
-    
-    // Clean up file if it exists
+
     if (req.file?.path && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
-    
+
     res.status(500).json({
       success: false,
       error: sapImportHttpError(error),

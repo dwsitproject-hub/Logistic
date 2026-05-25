@@ -1,0 +1,65 @@
+================================================================================
+KLIP — Staging deploy via PuTTY (branch: SIT)
+================================================================================
+Public URL (example): http://8.215.6.189
+Repo on servers:      /opt/klip
+
+Deploy order:
+  1) Backend  — 172.28.92.57  (PostgreSQL + API)
+  2) Frontend — 172.28.92.56  (Next.js + Nginx proxy)
+
+After git push from dev machine:
+  git push origin SIT
+
+--------------------------------------------------------------------------------
+A) BACKEND — PuTTY session → 172.28.92.57
+--------------------------------------------------------------------------------
+cd /opt/klip
+git fetch origin
+git checkout SIT
+git pull origin SIT
+docker compose -f docker-compose.backend.yml up -d --build
+docker compose -f docker-compose.backend.yml ps
+docker compose -f docker-compose.backend.yml logs --tail=50 backend
+curl -s http://127.0.0.1:5001/health
+
+Optional (script from repo):
+  cd /opt/klip
+  bash docs/scripts/staging-deploy-backend.sh
+
+--------------------------------------------------------------------------------
+B) FRONTEND — PuTTY session → 172.28.92.56
+--------------------------------------------------------------------------------
+curl -s http://172.28.92.57:5001/health
+
+cd /opt/klip
+git fetch origin
+git checkout SIT
+git pull origin SIT
+docker compose -f docker-compose.frontend.yml up -d --build
+docker compose -f docker-compose.frontend.yml ps
+docker compose -f docker-compose.frontend.yml logs --tail=50 frontend
+
+Optional (script from repo):
+  cd /opt/klip
+  bash docs/scripts/staging-deploy-frontend.sh
+
+--------------------------------------------------------------------------------
+C) Verify from laptop browser
+--------------------------------------------------------------------------------
+http://8.215.6.189
+http://8.215.6.189/api/health
+
+Contract Performance: Section 2 drilldown → Apply → Section 3 table loads
+Shipping Performance: All Shipments / By Vessel tabs
+
+--------------------------------------------------------------------------------
+D) Rollback (either server)
+--------------------------------------------------------------------------------
+cd /opt/klip
+git log -5 --oneline
+git checkout <previous-commit-or-tag>
+docker compose -f docker-compose.backend.yml up -d --build    # on .57
+docker compose -f docker-compose.frontend.yml up -d --build  # on .56
+
+================================================================================

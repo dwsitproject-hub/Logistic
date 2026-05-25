@@ -14,7 +14,6 @@ import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import {
-  avgDaysMetricLabel,
   contextPerformanceClass,
   formatAvgDays,
   formatSignedCycleDays,
@@ -53,13 +52,30 @@ interface ShippingPerformanceRow {
   discharge_eta_arrival?: string | null
   discharge_eta_berthed?: string | null
   discharge_eta_completed?: string | null
+  loading_ata_arrival?: string | null
+  loading_ata_berthed?: string | null
+  loading_ata_completed?: string | null
+  discharge_ata_arrival?: string | null
+  discharge_ata_berthed?: string | null
+  discharge_ata_completed?: string | null
+  loading_port?: string | null
+  discharge_port?: string | null
+  remark?: string | null
+  ata_loading_delta_eta_etr_days?: number | null
+  ata_loading_delta_eta_etb_days?: number | null
+  ata_loading_delta_etb_etc_days?: number | null
+  ata_discharge_delta_eta_etb_days?: number | null
+  ata_discharge_delta_etb_etc_days?: number | null
+  ata_total_delta_days?: number | null
 }
 
-type TableViewMode = 'all' | 'vessel_group'
+type TableViewMode = 'all' | 'by_vessel'
+type PerfDashMode = 'eta' | 'ata'
+type TableStatusFilter = 'All' | 'Open' | 'Closed'
 
 type TableColumnKey = keyof ShippingPerformanceRow
 
-/** Shipment-level columns hidden in vessel-group summary view. */
+/** Shipment-level columns hidden in the By Vessel summary view. */
 const DETAIL_COLUMN_KEYS = new Set<string>([
   'shipment_id',
   'status',
@@ -67,16 +83,32 @@ const DETAIL_COLUMN_KEYS = new Set<string>([
   'contract_ext_no',
   'contract_number',
   'sto_number',
-  'vessel_name',
+  'group_name',
   'incoterm',
   'product',
   'plant_site',
   'contract_date',
+  'loading_port',
+  'discharge_port',
 ])
 
-function vesselGroupKey(row: ShippingPerformanceRow): string {
-  return String(row.group_name ?? '').trim() || 'Blank'
-}
+const ALL_SHIPMENT_REQUIRED_COLUMNS = new Set<string>(['loading_port', 'discharge_port'])
+
+/** Hidden in the All Shipments table. */
+const ALL_SHIPMENTS_HIDDEN_COLUMNS = new Set<string>(['group_name'])
+
+/** Hidden in the By Vessel summary table. */
+const BY_VESSEL_HIDDEN_COLUMNS = new Set<string>(['group_name'])
+
+const OPEN_TABLE_STATUSES = new Set([
+  'PLANNED',
+  'IN_PROGRESS',
+  'LOADING',
+  'IN_TRANSIT',
+  'ARRIVED',
+  'UNLOADING',
+  'UNPLANNED',
+])
 
 function avgMetric(rows: ShippingPerformanceRow[], key: TableColumnKey): number | null {
   const vals = rows
@@ -91,21 +123,21 @@ function sumMetric(rows: ShippingPerformanceRow[], key: TableColumnKey): number 
   return rows.reduce((sum, r) => sum + Number(r[key] ?? 0), 0)
 }
 
-function aggregateByVesselGroup(rows: ShippingPerformanceRow[]): ShippingPerformanceRow[] {
+function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceRow[] {
   const groups = new Map<string, ShippingPerformanceRow[]>()
   for (const row of rows) {
-    const key = vesselGroupKey(row)
+    const key = normalizeVesselKey(row.vessel_name)
     const bucket = groups.get(key)
     if (bucket) bucket.push(row)
     else groups.set(key, [row])
   }
 
-  return [...groups.entries()].map(([groupKey, groupRows]) => ({
-    id: `vessel-group:${groupKey}`,
+  return [...groups.entries()].map(([vesselKey, vesselRows]) => ({
+    id: `vessel-group:${vesselKey}`,
     shipment_id: '',
     contract_number: '',
-    group_name: groupKey,
-    vessel_name: null,
+    group_name: null,
+    vessel_name: vesselKey,
     po_number: null,
     contract_ext_no: null,
     sto_number: null,
@@ -114,16 +146,16 @@ function aggregateByVesselGroup(rows: ShippingPerformanceRow[]): ShippingPerform
     product: null,
     status: null,
     plant_site: null,
-    shipment_count: groupRows.length,
-    sto_qty: sumMetric(groupRows, 'sto_qty'),
-    received_qty: sumMetric(groupRows, 'received_qty'),
-    outstanding_qty: sumMetric(groupRows, 'outstanding_qty'),
-    loading_delta_eta_etr_days: avgMetric(groupRows, 'loading_delta_eta_etr_days'),
-    loading_delta_eta_etb_days: avgMetric(groupRows, 'loading_delta_eta_etb_days'),
-    loading_delta_etb_etc_days: avgMetric(groupRows, 'loading_delta_etb_etc_days'),
-    discharge_delta_eta_etb_days: avgMetric(groupRows, 'discharge_delta_eta_etb_days'),
-    discharge_delta_etb_etc_days: avgMetric(groupRows, 'discharge_delta_etb_etc_days'),
-    total_delta_days: avgMetric(groupRows, 'total_delta_days'),
+    shipment_count: vesselRows.length,
+    sto_qty: sumMetric(vesselRows, 'sto_qty'),
+    received_qty: sumMetric(vesselRows, 'received_qty'),
+    outstanding_qty: sumMetric(vesselRows, 'outstanding_qty'),
+    loading_delta_eta_etr_days: avgMetric(vesselRows, 'loading_delta_eta_etr_days'),
+    loading_delta_eta_etb_days: avgMetric(vesselRows, 'loading_delta_eta_etb_days'),
+    loading_delta_etb_etc_days: avgMetric(vesselRows, 'loading_delta_etb_etc_days'),
+    discharge_delta_eta_etb_days: avgMetric(vesselRows, 'discharge_delta_eta_etb_days'),
+    discharge_delta_etb_etc_days: avgMetric(vesselRows, 'discharge_delta_etb_etc_days'),
+    total_delta_days: avgMetric(vesselRows, 'total_delta_days'),
     cargo_readiness_date: null,
     loading_eta_arrival: null,
     loading_eta_berthed: null,
@@ -137,20 +169,13 @@ function aggregateByVesselGroup(rows: ShippingPerformanceRow[]): ShippingPerform
 type LatePerfNode = {
   key: string
   count: number
-  totalQty: number
+  vesselCount: number
   children: LatePerfNode[]
 }
 
-function matchesPerfDrilldownRow(row: ShippingPerformanceRow, isLate: boolean): boolean {
-  const delta = Number(row.total_delta_days ?? 0)
-  if (isLate ? delta <= 0 : delta > 0) return false
-  if (String(row.status || '').trim().toUpperCase() === 'COMPLETED') return false
-  if (Number(row.outstanding_qty ?? 0) <= 0) return false
-  return true
-}
-
-type ShippingPerfSummary = {
-  count: number
+type PerVesselPerfSummary = {
+  vesselCount: number
+  shipmentCount: number
   totalQty: number
   avgLoadingEtaEtr: number
   avgLoadingEtaEtb: number
@@ -158,12 +183,11 @@ type ShippingPerfSummary = {
   avgDischargeEtaEtb: number
   avgDischargeEtbEtc: number
   avgTotalDelta: number
-  openOutstandingQty: number
-  closeOutstandingQty: number
 }
 
-const EMPTY_SHIPPING_SUMMARY: ShippingPerfSummary = {
-  count: 0,
+const EMPTY_PER_VESSEL_SUMMARY: PerVesselPerfSummary = {
+  vesselCount: 0,
+  shipmentCount: 0,
   totalQty: 0,
   avgLoadingEtaEtr: 0,
   avgLoadingEtaEtb: 0,
@@ -171,16 +195,297 @@ const EMPTY_SHIPPING_SUMMARY: ShippingPerfSummary = {
   avgDischargeEtaEtb: 0,
   avgDischargeEtbEtc: 0,
   avgTotalDelta: 0,
-  openOutstandingQty: 0,
-  closeOutstandingQty: 0,
 }
 
-function matchesShipmentStatusFilter(status: string, filter: string): boolean {
+const ETA_DATE_FIELDS: Array<keyof ShippingPerformanceRow> = [
+  'loading_eta_arrival',
+  'loading_eta_berthed',
+  'loading_eta_completed',
+  'discharge_eta_arrival',
+  'discharge_eta_berthed',
+  'discharge_eta_completed',
+]
+
+const ATA_DATE_FIELDS: Array<keyof ShippingPerformanceRow> = [
+  'loading_ata_arrival',
+  'loading_ata_berthed',
+  'loading_ata_completed',
+  'discharge_ata_arrival',
+  'discharge_ata_berthed',
+  'discharge_ata_completed',
+]
+
+function hasPresentDate(value: unknown): boolean {
+  return value !== null && value !== undefined && String(value).trim() !== ''
+}
+
+function rowHasEta(row: ShippingPerformanceRow): boolean {
+  return ETA_DATE_FIELDS.some((key) => hasPresentDate(row[key]))
+}
+
+function rowHasAta(row: ShippingPerformanceRow): boolean {
+  return ATA_DATE_FIELDS.some((key) => hasPresentDate(row[key]))
+}
+
+function normalizeGroupKey(value: unknown, fallback = 'Blank'): string {
+  const trimmed = String(value ?? '').trim()
+  return trimmed || fallback
+}
+
+function normalizeVesselKey(value: unknown): string {
+  return normalizeGroupKey(value, 'Unknown')
+}
+
+function countUniqueVessels(rows: ShippingPerformanceRow[]): number {
+  return new Set(rows.map((row) => normalizeVesselKey(row.vessel_name))).size
+}
+
+function sumRootTreeCounts(tree: LatePerfNode[]): { shipments: number; vesselCountSum: number } {
+  return {
+    shipments: tree.reduce((sum, node) => sum + node.count, 0),
+    vesselCountSum: tree.reduce((sum, node) => sum + node.vesselCount, 0),
+  }
+}
+
+function displayGroupLabel(key: string): string {
+  return key === 'Blank' ? 'Uncategorized' : key
+}
+
+function rowMatchesGroupSelection(rowValue: unknown, selectedKey: string): boolean {
+  return normalizeGroupKey(rowValue) === selectedKey
+}
+
+type DrilldownFilters = {
+  product: string | null
+  plant: string | null
+  incoterm: string | null
+  vessel: string | null
+}
+
+const EMPTY_DRILLDOWN_FILTERS: DrilldownFilters = {
+  product: null,
+  plant: null,
+  incoterm: null,
+  vessel: null,
+}
+
+function applyPerfModeFilter(rows: ShippingPerformanceRow[], mode: PerfDashMode): ShippingPerformanceRow[] {
+  if (mode === 'eta') return rows.filter((row) => rowHasEta(row) && !rowHasAta(row))
+  return rows.filter((row) => rowHasAta(row))
+}
+
+function applyDrilldownFiltersToRows(
+  sourceRows: ShippingPerformanceRow[],
+  filters: DrilldownFilters,
+): ShippingPerformanceRow[] {
+  return sourceRows.filter((row) => {
+    if (filters.vessel && normalizeVesselKey(row.vessel_name) !== filters.vessel) return false
+    if (filters.incoterm && !rowMatchesGroupSelection(row.incoterm, filters.incoterm)) return false
+    if (filters.product && !rowMatchesGroupSelection(row.product, filters.product)) return false
+    if (filters.plant && !rowMatchesGroupSelection(row.plant_site, filters.plant)) return false
+    return true
+  })
+}
+
+function distinctFieldValues(
+  rows: ShippingPerformanceRow[],
+  field: 'incoterm' | 'plant_site',
+): string[] {
+  const values = new Set<string>()
+  for (const row of rows) {
+    values.add(normalizeGroupKey(row[field]))
+  }
+  return [...values].sort((a, b) => a.localeCompare(b))
+}
+
+function applyGlobalFiltersToRows(
+  sourceRows: ShippingPerformanceRow[],
+  filters: {
+    selectedIncoterms: string[]
+    selectedPlantSites: string[]
+    dateFrom: string
+    dateTo: string
+  },
+): ShippingPerformanceRow[] {
+  return sourceRows.filter((row) => {
+    const inc = normalizeGroupKey(row.incoterm)
+    if (filters.selectedIncoterms.length > 0 && !filters.selectedIncoterms.includes(inc)) return false
+    const plant = normalizeGroupKey(row.plant_site)
+    if (filters.selectedPlantSites.length > 0 && !filters.selectedPlantSites.includes(plant)) return false
+    const cDate = String(row.contract_date || '').slice(0, 10)
+    if (filters.dateFrom && cDate && cDate < filters.dateFrom) return false
+    if (filters.dateTo && cDate && cDate > filters.dateTo) return false
+    return true
+  })
+}
+
+type PerfDatasetBundle = {
+  rows: ShippingPerformanceRow[]
+  tree: LatePerfNode[]
+  summary: PerVesselPerfSummary
+}
+
+function buildPerfDatasetBundle(rows: ShippingPerformanceRow[], mode: PerfDashMode): PerfDatasetBundle {
+  const tree = buildPerfTree(rows)
+  const rootTotals = sumRootTreeCounts(tree)
+  const metrics = buildCardSummary(rows, mode)
+  const shipmentCount = rows.length
+  const vesselCount = countUniqueVessels(rows)
+
+  return {
+    rows,
+    tree,
+    summary: {
+      ...metrics,
+      shipmentCount: shipmentCount || rootTotals.shipments,
+      vesselCount,
+    },
+  }
+}
+
+function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): PerVesselPerfSummary {
+  const vessels = new Set<string>()
+  let shipmentCount = 0
+  let totalQty = 0
+  let sumLoadingEtr = 0
+  let sumLoadingEtb = 0
+  let sumLoadingEtbEtc = 0
+  let sumDischargeEtb = 0
+  let sumDischargeEtbEtc = 0
+  let sumTotalDelta = 0
+
+  for (const row of rows) {
+    shipmentCount += 1
+    vessels.add(normalizeVesselKey(row.vessel_name))
+    totalQty += Number(row.outstanding_qty ?? 0)
+
+    if (mode === 'eta') {
+      sumLoadingEtr += Number(row.loading_delta_eta_etr_days ?? 0)
+      sumLoadingEtb += Number(row.loading_delta_eta_etb_days ?? 0)
+      sumLoadingEtbEtc += Number(row.loading_delta_etb_etc_days ?? 0)
+      sumDischargeEtb += Number(row.discharge_delta_eta_etb_days ?? 0)
+      sumDischargeEtbEtc += Number(row.discharge_delta_etb_etc_days ?? 0)
+      sumTotalDelta += Number(row.total_delta_days ?? 0)
+    } else {
+      sumLoadingEtr += Number(row.ata_loading_delta_eta_etr_days ?? 0)
+      sumLoadingEtb += Number(row.ata_loading_delta_eta_etb_days ?? 0)
+      sumLoadingEtbEtc += Number(row.ata_loading_delta_etb_etc_days ?? 0)
+      sumDischargeEtb += Number(row.ata_discharge_delta_eta_etb_days ?? 0)
+      sumDischargeEtbEtc += Number(row.ata_discharge_delta_etb_etc_days ?? 0)
+      sumTotalDelta += Number(row.ata_total_delta_days ?? 0)
+    }
+  }
+
+  if (shipmentCount === 0) return { ...EMPTY_PER_VESSEL_SUMMARY }
+
+  return {
+    vesselCount: vessels.size,
+    shipmentCount,
+    totalQty,
+    avgLoadingEtaEtr: sumLoadingEtr / shipmentCount,
+    avgLoadingEtaEtb: sumLoadingEtb / shipmentCount,
+    avgLoadingEtbEtc: sumLoadingEtbEtc / shipmentCount,
+    avgDischargeEtaEtb: sumDischargeEtb / shipmentCount,
+    avgDischargeEtbEtc: sumDischargeEtbEtc / shipmentCount,
+    avgTotalDelta: sumTotalDelta / shipmentCount,
+  }
+}
+
+function buildVesselPrimaryProductMap(rows: ShippingPerformanceRow[]): Map<string, string> {
+  const counts = new Map<string, Map<string, number>>()
+  for (const row of rows) {
+    const prod = normalizeGroupKey(row.product)
+    const ves = normalizeVesselKey(row.vessel_name)
+    if (!counts.has(ves)) counts.set(ves, new Map())
+    const prodMap = counts.get(ves)!
+    prodMap.set(prod, (prodMap.get(prod) || 0) + 1)
+  }
+
+  const primary = new Map<string, string>()
+  for (const [ves, prodMap] of counts) {
+    let bestProd = 'Blank'
+    let bestCount = -1
+    for (const [prod, count] of prodMap) {
+      if (count > bestCount || (count === bestCount && prod.localeCompare(bestProd) < 0)) {
+        bestCount = count
+        bestProd = prod
+      }
+    }
+    primary.set(ves, bestProd)
+  }
+  return primary
+}
+
+function buildPerfTree(rows: ShippingPerformanceRow[]): LatePerfNode[] {
+  type VesAcc = { count: number; vessels: Set<string> }
+  type VesMap = Map<string, VesAcc>
+  type IncAcc = { count: number; vessels: Set<string>; vesselsMap: VesMap }
+  type IncMap = Map<string, IncAcc>
+  type PlantAcc = { count: number; vessels: Set<string>; incoterms: IncMap }
+  type PlantMap = Map<string, PlantAcc>
+  type ProdAcc = { count: number; vessels: Set<string>; plants: PlantMap }
+  type ProdMap = Map<string, ProdAcc>
+  const root: ProdMap = new Map()
+  const vesselPrimaryProduct = buildVesselPrimaryProductMap(rows)
+
+  for (const row of rows) {
+    const prod = normalizeGroupKey(row.product)
+    const plant = normalizeGroupKey(row.plant_site)
+    const inc = normalizeGroupKey(row.incoterm)
+    const ves = normalizeVesselKey(row.vessel_name)
+
+    if (!root.has(prod)) root.set(prod, { count: 0, vessels: new Set(), plants: new Map() })
+    const pN = root.get(prod)!
+    pN.count += 1
+    if (vesselPrimaryProduct.get(ves) === prod) pN.vessels.add(ves)
+    if (!pN.plants.has(plant)) pN.plants.set(plant, { count: 0, vessels: new Set(), incoterms: new Map() })
+    const plN = pN.plants.get(plant)!
+    plN.count += 1
+    plN.vessels.add(ves)
+    if (!plN.incoterms.has(inc)) plN.incoterms.set(inc, { count: 0, vessels: new Set(), vesselsMap: new Map() })
+    const iN = plN.incoterms.get(inc)!
+    iN.count += 1
+    iN.vessels.add(ves)
+    if (!iN.vesselsMap.has(ves)) iN.vesselsMap.set(ves, { count: 0, vessels: new Set([ves]) })
+    const vN = iN.vesselsMap.get(ves)!
+    vN.count += 1
+  }
+
+  const srtByVesselCount = <T,>(m: Map<string, T & { vessels: Set<string> }>) =>
+    [...m.entries()].sort((a, b) => b[1].vessels.size - a[1].vessels.size)
+
+  const srtVesselLeaves = (m: VesMap) =>
+    [...m.entries()].sort((a, b) => b[1].count - a[1].count)
+
+  return srtByVesselCount(root).map(([prod, pN]) => ({
+    key: prod,
+    count: pN.count,
+    vesselCount: pN.vessels.size,
+    children: srtByVesselCount(pN.plants).map(([plant, plN]) => ({
+      key: plant,
+      count: plN.count,
+      vesselCount: plN.vessels.size,
+      children: srtByVesselCount(plN.incoterms).map(([inc, iN]) => ({
+        key: inc,
+        count: iN.count,
+        vesselCount: iN.vessels.size,
+        children: srtVesselLeaves(iN.vesselsMap).map(([ves, vN]) => ({
+          key: ves,
+          count: vN.count,
+          vesselCount: 1,
+          children: [],
+        })),
+      })),
+    })),
+  }))
+}
+
+function matchesTableStatusFilter(status: string, filter: TableStatusFilter): boolean {
   const normalized = String(status || '').trim().toUpperCase()
-  if (filter === 'ALL') return true
-  if (filter === 'Open') return normalized !== 'COMPLETED' && normalized !== 'CANCELLED' && normalized !== 'CANCELED'
-  if (filter === 'Close') return normalized === 'COMPLETED'
-  return normalized === filter.toUpperCase()
+  if (filter === 'All') return true
+  if (filter === 'Closed') return normalized === 'COMPLETED'
+  if (filter === 'Open') return OPEN_TABLE_STATUSES.has(normalized)
+  return true
 }
 
 type ColumnType = 'text' | 'number'
@@ -194,9 +499,11 @@ type ColumnDef = {
 }
 
 const COLUMN_DEFS: ColumnDef[] = [
-  { key: 'group_name', label: 'Vessel Group', type: 'text', defaultVisible: true },
-  { key: 'shipment_count', label: 'Shipments', type: 'number', defaultVisible: false },
   { key: 'vessel_name', label: 'Vessel', type: 'text', defaultVisible: true },
+  { key: 'loading_port', label: 'Loading Port', type: 'text', defaultVisible: true },
+  { key: 'discharge_port', label: 'Discharge Port', type: 'text', defaultVisible: true },
+  { key: 'group_name', label: 'Supplier Group', type: 'text', defaultVisible: false },
+  { key: 'shipment_count', label: 'Shipments', type: 'number', defaultVisible: false },
   { key: 'shipment_id', label: 'Shipment ID', type: 'text', defaultVisible: true },
   { key: 'status', label: 'Status', type: 'text', defaultVisible: true },
   { key: 'po_number', label: 'PO No', type: 'text', defaultVisible: false },
@@ -261,16 +568,8 @@ function NumberCell({
 export default function ShippingPerformancePage() {
   const [rows, setRows] = useState<ShippingPerformanceRow[]>([])
   const [summaryLoading, setSummaryLoading] = useState(true)
-  const [treeLoading, setTreeLoading] = useState(true)
-  const [tableLoading, setTableLoading] = useState(false)
   const [shippingTableEnabled, setShippingTableEnabled] = useState(false)
   const [authReady, setAuthReady] = useState(false)
-  const [latePerformanceSummary, setLatePerformanceSummary] = useState<ShippingPerfSummary>(EMPTY_SHIPPING_SUMMARY)
-  const [onTrackPerformanceSummary, setOnTrackPerformanceSummary] = useState<ShippingPerfSummary>(EMPTY_SHIPPING_SUMMARY)
-  const [lateTree, setLateTree] = useState<LatePerfNode[]>([])
-  const [onTrackTree, setOnTrackTree] = useState<LatePerfNode[]>([])
-  const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
-  const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
   const [searchDraft, setSearchDraft] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [showColumnManager, setShowColumnManager] = useState(false)
@@ -295,7 +594,7 @@ export default function ShippingPerformancePage() {
   const bottomScrollRef = useRef<HTMLDivElement | null>(null)
   const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
   const isSyncingScroll = useRef(false)
-  const [statusFilter, setStatusFilter] = useState<string>('ALL')
+  const [statusFilter, setStatusFilter] = useState<TableStatusFilter>('All')
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
   const [dateFrom, setDateFrom] = useState(() => {
@@ -308,12 +607,8 @@ export default function ShippingPerformancePage() {
     const day = String(d.getDate()).padStart(2, '0')
     return `${d.getFullYear()}-${m}-${day}`
   })
-  const [perfDashMode, setPerfDashMode] = useState<'late' | 'ontrack'>('ontrack')
-  const [lateOnTimeFilter, setLateOnTimeFilter] = useState<'ALL' | 'LATE' | 'ON_TIME'>('ALL')
-  const [lateSelVessel, setLateSelVessel] = useState<string | null>(null)
-  const [lateSelIncoterm, setLateSelIncoterm] = useState<string | null>(null)
-  const [lateSelProduct, setLateSelProduct] = useState<string | null>(null)
-  const [lateSelPlant, setLateSelPlant] = useState<string | null>(null)
+  const [perfDashMode, setPerfDashMode] = useState<PerfDashMode>('eta')
+  const [drilldownFilters, setDrilldownFilters] = useState<DrilldownFilters>(EMPTY_DRILLDOWN_FILTERS)
   const [tableViewMode, setTableViewMode] = useState<TableViewMode>('all')
 
   useEffect(() => {
@@ -335,98 +630,116 @@ export default function ShippingPerformancePage() {
     return () => window.clearInterval(interval)
   }, [])
 
-  const buildShippingPerfParams = useCallback(() => {
+  const buildShippingPerfFetchParams = useCallback(() => {
     const params = new URLSearchParams()
     params.append('scope', 'ytd')
     params.append('_ts', String(Date.now()))
-    if (dateFrom) params.append('dateFrom', dateFrom)
-    if (dateTo) params.append('dateTo', dateTo)
-    if (statusFilter && statusFilter !== 'ALL') params.append('status', statusFilter)
-    if (lateOnTimeFilter && lateOnTimeFilter !== 'ALL') params.append('lateOnTimeFilter', lateOnTimeFilter)
-    selectedIncoterms.forEach((v) => params.append('incoterm', v))
-    selectedPlantSites.forEach((v) => params.append('plant', v))
     return params
-  }, [dateFrom, dateTo, statusFilter, lateOnTimeFilter, selectedIncoterms, selectedPlantSites])
+  }, [])
 
-  const fetchShippingPerformanceSummary = useCallback(async () => {
+  const fetchShippingPerformanceDashboard = useCallback(async () => {
     if (!authReady) return
+    const params = buildShippingPerfFetchParams().toString()
     try {
       setSummaryLoading(true)
-      const resp = await api.get(`/shipments/performance/summary?${buildShippingPerfParams().toString()}`)
-      const data = resp.data?.data
-      setLatePerformanceSummary(data?.summary ?? EMPTY_SHIPPING_SUMMARY)
-      setOnTrackPerformanceSummary(data?.onTrackSummary ?? EMPTY_SHIPPING_SUMMARY)
-      if (Array.isArray(data?.meta?.incoterms)) setAvailableIncoterms(data.meta.incoterms)
-      if (Array.isArray(data?.meta?.plantSites)) setAvailablePlantSites(data.meta.plantSites)
+      const rowsResp = await api.get(`/shipments/performance?${params}`)
+      setRows(Array.isArray(rowsResp.data?.data) ? rowsResp.data.data : [])
     } catch (error) {
-      console.error('Failed to load shipping performance summary:', error)
-      setLatePerformanceSummary(EMPTY_SHIPPING_SUMMARY)
-      setOnTrackPerformanceSummary(EMPTY_SHIPPING_SUMMARY)
+      console.error('Failed to load shipping performance dashboard:', error)
+      setRows([])
     } finally {
       setSummaryLoading(false)
     }
-  }, [authReady, buildShippingPerfParams])
-
-  const fetchShippingPerformanceTree = useCallback(async () => {
-    if (!authReady) return
-    try {
-      setTreeLoading(true)
-      const resp = await api.get(`/shipments/performance/tree?${buildShippingPerfParams().toString()}`)
-      const data = resp.data?.data
-      setLateTree(Array.isArray(data?.tree) ? data.tree : [])
-      setOnTrackTree(Array.isArray(data?.onTrackTree) ? data.onTrackTree : [])
-    } catch (error) {
-      console.error('Failed to load shipping performance drilldown:', error)
-      setLateTree([])
-      setOnTrackTree([])
-    } finally {
-      setTreeLoading(false)
-    }
-  }, [authReady, buildShippingPerfParams])
-
-  const fetchShippingPerformanceDashboard = useCallback(async () => {
-    await fetchShippingPerformanceSummary()
-    await fetchShippingPerformanceTree()
-  }, [fetchShippingPerformanceSummary, fetchShippingPerformanceTree])
-
-  const fetchShippingPerformanceTable = useCallback(async () => {
-    if (!authReady) return
-    try {
-      setTableLoading(true)
-      const params = buildShippingPerfParams()
-      params.delete('lateOnTimeFilter')
-      const res = await api.get(`/shipments/performance?${params.toString()}`)
-      setRows(Array.isArray(res.data?.data) ? res.data.data : [])
-    } catch (error) {
-      console.error('Failed to load shipping performance table:', error)
-      setRows([])
-    } finally {
-      setTableLoading(false)
-    }
-  }, [authReady, buildShippingPerfParams])
+  }, [authReady, buildShippingPerfFetchParams])
 
   const loadShippingTableData = useCallback(() => {
     setShippingTableEnabled(true)
     setCurrentPage(1)
   }, [])
 
-  const focusShippingTable = useCallback(() => {
+  const revealTableView = useCallback(() => {
     setShippingTableEnabled(true)
-    setTimeout(() => {
-      tableSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 100)
   }, [])
 
   useEffect(() => {
+    if (!authReady) return
     void fetchShippingPerformanceDashboard()
-  }, [fetchShippingPerformanceDashboard])
+  }, [authReady, fetchShippingPerformanceDashboard])
+
+  // Data is fetched on mount — reveal the table as soon as the dashboard finishes loading.
+  useEffect(() => {
+    if (!summaryLoading) setShippingTableEnabled(true)
+  }, [summaryLoading])
+
+  const availableIncoterms = useMemo(() => distinctFieldValues(rows, 'incoterm'), [rows])
+  const availablePlantSites = useMemo(() => distinctFieldValues(rows, 'plant_site'), [rows])
+
+  // Step B: apply global filters (incoterm, plant, contract date)
+  const globallyFilteredRows = useMemo(
+    () =>
+      applyGlobalFiltersToRows(rows, {
+        selectedIncoterms,
+        selectedPlantSites,
+        dateFrom,
+        dateTo,
+      }),
+    [rows, selectedIncoterms, selectedPlantSites, dateFrom, dateTo],
+  )
+
+  const etaFilteredData = useMemo(
+    () => applyPerfModeFilter(globallyFilteredRows, 'eta'),
+    [globallyFilteredRows],
+  )
+
+  const ataFilteredData = useMemo(
+    () => applyPerfModeFilter(globallyFilteredRows, 'ata'),
+    [globallyFilteredRows],
+  )
+
+  const perfModeFilteredRows = useMemo(
+    () => applyPerfModeFilter(globallyFilteredRows, perfDashMode),
+    [globallyFilteredRows, perfDashMode],
+  )
+
+  // Step C: apply drilldown node selection (product → plant → incoterm → vessel)
+  const drilldownFilteredRows = useMemo(
+    () => applyDrilldownFiltersToRows(perfModeFilteredRows, drilldownFilters),
+    [perfModeFilteredRows, drilldownFilters],
+  )
+
+  // Step D: apply Section 3 status filter (All / Open / Closed)
+  const statusFilteredRows = useMemo(
+    () =>
+      drilldownFilteredRows.filter((row) =>
+        matchesTableStatusFilter(String(row.status || ''), statusFilter),
+      ),
+    [drilldownFilteredRows, statusFilter],
+  )
+
+  const etaDatasetBundle = useMemo(
+    () => buildPerfDatasetBundle(etaFilteredData, 'eta'),
+    [etaFilteredData],
+  )
+
+  const ataDatasetBundle = useMemo(
+    () => buildPerfDatasetBundle(ataFilteredData, 'ata'),
+    [ataFilteredData],
+  )
+
+  const activeDatasetBundle = useMemo(
+    () => (perfDashMode === 'eta' ? etaDatasetBundle : ataDatasetBundle),
+    [perfDashMode, etaDatasetBundle, ataDatasetBundle],
+  )
+
+  const perfTree = activeDatasetBundle.tree
+
+  const etaPerformanceSummary = etaDatasetBundle.summary
+  const ataPerformanceSummary = ataDatasetBundle.summary
 
   useEffect(() => {
-    if (!authReady || !shippingTableEnabled) return
-    void fetchShippingPerformanceTable()
-  }, [authReady, shippingTableEnabled, fetchShippingPerformanceTable])
-
-  const tableSectionRef = useRef<HTMLDivElement | null>(null)
+    setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
+    setCurrentPage(1)
+  }, [perfDashMode, selectedIncoterms, selectedPlantSites, dateFrom, dateTo])
 
   useEffect(() => {
     const onDocClick = (ev: MouseEvent) => {
@@ -442,74 +755,39 @@ export default function ShippingPerformancePage() {
     return () => document.removeEventListener('mousedown', onDocClick)
   }, [showColumnManager, openHeaderFilterId])
 
-  const filteredByTopFilters = useMemo(() => {
-    return rows.filter((row) => {
-      if (!matchesShipmentStatusFilter(String(row.status || ''), statusFilter)) return false
-      const inc = String(row.incoterm || '').trim() || 'Blank'
-      if (selectedIncoterms.length > 0 && !selectedIncoterms.includes(inc)) return false
-      const plant = String(row.plant_site || '').trim() || 'Blank'
-      if (selectedPlantSites.length > 0 && !selectedPlantSites.includes(plant)) return false
-      const cDate = String(row.contract_date || '').slice(0, 10)
-      if (dateFrom && cDate && cDate < dateFrom) return false
-      if (dateTo && cDate && cDate > dateTo) return false
-      const total = Number(row.total_delta_days ?? 0)
-      if (lateOnTimeFilter === 'LATE' && !(total > 0)) return false
-      if (lateOnTimeFilter === 'ON_TIME' && !(total <= 0)) return false
-      return true
-    })
-  }, [rows, statusFilter, selectedIncoterms, selectedPlantSites, dateFrom, dateTo, lateOnTimeFilter])
-
   const resetPerfSelections = useCallback(() => {
-    setLateSelVessel(null)
-    setLateSelIncoterm(null)
-    setLateSelProduct(null)
-    setLateSelPlant(null)
-    setLateOnTimeFilter('ALL')
+    setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
     setCurrentPage(1)
   }, [])
 
-  const applySummaryStatusFocus = useCallback(
-    (mode: 'ontrack' | 'late', shipmentStatus: 'Open' | 'Close') => {
-      setPerfDashMode(mode)
-      setLateOnTimeFilter(mode === 'ontrack' ? 'ON_TIME' : 'LATE')
-      setStatusFilter(shipmentStatus)
-      setLateSelVessel(null)
-      setLateSelIncoterm(null)
-      setLateSelProduct(null)
-      setLateSelPlant(null)
-      setCurrentPage(1)
-      focusShippingTable()
-    },
-    [focusShippingTable],
-  )
+  const applyPerfDrilldownClick = useCallback((next: Partial<DrilldownFilters>) => {
+    setShippingTableEnabled(true)
+    setDrilldownFilters((prev) => ({
+      product: 'product' in next ? (next.product ?? null) : prev.product,
+      plant: 'plant' in next ? (next.plant ?? null) : prev.plant,
+      incoterm: 'incoterm' in next ? (next.incoterm ?? null) : prev.incoterm,
+      vessel: 'vessel' in next ? (next.vessel ?? null) : prev.vessel,
+    }))
+    setCurrentPage(1)
+  }, [])
 
-  const isSummaryStatusSelected = useCallback(
-    (mode: 'ontrack' | 'late', shipmentStatus: 'Open' | 'Close') =>
-      !lateSelProduct &&
-      !lateSelPlant &&
-      !lateSelIncoterm &&
-      !lateSelVessel &&
-      lateOnTimeFilter === (mode === 'ontrack' ? 'ON_TIME' : 'LATE') &&
-      statusFilter === shipmentStatus,
-    [lateSelProduct, lateSelPlant, lateSelIncoterm, lateSelVessel, lateOnTimeFilter, statusFilter],
-  )
-
-  const summaryStatusBoxClass = useCallback(
-    (mode: 'ontrack' | 'late', shipmentStatus: 'Open' | 'Close', palette: string) => {
-      const selected = isSummaryStatusSelected(mode, shipmentStatus)
-      const ring = mode === 'ontrack' ? 'ring-green-500' : 'ring-red-500'
-      return `${palette} flex-1 rounded-lg border px-3 py-2 text-left transition-all hover:shadow-md cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-300 ${
-        selected ? `ring-2 ${ring} shadow-sm` : ''
+  const summaryCardClass = useCallback(
+    (mode: PerfDashMode) => {
+      const selected = perfDashMode === mode
+      const ring = mode === 'eta' ? 'ring-blue-500' : 'ring-indigo-500'
+      return `rounded-xl border bg-white p-5 shadow-sm text-left transition-all hover:shadow-md cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-300 ${
+        selected ? `ring-2 ${ring}` : ''
       }`
     },
-    [isSummaryStatusSelected],
+    [perfDashMode],
   )
 
-  const renderSummaryGapMetrics = (summary: ShippingPerfSummary, isLate: boolean) => {
-    const metricClass = contextPerformanceClass(isLate)
-    const fmt = (days: number) => formatAvgDays(isLate ? days : Math.abs(days))
+  const renderSummaryGapMetrics = (summary: PerVesselPerfSummary, mode: PerfDashMode) => {
+    const isAta = mode === 'ata'
+    const metricClass = contextPerformanceClass(isAta ? summary.avgTotalDelta > 0 : summary.avgTotalDelta > 0)
+    const fmt = (days: number) => formatAvgDays(Math.abs(days))
     return (
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-4">
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
         <span>Avg Loading ETA-ETR: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtaEtr)}</span></span>
         <span>Avg Loading ETA-ETB: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtaEtb)}</span></span>
         <span>Avg Loading ETB-ETC: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtbEtc)}</span></span>
@@ -519,23 +797,6 @@ export default function ShippingPerformancePage() {
       </div>
     )
   }
-
-  const applyPerfDrilldownClick = useCallback(
-    (next: {
-      product?: string | null
-      plant?: string | null
-      incoterm?: string | null
-      vessel?: string | null
-    }) => {
-      setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
-      if ('product' in next) setLateSelProduct(next.product ?? null)
-      if ('plant' in next) setLateSelPlant(next.plant ?? null)
-      if ('incoterm' in next) setLateSelIncoterm(next.incoterm ?? null)
-      if ('vessel' in next) setLateSelVessel(next.vessel ?? null)
-      focusShippingTable()
-    },
-    [perfDashMode, focusShippingTable],
-  )
 
   const applySearch = useCallback(() => {
     setSearchTerm(searchDraft)
@@ -558,60 +819,74 @@ export default function ShippingPerformancePage() {
     return Object.values(filters).some((v) => (v || '').trim().length > 0)
   }, [])
 
+  const hasActiveDrilldownFilters =
+    drilldownFilters.vessel !== null ||
+    drilldownFilters.incoterm !== null ||
+    drilldownFilters.product !== null ||
+    drilldownFilters.plant !== null
+
   const hasActiveFilters =
     Boolean(searchDraft || searchTerm) ||
-    statusFilter !== 'ALL' ||
-    lateOnTimeFilter !== 'ALL' ||
+    statusFilter !== 'All' ||
     selectedIncoterms.length > 0 ||
     selectedPlantSites.length > 0 ||
     Boolean(dateFrom || dateTo) ||
     hasActiveColumnFilters(columnFilters) ||
-    lateSelVessel !== null ||
-    lateSelIncoterm !== null ||
-    lateSelProduct !== null ||
-    lateSelPlant !== null
+    hasActiveDrilldownFilters
 
   const clearAllFilters = useCallback(() => {
     setSearchDraft('')
     setSearchTerm('')
-    setStatusFilter('ALL')
-    setLateOnTimeFilter('ALL')
+    setStatusFilter('All')
     setSelectedIncoterms([])
     setSelectedPlantSites([])
     setDateFrom('')
     setDateTo('')
     setColumnFilters({})
     setColumnFilterDrafts({})
-    setLateSelVessel(null)
-    setLateSelIncoterm(null)
-    setLateSelProduct(null)
-    setLateSelPlant(null)
+    setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
     setCurrentPage(1)
   }, [])
 
-  const isPerfDrilldownActive =
-    lateSelVessel !== null || lateSelIncoterm !== null || lateSelProduct !== null || lateSelPlant !== null
+  const tableScopeDescription = useMemo(() => {
+    const parts: string[] = [
+      perfDashMode === 'eta' ? 'Per Vessel by ETA' : 'Per Vessel by ATA',
+    ]
+    if (selectedIncoterms.length > 0) {
+      parts.push(`Incoterm: ${selectedIncoterms.map(displayGroupLabel).join(', ')}`)
+    }
+    if (selectedPlantSites.length > 0) {
+      parts.push(`Plant: ${selectedPlantSites.map(displayGroupLabel).join(', ')}`)
+    }
+    if (dateFrom || dateTo) {
+      parts.push(`Contract date: ${dateFrom || '…'} to ${dateTo || '…'}`)
+    }
+    if (drilldownFilters.product) parts.push(`Product: ${displayGroupLabel(drilldownFilters.product)}`)
+    if (drilldownFilters.plant) parts.push(`Plant node: ${displayGroupLabel(drilldownFilters.plant)}`)
+    if (drilldownFilters.incoterm) parts.push(`Incoterm node: ${displayGroupLabel(drilldownFilters.incoterm)}`)
+    if (drilldownFilters.vessel) parts.push(`Vessel: ${drilldownFilters.vessel}`)
+    if (statusFilter !== 'All') parts.push(`Status: ${statusFilter}`)
+    return parts.join(' · ')
+  }, [
+    perfDashMode,
+    selectedIncoterms,
+    selectedPlantSites,
+    dateFrom,
+    dateTo,
+    drilldownFilters,
+    statusFilter,
+  ])
 
-  const tableScopeRows = useMemo(() => {
-    if (!isPerfDrilldownActive) return filteredByTopFilters
-    return filteredByTopFilters.filter((row) => matchesPerfDrilldownRow(row, perfDashMode === 'late'))
-  }, [filteredByTopFilters, isPerfDrilldownActive, perfDashMode])
-
+  // Step E: apply Section 3 search, column filters, and sorting
   const filteredRows = useMemo(() => {
     const q = searchTerm.trim().toLowerCase()
-    const scoped = tableScopeRows.filter((row) => {
-      if (lateSelVessel  && (String(row.vessel_name || '').trim() || 'Unknown') !== lateSelVessel) return false
-      if (lateSelIncoterm && (String(row.incoterm || '').trim() || 'Blank') !== lateSelIncoterm) return false
-      if (lateSelProduct && (String(row.product || '').trim() || 'Blank') !== lateSelProduct) return false
-      if (lateSelPlant && (String(row.plant_site || '').trim() || 'Blank') !== lateSelPlant) return false
-      return true
-    })
-
     const base = !q
-      ? scoped
-      : scoped.filter((row) => {
+      ? statusFilteredRows
+      : statusFilteredRows.filter((row) => {
       const vessel = row.vessel_name?.toLowerCase() ?? ''
       const group = row.group_name?.toLowerCase() ?? ''
+      const loadingPort = row.loading_port?.toLowerCase() ?? ''
+      const dischargePort = row.discharge_port?.toLowerCase() ?? ''
       const shipmentId = row.shipment_id?.toLowerCase() ?? ''
       const contractNumber = row.contract_number?.toLowerCase() ?? ''
       const poNo = row.po_number?.toLowerCase() ?? ''
@@ -620,6 +895,8 @@ export default function ShippingPerformancePage() {
       return (
         vessel.includes(q) ||
         group.includes(q) ||
+        loadingPort.includes(q) ||
+        dischargePort.includes(q) ||
         shipmentId.includes(q) ||
         contractNumber.includes(q) ||
         poNo.includes(q) ||
@@ -655,21 +932,28 @@ export default function ShippingPerformancePage() {
       return 0
     })
     return sorted
-  }, [tableScopeRows, lateSelVessel, lateSelIncoterm, lateSelProduct, lateSelPlant, searchTerm, columnFilters, sortBy, sortDirection])
+  }, [statusFilteredRows, searchTerm, columnFilters, sortBy, sortDirection])
 
   const tableRows = useMemo(() => {
     if (tableViewMode === 'all') return filteredRows
-    return aggregateByVesselGroup(filteredRows)
+    return aggregateByVessel(filteredRows)
   }, [filteredRows, tableViewMode])
 
   const tableColumnKeys = useMemo((): TableColumnKey[] => {
     const ordered = columnOrder.filter((key) => visibleColumns[String(key)] && COLUMN_MAP[String(key)])
     if (tableViewMode === 'all') {
-      return ordered.filter((key) => String(key) !== 'shipment_count')
+      const withRequired = [...new Set<TableColumnKey>([
+        ...ordered.filter(
+          (key) => String(key) !== 'shipment_count' && !ALL_SHIPMENTS_HIDDEN_COLUMNS.has(String(key)),
+        ),
+        'loading_port' as TableColumnKey,
+        'discharge_port' as TableColumnKey,
+      ])]
+      return withRequired
     }
-    const summaryKeys: TableColumnKey[] = ['group_name', 'shipment_count']
+    const summaryKeys: TableColumnKey[] = ['vessel_name', 'shipment_count']
     const metricKeys = ordered.filter(
-      (key) => !DETAIL_COLUMN_KEYS.has(String(key)) && !summaryKeys.includes(key),
+      (key) => !DETAIL_COLUMN_KEYS.has(String(key)) && !summaryKeys.includes(key) && !ALL_SHIPMENT_REQUIRED_COLUMNS.has(String(key)),
     )
     return [...summaryKeys, ...metricKeys]
   }, [columnOrder, visibleColumns, tableViewMode])
@@ -688,13 +972,9 @@ export default function ShippingPerformancePage() {
     selectedPlantSites,
     dateFrom,
     dateTo,
-    lateOnTimeFilter,
     searchTerm,
     columnFilters,
-    lateSelVessel,
-    lateSelIncoterm,
-    lateSelProduct,
-    lateSelPlant,
+    drilldownFilters,
     tableViewMode,
   ])
 
@@ -769,15 +1049,8 @@ export default function ShippingPerformancePage() {
           </div>
         </div>
 
-        {/* Summary */}
+        {/* Section 1: Summary Cards */}
         {(() => {
-          const totalOsQty = (latePerformanceSummary.totalQty ?? 0) + (onTrackPerformanceSummary.totalQty ?? 0)
-          const latePct = totalOsQty > 0 ? ((latePerformanceSummary.totalQty ?? 0) / totalOsQty) * 100 : 0
-          const onTrackPct = totalOsQty > 0 ? ((onTrackPerformanceSummary.totalQty ?? 0) / totalOsQty) * 100 : 0
-          const fmtMT = (v: number) => (v / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' MT'
-          const onTimeAvgClass = contextPerformanceClass(false)
-          const lateAvgClass = contextPerformanceClass(true)
-
           if (summaryLoading) {
             return (
               <div className="space-y-2">
@@ -793,9 +1066,8 @@ export default function ShippingPerformancePage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {[0, 1].map((i) => (
                     <div key={i} className="rounded-xl border bg-white p-5 shadow-sm animate-pulse">
-                      <div className="h-5 bg-gray-200 rounded w-24 mb-4" />
+                      <div className="h-5 bg-gray-200 rounded w-40 mb-4" />
                       <div className="h-8 bg-gray-200 rounded w-32 mb-3" />
-                      <div className="h-6 bg-gray-100 rounded mb-3" />
                       <div className="h-16 bg-gray-100 rounded" />
                     </div>
                   ))}
@@ -816,123 +1088,67 @@ export default function ShippingPerformancePage() {
                 </button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="rounded-xl border bg-white p-5 shadow-sm">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-base font-semibold text-gray-800">On Time</span>
-                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">{onTrackPct.toFixed(1)}%</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPerfDashMode('eta')
+                    revealTableView()
+                  }}
+                  className={summaryCardClass('eta')}
+                >
+                  <div className="mb-3">
+                    <span className="text-base font-semibold text-gray-800">Per Vessel by ETA</span>
                   </div>
-                  <div className="text-sm text-gray-500 mb-1">Outstanding Qty</div>
-                  <div className="text-xl font-bold text-gray-900 mb-3">{fmtMT(onTrackPerformanceSummary.totalQty ?? 0)}</div>
-                  <div className="w-full h-6 rounded-md bg-gray-100 overflow-hidden mb-3">
-                    <div className="h-full bg-green-500 flex items-center justify-end pr-2 transition-all duration-500" style={{ width: `${onTrackPct}%` }}>
-                      <span className="text-xs font-bold text-white">{onTrackPct.toFixed(0)}%</span>
-                    </div>
+                  <div className="text-sm text-gray-500 mb-1">Total Vessels</div>
+                  <div className="text-xl font-bold text-gray-900 mb-3">
+                    {etaPerformanceSummary.vesselCount.toLocaleString('en-US')}
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
-                    <span>{avgDaysMetricLabel(false)}: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(Math.abs(onTrackPerformanceSummary.avgTotalDelta))}</span></span>
-                    <span>Shipments: <span className="font-semibold text-gray-700">{onTrackPerformanceSummary.count.toLocaleString('en-US')}</span></span>
+                    <span>Shipments: <span className="font-semibold text-gray-700">{etaPerformanceSummary.shipmentCount.toLocaleString('en-US')}</span></span>
                   </div>
-                  {renderSummaryGapMetrics(onTrackPerformanceSummary, false)}
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      title="View On Time open shipments in the table below"
-                      onClick={() => applySummaryStatusFocus('ontrack', 'Open')}
-                      className={summaryStatusBoxClass('ontrack', 'Open', 'bg-blue-50 border-blue-100')}
-                    >
-                      <div className="text-[11px] font-medium text-blue-600 mb-1">Open</div>
-                      <div className="text-sm font-semibold text-gray-800">{fmtMT(onTrackPerformanceSummary.openOutstandingQty ?? 0)}</div>
-                    </button>
-                    <button
-                      type="button"
-                      title="View On Time closed shipments in the table below"
-                      onClick={() => applySummaryStatusFocus('ontrack', 'Close')}
-                      className={summaryStatusBoxClass('ontrack', 'Close', 'bg-orange-50 border-orange-100')}
-                    >
-                      <div className="text-[11px] font-medium text-orange-600 mb-1">Close</div>
-                      <div className="text-sm font-semibold text-gray-800">{fmtMT(onTrackPerformanceSummary.closeOutstandingQty ?? 0)}</div>
-                    </button>
-                  </div>
-                </div>
+                  {renderSummaryGapMetrics(etaPerformanceSummary, 'eta')}
+                </button>
 
-                <div className="rounded-xl border bg-white p-5 shadow-sm">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-base font-semibold text-gray-800">Late</span>
-                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">{latePct.toFixed(1)}%</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPerfDashMode('ata')
+                    revealTableView()
+                  }}
+                  className={summaryCardClass('ata')}
+                >
+                  <div className="mb-3">
+                    <span className="text-base font-semibold text-gray-800">Per Vessel by ATA</span>
                   </div>
-                  <div className="text-sm text-gray-500 mb-1">Outstanding Qty</div>
-                  <div className="text-xl font-bold text-gray-900 mb-3">{fmtMT(latePerformanceSummary.totalQty ?? 0)}</div>
-                  <div className="w-full h-6 rounded-md bg-gray-100 overflow-hidden mb-3">
-                    <div className="h-full bg-red-500 flex items-center justify-end pr-2 transition-all duration-500" style={{ width: `${latePct}%` }}>
-                      <span className="text-xs font-bold text-white">{latePct.toFixed(0)}%</span>
-                    </div>
+                  <div className="text-sm text-gray-500 mb-1">Total Vessels</div>
+                  <div className="text-xl font-bold text-gray-900 mb-3">
+                    {ataPerformanceSummary.vesselCount.toLocaleString('en-US')}
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
-                    <span>{avgDaysMetricLabel(true)}: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(latePerformanceSummary.avgTotalDelta)}</span></span>
-                    <span>Shipments: <span className="font-semibold text-gray-700">{latePerformanceSummary.count.toLocaleString('en-US')}</span></span>
+                    <span>Shipments: <span className="font-semibold text-gray-700">{ataPerformanceSummary.shipmentCount.toLocaleString('en-US')}</span></span>
                   </div>
-                  {renderSummaryGapMetrics(latePerformanceSummary, true)}
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      title="View Late open shipments in the table below"
-                      onClick={() => applySummaryStatusFocus('late', 'Open')}
-                      className={summaryStatusBoxClass('late', 'Open', 'bg-blue-50 border-blue-100')}
-                    >
-                      <div className="text-[11px] font-medium text-blue-600 mb-1">Open</div>
-                      <div className="text-sm font-semibold text-gray-800">{fmtMT(latePerformanceSummary.openOutstandingQty ?? 0)}</div>
-                    </button>
-                    <button
-                      type="button"
-                      title="View Late closed shipments in the table below"
-                      onClick={() => applySummaryStatusFocus('late', 'Close')}
-                      className={summaryStatusBoxClass('late', 'Close', 'bg-orange-50 border-orange-100')}
-                    >
-                      <div className="text-[11px] font-medium text-orange-600 mb-1">Close</div>
-                      <div className="text-sm font-semibold text-gray-800">{fmtMT(latePerformanceSummary.closeOutstandingQty ?? 0)}</div>
-                    </button>
-                  </div>
-                </div>
+                  {renderSummaryGapMetrics(ataPerformanceSummary, 'ata')}
+                </button>
               </div>
             </div>
           )
         })()}
 
-        {/* Section 1: Performance */}
+        {/* Section 2: Drilldown */}
         <Card>
           <CardHeader className="pb-2">
-            <div className="flex items-start justify-between gap-4 flex-wrap">
-              <div>
-                <div className="inline-flex rounded-lg border bg-white p-1 mb-2">
-                  <button
-                    type="button"
-                    onClick={() => { setPerfDashMode('ontrack'); setLateOnTimeFilter('ON_TIME'); setLateSelVessel(null); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'ontrack' ? 'bg-green-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-                  >
-                    On Time
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setPerfDashMode('late'); setLateOnTimeFilter('LATE'); setLateSelVessel(null); setLateSelIncoterm(null); setLateSelProduct(null); setLateSelPlant(null) }}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${perfDashMode === 'late' ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-                  >
-                    Late
-                  </button>
-                </div>
-                <CardTitle className="text-base">
-                  {perfDashMode === 'late' ? 'Late Performance (YTD)' : 'On Time Performance (YTD)'}
-                </CardTitle>
-                <div className="text-sm text-gray-600 mt-1">
-                  {perfDashMode === 'late'
-                    ? <>Management view of late shipping where <span className="font-medium">Total delta &gt; 0</span>. Use drilldown to filter the table below.</>
-                    : <>Management view of on-time shipping where <span className="font-medium">Total delta ≤ 0</span>. Use drilldown to filter the table below.</>
-                  }
-                </div>
+            <div>
+              <CardTitle className="text-base">
+                {perfDashMode === 'eta' ? 'Performance Drilldown (ETA)' : 'Performance Drilldown (ATA)'}
+              </CardTitle>
+              <div className="text-sm text-gray-600 mt-1">
+                Navigate as a tree: <span className="font-medium">Product → Plant → Incoterm → Vessel</span>.
+                Click a node to filter the table below.
               </div>
             </div>
           </CardHeader>
           <CardContent className="pt-2">
-            {treeLoading ? (
+            {summaryLoading ? (
               <div className="rounded-xl border bg-white p-6 animate-pulse">
                 <div className="h-5 bg-gray-200 rounded w-48 mb-4" />
                 <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
@@ -941,36 +1157,35 @@ export default function ShippingPerformancePage() {
                   ))}
                 </div>
               </div>
-            ) : (perfDashMode === 'late' ? lateTree : onTrackTree).length === 0 ? (
-              <div className="text-sm text-gray-500">{perfDashMode === 'late' ? 'No late shipments found.' : 'No on-time shipments found.'}</div>
+            ) : perfTree.length === 0 ? (
+              <div className="text-sm text-gray-500">No shipments found for the current filters.</div>
             ) : (
-              <div className="space-y-3">
-                <div className="text-sm text-gray-600">
-                  Navigate as a tree: <span className="font-medium">Product → Plant → Incoterm → Vessel</span>. Click a node to filter the table below.
-                </div>
-                <div className="rounded-xl border bg-white p-4">
-                  <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-                    <div className="text-sm font-semibold text-gray-900">{perfDashMode === 'late' ? 'Late' : 'On Time'} Performance drilldown</div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        resetPerfSelections()
-                      }}
-                      className="text-sm text-blue-700 hover:underline"
-                    >
-                      Reset selection
-                    </button>
+              <div className="rounded-xl border bg-white p-4">
+                <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">Drilldown</div>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      {activeDatasetBundle.summary.shipmentCount.toLocaleString('en-US')} shipments ·{' '}
+                      {activeDatasetBundle.summary.vesselCount.toLocaleString('en-US')} vessels
+                    </div>
                   </div>
-                  <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
-                    {([
-                      { title: 'Product',  subtitle: 'Pick one',                                                                       level: 'product'  as const },
-                      { title: 'Plant',    subtitle: lateSelProduct  ? `Under ${lateSelProduct}`  : 'Pick product first',              level: 'plant'    as const },
-                      { title: 'Incoterm', subtitle: lateSelPlant    ? `Under ${lateSelPlant}`    : 'Pick plant first',                level: 'incoterm' as const },
-                      { title: 'Vessel',   subtitle: lateSelIncoterm ? `Under ${lateSelIncoterm}` : 'Pick incoterm first',             level: 'vessel'   as const },
+                  <button
+                    type="button"
+                    onClick={resetPerfSelections}
+                    className="text-sm text-blue-700 hover:underline"
+                  >
+                    Reset selection
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+                  {([
+                      { title: 'Product',  subtitle: drilldownFilters.product  ? `Under ${displayGroupLabel(drilldownFilters.product)}`  : 'Pick one',                          level: 'product'  as const },
+                      { title: 'Plant',    subtitle: drilldownFilters.product  ? `Under ${displayGroupLabel(drilldownFilters.product)}`  : 'Pick product first',              level: 'plant'    as const },
+                      { title: 'Incoterm', subtitle: drilldownFilters.plant    ? `Under ${displayGroupLabel(drilldownFilters.plant)}`    : 'Pick plant first',                level: 'incoterm' as const },
+                      { title: 'Vessel',   subtitle: drilldownFilters.incoterm ? `Under ${displayGroupLabel(drilldownFilters.incoterm)}` : 'Pick incoterm first',             level: 'vessel'   as const },
                     ] as const).map((col) => {
-                      const activeTree = perfDashMode === 'ontrack' ? onTrackTree : lateTree
-                      const totalQty   = activeTree.reduce((s, n) => s + n.totalQty, 0)
-                      const denom = totalQty || 1
+                      const activeTree = perfTree
+                      const denom = activeDatasetBundle.summary.vesselCount || 1
                       const levelStyles: Record<string, { headerBg: string; badge: string; bar: string; border: string }> = {
                         vessel:  { headerBg: 'bg-sky-50',     badge: 'bg-sky-100 text-sky-800',        bar: 'bg-sky-600',     border: 'border-sky-200' },
                         incoterm:{ headerBg: 'bg-violet-50',  badge: 'bg-violet-100 text-violet-800',  bar: 'bg-violet-600',  border: 'border-violet-200' },
@@ -984,19 +1199,23 @@ export default function ShippingPerformancePage() {
                         }`
 
                       const renderNode = (node: LatePerfNode, selected: boolean, onClick: () => void, isTotal = false) => {
-                        const pct = Math.max(1, Math.round((node.totalQty / denom) * 100))
+                        const label = col.level === 'vessel' ? node.key : displayGroupLabel(node.key)
+                        const pct = Math.max(1, Math.round((node.vesselCount / denom) * 100))
                         return (
                           <button key={node.key} type="button" className={itemClass(selected)} onClick={onClick}>
                             <div className="flex items-start justify-between gap-2">
                               <div className="min-w-0 flex-1 text-left">
-                                <div className="text-sm font-semibold text-gray-900 truncate">{node.key}</div>
+                                <div className="text-sm font-semibold text-gray-900 truncate">{label}</div>
                                 <div className="mt-1 h-1.5 rounded bg-gray-100 overflow-hidden">
                                   <div className={`h-full ${style.bar}`} style={{ width: `${pct}%` }} />
                                 </div>
                                 <div className="mt-1 text-xs text-gray-700 flex items-center justify-between gap-2">
                                   <span className="font-semibold">{node.count.toLocaleString('en-US')}</span>
                                   <span className="text-gray-500">shipments</span>
-                                  <span className="ml-auto font-semibold whitespace-nowrap">{(node.totalQty / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>
+                                  <span className="ml-auto text-right whitespace-nowrap">
+                                    <span className="block text-[10px] text-gray-500 leading-tight">Total Vessels</span>
+                                    <span className="font-semibold">{node.vesselCount.toLocaleString('en-US')}</span>
+                                  </span>
                                 </div>
                               </div>
                               {isTotal && (
@@ -1014,44 +1233,44 @@ export default function ShippingPerformancePage() {
                         </div>
                       )
 
-                      const productNode  = activeTree.find((n) => n.key === lateSelProduct)
-                      const plantNode    = productNode?.children.find((n) => n.key === lateSelPlant)
-                      const incotermNode = plantNode?.children.find((n) => n.key === lateSelIncoterm)
+                      const productNode  = activeTree.find((n) => n.key === drilldownFilters.product)
+                      const plantNode    = productNode?.children.find((n) => n.key === drilldownFilters.plant)
+                      const incotermNode = plantNode?.children.find((n) => n.key === drilldownFilters.incoterm)
 
                       const body = (() => {
                         if (col.level === 'product') {
                           return (
                             <div className="space-y-2">
-                              {activeTree.map((n) => renderNode(n, lateSelProduct === n.key, () => {
+                              {activeTree.map((n) => renderNode(n, drilldownFilters.product === n.key, () => {
                                 applyPerfDrilldownClick({ product: n.key, plant: null, incoterm: null, vessel: null })
                               }))}
                             </div>
                           )
                         }
                         if (col.level === 'plant') {
-                          if (!lateSelProduct) return <div className="text-sm text-gray-500">Select a product to see plants.</div>
+                          if (!drilldownFilters.product) return <div className="text-sm text-gray-500">Select a product to see plants.</div>
                           return (
                             <div className="space-y-2">
-                              {(productNode?.children || []).map((n) => renderNode(n, lateSelPlant === n.key, () => {
+                              {(productNode?.children || []).map((n) => renderNode(n, drilldownFilters.plant === n.key, () => {
                                 applyPerfDrilldownClick({ plant: n.key, incoterm: null, vessel: null })
                               }))}
                             </div>
                           )
                         }
                         if (col.level === 'incoterm') {
-                          if (!lateSelPlant) return <div className="text-sm text-gray-500">Select a plant to see incoterms.</div>
+                          if (!drilldownFilters.plant) return <div className="text-sm text-gray-500">Select a plant to see incoterms.</div>
                           return (
                             <div className="space-y-2">
-                              {(plantNode?.children || []).map((n) => renderNode(n, lateSelIncoterm === n.key, () => {
+                              {(plantNode?.children || []).map((n) => renderNode(n, drilldownFilters.incoterm === n.key, () => {
                                 applyPerfDrilldownClick({ incoterm: n.key, vessel: null })
                               }))}
                             </div>
                           )
                         }
-                        if (!lateSelIncoterm) return <div className="text-sm text-gray-500">Select an incoterm to see vessels.</div>
+                        if (!drilldownFilters.incoterm) return <div className="text-sm text-gray-500">Select an incoterm to see vessels.</div>
                         return (
                           <div className="space-y-2">
-                            {(incotermNode?.children || []).map((n) => renderNode(n, lateSelVessel === n.key, () => {
+                            {(incotermNode?.children || []).map((n) => renderNode(n, drilldownFilters.vessel === n.key, () => {
                               applyPerfDrilldownClick({ vessel: n.key })
                             }))}
                           </div>
@@ -1065,22 +1284,118 @@ export default function ShippingPerformancePage() {
                         </div>
                       )
                     })}
-                  </div>
                 </div>
               </div>
             )}
           </CardContent>
         </Card>
 
-        {/* Section 2: Filters */}
+        {/* Global Filters — before View Table (matches Contract Performance layout) */}
         <Card>
-          <CardContent className="pt-6">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Filters</CardTitle>
+            <p className="text-sm text-gray-600 mt-1">
+              Apply incoterm, plant/site, and contract date filters to the summary, drilldown, and shipment table.
+            </p>
+          </CardHeader>
+          <CardContent className="pt-2">
             <div className="space-y-4">
-              <div className="flex flex-wrap gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <SearchableMultiSelect
+                  label="Incoterm"
+                  options={availableIncoterms}
+                  selected={selectedIncoterms}
+                  onChange={(values) => {
+                    setSelectedIncoterms(values)
+                    revealTableView()
+                  }}
+                  placeholder="Select incoterm(s)"
+                  emptyMessage="No incoterms"
+                />
+                <SearchableMultiSelect
+                  label="Plant/Site"
+                  options={availablePlantSites}
+                  selected={selectedPlantSites}
+                  onChange={(values) => {
+                    setSelectedPlantSites(values)
+                    revealTableView()
+                  }}
+                  placeholder="Select plant/site(s)"
+                  emptyMessage="No plants"
+                />
+              </div>
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-700">Contract Date:</label>
+                  <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={(value) => { setDateFrom(value); revealTableView() }} className="w-40" />
+                  <span className="text-gray-500">to</span>
+                  <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={(value) => { setDateTo(value); revealTableView() }} className="w-40" />
+                </div>
+                {(selectedIncoterms.length > 0 || selectedPlantSites.length > 0 || dateFrom || dateTo) && (
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      setSelectedIncoterms([])
+                      setSelectedPlantSites([])
+                      setDateFrom('')
+                      setDateTo('')
+                    }}
+                    variant="ghost"
+                    size="sm"
+                    className="text-gray-500"
+                  >
+                    <X className="h-4 w-4 mr-1" />
+                    Clear filters
+                  </Button>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Section 3: View Table */}
+        <div>
+        <Card>
+          <CardHeader className="space-y-3">
+            <div>
+              <CardTitle>{tableViewMode === 'all' ? 'All Shipments' : 'By Vessel'}</CardTitle>
+              <p className="text-sm text-gray-500 mt-1">
+                {summaryLoading
+                  ? 'Loading shipments…'
+                  : !shippingTableEnabled
+                  ? 'Click All Data to load the shipment list'
+                  : tableViewMode === 'all'
+                  ? `${tableRows.length} total shipments | Showing ${paginatedRows.length} on this page`
+                  : `${tableRows.length} vessel${tableRows.length === 1 ? '' : 's'} | Showing ${paginatedRows.length} on this page`}
+              </p>
+              {shippingTableEnabled && !summaryLoading && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Active scope: {tableScopeDescription}
+                </p>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="inline-flex rounded-lg border bg-white p-1">
+                <button
+                  type="button"
+                  onClick={() => { setTableViewMode('all'); setCurrentPage(1) }}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tableViewMode === 'all' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+                >
+                  All Shipment
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setTableViewMode('by_vessel'); setCurrentPage(1) }}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tableViewMode === 'by_vessel' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+                >
+                  By Vessel
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
                 <div className="relative min-w-[12rem] flex-1">
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
                   <Input
-                    placeholder="Search vessel, group, shipment ID, or contract..."
+                    placeholder="Search vessel, supplier group, shipment ID, or contract..."
                     value={searchDraft}
                     onChange={(e) => setSearchDraft(e.target.value)}
                     onKeyDown={(e) => {
@@ -1094,104 +1409,29 @@ export default function ShippingPerformancePage() {
                 </div>
                 <select
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
+                  onChange={(e) => {
+                    setStatusFilter(e.target.value as TableStatusFilter)
+                    setCurrentPage(1)
+                  }}
                   className="rounded-lg border px-4 py-2"
+                  title="Section 3 status filter"
                 >
-                  <option value="ALL">All Status</option>
+                  <option value="All">All</option>
                   <option value="Open">Open</option>
-                  <option value="Close">Close</option>
-                  <option value="PLANNED">PLANNED</option>
-                  <option value="IN_PROGRESS">IN_PROGRESS</option>
-                  <option value="LOADING">LOADING</option>
-                  <option value="IN_TRANSIT">IN_TRANSIT</option>
-                  <option value="ARRIVED">ARRIVED</option>
-                  <option value="UNLOADING">UNLOADING</option>
-                  <option value="COMPLETED">COMPLETED</option>
-                  <option value="CANCELLED">CANCELLED</option>
+                  <option value="Closed">Closed</option>
                 </select>
-                <select
-                  value={lateOnTimeFilter}
-                  onChange={(e) => setLateOnTimeFilter(e.target.value as 'ALL' | 'LATE' | 'ON_TIME')}
-                  className="rounded-lg border px-4 py-2"
-                  title="Late: Total delta > 0. On Time: Total delta ≤ 0."
-                >
-                  <option value="ALL">Late/On Time: All</option>
-                  <option value="LATE">Late</option>
-                  <option value="ON_TIME">On Time</option>
-                </select>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <SearchableMultiSelect
-                  label="Incoterm"
-                  options={availableIncoterms}
-                  selected={selectedIncoterms}
-                  onChange={setSelectedIncoterms}
-                  placeholder="Select incoterm(s)"
-                  emptyMessage="No incoterms"
-                />
-                <SearchableMultiSelect
-                  label="Plant/Site"
-                  options={availablePlantSites}
-                  selected={selectedPlantSites}
-                  onChange={setSelectedPlantSites}
-                  placeholder="Select plant/site(s)"
-                  emptyMessage="No plants"
-                />
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <label className="text-sm font-medium text-gray-700">Contract Date:</label>
-                  <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={setDateFrom} className="w-40" />
-                  <span className="text-gray-500">to</span>
-                  <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={setDateTo} className="w-40" />
-                  {hasActiveFilters && (
-                    <Button
-                      type="button"
-                      onClick={clearAllFilters}
-                      variant="ghost"
-                      size="sm"
-                      className="text-gray-500"
-                    >
-                      <X className="h-4 w-4 mr-1" />
-                      Clear
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Section 3: Table */}
-        <div ref={tableSectionRef}>
-        <Card>
-          <CardHeader className="space-y-3">
-            <div>
-              <CardTitle>{tableViewMode === 'all' ? 'All Shipments' : 'By Vessel Group'}</CardTitle>
-              <p className="text-sm text-gray-500 mt-1">
-                {!shippingTableEnabled
-                  ? 'Click All Data to load the shipment list'
-                  : tableViewMode === 'all'
-                  ? `${tableRows.length} total shipments | Showing ${paginatedRows.length} on this page`
-                  : `${tableRows.length} vessel group${tableRows.length === 1 ? '' : 's'} | Showing ${paginatedRows.length} on this page`}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="inline-flex rounded-lg border bg-white p-1">
-                <button
-                  type="button"
-                  onClick={() => { setTableViewMode('all'); setCurrentPage(1) }}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tableViewMode === 'all' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-                >
-                  All Shipment
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setTableViewMode('vessel_group'); setCurrentPage(1) }}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tableViewMode === 'vessel_group' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-                >
-                  By Vessel Group
-                </button>
+                {hasActiveFilters && (
+                  <Button
+                    type="button"
+                    onClick={clearAllFilters}
+                    variant="ghost"
+                    size="sm"
+                    className="text-gray-500"
+                  >
+                    <X className="h-4 w-4 mr-1" />
+                    Clear
+                  </Button>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-2 ml-auto">
               {!shippingTableEnabled && (
@@ -1202,7 +1442,7 @@ export default function ShippingPerformancePage() {
                 </Button>
               )}
               <div ref={columnsMenuRef} className="relative">
-                <Button variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)} disabled={!shippingTableEnabled || tableLoading}>
+                <Button variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)} disabled={!shippingTableEnabled || summaryLoading}>
                   <SlidersHorizontal className="h-4 w-4 mr-2" />
                   Columns
                 </Button>
@@ -1244,6 +1484,12 @@ export default function ShippingPerformancePage() {
                       {columnOrder
                         .map((key) => COLUMN_DEFS.find((c) => c.key === key))
                         .filter((col): col is ColumnDef => !!col)
+                        .filter((col) => {
+                          const key = String(col.key)
+                          if (tableViewMode === 'all' && ALL_SHIPMENTS_HIDDEN_COLUMNS.has(key)) return false
+                          if (tableViewMode === 'by_vessel' && BY_VESSEL_HIDDEN_COLUMNS.has(key)) return false
+                          return true
+                        })
                         .map((col) => (
                           <div
                             key={String(col.key)}
@@ -1456,7 +1702,7 @@ export default function ShippingPerformancePage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {tableLoading ? (
+                    {summaryLoading ? (
                       <tr>
                         <td colSpan={tableColumnKeys.length || 1} className="px-3 py-6 text-center text-gray-500">
                           Loading shipping performance...
@@ -1491,7 +1737,7 @@ export default function ShippingPerformancePage() {
                                     <NumberCell
                                       value={rawValue}
                                       isDeltaDays={String(key).includes('delta')}
-                                      decimalPlaces={tableViewMode === 'vessel_group' && String(key).includes('delta') ? 1 : undefined}
+                                      decimalPlaces={tableViewMode === 'by_vessel' && String(key).includes('delta') ? 1 : undefined}
                                     />
                                   )
                                   : asDisplayValue(rawValue) || '-'}

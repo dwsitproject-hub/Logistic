@@ -48,8 +48,12 @@ router.post(
   '/import-upload',
   authenticateToken,
   authorize('ADMIN'),
-  upload.single('file'),
-  catchAsync(sapMasterV2Controller.importMasterV2Upload)
+  (req, res, next) => {
+    upload.single('file')(req, res, (err) => {
+      if (err) return next(err);
+      catchAsync(sapMasterV2Controller.importMasterV2Upload)(req, res, next);
+    });
+  }
 );
 
 router.get(
