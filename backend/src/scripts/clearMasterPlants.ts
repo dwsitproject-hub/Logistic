@@ -3,15 +3,24 @@
  *
  * Usage (preview only — default):
  *   cd backend
- *   npx ts-node src/scripts/clearMasterPlants.ts
+ *   npm run cleanup:master-plants
  *
  * Execute delete:
- *   npx ts-node src/scripts/clearMasterPlants.ts --confirm
+ *   npm run cleanup:master-plants:confirm
  *
- * Uses DB_* from backend/.env (same as the API).
+ * On the staging HOST (outside Docker), backend/.env often has DB_HOST=postgres.
+ * This script auto-uses 127.0.0.1 and port 5433 (see docker-compose.backend.yml).
+ * Override: SCRIPT_DB_HOST / SCRIPT_DB_PORT
+ *
+ * Or via Postgres container (no Node DB config needed):
+ *   docker compose -f docker-compose.backend.yml exec postgres \
+ *     psql -U postgres -d klip_db -c "TRUNCATE TABLE master_plants;"
  */
 
-import { getClient } from '../database/connection';
+import dotenv from 'dotenv';
+import { Pool } from 'pg';
+
+dotenv.config();
 
 type PlantPreviewRow = {
   company_name: string;
@@ -20,16 +29,46 @@ type PlantPreviewRow = {
   group_plant: string | null;
 };
 
+function resolveScriptDbConfig() {
+  let host = process.env.SCRIPT_DB_HOST || process.env.DB_HOST || 'localhost';
+  let port = parseInt(process.env.SCRIPT_DB_PORT || process.env.DB_PORT || '5432', 10);
+
+  // backend/.env on staging uses Docker service names — not resolvable from the host shell.
+  if (!process.env.SCRIPT_DB_HOST && (host === 'postgres' || host === 'klip-postgres')) {
+    host = '127.0.0.1';
+    port = parseInt(process.env.POSTGRES_PORT || '5433', 10);
+  }
+
+  return {
+    host,
+    port,
+    database: process.env.DB_NAME || 'klip_db',
+    user: process.env.DB_USER || 'postgres',
+    password: process.env.DB_PASSWORD,
+  };
+}
+
 async function main() {
   const confirm = process.argv.includes('--confirm');
-  const client = await getClient();
+  const dbConfig = resolveScriptDbConfig();
+  const pool = new Pool(dbConfig);
+  const client = await pool.connect();
 
   try {
-    const dbInfo = await client.query<{ db: string; host: string | null }>(
-      `SELECT current_database() AS db, inet_server_addr()::text AS host`,
+    console.log(
+      JSON.stringify(
+        {
+          connect: {
+            host: dbConfig.host,
+            port: dbConfig.port,
+            database: dbConfig.database,
+            user: dbConfig.user,
+          },
+        },
+        null,
+        2,
+      ),
     );
-    const db = dbInfo.rows[0]?.db ?? 'unknown';
-    const host = dbInfo.rows[0]?.host ?? process.env.DB_HOST ?? 'unknown';
 
     const countRes = await client.query<{ n: number }>(
       `SELECT COUNT(*)::int AS n FROM master_plants`,
@@ -45,7 +84,7 @@ async function main() {
       `,
     );
 
-    console.log(JSON.stringify({ database: db, host, master_plants_before: before }, null, 2));
+    console.log(JSON.stringify({ master_plants_before: before }, null, 2));
     if (preview.rows.length > 0) {
       console.log('Sample rows (up to 15):');
       console.table(preview.rows);
@@ -87,6 +126,7 @@ async function main() {
     process.exitCode = 1;
   } finally {
     client.release();
+    await pool.end();
   }
 }
 

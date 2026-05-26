@@ -4,9 +4,9 @@
 -- Run on staging DB (backend server), e.g.:
 --   psql -h localhost -U postgres -d klip_db -f src/scripts/clearMasterPlantsStaging.sql
 --
--- Or from /opt/klip/backend inside the backend container:
+-- Or from repo root on staging host (Postgres published on 127.0.0.1:5433):
 --   docker compose -f docker-compose.backend.yml exec postgres \
---     psql -U postgres -d klip_db -f /path/to/clearMasterPlantsStaging.sql
+--     psql -U postgres -d klip_db -c "TRUNCATE TABLE master_plants;"
 
 BEGIN;
 
