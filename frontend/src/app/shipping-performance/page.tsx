@@ -298,7 +298,7 @@ function applyDrilldownFiltersToRows(
 
 function distinctFieldValues(
   rows: ShippingPerformanceRow[],
-  field: 'incoterm' | 'plant_site',
+  field: 'incoterm' | 'plant_site' | 'product',
 ): string[] {
   const values = new Set<string>()
   for (const row of rows) {
@@ -344,7 +344,7 @@ function applyGlobalFiltersToRows(
   ] as const
 
   return sourceRows.filter((row) => {
-    if (!rowMatchesGlobalSearch(row as Record<string, unknown>, searchTrim, [...searchFields])) return false
+    if (!rowMatchesGlobalSearch(row, searchTrim, searchFields)) return false
     if (!rowMatchesToolbarMultiFilters(row, filters)) return false
     const vessel = normalizeVesselKey(row.vessel_name)
     if (filters.selectedVessels.length > 0 && !filters.selectedVessels.includes(vessel)) return false
@@ -1388,8 +1388,8 @@ export default function ShippingPerformancePage() {
               }}
               incotermEmptyMessage="No incoterms"
               productEmptyMessage="No products"
-              plantPlaceholder="Select group plant(s)"
-              plantEmptyMessage="No group plants"
+              groupPlantPlaceholder="Select group plant(s)"
+              groupPlantEmptyMessage="No group plants"
               vesselPlaceholder="Select vessel(s)"
               vesselEmptyMessage="No vessels"
             />
