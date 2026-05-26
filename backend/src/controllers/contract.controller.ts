@@ -19,6 +19,7 @@ import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planni
 import {
   runLatePerformance,
 } from '../services/latePerformance.service';
+import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
 
 export { B2B_CHILD_EXCLUSION_SQL };
 
@@ -315,37 +316,18 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       )`;
     }
 
-    // Plant/Site filter: matches contract.plant_code directly, or via shipments/trucking operations.
-    // 'Blank' matches null/empty plant_code.
+    // Group Plant filter via master_plants (matches contract performance / filter-options).
     const plantArr = Array.isArray(plant) ? plant : (plant ? [plant] : []);
     const plants = plantArr.map((p) => String(p)).filter((p) => p.trim() !== '');
-    if (plants.length > 0) {
-      const blankIncluded = plants.some((p) => p === 'Blank');
-      const nonBlank = plants.filter((p) => p !== 'Blank');
-      const contractParts: string[] = [];
-      const shipParts: string[] = [];
-      const truckParts: string[] = [];
-      if (blankIncluded) {
-        contractParts.push(`(base.plant_code IS NULL OR TRIM(base.plant_code) = '')`);
-        shipParts.push(`(s.port_of_discharge IS NULL OR TRIM(s.port_of_discharge) = '')`);
-        truckParts.push(`(t.location IS NULL OR TRIM(t.location) = '')`);
-      }
-      if (nonBlank.length > 0) {
-        const ph = nonBlank.map(() => `$${paramIndex++}`).join(', ');
-        contractParts.push(`base.plant_code IN (SELECT plant_code FROM master_plants WHERE plant_name IN (${ph}) OR group_plant IN (${ph}))`);
-        shipParts.push(`s.port_of_discharge IN (${ph})`);
-        truckParts.push(`t.location IN (${ph})`);
-        queryParams.push(...nonBlank);
-      }
-      const contractOr = contractParts.length > 0 ? contractParts.join(' OR ') : 'FALSE';
-      const shipOr = shipParts.length > 0 ? shipParts.join(' OR ') : 'FALSE';
-      const truckOr = truckParts.length > 0 ? truckParts.join(' OR ') : 'FALSE';
-      queryText += ` AND (
-        (${contractOr})
-        OR EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = base.id AND (${shipOr}))
-        OR EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = base.id AND (${truckOr}))
-      )`;
-    }
+    const groupPlantFilter = appendGroupPlantFilter(
+      plants,
+      paramIndex,
+      groupPlantExpr('base.plant_code', 'base.company_name'),
+      'base.plant_code',
+    );
+    queryText += groupPlantFilter.sql;
+    queryParams.push(...groupPlantFilter.params);
+    paramIndex = groupPlantFilter.nextIndex;
 
     const globalSearch =
       typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';
@@ -401,7 +383,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       outstanding_qty_mt: outstandingQtyExpr,
       contract_qty: 'quantity_ordered',
       created_at: 'created_at',
-      // computed (JS): log_cycle_days, trade_cycle_days, cash_cycle_days
+      // computed (JS): log_cycle_days, trade_cycle_days, cash_cycle_days, dp_cycle_days
     };
     const sortKey = allowedSort[sortKeyRaw] ? sortKeyRaw : 'contract_date';
     const orderExpr = allowedSort[sortKey] || 'contract_date::date';
@@ -669,6 +651,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       //   SEA  -> ETA Vessel Complete Discharge - Due Date Delivery End
       const deliveryEnd = due(row.delivery_end_date);
       const payoffDate = row.payoff_date ? due(row.payoff_date) : null;
+      const dpDate = row.dp_date ? due(row.dp_date) : null;
       let tradeCycle: number | null = null;
       if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
         // positive = delivered AFTER due date (LATE), negative = delivered before due date (ON TIME)
@@ -719,6 +702,27 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         }
       }
       (row as any).cash_cycle_days = cashCycle;
+
+      // Compute DP Cycle (days) — same structure as Cash Cycle, using DP Date instead of Payoff Date
+      let dpCycle: number | null = null;
+      if ((statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') && dpDate) {
+        if (transport.startsWith('LAND')) {
+          const d = diffInDays(lastTruck, dpDate);
+          if (d != null) dpCycle = d;
+        } else if (transport.startsWith('SEA')) {
+          const d = diffInDays(lastAtaDischarge, dpDate);
+          if (d != null) dpCycle = d;
+        }
+      } else if ((statusText === 'OPEN' || statusText === 'ACTIVE') && dpDate) {
+        if (transport.startsWith('LAND')) {
+          const d = diffInDays(dpDate, lastTruckDeliverable);
+          if (d != null) dpCycle = d;
+        } else if (transport.startsWith('SEA')) {
+          const d = diffInDays(dpDate, lastEtaDischarge);
+          if (d != null) dpCycle = d;
+        }
+      }
+      (row as any).dp_cycle_days = dpCycle;
 
       // Payment Status (summary)
       // Treat a contract as PAID when Payoff Date exists (as per finance logic); otherwise PENDING if it has a due date.

@@ -77,6 +77,7 @@ const SB_COL: Record<string, string> = {
   buyers: 'sb.buyers',
   product: 'sb.product',
   products: 'sb.products',
+  incoterm: 'sb.incoterm',
   group_name: 'sb.group_name',
   group_names: 'sb.group_names',
   charter_type: 'sb.charter_type',
@@ -199,6 +200,23 @@ export function appendShipmentColumnFilters(
         pi += 1
       }
       continue
+    }
+
+    if (f.type === 'multi') {
+      const vals = Array.isArray(f.values) ? f.values.filter((x) => x != null && String(x).trim() !== '') : []
+      const incBlank = Boolean(f.includeBlank)
+      const ors: string[] = []
+      if (incBlank) {
+        ors.push(`(${expr} IS NULL OR TRIM(${expr}::text) = '')`)
+      }
+      if (vals.length > 0) {
+        ors.push(`${expr}::text = ANY($${pi}::text[])`)
+        params.push(vals)
+        pi += 1
+      }
+      if (ors.length > 0) {
+        parts.push(` AND (${ors.join(' OR ')})`)
+      }
     }
   }
 

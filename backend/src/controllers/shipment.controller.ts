@@ -23,6 +23,7 @@ import {
   buildSyntheticOperationId,
   formatDDMMYYYY,
 } from '../utils/operationId';
+import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
 
 /** Normalize date-like fields for shipments / loading ports (YYYY-MM-DD or null). */
 function toShipmentDateOrNull(v: unknown): string | null {
@@ -331,11 +332,16 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     }
     const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
     const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-    if (plants.length > 0) {
-      // Plant/Site filter (same options as Dashboard). Matches discharge port.
-      coreWhereParts.push(`NULLIF(TRIM(COALESCE(s.port_of_discharge::text, '')), '') = ANY($${cp}::text[])`);
-      coreParams.push(plants);
-      cp += 1;
+    const groupPlantFilter = appendGroupPlantFilter(
+      plants,
+      cp,
+      groupPlantExpr('c.plant_code', 'c.company_name'),
+      'c.plant_code',
+    );
+    if (groupPlantFilter.sql) {
+      coreWhereParts.push(groupPlantFilter.sql.replace(/^ AND /, ''));
+      coreParams.push(...groupPlantFilter.params);
+      cp = groupPlantFilter.nextIndex;
     }
 
     const coreWhereSql = coreWhereParts.join(' AND ');
@@ -418,7 +424,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.arrival_date) as arrival_date,
           MAX(s.port_of_loading) as port_of_loading,
           MAX(s.port_of_discharge) as port_of_discharge,
-          MAX(s.port_of_discharge) as plant_site,
+          MAX(${groupPlantExpr('c.plant_code', 'c.company_name')}) as plant_site,
           -- Basic ETA loading dates at shipment level (kept in sync with first loading port)
           MAX(s.eta_arrival) as eta_arrival,
           MAX(s.eta_berthed) as eta_berthed,
@@ -459,6 +465,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           STRING_AGG(DISTINCT c.buyer, ', ' ORDER BY c.buyer) FILTER (WHERE c.buyer IS NOT NULL) as buyers,
           MAX(c.product) as product,
           STRING_AGG(DISTINCT c.product, ', ' ORDER BY c.product) FILTER (WHERE c.product IS NOT NULL) as products,
+          MAX(c.incoterm) as incoterm,
           MAX(c.group_name) as group_name,
           STRING_AGG(DISTINCT c.group_name, ', ' ORDER BY c.group_name) FILTER (WHERE c.group_name IS NOT NULL) as group_names,
           COUNT(DISTINCT c.contract_id) FILTER (WHERE c.contract_id IS NOT NULL) as contract_count,
@@ -870,7 +877,7 @@ ${contractMetaSelect}
         COALESCE(sa.sto_quantity, 0) AS sto_quantity,
         COALESCE(sa.quantity_receive, 0) AS quantity_receive,
         COALESCE(sa.quantity_delivered_sap, 0) AS quantity_delivered_sap,
-        sl.incoterm AS incoterm,
+        COALESCE(sl.incoterm, sp.incoterm) AS incoterm,
         sl.b2b_flag AS b2b_flag,
         sl.source_type AS source_type,
         COALESCE(cex.contract_ext_no, sp.contract_ext_no) AS contract_ext_no_merged

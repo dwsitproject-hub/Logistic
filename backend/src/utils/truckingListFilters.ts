@@ -39,6 +39,7 @@ const TRUCK_COL: Record<string, string> = {
   trucking_owner: 't.trucking_owner',
   supplier: 'c.supplier',
   product: 'c.product',
+  incoterm: 'c.incoterm',
   buyer: 'c.buyer',
   group_name: 'c.group_name',
   contract_ext_no: `(SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1)`,
@@ -148,6 +149,23 @@ export function appendTruckingColumnFilters(
         pi += 1
       }
       continue
+    }
+
+    if (f.type === 'multi') {
+      const vals = Array.isArray(f.values) ? f.values.filter((x) => x != null && String(x).trim() !== '') : []
+      const incBlank = Boolean(f.includeBlank)
+      const ors: string[] = []
+      if (incBlank) {
+        ors.push(`(${expr} IS NULL OR TRIM(${expr}::text) = '')`)
+      }
+      if (vals.length > 0) {
+        ors.push(`${expr}::text = ANY($${pi}::text[])`)
+        params.push(vals)
+        pi += 1
+      }
+      if (ors.length > 0) {
+        parts.push(` AND (${ors.join(' OR ')})`)
+      }
     }
   }
 

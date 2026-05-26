@@ -18,6 +18,8 @@ import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateForma
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
+import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { format } from 'date-fns'
 import {
@@ -79,7 +81,7 @@ interface Shipment {
   arrival_date: string
   port_of_loading: string
   port_of_discharge: string
-  plant_site: string // Vessel Discharge Port = Plant/Site
+  plant_site: string // Group Plant (resolved from master_plants via contract plant_code)
   quantity_shipped: number
   quantity_delivered: number
   inbound_weight: number
@@ -276,8 +278,12 @@ function ShipmentsPageContent() {
   const [etaDischargeFilter, setEtaDischargeFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
   const [vesselFilter, setVesselFilter] = useState('')
   const [saving, setSaving] = useState(false)
-  const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
-  const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
+  const [selectedGroupPlants, setSelectedGroupPlants] = useState<string[]>([])
+  const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
+  const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
+  const [selectedProducts, setSelectedProducts] = useState<string[]>([])
+  const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
+  const [availableProducts, setAvailableProducts] = useState<string[]>([])
   
   // Excel-like column filtering
   type ColumnFilter =
@@ -704,7 +710,9 @@ function ShipmentsPageContent() {
     statusFilter,
     dateFrom,
     dateTo,
-    selectedPlantSites,
+    selectedGroupPlants,
+    selectedIncoterms,
+    selectedProducts,
     lateIndicatorFilter,
     viewOption,
     etaLoadingFilter,
@@ -713,22 +721,31 @@ function ShipmentsPageContent() {
 
   useEffect(() => {
     let cancelled = false
-    api
-      .get('/dashboard/filter-options/plants')
-      .then((res) => {
+    Promise.all([
+      api.get('/contracts/filter-options/group-plants'),
+      api.get('/contracts/filter-options/incoterms'),
+      api.get('/dashboard/filter-options/products'),
+    ])
+      .then(([plantRes, incRes, productRes]) => {
         if (cancelled) return
-        const plantPayload = res.data?.data
-        const plants = (Array.isArray(plantPayload)
-          ? plantPayload
-          : plantPayload && typeof plantPayload === 'object' && 'plants' in plantPayload
-            ? (plantPayload as { plants?: string[] }).plants
+        const plants = (plantRes.data?.data?.groupPlants || []) as string[]
+        const incs = (incRes.data?.data?.incoterms || []) as string[]
+        const productPayload = productRes.data?.data
+        const products = (Array.isArray(productPayload)
+          ? productPayload
+          : productPayload && typeof productPayload === 'object' && 'products' in productPayload
+            ? (productPayload as { products?: string[] }).products
             : []) as string[]
-        setAvailablePlantSites(Array.isArray(plants) ? plants : [])
+        setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
+        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
+        setAvailableProducts(Array.isArray(products) ? products : [])
       })
       .catch((e) => {
         if (cancelled) return
-        console.error('Failed to fetch plant/site options:', e)
-        setAvailablePlantSites([])
+        console.error('Failed to fetch filter options:', e)
+        setAvailableGroupPlants([])
+        setAvailableIncoterms([])
+        setAvailableProducts([])
       })
     return () => {
       cancelled = true
@@ -767,9 +784,22 @@ function ShipmentsPageContent() {
       if (searchTrim.length >= 2) {
         params.append('search', searchTrim)
       }
-      const cfKeys = Object.keys(columnFilters)
+      const cfKeys = Object.keys(
+        appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+          selectedIncoterms,
+          selectedProducts,
+        }),
+      )
       if (cfKeys.length > 0) {
-        params.append('columnFilters', JSON.stringify(columnFilters))
+        params.append(
+          'columnFilters',
+          JSON.stringify(
+            appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+              selectedIncoterms,
+              selectedProducts,
+            }),
+          ),
+        )
       }
       if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
         params.append('lateIndicator', lateIndicatorFilter)
@@ -802,8 +832,8 @@ function ShipmentsPageContent() {
       if (contractParam) {
         params.append('contract', contractParam)
       }
-      if (selectedPlantSites.length > 0) {
-        selectedPlantSites.forEach((p) => params.append('plant', p))
+      if (selectedGroupPlants.length > 0) {
+        selectedGroupPlants.forEach((p) => params.append('plant', p))
       }
 
       // List path: skip heavy enriched summary SQL on the same round-trip; load summary after (debounced).
@@ -1515,7 +1545,9 @@ function ShipmentsPageContent() {
     lateIndicatorFilter !== 'ALL' ||
     viewFilterValue !== '' ||
     viewOption !== 'all' ||
-    selectedPlantSites.length > 0 ||
+    selectedGroupPlants.length > 0 ||
+    selectedIncoterms.length > 0 ||
+    selectedProducts.length > 0 ||
     etaLoadingFilter !== 'ALL' ||
     etaDischargeFilter !== 'ALL' ||
     hasActiveShipmentColumnFilters(columnFilters)
@@ -1527,7 +1559,9 @@ function ShipmentsPageContent() {
     setLateIndicatorFilter('ALL')
     setViewOption('all')
     setViewFilterValue('')
-    setSelectedPlantSites([])
+    setSelectedGroupPlants([])
+    setSelectedIncoterms([])
+    setSelectedProducts([])
     setDateFrom('')
     setDateTo('')
     setColumnFilters({})
@@ -2092,6 +2126,16 @@ function ShipmentsPageContent() {
           {formatNumber(s.quantity_receive ?? '-')} Kg
         </span>
       )
+    },
+    {
+      id: 'product',
+      label: 'Product',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.product || s.products || '',
+      render: (s) => (
+        <span className="text-sm break-words">{s.product || s.products || '-'}</span>
+      ),
     },
     {
       id: 'incoterm',
@@ -3302,16 +3346,28 @@ function ShipmentsPageContent() {
                 )}
               </div>
 
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <SearchableMultiSelect
-                  label="Plant/Site"
-                  options={availablePlantSites}
-                  selected={selectedPlantSites}
-                  onChange={setSelectedPlantSites}
-                  placeholder="Select plant/site(s)"
-                  emptyMessage="Loading plants..."
-                />
-              </div>
+              <PerformanceScopeFilters
+                hideGroupPlantFilter={false}
+                incotermOptions={availableIncoterms}
+                selectedIncoterms={selectedIncoterms}
+                onIncotermsChange={setSelectedIncoterms}
+                showProductFilter
+                productOptions={availableProducts}
+                selectedProducts={selectedProducts}
+                onProductsChange={setSelectedProducts}
+                groupPlantOptions={availableGroupPlants}
+                selectedGroupPlants={selectedGroupPlants}
+                onGroupPlantsChange={setSelectedGroupPlants}
+                dateFrom={dateFrom}
+                dateTo={dateTo}
+                onDateFromChange={setDateFrom}
+                onDateToChange={setDateTo}
+                showDateRange={false}
+                incotermEmptyMessage="Loading incoterms..."
+                productEmptyMessage="Loading products..."
+                groupPlantPlaceholder="Select group plant(s)"
+                groupPlantEmptyMessage="No group plants"
+              />
 
               <div className="flex gap-4 items-center">
                 <div className="flex items-center gap-2">

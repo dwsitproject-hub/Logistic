@@ -21,6 +21,8 @@ export const FIELD_HELP = {
 
   cashCycle: `Closed: latest receive/discharge → Payoff Date (Land: Trucking Last Receive; SEA: ATA Vessel Complete Discharge). Open: Land uses latest Daily Planning Deliverables date; SEA uses ETA Vessel Complete Discharge.`,
 
+  dpCycle: `Closed: latest receive/discharge → DP Date (Land: Trucking Last Receive; SEA: ATA Vessel Complete Discharge). Open: Land uses latest Daily Planning Deliverables date; SEA uses ETA Vessel Complete Discharge.`,
+
   outstandingQty: `Remaining quantity yet to be delivered. Green = Over Delivered; Red = Still Outstanding.`,
 
   receivedQty: `Actual quantity received based on contract data (quantity_receive). For sea shipments: received at destination. For land shipments: quantity delivered to plant/site.`,

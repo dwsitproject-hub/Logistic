@@ -19,6 +19,8 @@ import { format } from 'date-fns'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
+import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
 
 const TRUCKING_ACTIONS_COL_WIDTH = 140
 
@@ -67,6 +69,7 @@ interface TruckingOperation {
   supplier: string
   buyer: string
   product: string
+  incoterm?: string
   group_name: string
   contract_ext_no?: string
   daily_deliverables?: Array<{ date: string; quantity_delivered: number }>
@@ -522,8 +525,12 @@ function TruckingPageContent() {
   const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
   const [loadingLocationFilter, setLoadingLocationFilter] = useState('')
   const [unloadingLocationFilter, setUnloadingLocationFilter] = useState('')
-  const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
-  const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
+  const [selectedGroupPlants, setSelectedGroupPlants] = useState<string[]>([])
+  const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
+  const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
+  const [selectedProducts, setSelectedProducts] = useState<string[]>([])
+  const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
+  const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const defaultContractDateRange = useMemo(() => {
@@ -1019,26 +1026,35 @@ function TruckingPageContent() {
   useEffect(() => {
     fetchTruckingOperations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir, selectedPlantSites, dateFrom, dateTo, searchTerm])
+  }, [page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir, selectedGroupPlants, selectedIncoterms, selectedProducts, dateFrom, dateTo, searchTerm, columnFilters])
 
   useEffect(() => {
     let cancelled = false
-    api
-      .get('/dashboard/filter-options/plants')
-      .then((res) => {
+    Promise.all([
+      api.get('/contracts/filter-options/group-plants'),
+      api.get('/contracts/filter-options/incoterms'),
+      api.get('/dashboard/filter-options/products'),
+    ])
+      .then(([plantRes, incRes, productRes]) => {
         if (cancelled) return
-        const plantPayload = res.data?.data
-        const plants = (Array.isArray(plantPayload)
-          ? plantPayload
-          : plantPayload && typeof plantPayload === 'object' && 'plants' in plantPayload
-            ? (plantPayload as { plants?: string[] }).plants
+        const plants = (plantRes.data?.data?.groupPlants || []) as string[]
+        const incs = (incRes.data?.data?.incoterms || []) as string[]
+        const productPayload = productRes.data?.data
+        const products = (Array.isArray(productPayload)
+          ? productPayload
+          : productPayload && typeof productPayload === 'object' && 'products' in productPayload
+            ? (productPayload as { products?: string[] }).products
             : []) as string[]
-        setAvailablePlantSites(Array.isArray(plants) ? plants : [])
+        setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
+        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
+        setAvailableProducts(Array.isArray(products) ? products : [])
       })
       .catch((e) => {
         if (cancelled) return
-        console.error('Failed to fetch plant/site options:', e)
-        setAvailablePlantSites([])
+        console.error('Failed to fetch filter options:', e)
+        setAvailableGroupPlants([])
+        setAvailableIncoterms([])
+        setAvailableProducts([])
       })
     return () => {
       cancelled = true
@@ -1091,9 +1107,13 @@ function TruckingPageContent() {
       if (searchTrim.length >= 2) {
         params.append('search', searchTrim)
       }
-      const cfKeys = Object.keys(columnFilters)
+      const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+        selectedIncoterms,
+        selectedProducts,
+      })
+      const cfKeys = Object.keys(mergedColumnFilters)
       if (cfKeys.length > 0) {
-        params.append('columnFilters', JSON.stringify(columnFilters))
+        params.append('columnFilters', JSON.stringify(mergedColumnFilters))
       }
       if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
         params.append('lateIndicator', lateIndicatorFilter)
@@ -1110,8 +1130,8 @@ function TruckingPageContent() {
       if (contractParam) {
         params.append('contract', contractParam)
       }
-      if (selectedPlantSites.length > 0) {
-        selectedPlantSites.forEach((p) => params.append('plant', p))
+      if (selectedGroupPlants.length > 0) {
+        selectedGroupPlants.forEach((p) => params.append('plant', p))
       }
       
       const response = await api.get(`/trucking?${params.toString()}`)
@@ -1366,7 +1386,9 @@ function TruckingPageContent() {
       lateIndicatorFilter !== 'ALL' ||
       !!loadingLocationFilter.trim() ||
       !!unloadingLocationFilter.trim() ||
-      selectedPlantSites.length > 0 ||
+      selectedGroupPlants.length > 0 ||
+      selectedIncoterms.length > 0 ||
+      selectedProducts.length > 0 ||
       Object.keys(columnFilters).length > 0 ||
       dateFrom !== defaultContractDateRange.from ||
       dateTo !== defaultContractDateRange.to
@@ -1378,7 +1400,9 @@ function TruckingPageContent() {
     lateIndicatorFilter,
     loadingLocationFilter,
     unloadingLocationFilter,
-    selectedPlantSites,
+    selectedGroupPlants,
+    selectedIncoterms,
+    selectedProducts,
     columnFilters,
     dateFrom,
     dateTo,
@@ -1392,7 +1416,9 @@ function TruckingPageContent() {
     setLateIndicatorFilter('ALL')
     setLoadingLocationFilter('')
     setUnloadingLocationFilter('')
-    setSelectedPlantSites([])
+    setSelectedGroupPlants([])
+    setSelectedIncoterms([])
+    setSelectedProducts([])
     setColumnFilters({})
     setDateFrom(defaultContractDateRange.from)
     setDateTo(defaultContractDateRange.to)
@@ -1421,6 +1447,7 @@ function TruckingPageContent() {
       case 'trucking_owner': return o.trucking_owner || ''
       case 'supplier': return o.supplier || ''
       case 'product': return o.product || ''
+      case 'incoterm': return o.incoterm || ''
       case 'buyer': return o.buyer || ''
       case 'group_name': return o.group_name || ''
       case 'contract_qty': return typeof o.contract_qty === 'number' ? o.contract_qty : null
@@ -1595,6 +1622,14 @@ function TruckingPageContent() {
       sortable: true,
       getSortValue: (o) => o.product || '',
       render: (o) => <span className="text-sm break-words">{o.product || '-'}</span>
+    },
+    {
+      id: 'incoterm',
+      label: 'Incoterm',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.incoterm || '',
+      render: (o) => <span className="text-sm break-words">{o.incoterm || '-'}</span>
     },
     {
       id: 'quantity_sent',
@@ -2206,13 +2241,27 @@ function TruckingPageContent() {
               </div>
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <SearchableMultiSelect
-                  label="Plant/Site"
-                  options={availablePlantSites}
-                  selected={selectedPlantSites}
-                  onChange={setSelectedPlantSites}
-                  placeholder="Select plant/site(s)"
-                  emptyMessage="Loading plants..."
+                <PerformanceScopeFilters
+                  hideGroupPlantFilter={false}
+                  incotermOptions={availableIncoterms}
+                  selectedIncoterms={selectedIncoterms}
+                  onIncotermsChange={setSelectedIncoterms}
+                  showProductFilter
+                  productOptions={availableProducts}
+                  selectedProducts={selectedProducts}
+                  onProductsChange={setSelectedProducts}
+                  groupPlantOptions={availableGroupPlants}
+                  selectedGroupPlants={selectedGroupPlants}
+                  onGroupPlantsChange={setSelectedGroupPlants}
+                  dateFrom={dateFrom}
+                  dateTo={dateTo}
+                  onDateFromChange={setDateFrom}
+                  onDateToChange={setDateTo}
+                  showDateRange={false}
+                  incotermEmptyMessage="Loading incoterms..."
+                  productEmptyMessage="Loading products..."
+                  groupPlantPlaceholder="Select group plant(s)"
+                  groupPlantEmptyMessage="No group plants"
                 />
               </div>
 

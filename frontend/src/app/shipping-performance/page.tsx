@@ -5,11 +5,16 @@ import Layout from '@/components/Layout'
 import api from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { ArrowDown, ArrowUp, ChevronRight, Database, GripVertical, SlidersHorizontal, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronRight, Database, GripVertical, Search, SlidersHorizontal, X } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
+import {
+  rowMatchesGlobalSearch,
+  rowMatchesToolbarMultiFilters,
+} from '@/lib/globalScopeFilters'
 import {
   contextPerformanceClass,
   formatAvgDays,
@@ -177,7 +182,7 @@ type LatePerfNode = {
 
 type PerVesselPerfSummary = {
   vesselCount: number
-  shipmentCount: number
+  contractCount: number
   totalQty: number
   avgLoadingEtaEtr: number
   avgLoadingEtaEtb: number
@@ -189,7 +194,7 @@ type PerVesselPerfSummary = {
 
 const EMPTY_PER_VESSEL_SUMMARY: PerVesselPerfSummary = {
   vesselCount: 0,
-  shipmentCount: 0,
+  contractCount: 0,
   totalQty: 0,
   avgLoadingEtaEtr: 0,
   avgLoadingEtaEtb: 0,
@@ -242,11 +247,13 @@ function countUniqueVessels(rows: ShippingPerformanceRow[]): number {
   return new Set(rows.map((row) => normalizeVesselKey(row.vessel_name))).size
 }
 
-function sumRootTreeCounts(tree: LatePerfNode[]): { shipments: number; vesselCountSum: number } {
-  return {
-    shipments: tree.reduce((sum, node) => sum + node.count, 0),
-    vesselCountSum: tree.reduce((sum, node) => sum + node.vesselCount, 0),
+function countUniqueContracts(rows: ShippingPerformanceRow[]): number {
+  const contracts = new Set<string>()
+  for (const row of rows) {
+    const contractNumber = String(row.contract_number || '').trim()
+    if (contractNumber) contracts.add(contractNumber)
   }
+  return contracts.size
 }
 
 function displayGroupLabel(key: string): string {
@@ -312,18 +319,33 @@ function applyGlobalFiltersToRows(
   sourceRows: ShippingPerformanceRow[],
   filters: {
     selectedIncoterms: string[]
-    selectedPlantSites: string[]
+    selectedProducts: string[]
+    selectedGroupPlants: string[]
     selectedVessels: string[]
     statusFilter: TableStatusFilter
     dateFrom: string
     dateTo: string
+    searchTerm: string
   },
 ): ShippingPerformanceRow[] {
+  const searchTrim = filters.searchTerm.trim()
+  const searchFields = [
+    'shipment_id',
+    'contract_number',
+    'contract_ext_no',
+    'po_number',
+    'sto_number',
+    'vessel_name',
+    'product',
+    'incoterm',
+    'group_name',
+    'loading_port',
+    'discharge_port',
+  ] as const
+
   return sourceRows.filter((row) => {
-    const inc = normalizeGroupKey(row.incoterm)
-    if (filters.selectedIncoterms.length > 0 && !filters.selectedIncoterms.includes(inc)) return false
-    const plant = normalizeGroupKey(row.plant_site)
-    if (filters.selectedPlantSites.length > 0 && !filters.selectedPlantSites.includes(plant)) return false
+    if (!rowMatchesGlobalSearch(row as Record<string, unknown>, searchTrim, [...searchFields])) return false
+    if (!rowMatchesToolbarMultiFilters(row, filters)) return false
     const vessel = normalizeVesselKey(row.vessel_name)
     if (filters.selectedVessels.length > 0 && !filters.selectedVessels.includes(vessel)) return false
     if (!matchesTableStatusFilter(String(row.status || ''), filters.statusFilter)) return false
@@ -342,9 +364,7 @@ type PerfDatasetBundle = {
 
 function buildPerfDatasetBundle(rows: ShippingPerformanceRow[], mode: PerfDashMode): PerfDatasetBundle {
   const tree = buildPerfTree(rows)
-  const rootTotals = sumRootTreeCounts(tree)
   const metrics = buildCardSummary(rows, mode)
-  const shipmentCount = rows.length
   const vesselCount = countUniqueVessels(rows)
 
   return {
@@ -352,15 +372,16 @@ function buildPerfDatasetBundle(rows: ShippingPerformanceRow[], mode: PerfDashMo
     tree,
     summary: {
       ...metrics,
-      shipmentCount: shipmentCount || rootTotals.shipments,
       vesselCount,
+      contractCount: metrics.contractCount || countUniqueContracts(rows),
     },
   }
 }
 
 function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): PerVesselPerfSummary {
   const vessels = new Set<string>()
-  let shipmentCount = 0
+  const contracts = new Set<string>()
+  let rowCount = 0
   let totalQty = 0
   let sumLoadingEtr = 0
   let sumLoadingEtb = 0
@@ -370,8 +391,10 @@ function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): P
   let sumTotalDelta = 0
 
   for (const row of rows) {
-    shipmentCount += 1
+    rowCount += 1
     vessels.add(normalizeVesselKey(row.vessel_name))
+    const contractNumber = String(row.contract_number || '').trim()
+    if (contractNumber) contracts.add(contractNumber)
     totalQty += Number(row.outstanding_qty ?? 0)
 
     if (mode === 'eta') {
@@ -391,18 +414,18 @@ function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): P
     }
   }
 
-  if (shipmentCount === 0) return { ...EMPTY_PER_VESSEL_SUMMARY }
+  if (rowCount === 0) return { ...EMPTY_PER_VESSEL_SUMMARY }
 
   return {
     vesselCount: vessels.size,
-    shipmentCount,
+    contractCount: contracts.size,
     totalQty,
-    avgLoadingEtaEtr: sumLoadingEtr / shipmentCount,
-    avgLoadingEtaEtb: sumLoadingEtb / shipmentCount,
-    avgLoadingEtbEtc: sumLoadingEtbEtc / shipmentCount,
-    avgDischargeEtaEtb: sumDischargeEtb / shipmentCount,
-    avgDischargeEtbEtc: sumDischargeEtbEtc / shipmentCount,
-    avgTotalDelta: sumTotalDelta / shipmentCount,
+    avgLoadingEtaEtr: sumLoadingEtr / rowCount,
+    avgLoadingEtaEtb: sumLoadingEtb / rowCount,
+    avgLoadingEtbEtc: sumLoadingEtbEtc / rowCount,
+    avgDischargeEtaEtb: sumDischargeEtb / rowCount,
+    avgDischargeEtbEtc: sumDischargeEtbEtc / rowCount,
+    avgTotalDelta: sumTotalDelta / rowCount,
   }
 }
 
@@ -670,8 +693,11 @@ export default function ShippingPerformancePage() {
   const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
   const isSyncingScroll = useRef(false)
   const [statusFilter, setStatusFilter] = useState<TableStatusFilter>('All')
+  const [searchDraft, setSearchDraft] = useState('')
+  const [searchTerm, setSearchTerm] = useState('')
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
-  const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
+  const [selectedProducts, setSelectedProducts] = useState<string[]>([])
+  const [selectedGroupPlants, setSelectedGroupPlants] = useState<string[]>([])
   const [selectedVessels, setSelectedVessels] = useState<string[]>([])
   const [dateFrom, setDateFrom] = useState(() => {
     const d = new Date()
@@ -754,8 +780,12 @@ export default function ShippingPerformancePage() {
     () => distinctFieldValues(baseFilteredRows, 'incoterm'),
     [baseFilteredRows],
   )
-  const availablePlantSites = useMemo(
+  const availableGroupPlants = useMemo(
     () => distinctFieldValues(baseFilteredRows, 'plant_site'),
+    [baseFilteredRows],
+  )
+  const availableProducts = useMemo(
+    () => distinctFieldValues(baseFilteredRows, 'product'),
     [baseFilteredRows],
   )
   const availableVessels = useMemo(
@@ -768,13 +798,15 @@ export default function ShippingPerformancePage() {
     () =>
       applyGlobalFiltersToRows(baseFilteredRows, {
         selectedIncoterms,
-        selectedPlantSites,
+        selectedProducts,
+        selectedGroupPlants,
         selectedVessels,
         statusFilter,
         dateFrom,
         dateTo,
+        searchTerm,
       }),
-    [baseFilteredRows, selectedIncoterms, selectedPlantSites, selectedVessels, statusFilter, dateFrom, dateTo],
+    [baseFilteredRows, selectedIncoterms, selectedProducts, selectedGroupPlants, selectedVessels, statusFilter, dateFrom, dateTo, searchTerm],
   )
 
   const etaFilteredData = useMemo(
@@ -821,7 +853,7 @@ export default function ShippingPerformancePage() {
   useEffect(() => {
     setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
     setCurrentPage(1)
-  }, [perfDashMode, selectedIncoterms, selectedPlantSites, selectedVessels, statusFilter, dateFrom, dateTo])
+  }, [perfDashMode, selectedIncoterms, selectedProducts, selectedGroupPlants, selectedVessels, statusFilter, dateFrom, dateTo, searchTerm])
 
   useEffect(() => {
     const allKeys = COLUMN_DEFS.map((col) => col.key)
@@ -876,12 +908,13 @@ export default function ShippingPerformancePage() {
     const isAta = mode === 'ata'
     const metricClass = contextPerformanceClass(isAta ? summary.avgTotalDelta > 0 : summary.avgTotalDelta > 0)
     const fmt = (days: number) => formatAvgDays(Math.abs(days))
+    const arrivalLabel = isAta ? 'ATA' : 'ETA'
     return (
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
-        <span>Avg Loading ETA-ETR: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtaEtr)}</span></span>
-        <span>Avg Loading ETA-ETB: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtaEtb)}</span></span>
+        <span>Avg Loading {arrivalLabel}-ETR: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtaEtr)}</span></span>
+        <span>Avg Loading {arrivalLabel}-ETB: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtaEtb)}</span></span>
         <span>Avg Loading ETB-ETC: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtbEtc)}</span></span>
-        <span>Avg Discharge ETA-ETB: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgDischargeEtaEtb)}</span></span>
+        <span>Avg Discharge {arrivalLabel}-ETB: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgDischargeEtaEtb)}</span></span>
         <span>Avg Discharge ETB-ETC: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgDischargeEtbEtc)}</span></span>
         <span>Avg Total: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgTotalDelta)}</span></span>
       </div>
@@ -890,13 +923,13 @@ export default function ShippingPerformancePage() {
 
   const tableScopeDescription = useMemo(() => {
     const parts: string[] = [
-      perfDashMode === 'eta' ? 'Per Vessel by ETA' : 'Per Vessel by ATA',
+      perfDashMode === 'eta' ? 'On Going' : 'Close',
     ]
     if (selectedIncoterms.length > 0) {
       parts.push(`Incoterm: ${selectedIncoterms.map(displayGroupLabel).join(', ')}`)
     }
-    if (selectedPlantSites.length > 0) {
-      parts.push(`Group Plant: ${selectedPlantSites.map(displayGroupLabel).join(', ')}`)
+    if (selectedGroupPlants.length > 0) {
+      parts.push(`Group Plant: ${selectedGroupPlants.map(displayGroupLabel).join(', ')}`)
     }
     if (selectedVessels.length > 0) {
       parts.push(`Vessel: ${selectedVessels.map(displayGroupLabel).join(', ')}`)
@@ -913,7 +946,7 @@ export default function ShippingPerformancePage() {
   }, [
     perfDashMode,
     selectedIncoterms,
-    selectedPlantSites,
+    selectedGroupPlants,
     selectedVessels,
     dateFrom,
     dateTo,
@@ -967,7 +1000,7 @@ export default function ShippingPerformancePage() {
   }, [
     statusFilter,
     selectedIncoterms,
-    selectedPlantSites,
+    selectedGroupPlants,
     selectedVessels,
     dateFrom,
     dateTo,
@@ -1079,14 +1112,14 @@ export default function ShippingPerformancePage() {
                   className={summaryCardClass('eta')}
                 >
                   <div className="mb-3">
-                    <span className="text-base font-semibold text-gray-800">Per Vessel by ETA</span>
+                    <span className="text-base font-semibold text-gray-800">On Going</span>
                   </div>
                   <div className="text-sm text-gray-500 mb-1">Total Vessels</div>
                   <div className="text-xl font-bold text-gray-900 mb-3">
                     {etaPerformanceSummary.vesselCount.toLocaleString('en-US')}
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
-                    <span>Shipments: <span className="font-semibold text-gray-700">{etaPerformanceSummary.shipmentCount.toLocaleString('en-US')}</span></span>
+                    <span>Contracts: <span className="font-semibold text-gray-700">{etaPerformanceSummary.contractCount.toLocaleString('en-US')}</span></span>
                   </div>
                   {renderSummaryGapMetrics(etaPerformanceSummary, 'eta')}
                 </button>
@@ -1100,14 +1133,14 @@ export default function ShippingPerformancePage() {
                   className={summaryCardClass('ata')}
                 >
                   <div className="mb-3">
-                    <span className="text-base font-semibold text-gray-800">Per Vessel by ATA</span>
+                    <span className="text-base font-semibold text-gray-800">Close</span>
                   </div>
                   <div className="text-sm text-gray-500 mb-1">Total Vessels</div>
                   <div className="text-xl font-bold text-gray-900 mb-3">
                     {ataPerformanceSummary.vesselCount.toLocaleString('en-US')}
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
-                    <span>Shipments: <span className="font-semibold text-gray-700">{ataPerformanceSummary.shipmentCount.toLocaleString('en-US')}</span></span>
+                    <span>Contracts: <span className="font-semibold text-gray-700">{ataPerformanceSummary.contractCount.toLocaleString('en-US')}</span></span>
                   </div>
                   {renderSummaryGapMetrics(ataPerformanceSummary, 'ata')}
                 </button>
@@ -1147,7 +1180,7 @@ export default function ShippingPerformancePage() {
                   <div>
                     <div className="text-sm font-semibold text-gray-900">Drilldown</div>
                     <div className="text-xs text-gray-500 mt-0.5">
-                      {activeDatasetBundle.summary.shipmentCount.toLocaleString('en-US')} shipments ·{' '}
+                      {activeDatasetBundle.summary.contractCount.toLocaleString('en-US')} contracts ·{' '}
                       {activeDatasetBundle.summary.vesselCount.toLocaleString('en-US')} vessels
                     </div>
                   </div>
@@ -1280,20 +1313,42 @@ export default function ShippingPerformancePage() {
               Apply incoterm, group plant, vessel, status, and contract date filters to the summary, drilldown, and shipment table.
             </p>
           </CardHeader>
-          <CardContent className="pt-2">
+          <CardContent className="pt-2 space-y-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
+              <Input
+                placeholder="Search by Shipment ID, Contract, PO, Vessel, Product, or Incoterm..."
+                value={searchDraft}
+                onChange={(e) => setSearchDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    setSearchTerm(searchDraft)
+                    revealTableView()
+                  }
+                }}
+                className="pl-10"
+              />
+            </div>
             <PerformanceScopeFilters
-              hidePlantFilter={false}
-              plantLabel="Group Plant"
+              hideGroupPlantFilter={false}
               incotermOptions={availableIncoterms}
               selectedIncoterms={selectedIncoterms}
               onIncotermsChange={(values) => {
                 setSelectedIncoterms(values)
                 revealTableView()
               }}
-              plantOptions={availablePlantSites}
-              selectedPlantSites={selectedPlantSites}
-              onPlantSitesChange={(values) => {
-                setSelectedPlantSites(values)
+              showProductFilter
+              productOptions={availableProducts}
+              selectedProducts={selectedProducts}
+              onProductsChange={(values) => {
+                setSelectedProducts(values)
+                revealTableView()
+              }}
+              groupPlantOptions={availableGroupPlants}
+              selectedGroupPlants={selectedGroupPlants}
+              onGroupPlantsChange={(values) => {
+                setSelectedGroupPlants(values)
                 revealTableView()
               }}
               showVesselFilter
@@ -1321,14 +1376,18 @@ export default function ShippingPerformancePage() {
               }}
               showClearButton
               onClear={() => {
+                setSearchDraft('')
+                setSearchTerm('')
                 setSelectedIncoterms([])
-                setSelectedPlantSites([])
+                setSelectedProducts([])
+                setSelectedGroupPlants([])
                 setSelectedVessels([])
                 setStatusFilter('All')
                 setDateFrom('')
                 setDateTo('')
               }}
               incotermEmptyMessage="No incoterms"
+              productEmptyMessage="No products"
               plantPlaceholder="Select group plant(s)"
               plantEmptyMessage="No group plants"
               vesselPlaceholder="Select vessel(s)"

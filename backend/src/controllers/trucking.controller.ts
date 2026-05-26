@@ -19,6 +19,7 @@ import {
   sqlEffectiveTruckingCompletionDate,
   sqlEffectiveTruckingStartDate,
 } from '../utils/truckingSapDates';
+import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
 
 function deriveTruckingStatus(
   truckingStartDate: any,
@@ -254,6 +255,7 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
         c.supplier,
         c.buyer,
         c.product,
+        c.incoterm,
         c.group_name,
         s.estimated_km,
         CASE
@@ -409,12 +411,15 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
 
     const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
     const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-    if (plants.length > 0) {
-      // Plant/Site filter: map to unloading location (fallback to derived location).
-      queryText += ` AND COALESCE(NULLIF(TRIM(t.unloading_location::text), ''), NULLIF(TRIM(t.location::text), ''), '') = ANY($${paramIndex}::text[])`;
-      queryParams.push(plants);
-      paramIndex++;
-    }
+    const groupPlantFilter = appendGroupPlantFilter(
+      plants,
+      paramIndex,
+      groupPlantExpr('c.plant_code', 'c.company_name'),
+      'c.plant_code',
+    );
+    queryText += groupPlantFilter.sql;
+    queryParams.push(...groupPlantFilter.params);
+    paramIndex = groupPlantFilter.nextIndex;
 
     const innerParams = [...queryParams];
     const outerStart = paramIndex;

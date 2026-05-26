@@ -34,6 +34,7 @@ import {
 } from '@/lib/cycleDaysDisplay'
 import { formatDateDMY, toSortableTimestamp } from '@/lib/dateFormat'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
+import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 /** Column ids sorted on the API (see GET /contracts allowedSort). */
@@ -61,6 +62,7 @@ const CLIENT_ONLY_SORT_COLUMN_IDS = new Set([
   'log_cycle_days',
   'trade_cycle_days',
   'cash_cycle_days',
+  'dp_cycle_days',
   'contract_aging',
   'delivery_status',
   'status_overall',
@@ -163,6 +165,7 @@ interface Contract {
   log_cycle_days?: number | null
   trade_cycle_days?: number | null
   cash_cycle_days?: number | null
+  dp_cycle_days?: number | null
   payment_status?: string
   company_name?: string
 }
@@ -240,6 +243,8 @@ const CONTRACTS_DEFAULT_COLUMN_ORDER: string[] = [
   'contract_id',
   'contract_ext_no',
   'po_number',
+  'product',
+  'incoterm',
   'supplier',
   'company_name',
   'contract_qty',
@@ -341,7 +346,7 @@ function applyContractPerfGlobalFiltersToHotspots(
   hotspots: ContractPerfHotspot[],
   filters: {
     selectedIncoterms: string[]
-    selectedPlantSites: string[]
+    selectedGroupPlants: string[]
     productQuery: string | undefined
   },
 ): ContractPerfHotspot[] {
@@ -349,7 +354,7 @@ function applyContractPerfGlobalFiltersToHotspots(
     const inc = normalizePerfGroupKey(row.incoterm)
     if (filters.selectedIncoterms.length > 0 && !filters.selectedIncoterms.includes(inc)) return false
     const plant = normalizePerfGroupKey(row.plant_site)
-    if (filters.selectedPlantSites.length > 0 && !filters.selectedPlantSites.includes(plant)) return false
+    if (filters.selectedGroupPlants.length > 0 && !filters.selectedGroupPlants.includes(plant)) return false
     if (filters.productQuery && normalizePerfProductGroupKey(row.product) !== filters.productQuery) return false
     return true
   })
@@ -707,12 +712,15 @@ function defaultCompactVisibleColumnIds(isContractPerformance: boolean): string[
     return [
       'contract_date',
       'contract_id',
+      'product',
+      'incoterm',
       'group_name',
       'supplier',
       'qty_delivery',
       'outstanding_qty_mt',
       'trade_cycle_days',
       'cash_cycle_days',
+      'dp_cycle_days',
       'log_cycle_days',
       'month_delivery_end',
     ]
@@ -725,7 +733,7 @@ function ContractsPageContent() {
   const pathname = usePathname()
   const isContractPerformance = pathname === '/contract-performance'
   const [contracts, setContracts] = useState<Contract[]>([])
-  const [loading, setLoading] = useState(() => pathname !== '/contract-performance')
+  const [loading, setLoading] = useState(true)
   const [authReady, setAuthReady] = useState(false)
   // Search should apply only on Enter / Apply (not per keystroke)
   const [searchDraft, setSearchDraft] = useState('')
@@ -765,7 +773,7 @@ function ContractsPageContent() {
     return `${y}-${m}-${day}`
   })
   const [availableB2bFlags, setAvailableB2bFlags] = useState<string[]>([])
-  const [productFilter, setProductFilter] = useState<string>('ALL')
+  const [selectedProducts, setSelectedProducts] = useState<string[]>([])
   const [selectedProductTab, setSelectedProductTab] = useState<ContractPerfProductTab>('All')
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const [transportModeFilter, setTransportModeFilter] = useState<string>('ALL')
@@ -774,8 +782,8 @@ function ContractsPageContent() {
   const [summaryCardStatus, setSummaryCardStatus] = useState<'All' | 'Open' | 'Close'>('All')
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
-  const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
-  const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
+  const [selectedGroupPlants, setSelectedGroupPlants] = useState<string[]>([])
+  const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
   const [uploadingId, setUploadingId] = useState<string>('')
   const [csvCargoUploading, setCsvCargoUploading] = useState(false)
   const [csvCargoResult, setCsvCargoResult] = useState<{ updated: number; notFound: number; errors: { po_number: string; reason: string }[] } | null>(null)
@@ -811,31 +819,38 @@ function ContractsPageContent() {
   const [updatingContractId, setUpdatingContractId] = useState<string | null>(null)
 
   type LatePerfNode = { key: string; count: number; totalDays: number; maxDays: number; totalQtyDelivery?: number; children: LatePerfNode[] }
-  type TradeCycleBucket = { count: number; qty: number }
-  type TradeCycleDist = {
-    noData: TradeCycleBucket
-    onTime: TradeCycleBucket
-    d1_7:   TradeCycleBucket
-    d8_14:  TradeCycleBucket
-    d15_30: TradeCycleBucket
-    d31_60: TradeCycleBucket
-    d61plus: TradeCycleBucket
+  type StatusCardSummary = {
+    openOutstandingQty: number
+    closeContractQty: number
+    openAvgDays: number
+    openAvgLogCycle: number | null
+    openAvgDpCycle: number | null
+    openAvgCashCycle: number | null
+    openIsLateContext: boolean
+    closeAvgDays: number
+    closeAvgLogCycle: number | null
+    closeAvgDpCycle: number | null
+    closeAvgCashCycle: number | null
+    closeIsLateContext: boolean
+  }
+  const EMPTY_STATUS_CARD_SUMMARY: StatusCardSummary = {
+    openOutstandingQty: 0,
+    closeContractQty: 0,
+    openAvgDays: 0,
+    openAvgLogCycle: null,
+    openAvgDpCycle: null,
+    openAvgCashCycle: null,
+    openIsLateContext: false,
+    closeAvgDays: 0,
+    closeAvgLogCycle: null,
+    closeAvgDpCycle: null,
+    closeAvgCashCycle: null,
+    closeIsLateContext: false,
   }
   const [perfDashMode, setPerfDashMode] = useState<'late' | 'ontrack'>('ontrack')
   const [latePerformanceTree, setLatePerformanceTree] = useState<LatePerfNode[]>([])
-  type PerfSummary = {
-    count: number; totalDays: number; avgDays: number; maxDays: number
-    totalQtyDelivery?: number; avgLogCycle?: number | null; avgCashCycle?: number | null
-    openOutstandingQty?: number; closeOutstandingQty?: number
-  }
-  const [latePerformanceSummary, setLatePerformanceSummary] = useState<PerfSummary>({
-    count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0,
-  })
   const [onTrackPerformanceTree, setOnTrackPerformanceTree] = useState<LatePerfNode[]>([])
-  const [onTrackPerformanceSummary, setOnTrackPerformanceSummary] = useState<PerfSummary>({
-    count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0,
-  })
-  const [tradeCycleDist, setTradeCycleDist] = useState<TradeCycleDist | null>(null)
+  const [statusCardSummary, setStatusCardSummary] = useState<StatusCardSummary>(EMPTY_STATUS_CARD_SUMMARY)
   const [latePerfSummaryLoading, setLatePerfSummaryLoading] = useState(false)
   const [latePerfTreeLoading, setLatePerfTreeLoading] = useState(false)
   const [isTableLoading, setIsTableLoading] = useState(false)
@@ -855,7 +870,7 @@ function ContractsPageContent() {
       dateFrom,
       dateTo,
       selectedIncoterms,
-      selectedPlantSites,
+      selectedGroupPlants,
       productQuery: contractPerfProductQuery,
       summaryCardStatus,
       lateOnTimeFilter,
@@ -867,7 +882,7 @@ function ContractsPageContent() {
       dateFrom,
       dateTo,
       selectedIncoterms,
-      selectedPlantSites,
+      selectedGroupPlants,
       contractPerfProductQuery,
       summaryCardStatus,
       lateOnTimeFilter,
@@ -888,7 +903,7 @@ function ContractsPageContent() {
   const contractPerfResolvedScope = useMemo(
     () => ({
       resolvedProduct: resolveContractPerfTableProduct(contractPerfProductQuery, appliedDrilldownSelection.product),
-      resolvedPlants: resolveContractPerfTablePlants(selectedPlantSites, appliedDrilldownSelection.plant),
+      resolvedPlants: resolveContractPerfTablePlants(selectedGroupPlants, appliedDrilldownSelection.plant),
       resolvedIncoterms: resolveContractPerfIncoterms(selectedIncoterms, appliedDrilldownSelection.incoterm),
       drilldownSupplier: appliedDrilldownSelection.supplier,
       search: searchTerm.trim(),
@@ -896,7 +911,7 @@ function ContractsPageContent() {
     [
       contractPerfProductQuery,
       appliedDrilldownSelection.product,
-      selectedPlantSites,
+      selectedGroupPlants,
       appliedDrilldownSelection.plant,
       selectedIncoterms,
       appliedDrilldownSelection.incoterm,
@@ -905,17 +920,7 @@ function ContractsPageContent() {
     ],
   )
 
-  /** Memo 1 — Section 1 card totals: global filters only, never Open/Close sub-status. */
-  const cardTotalsData = useMemo(
-    () => ({
-      late: latePerformanceSummary,
-      onTrack: onTrackPerformanceSummary,
-      tradeCycleDist,
-    }),
-    [latePerformanceSummary, onTrackPerformanceSummary, tradeCycleDist],
-  )
-
-  /** Memo 2 — Section 2 drilldown source: Section 1 + Section 3 filtered API trees. */
+  /** Memo 1 — Section 2 drilldown source: Section 1 + Section 3 filtered API trees. */
   const filteredDrilldownData = useMemo(() => {
     const activeBranch =
       section1FilterState.lateOnTimeFilter === 'ON_TIME'
@@ -967,7 +972,7 @@ function ContractsPageContent() {
     let rows = latePerfAllHotspots
     rows = applyContractPerfGlobalFiltersToHotspots(rows, {
       selectedIncoterms: contractPerfResolvedScope.resolvedIncoterms,
-      selectedPlantSites: contractPerfResolvedScope.resolvedPlants,
+      selectedGroupPlants: contractPerfResolvedScope.resolvedPlants,
       productQuery: contractPerfResolvedScope.resolvedProduct,
     })
     if (contractPerfResolvedScope.drilldownSupplier) {
@@ -1028,23 +1033,9 @@ function ContractsPageContent() {
     [isContractPerformance],
   )
 
-  const shouldLoadTableData = useMemo(() => {
-    if (!isContractPerformance) return true
-    if (hasContractPerfDrilldownSelection(appliedDrilldownSelection)) return true
-    const isSummaryCardSelected =
-      (lateOnTimeFilter === 'ON_TIME' || lateOnTimeFilter === 'LATE') &&
-      (summaryCardStatus === 'Open' || summaryCardStatus === 'Close')
-    return isSummaryCardSelected
-  }, [
-    isContractPerformance,
-    appliedDrilldownSelection,
-    lateOnTimeFilter,
-    summaryCardStatus,
-  ])
-
   /** Scoped contract rows for drilldown — same filter scope as Section 3 table, one row per contract_id. */
   const contractPerfDrilldownRows = useMemo(() => {
-    if (!isContractPerformance || !shouldLoadTableData) return []
+    if (!isContractPerformance) return []
     const tradeCycleByContractId = new Map(
       contractPerfDrilldownScopeContracts.map((c) => [c.contract_id, c.trade_cycle_days] as const),
     )
@@ -1070,7 +1061,6 @@ function ContractsPageContent() {
     return rows
   }, [
     isContractPerformance,
-    shouldLoadTableData,
     contractPerfDrilldownScopeContracts,
     section1FilterState.lateOnTimeFilter,
     section1FilterState.perfDashMode,
@@ -1079,14 +1069,13 @@ function ContractsPageContent() {
   /** Section 2 drilldown tree — MT from late-performance hotspots (Section 1 source); unique counts from scoped contracts. */
   const latePerfBranchTree = useMemo(() => {
     const mtTree = buildLatePerfBranchTreeFromHotspots(contractPerfUnifiedFilteredHotspots)
-    if (isContractPerformance && shouldLoadTableData && contractPerfDrilldownRows.length > 0) {
+    if (isContractPerformance && contractPerfDrilldownRows.length > 0) {
       const countTree = buildLatePerfBranchTreeFromDrilldownRows(contractPerfDrilldownRows)
       return mergeUniqueContractCountsIntoBranchTree(mtTree, countTree)
     }
     return mtTree
   }, [
     isContractPerformance,
-    shouldLoadTableData,
     contractPerfDrilldownRows,
     contractPerfUnifiedFilteredHotspots,
   ])
@@ -1099,9 +1088,9 @@ function ContractsPageContent() {
 
   /** Authoritative total — table pagination when loaded, otherwise drilldown root count. */
   const contractPerfDisplayTotalCount = useMemo(() => {
-    if (!isContractPerformance || !shouldLoadTableData) return contractPerfDrilldownUniqueCount
+    if (!isContractPerformance) return totalContracts
     return totalContracts
-  }, [isContractPerformance, shouldLoadTableData, contractPerfDrilldownUniqueCount, totalContracts])
+  }, [isContractPerformance, totalContracts])
 
   const startContractPerfTableLoad = useCallback(() => {
     if (!isContractPerformance) return
@@ -1122,6 +1111,18 @@ function ContractsPageContent() {
     if (!isContractPerformance) return
     setIsTableLoading(true)
   }, [isContractPerformance])
+
+  const applySummaryStatusCard = useCallback(
+    (status: 'Open' | 'Close') => {
+      if (!isContractPerformance) return
+      lockSection1FilterChange()
+      const nextStatus = summaryCardStatus === status ? 'All' : status
+      setSummaryCardStatus(nextStatus)
+      setStatusFilter(nextStatus === 'All' ? 'All Status' : nextStatus)
+      setCurrentPage(1)
+    },
+    [isContractPerformance, lockSection1FilterChange, summaryCardStatus],
+  )
 
   const commitDrilldownSelection = useCallback(() => {
     if (!isContractPerformance) return
@@ -1150,13 +1151,6 @@ function ContractsPageContent() {
     lockSection1FilterChange,
     perfDashMode,
   ])
-
-  useEffect(() => {
-    if (!isContractPerformance) return
-    if (!shouldLoadTableData && !latePerfTreeLoading && contractPerfPendingLoadsRef.current === 0) {
-      setIsTableLoading(false)
-    }
-  }, [isContractPerformance, shouldLoadTableData, latePerfTreeLoading])
 
   /** Section 2 lock: only while the drilldown tree API refreshes (Section 1 scope). Table loads do not block Section 2. */
   const isSection2TreeLoading = latePerfTreeLoading
@@ -1295,7 +1289,6 @@ function ContractsPageContent() {
 
   useEffect(() => {
     if (!authReady) return
-    if (isContractPerformance && !shouldLoadTableData) return
     // Read URL parameters
     const statusParam = searchParams.get('status')
     if (statusParam) {
@@ -1310,19 +1303,18 @@ function ContractsPageContent() {
     searchParams,
     statusFilter,
     b2bFlagFilter,
-    productFilter,
+    selectedProducts,
+    selectedGroupPlants,
+    selectedIncoterms,
     dateFrom,
     dateTo,
     transportModeFilter,
     perfTransportMode,
     lateOnTimeFilter,
     unassignedFilter,
-    selectedIncoterms,
-    selectedPlantSites,
     columnFilters,
     sortKey,
     sortDir,
-    shouldLoadTableData,
     isContractPerformance,
     selectedProductTab,
     appliedDrilldownSelection,
@@ -1345,7 +1337,7 @@ function ContractsPageContent() {
   }, [
     selectedProductTab,
     selectedIncoterms,
-    selectedPlantSites,
+    selectedGroupPlants,
     dateFrom,
     dateTo,
     perfTransportMode,
@@ -1381,10 +1373,10 @@ function ContractsPageContent() {
   }
 
   const columnStorageKey = isContractPerformance
-    ? 'contract-performance.compact.visibleColumns.v11'
+    ? 'contract-performance.compact.visibleColumns.v13'
     : 'contracts.compact.visibleColumns.v8'
   const columnOrderStorageKey = isContractPerformance
-    ? 'contract-performance.compact.columnOrder.v8'
+    ? 'contract-performance.compact.columnOrder.v9'
     : 'contracts.compact.columnOrder.v9'
   // v4: default column order puts Contract Date first (ignore stale v3 saved order).
   // Bumped so saved "created_at" default does not fight API order (newest contract_date first).
@@ -1394,8 +1386,9 @@ function ContractsPageContent() {
     let trackContractPerfTableLoad = false
     try {
       if (!authReady) return
-      if (isContractPerformance && !shouldLoadTableData) return
-      trackContractPerfTableLoad = isContractPerformance && shouldLoadTableData
+      if (isContractPerformance) {
+        trackContractPerfTableLoad = true
+      }
       if (trackContractPerfTableLoad) startContractPerfTableLoad()
       setLoading(true)
       const params = new URLSearchParams()
@@ -1407,7 +1400,10 @@ function ContractsPageContent() {
       }
       const mergedColumnFilters: Record<string, any> = isContractPerformance
         ? (contractPerfTableColumnFilters as Record<string, any>)
-        : { ...columnFilters }
+        : appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+            selectedIncoterms,
+            selectedProducts,
+          })
       if (!isContractPerformance) {
         // non-performance page keeps legacy inline filters below
       }
@@ -1424,11 +1420,11 @@ function ContractsPageContent() {
         if (b2bFlagFilter && b2bFlagFilter !== 'ALL') {
           params.append('b2bFlag', b2bFlagFilter)
         }
-        if (productFilter && productFilter !== 'ALL') {
-          params.append('product', productFilter)
-        }
         if (transportModeFilter && transportModeFilter !== 'ALL') {
           params.append('transportMode', transportModeFilter)
+        }
+        if (selectedGroupPlants.length > 0) {
+          selectedGroupPlants.forEach((p) => params.append('plant', p))
         }
       } else {
         if (perfTransportMode !== 'ALL') {
@@ -1498,7 +1494,7 @@ function ContractsPageContent() {
 
   /** Fetch full scoped contract list for Section 2 unique-count drilldown aggregation (table pagination unchanged). */
   const fetchContractPerfDrilldownScope = useCallback(async () => {
-    if (!authReady || !isContractPerformance || !shouldLoadTableData) {
+    if (!authReady || !isContractPerformance) {
       setContractPerfDrilldownScopeContracts([])
       return
     }
@@ -1545,7 +1541,6 @@ function ContractsPageContent() {
   }, [
     authReady,
     isContractPerformance,
-    shouldLoadTableData,
     searchTerm,
     contractPerfTableColumnFilters,
     statusFilter,
@@ -1577,7 +1572,7 @@ function ContractsPageContent() {
           : selectedIncoterms,
         resolvedPlants: includeLocalFilters
           ? contractPerfResolvedScope.resolvedPlants
-          : selectedPlantSites,
+          : selectedGroupPlants,
         contractStatus,
         search: includeLocalFilters ? contractPerfResolvedScope.search : '',
         drilldownSupplier: includeLocalFilters ? contractPerfResolvedScope.drilldownSupplier : null,
@@ -1591,7 +1586,7 @@ function ContractsPageContent() {
       contractPerfProductQuery,
       b2bFlagFilter,
       selectedIncoterms,
-      selectedPlantSites,
+      selectedGroupPlants,
       contractPerfResolvedScope,
     ],
   )
@@ -1614,14 +1609,10 @@ function ContractsPageContent() {
       setLatePerfSummaryLoading(true)
       const resp = await api.get(`/contracts/late-performance/summary?${buildLatePerfBaseParams().toString()}`)
       const data = resp.data?.data
-      setLatePerformanceSummary(data?.summary ?? { count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0 })
-      setOnTrackPerformanceSummary(data?.onTrackSummary ?? { count: 0, totalDays: 0, avgDays: 0, maxDays: 0, totalQtyDelivery: 0 })
-      setTradeCycleDist(data?.distribution ?? null)
+      setStatusCardSummary(data?.statusCardSummary ?? EMPTY_STATUS_CARD_SUMMARY)
     } catch (e) {
       console.error('Failed to load late performance summary:', e)
-      setLatePerformanceSummary({ count: 0, totalDays: 0, avgDays: 0, maxDays: 0 })
-      setOnTrackPerformanceSummary({ count: 0, totalDays: 0, avgDays: 0, maxDays: 0 })
-      setTradeCycleDist(null)
+      setStatusCardSummary(EMPTY_STATUS_CARD_SUMMARY)
     } finally {
       setLatePerfSummaryLoading(false)
     }
@@ -1652,78 +1643,6 @@ function ContractsPageContent() {
     void fetchLatePerformanceDrilldownTree()
   }, [fetchLatePerformanceDrilldownTree])
 
-  const isSummaryStatusSelected = useCallback(
-    (mode: 'ontrack' | 'late', contractStatus: 'Open' | 'Close') =>
-      section1FilterState.perfDashMode === mode &&
-      section1FilterState.lateOnTimeFilter === (mode === 'ontrack' ? 'ON_TIME' : 'LATE') &&
-      section1FilterState.summaryCardStatus === contractStatus,
-    [section1FilterState],
-  )
-
-  const applySummaryStatusFocus = useCallback(
-    (mode: 'ontrack' | 'late', contractStatus: 'Open' | 'Close') => {
-      if (!isContractPerformance) return
-      lockSection1FilterChange()
-
-      const alreadySelected =
-        !hasContractPerfDrilldownSelection(appliedDrilldownSelection) &&
-        perfDashMode === mode &&
-        lateOnTimeFilter === (mode === 'ontrack' ? 'ON_TIME' : 'LATE') &&
-        summaryCardStatus === contractStatus
-
-      if (alreadySelected) {
-        setSummaryCardStatus('All')
-        setStatusFilter('All Status')
-        setLateOnTimeFilter('ALL')
-        setDraftDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
-        setAppliedDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
-        setColumnFilters((prev) => {
-          const next = { ...prev }
-          delete next.supplier
-          return next
-        })
-        setCurrentPage(1)
-        collapseAll()
-        return
-      }
-
-      setSummaryCardStatus(contractStatus)
-      setPerfDashMode(mode)
-      setLateOnTimeFilter(mode === 'ontrack' ? 'ON_TIME' : 'LATE')
-      setStatusFilter(contractStatus)
-      setDraftDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
-      setAppliedDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
-      setPerfTransportMode('ALL')
-      setColumnFilters((prev) => {
-        const next = { ...prev }
-        delete next.supplier
-        return next
-      })
-      setCurrentPage(1)
-      collapseAll()
-    },
-    [
-      appliedDrilldownSelection,
-      collapseAll,
-      isContractPerformance,
-      lateOnTimeFilter,
-      lockSection1FilterChange,
-      perfDashMode,
-      summaryCardStatus,
-    ],
-  )
-
-  const summaryStatusBoxClass = useCallback(
-    (mode: 'ontrack' | 'late', contractStatus: 'Open' | 'Close', palette: string) => {
-      const selected = isSummaryStatusSelected(mode, contractStatus)
-      const ring = mode === 'ontrack' ? 'ring-green-500' : 'ring-red-500'
-      return `${palette} flex-1 rounded-lg border px-3 py-2 text-left transition-all hover:shadow-md cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-300 ${
-        selected ? `ring-2 ${ring} shadow-sm` : ''
-      }`
-    },
-    [isSummaryStatusSelected],
-  )
-
   /** Section 2 node click — updates draft drilldown selection only; Section 3 loads on Apply. */
   const applyDrilldownNodeSelection = useCallback(
     (level: 'product' | 'plant' | 'incoterm' | 'supplier', label: string) => {
@@ -1746,29 +1665,38 @@ function ContractsPageContent() {
 
   // Contract Performance: Incoterm from contracts; Group Plant from master_plants (matches filter logic)
   useEffect(() => {
-    if (!authReady || !isContractPerformance) return
+    if (!authReady) return
     let cancelled = false
     Promise.all([
       api.get('/contracts/filter-options/incoterms'),
       api.get('/contracts/filter-options/group-plants'),
+      api.get('/dashboard/filter-options/products'),
     ])
-      .then(([incRes, plantRes]) => {
+      .then(([incRes, plantRes, productRes]) => {
         if (cancelled) return
         const incs = (incRes.data?.data?.incoterms || []) as string[]
         const plants = (plantRes.data?.data?.groupPlants || []) as string[]
+        const productPayload = productRes.data?.data
+        const products = (Array.isArray(productPayload)
+          ? productPayload
+          : productPayload && typeof productPayload === 'object' && 'products' in productPayload
+            ? (productPayload as { products?: string[] }).products
+            : []) as string[]
         setAvailableIncoterms(Array.isArray(incs) ? incs : [])
-        setAvailablePlantSites(Array.isArray(plants) ? plants : [])
+        setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
+        setAvailableProducts(Array.isArray(products) ? products : [])
       })
       .catch((e) => {
         if (cancelled) return
-        console.error('Failed to fetch Contract Performance filter options:', e)
+        console.error('Failed to fetch filter options:', e)
         setAvailableIncoterms([])
-        setAvailablePlantSites([])
+        setAvailableGroupPlants([])
+        setAvailableProducts([])
       })
     return () => {
       cancelled = true
     }
-  }, [authReady, isContractPerformance])
+  }, [authReady])
 
   // Dashboard cards: SEA without shipments, LAND without trucking — reflect active filters
   const fetchUnassignedCounts = useCallback(async () => {
@@ -1777,10 +1705,23 @@ function ContractsPageContent() {
       const params = new URLSearchParams()
       if (searchTerm.trim().length >= 2) params.append('search', searchTerm.trim())
       if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
-      if (productFilter && productFilter !== 'ALL') params.append('product', productFilter)
+      if (selectedProducts.length > 0 || selectedIncoterms.length > 0) {
+        params.append(
+          'columnFilters',
+          JSON.stringify(
+            appendToolbarMultiToColumnFilters({}, {
+              selectedProducts,
+              selectedIncoterms,
+            }),
+          ),
+        )
+      }
       if (transportModeFilter && transportModeFilter !== 'ALL') params.append('transportMode', transportModeFilter)
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
+      if (selectedGroupPlants.length > 0) {
+        selectedGroupPlants.forEach((p) => params.append('plant', p))
+      }
       if (statusFilter && statusFilter !== 'All Status') {
         params.append('status', statusFilter)
       }
@@ -1800,7 +1741,9 @@ function ContractsPageContent() {
     authReady,
     searchTerm,
     b2bFlagFilter,
-    productFilter,
+    selectedProducts,
+    selectedGroupPlants,
+    selectedIncoterms,
     transportModeFilter,
     dateFrom,
     dateTo,
@@ -2507,10 +2450,18 @@ function ContractsPageContent() {
     {
       id: 'product',
       label: 'Product',
-      defaultVisible: false,
+      defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.product || '',
       render: (c) => <span className="text-sm truncate">{c.product || '-'}</span>
+    },
+    {
+      id: 'incoterm',
+      label: 'Incoterm',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => c.incoterm || '',
+      render: (c) => <span className="text-sm truncate">{c.incoterm || '-'}</span>
     },
     {
       id: 'delivery_status',
@@ -2673,6 +2624,27 @@ function ContractsPageContent() {
       },
       className: 'whitespace-nowrap'
     },
+    ...(isContractPerformance
+      ? ([
+          {
+            id: 'dp_cycle_days',
+            label: 'DP Cycle',
+            formulaHelp: FIELD_HELP.dpCycle,
+            defaultVisible: true,
+            sortable: true,
+            getSortValue: (c: Contract) => c.dp_cycle_days ?? 0,
+            render: (c: Contract) => {
+              if (c.dp_cycle_days == null) return <span className="text-xs">-</span>
+              return (
+                <span className={`text-xs font-semibold ${signedCycleDaysClass(c.dp_cycle_days)}`}>
+                  {formatSignedCycleDays(c.dp_cycle_days)}
+                </span>
+              )
+            },
+            className: 'whitespace-nowrap',
+          },
+        ] as CompactColumn[])
+      : []),
     {
       id: 'log_cycle_days',
       label: 'Log Cycle',
@@ -3084,6 +3056,7 @@ function ContractsPageContent() {
       outstanding_qty_mt: 'Outstanding Qty (MT)',
       trade_cycle_days: 'Trade Cycle',
       cash_cycle_days: 'Cash Cycle',
+      dp_cycle_days: 'DP Cycle',
       over_under_delivery_status: 'Over/Under Delivery Status',
       company_name: 'Buyer',
       lt_spot: 'LT/SPOT',
@@ -3123,6 +3096,7 @@ function ContractsPageContent() {
     let outQtyFmtLen = H.outstanding_qty.length
     let tradeLen = H.trade_cycle_days.length
     let cashLen = H.cash_cycle_days.length
+    let dpLen = H.dp_cycle_days.length
     let overUnderLen = H.over_under_delivery_status.length
     let logCycleLen = H.log_cycle_days.length
     let dsLen = H.delivery_start.length
@@ -3167,6 +3141,9 @@ function ContractsPageContent() {
       if (c.cash_cycle_days != null) {
         cashLen = Math.max(cashLen, formatSignedCycleDays(c.cash_cycle_days).length)
       }
+      if (c.dp_cycle_days != null) {
+        dpLen = Math.max(dpLen, formatSignedCycleDays(c.dp_cycle_days).length)
+      }
       if (c.log_cycle_days != null) {
         logCycleLen = Math.max(logCycleLen, formatLogCycleDays(c.log_cycle_days, c.trade_cycle_days).length)
       }
@@ -3199,6 +3176,7 @@ function ContractsPageContent() {
       outstanding_qty_mt: qtyTrack(H.outstanding_qty_mt, outMtFmtLen, 96, 240),
       trade_cycle_days: track(H.trade_cycle_days, tradeLen, 108, 220),
       cash_cycle_days: track(H.cash_cycle_days, cashLen, 108, 220),
+      dp_cycle_days: track(H.dp_cycle_days, dpLen, 108, 220),
       over_under_delivery_status: track(H.over_under_delivery_status, overUnderLen, 120, 260),
       company_name: track(H.company_name, buyerLen, 100, 380),
       lt_spot: track(H.lt_spot, ltLen, 72, 140),
@@ -3365,12 +3343,6 @@ function ContractsPageContent() {
         )}
 
         {isContractPerformance && (() => {
-          const { late: lateCardTotals, onTrack: onTrackCardTotals } = cardTotalsData
-          const totalOsQty = (lateCardTotals.totalQtyDelivery ?? 0) + (onTrackCardTotals.totalQtyDelivery ?? 0)
-          const latePct   = totalOsQty > 0 ? ((lateCardTotals.totalQtyDelivery ?? 0) / totalOsQty) * 100 : 0
-          const onTrackPct = totalOsQty > 0 ? ((onTrackCardTotals.totalQtyDelivery ?? 0) / totalOsQty) * 100 : 0
-          const onTimeAvgClass = contextPerformanceClass(false)
-          const lateAvgClass = contextPerformanceClass(true)
           if (latePerfSummaryLoading) {
             return (
               <div className="space-y-2">
@@ -3379,7 +3351,6 @@ function ContractsPageContent() {
                     <div key={i} className="rounded-xl border bg-white p-5 shadow-sm animate-pulse">
                       <div className="h-5 bg-gray-200 rounded w-24 mb-4" />
                       <div className="h-8 bg-gray-200 rounded w-32 mb-3" />
-                      <div className="h-6 bg-gray-100 rounded mb-3" />
                       <div className="h-16 bg-gray-100 rounded" />
                     </div>
                   ))}
@@ -3387,97 +3358,59 @@ function ContractsPageContent() {
               </div>
             )
           }
+          const openSelected = summaryCardStatus === 'Open'
+          const closeSelected = summaryCardStatus === 'Close'
+          const openAvgClass = contextPerformanceClass(statusCardSummary.openIsLateContext)
+          const closeAvgClass = contextPerformanceClass(statusCardSummary.closeIsLateContext)
           return (
             <div className="space-y-2">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {/* On Track card */}
-              <div className="rounded-xl border bg-white p-5 shadow-sm">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-base font-semibold text-gray-800">On Time</span>
-                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">{onTrackPct.toFixed(1)}%</span>
-                </div>
-                <div className="text-sm text-gray-500 mb-1">Outstanding Qty</div>
-                <div className="text-xl font-bold text-gray-900 mb-3">{formatContractPerfOutstandingMt(onTrackCardTotals.totalQtyDelivery ?? 0)}</div>
-                {/* Progress bar */}
-                <div className="w-full h-6 rounded-md bg-gray-100 overflow-hidden mb-3">
-                  <div className="h-full bg-green-500 flex items-center justify-end pr-2 transition-all duration-500" style={{ width: `${onTrackPct}%` }}>
-                    <span className="text-xs font-bold text-white">{onTrackPct.toFixed(0)}%</span>
+                <button
+                  type="button"
+                  onClick={() => applySummaryStatusCard('Open')}
+                  className={`rounded-xl border bg-white p-5 shadow-sm text-left transition-colors ${
+                    openSelected ? 'border-green-500 ring-2 ring-green-200' : 'hover:border-green-300'
+                  }`}
+                >
+                  <div className="mb-3">
+                    <span className="text-base font-semibold text-gray-800">Open</span>
                   </div>
-                </div>
-                {/* Avg metrics */}
-                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-4">
-                  <span>{avgDaysMetricLabel(false)}: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackCardTotals.avgDays)}</span></span>
-                  <span>Avg Trade: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackCardTotals.avgDays)}</span></span>
-                  <span>Avg Cash: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackCardTotals.avgCashCycle)}</span></span>
-                  <span>Avg Log: <span className={`font-semibold ${onTimeAvgClass}`}>{formatAvgDays(onTrackCardTotals.avgLogCycle)}</span></span>
-                </div>
-                {/* Open / Close breakdown */}
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    title="View On Time open contracts in the table below"
-                    onClick={() => applySummaryStatusFocus('ontrack', 'Open')}
-                    className={summaryStatusBoxClass('ontrack', 'Open', 'bg-blue-50 border-blue-100')}
-                  >
-                    <div className="text-[11px] font-medium text-blue-600 mb-1">Open</div>
-                    <div className="text-sm font-semibold text-gray-800">{formatContractPerfOutstandingMt(onTrackCardTotals.openOutstandingQty ?? 0)}</div>
-                  </button>
-                  <button
-                    type="button"
-                    title="View On Time closed contracts in the table below"
-                    onClick={() => applySummaryStatusFocus('ontrack', 'Close')}
-                    className={summaryStatusBoxClass('ontrack', 'Close', 'bg-orange-50 border-orange-100')}
-                  >
-                    <div className="text-[11px] font-medium text-orange-600 mb-1">Close</div>
-                    <div className="text-sm font-semibold text-gray-800">{formatContractPerfOutstandingMt(onTrackCardTotals.closeOutstandingQty ?? 0)}</div>
-                  </button>
-                </div>
-              </div>
+                  <div className="text-sm text-gray-500 mb-1">Outstanding Qty (MT)</div>
+                  <div className="text-xl font-bold text-gray-900 mb-3">
+                    {formatContractPerfOutstandingMt(statusCardSummary.openOutstandingQty)}
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                    <span>{avgDaysMetricLabel(statusCardSummary.openIsLateContext)}: <span className={`font-semibold ${openAvgClass}`}>{formatAvgDays(statusCardSummary.openAvgDays)}</span></span>
+                    <span>Avg Trade: <span className={`font-semibold ${openAvgClass}`}>{formatAvgDays(statusCardSummary.openAvgDays)}</span></span>
+                    <span>Avg DP: <span className={`font-semibold ${openAvgClass}`}>{formatAvgDays(statusCardSummary.openAvgDpCycle)}</span></span>
+                    <span>Avg Cash: <span className={`font-semibold ${openAvgClass}`}>{formatAvgDays(statusCardSummary.openAvgCashCycle)}</span></span>
+                    <span>Avg Log: <span className={`font-semibold ${openAvgClass}`}>{formatAvgDays(statusCardSummary.openAvgLogCycle)}</span></span>
+                  </div>
+                </button>
 
-              {/* Late card */}
-              <div className="rounded-xl border bg-white p-5 shadow-sm">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-base font-semibold text-gray-800">Late</span>
-                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">{latePct.toFixed(1)}%</span>
-                </div>
-                <div className="text-sm text-gray-500 mb-1">Outstanding Qty</div>
-                <div className="text-xl font-bold text-gray-900 mb-3">{formatContractPerfOutstandingMt(lateCardTotals.totalQtyDelivery ?? 0)}</div>
-                {/* Progress bar */}
-                <div className="w-full h-6 rounded-md bg-gray-100 overflow-hidden mb-3">
-                  <div className="h-full bg-red-500 flex items-center justify-end pr-2 transition-all duration-500" style={{ width: `${latePct}%` }}>
-                    <span className="text-xs font-bold text-white">{latePct.toFixed(0)}%</span>
+                <button
+                  type="button"
+                  onClick={() => applySummaryStatusCard('Close')}
+                  className={`rounded-xl border bg-white p-5 shadow-sm text-left transition-colors ${
+                    closeSelected ? 'border-slate-500 ring-2 ring-slate-200' : 'hover:border-slate-300'
+                  }`}
+                >
+                  <div className="mb-3">
+                    <span className="text-base font-semibold text-gray-800">Close</span>
                   </div>
-                </div>
-                {/* Avg metrics */}
-                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-4">
-                  <span>{avgDaysMetricLabel(true)}: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(lateCardTotals.avgDays)}</span></span>
-                  <span>Avg Trade: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(lateCardTotals.avgDays)}</span></span>
-                  <span>Avg Cash: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(lateCardTotals.avgCashCycle)}</span></span>
-                  <span>Avg Log: <span className={`font-semibold ${lateAvgClass}`}>{formatAvgDays(lateCardTotals.avgLogCycle)}</span></span>
-                </div>
-                {/* Open / Close breakdown */}
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    title="View Late open contracts in the table below"
-                    onClick={() => applySummaryStatusFocus('late', 'Open')}
-                    className={summaryStatusBoxClass('late', 'Open', 'bg-blue-50 border-blue-100')}
-                  >
-                    <div className="text-[11px] font-medium text-blue-600 mb-1">Open</div>
-                    <div className="text-sm font-semibold text-gray-800">{formatContractPerfOutstandingMt(lateCardTotals.openOutstandingQty ?? 0)}</div>
-                  </button>
-                  <button
-                    type="button"
-                    title="View Late closed contracts in the table below"
-                    onClick={() => applySummaryStatusFocus('late', 'Close')}
-                    className={summaryStatusBoxClass('late', 'Close', 'bg-orange-50 border-orange-100')}
-                  >
-                    <div className="text-[11px] font-medium text-orange-600 mb-1">Close</div>
-                    <div className="text-sm font-semibold text-gray-800">{formatContractPerfOutstandingMt(lateCardTotals.closeOutstandingQty ?? 0)}</div>
-                  </button>
-                </div>
+                  <div className="text-sm text-gray-500 mb-1">Contract Qty (MT)</div>
+                  <div className="text-xl font-bold text-gray-900 mb-3">
+                    {formatContractPerfOutstandingMt(statusCardSummary.closeContractQty)}
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                    <span>{avgDaysMetricLabel(statusCardSummary.closeIsLateContext)}: <span className={`font-semibold ${closeAvgClass}`}>{formatAvgDays(statusCardSummary.closeAvgDays)}</span></span>
+                    <span>Avg Trade: <span className={`font-semibold ${closeAvgClass}`}>{formatAvgDays(statusCardSummary.closeAvgDays)}</span></span>
+                    <span>Avg DP: <span className={`font-semibold ${closeAvgClass}`}>{formatAvgDays(statusCardSummary.closeAvgDpCycle)}</span></span>
+                    <span>Avg Cash: <span className={`font-semibold ${closeAvgClass}`}>{formatAvgDays(statusCardSummary.closeAvgCashCycle)}</span></span>
+                    <span>Avg Log: <span className={`font-semibold ${closeAvgClass}`}>{formatAvgDays(statusCardSummary.closeAvgLogCycle)}</span></span>
+                  </div>
+                </button>
               </div>
-            </div>
             </div>
           )
         })()}
@@ -3553,7 +3486,7 @@ function ContractsPageContent() {
                   <div className="text-sm text-gray-600">
                     Navigate as a tree: <span className="font-medium">Product → Plant → Incoterm → Supplier</span>.
                     Use the drilldown to explore <span className="font-medium">YTD {perfDashMode === 'late' ? 'late' : 'on-time'}</span> contracts by dimension.
-                    Click <span className="font-medium">Apply</span> to load the contract list in Section 3 with your drilldown selection.
+                    Click <span className="font-medium">Apply</span> to filter the Section 3 table with your drilldown selection.
                   </div>
 
                   <div className="rounded-xl border bg-white p-4 relative">
@@ -3743,105 +3676,6 @@ function ContractsPageContent() {
           </Card>
         )}
 
-        {/* Trade Cycle Distribution */}
-        {false && isContractPerformance && tradeCycleDist && (() => {
-          const buckets = [
-            { key: 'onTime',  label: 'On Time',    sublabel: '≤ 0 days',   color: '#16a34a', bg: 'bg-green-50',  border: 'border-green-200',  text: 'text-green-700',  bar: '#16a34a' },
-            { key: 'd1_7',    label: '1–7 days',   sublabel: 'Watch',       color: '#ca8a04', bg: 'bg-yellow-50', border: 'border-yellow-200', text: 'text-yellow-700', bar: '#ca8a04' },
-            { key: 'd8_14',   label: '8–14 days',  sublabel: 'Caution',     color: '#ea580c', bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-700', bar: '#ea580c' },
-            { key: 'd15_30',  label: '15–30 days', sublabel: 'Late',        color: '#dc2626', bg: 'bg-red-50',    border: 'border-red-200',    text: 'text-red-700',    bar: '#dc2626' },
-            { key: 'd31_60',  label: '31–60 days', sublabel: 'Overdue',     color: '#9f1239', bg: 'bg-rose-50',   border: 'border-rose-200',   text: 'text-rose-700',   bar: '#9f1239' },
-            { key: 'd61plus', label: '61+ days',   sublabel: 'Critical',    color: '#6b21a8', bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-700', bar: '#6b21a8' },
-            { key: 'noData',  label: 'No Data',    sublabel: 'Missing dates', color: '#9ca3af', bg: 'bg-gray-50',  border: 'border-gray-200',   text: 'text-gray-500',   bar: '#9ca3af' },
-          ] as const
-          const total = buckets.reduce((s, b) => s + (tradeCycleDist![b.key as keyof TradeCycleDist]?.count ?? 0), 0)
-          return (
-            <Card>
-              <CardHeader className="pb-2">
-                <div className="flex items-start justify-between gap-4 flex-wrap">
-                  <div>
-                    <CardTitle className="text-base">Trade Cycle Distribution (YTD)</CardTitle>
-                    <div className="text-sm text-gray-600 mt-1">
-                      Distribution of all {total.toLocaleString()} tracked contracts by trade cycle lateness.
-                    </div>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="pt-2 space-y-4">
-                {/* Stacked bar */}
-                <div className="flex rounded-full overflow-hidden h-3 w-full">
-                  {buckets.map(b => {
-                    const cnt = tradeCycleDist![b.key as keyof TradeCycleDist]?.count ?? 0
-                    const pct = total > 0 ? (cnt / total) * 100 : 0
-                    return pct > 0 ? (
-                      <div key={b.key} title={`${b.label}: ${cnt} contracts (${pct.toFixed(1)}%)`}
-                        style={{ width: `${pct}%`, backgroundColor: b.bar }} />
-                    ) : null
-                  })}
-                </div>
-                {/* Bucket cards */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-                  {buckets.map(b => {
-                    const cnt = tradeCycleDist![b.key as keyof TradeCycleDist]?.count ?? 0
-                    const qty = tradeCycleDist![b.key as keyof TradeCycleDist]?.qty ?? 0
-                    const pct = total > 0 ? ((cnt / total) * 100).toFixed(1) : '0.0'
-                    return (
-                      <div key={b.key} className={`rounded border px-3 py-2 ${b.bg} ${b.border}`}>
-                        <div className={`text-[11px] font-semibold ${b.text}`}>{b.label}</div>
-                        <div className={`text-xs ${b.text} opacity-70 mb-1`}>{b.sublabel}</div>
-                        <div className="text-lg font-bold text-gray-900">{cnt.toLocaleString()}</div>
-                        <div className="text-[10px] text-gray-500">{pct}% of total</div>
-                        {qty > 0 && <div className="text-[10px] text-gray-400 mt-0.5">{(qty / 1000).toLocaleString('en-US', { maximumFractionDigits: 1 })} MT</div>}
-                      </div>
-                    )
-                  })}
-                </div>
-
-                {/* Formula legend */}
-                <div className="rounded-xl border bg-gray-50 p-3">
-                  <div className="text-xs font-semibold text-gray-700 mb-2">How Trade Cycle is calculated</div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-xs text-gray-600">
-                    <div className="flex items-center gap-2">
-                      <span className="shrink-0 w-28 font-medium text-gray-700">Closed + LAND</span>
-                      <span className="text-gray-400">Trucking Last Receive</span>
-                      <span className="shrink-0 text-gray-400">→</span>
-                      <span className="text-gray-400">Delivery End Date</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="shrink-0 w-28 font-medium text-gray-700">Closed + SEA</span>
-                      <span className="text-gray-400">ATA Vessel Discharge</span>
-                      <span className="shrink-0 text-gray-400">→</span>
-                      <span className="text-gray-400">Delivery End Date</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="shrink-0 w-28 font-medium text-gray-700">Open + LAND</span>
-                      <span className="text-gray-400">Delivery End Date</span>
-                      <span className="shrink-0 text-gray-400">→</span>
-                      <span className="text-gray-400">Latest Daily Plan Date</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="shrink-0 w-28 font-medium text-gray-700">Open + SEA</span>
-                      <span className="text-gray-400">Delivery End Date</span>
-                      <span className="shrink-0 text-gray-400">→</span>
-                      <span className="text-gray-400">ETA Vessel Discharge</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4 mt-2 pt-2 border-t border-gray-200 text-xs">
-                    <div className="flex items-center gap-1.5">
-                      <span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500" />
-                      <span className="text-gray-600">Result ≤ 0 = On Time</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500" />
-                      <span className="text-gray-600">Result &gt; 0 = Late · Result &lt; 0 = Ahead</span>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )
-        })()}
-
         {/* Filters */}
         <Card>
           <CardContent className="pt-6">
@@ -3893,18 +3727,6 @@ function ContractsPageContent() {
                 )}
                 {!isContractPerformance && (
                   <select
-                    value={productFilter}
-                    onChange={(e) => setProductFilter(e.target.value)}
-                    className="px-4 py-2 border rounded-lg"
-                  >
-                    <option value="ALL">All Products</option>
-                    {availableProducts.map(p => (
-                      <option key={p} value={p}>{p}</option>
-                    ))}
-                  </select>
-                )}
-                {!isContractPerformance && (
-                  <select
                     value={transportModeFilter}
                     onChange={(e) => setTransportModeFilter(e.target.value)}
                     className="px-4 py-2 border rounded-lg"
@@ -3950,21 +3772,20 @@ function ContractsPageContent() {
                 )}
               </div>
 
-              {isContractPerformance && (
+              {isContractPerformance ? (
                 <PerformanceScopeFilters
-                  hidePlantFilter={false}
-                  plantLabel="Group Plant"
+                  hideGroupPlantFilter={false}
                   incotermOptions={availableIncoterms}
                   selectedIncoterms={selectedIncoterms}
                   onIncotermsChange={(selected) => {
                     lockSection1FilterChange()
                     setSelectedIncoterms(selected)
                   }}
-                  plantOptions={availablePlantSites}
-                  selectedPlantSites={selectedPlantSites}
-                  onPlantSitesChange={(selected) => {
+                  groupPlantOptions={availableGroupPlants}
+                  selectedGroupPlants={selectedGroupPlants}
+                  onGroupPlantsChange={(selected) => {
                     lockSection1FilterChange()
-                    setSelectedPlantSites(selected)
+                    setSelectedGroupPlants(selected)
                   }}
                   dateFrom={dateFrom}
                   dateTo={dateTo}
@@ -3978,8 +3799,31 @@ function ContractsPageContent() {
                   }}
                   showDateRange={false}
                   incotermEmptyMessage="Loading incoterms..."
-                  plantPlaceholder="Select group plant(s)"
-                  plantEmptyMessage="No group plants"
+                  groupPlantPlaceholder="Select group plant(s)"
+                  groupPlantEmptyMessage="No group plants"
+                />
+              ) : (
+                <PerformanceScopeFilters
+                  hideGroupPlantFilter={false}
+                  incotermOptions={availableIncoterms}
+                  selectedIncoterms={selectedIncoterms}
+                  onIncotermsChange={setSelectedIncoterms}
+                  showProductFilter
+                  productOptions={availableProducts}
+                  selectedProducts={selectedProducts}
+                  onProductsChange={setSelectedProducts}
+                  groupPlantOptions={availableGroupPlants}
+                  selectedGroupPlants={selectedGroupPlants}
+                  onGroupPlantsChange={setSelectedGroupPlants}
+                  dateFrom={dateFrom}
+                  dateTo={dateTo}
+                  onDateFromChange={setDateFrom}
+                  onDateToChange={setDateTo}
+                  showDateRange={false}
+                  incotermEmptyMessage="Loading incoterms..."
+                  productEmptyMessage="Loading products..."
+                  groupPlantPlaceholder="Select group plant(s)"
+                  groupPlantEmptyMessage="No group plants"
                 />
               )}
               
@@ -4009,7 +3853,9 @@ function ContractsPageContent() {
                     searchDraft ||
                     searchTerm ||
                     transportModeFilter !== 'ALL' ||
-                    productFilter !== 'ALL' ||
+                    selectedProducts.length > 0 ||
+                    selectedIncoterms.length > 0 ||
+                    selectedGroupPlants.length > 0 ||
                     b2bFlagFilter !== 'ALL' ||
                     statusFilter !== 'All Status' ||
                     summaryCardStatus !== 'All' ||
@@ -4020,7 +3866,7 @@ function ContractsPageContent() {
                         perfTransportMode !== 'ALL' ||
                         selectedProductTab !== 'All' ||
                         selectedIncoterms.length > 0 ||
-                        selectedPlantSites.length > 0 ||
+                        selectedGroupPlants.length > 0 ||
                         Boolean(
                           hasContractPerfDrilldownSelection(appliedDrilldownSelection) ||
                             hasContractPerfDrilldownSelection(draftDrilldownSelection),
@@ -4033,7 +3879,9 @@ function ContractsPageContent() {
                         setSearchDraft('')
                         setSearchTerm('')
                         setTransportModeFilter('ALL')
-                        setProductFilter('ALL')
+                        setSelectedProducts([])
+                        setSelectedIncoterms([])
+                        setSelectedGroupPlants([])
                         setSelectedProductTab('All')
                         setB2bFlagFilter('ALL')
                         setStatusFilter('All Status')
@@ -4045,9 +3893,7 @@ function ContractsPageContent() {
                           resetLatePerfSelections()
                         }
                         setCurrentPage(1)
-                        if (!isContractPerformance || shouldLoadTableData) {
-                          fetchContracts(1, '')
-                        }
+                        fetchContracts(1, '')
                       }}
                       variant="ghost"
                       size="sm"
@@ -4154,15 +4000,11 @@ function ContractsPageContent() {
                       : 'All Contracts'}
                   </CardTitle>
                   <p className="text-sm text-gray-500 mt-1">
-                    {isContractPerformance && !shouldLoadTableData
-                      ? 'Please select at least one card in Section 1, or choose drilldown filters in Section 2 and click Apply, to view detailed data.'
-                      : <>
-                          {isContractPerformance
-                            ? contractPerfDisplayTotalCount.toLocaleString('en-US')
-                            : totalContracts}{' '}
-                          total contracts | Showing {filteredContracts.length} on this page
-                          {totalPages > 1 && ` (Page ${currentPage} of ${totalPages})`}
-                        </>}
+                    {isContractPerformance
+                      ? contractPerfDisplayTotalCount.toLocaleString('en-US')
+                      : totalContracts}{' '}
+                    total contracts | Showing {filteredContracts.length} on this page
+                    {totalPages > 1 && ` (Page ${currentPage} of ${totalPages})`}
                   </p>
                 </div>
                 {unassignedFilter && (
@@ -4187,7 +4029,7 @@ function ContractsPageContent() {
                     variant="outline"
                     size="sm"
                     onClick={() => setShowColumnsMenu(v => !v)}
-                    disabled={loading || (isContractPerformance && !shouldLoadTableData)}
+                    disabled={loading}
                   >
                     <SlidersHorizontal className="h-4 w-4 mr-2" />
                     Columns
@@ -4262,7 +4104,7 @@ function ContractsPageContent() {
                     </div>
                   )}
                 </div>
-                {(!isContractPerformance || shouldLoadTableData) && totalPages > 1 && (
+                {totalPages > 1 && (
                   <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
                     <Button
                       variant="outline"
@@ -4316,13 +4158,7 @@ function ContractsPageContent() {
             </div>
           </CardHeader>
           <CardContent>
-            {isContractPerformance && !shouldLoadTableData ? (
-              <div className="flex flex-col items-center justify-center py-16 text-center">
-                <p className="text-gray-600 max-w-md">
-                  Please select at least one card in Section 1 or Section 2 to view detailed data.
-                </p>
-              </div>
-            ) : loading ? (
+            {loading ? (
               <div className="text-center py-8">Loading contracts...</div>
             ) : (
               <>

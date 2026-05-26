@@ -14,7 +14,7 @@ export interface ShippingPerformanceFilters {
 
 export interface PerVesselPerfSummary {
   vesselCount: number;
-  shipmentCount: number;
+  contractCount: number;
   totalQty: number;
   avgLoadingEtaEtr: number;
   avgLoadingEtaEtb: number;
@@ -40,7 +40,7 @@ export interface ShippingPerfRemark {
 
 const EMPTY_SUMMARY: PerVesselPerfSummary = {
   vesselCount: 0,
-  shipmentCount: 0,
+  contractCount: 0,
   totalQty: 0,
   avgLoadingEtaEtr: 0,
   avgLoadingEtaEtb: 0,
@@ -317,7 +317,7 @@ function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMod
     else byVessel.set(vessel, [row]);
   }
 
-  let shipmentCount = 0;
+  let rowCount = 0;
   let totalQty = 0;
   let sumLoadingEtaEtr = 0;
   let sumLoadingEtaEtb = 0;
@@ -325,10 +325,13 @@ function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMod
   let sumDischargeEtaEtb = 0;
   let sumDischargeEtbEtc = 0;
   let sumTotalDelta = 0;
+  const contracts = new Set<string>();
 
   for (const vesselRows of byVessel.values()) {
     for (const row of vesselRows) {
-      shipmentCount += 1;
+      rowCount += 1;
+      const contractNumber = String(row.contract_number || '').trim();
+      if (contractNumber) contracts.add(contractNumber);
       totalQty += Number(row.outstanding_qty ?? 0);
       sumLoadingEtaEtr += Number(row[deltaField(mode, 'loading_delta_eta_etr_days')] ?? 0);
       sumLoadingEtaEtb += Number(row[deltaField(mode, 'loading_delta_eta_etb_days')] ?? 0);
@@ -339,18 +342,18 @@ function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMod
     }
   }
 
-  if (shipmentCount === 0) return { ...EMPTY_SUMMARY };
+  if (rowCount === 0) return { ...EMPTY_SUMMARY };
 
   return {
     vesselCount: byVessel.size,
-    shipmentCount,
+    contractCount: contracts.size,
     totalQty,
-    avgLoadingEtaEtr: sumLoadingEtaEtr / shipmentCount,
-    avgLoadingEtaEtb: sumLoadingEtaEtb / shipmentCount,
-    avgLoadingEtbEtc: sumLoadingEtbEtc / shipmentCount,
-    avgDischargeEtaEtb: sumDischargeEtaEtb / shipmentCount,
-    avgDischargeEtbEtc: sumDischargeEtbEtc / shipmentCount,
-    avgTotalDelta: sumTotalDelta / shipmentCount,
+    avgLoadingEtaEtr: sumLoadingEtaEtr / rowCount,
+    avgLoadingEtaEtb: sumLoadingEtaEtb / rowCount,
+    avgLoadingEtbEtc: sumLoadingEtbEtc / rowCount,
+    avgDischargeEtaEtb: sumDischargeEtaEtb / rowCount,
+    avgDischargeEtbEtc: sumDischargeEtbEtc / rowCount,
+    avgTotalDelta: sumTotalDelta / rowCount,
   };
 }
 

@@ -540,6 +540,27 @@ export function aggregateLatePerformanceRows(
   let onTrackOpenOutstandingQty = 0;
   let onTrackCloseOutstandingQty = 0;
 
+  let openStatusOutstandingQty = 0;
+  let closeStatusContractQty = 0;
+  let openStatusTradeCount = 0;
+  let openStatusTradeMagnitudeSum = 0;
+  let openStatusTradeSignedSum = 0;
+  let openStatusLogCycleTotal = 0;
+  let openStatusLogCycleCount = 0;
+  let openStatusCashCycleTotal = 0;
+  let openStatusCashCycleCount = 0;
+  let openStatusDpCycleTotal = 0;
+  let openStatusDpCycleCount = 0;
+  let closeStatusTradeCount = 0;
+  let closeStatusTradeMagnitudeSum = 0;
+  let closeStatusTradeSignedSum = 0;
+  let closeStatusLogCycleTotal = 0;
+  let closeStatusLogCycleCount = 0;
+  let closeStatusCashCycleTotal = 0;
+  let closeStatusCashCycleCount = 0;
+  let closeStatusDpCycleTotal = 0;
+  let closeStatusDpCycleCount = 0;
+
   type DistBucket = { count: number; qty: number };
   const dist: Record<string, DistBucket> = {
     noData: { count: 0, qty: 0 },
@@ -678,6 +699,11 @@ export function aggregateLatePerformanceRows(
         : Number(row.total_sto_quantity || 0);
     const _outstandingQty = Math.max(0, _qtyOrdered - _subtracted);
 
+    if (includeSummary) {
+      if (isOpen) openStatusOutstandingQty += _outstandingQty;
+      else if (isClosed) closeStatusContractQty += _qtyOrdered;
+    }
+
     const cargoReady = row.cargo_readiness_date;
     let logCycle: number | null = null;
     if (cargoReady) {
@@ -711,6 +737,24 @@ export function aggregateLatePerformanceRows(
       }
     }
 
+    const dpRaw =
+      (spd?.payment?.dp_date && String(spd.payment.dp_date).trim()) ||
+      (spd?.raw?.['DP Date'] && String(spd.raw['DP Date']).trim()) ||
+      null;
+    const dpDate = dpRaw ? due(dpRaw) : null;
+    let dpCycle: number | null = null;
+    if (dpDate) {
+      if (isClosed) {
+        dpCycle = transport.startsWith('LAND')
+          ? diffInDays(row.last_trucking_completion_date, dpDate)
+          : diffInDays(row.last_ata_vessel_complete_discharge, dpDate);
+      } else if (isOpen) {
+        dpCycle = transport.startsWith('LAND')
+          ? diffInDays(dpDate, row.last_trucking_daily_deliverable_date)
+          : diffInDays(dpDate, row.last_eta_vessel_complete_discharge);
+      }
+    }
+
     if (tradeCycle == null) {
       if (includeSummary) {
         debugCounts.tradeCycleNull += 1;
@@ -720,6 +764,44 @@ export function aggregateLatePerformanceRows(
       }
       continue;
     }
+
+    if (includeSummary) {
+      const tradeMagnitude = tradeCycle <= 0 ? -tradeCycle : tradeCycle;
+      if (isOpen) {
+        openStatusTradeCount += 1;
+        openStatusTradeMagnitudeSum += tradeMagnitude;
+        openStatusTradeSignedSum += tradeCycle;
+        if (logCycle != null) {
+          openStatusLogCycleTotal += logCycle;
+          openStatusLogCycleCount += 1;
+        }
+        if (cashCycle != null) {
+          openStatusCashCycleTotal += cashCycle;
+          openStatusCashCycleCount += 1;
+        }
+        if (dpCycle != null) {
+          openStatusDpCycleTotal += dpCycle;
+          openStatusDpCycleCount += 1;
+        }
+      } else if (isClosed) {
+        closeStatusTradeCount += 1;
+        closeStatusTradeMagnitudeSum += tradeMagnitude;
+        closeStatusTradeSignedSum += tradeCycle;
+        if (logCycle != null) {
+          closeStatusLogCycleTotal += logCycle;
+          closeStatusLogCycleCount += 1;
+        }
+        if (cashCycle != null) {
+          closeStatusCashCycleTotal += cashCycle;
+          closeStatusCashCycleCount += 1;
+        }
+        if (dpCycle != null) {
+          closeStatusDpCycleTotal += dpCycle;
+          closeStatusDpCycleCount += 1;
+        }
+      }
+    }
+
     if (tradeCycle <= 0) {
       if (includeSummary) {
         debugCounts.tradeCycleNonPositive += 1;
@@ -835,6 +917,20 @@ export function aggregateLatePerformanceRows(
   const out: {
     summary?: Record<string, unknown>;
     onTrackSummary?: Record<string, unknown>;
+    statusCardSummary?: {
+      openOutstandingQty: number;
+      closeContractQty: number;
+      openAvgDays: number;
+      openAvgLogCycle: number | null;
+      openAvgDpCycle: number | null;
+      openAvgCashCycle: number | null;
+      openIsLateContext: boolean;
+      closeAvgDays: number;
+      closeAvgLogCycle: number | null;
+      closeAvgDpCycle: number | null;
+      closeAvgCashCycle: number | null;
+      closeIsLateContext: boolean;
+    };
     distribution?: Record<string, DistBucket>;
     tree?: any[];
     onTrackTree?: any[];
@@ -863,6 +959,26 @@ export function aggregateLatePerformanceRows(
       avgCashCycle: onTrackCashCycleCount > 0 ? Math.round(onTrackTotalCashCycle / onTrackCashCycleCount) : null,
       openOutstandingQty: onTrackOpenOutstandingQty,
       closeOutstandingQty: onTrackCloseOutstandingQty,
+    };
+    out.statusCardSummary = {
+      openOutstandingQty: openStatusOutstandingQty,
+      closeContractQty: closeStatusContractQty,
+      openAvgDays: openStatusTradeCount > 0 ? openStatusTradeMagnitudeSum / openStatusTradeCount : 0,
+      openAvgLogCycle:
+        openStatusLogCycleCount > 0 ? Math.round(openStatusLogCycleTotal / openStatusLogCycleCount) : null,
+      openAvgDpCycle:
+        openStatusDpCycleCount > 0 ? Math.round(openStatusDpCycleTotal / openStatusDpCycleCount) : null,
+      openAvgCashCycle:
+        openStatusCashCycleCount > 0 ? Math.round(openStatusCashCycleTotal / openStatusCashCycleCount) : null,
+      openIsLateContext: openStatusTradeCount > 0 ? openStatusTradeSignedSum / openStatusTradeCount > 0 : false,
+      closeAvgDays: closeStatusTradeCount > 0 ? closeStatusTradeMagnitudeSum / closeStatusTradeCount : 0,
+      closeAvgLogCycle:
+        closeStatusLogCycleCount > 0 ? Math.round(closeStatusLogCycleTotal / closeStatusLogCycleCount) : null,
+      closeAvgDpCycle:
+        closeStatusDpCycleCount > 0 ? Math.round(closeStatusDpCycleTotal / closeStatusDpCycleCount) : null,
+      closeAvgCashCycle:
+        closeStatusCashCycleCount > 0 ? Math.round(closeStatusCashCycleTotal / closeStatusCashCycleCount) : null,
+      closeIsLateContext: closeStatusTradeCount > 0 ? closeStatusTradeSignedSum / closeStatusTradeCount > 0 : false,
     };
     out.distribution = dist;
     if (filters.debug) {
