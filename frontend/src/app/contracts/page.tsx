@@ -200,6 +200,41 @@ function contractMatchesUnassignedCardFilter(c: Contract, filter: ContractsUnass
   return mode.startsWith('MIX') && (noShipment || noTrucking)
 }
 
+function getStatusColor(status: string) {
+  switch (status) {
+    case 'Close':
+    case 'CLOSE':
+    case 'Completed':
+    case 'COMPLETED':
+      return 'bg-blue-100 text-blue-800'
+    case 'Open':
+    case 'OPEN':
+    case 'ACTIVE':
+      return 'bg-green-100 text-green-800'
+    case 'Cancelled':
+    case 'CANCELLED':
+      return 'bg-red-100 text-red-800'
+    default:
+      return 'bg-gray-100 text-gray-800'
+  }
+}
+
+function getContractOverallStatus(
+  c: Pick<Contract, 'import_status' | 'status' | 'payment_status'>,
+): string {
+  const delivery = String(c.import_status || c.status || '').toUpperCase()
+  const paid = String(c.payment_status || '').toUpperCase() === 'PAID'
+  return delivery === 'CLOSE' && paid ? 'Close' : (c.import_status || c.status || '-')
+}
+
+function ContractStatusBadge({ status }: { status: string }) {
+  return (
+    <Badge className={getStatusColor(status)}>
+      {status}
+    </Badge>
+  )
+}
+
 /**
  * B2B contracts: show Buyer in Parties the same as Company Name (display-only).
  */
@@ -1814,26 +1849,6 @@ function ContractsPageContent() {
     unassignedFilter !== null ||
     hasActiveSectionOneColumnFilters(columnFilters)
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'Close':
-      case 'CLOSE':
-      case 'Completed':
-      case 'COMPLETED':
-        return 'bg-blue-100 text-blue-800'
-      case 'Open':
-      case 'OPEN':
-      case 'ACTIVE': // backward compatibility
-        return 'bg-green-100 text-green-800'
-      case 'COMPLETED':
-        return 'bg-blue-100 text-blue-800'
-      case 'Cancelled':
-      case 'CANCELLED':
-        return 'bg-red-100 text-red-800'
-      default:
-        return 'bg-gray-100 text-gray-800'
-    }
-  }
   const countGt0 = (v: unknown) => {
     const n = typeof v === 'string' ? parseFloat(v) : Number(v)
     return Number.isFinite(n) && n > 0
@@ -5075,12 +5090,8 @@ function ContractsPageContent() {
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Status</div>
-                        <div className="font-medium mt-1">
-                          {(() => {
-                            const delivery = String(selectedContract.import_status || selectedContract.status || '').toUpperCase()
-                            const paid = String(selectedContract.payment_status || '').toUpperCase() === 'PAID'
-                            return delivery === 'CLOSE' && paid ? 'Close' : (selectedContract.import_status || selectedContract.status || '-')
-                          })()}
+                        <div className="mt-1">
+                          <ContractStatusBadge status={getContractOverallStatus(selectedContract)} />
                         </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
@@ -5102,9 +5113,7 @@ function ContractsPageContent() {
                       <div className="p-3 bg-gray-50 rounded">
                         <div className="text-gray-500">Delivery Status</div>
                         <div className="mt-1">
-                          <Badge className={getStatusColor(selectedContract.import_status || selectedContract.status)}>
-                            {selectedContract.import_status || selectedContract.status}
-                          </Badge>
+                          <ContractStatusBadge status={selectedContract.import_status || selectedContract.status || '-'} />
                         </div>
                       </div>
                       <div className="p-3 bg-gray-50 rounded">
