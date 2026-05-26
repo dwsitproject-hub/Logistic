@@ -33,6 +33,8 @@ interface ShippingPerformanceRow {
   contract_date?: string | null
   incoterm?: string | null
   product?: string | null
+  supplier?: string | null
+  contract_qty?: number | null
   status?: string | null
   plant_site?: string | null
   vessel_name: string | null
@@ -88,6 +90,8 @@ const DETAIL_COLUMN_KEYS = new Set<string>([
   'group_name',
   'incoterm',
   'product',
+  'supplier',
+  'contract_qty',
   'plant_site',
   'contract_date',
   'loading_port',
@@ -151,6 +155,8 @@ function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceR
     contract_date: null,
     incoterm: null,
     product: null,
+    supplier: null,
+    contract_qty: sumMetric(vesselRows, 'contract_qty'),
     status: null,
     plant_site: null,
     shipment_count: vesselRows.length,
@@ -530,6 +536,8 @@ const COLUMN_DEFS: ColumnDef[] = [
   { key: 'discharge_port', label: 'Discharge Port', type: 'text', defaultVisible: true },
   { key: 'incoterm', label: 'Incoterm', type: 'text', defaultVisible: true },
   { key: 'product', label: 'Product', type: 'text', defaultVisible: true },
+  { key: 'supplier', label: 'Supplier', type: 'text', defaultVisible: true },
+  { key: 'contract_qty', label: 'Contract Qty', type: 'number', defaultVisible: true },
   { key: 'group_name', label: 'Supplier Group', type: 'text', defaultVisible: false },
   { key: 'shipment_count', label: 'Shipments', type: 'number', defaultVisible: false },
   { key: 'shipment_id', label: 'Shipment ID', type: 'text', defaultVisible: true },
@@ -1664,7 +1672,7 @@ export default function ShippingPerformancePage() {
                             const rawValue = row[key]
                             return (
                               <td key={`${row.id}-${String(key)}`} className="px-3 py-2 whitespace-nowrap">
-                                {(key === 'sto_qty' || key === 'received_qty' || key === 'outstanding_qty')
+                                {(key === 'sto_qty' || key === 'received_qty' || key === 'outstanding_qty' || key === 'contract_qty')
                                   ? (rawValue === null || rawValue === undefined
                                       ? <span className="text-gray-400">-</span>
                                       : <span>{(Number(rawValue) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>)

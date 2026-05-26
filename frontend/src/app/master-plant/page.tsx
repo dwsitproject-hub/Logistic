@@ -209,32 +209,45 @@ export default function MasterPlantPage() {
         return
       }
 
-      const res = await api.post('/master-plants/upload', { rows: payloadRows })
-      const data = res.data?.data
-      if (data) {
-        setUploadResult({
-          total: data.total ?? payloadRows.length,
-          success: (data.inserted ?? 0) + (data.updated ?? 0),
-          inserted: data.inserted ?? 0,
-          updated: data.updated ?? 0,
-          failed: data.failed ?? 0,
-          errors: data.errors ?? [],
-        })
-      } else {
-        setUploadResult({
-          total: payloadRows.length,
-          success: payloadRows.length,
-          inserted: payloadRows.length,
-          updated: 0,
-          failed: 0,
-          errors: [],
-        })
+      const BATCH_SIZE = 50
+      let totalInserted = 0
+      let totalUpdated = 0
+      let totalFailed = 0
+      const allErrors: Array<{ row: number; plant_code: string; reason: string }> = []
+
+      for (let offset = 0; offset < payloadRows.length; offset += BATCH_SIZE) {
+        const chunk = payloadRows.slice(offset, offset + BATCH_SIZE)
+        const res = await api.post('/master-plants/upload', { rows: chunk })
+        const data = res.data?.data
+        if (data) {
+          totalInserted += data.inserted ?? 0
+          totalUpdated += data.updated ?? 0
+          totalFailed += data.failed ?? 0
+          if (Array.isArray(data.errors)) {
+            allErrors.push(...data.errors)
+          }
+        } else {
+          totalInserted += chunk.length
+        }
       }
+
+      setUploadResult({
+        total: payloadRows.length,
+        success: totalInserted + totalUpdated,
+        inserted: totalInserted,
+        updated: totalUpdated,
+        failed: totalFailed,
+        errors: allErrors,
+      })
 
       await fetchData(debouncedSearch)
     } catch (err: any) {
       console.error('Upload master plant file error', err)
-      const msg = err?.response?.data?.error?.message || 'Failed to parse or upload file'
+      const msg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to parse or upload file'
       alert(msg)
     } finally {
       e.target.value = ''

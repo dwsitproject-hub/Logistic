@@ -47,8 +47,15 @@ dotenv.config();
 
 const app: Application = express();
 const PORT = process.env.PORT || 5001;
+const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || '50mb';
 
-// Swagger configuration
+// Middleware
+app.use(helmet());
+app.use(cors());
+app.use(compression());
+app.use(morgan('combined', { stream: { write: (message) => logger.info(message.trim()) } }));
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
+app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
@@ -82,14 +89,6 @@ const swaggerOptions = {
 };
 
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
-
-// Middleware
-app.use(helmet());
-app.use(cors());
-app.use(compression());
-app.use(morgan('combined', { stream: { write: (message) => logger.info(message.trim()) } }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
 // API Documentation
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));

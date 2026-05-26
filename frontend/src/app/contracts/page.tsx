@@ -177,6 +177,29 @@ function isContractB2b(c: Pick<Contract, 'b2b_flag' | 'contract_type'>): boolean
   return contractType === 'B2B' || b2bFlag === 'B2B'
 }
 
+type ContractsUnassignedCardFilter = 'sea' | 'land' | 'mix'
+
+function contractCountGt0(v: unknown): boolean {
+  const n = typeof v === 'string' ? parseFloat(v) : Number(v)
+  return Number.isFinite(n) && n > 0
+}
+
+/** Client-side guard for summary-card filter (mirrors GET /contracts?unassigned=). */
+function contractIsOpen(c: Contract): boolean {
+  const raw = (c.import_status || c.status || '').toUpperCase()
+  return raw === 'OPEN' || raw === 'ACTIVE'
+}
+
+function contractMatchesUnassignedCardFilter(c: Contract, filter: ContractsUnassignedCardFilter): boolean {
+  if (!contractIsOpen(c)) return false
+  const mode = String(c.transport_mode || '').toUpperCase()
+  const noShipment = !contractCountGt0(c.shipment_count) && !contractCountGt0(c.sto_count)
+  const noTrucking = !contractCountGt0(c.trucking_count)
+  if (filter === 'sea') return mode.startsWith('SEA') && noShipment
+  if (filter === 'land') return mode.startsWith('LAND') && noTrucking
+  return mode.startsWith('MIX') && (noShipment || noTrucking)
+}
+
 /**
  * B2B contracts: show Buyer in Parties the same as Company Name (display-only).
  */
@@ -755,10 +778,7 @@ function ContractsPageContent() {
   const bottomScrollRef = useRef<HTMLDivElement | null>(null)
   const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
   const isSyncingScroll = useRef(false)
-  // Contracts page: default Open so the list and SEA/LAND "without shipment/trucking" cards show actionable open contracts only.
-  const [statusFilter, setStatusFilter] = useState<string>(() =>
-    pathname === '/contract-performance' ? 'All Status' : 'Open'
-  )
+  const [statusFilter, setStatusFilter] = useState<string>('All Status')
   const [b2bFlagFilter, setB2bFlagFilter] = useState<string>('ALL')
   /** Default YTD on first load so GET /contracts stays bounded (same as Contract Performance). */
   const [dateFrom, setDateFrom] = useState(() => {
@@ -1412,8 +1432,10 @@ function ContractsPageContent() {
         params.append('columnFilters', JSON.stringify(mergedColumnFilters))
       }
 
-      // Status: only send when a specific value is chosen. "All Status" omits the param so counts and list include every status.
-      if (statusFilter && statusFilter !== 'All Status') {
+      // Status: summary-card drilldown always Open; otherwise respect global status filter.
+      if (!isContractPerformance && unassignedFilter) {
+        params.append('status', 'Open')
+      } else if (statusFilter && statusFilter !== 'All Status') {
         params.append('status', statusFilter)
       }
       if (!isContractPerformance) {
@@ -1698,7 +1720,7 @@ function ContractsPageContent() {
     }
   }, [authReady])
 
-  // Dashboard cards: SEA without shipments, LAND without trucking — reflect active filters
+  // Summary alert cards — always Open contracts; other global filters still apply.
   const fetchUnassignedCounts = useCallback(async () => {
     if (!authReady) return
     try {
@@ -1722,9 +1744,6 @@ function ContractsPageContent() {
       if (selectedGroupPlants.length > 0) {
         selectedGroupPlants.forEach((p) => params.append('plant', p))
       }
-      if (statusFilter && statusFilter !== 'All Status') {
-        params.append('status', statusFilter)
-      }
       const res = await api.get<{
         success: boolean
         data: { seaWithoutShipments: number; landWithoutTrucking: number; mixWithoutLogistics: number }
@@ -1747,13 +1766,53 @@ function ContractsPageContent() {
     transportModeFilter,
     dateFrom,
     dateTo,
-    statusFilter,
   ])
 
   useEffect(() => {
     if (isContractPerformance) return
     fetchUnassignedCounts()
   }, [fetchUnassignedCounts, isContractPerformance])
+
+  const toggleContractsUnassignedFilter = useCallback((mode: ContractsUnassignedCardFilter) => {
+    setCurrentPage(1)
+    setUnassignedFilter((prev) => {
+      const next = prev === mode ? null : mode
+      if (next) {
+        setStatusFilter('Open')
+        setTimeout(() => contractsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
+      }
+      return next
+    })
+  }, [])
+
+  const clearContractsPageFilters = useCallback(() => {
+    setDateFrom('')
+    setDateTo('')
+    setSearchDraft('')
+    setSearchTerm('')
+    setTransportModeFilter('ALL')
+    setSelectedProducts([])
+    setSelectedIncoterms([])
+    setSelectedGroupPlants([])
+    setB2bFlagFilter('ALL')
+    setStatusFilter('All Status')
+    setUnassignedFilter(null)
+    setColumnFilters({})
+    setCurrentPage(1)
+  }, [])
+
+  const hasActiveContractsPageFilters =
+    Boolean(dateFrom) ||
+    Boolean(dateTo) ||
+    searchTerm.trim().length > 0 ||
+    transportModeFilter !== 'ALL' ||
+    selectedProducts.length > 0 ||
+    selectedIncoterms.length > 0 ||
+    selectedGroupPlants.length > 0 ||
+    b2bFlagFilter !== 'ALL' ||
+    statusFilter !== 'All Status' ||
+    unassignedFilter !== null ||
+    hasActiveSectionOneColumnFilters(columnFilters)
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -2354,10 +2413,14 @@ function ContractsPageContent() {
     return true
   }
 
-  // Search + most column filters run on the server; only computed UI columns filter here
+  // Search + most column filters run on the server; summary-card filter also applied client-side on the current page slice.
   const filteredContracts = useMemo(() => {
-    return contracts.filter((contract) => passesColumnFilters(contract, clientOnlyColumnFilters))
-  }, [contracts, clientOnlyColumnFilters])
+    let rows = contracts.filter((contract) => passesColumnFilters(contract, clientOnlyColumnFilters))
+    if (!isContractPerformance && unassignedFilter) {
+      rows = rows.filter((contract) => contractMatchesUnassignedCardFilter(contract, unassignedFilter))
+    }
+    return rows
+  }, [contracts, clientOnlyColumnFilters, isContractPerformance, unassignedFilter])
 
   type CompactColumn = {
     id: string
@@ -3676,6 +3739,71 @@ function ContractsPageContent() {
           </Card>
         )}
 
+        {!isContractPerformance && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Card
+              className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'sea' ? 'ring-2 ring-blue-500 bg-blue-50/50' : ''}`}
+              onClick={() => toggleContractsUnassignedFilter('sea')}
+            >
+              <CardContent className="pt-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm text-gray-500">SEA contracts without shipments</div>
+                    <div className="text-2xl font-semibold text-gray-900 mt-1">
+                      {unassignedSeaContracts}
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {unassignedFilter === 'sea' ? 'Click again to clear' : 'Click to filter table'}
+                    </div>
+                  </div>
+                  <Ship className="h-8 w-8 text-blue-500" />
+                </div>
+              </CardContent>
+            </Card>
+            <Card
+              className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'land' ? 'ring-2 ring-amber-500 bg-amber-50/50' : ''}`}
+              onClick={() => toggleContractsUnassignedFilter('land')}
+            >
+              <CardContent className="pt-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm text-gray-500">LAND contracts without trucking</div>
+                    <div className="text-2xl font-semibold text-gray-900 mt-1">
+                      {unassignedLandContracts}
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {unassignedFilter === 'land' ? 'Click again to clear' : 'Click to filter table'}
+                    </div>
+                  </div>
+                  <Truck className="h-8 w-8 text-amber-500" />
+                </div>
+              </CardContent>
+            </Card>
+            <Card
+              className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'mix' ? 'ring-2 ring-green-500 bg-green-50/50' : ''}`}
+              onClick={() => toggleContractsUnassignedFilter('mix')}
+            >
+              <CardContent className="pt-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm text-gray-500">MIX contracts without shipment or trucking</div>
+                    <div className="text-2xl font-semibold text-gray-900 mt-1">
+                      {unassignedMixContracts}
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {unassignedFilter === 'mix' ? 'Click again to clear' : 'Click to filter table'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Ship className="h-7 w-7 text-green-500" />
+                    <Truck className="h-7 w-7 text-green-500" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
         {/* Filters */}
         <Card>
           <CardContent className="pt-6">
@@ -3702,6 +3830,9 @@ function ContractsPageContent() {
                     const value = e.target.value
                     if (isContractPerformance) lockSection1FilterChange()
                     setStatusFilter(value)
+                    if (!isContractPerformance && unassignedFilter && value !== 'Open') {
+                      setUnassignedFilter(null)
+                    }
                     if (isContractPerformance) {
                       setSummaryCardStatus(value === 'Open' || value === 'Close' ? value : 'All')
                       setCurrentPage(1)
@@ -3859,7 +3990,7 @@ function ContractsPageContent() {
                     b2bFlagFilter !== 'ALL' ||
                     statusFilter !== 'All Status' ||
                     summaryCardStatus !== 'All' ||
-                    (!isContractPerformance && unassignedFilter) ||
+                    (!isContractPerformance && hasActiveContractsPageFilters) ||
                     hasActiveSectionOneColumnFilters(columnFilters) ||
                     (isContractPerformance &&
                       (lateOnTimeFilter !== 'ALL' ||
@@ -3874,26 +4005,25 @@ function ContractsPageContent() {
                     <Button
                       onClick={() => {
                         lockSection1FilterChange()
-                        setDateFrom('')
-                        setDateTo('')
-                        setSearchDraft('')
-                        setSearchTerm('')
-                        setTransportModeFilter('ALL')
-                        setSelectedProducts([])
-                        setSelectedIncoterms([])
-                        setSelectedGroupPlants([])
-                        setSelectedProductTab('All')
-                        setB2bFlagFilter('ALL')
-                        setStatusFilter('All Status')
-                        setSummaryCardStatus('All')
-                        setColumnFilters({})
                         if (!isContractPerformance) {
-                          setUnassignedFilter(null)
+                          clearContractsPageFilters()
                         } else {
+                          setDateFrom('')
+                          setDateTo('')
+                          setSearchDraft('')
+                          setSearchTerm('')
+                          setTransportModeFilter('ALL')
+                          setSelectedProducts([])
+                          setSelectedIncoterms([])
+                          setSelectedGroupPlants([])
+                          setSelectedProductTab('All')
+                          setB2bFlagFilter('ALL')
+                          setStatusFilter('All Status')
+                          setSummaryCardStatus('All')
+                          setColumnFilters({})
                           resetLatePerfSelections()
+                          setCurrentPage(1)
                         }
-                        setCurrentPage(1)
-                        fetchContracts(1, '')
                       }}
                       variant="ghost"
                       size="sm"
@@ -3908,79 +4038,6 @@ function ContractsPageContent() {
             </div>
           </CardContent>
         </Card>
-
-        {!isContractPerformance && (
-          <>
-            {/* Assignment summary - clickable to filter list */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Card
-                className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'sea' ? 'ring-2 ring-blue-500 bg-blue-50/50' : ''}`}
-                onClick={() => {
-                  setUnassignedFilter(prev => (prev === 'sea' ? null : 'sea'))
-                  if (unassignedFilter !== 'sea') setTimeout(() => contractsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
-                }}
-              >
-                <CardContent className="pt-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm text-gray-500">SEA contracts without shipments</div>
-                      <div className="text-2xl font-semibold text-gray-900 mt-1">
-                        {unassignedSeaContracts}
-                      </div>
-                      <div className="text-xs text-gray-400 mt-1">Click to view list</div>
-                    </div>
-                    <Ship className="h-8 w-8 text-blue-500" />
-                  </div>
-                </CardContent>
-              </Card>
-              <Card
-                className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'land' ? 'ring-2 ring-amber-500 bg-amber-50/50' : ''}`}
-                onClick={() => {
-                  setUnassignedFilter(prev => (prev === 'land' ? null : 'land'))
-                  if (unassignedFilter !== 'land') setTimeout(() => contractsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
-                }}
-              >
-                <CardContent className="pt-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm text-gray-500">LAND contracts without trucking</div>
-                      <div className="text-2xl font-semibold text-gray-900 mt-1">
-                        {unassignedLandContracts}
-                      </div>
-                      <div className="text-xs text-gray-400 mt-1">Click to view list</div>
-                    </div>
-                    <Truck className="h-8 w-8 text-amber-500" />
-                  </div>
-                </CardContent>
-              </Card>
-              <Card
-                className={`cursor-pointer transition-all hover:shadow-md ${unassignedFilter === 'mix' ? 'ring-2 ring-green-500 bg-green-50/50' : ''}`}
-                onClick={() => {
-                  setUnassignedFilter(prev => (prev === 'mix' ? null : 'mix'))
-                  if (unassignedFilter !== 'mix') setTimeout(() => contractsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
-                }}
-              >
-                <CardContent className="pt-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm text-gray-500">MIX contracts without shipment or trucking</div>
-                      <div className="text-2xl font-semibold text-gray-900 mt-1">
-                        {unassignedMixContracts}
-                      </div>
-                      <div className="text-xs text-gray-400 mt-1">Click to view list</div>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Ship className="h-7 w-7 text-green-500" />
-                      <Truck className="h-7 w-7 text-green-500" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Active filter banner */}
-          </>
-        )}
 
         {/* Contracts List */}
         <Card ref={contractsTableRef}>
@@ -4016,7 +4073,7 @@ function ContractsPageContent() {
                           ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
                           : 'bg-green-100 text-green-700 hover:bg-green-200'
                     }`}
-                    onClick={() => setUnassignedFilter(null)}
+                    onClick={() => toggleContractsUnassignedFilter(unassignedFilter)}
                   >
                     <X className="h-3 w-3 mr-1" />
                     Clear filter

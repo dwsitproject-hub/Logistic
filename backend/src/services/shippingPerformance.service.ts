@@ -163,6 +163,8 @@ const SHIPPING_PERFORMANCE_SQL = `
         c.contract_date::date AS contract_date,
         c.incoterm,
         c.product,
+        c.supplier,
+        COALESCE(c.quantity_ordered, 0)::numeric AS contract_qty,
         s.vessel_name,
         s.status,
         COALESCE(
