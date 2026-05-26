@@ -75,3 +75,22 @@ export function isDueDatePastToday(dueEnd: unknown, today: Date = new Date()): b
   if (!dueKey || !todayKey) return false;
   return dueKey < todayKey;
 }
+
+/** On Time / Late / - — actual completion first, then ETA, then past-due fallback. */
+export function computeLateIndicatorText(
+  dueEnd: unknown,
+  actualCompletion: unknown,
+  etaCompletion?: unknown,
+  today: Date = new Date(),
+): string {
+  if (!dueEnd) return '-';
+  if (actualCompletion) {
+    const late = isCompletionLateVsDue(dueEnd, actualCompletion);
+    return late == null ? '-' : late ? 'Late' : 'On Time';
+  }
+  if (etaCompletion) {
+    const late = isCompletionLateVsDue(dueEnd, etaCompletion);
+    return late == null ? '-' : late ? 'Late' : 'On Time';
+  }
+  return isDueDatePastToday(dueEnd, today) ? 'Late' : 'On Time';
+}

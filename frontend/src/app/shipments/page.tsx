@@ -251,6 +251,49 @@ interface DocumentItem {
   created_at?: string
 }
 
+function ShipmentRowEditButton({
+  visible,
+  hasShipmentEditData,
+  onEdit,
+}: {
+  visible: boolean
+  hasShipmentEditData: boolean
+  onEdit: () => void
+}) {
+  if (!visible) return null
+
+  const button = (
+    <Button
+      variant="outline"
+      size="icon"
+      disabled={!hasShipmentEditData}
+      onClick={() => {
+        if (!hasShipmentEditData) return
+        onEdit()
+      }}
+      aria-disabled={!hasShipmentEditData}
+      className={
+        hasShipmentEditData
+          ? undefined
+          : 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-300 opacity-60 shadow-none hover:bg-gray-100 hover:text-gray-300'
+      }
+    >
+      <Pencil className="h-4 w-4" />
+    </Button>
+  )
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex">{button}</span>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {hasShipmentEditData ? 'Edit' : 'Shipment data is not available'}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 function ShipmentsPageContent() {
   const searchParams = useSearchParams()
   const perms = usePermissions()
@@ -4281,6 +4324,7 @@ function ShipmentsPageContent() {
                           </tr>
                         ) : sortedShipments.map((shipment, idx) => {
                           const isEditing = editingId === shipment.id
+                          const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
                           const rowBg = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                           return (
                             <>
@@ -4462,23 +4506,17 @@ function ShipmentsPageContent() {
                                       </>
                                     ) : (
                                       <>
-                                      {canShowEditShipmentButton &&
-                                        shipment.vessel_name?.trim() && (
-                                          <Button
-                                            variant="outline"
-                                            size="icon"
-                                            onClick={() => {
-                                              if (perms.loaded && !canEditShipment) {
-                                                alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
-                                                return
-                                              }
-                                              handleEdit(shipment)
-                                            }}
-                                            title="Edit"
-                                          >
-                                            <Pencil className="h-4 w-4" />
-                                          </Button>
-                                        )}
+                                      <ShipmentRowEditButton
+                                        visible={canShowEditShipmentButton}
+                                        hasShipmentEditData={hasShipmentEditData}
+                                        onEdit={() => {
+                                          if (perms.loaded && !canEditShipment) {
+                                            alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
+                                            return
+                                          }
+                                          handleEdit(shipment)
+                                        }}
+                                      />
                                         <Button
                                           variant="outline"
                                           size="icon"
@@ -4654,6 +4692,7 @@ function ShipmentsPageContent() {
                 <div className="lg:hidden space-y-2">
                   {sortedShipments.map((shipment) => {
                     const isEditing = editingId === shipment.id
+                    const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
                     return (
                       <div
                         key={shipment.id}
@@ -4696,23 +4735,17 @@ function ShipmentsPageContent() {
                                 </>
                               ) : (
                                 <>
-                                  {canShowEditShipmentButton &&
-                                    shipment.vessel_name?.trim() && (
-                                      <Button
-                                        variant="outline"
-                                        size="icon"
-                                        onClick={() => {
-                                          if (perms.loaded && !canEditShipment) {
-                                            alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
-                                            return
-                                          }
-                                          handleEdit(shipment)
-                                        }}
-                                        title="Edit"
-                                      >
-                                        <Pencil className="h-4 w-4" />
-                                      </Button>
-                                    )}
+                                  <ShipmentRowEditButton
+                                    visible={canShowEditShipmentButton}
+                                    hasShipmentEditData={hasShipmentEditData}
+                                    onEdit={() => {
+                                      if (perms.loaded && !canEditShipment) {
+                                        alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
+                                        return
+                                      }
+                                      handleEdit(shipment)
+                                    }}
+                                  />
                                   <Button variant="outline" size="icon" onClick={() => handleViewLoadingPorts(shipment)} title="Ports" className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
                                     <Ship className="h-4 w-4" />
                                   </Button>

@@ -2,8 +2,7 @@ import { Response } from 'express';
 import { query } from '../database/connection';
 import {
   diffCalendarDays,
-  isCompletionLateVsDue,
-  isDueDatePastToday,
+  computeLateIndicatorText,
 } from '../utils/calendarDays';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
@@ -1852,22 +1851,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       return res.status(404).json({ success: false, error: { message: 'Contract not found' } });
     }
     const contract = contractResult.rows[0];
-    const deliveryEnd = contract.delivery_end_date ? new Date(contract.delivery_end_date) : null;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const computeLateIndicator = (endDate: Date | null, ataDate: string | null, etaDate: string | null): string => {
-      if (!endDate) return '-';
-      if (ataDate) {
-        const late = isCompletionLateVsDue(endDate, ataDate);
-        return late == null ? '-' : late ? 'Late' : 'On Time';
-      }
-      if (etaDate) {
-        const late = isCompletionLateVsDue(endDate, etaDate);
-        return late == null ? '-' : late ? 'Late' : 'On Time';
-      }
-      return isDueDatePastToday(endDate, today) ? 'Late' : 'On Time';
-    };
+    const deliveryEnd = contract.delivery_end_date ?? null;
 
     // Shipment STOs: group by effective STO (prefer contracts.sto_number, then latest SAP STO, then operation/shipment ids)
     const shipmentStosQuery = `
@@ -2028,10 +2012,10 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
     const truckingRows = await query(truckingStosQuery, [id]);
 
     const shipmentStos = shipmentRows.rows.map((r: any) => {
-      const lateIndicator = computeLateIndicator(
+      const lateIndicator = computeLateIndicatorText(
         deliveryEnd,
         r.ata_discharge_complete,
-        r.eta_discharge_complete
+        r.eta_vessel_arrival_loading_port,
       );
       return {
         type: 'shipment',
@@ -2049,10 +2033,10 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
     });
 
     const truckingStos = truckingRows.rows.map((r: any) => {
-      const lateIndicator = computeLateIndicator(
+      const lateIndicator = computeLateIndicatorText(
         deliveryEnd,
         r.trucking_completion_date,
-        r.eta_trucking_completion_date
+        r.eta_trucking_completion_date,
       );
       return {
         type: 'trucking',
