@@ -13,6 +13,8 @@
     "migrate:sea-trucking-to-shipments": "ts-node src/scripts/migrateSeaTruckingToShipments.ts",
     "cleanup:false-land-trucking": "ts-node src/scripts/removeFalseLandTruckingOperations.ts",
     "cleanup:false-sea-shipments": "ts-node src/scripts/removeFalseSeaShipments.ts",
+    "cleanup:master-plants": "ts-node src/scripts/clearMasterPlants.ts",
+    "cleanup:master-plants:confirm": "ts-node src/scripts/clearMasterPlants.ts --confirm",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
