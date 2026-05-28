@@ -38,6 +38,7 @@ import {
 } from '@/components/PermissionsContext'
 
 type EtaDetailFields = {
+  loadingPort: string
   etaVesselArrivalAtLoadingPort: string
   etaVesselBerthedAtLoadingPort: string
   etaVesselStartLoading: string
@@ -53,6 +54,7 @@ type ShipmentEtaDetail = { id: string; contractIds: string[] } & EtaDetailFields
 
 function emptyEtaFields(): EtaDetailFields {
   return {
+    loadingPort: '',
     etaVesselArrivalAtLoadingPort: '',
     etaVesselBerthedAtLoadingPort: '',
     etaVesselStartLoading: '',
@@ -75,6 +77,7 @@ function createShipmentEtaDetail(contractIds: string[] = []): ShipmentEtaDetail 
 
 function etaDetailToApiPayload(d: EtaDetailFields) {
   return {
+    port_of_loading: d.loadingPort || null,
     eta_arrival: d.etaVesselArrivalAtLoadingPort || null,
     eta_berthed: d.etaVesselBerthedAtLoadingPort || null,
     eta_loading_start: d.etaVesselStartLoading || null,
@@ -142,6 +145,10 @@ function formatNumber(num: number | string) {
   })
 }
 
+function generateOperationId(contractId: string): string {
+  return `OP-${contractId}-${Date.now().toString().slice(-8)}`
+}
+
 export function AddShipmentModal({
   open,
   onClose,
@@ -205,6 +212,7 @@ export function AddShipmentModal({
   const [showVesselSuggestions, setShowVesselSuggestions] = useState(false)
   const [portSuggestions, setPortSuggestions] = useState<Array<{ port: string; region: string | null }>>([])
   const [showPortSuggestions, setShowPortSuggestions] = useState(false)
+  const [activeEtaPortRowId, setActiveEtaPortRowId] = useState<string | null>(null)
   const vesselSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const portSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -319,16 +327,29 @@ export function AddShipmentModal({
 
   const handleAddContract = async (contract: any) => {
     const contractId = String(contract.contract_id || contract).trim()
-    if (!newShipment.contractNumbers.includes(contractId)) {
-      await validateContractNumber(contractId)
+    if (!contractId) return
 
-      setNewShipment((prev) => ({
+    await validateContractNumber(contractId)
+
+    let added = false
+    setNewShipment((prev) => {
+      if (prev.contractNumbers.includes(contractId)) return prev
+      added = true
+      const isFirstContract = prev.contractNumbers.length === 0
+      return {
         ...prev,
         contractNumbers: [...prev.contractNumbers, contractId],
-      }))
+        operationId: isFirstContract ? generateOperationId(contractId) : prev.operationId,
+      }
+    })
+
+    if (added) {
+      clearFieldError('contractNumbers')
       setContractQtyAssigned((prev) => ({ ...prev, [contractId]: prev[contractId] ?? '' }))
+      setContractSearchTerm('')
+    } else {
+      showNotification('warning', 'This PO has already been added.')
     }
-    setContractSearchTerm('')
     setShowContractSuggestions(false)
   }
 
@@ -339,14 +360,25 @@ export function AddShipmentModal({
     const resolvedContractId = await validateContractNumber(term)
     if (!resolvedContractId) return
 
-    if (!newShipment.contractNumbers.includes(resolvedContractId)) {
-      setNewShipment((prev) => ({
+    let added = false
+    setNewShipment((prev) => {
+      if (prev.contractNumbers.includes(resolvedContractId)) return prev
+      added = true
+      const isFirstContract = prev.contractNumbers.length === 0
+      return {
         ...prev,
         contractNumbers: [...prev.contractNumbers, resolvedContractId],
-      }))
+        operationId: isFirstContract ? generateOperationId(resolvedContractId) : prev.operationId,
+      }
+    })
+
+    if (added) {
+      clearFieldError('contractNumbers')
       setContractQtyAssigned((prev) => ({ ...prev, [resolvedContractId]: prev[resolvedContractId] ?? '' }))
+      setContractSearchTerm('')
+    } else {
+      showNotification('warning', 'This PO has already been added.')
     }
-    setContractSearchTerm('')
     setShowContractSuggestions(false)
   }
 
@@ -354,6 +386,7 @@ export function AddShipmentModal({
     setNewShipment((prev) => ({
       ...prev,
       contractNumbers: prev.contractNumbers.filter((id) => id !== contractId),
+      operationId: prev.contractNumbers.filter((id) => id !== contractId).length > 0 ? prev.operationId : '',
     }))
     setContractQtyAssigned((prev) => {
       const next = { ...prev }
@@ -506,18 +539,6 @@ export function AddShipmentModal({
     }))
     setShowVesselSuggestions(false)
     setVesselSuggestions([])
-  }
-
-  const handlePortOfLoadingChange = (value: string) => {
-    setNewShipment((prev) => ({ ...prev, portOfLoading: value }))
-    if (portSearchTimeoutRef.current) clearTimeout(portSearchTimeoutRef.current)
-    portSearchTimeoutRef.current = setTimeout(() => fetchPortSuggestions(value), 300)
-  }
-
-  const handleSelectPort = (p: { port: string }) => {
-    setNewShipment((prev) => ({ ...prev, portOfLoading: p.port }))
-    setShowPortSuggestions(false)
-    setPortSuggestions([])
   }
 
   const vesselCapacityNum = newShipment.vesselCapacity ? parseFloat(String(newShipment.vesselCapacity)) : null
@@ -726,7 +747,7 @@ export function AddShipmentModal({
     try {
       setSaving(true)
 
-      const operationId = `OP-${newShipment.contractNumbers[0]}-${Date.now().toString().slice(-8)}`
+      const operationId = newShipment.operationId || generateOperationId(newShipment.contractNumbers[0])
 
       const etaByContract: Record<string, ReturnType<typeof etaDetailToApiPayload>> = {}
       for (const block of etaDetails) {
@@ -766,7 +787,7 @@ export function AddShipmentModal({
 
   const vesselDropdownOpen = showVesselSuggestions && vesselSuggestions.length > 0
   const portDropdownOpen = showPortSuggestions && portSuggestions.length > 0
-  const section2DropdownOpen = vesselDropdownOpen || portDropdownOpen
+  const section2DropdownOpen = vesselDropdownOpen
 
   const step1Done = newShipment.contractNumbers.length > 0 && newShipment.contractNumbers.every((id) => contractValidations[id]?.exists)
   const step2Done = Boolean(newShipment.vesselName.trim() || selectedTransportMode === 'land')
@@ -807,7 +828,7 @@ export function AddShipmentModal({
             {[
               { num: 1, label: 'Contract & PO', done: step1Done, icon: <FileText className="h-3.5 w-3.5" /> },
               { num: 2, label: 'Vessel Detail', done: step2Done, icon: <Anchor className="h-3.5 w-3.5" /> },
-              { num: 3, label: 'ETA Schedule', done: step3Done, icon: <Clock className="h-3.5 w-3.5" /> },
+              { num: 3, label: 'ETA Schedule + Loading Port', done: step3Done, icon: <Clock className="h-3.5 w-3.5" /> },
             ].map((s, i) => (
               <div key={s.num} className="flex items-center">
                 <div className="flex items-center gap-1.5">
@@ -888,8 +909,8 @@ export function AddShipmentModal({
                   </label>
                   <Input
                     value={
-                      newShipment.contractNumbers.length > 0
-                        ? `OP-${newShipment.contractNumbers[0]}-${Date.now().toString().slice(-8)}`
+                      newShipment.operationId
+                        ? newShipment.operationId
                         : 'Auto-generated when PO is added'
                     }
                     disabled
@@ -926,6 +947,7 @@ export function AddShipmentModal({
                           onChange={(e) => handleContractSearch(e.target.value)}
                           onFocus={() => setShowContractSuggestions(true)}
                           onKeyDown={(e) => {
+                            if (e.key === ' ' || e.code === 'Space') return
                             if (e.key === 'Enter') {
                               e.preventDefault()
                               void handleAddContractManually()
@@ -1269,32 +1291,6 @@ export function AddShipmentModal({
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 overflow-visible">
-                <div
-                  className={`relative overflow-visible ${portDropdownOpen ? 'z-[100]' : 'z-0'}`}
-                >
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Port of Loading (Optional)</label>
-                  <Input
-                    value={newShipment.portOfLoading}
-                    onChange={(e) => handlePortOfLoadingChange(e.target.value)}
-                    onFocus={() => newShipment.portOfLoading.trim().length >= 2 && setShowPortSuggestions(true)}
-                    onBlur={() => setTimeout(() => setShowPortSuggestions(false), 200)}
-                    placeholder="Type to search port (from Master Loading Port)"
-                  />
-                  {portDropdownOpen && (
-                    <div className={AUTOCOMPLETE_PANEL_CLASS}>
-                      {portSuggestions.map((p, idx) => (
-                        <div
-                          key={p.port + (p.region || '') + idx}
-                          className="px-3 py-2 hover:bg-gray-100 cursor-pointer border-b last:border-b-0"
-                          onMouseDown={() => handleSelectPort(p)}
-                        >
-                          <div className="font-medium text-sm">{p.port}</div>
-                          {p.region && <div className="text-xs text-gray-500">{p.region}</div>}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Plant/Site (Discharge Port) (Optional)</label>
                   <PlantSiteCombobox
@@ -1313,7 +1309,7 @@ export function AddShipmentModal({
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-100">
                 <Clock className="h-3.5 w-3.5 text-violet-600" />
               </div>
-              <h4 className="text-sm font-semibold text-gray-800">3. ETA Schedule</h4>
+              <h4 className="text-sm font-semibold text-gray-800">3. ETA Schedule + Loading Port</h4>
               {step3Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
             </div>
             <div className="p-4 space-y-3">
@@ -1361,7 +1357,54 @@ export function AddShipmentModal({
                             </button>
                           </div>
 
-                          <div className="px-2 py-1.5 border-b bg-white">
+                          <div className="px-2 py-1.5 border-b bg-white space-y-2">
+                            <div
+                              className={`relative overflow-visible ${activeEtaPortRowId === block.id && portDropdownOpen ? 'z-[100]' : 'z-0'}`}
+                            >
+                              <label className="block text-[11px] font-medium text-gray-600 mb-1">
+                                Loading Port (Optional)
+                              </label>
+                              <Input
+                                value={block.loadingPort}
+                                onChange={(e) => {
+                                  const value = e.target.value
+                                  updateEtaDetailBlock(block.id, { loadingPort: value })
+                                  if (portSearchTimeoutRef.current) clearTimeout(portSearchTimeoutRef.current)
+                                  portSearchTimeoutRef.current = setTimeout(() => fetchPortSuggestions(value), 300)
+                                }}
+                                onFocus={() => {
+                                  setActiveEtaPortRowId(block.id)
+                                  if ((block.loadingPort || '').trim().length >= 2) setShowPortSuggestions(true)
+                                }}
+                                onBlur={() => {
+                                  setTimeout(() => {
+                                    setShowPortSuggestions(false)
+                                    setActiveEtaPortRowId((prev) => (prev === block.id ? null : prev))
+                                  }, 200)
+                                }}
+                                placeholder="Type to search port (from Master Loading Port)"
+                                className="h-8 text-xs"
+                              />
+                              {activeEtaPortRowId === block.id && portDropdownOpen && (
+                                <div className={AUTOCOMPLETE_PANEL_CLASS}>
+                                  {portSuggestions.map((p, idx) => (
+                                    <div
+                                      key={`${block.id}-${p.port}-${p.region || ''}-${idx}`}
+                                      className="px-3 py-2 hover:bg-gray-100 cursor-pointer border-b last:border-b-0"
+                                      onMouseDown={() => {
+                                        updateEtaDetailBlock(block.id, { loadingPort: p.port })
+                                        setShowPortSuggestions(false)
+                                        setPortSuggestions([])
+                                        setActiveEtaPortRowId(null)
+                                      }}
+                                    >
+                                      <div className="font-medium text-sm">{p.port}</div>
+                                      {p.region && <div className="text-xs text-gray-500">{p.region}</div>}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                             <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
                               <span className="text-gray-600 font-medium">
                                 Apply to PO <span className="text-red-500">*</span>

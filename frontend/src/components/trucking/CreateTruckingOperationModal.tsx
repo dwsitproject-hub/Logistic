@@ -127,10 +127,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
           if (plantLabel) {
             setNewOperation((prev) => ({ ...prev, location: plantLabel }))
           }
-          const supplierLabel = cd.supplier || ''
-          if (supplierLabel) {
-            setNewOperation((prev) => ({ ...prev, loading_location: supplierLabel }))
-          }
           const buyerLabel = (cd.buyer || '').trim()
           if (buyerLabel) {
             setNewOperation((prev) => ({ ...prev, unloading_location: buyerLabel }))
@@ -202,11 +198,12 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
 
   const handleSelectContractSuggestion = async (c: any) => {
     const label = c.contract_ext_no || c.contract_id
+    const contractId = String(c.contract_id || '').trim()
     setNewOperation((prev) => ({ ...prev, contract_number: String(label || '').trim() }))
     setContractSearchTerm(String(label || '').trim())
     setShowContractSuggestions(false)
     setContractSuggestions([])
-    await validateContractNumber(String(label || '').trim())
+    await validateContractNumber(contractId || String(label || '').trim())
   }
 
   const truckingDateRange = useMemo(() => {
@@ -235,10 +232,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         if (newOperation.cargo_readiness_date < minIso || newOperation.cargo_readiness_date > maxIso)
           errors.cargo_readiness_date = rangeMsg
       }
-      ;(newOperation.daily_deliverables || []).forEach((row, idx) => {
-        if (row.date && (row.date < minIso || row.date > maxIso))
-          errors[`dailyDate_${idx}`] = rangeMsg
-      })
     }
 
     setFormErrors(errors)
@@ -273,17 +266,11 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   const handleCreateOperation = async () => {
     if (!validateForm()) return
 
-    const start = (contractValidation.contractData?.delivery_start_date || '').trim()
-    const end = (contractValidation.contractData?.delivery_end_date || '').trim()
     const maxQty = newOperation.quantity_delivered
       ? parseFloat(String(newOperation.quantity_delivered).replace(/,/g, '').trim())
       : NaN
     const rows = newOperation.daily_deliverables || []
     if (rows.length > 0) {
-      if (!start || !end) {
-        showNotification('warning', 'Delivery dates required', 'Due Date Delivery Start and End are required when daily deliverables are provided.')
-        return
-      }
       let sum = 0
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i]
@@ -291,8 +278,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         const qn = r.quantity ? parseFloat(String(r.quantity).replace(/,/g, '').trim()) : NaN
         if (!d) { showNotification('error', `Row ${i + 1}: Date is required`); return }
         if (!Number.isFinite(qn) || qn < 0) { showNotification('error', `Row ${i + 1}: Quantity must be a valid number`); return }
-        if (d < start) { showNotification('error', `Row ${i + 1}: Date cannot be before Delivery Start`); return }
-        if (d > end) { showNotification('error', `Row ${i + 1}: Date cannot be after Delivery End`); return }
         if (Number.isFinite(maxQty) && qn > maxQty) { showNotification('error', `Row ${i + 1}: Quantity cannot exceed Quantity Delivered (Kg)`); return }
         sum += qn
         if (Number.isFinite(maxQty) && sum > maxQty) { showNotification('error', 'Sum of daily quantities cannot exceed Quantity Delivered (Kg)'); return }
@@ -640,7 +625,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
                     <div>
                       <p className="text-xs font-semibold text-gray-700">Daily Planning Deliverables</p>
-                      <p className="text-[10px] text-gray-400 mt-0.5">Opsional — validasi terhadap tanggal dan total Qty Delivered</p>
+                      <p className="text-[10px] text-gray-400 mt-0.5">Opsional — validasi terhadap total Qty Delivered</p>
                       {cd && Number.isFinite(Number(cd.outstanding_quantity)) && (
                         <p className="text-[10px] text-amber-600 font-medium mt-0.5">
                           Outstanding Qty: {fmtQty(Number(cd.outstanding_quantity))} Kg
@@ -680,8 +665,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                                 <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Date</label>
                                 <DateInputDdMmYyyy
                                   valueIso={row.date}
-                                  minIso={truckingDateRange?.minIso}
-                                  maxIso={truckingDateRange?.maxIso}
                                   onChangeIso={(iso) => {
                                     setNewOperation((prev) => ({
                                       ...prev,
@@ -753,12 +736,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
 
                         {/* Qty summary */}
                         <div className="flex items-center justify-between mt-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs">
-                          <span className="text-gray-500">
-                            Allowed range:{' '}
-                            {cd?.delivery_start_date && cd?.delivery_end_date
-                              ? `${fmtIsoDate(cd.delivery_start_date)} — ${fmtIsoDate(cd.delivery_end_date)}`
-                              : 'Set contract first'}
-                          </span>
+                          <span className="text-gray-500">Date is not restricted by Due Date range</span>
                           <span className={`font-semibold tabular-nums ${Number.isFinite(maxQty) && sumQty > maxQty ? 'text-red-600' : 'text-gray-700'}`}>
                             Total: {fmtQty(sumQty)}{Number.isFinite(maxQty) ? ` / ${fmtQty(maxQty)} Kg` : ' Kg'}
                           </span>

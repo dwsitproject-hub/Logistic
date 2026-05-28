@@ -71,16 +71,26 @@ export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Resp
       WHERE (
         COALESCE(l.contract_ext_no, '') ILIKE $1
         OR c.contract_id ILIKE $1
+        OR COALESCE(c.po_number, '') ILIKE $1
         OR COALESCE(c.sto_number, '') ILIKE $1
       )
       AND NOT (
         UPPER(TRIM(COALESCE(l.b2b_flag, c.contract_type::text, ''))) = 'B2B'
         AND NULLIF(TRIM(COALESCE(l.contract_reference_po, '')), '') IS NOT NULL
       )
-      ORDER BY COALESCE(l.contract_ext_no, c.contract_id)
+      ORDER BY
+        CASE
+          WHEN COALESCE(c.po_number, '') = $2 THEN 0
+          WHEN COALESCE(l.contract_ext_no, '') = $2 THEN 1
+          WHEN c.contract_id = $2 THEN 2
+          WHEN COALESCE(c.sto_number, '') = $2 THEN 3
+          ELSE 4
+        END,
+        c.contract_date DESC NULLS LAST,
+        COALESCE(l.contract_ext_no, c.contract_id)
       LIMIT 10
       `,
-      [`%${term}%`]
+      [`%${term}%`, term]
     );
 
     return res.json({ success: true, data: result.rows });
@@ -748,9 +758,14 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         SELECT c.*
         FROM contracts c
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-        WHERE c.contract_id = $1
+        WHERE COALESCE(c.po_number, '') = $1
+           OR c.contract_id = $1
            OR COALESCE(l.contract_ext_no, '') = $1
-        ORDER BY (c.contract_id = $1) DESC
+        ORDER BY
+          (COALESCE(c.po_number, '') = $1) DESC,
+          (c.contract_id = $1) DESC,
+          (COALESCE(l.contract_ext_no, '') = $1) DESC,
+          c.contract_date DESC NULLS LAST
         LIMIT 1
       )
       SELECT

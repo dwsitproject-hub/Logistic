@@ -86,7 +86,7 @@ router.put('/:id', auditLog('UPDATE', 'SHIPMENT'), updateShipment);
 router.get('/:shipmentId/loading-ports', getVesselLoadingPorts);
 router.post('/:shipmentId/loading-ports', auditLog('CREATE', 'LOADING_PORT'), upsertVesselLoadingPort);
 router.put('/:shipmentId/loading-ports/:portId', auditLog('UPDATE', 'LOADING_PORT'), upsertVesselLoadingPort);
-router.delete('/:shipmentId/loading-ports/:portId', auditLog('DELETE', 'LOADING_PORT'), deleteVesselLoadingPort);
+router.delete('/:shipmentId/loading-ports/:portId', auditLog('CANCEL', 'LOADING_PORT'), deleteVesselLoadingPort);
 
 export default router;
 

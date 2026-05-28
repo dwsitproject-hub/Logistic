@@ -249,6 +249,9 @@ function CalendarDeliverablesTable({
   const scrollTopRef = useRef<HTMLDivElement | null>(null)
   const scrollBottomRef = useRef<HTMLDivElement | null>(null)
   const isSyncing = useRef(false)
+  const editInputRef = useRef<HTMLInputElement | null>(null)
+  const [editingQtyCellKey, setEditingQtyCellKey] = useState<string | null>(null)
+  const editingQtyValueRef = useRef<string>('')
   const dayIso = (day: number) => {
     const m = String(mm + 1).padStart(2, '0')
     const d = String(day).padStart(2, '0')
@@ -256,6 +259,28 @@ function CalendarDeliverablesTable({
   }
   const sumPlannedQty = (r: TruckingCalendarRow) =>
     (r.daily_deliverables || []).reduce((s, x) => s + Number(x?.quantity_delivered || 0), 0)
+
+  useEffect(() => {
+    if (editingQtyCellKey) {
+      editInputRef.current?.focus()
+      editInputRef.current?.select()
+    }
+  }, [editingQtyCellKey])
+
+  const startInlineQtyEdit = useCallback((key: string, current: string) => {
+    if (savingAll) return
+    editingQtyValueRef.current = current
+    setEditingQtyCellKey(key)
+  }, [savingAll])
+
+  const commitInlineQtyEdit = useCallback((rowId: string, date: string) => {
+    onCellChange(rowId, date, editingQtyValueRef.current)
+    setEditingQtyCellKey(null)
+  }, [onCellChange])
+
+  const cancelInlineQtyEdit = useCallback(() => {
+    setEditingQtyCellKey(null)
+  }, [])
 
   const orderedMetaCols = useMemo(() => {
     const all = [
@@ -472,31 +497,46 @@ function CalendarDeliverablesTable({
                     const key = `${r.id}:${date}`
                     const draftValue = cellDrafts[key] ?? ''
                     const isDirty = (draftValue ?? '') !== (cellBaseline[key] ?? '')
+                    const isEditingThisCell = editingQtyCellKey === key
                     return (
                       <td
                         key={date}
                         className={`px-2 py-1.5 border-b border-gray-100 text-right tabular-nums ${isDirty ? 'bg-amber-50/50' : ''}`}
                       >
-                        <input
-                          value={draftValue}
-                          onChange={(e) => onCellChange(r.id, date, e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Tab' && !e.shiftKey) {
-                              e.preventDefault()
-                              const rowEl = e.currentTarget.closest('tr')
-                              const nextInput = rowEl?.querySelector<HTMLInputElement>(
-                                `input[data-day-index="${d + 1}"]`,
-                              )
-                              if (nextInput) nextInput.focus()
-                            }
-                          }}
-                          disabled={savingAll}
-                          data-day-input="1"
-                          data-day-index={d}
-                          className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-white text-right text-xs focus:border-blue-400 focus:ring-1 focus:ring-blue-200 disabled:opacity-60"
-                          placeholder="0"
-                          title={date}
-                        />
+                        {isEditingThisCell ? (
+                          <input
+                            ref={editInputRef}
+                            key={key}
+                            defaultValue={draftValue}
+                            onChange={(e) => {
+                              editingQtyValueRef.current = e.target.value
+                            }}
+                            onBlur={() => commitInlineQtyEdit(r.id, date)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault()
+                                commitInlineQtyEdit(r.id, date)
+                              } else if (e.key === 'Escape') {
+                                e.preventDefault()
+                                cancelInlineQtyEdit()
+                              }
+                            }}
+                            disabled={savingAll}
+                            className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-white text-right text-xs focus:border-blue-400 focus:ring-1 focus:ring-blue-200 disabled:opacity-60"
+                            placeholder="0"
+                            title={date}
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => startInlineQtyEdit(key, draftValue)}
+                            disabled={savingAll}
+                            className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-gray-50 text-right text-xs text-gray-700 hover:bg-white disabled:opacity-60"
+                            title={`Click to edit ${date}`}
+                          >
+                            {draftValue ? formatQty(Number(String(draftValue).replace(/,/g, ''))) : '0'}
+                          </button>
+                        )}
                       </td>
                     )
                   })}

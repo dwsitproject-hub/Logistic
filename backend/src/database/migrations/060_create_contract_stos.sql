@@ -29,6 +29,7 @@ WHERE sto_number IS NOT NULL AND sto_number != ''
 ON CONFLICT (contract_id, sto_number) DO NOTHING;
 
 -- Trigger to keep updated_at current
+DROP TRIGGER IF EXISTS update_contract_stos_updated_at ON contract_stos;
 CREATE TRIGGER update_contract_stos_updated_at
   BEFORE UPDATE ON contract_stos
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

@@ -17,10 +17,12 @@ import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
+import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
+import { MasterLoadingPortCombobox } from '@/components/MasterLoadingPortCombobox'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { format } from 'date-fns'
 import {
   usePermissions,
@@ -186,6 +188,10 @@ interface VesselLoadingPort {
   quality_ds?: number | null
   quality_stone?: number | null
   is_discharge_port?: boolean
+  is_cancelled?: boolean
+  cancel_remark?: string | null
+  cancelled_at?: string | null
+  cancelled_by_name?: string | null
   created_at?: string
   updated_at?: string
 }
@@ -240,6 +246,43 @@ function buildLoadingPortUpdatePayload(
   }
 }
 
+/** Payload for POST /shipments/:id/loading-ports (API-accepted fields only). */
+function buildLoadingPortCreatePayload(source: Record<string, unknown>): Record<string, unknown> {
+  const payload = buildLoadingPortUpdatePayload(source, 'create')
+  const { id: _id, ...createPayload } = payload
+  return createPayload
+}
+
+function nextAddLoadingPortSequence(loadingPorts: VesselLoadingPort[]): number {
+  const loadingCount = loadingPorts.filter((p) => !p.is_discharge_port).length
+  return loadingCount + 1
+}
+
+function createEmptyNewLoadingPort(portSequence: number): Partial<VesselLoadingPort> {
+  return {
+    port_name: '',
+    port_sequence: portSequence,
+    quantity_at_loading_port: 0,
+    eta_vessel_arrival: '',
+    ata_vessel_arrival: '',
+    eta_vessel_berthed: '',
+    ata_vessel_berthed: '',
+    eta_loading_start: '',
+    ata_loading_start: '',
+    eta_loading_completed: '',
+    ata_loading_completed: '',
+    eta_vessel_sailed: '',
+    ata_vessel_sailed: '',
+    eta_vessel_berthed_at_loading_port: '',
+    eta_vessel_arrive_at_discharge_port: '',
+    eta_vessel_berthed_at_discharge_port: '',
+    eta_vessel_start_discharging: '',
+    eta_vessel_complete_discharge: '',
+    loading_rate: 0,
+    is_discharge_port: false,
+  }
+}
+
 interface DocumentItem {
   id: string
   document_type?: string
@@ -291,6 +334,54 @@ function ShipmentRowEditButton({
         {hasShipmentEditData ? 'Edit' : 'Shipment data is not available'}
       </TooltipContent>
     </Tooltip>
+  )
+}
+
+function shipmentModalPoDisplay(info: Record<string, unknown> | null | undefined, shipment: Shipment | null): string {
+  const po =
+    info?.po_number ??
+    info?.po_numbers ??
+    shipment?.po_numbers ??
+    ''
+  const value = String(po ?? '').trim()
+  return value || '-'
+}
+
+function shipmentModalContractDisplay(info: Record<string, unknown> | null | undefined, shipment: Shipment | null): string {
+  const contract =
+    info?.contract_number ??
+    info?.contract_numbers ??
+    info?.contract_id ??
+    shipment?.contract_numbers ??
+    shipment?.contract_number ??
+    ''
+  const value = String(contract ?? '').trim()
+  return value || '-'
+}
+
+function ShipmentDetailReadOnlyField({
+  label,
+  value,
+  locked,
+}: {
+  label: string
+  value: string
+  locked?: boolean
+}) {
+  return (
+    <div>
+      <div className="text-gray-500">{label}</div>
+      <div
+        className={
+          locked
+            ? 'mt-1 rounded border border-gray-200 bg-gray-100 px-2 py-1.5 text-sm font-medium text-gray-500'
+            : 'font-medium mt-1'
+        }
+        aria-readonly="true"
+      >
+        {value}
+      </div>
+    </div>
   )
 }
 
@@ -482,7 +573,10 @@ function ShipmentsPageContent() {
   // Vessel loading ports state
   const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null)
   const [loadingPorts, setLoadingPorts] = useState<VesselLoadingPort[]>([])
+  const [cancelledLoadingPorts, setCancelledLoadingPorts] = useState<VesselLoadingPort[]>([])
   const [shipmentInfo, setShipmentInfo] = useState<any>(null)
+  const [shipmentInfoLoading, setShipmentInfoLoading] = useState(false)
+  const [shipmentInfoError, setShipmentInfoError] = useState<string | null>(null)
   const [showLoadingPorts, setShowLoadingPorts] = useState(false)
   const [editingPort, setEditingPort] = useState<VesselLoadingPort | null>(null)
   const [newPort, setNewPort] = useState<Partial<VesselLoadingPort>>({
@@ -561,6 +655,9 @@ function ShipmentsPageContent() {
   const [editedShipmentInfo, setEditedShipmentInfo] = useState<any>(null)
   const [editingPortId, setEditingPortId] = useState<string | null>(null)
   const [editedPortData, setEditedPortData] = useState<Partial<VesselLoadingPort> | null>(null)
+  const [cancelPortTarget, setCancelPortTarget] = useState<{ id: string; portName: string; portSequence: number } | null>(null)
+  const [cancelPortRemark, setCancelPortRemark] = useState('')
+  const [cancelPortSubmitting, setCancelPortSubmitting] = useState(false)
 
   // ---- ETA Loading Status buckets (counts for toolbar chips; scoped to current result page only) ----
   const etaLoadingBuckets = useMemo(() => {
@@ -2494,7 +2591,41 @@ function ShipmentsPageContent() {
   }, [visibleColumns, sortedShipments.length])
 
   // Vessel loading port functions
+  const buildShipmentInfoFromShipment = (s: Record<string, unknown>) => ({
+    quantity_delivered: s.quantity_delivered,
+    actual_vessel_qty_receive: s.actual_vessel_qty_receive,
+    vessel_oa_actual: s.vessel_oa_actual,
+    vessel_oa_budget: s.vessel_oa_budget,
+    bl_quantity: s.bl_quantity,
+    vessel_loading_port_1: s.port_of_loading,
+    vessel_discharge_port_1: s.port_of_discharge,
+    ata_vessel_arrival_at_loading_port: s.ata_arrival,
+    ata_vessel_berthed_at_loading_port: s.ata_berthed,
+    ata_vessel_start_loading: s.ata_loading_start,
+    ata_vessel_completed_loading: s.ata_loading_complete,
+    ata_vessel_sailed_from_loading_port: s.ata_sailed,
+    ata_vessel_arrive_at_discharge_port: s.ata_discharge_arrival,
+    ata_vessel_berthed_at_discharge_port: s.ata_discharge_berthed,
+    ata_vessel_start_discharging: s.ata_discharge_start,
+    ata_vessel_complete_discharge: s.ata_discharge_complete,
+  })
+
+  const fetchShipmentInfoFallback = async (shipmentId: string) => {
+    try {
+      const shipmentResponse = await api.get(`/shipments/${shipmentId}`)
+      if (shipmentResponse.data.success && shipmentResponse.data.data) {
+        setShipmentInfo(buildShipmentInfoFromShipment(shipmentResponse.data.data))
+        return
+      }
+    } catch (err) {
+      console.error('Error fetching shipment data:', err)
+    }
+    setShipmentInfo({})
+  }
+
   const fetchLoadingPorts = async (shipmentId: string, skipCache = false) => {
+    setShipmentInfoLoading(true)
+    setShipmentInfoError(null)
     try {
       const url = skipCache
         ? `/shipments/${shipmentId}/loading-ports?_t=${Date.now()}`
@@ -2505,65 +2636,48 @@ function ShipmentsPageContent() {
         // Handle new response structure: { ports: [], shipmentInfo: {} }
         if (response.data.data && typeof response.data.data === 'object' && 'ports' in response.data.data) {
           setLoadingPorts(response.data.data.ports || [])
-          // Always set shipmentInfo, even if null - we'll fetch it separately if needed
+          setCancelledLoadingPorts(response.data.data.cancelledPorts || [])
           const info = response.data.data.shipmentInfo
           console.log('ShipmentInfo from response:', info)
-          if (info) {
+          if (info && typeof info === 'object') {
             setShipmentInfo(info)
           } else {
-            // Fallback: fetch shipment data directly if shipmentInfo is not in response
             console.log('ShipmentInfo not in response, fetching directly...')
-            try {
-              // Try with the same identifier first
-              const shipmentResponse = await api.get(`/shipments/${shipmentId}`)
-              if (shipmentResponse.data.success && shipmentResponse.data.data) {
-                const s = shipmentResponse.data.data
-                console.log('Fetched shipment data:', s)
-                setShipmentInfo({
-                  quantity_delivered: s.quantity_delivered,
-                  actual_vessel_qty_receive: s.actual_vessel_qty_receive,
-                  vessel_oa_actual: s.vessel_oa_actual,
-                  vessel_oa_budget: s.vessel_oa_budget,
-                  bl_quantity: s.bl_quantity,
-                  vessel_loading_port_1: s.port_of_loading,
-                  ata_vessel_arrival_at_loading_port: s.ata_arrival,
-                  ata_vessel_berthed_at_loading_port: s.ata_berthed,
-                  ata_vessel_start_loading: s.ata_loading_start,
-                  ata_vessel_completed_loading: s.ata_loading_complete,
-                  ata_vessel_sailed_from_loading_port: s.ata_sailed,
-                  ata_vessel_arrive_at_discharge_port: s.ata_discharge_arrival,
-                  ata_vessel_berthed_at_discharge_port: s.ata_discharge_berthed,
-                  ata_vessel_start_discharging: s.ata_discharge_start,
-                  ata_vessel_complete_discharge: s.ata_discharge_complete
-                })
-              } else {
-                console.warn('Shipment data fetch returned no data')
-                setShipmentInfo(null)
-              }
-            } catch (err) {
-              console.error('Error fetching shipment data:', err)
-              setShipmentInfo(null)
-            }
+            await fetchShipmentInfoFallback(shipmentId)
           }
         } else {
           // Fallback for old response structure (array)
           console.warn('Unexpected response structure:', response.data.data)
           setLoadingPorts(Array.isArray(response.data.data) ? response.data.data : [])
-          setShipmentInfo(null)
+          setCancelledLoadingPorts([])
+          await fetchShipmentInfoFallback(shipmentId)
         }
       } else {
         console.error('API returned success: false', response.data)
+        setLoadingPorts([])
+        setCancelledLoadingPorts([])
+        setShipmentInfo({})
+        setShipmentInfoError(response.data?.error?.message || 'Failed to load shipment information')
       }
     } catch (error) {
       console.error('Error fetching loading ports:', error)
       setLoadingPorts([])
-      setShipmentInfo(null)
+      setCancelledLoadingPorts([])
+      setShipmentInfo({})
+      setShipmentInfoError(apiErrorMessage(error, 'Failed to load shipment information'))
+    } finally {
+      setShipmentInfo((prev) => prev ?? {})
+      setShipmentInfoLoading(false)
     }
   }
 
   const handleViewLoadingPorts = async (shipment: Shipment) => {
     setSelectedShipment(shipment)
     setShowLoadingPorts(true)
+    setShipmentInfo(null)
+    setLoadingPorts([])
+    setCancelledLoadingPorts([])
+    setShipmentInfoError(null)
     // For editing/saving we always work per specific shipment (UUID)
     await fetchLoadingPorts(shipment.id)
   }
@@ -2571,34 +2685,22 @@ function ShipmentsPageContent() {
   const handleSaveLoadingPort = async () => {
     if (!selectedShipment) return
 
+    const portName = String(newPort.port_name ?? '').trim()
+    if (!portName) {
+      alert('Port is required. Select a port from Master Port.')
+      return
+    }
+
     try {
-      const portData = newPort
+      const portData = buildLoadingPortCreatePayload({
+        ...newPort,
+        port_sequence: nextAddLoadingPortSequence(loadingPorts),
+      } as Record<string, unknown>)
       const response = await api.post(`/shipments/${selectedShipment.id}/loading-ports`, portData)
       
       if (response.data.success) {
         await fetchLoadingPorts(selectedShipment.id)
-        setNewPort({
-          port_name: '',
-          port_sequence: loadingPorts.length + 1,
-          quantity_at_loading_port: 0,
-          eta_vessel_arrival: '',
-          ata_vessel_arrival: '',
-          eta_vessel_berthed: '',
-          ata_vessel_berthed: '',
-          eta_loading_start: '',
-          ata_loading_start: '',
-          eta_loading_completed: '',
-          ata_loading_completed: '',
-          eta_vessel_sailed: '',
-          ata_vessel_sailed: '',
-          eta_vessel_berthed_at_loading_port: '',
-          eta_vessel_arrive_at_discharge_port: '',
-          eta_vessel_berthed_at_discharge_port: '',
-          eta_vessel_start_discharging: '',
-          eta_vessel_complete_discharge: '',
-          loading_rate: 0,
-          is_discharge_port: false
-        })
+        setNewPort(createEmptyNewLoadingPort(nextAddLoadingPortSequence(loadingPorts) + 1))
         alert('Loading port added successfully!')
       }
     } catch (error) {
@@ -2607,18 +2709,49 @@ function ShipmentsPageContent() {
     }
   }
 
-  const handleDeleteLoadingPort = async (portId: string) => {
-    if (!selectedShipment) return
+  const openCancelLoadingPortDialog = (port: VesselLoadingPort) => {
+    if (!port.id || port.is_discharge_port) return
+    setCancelPortTarget({
+      id: port.id,
+      portName: port.port_name || '',
+      portSequence: port.port_sequence || 1,
+    })
+    setCancelPortRemark('')
+  }
 
+  const closeCancelLoadingPortDialog = () => {
+    if (cancelPortSubmitting) return
+    setCancelPortTarget(null)
+    setCancelPortRemark('')
+  }
+
+  const handleConfirmCancelLoadingPort = async () => {
+    if (!selectedShipment || !cancelPortTarget) return
+
+    const remark = cancelPortRemark.trim()
+    if (!remark) {
+      alert('Cancellation remark is required.')
+      return
+    }
+
+    setCancelPortSubmitting(true)
     try {
-      const response = await api.delete(`/shipments/${selectedShipment.id}/loading-ports/${portId}`)
+      const response = await api.delete(
+        `/shipments/${selectedShipment.id}/loading-ports/${cancelPortTarget.id}`,
+        { data: { action: 'cancel', remark } },
+      )
+
       if (response.data.success) {
+        setCancelPortTarget(null)
+        setCancelPortRemark('')
         await fetchLoadingPorts(selectedShipment.id)
-        alert('Loading port deleted successfully!')
+        alert('Loading port cancelled successfully!')
       }
     } catch (error) {
-      console.error('Error deleting loading port:', error)
-      alert('Failed to delete loading port')
+      console.error('Error cancelling loading port:', error)
+      alert(apiErrorMessage(error, 'Failed to cancel loading port'))
+    } finally {
+      setCancelPortSubmitting(false)
     }
   }
 
@@ -5010,8 +5143,19 @@ function ShipmentsPageContent() {
                 </div>
                 <div className="space-y-4 p-4">
                   {/* Shipment-Level Information */}
-                  {shipmentInfo ? (
-                    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden mb-2">
+                  {shipmentInfoLoading ? (
+                    <div className="rounded-xl border border-gray-200 p-6 text-center">
+                      <Loader2 className="h-5 w-5 animate-spin text-gray-400 mx-auto mb-2" />
+                      <p className="text-sm text-gray-500">Loading shipment information...</p>
+                    </div>
+                  ) : (
+                    <>
+                      {shipmentInfoError && (
+                        <div className="rounded-xl border border-red-200 bg-red-50 p-4 mb-2 text-sm text-red-700">
+                          {shipmentInfoError}
+                        </div>
+                      )}
+                      <div className="rounded-xl border border-gray-200 bg-white overflow-hidden mb-2">
                       {/* Key Metrics Summary Bar */}
                       <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-gray-100 bg-gray-50 border-b border-gray-200">
                         {[
@@ -5064,6 +5208,16 @@ function ShipmentsPageContent() {
                       <div>
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quantities &amp; Ports</p>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+                        <ShipmentDetailReadOnlyField
+                          label="PO"
+                          value={shipmentModalPoDisplay(shipmentInfo, selectedShipment)}
+                          locked={editingShipmentInfo}
+                        />
+                        <ShipmentDetailReadOnlyField
+                          label="Contract"
+                          value={shipmentModalContractDisplay(shipmentInfo, selectedShipment)}
+                          locked={editingShipmentInfo}
+                        />
                         <div>
                           <div className="text-gray-500">Quantity Delivery</div>
                           {editingShipmentInfo ? (
@@ -5095,12 +5249,16 @@ function ShipmentsPageContent() {
                         <div>
                           <div className="text-gray-500">Vessel Loading Port 1</div>
                           {editingShipmentInfo ? (
-                            <Input
-                              value={editedShipmentInfo?.vessel_loading_port_1 || ''}
-                              onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, vessel_loading_port_1: e.target.value })}
-                              className="h-8 text-sm mt-1"
-                              placeholder="Loading Port Name"
-                            />
+                            <div className="mt-1">
+                              <MasterLoadingPortCombobox
+                                value={editedShipmentInfo?.vessel_loading_port_1 || ''}
+                                onChange={(value) =>
+                                  setEditedShipmentInfo({ ...editedShipmentInfo, vessel_loading_port_1: value })
+                                }
+                                placeholder="Search Master Loading Port..."
+                                className="h-8 text-sm"
+                              />
+                            </div>
                           ) : (
                           <div className="font-medium">{shipmentInfo.vessel_loading_port_1 || '-'}</div>
                           )}
@@ -5108,12 +5266,16 @@ function ShipmentsPageContent() {
                         <div>
                           <div className="text-gray-500">Vessel Discharge Port 1</div>
                           {editingShipmentInfo ? (
-                            <Input
-                              value={editedShipmentInfo?.vessel_discharge_port_1 || ''}
-                              onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, vessel_discharge_port_1: e.target.value })}
-                              className="h-8 text-sm mt-1"
-                              placeholder="Discharge Port Name"
-                            />
+                            <div className="mt-1">
+                              <PlantSiteCombobox
+                                value={editedShipmentInfo?.vessel_discharge_port_1 || ''}
+                                onChange={(value) =>
+                                  setEditedShipmentInfo({ ...editedShipmentInfo, vessel_discharge_port_1: value })
+                                }
+                                placeholder="Search Master Plant..."
+                                className="h-8 text-sm"
+                              />
+                            </div>
                           ) : (
                             <div className="font-medium">{shipmentInfo.vessel_discharge_port_1 || '-'}</div>
                           )}
@@ -5516,11 +5678,7 @@ function ShipmentsPageContent() {
                         </div>
                       </div>
                     </div>
-                  ) : (
-                    <div className="rounded-xl border border-gray-200 p-6 text-center">
-                      <Loader2 className="h-5 w-5 animate-spin text-gray-400 mx-auto mb-2" />
-                      <p className="text-sm text-gray-500">Loading shipment information...</p>
-                    </div>
+                    </>
                   )}
                 {loadingPorts.length === 0 ? (
                   <div className="text-gray-500">No loading ports yet.</div>
@@ -5609,14 +5767,14 @@ function ShipmentsPageContent() {
                             )}
                           </div>
                           <div className="flex gap-2">
-                            {!isEditing && port.id && (
+                            {!isEditing && port.id && !port.is_discharge_port && (
                                   <Button
                                     variant="outline"
                                     size="sm"
-                                    onClick={() => handleDeleteLoadingPort(port.id!)}
+                                    onClick={() => openCancelLoadingPortDialog(port)}
                                     className="text-red-600 border-red-200 hover:bg-red-50"
                                   >
-                                    Delete
+                                    Cancel
                                   </Button>
                             )}
                           </div>
@@ -5825,27 +5983,43 @@ function ShipmentsPageContent() {
                   {/* Basic Info */}
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Port Info</p>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                       <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Port Name</label>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">PO</label>
                         <Input
+                          value={shipmentModalPoDisplay(shipmentInfo, selectedShipment)}
+                          readOnly
+                          disabled
+                          className="h-9 text-sm bg-gray-100 text-gray-600 cursor-not-allowed"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Contract</label>
+                        <Input
+                          value={shipmentModalContractDisplay(shipmentInfo, selectedShipment)}
+                          readOnly
+                          disabled
+                          className="h-9 text-sm bg-gray-100 text-gray-600 cursor-not-allowed"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Port</label>
+                        <MasterLoadingPortCombobox
                           value={newPort.port_name as string}
-                          onChange={(e) => setNewPort({ ...newPort, port_name: e.target.value })}
+                          onChange={(value) => setNewPort({ ...newPort, port_name: value })}
+                          placeholder="Search Master Port..."
                           className="h-9 text-sm"
-                          placeholder="e.g., Loading Port 1"
                         />
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1">Sequence</label>
                         <Input
                           type="number"
-                          value={newPort.port_sequence as number}
-                          onChange={(e) => {
-                            const v = parseInt(e.target.value || '1')
-                            setNewPort({ ...newPort, port_sequence: v })
-                          }}
-                          className="h-9 text-sm"
-                          min={1}
+                          value={nextAddLoadingPortSequence(loadingPorts)}
+                          readOnly
+                          tabIndex={-1}
+                          aria-readonly="true"
+                          className="h-9 text-sm bg-gray-100 text-gray-600 cursor-not-allowed opacity-90"
                         />
                       </div>
                       <div>
@@ -5912,28 +6086,7 @@ function ShipmentsPageContent() {
                         size="sm"
                         className="h-8 text-xs"
                         onClick={() => {
-                          setNewPort({
-                            port_name: '',
-                            port_sequence: loadingPorts.length + 1,
-                            quantity_at_loading_port: 0,
-                            eta_vessel_arrival: '',
-                            ata_vessel_arrival: '',
-                            eta_vessel_berthed: '',
-                            ata_vessel_berthed: '',
-                            eta_loading_start: '',
-                            ata_loading_start: '',
-                            eta_loading_completed: '',
-                            ata_loading_completed: '',
-                            eta_vessel_sailed: '',
-                            ata_vessel_sailed: '',
-                            eta_vessel_berthed_at_loading_port: '',
-                            eta_vessel_arrive_at_discharge_port: '',
-                            eta_vessel_berthed_at_discharge_port: '',
-                            eta_vessel_start_discharging: '',
-                            eta_vessel_complete_discharge: '',
-                            loading_rate: 0,
-                            is_discharge_port: false
-                          })
+                          setNewPort(createEmptyNewLoadingPort(nextAddLoadingPortSequence(loadingPorts)))
                         }}
                       >
                         <X className="h-3.5 w-3.5 mr-1" /> Reset
@@ -5946,10 +6099,84 @@ function ShipmentsPageContent() {
                   </div>
                 </div>
               </div>
+
+              {/* Cancellation History */}
+            <div className="rounded-xl border border-gray-200 shadow-sm">
+              <div className="border-b border-gray-200 px-4 py-3">
+                <h4 className="font-semibold text-sm text-gray-800">Cancellation History</h4>
+              </div>
+              <div className="p-4">
+                <hr className="my-2 border-gray-200" />
+                {cancelledLoadingPorts.length === 0 ? (
+                  <div className="text-sm text-gray-500">No cancelled activities.</div>
+                ) : (
+                  <div className="space-y-3">
+                    {cancelledLoadingPorts.map((port) => {
+                      const portLabel = port.is_discharge_port
+                        ? `Discharge Port - ${port.port_name || '-'}`
+                        : `Loading Port ${port.port_sequence || '-'} - ${port.port_name || '-'}`
+                      return (
+                        <div
+                          key={`cancelled-${port.id ?? `${port.shipment_id}-${port.port_sequence}-${port.port_name}`}`}
+                          className="rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600"
+                        >
+                          <div className="font-medium text-gray-700">{portLabel}</div>
+                          <div className="mt-1">
+                            <span className="text-gray-500">Remark:</span>{' '}
+                            <span>{port.cancel_remark?.trim() || '-'}</span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            Cancelled by: {port.cancelled_by_name?.trim() || 'Unknown User'} on {port.cancelled_at ? formatDateTimeDMY(port.cancelled_at) : '-'}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
             </div>
           </div>
         </div>
       )}
+
+      <Dialog open={!!cancelPortTarget} onOpenChange={(open) => { if (!open) closeCancelLoadingPortDialog() }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cancel Loading Port</DialogTitle>
+            <DialogDescription>
+              {cancelPortTarget
+                ? `Loading Port ${cancelPortTarget.portSequence}: ${cancelPortTarget.portName || '-'}`
+                : 'Provide a reason before cancelling this loading port activity.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label htmlFor="cancel-port-remark" className="text-sm font-medium text-gray-700">
+              Cancellation Reason
+            </label>
+            <textarea
+              id="cancel-port-remark"
+              className="w-full min-h-[96px] border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200"
+              placeholder="Enter reason for cancelling this loading port activity..."
+              value={cancelPortRemark}
+              onChange={(e) => setCancelPortRemark(e.target.value)}
+              disabled={cancelPortSubmitting}
+            />
+          </div>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={closeCancelLoadingPortDialog} disabled={cancelPortSubmitting}>
+              Close
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700"
+              onClick={handleConfirmCancelLoadingPort}
+              disabled={cancelPortSubmitting || !cancelPortRemark.trim()}
+            >
+              {cancelPortSubmitting ? 'Cancelling...' : 'Confirm Cancel'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Documents Modal */}
       {showDocs && selectedShipment && (

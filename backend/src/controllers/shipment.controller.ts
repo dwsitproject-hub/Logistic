@@ -49,6 +49,48 @@ function toShipmentDateOrNull(v: unknown): string | null {
   return null;
 }
 
+let vesselLoadingPortHasCancelColumnCache: boolean | null = null;
+async function vesselLoadingPortHasCancelColumn(): Promise<boolean> {
+  if (vesselLoadingPortHasCancelColumnCache !== null) return vesselLoadingPortHasCancelColumnCache;
+  try {
+    const result = await query(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'vessel_loading_ports'
+           AND column_name = 'is_cancelled'
+       ) AS has_column`
+    );
+    vesselLoadingPortHasCancelColumnCache = Boolean(result.rows[0]?.has_column);
+  } catch (error) {
+    logger.warn('Unable to determine vessel_loading_ports cancellation column availability', { error });
+    vesselLoadingPortHasCancelColumnCache = false;
+  }
+  return vesselLoadingPortHasCancelColumnCache;
+}
+
+let vesselLoadingPortHasCancelledByColumnCache: boolean | null = null;
+async function vesselLoadingPortHasCancelledByColumn(): Promise<boolean> {
+  if (vesselLoadingPortHasCancelledByColumnCache !== null) return vesselLoadingPortHasCancelledByColumnCache;
+  try {
+    const result = await query(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'vessel_loading_ports'
+           AND column_name = 'cancelled_by_user_id'
+       ) AS has_column`
+    );
+    vesselLoadingPortHasCancelledByColumnCache = Boolean(result.rows[0]?.has_column);
+  } catch (error) {
+    logger.warn('Unable to determine vessel_loading_ports cancelled_by_user_id column availability', { error });
+    vesselLoadingPortHasCancelledByColumnCache = false;
+  }
+  return vesselLoadingPortHasCancelledByColumnCache;
+}
+
 /** Ensure assignments table exists and supports per-PO rows. */
 async function ensureUserStoContractAssignmentsTable() {
   await query(`
@@ -1492,12 +1534,22 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
   try {
     const { shipmentId } = req.params;
     logger.info('Getting vessel loading ports for:', { shipmentId });
+    const hasCancelColumn = await vesselLoadingPortHasCancelColumn();
+    const hasCancelledByColumn = await vesselLoadingPortHasCancelledByColumn();
+    const activePortFilter = hasCancelColumn ? 'AND COALESCE(vlp.is_cancelled, false) = false' : '';
+    const activeLoadingJoinFilter = hasCancelColumn ? ' AND COALESCE(vlp1.is_cancelled, false) = false' : '';
+    const activeDischargeJoinFilter = hasCancelColumn ? ' AND COALESCE(vlpd.is_cancelled, false) = false' : '';
+    const cancelledBySelect = hasCancelledByColumn
+      ? `vlp.cancelled_by_user_id, COALESCE(u.full_name, u.username, u.email) AS cancelled_by_name`
+      : `NULL::uuid AS cancelled_by_user_id, NULL::text AS cancelled_by_name`;
+    const cancelledByJoin = hasCancelledByColumn ? 'LEFT JOIN users u ON u.id = vlp.cancelled_by_user_id' : '';
 
     // Check if shipmentId is a UUID (individual shipment) or STO number (aggregated)
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(shipmentId);
     logger.info('Is UUID:', isUUID);
 
     let portsResult;
+    let cancelledPortsResult = { rows: [] as any[] };
     let shipmentInfoResult;
     
     if (isUUID) {
@@ -1538,10 +1590,34 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
          FROM vessel_loading_ports vlp
          LEFT JOIN shipments s ON vlp.shipment_id = s.id
          LEFT JOIN contracts c ON s.contract_id = c.id
-         WHERE vlp.shipment_id = $1 
+         WHERE vlp.shipment_id = $1
+         ${activePortFilter}
          ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
         [shipmentId]
       );
+      if (hasCancelColumn) {
+        cancelledPortsResult = await query(
+          `SELECT
+             vlp.id,
+             vlp.shipment_id,
+             vlp.port_name,
+             vlp.port_sequence,
+             vlp.is_discharge_port,
+             vlp.cancel_remark,
+             vlp.cancelled_at,
+             ${cancelledBySelect},
+             vlp.updated_at,
+             c.contract_id as contract_number
+           FROM vessel_loading_ports vlp
+           LEFT JOIN shipments s ON vlp.shipment_id = s.id
+           LEFT JOIN contracts c ON s.contract_id = c.id
+           ${cancelledByJoin}
+           WHERE vlp.shipment_id = $1
+             AND COALESCE(vlp.is_cancelled, false) = true
+           ORDER BY vlp.cancelled_at DESC NULLS LAST, vlp.updated_at DESC NULLS LAST`,
+          [shipmentId]
+        );
+      }
 
       // Backfill: if shipment has port names but no vessel_loading_ports rows, create one loading + one discharge row from shipments
       if (portsResult.rows.length === 0) {
@@ -1583,6 +1659,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
                LEFT JOIN shipments sh ON vlp.shipment_id = sh.id
                LEFT JOIN contracts c ON sh.contract_id = c.id
                WHERE vlp.shipment_id = $1
+              ${activePortFilter}
                ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
               [shipmentId]
             );
@@ -1649,8 +1726,8 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           vlpd.quality_stone as quality_at_discharge_loc_1_stone
          FROM shipments s
          LEFT JOIN contracts c ON s.contract_id = c.id
-         LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false
-         LEFT JOIN vessel_loading_ports vlpd ON vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true
+         LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false${activeLoadingJoinFilter}
+         LEFT JOIN vessel_loading_ports vlpd ON vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true${activeDischargeJoinFilter}
          WHERE s.id = $1
          LIMIT 1`,
         [shipmentId]
@@ -1693,10 +1770,34 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
          FROM vessel_loading_ports vlp
          LEFT JOIN shipments s ON vlp.shipment_id = s.id
          LEFT JOIN contracts c ON s.contract_id = c.id
-         WHERE c.sto_number = $1 OR s.shipment_id = $1
+         WHERE (c.sto_number = $1 OR s.shipment_id = $1)
+         ${activePortFilter}
          ORDER BY c.contract_id, vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
         [shipmentId]
       );
+      if (hasCancelColumn) {
+        cancelledPortsResult = await query(
+          `SELECT
+             vlp.id,
+             vlp.shipment_id,
+             vlp.port_name,
+             vlp.port_sequence,
+             vlp.is_discharge_port,
+             vlp.cancel_remark,
+             vlp.cancelled_at,
+             ${cancelledBySelect},
+             vlp.updated_at,
+             c.contract_id as contract_number
+           FROM vessel_loading_ports vlp
+           LEFT JOIN shipments s ON vlp.shipment_id = s.id
+           LEFT JOIN contracts c ON s.contract_id = c.id
+           ${cancelledByJoin}
+           WHERE (c.sto_number = $1 OR s.shipment_id = $1)
+             AND COALESCE(vlp.is_cancelled, false) = true
+           ORDER BY vlp.cancelled_at DESC NULLS LAST, vlp.updated_at DESC NULLS LAST`,
+          [shipmentId]
+        );
+      }
       
       // Get shipment-level information (aggregated by STO)
       // Also pull ATA dates from first loading port if not in shipments table
@@ -1757,8 +1858,8 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           MAX(vlpd.quality_stone) as quality_at_discharge_loc_1_stone
          FROM shipments s
          LEFT JOIN contracts c ON s.contract_id = c.id
-         LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false
-         LEFT JOIN vessel_loading_ports vlpd ON vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true
+         LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false${activeLoadingJoinFilter}
+         LEFT JOIN vessel_loading_ports vlpd ON vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true${activeDischargeJoinFilter}
          WHERE c.sto_number = $1 OR s.shipment_id = $1
          GROUP BY COALESCE(c.sto_number, s.shipment_id)`,
         [shipmentId]
@@ -1857,6 +1958,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
       success: true,
       data: {
         ports: portsResult.rows,
+        cancelledPorts: cancelledPortsResult.rows,
         shipmentInfo: shipmentInfo,
       },
     });
@@ -2147,32 +2249,89 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
   }
 };
 
-// Delete vessel loading port
+// Cancel vessel loading port (soft cancel with required remark)
 export const deleteVesselLoadingPort = async (req: AuthRequest, res: Response) => {
   try {
     const { shipmentId, portId } = req.params;
+    const remark = String(req.body?.remark ?? '').trim();
+    const hasCancelColumn = await vesselLoadingPortHasCancelColumn();
+    const hasCancelledByColumn = await vesselLoadingPortHasCancelledByColumn();
+    const cancelledByUserId = req.user?.id ?? null;
 
-    const result = await query(
-      'DELETE FROM vessel_loading_ports WHERE id = $1 AND shipment_id = $2 RETURNING *',
+    if (!remark) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Cancellation remark is required' },
+      });
+    }
+
+    if (!hasCancelColumn) {
+      return res.status(409).json({
+        success: false,
+        error: { message: 'Cancellation is not ready: please run latest database migration first' },
+      });
+    }
+
+    const existing = await query(
+      'SELECT * FROM vessel_loading_ports WHERE id = $1 AND shipment_id = $2',
       [portId, shipmentId]
     );
 
-    if (result.rows.length === 0) {
+    if (existing.rows.length === 0) {
       return res.status(404).json({
         success: false,
         error: { message: 'Vessel loading port not found' },
       });
     }
 
+    const port = existing.rows[0];
+    if (port.is_discharge_port) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Discharge ports cannot be cancelled via this action' },
+      });
+    }
+
+    if (port.is_cancelled) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Loading port is already cancelled' },
+      });
+    }
+
+    const result = hasCancelledByColumn
+      ? await query(
+          `UPDATE vessel_loading_ports
+           SET is_cancelled = true,
+               cancel_remark = $3,
+               cancelled_at = CURRENT_TIMESTAMP,
+               cancelled_by_user_id = $4,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1 AND shipment_id = $2
+           RETURNING *`,
+          [portId, shipmentId, remark, cancelledByUserId]
+        )
+      : await query(
+          `UPDATE vessel_loading_ports
+           SET is_cancelled = true,
+               cancel_remark = $3,
+               cancelled_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1 AND shipment_id = $2
+           RETURNING *`,
+          [portId, shipmentId, remark]
+        );
+
     return res.json({
       success: true,
-      message: 'Vessel loading port deleted successfully',
+      data: result.rows[0],
+      message: 'Vessel loading port cancelled successfully',
     });
   } catch (error) {
-    logger.error('Delete vessel loading port error:', error);
+    logger.error('Cancel vessel loading port error:', error);
     return res.status(500).json({
       success: false,
-      error: { message: 'Failed to delete vessel loading port' },
+      error: { message: 'Failed to cancel vessel loading port' },
     });
   }
 };
@@ -3249,7 +3408,21 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       resolvedOperationId = buildSyntheticOperationId('SEA', dmy, seq);
     }
 
-    const legacyEta = {
+    type PerContractEtaPayload = {
+      port_of_loading?: string | null;
+      eta_arrival?: string | null;
+      eta_berthed?: string | null;
+      eta_loading_start?: string | null;
+      eta_loading_complete?: string | null;
+      eta_sailed?: string | null;
+      eta_discharge_arrival?: string | null;
+      eta_discharge_berthed?: string | null;
+      eta_discharge_start?: string | null;
+      eta_discharge_complete?: string | null;
+    };
+
+    const legacyEta: PerContractEtaPayload = {
+      port_of_loading: portOfLoading || null,
       eta_arrival: eta_arrival || null,
       eta_berthed: eta_berthed || null,
       eta_loading_start: eta_loading_start || null,
@@ -3263,7 +3436,7 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
 
     const etaByContractMap =
       etaByContract && typeof etaByContract === 'object' && !Array.isArray(etaByContract)
-        ? (etaByContract as Record<string, Record<string, string | null>>)
+        ? (etaByContract as Record<string, PerContractEtaPayload>)
         : {};
 
     for (const contract of contractCheck.rows) {
@@ -3352,7 +3525,7 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
           vesselCapacity ? parseFloat(String(vesselCapacity)) : null,
           vesselHullType || null,
           charterType || null,
-          portOfLoading || null,
+          perContractEta.port_of_loading || portOfLoading || null,
           portOfDischarge || null,
           quantityShipped ? parseFloat(String(quantityShipped)) : null,
           quantityDelivered ? parseFloat(String(quantityDelivered)) : null,
@@ -3397,7 +3570,7 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
           vesselCapacity ? parseFloat(String(vesselCapacity)) : null,
           vesselHullType || null,
           charterType || null,
-          portOfLoading || null,
+          perContractEta.port_of_loading || portOfLoading || null,
           portOfDischarge || null,
           quantityShipped ? parseFloat(String(quantityShipped)) : null,
           perContractEta.eta_arrival || null,
