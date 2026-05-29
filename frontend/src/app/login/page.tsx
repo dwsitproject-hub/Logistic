@@ -105,16 +105,6 @@ export default function LoginPage() {
               {loading ? 'Logging in...' : 'Login'}
             </Button>
           </form>
-          <div className="mt-6 text-sm text-muted-foreground">
-            <p className="font-semibold mb-2">Demo Credentials:</p>
-            <ul className="space-y-1 text-xs">
-              <li>Admin: admin / admin123</li>
-              <li>Trading: trading / trading123</li>
-              <li>Logistics: logistics / logistics123</li>
-              <li>Finance: finance / finance123</li>
-              <li>Management: management / management123</li>
-            </ul>
-          </div>
         </CardContent>
       </Card>
     </div>

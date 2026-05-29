@@ -13,6 +13,7 @@ import {
   getLatePerformance,
   getLatePerformanceSummary,
   getLatePerformanceTree,
+  getLatePerformanceData,
   getDistinctBuyers,
   createContract,
   updateContract,
@@ -72,6 +73,7 @@ router.use(authenticateToken);
 router.get('/', getContracts);
 router.get('/late-performance/summary', getLatePerformanceSummary);
 router.get('/late-performance/tree', getLatePerformanceTree);
+router.get('/late-performance/data', getLatePerformanceData);
 router.get('/late-performance', getLatePerformance);
 router.get('/filter-options/incoterms', getContractFilterIncoterms);
 router.get('/filter-options/group-plants', getContractFilterGroupPlants);

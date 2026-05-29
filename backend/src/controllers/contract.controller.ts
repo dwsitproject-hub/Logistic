@@ -1622,6 +1622,24 @@ export const getLatePerformanceTree = async (req: AuthRequest, res: Response) =>
   }
 };
 
+/** Combined endpoint: returns both summary and tree in a single SQL execution.
+ *  Frontend uses this to halve the number of database round-trips on page load and
+ *  on every filter change. */
+export const getLatePerformanceData = async (req: AuthRequest, res: Response) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    const data = await runLatePerformance(req, 'all');
+    return res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Get late performance data error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch late performance data' },
+    });
+  }
+};
+
 /** Get counts of SEA/LAND/MIX contracts missing required logistics (for dashboard cards) */
 export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
   try {

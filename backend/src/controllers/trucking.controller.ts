@@ -899,6 +899,13 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
           updateFields.push(`daily_deliverables = $${paramIndex}::jsonb`);
           updateValues.push(JSON.stringify(dd2.rows));
           paramIndex++;
+          // Keep denormalized date in sync
+          const lastDd = dd2.rows.length > 0
+            ? dd2.rows.reduce((mx, r) => (!mx || r.date > mx ? r.date : mx), '')
+            : null;
+          updateFields.push(`last_daily_deliverable_date = $${paramIndex}::date`);
+          updateValues.push(lastDd);
+          paramIndex++;
           continue;
         }
 
@@ -1257,12 +1264,17 @@ export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Res
       return res.status(400).json({ success: false, error: { message: dd.message } });
     }
 
+    const lastDdDate = dd.rows.length > 0
+      ? dd.rows.reduce((mx, r) => (!mx || r.date > mx ? r.date : mx), '')
+      : null;
     const upd = await query(
       `UPDATE trucking_operations
-       SET daily_deliverables = $2::jsonb, updated_at = CURRENT_TIMESTAMP
+       SET daily_deliverables = $2::jsonb,
+           last_daily_deliverable_date = $3::date,
+           updated_at = CURRENT_TIMESTAMP
        WHERE id = $1
        RETURNING *`,
-      [id, JSON.stringify(dd.rows)],
+      [id, JSON.stringify(dd.rows), lastDdDate],
     );
 
     return res.json({ success: true, data: upd.rows[0], message: 'Daily planning deliverables updated successfully' });
@@ -1589,11 +1601,16 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
         continue;
       }
 
+      const lastDdDateBulk = dd.rows.length > 0
+        ? dd.rows.reduce((mx: string, r: { date: string }) => (!mx || r.date > mx ? r.date : mx), '')
+        : null;
       await query(
         `UPDATE trucking_operations
-         SET daily_deliverables = $2::jsonb, updated_at = CURRENT_TIMESTAMP
+         SET daily_deliverables = $2::jsonb,
+             last_daily_deliverable_date = $3::date,
+             updated_at = CURRENT_TIMESTAMP
          WHERE id = $1`,
-        [cur.id, JSON.stringify(dd.rows)],
+        [cur.id, JSON.stringify(dd.rows), lastDdDateBulk],
       );
 
       operationsSucceeded += 1;

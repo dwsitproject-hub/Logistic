@@ -2666,7 +2666,6 @@ function ShipmentsPageContent() {
       setShipmentInfo({})
       setShipmentInfoError(apiErrorMessage(error, 'Failed to load shipment information'))
     } finally {
-      setShipmentInfo((prev) => prev ?? {})
       setShipmentInfoLoading(false)
     }
   }
