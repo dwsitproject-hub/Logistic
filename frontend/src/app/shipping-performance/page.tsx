@@ -163,7 +163,7 @@ function resolvePerfTableDataKey(
   mode: PerfDashMode,
 ): keyof ShippingPerformanceRow {
   if (mode === 'eta' || !isPerfDeltaLogicalKey(String(logicalKey))) return logicalKey
-  return PERF_DELTA_ATA_KEY_MAP[logicalKey]
+  return PERF_DELTA_ATA_KEY_MAP[logicalKey as keyof typeof PERF_DELTA_ATA_KEY_MAP]
 }
 
 function resolvePerfColumnLabel(label: string, mode: PerfDashMode): string {
