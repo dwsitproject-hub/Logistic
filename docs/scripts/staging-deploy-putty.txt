@@ -55,8 +55,12 @@ Shipping Performance:
   - UNPLANNED shipments hidden from all sections
   - Global Filters: Incoterm, Group Plant, Vessel, Status, Contract Date
   - Section order: Summary → Drilldown → Filters → Table
-  - Table: Incoterm/Product columns, column reorder in Columns menu
-  - Delta column header tooltips (Loading/Discharge ETA-ETR/ETB/ETC)
+  - Summary cards On Going / Close: Avg metrics red (late) / green (ahead)
+  - Close card + table: ATA column labels and ata_* delta fields
+  - Drilldown: contract count per product (not shipment sum); global unique vessels in header
+  - Table: Shipment ID column removed; delta tooltips; Incoterm/Product columns
+  - After backend pull on .57, run DB migrate if new migrations:
+      docker compose -f docker-compose.backend.yml exec backend npm run db:migrate
 
 --------------------------------------------------------------------------------
 D) Rollback (either server)

@@ -16,7 +16,6 @@ import {
   rowMatchesToolbarMultiFilters,
 } from '@/lib/globalScopeFilters'
 import {
-  contextPerformanceClass,
   formatAvgDays,
   formatSignedCycleDays,
   formatSignedDeltaDays,
@@ -81,7 +80,6 @@ type TableColumnKey = keyof ShippingPerformanceRow
 
 /** Shipment-level columns hidden in the By Vessel summary view. */
 const DETAIL_COLUMN_KEYS = new Set<string>([
-  'shipment_id',
   'status',
   'po_number',
   'contract_ext_no',
@@ -134,7 +132,51 @@ function sumMetric(rows: ShippingPerformanceRow[], key: TableColumnKey): number 
   return rows.reduce((sum, r) => sum + Number(r[key] ?? 0), 0)
 }
 
-function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceRow[] {
+/** Logical delta column keys in the table — map to ATA payload fields when Close card is active. */
+const PERF_DELTA_LOGICAL_KEYS = [
+  'loading_delta_eta_etr_days',
+  'loading_delta_eta_etb_days',
+  'loading_delta_etb_etc_days',
+  'discharge_delta_eta_etb_days',
+  'discharge_delta_etb_etc_days',
+  'total_delta_days',
+] as const satisfies ReadonlyArray<keyof ShippingPerformanceRow>
+
+const PERF_DELTA_ATA_KEY_MAP: Record<
+  (typeof PERF_DELTA_LOGICAL_KEYS)[number],
+  keyof ShippingPerformanceRow
+> = {
+  loading_delta_eta_etr_days: 'ata_loading_delta_eta_etr_days',
+  loading_delta_eta_etb_days: 'ata_loading_delta_eta_etb_days',
+  loading_delta_etb_etc_days: 'ata_loading_delta_etb_etc_days',
+  discharge_delta_eta_etb_days: 'ata_discharge_delta_eta_etb_days',
+  discharge_delta_etb_etc_days: 'ata_discharge_delta_etb_etc_days',
+  total_delta_days: 'ata_total_delta_days',
+}
+
+function isPerfDeltaLogicalKey(key: string): key is (typeof PERF_DELTA_LOGICAL_KEYS)[number] {
+  return Object.prototype.hasOwnProperty.call(PERF_DELTA_ATA_KEY_MAP, key)
+}
+
+function resolvePerfTableDataKey(
+  logicalKey: keyof ShippingPerformanceRow,
+  mode: PerfDashMode,
+): keyof ShippingPerformanceRow {
+  if (mode === 'eta' || !isPerfDeltaLogicalKey(String(logicalKey))) return logicalKey
+  return PERF_DELTA_ATA_KEY_MAP[logicalKey]
+}
+
+function resolvePerfColumnLabel(label: string, mode: PerfDashMode): string {
+  if (mode === 'eta') return label
+  return label.replace(/\bETA\b/g, 'ATA')
+}
+
+function resolvePerfColumnTooltip(tooltip: string | undefined, mode: PerfDashMode): string | undefined {
+  if (!tooltip || mode === 'eta') return tooltip
+  return tooltip.replace(/\bETA\b/g, 'ATA')
+}
+
+function aggregateByVessel(rows: ShippingPerformanceRow[], mode: PerfDashMode = 'eta'): ShippingPerformanceRow[] {
   const groups = new Map<string, ShippingPerformanceRow[]>()
   for (const row of rows) {
     const key = normalizeVesselKey(row.vessel_name)
@@ -142,6 +184,9 @@ function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceR
     if (bucket) bucket.push(row)
     else groups.set(key, [row])
   }
+
+  const avgDelta = (vesselRows: ShippingPerformanceRow[], logicalKey: (typeof PERF_DELTA_LOGICAL_KEYS)[number]) =>
+    avgMetric(vesselRows, resolvePerfTableDataKey(logicalKey, mode))
 
   return [...groups.entries()].map(([vesselKey, vesselRows]) => ({
     id: `vessel-group:${vesselKey}`,
@@ -163,12 +208,12 @@ function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceR
     sto_qty: sumMetric(vesselRows, 'sto_qty'),
     received_qty: sumMetric(vesselRows, 'received_qty'),
     outstanding_qty: sumMetric(vesselRows, 'outstanding_qty'),
-    loading_delta_eta_etr_days: avgMetric(vesselRows, 'loading_delta_eta_etr_days'),
-    loading_delta_eta_etb_days: avgMetric(vesselRows, 'loading_delta_eta_etb_days'),
-    loading_delta_etb_etc_days: avgMetric(vesselRows, 'loading_delta_etb_etc_days'),
-    discharge_delta_eta_etb_days: avgMetric(vesselRows, 'discharge_delta_eta_etb_days'),
-    discharge_delta_etb_etc_days: avgMetric(vesselRows, 'discharge_delta_etb_etc_days'),
-    total_delta_days: avgMetric(vesselRows, 'total_delta_days'),
+    loading_delta_eta_etr_days: avgDelta(vesselRows, 'loading_delta_eta_etr_days'),
+    loading_delta_eta_etb_days: avgDelta(vesselRows, 'loading_delta_eta_etb_days'),
+    loading_delta_etb_etc_days: avgDelta(vesselRows, 'loading_delta_etb_etc_days'),
+    discharge_delta_eta_etb_days: avgDelta(vesselRows, 'discharge_delta_eta_etb_days'),
+    discharge_delta_etb_etc_days: avgDelta(vesselRows, 'discharge_delta_etb_etc_days'),
+    total_delta_days: avgDelta(vesselRows, 'total_delta_days'),
     cargo_readiness_date: null,
     loading_eta_arrival: null,
     loading_eta_berthed: null,
@@ -181,9 +226,15 @@ function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceR
 
 type LatePerfNode = {
   key: string
+  /** Distinct contract count for this drilldown node (not shipment/row count). */
   count: number
   vesselCount: number
   children: LatePerfNode[]
+}
+
+function addDistinctContract(contracts: Set<string>, row: ShippingPerformanceRow): void {
+  const contractNumber = String(row.contract_number || '').trim()
+  if (contractNumber) contracts.add(contractNumber)
 }
 
 type PerVesselPerfSummary = {
@@ -264,6 +315,20 @@ function countUniqueContracts(rows: ShippingPerformanceRow[]): number {
 
 function displayGroupLabel(key: string): string {
   return key === 'Blank' ? 'Uncategorized' : key
+}
+
+/** Drilldown card vessel label — per-node count; summing sibling cards can exceed the global unique total. */
+function drilldownVesselCountLabel(level: 'product' | 'plant' | 'incoterm' | 'vessel'): string {
+  switch (level) {
+    case 'product':
+      return 'Vessels in product'
+    case 'plant':
+      return 'Vessels in plant'
+    case 'incoterm':
+      return 'Vessels in incoterm'
+    default:
+      return 'Vessel'
+  }
 }
 
 function rowMatchesGroupSelection(rowValue: unknown, selectedKey: string): boolean {
@@ -436,13 +501,13 @@ function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): P
 }
 
 function buildPerfTree(rows: ShippingPerformanceRow[]): LatePerfNode[] {
-  type VesAcc = { count: number; vessels: Set<string> }
+  type VesAcc = { contracts: Set<string>; vessels: Set<string> }
   type VesMap = Map<string, VesAcc>
-  type IncAcc = { count: number; vessels: Set<string>; vesselsMap: VesMap }
+  type IncAcc = { contracts: Set<string>; vessels: Set<string>; vesselsMap: VesMap }
   type IncMap = Map<string, IncAcc>
-  type PlantAcc = { count: number; vessels: Set<string>; incoterms: IncMap }
+  type PlantAcc = { contracts: Set<string>; vessels: Set<string>; incoterms: IncMap }
   type PlantMap = Map<string, PlantAcc>
-  type ProdAcc = { count: number; vessels: Set<string>; plants: PlantMap }
+  type ProdAcc = { contracts: Set<string>; vessels: Set<string>; plants: PlantMap }
   type ProdMap = Map<string, ProdAcc>
   const root: ProdMap = new Map()
 
@@ -452,44 +517,44 @@ function buildPerfTree(rows: ShippingPerformanceRow[]): LatePerfNode[] {
     const inc = normalizeGroupKey(row.incoterm)
     const ves = normalizeVesselKey(row.vessel_name)
 
-    if (!root.has(prod)) root.set(prod, { count: 0, vessels: new Set(), plants: new Map() })
+    if (!root.has(prod)) root.set(prod, { contracts: new Set(), vessels: new Set(), plants: new Map() })
     const pN = root.get(prod)!
-    pN.count += 1
+    addDistinctContract(pN.contracts, row)
     pN.vessels.add(ves)
-    if (!pN.plants.has(plant)) pN.plants.set(plant, { count: 0, vessels: new Set(), incoterms: new Map() })
+    if (!pN.plants.has(plant)) pN.plants.set(plant, { contracts: new Set(), vessels: new Set(), incoterms: new Map() })
     const plN = pN.plants.get(plant)!
-    plN.count += 1
+    addDistinctContract(plN.contracts, row)
     plN.vessels.add(ves)
-    if (!plN.incoterms.has(inc)) plN.incoterms.set(inc, { count: 0, vessels: new Set(), vesselsMap: new Map() })
+    if (!plN.incoterms.has(inc)) plN.incoterms.set(inc, { contracts: new Set(), vessels: new Set(), vesselsMap: new Map() })
     const iN = plN.incoterms.get(inc)!
-    iN.count += 1
+    addDistinctContract(iN.contracts, row)
     iN.vessels.add(ves)
-    if (!iN.vesselsMap.has(ves)) iN.vesselsMap.set(ves, { count: 0, vessels: new Set([ves]) })
+    if (!iN.vesselsMap.has(ves)) iN.vesselsMap.set(ves, { contracts: new Set(), vessels: new Set([ves]) })
     const vN = iN.vesselsMap.get(ves)!
-    vN.count += 1
+    addDistinctContract(vN.contracts, row)
   }
 
   const srtByVesselCount = <T,>(m: Map<string, T & { vessels: Set<string> }>) =>
     [...m.entries()].sort((a, b) => b[1].vessels.size - a[1].vessels.size)
 
   const srtVesselLeaves = (m: VesMap) =>
-    [...m.entries()].sort((a, b) => b[1].count - a[1].count)
+    [...m.entries()].sort((a, b) => b[1].contracts.size - a[1].contracts.size)
 
   return srtByVesselCount(root).map(([prod, pN]) => ({
     key: prod,
-    count: pN.count,
+    count: pN.contracts.size,
     vesselCount: pN.vessels.size,
     children: srtByVesselCount(pN.plants).map(([plant, plN]) => ({
       key: plant,
-      count: plN.count,
+      count: plN.contracts.size,
       vesselCount: plN.vessels.size,
       children: srtByVesselCount(plN.incoterms).map(([inc, iN]) => ({
         key: inc,
-        count: iN.count,
+        count: iN.contracts.size,
         vesselCount: iN.vessels.size,
         children: srtVesselLeaves(iN.vesselsMap).map(([ves, vN]) => ({
           key: ves,
-          count: vN.count,
+          count: vN.contracts.size,
           vesselCount: 1,
           children: [],
         })),
@@ -540,7 +605,6 @@ const COLUMN_DEFS: ColumnDef[] = [
   { key: 'contract_qty', label: 'Contract Qty', type: 'number', defaultVisible: true },
   { key: 'group_name', label: 'Supplier Group', type: 'text', defaultVisible: false },
   { key: 'shipment_count', label: 'Shipments', type: 'number', defaultVisible: false },
-  { key: 'shipment_id', label: 'Shipment ID', type: 'text', defaultVisible: true },
   { key: 'status', label: 'Status', type: 'text', defaultVisible: true },
   { key: 'po_number', label: 'PO No', type: 'text', defaultVisible: false },
   { key: 'contract_ext_no', label: 'Contract Ext No', type: 'text', defaultVisible: false },
@@ -913,18 +977,18 @@ export default function ShippingPerformancePage() {
   )
 
   const renderSummaryGapMetrics = (summary: PerVesselPerfSummary, mode: PerfDashMode) => {
-    const isAta = mode === 'ata'
-    const metricClass = contextPerformanceClass(isAta ? summary.avgTotalDelta > 0 : summary.avgTotalDelta > 0)
+    const arrivalLabel = mode === 'ata' ? 'ATA' : 'ETA'
     const fmt = (days: number) => formatAvgDays(Math.abs(days))
-    const arrivalLabel = isAta ? 'ATA' : 'ETA'
+    const metricValueClass = (days: number) =>
+      `font-semibold ${signedCycleDaysClass(days)}`
     return (
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
-        <span>Avg Loading {arrivalLabel}-ETR: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtaEtr)}</span></span>
-        <span>Avg Loading {arrivalLabel}-ETB: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtaEtb)}</span></span>
-        <span>Avg Loading ETB-ETC: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgLoadingEtbEtc)}</span></span>
-        <span>Avg Discharge {arrivalLabel}-ETB: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgDischargeEtaEtb)}</span></span>
-        <span>Avg Discharge ETB-ETC: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgDischargeEtbEtc)}</span></span>
-        <span>Avg Total: <span className={`font-semibold ${metricClass}`}>{fmt(summary.avgTotalDelta)}</span></span>
+        <span>Avg Loading {arrivalLabel}-ETR: <span className={metricValueClass(summary.avgLoadingEtaEtr)}>{fmt(summary.avgLoadingEtaEtr)}</span></span>
+        <span>Avg Loading {arrivalLabel}-ETB: <span className={metricValueClass(summary.avgLoadingEtaEtb)}>{fmt(summary.avgLoadingEtaEtb)}</span></span>
+        <span>Avg Loading ETB-ETC: <span className={metricValueClass(summary.avgLoadingEtbEtc)}>{fmt(summary.avgLoadingEtbEtc)}</span></span>
+        <span>Avg Discharge {arrivalLabel}-ETB: <span className={metricValueClass(summary.avgDischargeEtaEtb)}>{fmt(summary.avgDischargeEtaEtb)}</span></span>
+        <span>Avg Discharge ETB-ETC: <span className={metricValueClass(summary.avgDischargeEtbEtc)}>{fmt(summary.avgDischargeEtbEtc)}</span></span>
+        <span>Avg Total: <span className={metricValueClass(summary.avgTotalDelta)}>{fmt(summary.avgTotalDelta)}</span></span>
       </div>
     )
   }
@@ -964,9 +1028,10 @@ export default function ShippingPerformancePage() {
 
   // Step D: apply Section 3 sorting
   const filteredRows = useMemo(() => {
+    const sortDataKey = resolvePerfTableDataKey(sortBy, perfDashMode)
     const sorted = [...drilldownFilteredRows].sort((a, b) => {
-      const aVal = a[sortBy]
-      const bVal = b[sortBy]
+      const aVal = a[sortDataKey]
+      const bVal = b[sortDataKey]
       const colType = COLUMN_MAP[String(sortBy)]?.type ?? 'text'
       if (colType === 'number') {
         const aNum = aVal === null || aVal === undefined || aVal === '' ? Number.NEGATIVE_INFINITY : Number(aVal)
@@ -980,12 +1045,12 @@ export default function ShippingPerformancePage() {
       return 0
     })
     return sorted
-  }, [drilldownFilteredRows, sortBy, sortDirection])
+  }, [drilldownFilteredRows, sortBy, sortDirection, perfDashMode])
 
   const tableRows = useMemo(() => {
     if (tableViewMode === 'all') return filteredRows
-    return aggregateByVessel(filteredRows)
-  }, [filteredRows, tableViewMode])
+    return aggregateByVessel(filteredRows, perfDashMode)
+  }, [filteredRows, tableViewMode, perfDashMode])
 
   const manageableColumnKeys = useMemo(
     () => resolveManageableColumnKeys(columnOrder, tableViewMode),
@@ -1188,9 +1253,14 @@ export default function ShippingPerformancePage() {
                   <div>
                     <div className="text-sm font-semibold text-gray-900">Drilldown</div>
                     <div className="text-xs text-gray-500 mt-0.5">
-                      {activeDatasetBundle.summary.contractCount.toLocaleString('en-US')} contracts ·{' '}
-                      {activeDatasetBundle.summary.vesselCount.toLocaleString('en-US')} vessels
+                      {activeDatasetBundle.summary.contractCount.toLocaleString('en-US')} unique contracts ·{' '}
+                      {activeDatasetBundle.summary.vesselCount.toLocaleString('en-US')} unique vessels (global)
                     </div>
+                    <p className="text-[11px] text-gray-500 mt-1 max-w-2xl">
+                      Vessel counts on each card below are unique within that product/plant/incoterm only. The same
+                      vessel can appear on multiple product cards, so do not add those numbers together — use the
+                      global total here.
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -1234,9 +1304,11 @@ export default function ShippingPerformancePage() {
                                 </div>
                                 <div className="mt-1 text-xs text-gray-700 flex items-center justify-between gap-2">
                                   <span className="font-semibold">{node.count.toLocaleString('en-US')}</span>
-                                  <span className="text-gray-500">shipments</span>
+                                  <span className="text-gray-500">contracts</span>
                                   <span className="ml-auto text-right whitespace-nowrap">
-                                    <span className="block text-[10px] text-gray-500 leading-tight">Total Vessels</span>
+                                    <span className="block text-[10px] text-gray-500 leading-tight">
+                                      {drilldownVesselCountLabel(col.level)}
+                                    </span>
                                     <span className="font-semibold">{node.vesselCount.toLocaleString('en-US')}</span>
                                   </span>
                                 </div>
@@ -1325,7 +1397,7 @@ export default function ShippingPerformancePage() {
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
               <Input
-                placeholder="Search by Shipment ID, Contract, PO, Vessel, Product, or Incoterm..."
+                placeholder="Search by Contract, PO, STO, Vessel, Product, or Incoterm..."
                 value={searchDraft}
                 onChange={(e) => setSearchDraft(e.target.value)}
                 onKeyDown={(e) => {
@@ -1521,7 +1593,7 @@ export default function ShippingPerformancePage() {
                                 checked={Boolean(visibleColumns[String(col.key)])}
                                 onCheckedChange={() => onToggleColumn(col.key)}
                               />
-                              <span className="truncate">{col.label}</span>
+                              <span className="truncate">{resolvePerfColumnLabel(col.label, perfDashMode)}</span>
                             </label>
                           </div>
                         )
@@ -1608,15 +1680,17 @@ export default function ShippingPerformancePage() {
                     <tr className="border-b">
                       {tableColumnKeys.map((key) => {
                         const col = COLUMN_MAP[String(key)]
+                        const columnLabel = resolvePerfColumnLabel(col.label, perfDashMode)
+                        const columnTooltip = resolvePerfColumnTooltip(col.tooltip, perfDashMode)
                         const isSorted = sortBy === key
                         const headerButton = (
                           <button
                             type="button"
-                            className={`inline-flex items-center gap-1 ${col.tooltip ? 'cursor-help' : ''}`}
+                            className={`inline-flex items-center gap-1 ${columnTooltip ? 'cursor-help' : ''}`}
                             onClick={() => onHeaderSort(key)}
-                            title={col.tooltip ? undefined : 'Click to sort, drag to reorder'}
+                            title={columnTooltip ? undefined : 'Click to sort, drag to reorder'}
                           >
-                            <span>{col.label}</span>
+                            <span>{columnLabel}</span>
                             <span className="text-xs text-gray-500">
                               {isSorted ? (sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : null}
                             </span>
@@ -1636,11 +1710,11 @@ export default function ShippingPerformancePage() {
                               setDraggingColumn(null)
                             }}
                           >
-                            {col.tooltip ? (
+                            {columnTooltip ? (
                               <Tooltip delayDuration={200}>
                                 <TooltipTrigger asChild>{headerButton}</TooltipTrigger>
                                 <TooltipContent side="top" className="text-xs leading-relaxed max-w-sm">
-                                  {col.tooltip}
+                                  {columnTooltip}
                                 </TooltipContent>
                               </Tooltip>
                             ) : (
@@ -1669,7 +1743,8 @@ export default function ShippingPerformancePage() {
                         <tr key={row.id} className="border-t hover:bg-gray-50">
                           {tableColumnKeys.map((key) => {
                             const col = COLUMN_MAP[String(key)]
-                            const rawValue = row[key]
+                            const dataKey = resolvePerfTableDataKey(key, perfDashMode)
+                            const rawValue = row[dataKey]
                             return (
                               <td key={`${row.id}-${String(key)}`} className="px-3 py-2 whitespace-nowrap">
                                 {(key === 'sto_qty' || key === 'received_qty' || key === 'outstanding_qty' || key === 'contract_qty')
@@ -1686,8 +1761,8 @@ export default function ShippingPerformancePage() {
                                   ? (
                                     <NumberCell
                                       value={rawValue}
-                                      isDeltaDays={String(key).includes('delta')}
-                                      decimalPlaces={tableViewMode === 'by_vessel' && String(key).includes('delta') ? 1 : undefined}
+                                      isDeltaDays={String(key).includes('delta') || String(dataKey).includes('delta')}
+                                      decimalPlaces={tableViewMode === 'by_vessel' && (String(key).includes('delta') || String(dataKey).includes('delta')) ? 1 : undefined}
                                     />
                                   )
                                   : asDisplayValue(rawValue) || '-'}

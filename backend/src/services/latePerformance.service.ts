@@ -202,12 +202,11 @@ export function buildLatePerformanceQuery(filters: LatePerformanceFilters): {
           (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
           (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery,
           (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
+          -- Use the denormalized column instead of CROSS JOIN LATERAL jsonb_array_elements
           (
-            SELECT MAX((dd->>'date')::date)
-            FROM trucking_operations tdd
-            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(tdd.daily_deliverables, '[]'::jsonb)) AS dd
-            WHERE tdd.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-              AND (dd->>'date') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+            SELECT MAX(t.last_daily_deliverable_date)
+            FROM trucking_operations t
+            WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
           ) AS last_trucking_daily_deliverable_date,
           (
             WITH trucking_contract AS (
