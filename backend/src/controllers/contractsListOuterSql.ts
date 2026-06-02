@@ -86,6 +86,9 @@ export const CONTRACTS_LIST_OUTER_SQL = `
         base.last_trucking_daily_deliverable_date,
         base.first_ata_vessel_completed_loading,
         base.last_ata_vessel_complete_discharge,
-        base.last_eta_vessel_complete_discharge
+        base.last_eta_vessel_complete_discharge,
+        NULLIF(TRIM(base.last_vessel_name), '') AS vessel_name,
+        base.last_eta_vessel_completed_loading AS eta_vessel_completed_loading,
+        base.last_eta_vessel_complete_discharge AS eta_vessel_complete_discharge
       FROM page AS base
 `;

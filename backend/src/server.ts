@@ -14,6 +14,7 @@ import { errorHandler } from './middleware/errorHandler';
 import { notFoundHandler } from './middleware/notFoundHandler';
 import logger from './utils/logger';
 import { SchedulerService } from './services/scheduler.service';
+import { ensureUserStoContractAssignmentsTable } from './database/ensureUserStoContractAssignments';
 
 // Import routes
 import authRoutes from './routes/auth.routes';
@@ -135,9 +136,15 @@ app.use(errorHandler);
 
 // Start server (skipped in automated tests so Vitest can import `app` without binding a port)
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(PORT, () => {
+  app.listen(PORT, async () => {
     logger.info(`🚀 Server is running on port ${PORT}`);
     logger.info(`📚 API Documentation available at http://localhost:${PORT}/api-docs`);
+
+    try {
+      await ensureUserStoContractAssignmentsTable();
+    } catch (error) {
+      logger.error('Failed to ensure user_sto_contract_assignments table:', error);
+    }
 
     try {
       SchedulerService.initialize();

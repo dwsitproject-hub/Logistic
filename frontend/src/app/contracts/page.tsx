@@ -70,6 +70,9 @@ const CLIENT_ONLY_SORT_COLUMN_IDS = new Set([
   'over_under_delivery_status',
   'month_delivery_end',
   'cargo_readiness_date',
+  'vessel_name',
+  'eta_vessel_completed_loading',
+  'eta_vessel_complete_discharge',
   'po_number',
   'contract_ext_no',
   'lt_spot',
@@ -82,6 +85,8 @@ const DATE_SORT_COLUMN_IDS = new Set([
   'delivery_end',
   'created_at',
   'cargo_readiness_date',
+  'eta_vessel_completed_loading',
+  'eta_vessel_complete_discharge',
 ])
 
 function resolveApiSortKey(columnId: string): string | null {
@@ -167,6 +172,9 @@ interface Contract {
   dp_cycle_days?: number | null
   payment_status?: string
   company_name?: string
+  vessel_name?: string | null
+  eta_vessel_completed_loading?: string | null
+  eta_vessel_complete_discharge?: string | null
 }
 
 /** True when SAP B2B flag is set; do not use `contract_type || b2b_flag` (LT/SPOT lives in contract_type). */
@@ -852,6 +860,9 @@ function defaultCompactVisibleColumnIds(isContractPerformance: boolean): string[
       'contract_date',
       'contract_id',
       'product',
+      'vessel_name',
+      'eta_vessel_completed_loading',
+      'eta_vessel_complete_discharge',
       'incoterm',
       'group_name',
       'supplier',
@@ -1524,10 +1535,10 @@ function ContractsPageContent() {
   }
 
   const columnStorageKey = isContractPerformance
-    ? 'contract-performance.compact.visibleColumns.v13'
+    ? 'contract-performance.compact.visibleColumns.v14'
     : 'contracts.compact.visibleColumns.v8'
   const columnOrderStorageKey = isContractPerformance
-    ? 'contract-performance.compact.columnOrder.v9'
+    ? 'contract-performance.compact.columnOrder.v10'
     : 'contracts.compact.columnOrder.v9'
   // v4: default column order puts Contract Date first (ignore stale v3 saved order).
   // Bumped so saved "created_at" default does not fight API order (newest contract_date first).
@@ -2583,6 +2594,48 @@ function ContractsPageContent() {
       getSortValue: (c) => c.incoterm || '',
       render: (c) => <span className="text-sm truncate">{c.incoterm || '-'}</span>
     },
+    ...(isContractPerformance
+      ? ([
+          {
+            id: 'vessel_name',
+            label: 'Vessel',
+            defaultVisible: true,
+            sortable: true,
+            getSortValue: (c: Contract) => c.vessel_name || '',
+            render: (c: Contract) => (
+              <span className="text-sm truncate block" title={c.vessel_name || ''}>
+                {c.vessel_name?.trim() ? c.vessel_name : '-'}
+              </span>
+            ),
+          },
+          {
+            id: 'eta_vessel_completed_loading',
+            label: 'ETA Completed Loading',
+            defaultVisible: true,
+            sortable: true,
+            getSortValue: (c: Contract) => c.eta_vessel_completed_loading || '',
+            render: (c: Contract) => (
+              <span className="text-sm whitespace-nowrap">
+                {c.eta_vessel_completed_loading ? formatShortDate(c.eta_vessel_completed_loading) : '-'}
+              </span>
+            ),
+            className: 'whitespace-nowrap',
+          },
+          {
+            id: 'eta_vessel_complete_discharge',
+            label: 'ETA Completed Discharge',
+            defaultVisible: true,
+            sortable: true,
+            getSortValue: (c: Contract) => c.eta_vessel_complete_discharge || '',
+            render: (c: Contract) => (
+              <span className="text-sm whitespace-nowrap">
+                {c.eta_vessel_complete_discharge ? formatShortDate(c.eta_vessel_complete_discharge) : '-'}
+              </span>
+            ),
+            className: 'whitespace-nowrap',
+          },
+        ] as CompactColumn[])
+      : []),
     {
       id: 'delivery_status',
       label: 'Delivery Status',
@@ -3166,6 +3219,9 @@ function ContractsPageContent() {
       delivery_end: 'Due Date Delivery End',
       month_delivery_end: 'Month Delivery End',
       cargo_readiness_date: 'Cargo Readiness Date',
+      vessel_name: 'Vessel',
+      eta_vessel_completed_loading: 'ETA Completed Loading',
+      eta_vessel_complete_discharge: 'ETA Completed Discharge',
       created_at: 'Created',
       company_code: 'Co.',
       status: 'Status',
@@ -3203,6 +3259,9 @@ function ContractsPageContent() {
     let deLen = H.delivery_end.length
     let monthEndLen = H.month_delivery_end.length
     let createdLen = H.created_at.length
+    let vesselLen = H.vessel_name.length
+    let etaLoadLen = H.eta_vessel_completed_loading.length
+    let etaDischargeLen = H.eta_vessel_complete_discharge.length
 
     for (const c of sortedContracts) {
       contractIdLen = Math.max(contractIdLen, String(c.contract_id ?? '').length)
@@ -3252,6 +3311,15 @@ function ContractsPageContent() {
       deLen = Math.max(deLen, formatDateDMY(c.delivery_end_date || '').length)
       monthEndLen = Math.max(monthEndLen, formatMonthDeliveryEnd(c.delivery_end_date || '').length)
       createdLen = Math.max(createdLen, formatDateDMY(c.created_at || '').length)
+      vesselLen = Math.max(vesselLen, String(c.vessel_name ?? '').length)
+      etaLoadLen = Math.max(
+        etaLoadLen,
+        c.eta_vessel_completed_loading ? formatDateDMY(c.eta_vessel_completed_loading).length : 1,
+      )
+      etaDischargeLen = Math.max(
+        etaDischargeLen,
+        c.eta_vessel_complete_discharge ? formatDateDMY(c.eta_vessel_complete_discharge).length : 1,
+      )
     }
 
     const supplierTrack = track(H.supplier, supplierLen, 100, 360)
@@ -3286,6 +3354,9 @@ function ContractsPageContent() {
       delivery_end: track(H.delivery_end, deLen, 108, 280),
       month_delivery_end: track(H.month_delivery_end, monthEndLen, 96, 200),
       cargo_readiness_date: track(H.cargo_readiness_date, 24, 220, 320),
+      vessel_name: track(H.vessel_name, vesselLen, 96, 280),
+      eta_vessel_completed_loading: track(H.eta_vessel_completed_loading, etaLoadLen, 120, 200),
+      eta_vessel_complete_discharge: track(H.eta_vessel_complete_discharge, etaDischargeLen, 120, 220),
       created_at: track(H.created_at, createdLen, 96, 140),
       company_code: track(H.company_code, 8, 72, 120),
       status: track(H.status, 12, 88, 160),

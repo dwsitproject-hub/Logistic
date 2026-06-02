@@ -3,6 +3,8 @@ import { query } from '../database/connection';
 import {
   diffCalendarDays,
   computeLateIndicatorText,
+  hasCalendarDate,
+  openDueDateTradeCycleDays,
 } from '../utils/calendarDays';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
@@ -19,11 +21,13 @@ import {
   runLatePerformance,
 } from '../services/latePerformance.service';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 
 export { B2B_CHILD_EXCLUSION_SQL };
 
 export const getContracts = async (req: AuthRequest, res: Response) => {
   try {
+    await ensureUserStoContractAssignmentsTable();
     const { status, supplier, buyer, dateFrom, dateTo, outstanding, companyCode, b2bFlag, page = 1, limit = 10 } = req.query;
     const productFilter = (req.query as any).product as string | undefined;
     const transportMode = (req.query as any).transportMode as string | undefined;
@@ -176,6 +180,12 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
             WHERE tdd.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
               AND (dd->>'date') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
           ) AS last_trucking_daily_deliverable_date,
+          -- Open standard ETA (LAND): from trucking ETA columns
+          (
+            SELECT MAX(COALESCE(t.eta_trucking_completion_date::date, t.eta_delivery_end_date::date))
+            FROM trucking_operations t
+            WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+          ) AS open_standard_eta_trucking,
           -- For Log Cycle calculation (SEA): earliest ATA loading complete and latest ATA discharge complete
           (SELECT MIN(s2.ata_loading_complete::date) FROM shipments s2 WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1] AND s2.ata_loading_complete IS NOT NULL) AS first_ata_vessel_completed_loading,
           (
@@ -189,6 +199,48 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
             FROM shipments s2
             WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
           ) AS last_ata_vessel_complete_discharge,
+          -- Latest vessel name (SEA contracts; for list display)
+          (
+            SELECT s2.vessel_name
+            FROM shipments s2
+            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+              AND NULLIF(TRIM(s2.vessel_name), '') IS NOT NULL
+            ORDER BY s2.updated_at DESC NULLS LAST, s2.created_at DESC NULLS LAST
+            LIMIT 1
+          ) AS last_vessel_name,
+          -- Latest ETA vessel completed loading (loading port)
+          (
+            SELECT MAX(
+              COALESCE(
+                s2.eta_loading_complete::date,
+                (
+                  SELECT vlpd.eta_loading_completed::date
+                  FROM vessel_loading_ports vlpd
+                  WHERE vlpd.shipment_id = s2.id
+                    AND COALESCE(vlpd.is_discharge_port, false) = false
+                  ORDER BY vlpd.updated_at DESC NULLS LAST, vlpd.created_at DESC NULLS LAST
+                  LIMIT 1
+                )
+              )
+            )
+            FROM shipments s2
+            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+          ) AS last_eta_vessel_completed_loading,
+          -- Open standard ETA (SEA): from first loading-port ETA vessel arrival
+          (
+            SELECT MAX(
+              (
+                SELECT vlp.eta_vessel_arrival::date
+                FROM vessel_loading_ports vlp
+                WHERE vlp.shipment_id = s2.id
+                  AND COALESCE(vlp.is_discharge_port, false) = false
+                ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.updated_at DESC NULLS LAST, vlp.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+            )
+            FROM shipments s2
+            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+          ) AS open_standard_eta_vessel_loading,
           -- For Trade/Cash Cycle calculation (SEA open): latest ETA vessel complete discharge
           (
             SELECT MAX(
@@ -395,7 +447,9 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
 
     // Push Late/On-Track filter into SQL when cycle sort is NOT also requested.
     // This avoids fetching up to 10 000 rows just to filter them in Node.js.
-    const useSqlLateFilter = wantLateFilter && !wantCycleSort;
+    // Keep late/on-time filtering in Node so it mirrors late-performance service logic
+    // (effective due-date fallback + Open Condition B when standard ETA is empty).
+    const useSqlLateFilter = false;
 
     // SQL expression that mirrors the JS trade_cycle_days computation:
     //   positive  = delivered / projected AFTER delivery_end_date  → LATE
@@ -495,6 +549,25 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       // Month-name strings etc.
       const dt = new Date(s);
       return Number.isNaN(dt.getTime()) ? null : dt;
+    };
+    const resolveEffectiveDeliveryEnd = (row: any): Date | null => {
+      const fromDb = due(row.delivery_end_date);
+      if (fromDb) return fromDb;
+      const spd = row.latest_spd_data as
+        | { contract?: { due_date_delivery_end?: unknown }; raw?: Record<string, unknown> }
+        | null
+        | undefined;
+      if (!spd) return null;
+      const fromContract = due(spd.contract?.due_date_delivery_end);
+      if (fromContract) return fromContract;
+      const raw = spd.raw;
+      if (!raw) return null;
+      return (
+        due(raw['Due Date Delivery\r\n(End)']) ??
+        due(raw['Due Date Delivery (End)']) ??
+        due(raw['Due Date Delivery End']) ??
+        null
+      );
     };
     const parseDeviation = (s: unknown): number | null => {
       if (s == null) return null;
@@ -648,7 +721,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       // - Open: per request
       //   LAND -> latest date from daily_deliverables - Due Date Delivery End
       //   SEA  -> ETA Vessel Complete Discharge - Due Date Delivery End
-      const deliveryEnd = due(row.delivery_end_date);
+      const deliveryEnd = resolveEffectiveDeliveryEnd(row);
       const payoffDate = row.payoff_date ? due(row.payoff_date) : null;
       const dpDate = row.dp_date ? due(row.dp_date) : null;
       let tradeCycle: number | null = null;
@@ -664,13 +737,24 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           }
         }
       } else if (statusText === 'OPEN' || statusText === 'ACTIVE') {
-        // positive = projected completion AFTER due date (LATE), negative = on track
+        // Open mirror of late-performance rules:
+        // A) Standard ETA present -> projected completion vs due end
+        // B) Standard ETA empty   -> today vs due end
         if (deliveryEnd) {
+          const openStandardEta = transport.startsWith('LAND')
+            ? row.open_standard_eta_trucking
+            : transport.startsWith('SEA')
+              ? row.open_standard_eta_vessel_loading
+              : null;
           if (transport.startsWith('LAND')) {
-            const d = diffCalendarDays(row.delivery_end_date, lastTruckDeliverable);
+            const d = hasCalendarDate(openStandardEta)
+              ? diffCalendarDays(deliveryEnd, lastTruckDeliverable)
+              : openDueDateTradeCycleDays(deliveryEnd, todayMid);
             if (d != null) tradeCycle = d;
           } else if (transport.startsWith('SEA')) {
-            const d = diffCalendarDays(row.delivery_end_date, lastEtaDischarge);
+            const d = hasCalendarDate(openStandardEta)
+              ? diffCalendarDays(deliveryEnd, lastEtaDischarge)
+              : openDueDateTradeCycleDays(deliveryEnd, todayMid);
             if (d != null) tradeCycle = d;
           }
         }
@@ -736,6 +820,10 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       delete (row as any).first_ata_vessel_completed_loading;
       delete (row as any).last_ata_vessel_complete_discharge;
       delete (row as any).last_eta_vessel_complete_discharge;
+      delete (row as any).last_vessel_name;
+      delete (row as any).last_eta_vessel_completed_loading;
+      delete (row as any).open_standard_eta_trucking;
+      delete (row as any).open_standard_eta_vessel_loading;
 
       // B2B origin company name override
       const typeText = String(row.contract_type || row.b2b_flag || '').toUpperCase();
@@ -794,11 +882,17 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         },
       },
     });
-  } catch (error) {
-    logger.error('Get contracts error:', error);
+  } catch (error: unknown) {
+    const pgCode = (error as { code?: string })?.code;
+    const pgDetail = (error as { detail?: string })?.detail;
+    const pgMessage = error instanceof Error ? error.message : String(error);
+    logger.error('Get contracts error:', { pgCode, pgDetail, message: pgMessage, error });
     res.status(500).json({
       success: false,
-      error: { message: 'Failed to fetch contracts' },
+      error: {
+        message: 'Failed to fetch contracts',
+        ...(process.env.NODE_ENV !== 'production' && pgMessage ? { detail: pgMessage } : {}),
+      },
     });
   }
 };

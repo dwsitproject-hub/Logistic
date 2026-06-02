@@ -66,8 +66,11 @@ Shipping Performance:
   - Close card + table: ATA column labels and ata_* delta fields
   - Drilldown: contract count per product (not shipment sum); global unique vessels in header
   - Table: Shipment ID column removed; delta tooltips; Incoterm/Product columns
-  - After backend pull on .57, run DB migrate if new migrations:
-      docker compose -f docker-compose.backend.yml exec backend npm run db:migrate
+  - Migrations run automatically on backend container start (docker-entrypoint.sh).
+    To run manually inside Docker (production image has no ts-node):
+      docker compose -f docker-compose.backend.yml exec backend node dist/database/migrate.js
+    Or: docker compose -f docker-compose.backend.yml exec backend npm run db:migrate:prod
+  - If GET /contracts returns 500, rebuild backend after pull (table auto-created on startup as fallback).
 
 --------------------------------------------------------------------------------
 D) Rollback (either server)
