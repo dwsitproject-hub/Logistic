@@ -24,7 +24,6 @@ import {
   CYCLE_DAYS_LATE_CLASS,
   CYCLE_DAYS_ON_TIME_CLASS,
   contextPerformanceClass,
-  avgDaysMetricLabel,
   formatAvgDays,
   formatContractAgingDays,
   formatLogCycleDays,
@@ -193,7 +192,8 @@ function contractIsOpen(c: Contract): boolean {
 function contractMatchesUnassignedCardFilter(c: Contract, filter: ContractsUnassignedCardFilter): boolean {
   if (!contractIsOpen(c)) return false
   const mode = String(c.transport_mode || '').toUpperCase()
-  const noShipment = !contractCountGt0(c.shipment_count) && !contractCountGt0(c.sto_count)
+  // Align with GET /contracts?unassigned= and /contracts/unassigned-counts (shipments/trucking rows only).
+  const noShipment = !contractCountGt0(c.shipment_count)
   const noTrucking = !contractCountGt0(c.trucking_count)
   if (filter === 'sea') return mode.startsWith('SEA') && noShipment
   if (filter === 'land') return mode.startsWith('LAND') && noTrucking
@@ -423,6 +423,33 @@ function contractPerfTradeCycleDaysForAgg(tradeCycle: number | null | undefined)
   return Math.abs(tradeCycle)
 }
 
+/** On Time / Late share for Contract Performance Open & Close summary cards (Trade Cycle ≤ 0 vs > 0). */
+function contractPerfOnTimeLatePercents(
+  onTimeCount: number,
+  lateCount: number,
+): { onTimeLabel: string; lateLabel: string } {
+  const total = onTimeCount + lateCount
+  if (total <= 0) return { onTimeLabel: 'N/A', lateLabel: 'N/A' }
+  return {
+    onTimeLabel: `${Math.round((onTimeCount / total) * 100)}%`,
+    lateLabel: `${Math.round((lateCount / total) * 100)}%`,
+  }
+}
+
+function ContractPerfStatusPctBadges({ onTimeCount, lateCount }: { onTimeCount: number; lateCount: number }) {
+  const { onTimeLabel, lateLabel } = contractPerfOnTimeLatePercents(onTimeCount, lateCount)
+  return (
+    <div className="flex flex-wrap gap-1.5 justify-end shrink-0">
+      <Badge className="bg-green-100 text-green-800 hover:bg-green-100 border-0 font-normal text-xs">
+        On Time: {onTimeLabel}
+      </Badge>
+      <Badge className="bg-red-100 text-red-800 hover:bg-red-100 border-0 font-normal text-xs">
+        Late: {lateLabel}
+      </Badge>
+    </div>
+  )
+}
+
 function contractToDrilldownRow(contract: Contract): ContractPerfDrilldownRow {
   const tradeCycleDays = contract.trade_cycle_days
   const days = contractPerfTradeCycleDaysForAgg(tradeCycleDays)
@@ -546,6 +573,60 @@ function buildLatePerfBranchTreeFromDrilldownRows(rows: ContractPerfDrilldownRow
     totalQtyDelivery: root.totalQtyDelivery,
     children: toNodes(root.children, 'total', 'product'),
   }
+}
+
+type LatePerfApiTreeNode = {
+  key: string
+  count: number
+  totalDays: number
+  maxDays: number
+  totalQtyDelivery?: number
+  children?: LatePerfApiTreeNode[]
+}
+
+/** Flatten API tree (Incoterm → Plant → Product → Group → Supplier) to hotspot rows. */
+function flattenLatePerfApiTreeToHotspots(tree: LatePerfApiTreeNode[]): ContractPerfHotspot[] {
+  const out: ContractPerfHotspot[] = []
+  for (const inc of tree) {
+    for (const plant of inc.children || []) {
+      for (const prod of plant.children || []) {
+        for (const gn of prod.children || []) {
+          for (const sup of gn.children || []) {
+            out.push({
+              incoterm: inc.key,
+              product: normalizePerfProductGroupKey(prod.key),
+              plant_site: plant.key,
+              group_name: gn.key,
+              supplier: sup.key,
+              count: sup.count,
+              totalDays: sup.totalDays,
+              maxDays: sup.maxDays,
+              totalQtyDelivery: sup.totalQtyDelivery || 0,
+            })
+          }
+        }
+      }
+    }
+  }
+  return out
+}
+
+/** Sum outstanding kg at product nodes across one or more API trees (for Section 1 vs 2 reconciliation). */
+function sumProductOutstandingKgFromPerfTrees(trees: LatePerfApiTreeNode[][], productLabel: string): number {
+  const key = normalizePerfProductGroupKey(productLabel)
+  let total = 0
+  for (const tree of trees) {
+    for (const inc of tree) {
+      for (const plant of inc.children || []) {
+        for (const prod of plant.children || []) {
+          if (normalizePerfProductGroupKey(prod.key) === key) {
+            total += Number(prod.totalQtyDelivery) || 0
+          }
+        }
+      }
+    }
+  }
+  return total
 }
 
 function buildLatePerfBranchTreeFromHotspots(hotspots: ContractPerfHotspot[]): ContractPerfBranchNode {
@@ -918,6 +999,10 @@ function ContractsPageContent() {
   type StatusCardSummary = {
     openOutstandingQty: number
     closeContractQty: number
+    openOnTimeCount: number
+    openLateCount: number
+    closeOnTimeCount: number
+    closeLateCount: number
     openAvgDays: number
     openAvgLogCycle: number | null
     openAvgDpCycle: number | null
@@ -932,6 +1017,10 @@ function ContractsPageContent() {
   const EMPTY_STATUS_CARD_SUMMARY: StatusCardSummary = {
     openOutstandingQty: 0,
     closeContractQty: 0,
+    openOnTimeCount: 0,
+    openLateCount: 0,
+    closeOnTimeCount: 0,
+    closeLateCount: 0,
     openAvgDays: 0,
     openAvgLogCycle: null,
     openAvgDpCycle: null,
@@ -946,6 +1035,7 @@ function ContractsPageContent() {
   const [perfDashMode, setPerfDashMode] = useState<'late' | 'ontrack'>('ontrack')
   const [latePerformanceTree, setLatePerformanceTree] = useState<LatePerfNode[]>([])
   const [onTrackPerformanceTree, setOnTrackPerformanceTree] = useState<LatePerfNode[]>([])
+  const [unscheduledPerformanceTree, setUnscheduledPerformanceTree] = useState<LatePerfNode[]>([])
   const [statusCardSummary, setStatusCardSummary] = useState<StatusCardSummary>(EMPTY_STATUS_CARD_SUMMARY)
   const [latePerfSummaryLoading, setLatePerfSummaryLoading] = useState(false)
   const [latePerfTreeLoading, setLatePerfTreeLoading] = useState(false)
@@ -1035,31 +1125,54 @@ function ContractsPageContent() {
   ])
 
   const latePerfAllHotspots = useMemo((): LatePerfHotspot[] => {
-    const activeTree = filteredDrilldownData.activeTree
-    const out: LatePerfHotspot[] = []
-    for (const inc of activeTree) {
-      for (const plant of inc.children || []) {
-        for (const prod of plant.children || []) {
-          for (const gn of prod.children || []) {
-            for (const sup of gn.children || []) {
-              out.push({
-                incoterm: inc.key,
-                product: normalizePerfProductGroupKey(prod.key),
-                plant_site: plant.key,
-                group_name: gn.key,
-                supplier: sup.key,
-                count: sup.count,
-                totalDays: sup.totalDays,
-                maxDays: sup.maxDays,
-                totalQtyDelivery: sup.totalQtyDelivery || 0,
-              })
-            }
-          }
-        }
-      }
-    }
-    return out
+    return flattenLatePerfApiTreeToHotspots(
+      filteredDrilldownData.activeTree as LatePerfApiTreeNode[],
+    )
   }, [filteredDrilldownData.activeTree])
+
+  /** Section 1 vs Section 2 qty reconciliation (Open: outstanding; Close: contract qty). */
+  const contractPerfQtyReconciliation = useMemo(() => {
+    if (!isContractPerformance || (summaryCardStatus !== 'Open' && summaryCardStatus !== 'Close')) return null
+    const productKey =
+      selectedProductTab === 'All' ? 'All' : normalizePerfProductGroupKey(selectedProductTab)
+    const section1Kg =
+      summaryCardStatus === 'Open'
+        ? statusCardSummary.openOutstandingQty
+        : statusCardSummary.closeContractQty
+    const trees = [
+      onTrackPerformanceTree as LatePerfApiTreeNode[],
+      latePerformanceTree as LatePerfApiTreeNode[],
+      unscheduledPerformanceTree as LatePerfApiTreeNode[],
+    ]
+    const sumTreeKg = (tree: LatePerfApiTreeNode[]) =>
+      productKey === 'All'
+        ? flattenLatePerfApiTreeToHotspots(tree).reduce((s, r) => s + r.totalQtyDelivery, 0)
+        : sumProductOutstandingKgFromPerfTrees([tree], productKey)
+    const onTimeKg = sumTreeKg(trees[0])
+    const lateKg = sumTreeKg(trees[1])
+    const unscheduledKg = sumTreeKg(trees[2])
+    const drilldownTotalKg =
+      summaryCardStatus === 'Open' ? onTimeKg + lateKg : onTimeKg + lateKg + unscheduledKg
+    return {
+      status: summaryCardStatus,
+      productKey,
+      section1Kg,
+      onTimeKg,
+      lateKg,
+      unscheduledKg,
+      drilldownTotalKg,
+      gapKg: section1Kg - drilldownTotalKg,
+    }
+  }, [
+    isContractPerformance,
+    summaryCardStatus,
+    selectedProductTab,
+    statusCardSummary.openOutstandingQty,
+    statusCardSummary.closeContractQty,
+    onTrackPerformanceTree,
+    latePerformanceTree,
+    unscheduledPerformanceTree,
+  ])
 
   /** Unified filtered rows: Raw API tree → Section 1 + Section 3 + Section 2 scope (single pipeline). */
   const contractPerfUnifiedFilteredHotspots = useMemo(() => {
@@ -1595,11 +1708,15 @@ function ContractsPageContent() {
       setStatusCardSummary(summaryData?.statusCardSummary ?? EMPTY_STATUS_CARD_SUMMARY)
       setLatePerformanceTree(Array.isArray(treeData?.tree) ? treeData.tree : [])
       setOnTrackPerformanceTree(Array.isArray(treeData?.onTrackTree) ? treeData.onTrackTree : [])
+      setUnscheduledPerformanceTree(
+        Array.isArray(treeData?.unscheduledTree) ? treeData.unscheduledTree : [],
+      )
     } catch (e) {
       console.error('Failed to load late performance data:', e)
       setStatusCardSummary(EMPTY_STATUS_CARD_SUMMARY)
       setLatePerformanceTree([])
       setOnTrackPerformanceTree([])
+      setUnscheduledPerformanceTree([])
     } finally {
       setLatePerfSummaryLoading(false)
       setLatePerfTreeLoading(false)
@@ -3355,18 +3472,20 @@ function ContractsPageContent() {
                     openSelected ? 'border-green-500 ring-2 ring-green-200' : 'hover:border-green-300'
                   }`}
                 >
-                  <div className="mb-3">
+                  <div className="flex items-start justify-between gap-2 mb-3">
                     <span className="text-base font-semibold text-gray-800">Open</span>
+                    <ContractPerfStatusPctBadges
+                      onTimeCount={statusCardSummary.openOnTimeCount ?? 0}
+                      lateCount={statusCardSummary.openLateCount ?? 0}
+                    />
                   </div>
                   <div className="text-sm text-gray-500 mb-1">Outstanding Qty (MT)</div>
                   <div className="text-xl font-bold text-gray-900 mb-3">
                     {formatContractPerfOutstandingMt(statusCardSummary.openOutstandingQty)}
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
-                    <span>{avgDaysMetricLabel(statusCardSummary.openIsLateContext)}: <span className={`font-semibold ${openAvgClass}`}>{formatAvgDays(statusCardSummary.openAvgDays)}</span></span>
                     <span>Avg Trade: <span className={`font-semibold ${openAvgClass}`}>{formatAvgDays(statusCardSummary.openAvgDays)}</span></span>
                     <span>Avg DP: <span className={`font-semibold ${openAvgClass}`}>{formatAvgDays(statusCardSummary.openAvgDpCycle)}</span></span>
-                    <span>Avg Cash: <span className={`font-semibold ${openAvgClass}`}>{formatAvgDays(statusCardSummary.openAvgCashCycle)}</span></span>
                     <span>Avg Log: <span className={`font-semibold ${openAvgClass}`}>{formatAvgDays(statusCardSummary.openAvgLogCycle)}</span></span>
                   </div>
                 </button>
@@ -3378,18 +3497,20 @@ function ContractsPageContent() {
                     closeSelected ? 'border-slate-500 ring-2 ring-slate-200' : 'hover:border-slate-300'
                   }`}
                 >
-                  <div className="mb-3">
+                  <div className="flex items-start justify-between gap-2 mb-3">
                     <span className="text-base font-semibold text-gray-800">Close</span>
+                    <ContractPerfStatusPctBadges
+                      onTimeCount={statusCardSummary.closeOnTimeCount ?? 0}
+                      lateCount={statusCardSummary.closeLateCount ?? 0}
+                    />
                   </div>
                   <div className="text-sm text-gray-500 mb-1">Contract Qty (MT)</div>
                   <div className="text-xl font-bold text-gray-900 mb-3">
                     {formatContractPerfOutstandingMt(statusCardSummary.closeContractQty)}
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
-                    <span>{avgDaysMetricLabel(statusCardSummary.closeIsLateContext)}: <span className={`font-semibold ${closeAvgClass}`}>{formatAvgDays(statusCardSummary.closeAvgDays)}</span></span>
                     <span>Avg Trade: <span className={`font-semibold ${closeAvgClass}`}>{formatAvgDays(statusCardSummary.closeAvgDays)}</span></span>
                     <span>Avg DP: <span className={`font-semibold ${closeAvgClass}`}>{formatAvgDays(statusCardSummary.closeAvgDpCycle)}</span></span>
-                    <span>Avg Cash: <span className={`font-semibold ${closeAvgClass}`}>{formatAvgDays(statusCardSummary.closeAvgCashCycle)}</span></span>
                     <span>Avg Log: <span className={`font-semibold ${closeAvgClass}`}>{formatAvgDays(statusCardSummary.closeAvgLogCycle)}</span></span>
                   </div>
                 </button>
@@ -3427,6 +3548,11 @@ function ContractsPageContent() {
                       ? <>Management view of late contracts where <span className="font-medium">Trade Cycle &gt; 0</span>. Use hotspots to jump to the exact contracts list.</>
                       : <>Management view of on-time contracts where <span className="font-medium">Trade Cycle ≤ 0</span>. Use hotspots to jump to the exact contracts list.</>
                     }
+                    {summaryCardStatus === 'Open' ? (
+                      <span className="block mt-1 text-xs text-gray-500">
+                        With <span className="font-medium">Open</span> selected: standard ETA → Trade Cycle vs due date (unchanged). No standard ETA → On Time if today &lt; due date delivery end; Late if today ≥ due date delivery end.
+                      </span>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -3470,7 +3596,63 @@ function ContractsPageContent() {
                     Navigate as a tree: <span className="font-medium">Product → Plant → Incoterm → Supplier</span>.
                     Use the drilldown to explore <span className="font-medium">YTD {perfDashMode === 'late' ? 'late' : 'on-time'}</span> contracts by dimension.
                     Click <span className="font-medium">Apply</span> to filter the Section 3 table with your drilldown selection.
+                    {summaryCardStatus === 'Open' ? (
+                      <span className="block mt-1 text-xs text-gray-500">
+                        With <span className="font-medium">Open</span> selected: standard ETA keeps Trade Cycle vs due date; empty ETA uses today vs due date delivery end. Open contracts without due date delivery end are excluded from Section 1 and Section 2. Sum On Time + Late qty should match Section 1 Open outstanding.
+                      </span>
+                    ) : null}
                   </div>
+
+                  {contractPerfQtyReconciliation ? (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800">
+                      <div className="font-semibold text-slate-900">
+                        {contractPerfQtyReconciliation.status === 'Open'
+                          ? 'Outstanding qty reconciliation'
+                          : 'Contract qty reconciliation'}
+                        {contractPerfQtyReconciliation.productKey !== 'All'
+                          ? ` — ${contractPerfQtyReconciliation.productKey}`
+                          : ' (all products)'}
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 tabular-nums">
+                        <span>
+                          Section 1 {contractPerfQtyReconciliation.status}:{' '}
+                          <span className="font-semibold">
+                            {formatContractPerfOutstandingMt(contractPerfQtyReconciliation.section1Kg)}
+                          </span>
+                        </span>
+                        <span className="text-green-700">
+                          On Time: {formatContractPerfOutstandingMt(contractPerfQtyReconciliation.onTimeKg)}
+                        </span>
+                        <span className="text-red-700">
+                          Late: {formatContractPerfOutstandingMt(contractPerfQtyReconciliation.lateKg)}
+                        </span>
+                        {contractPerfQtyReconciliation.status === 'Close' &&
+                        contractPerfQtyReconciliation.unscheduledKg > 0 ? (
+                          <span className="text-gray-600">
+                            Unscheduled:{' '}
+                            {formatContractPerfOutstandingMt(contractPerfQtyReconciliation.unscheduledKg)}
+                          </span>
+                        ) : null}
+                        <span>
+                          Drilldown total:{' '}
+                          <span className="font-semibold">
+                            {formatContractPerfOutstandingMt(contractPerfQtyReconciliation.drilldownTotalKg)}
+                          </span>
+                        </span>
+                      </div>
+                      {Math.abs(contractPerfQtyReconciliation.gapKg) > 0 ? (
+                        <div className="mt-1 text-amber-800">
+                          Gap: {formatContractPerfOutstandingMt(Math.abs(contractPerfQtyReconciliation.gapKg))}
+                          {contractPerfQtyReconciliation.gapKg > 0 ? ' not yet in drilldown trees' : ' (drilldown exceeds Section 1 — check filters)'}
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-green-700">
+                          Drilldown totals match Section 1{' '}
+                          {contractPerfQtyReconciliation.status === 'Open' ? 'Open outstanding' : 'Close contract qty'}.
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
 
                   <div className="rounded-xl border bg-white p-4 relative">
                     {isSection2TreeLoading && (
@@ -3584,6 +3766,15 @@ function ContractsPageContent() {
                         const body = (() => {
                           // Column order: Product → Plant → Incoterm → Supplier
                           if (col.level === 'product') {
+                            const unscheduledProductKg =
+                              selectedProductTab === 'All'
+                                ? flattenLatePerfApiTreeToHotspots(
+                                    unscheduledPerformanceTree as LatePerfApiTreeNode[],
+                                  ).reduce((s, r) => s + r.totalQtyDelivery, 0)
+                                : sumProductOutstandingKgFromPerfTrees(
+                                    [unscheduledPerformanceTree as LatePerfApiTreeNode[]],
+                                    selectedProductTab,
+                                  )
                             return (
                               <div className="space-y-2">
                                 {latePerfProductNodes.slice(0, 30).map((n) =>
@@ -3591,6 +3782,17 @@ function ContractsPageContent() {
                                     applyDrilldownNodeSelection('product', n.label)
                                   }),
                                 )}
+                                {unscheduledProductKg > 0 ? (
+                                  <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                                    <span className="font-semibold text-gray-800">Unscheduled</span>
+                                    <span className="ml-2 tabular-nums">
+                                      {formatContractPerfOutstandingMt(unscheduledProductKg)}
+                                    </span>
+                                    <span className="ml-1">
+                                      — Close contracts only (Open uses due date when ETA is empty)
+                                    </span>
+                                  </div>
+                                ) : null}
                               </div>
                             )
                           }

@@ -50,7 +50,14 @@ C) Verify from laptop browser
 http://8.215.6.189
 http://8.215.6.189/api/health
 
-Contract Performance: Section 2 drilldown → Apply → Section 3 table loads
+Contract Performance (/contract-performance):
+  - Section 1 Close: Contract Qty = On Time + Late + Unscheduled (contract qty, not outstanding)
+  - Section 1 Open: Outstanding qty = On Time + Late (reconciliation bar when Open selected)
+  - Open/Close without due date delivery end excluded (Section 1 + Section 2)
+  - Section 2 Close: drilldown MT uses contract qty; Unscheduled = Close without completion date
+  - UI: Avg Cash / Avg Late labels hidden on Section 1 cards
+  - Hard refresh (Ctrl+Shift+R) after deploy
+
 Shipping Performance:
   - UNPLANNED shipments hidden from all sections
   - Global Filters: Incoterm, Group Plant, Vessel, Status, Contract Date

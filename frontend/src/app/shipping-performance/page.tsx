@@ -304,13 +304,39 @@ function countUniqueVessels(rows: ShippingPerformanceRow[]): number {
   return new Set(rows.map((row) => normalizeVesselKey(row.vessel_name))).size
 }
 
-function countUniqueContracts(rows: ShippingPerformanceRow[]): number {
-  const contracts = new Set<string>()
+type ContractActivityFlags = { hasOpenEtaRow: boolean; hasAtaRow: boolean }
+
+/** One entry per contract across all rows in scope (may include multiple shipments). */
+function getContractActivityByContract(rows: ShippingPerformanceRow[]): Map<string, ContractActivityFlags> {
+  const byContract = new Map<string, ContractActivityFlags>()
   for (const row of rows) {
     const contractNumber = String(row.contract_number || '').trim()
-    if (contractNumber) contracts.add(contractNumber)
+    if (!contractNumber) continue
+    let acc = byContract.get(contractNumber)
+    if (!acc) acc = { hasOpenEtaRow: false, hasAtaRow: false }
+    if (rowHasAta(row)) acc.hasAtaRow = true
+    if (rowHasEta(row) && !rowHasAta(row)) acc.hasOpenEtaRow = true
+    byContract.set(contractNumber, acc)
   }
-  return contracts.size
+  return byContract
+}
+
+/**
+ * Contract-level counts for summary cards (disjoint across On Going vs Close):
+ * - On Going: contract has at least one ETA-only shipment and no shipment with ATA in scope
+ * - Close: contract has at least one shipment with ATA in scope
+ */
+function countUniqueContractsForPerfMode(scopeRows: ShippingPerformanceRow[], mode: PerfDashMode): number {
+  const byContract = getContractActivityByContract(scopeRows)
+  let count = 0
+  for (const acc of byContract.values()) {
+    if (mode === 'ata') {
+      if (acc.hasAtaRow) count += 1
+    } else if (acc.hasOpenEtaRow && !acc.hasAtaRow) {
+      count += 1
+    }
+  }
+  return count
 }
 
 function displayGroupLabel(key: string): string {
@@ -433,18 +459,23 @@ type PerfDatasetBundle = {
   summary: PerVesselPerfSummary
 }
 
-function buildPerfDatasetBundle(rows: ShippingPerformanceRow[], mode: PerfDashMode): PerfDatasetBundle {
-  const tree = buildPerfTree(rows)
-  const metrics = buildCardSummary(rows, mode)
-  const vesselCount = countUniqueVessels(rows)
+function buildPerfDatasetBundle(
+  modeRows: ShippingPerformanceRow[],
+  mode: PerfDashMode,
+  contractScopeRows: ShippingPerformanceRow[],
+): PerfDatasetBundle {
+  const tree = buildPerfTree(modeRows)
+  const metrics = buildCardSummary(modeRows, mode)
+  const vesselCount = countUniqueVessels(modeRows)
+  const contractCount = countUniqueContractsForPerfMode(contractScopeRows, mode)
 
   return {
-    rows,
+    rows: modeRows,
     tree,
     summary: {
       ...metrics,
       vesselCount,
-      contractCount: metrics.contractCount || countUniqueContracts(rows),
+      contractCount,
     },
   }
 }
@@ -903,13 +934,13 @@ export default function ShippingPerformancePage() {
   )
 
   const etaDatasetBundle = useMemo(
-    () => buildPerfDatasetBundle(etaFilteredData, 'eta'),
-    [etaFilteredData],
+    () => buildPerfDatasetBundle(etaFilteredData, 'eta', globallyFilteredRows),
+    [etaFilteredData, globallyFilteredRows],
   )
 
   const ataDatasetBundle = useMemo(
-    () => buildPerfDatasetBundle(ataFilteredData, 'ata'),
-    [ataFilteredData],
+    () => buildPerfDatasetBundle(ataFilteredData, 'ata', globallyFilteredRows),
+    [ataFilteredData, globallyFilteredRows],
   )
 
   const activeDatasetBundle = useMemo(
@@ -1192,7 +1223,7 @@ export default function ShippingPerformancePage() {
                     {etaPerformanceSummary.vesselCount.toLocaleString('en-US')}
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
-                    <span>Contracts: <span className="font-semibold text-gray-700">{etaPerformanceSummary.contractCount.toLocaleString('en-US')}</span></span>
+                    <span>Unique contracts: <span className="font-semibold text-gray-700">{etaPerformanceSummary.contractCount.toLocaleString('en-US')}</span></span>
                   </div>
                   {renderSummaryGapMetrics(etaPerformanceSummary, 'eta')}
                 </button>
@@ -1213,7 +1244,7 @@ export default function ShippingPerformancePage() {
                     {ataPerformanceSummary.vesselCount.toLocaleString('en-US')}
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
-                    <span>Contracts: <span className="font-semibold text-gray-700">{ataPerformanceSummary.contractCount.toLocaleString('en-US')}</span></span>
+                    <span>Unique contracts: <span className="font-semibold text-gray-700">{ataPerformanceSummary.contractCount.toLocaleString('en-US')}</span></span>
                   </div>
                   {renderSummaryGapMetrics(ataPerformanceSummary, 'ata')}
                 </button>
@@ -1257,9 +1288,9 @@ export default function ShippingPerformancePage() {
                       {activeDatasetBundle.summary.vesselCount.toLocaleString('en-US')} unique vessels (global)
                     </div>
                     <p className="text-[11px] text-gray-500 mt-1 max-w-2xl">
-                      Vessel counts on each card below are unique within that product/plant/incoterm only. The same
-                      vessel can appear on multiple product cards, so do not add those numbers together — use the
-                      global total here.
+                      Contract and vessel counts on each product card below are unique within that product only. The
+                      same contract or vessel can appear on multiple product cards — do not add those numbers together;
+                      use the global total here (matches the selected On Going / Close card above).
                     </p>
                   </div>
                   <button

@@ -1,4 +1,10 @@
-import { diffCalendarDays } from '../utils/calendarDays';
+import {
+  diffCalendarDays,
+  hasCalendarDate,
+  isLegacyTradeCycleOnTime,
+  isOpenConditionBOnTime,
+  openDueDateTradeCycleDays,
+} from '../utils/calendarDays';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
@@ -270,7 +276,26 @@ export function buildLatePerformanceQuery(filters: LatePerformanceFilters): {
             )
             FROM shipments s2
             WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_eta_vessel_complete_discharge
+          ) AS last_eta_vessel_complete_discharge,
+          (
+            SELECT MAX(COALESCE(t.eta_trucking_completion_date::date, t.eta_delivery_end_date::date))
+            FROM trucking_operations t
+            WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+          ) AS open_standard_eta_trucking,
+          (
+            SELECT MAX(
+              (
+                SELECT vlp.eta_vessel_arrival::date
+                FROM vessel_loading_ports vlp
+                WHERE vlp.shipment_id = s2.id
+                  AND COALESCE(vlp.is_discharge_port, false) = false
+                ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.updated_at DESC NULLS LAST, vlp.created_at DESC NULLS LAST
+                LIMIT 1
+              )
+            )
+            FROM shipments s2
+            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+          ) AS open_standard_eta_vessel_loading
         FROM contract_scope cs
         INNER JOIN contracts c ON c.contract_id = cs.contract_id
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
@@ -471,6 +496,33 @@ const due = (v: unknown): Date | null => {
   return Number.isNaN(dt.getTime()) ? null : dt;
 };
 
+/** Due date delivery end from contracts table, else latest SAP processed contract/raw fields. */
+export function resolveEffectiveDeliveryEnd(row: {
+  delivery_end_date?: unknown;
+  latest_spd_data?: unknown;
+}): Date | null {
+  const fromDb = due(row.delivery_end_date);
+  if (fromDb) return fromDb;
+
+  const spd = row.latest_spd_data as
+    | { contract?: { due_date_delivery_end?: unknown }; raw?: Record<string, unknown> }
+    | null
+    | undefined;
+  if (!spd) return null;
+
+  const fromContractJson = due(spd.contract?.due_date_delivery_end);
+  if (fromContractJson) return fromContractJson;
+
+  const raw = spd.raw;
+  if (!raw) return null;
+  return (
+    due(raw['Due Date Delivery\r\n(End)']) ??
+    due(raw['Due Date Delivery (End)']) ??
+    due(raw['Due Date Delivery End']) ??
+    null
+  );
+}
+
 const diffInDays = (start: unknown, end: unknown): number | null => diffCalendarDays(start, end);
 
 type AggNode = {
@@ -491,6 +543,33 @@ const add = (m: Map<string, AggNode>, key: string) => {
   return node;
 };
 
+/** Incoterm → Plant → Product → Group → Supplier (matches frontend flatten). */
+function addContractRowToPerfTree(
+  treeRoot: Map<string, AggNode>,
+  row: any,
+  tradeCycleDays: number,
+  outstandingQty: number,
+) {
+  const inc = String(row.incoterm || '').trim() || 'Blank';
+  const pl = String(row.plant_site || '').trim() || 'Blank';
+  const prod = String(row.product || '').trim() || 'Blank';
+  const gn = String(row.group_name || '').trim() || 'Blank';
+  const sup = String(row.supplier || '').trim() || 'Blank';
+
+  const n1 = add(treeRoot, inc);
+  const n2 = add(n1.children, pl);
+  const n3 = add(n2.children, prod);
+  const n4 = add(n3.children, gn);
+  const n5 = add(n4.children, sup);
+  const daysForAgg = tradeCycleDays <= 0 ? Math.max(0, -tradeCycleDays) : tradeCycleDays;
+  for (const n of [n1, n2, n3, n4, n5]) {
+    n.count += 1;
+    n.totalDays += daysForAgg;
+    n.maxDays = Math.max(n.maxDays, daysForAgg);
+    n.totalQtyDelivery += outstandingQty;
+  }
+}
+
 const toSorted = (m: Map<string, AggNode>): any[] =>
   [...m.values()]
     .sort((a, b) => b.totalQtyDelivery - a.totalQtyDelivery || b.count - a.count || a.key.localeCompare(b.key))
@@ -503,6 +582,37 @@ const toSorted = (m: Map<string, AggNode>): any[] =>
       children: toSorted(n.children),
     }));
 
+function resolveOpenStandardEta(row: any, transport: string): unknown {
+  if (transport.startsWith('LAND')) return row.open_standard_eta_trucking;
+  if (transport.startsWith('SEA')) return row.open_standard_eta_vessel_loading;
+  return null;
+}
+
+/**
+ * Open contracts — Trade Cycle for drilldown.
+ *   A) Standard ETA present → delivery_end vs planning/discharge (unchanged).
+ *   B) Standard ETA empty → today vs due date delivery end (Late if today >= due end).
+ * Condition B applies to every Open row. Section-1 "Open" card only gates extra UI copy, not this rule.
+ */
+function computeOpenTradeCycleDays(
+  row: any,
+  transport: string,
+  todayMid: Date,
+  deliveryEnd: Date,
+): number | null {
+  if (hasCalendarDate(resolveOpenStandardEta(row, transport))) {
+    if (transport.startsWith('LAND')) {
+      return diffCalendarDays(deliveryEnd, row.last_trucking_daily_deliverable_date);
+    }
+    if (transport.startsWith('SEA')) {
+      return diffCalendarDays(deliveryEnd, row.last_eta_vessel_complete_discharge);
+    }
+    return null;
+  }
+
+  return openDueDateTradeCycleDays(deliveryEnd, todayMid);
+}
+
 export function aggregateLatePerformanceRows(
   rows: any[],
   filters: LatePerformanceFilters,
@@ -510,12 +620,18 @@ export function aggregateLatePerformanceRows(
 ) {
   const includeSummary = part === 'summary' || part === 'all';
   const includeTree = part === 'tree' || part === 'all';
-
   const todayMid = new Date();
   todayMid.setHours(0, 0, 0, 0);
 
   const root = new Map<string, AggNode>();
   const onTrackRoot = new Map<string, AggNode>();
+  const unscheduledRoot = new Map<string, AggNode>();
+  const debugNoScheduleRows: Array<{
+    contract_id: string;
+    product: string;
+    outstanding_qty: number;
+    transport_mode: string;
+  }> = [];
 
   let lateCount = 0;
   let lateTotalDays = 0;
@@ -542,6 +658,8 @@ export function aggregateLatePerformanceRows(
   let openStatusOutstandingQty = 0;
   let closeStatusContractQty = 0;
   let openStatusTradeCount = 0;
+  let openStatusOnTimeCount = 0;
+  let openStatusLateCount = 0;
   let openStatusTradeMagnitudeSum = 0;
   let openStatusTradeSignedSum = 0;
   let openStatusLogCycleTotal = 0;
@@ -551,6 +669,8 @@ export function aggregateLatePerformanceRows(
   let openStatusDpCycleTotal = 0;
   let openStatusDpCycleCount = 0;
   let closeStatusTradeCount = 0;
+  let closeStatusOnTimeCount = 0;
+  let closeStatusLateCount = 0;
   let closeStatusTradeMagnitudeSum = 0;
   let closeStatusTradeSignedSum = 0;
   let closeStatusLogCycleTotal = 0;
@@ -615,7 +735,8 @@ export function aggregateLatePerformanceRows(
 
     const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
     const transport = String(row.transport_mode || '').trim().toUpperCase();
-    const deliveryEnd = due(row.delivery_end_date);
+    // Section 1 + Section 2: skip contracts with no due date delivery end (DB or SAP).
+    const deliveryEnd = resolveEffectiveDeliveryEnd(row);
     if (!deliveryEnd) {
       if (includeSummary) {
         debugCounts.missingDeliveryEnd += 1;
@@ -653,7 +774,7 @@ export function aggregateLatePerformanceRows(
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
         }
-        tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_trucking_completion_date);
+        tradeCycle = diffCalendarDays(deliveryEnd, row.last_trucking_completion_date);
       } else {
         if (includeSummary) {
           debugCounts.branchClosedSea += 1;
@@ -663,7 +784,7 @@ export function aggregateLatePerformanceRows(
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
         }
-        tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_ata_vessel_complete_discharge);
+        tradeCycle = diffCalendarDays(deliveryEnd, row.last_ata_vessel_complete_discharge);
       }
     } else if (isOpen) {
       if (transport.startsWith('LAND')) {
@@ -675,7 +796,6 @@ export function aggregateLatePerformanceRows(
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
         }
-        tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_trucking_daily_deliverable_date);
       } else {
         if (includeSummary) {
           debugCounts.branchOpenSea += 1;
@@ -685,9 +805,12 @@ export function aggregateLatePerformanceRows(
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
         }
-        tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_eta_vessel_complete_discharge);
       }
+      tradeCycle = computeOpenTradeCycleDays(row, transport, todayMid, deliveryEnd);
     }
+
+    const openUsesConditionB =
+      isOpen && !hasCalendarDate(resolveOpenStandardEta(row, transport));
 
     const _inc = String(row.incoterm || '').trim().toUpperCase();
     const _qtyOrdered = Number(row.quantity_ordered || 0);
@@ -697,7 +820,10 @@ export function aggregateLatePerformanceRows(
         ? Number(row.quantity_delivery || 0)
         : Number(row.total_sto_quantity || 0);
     const _outstandingQty = Math.max(0, _qtyOrdered - _subtracted);
+    /** Open Section 1/2: outstanding qty. Close Section 1/2: total contract qty (quantity_ordered). */
+    const _qtyForPerf = isClosed ? _qtyOrdered : _outstandingQty;
 
+    // Section 1 status cards — only contracts with a resolved due date delivery end (see skip above).
     if (includeSummary) {
       if (isOpen) openStatusOutstandingQty += _outstandingQty;
       else if (isClosed) closeStatusContractQty += _qtyOrdered;
@@ -755,19 +881,41 @@ export function aggregateLatePerformanceRows(
     }
 
     if (tradeCycle == null) {
-      if (includeSummary) {
-        debugCounts.tradeCycleNull += 1;
-        pushSample('tradeCycleNull', String(row.contract_id || ''));
-        dist.noData.count += 1;
-        dist.noData.qty += _outstandingQty;
+      if (isOpen) {
+        // Open + due end present but Trade Cycle still null (e.g. bad transport) → On Time so qty is not dropped.
+        tradeCycle = -1;
+      } else {
+        if (includeSummary) {
+          debugCounts.tradeCycleNull += 1;
+          pushSample('tradeCycleNull', String(row.contract_id || ''));
+          dist.noData.count += 1;
+          dist.noData.qty += _qtyForPerf;
+        }
+        if (includeTree) {
+          addContractRowToPerfTree(unscheduledRoot, row, 0, _qtyForPerf);
+        }
+        if (filters.debug && debugNoScheduleRows.length < 500) {
+          debugNoScheduleRows.push({
+            contract_id: String(row.contract_id || ''),
+            product: String(row.product || '').trim() || 'Blank',
+            outstanding_qty: _qtyForPerf,
+            transport_mode: transport,
+          });
+        }
+        continue;
       }
-      continue;
     }
+
+    const contractPerfOnTime = openUsesConditionB
+      ? isOpenConditionBOnTime(tradeCycle)
+      : isLegacyTradeCycleOnTime(tradeCycle);
 
     if (includeSummary) {
       const tradeMagnitude = tradeCycle <= 0 ? -tradeCycle : tradeCycle;
       if (isOpen) {
         openStatusTradeCount += 1;
+        if (contractPerfOnTime) openStatusOnTimeCount += 1;
+        else openStatusLateCount += 1;
         openStatusTradeMagnitudeSum += tradeMagnitude;
         openStatusTradeSignedSum += tradeCycle;
         if (logCycle != null) {
@@ -784,6 +932,8 @@ export function aggregateLatePerformanceRows(
         }
       } else if (isClosed) {
         closeStatusTradeCount += 1;
+        if (isLegacyTradeCycleOnTime(tradeCycle)) closeStatusOnTimeCount += 1;
+        else closeStatusLateCount += 1;
         closeStatusTradeMagnitudeSum += tradeMagnitude;
         closeStatusTradeSignedSum += tradeCycle;
         if (logCycle != null) {
@@ -801,18 +951,18 @@ export function aggregateLatePerformanceRows(
       }
     }
 
-    if (tradeCycle <= 0) {
+    if (contractPerfOnTime) {
       if (includeSummary) {
         debugCounts.tradeCycleNonPositive += 1;
         pushSample('tradeCycleNonPositive', `${String(row.contract_id || '')}:${tradeCycle}`);
         dist.onTime.count += 1;
-        dist.onTime.qty += _outstandingQty;
+        dist.onTime.qty += _qtyForPerf;
 
-        const daysAhead = -tradeCycle;
+        const daysAhead = openUsesConditionB ? Math.max(0, -tradeCycle) : -tradeCycle;
         onTrackCount += 1;
         onTrackTotalDaysAhead += daysAhead;
         onTrackMaxDaysAhead = Math.max(onTrackMaxDaysAhead, daysAhead);
-        onTrackTotalQtyDelivery += _outstandingQty;
+        onTrackTotalQtyDelivery += _qtyForPerf;
         if (logCycle != null) {
           onTrackTotalLogCycle += logCycle;
           onTrackLogCycleCount++;
@@ -822,27 +972,11 @@ export function aggregateLatePerformanceRows(
           onTrackCashCycleCount++;
         }
         if (isOpen) onTrackOpenOutstandingQty += _outstandingQty;
-        else onTrackCloseOutstandingQty += _outstandingQty;
+        else onTrackCloseOutstandingQty += _qtyOrdered;
       }
 
       if (includeTree) {
-        const otInc = String(row.incoterm || '').trim() || 'Blank';
-        const otPl = String(row.plant_site || '').trim() || 'Blank';
-        const otProd = String(row.product || '').trim() || 'Blank';
-        const otGn = String(row.group_name || '').trim() || 'Blank';
-        const otSup = String(row.supplier || '').trim() || 'Blank';
-        const daysAhead = -tradeCycle;
-        const ot1 = add(onTrackRoot, otInc);
-        const ot2 = add(ot1.children, otPl);
-        const ot3 = add(ot2.children, otProd);
-        const ot4 = add(ot3.children, otGn);
-        const ot5 = add(ot4.children, otSup);
-        for (const n of [ot1, ot2, ot3, ot4, ot5]) {
-          n.count += 1;
-          n.totalDays += daysAhead;
-          n.maxDays = Math.max(n.maxDays, daysAhead);
-          n.totalQtyDelivery += _outstandingQty;
-        }
+        addContractRowToPerfTree(onTrackRoot, row, tradeCycle, _qtyForPerf);
       }
       continue;
     }
@@ -850,25 +984,25 @@ export function aggregateLatePerformanceRows(
     if (includeSummary) {
       if (tradeCycle <= 7) {
         dist.d1_7.count += 1;
-        dist.d1_7.qty += _outstandingQty;
+        dist.d1_7.qty += _qtyForPerf;
       } else if (tradeCycle <= 14) {
         dist.d8_14.count += 1;
-        dist.d8_14.qty += _outstandingQty;
+        dist.d8_14.qty += _qtyForPerf;
       } else if (tradeCycle <= 30) {
         dist.d15_30.count += 1;
-        dist.d15_30.qty += _outstandingQty;
+        dist.d15_30.qty += _qtyForPerf;
       } else if (tradeCycle <= 60) {
         dist.d31_60.count += 1;
-        dist.d31_60.qty += _outstandingQty;
+        dist.d31_60.qty += _qtyForPerf;
       } else {
         dist.d61plus.count += 1;
-        dist.d61plus.qty += _outstandingQty;
+        dist.d61plus.qty += _qtyForPerf;
       }
 
       lateCount += 1;
       lateTotalDays += tradeCycle;
       lateMaxDays = Math.max(lateMaxDays, tradeCycle);
-      lateTotalQtyDelivery += _outstandingQty;
+      lateTotalQtyDelivery += _qtyForPerf;
       if (logCycle != null) {
         lateTotalLogCycle += logCycle;
         lateLogCycleCount++;
@@ -878,29 +1012,13 @@ export function aggregateLatePerformanceRows(
         lateCashCycleCount++;
       }
       if (isOpen) lateOpenOutstandingQty += _outstandingQty;
-      else lateCloseOutstandingQty += _outstandingQty;
+      else lateCloseOutstandingQty += _qtyOrdered;
       debugCounts.includedLate += 1;
       pushSample('includedLate', `${String(row.contract_id || '')}:${tradeCycle}`);
     }
 
     if (includeTree) {
-      const inc = String(row.incoterm || '').trim() || 'Blank';
-      const pl = String(row.plant_site || '').trim() || 'Blank';
-      const prod = String(row.product || '').trim() || 'Blank';
-      const gn = String(row.group_name || '').trim() || 'Blank';
-      const sup = String(row.supplier || '').trim() || 'Blank';
-
-      const n1 = add(root, inc);
-      const n2 = add(n1.children, pl);
-      const n3 = add(n2.children, prod);
-      const n4 = add(n3.children, gn);
-      const n5 = add(n4.children, sup);
-      for (const n of [n1, n2, n3, n4, n5]) {
-        n.count += 1;
-        n.totalDays += tradeCycle;
-        n.maxDays = Math.max(n.maxDays, tradeCycle);
-        n.totalQtyDelivery += _outstandingQty;
-      }
+      addContractRowToPerfTree(root, row, tradeCycle, _qtyForPerf);
     }
   }
 
@@ -919,6 +1037,10 @@ export function aggregateLatePerformanceRows(
     statusCardSummary?: {
       openOutstandingQty: number;
       closeContractQty: number;
+      openOnTimeCount: number;
+      openLateCount: number;
+      closeOnTimeCount: number;
+      closeLateCount: number;
       openAvgDays: number;
       openAvgLogCycle: number | null;
       openAvgDpCycle: number | null;
@@ -933,7 +1055,12 @@ export function aggregateLatePerformanceRows(
     distribution?: Record<string, DistBucket>;
     tree?: any[];
     onTrackTree?: any[];
-    debug?: { counts: typeof debugCounts; samples: typeof debugSamples };
+    unscheduledTree?: any[];
+    debug?: {
+      counts: typeof debugCounts;
+      samples: typeof debugSamples;
+      noScheduleRows?: typeof debugNoScheduleRows;
+    };
   } = {};
 
   if (includeSummary) {
@@ -962,6 +1089,10 @@ export function aggregateLatePerformanceRows(
     out.statusCardSummary = {
       openOutstandingQty: openStatusOutstandingQty,
       closeContractQty: closeStatusContractQty,
+      openOnTimeCount: openStatusOnTimeCount,
+      openLateCount: openStatusLateCount,
+      closeOnTimeCount: closeStatusOnTimeCount,
+      closeLateCount: closeStatusLateCount,
       openAvgDays: openStatusTradeCount > 0 ? openStatusTradeMagnitudeSum / openStatusTradeCount : 0,
       openAvgLogCycle:
         openStatusLogCycleCount > 0 ? Math.round(openStatusLogCycleTotal / openStatusLogCycleCount) : null,
@@ -984,6 +1115,7 @@ export function aggregateLatePerformanceRows(
       out.debug = {
         counts: debugCounts,
         samples: debugSamples,
+        noScheduleRows: debugNoScheduleRows,
       };
     }
   }
@@ -991,6 +1123,7 @@ export function aggregateLatePerformanceRows(
   if (includeTree) {
     out.tree = toSorted(root);
     out.onTrackTree = toSorted(onTrackRoot);
+    out.unscheduledTree = toSorted(unscheduledRoot);
   }
 
   return out;
