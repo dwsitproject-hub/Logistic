@@ -38,6 +38,13 @@ npm run install:all
 **Frontend** (`frontend/.env.local`):
 
 ```env
+# Recommended: same-origin proxy (works with Cursor port-forward on 3001 only)
+NEXT_PUBLIC_API_URL=/api
+```
+
+Or call the backend directly (browser must reach port 5001):
+
+```env
 NEXT_PUBLIC_API_URL=http://localhost:5001/api
 ```
 
