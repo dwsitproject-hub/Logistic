@@ -130,8 +130,9 @@ app.use(errorHandler);
 
 // Start server (skipped in automated tests so Vitest can import `app` without binding a port)
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(PORT, () => {
-    logger.info(`🚀 Server is running on port ${PORT}`);
+  const HOST = process.env.HOST || '0.0.0.0';
+  app.listen(Number(PORT), HOST, () => {
+    logger.info(`🚀 Server is running on http://${HOST}:${PORT}`);
     logger.info(`📚 API Documentation available at http://localhost:${PORT}/api-docs`);
 
     try {
