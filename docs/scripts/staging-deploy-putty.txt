@@ -1,9 +1,11 @@
 ================================================================================
 KLIP — Deploy ke SIT (Staging)
 ================================================================================
+GitHub:         https://github.com/jerrypra0906/Logistic/tree/SIT
 Public URL:     http://8.215.6.189
 Repo di server: /opt/klip
 Branch:         SIT
+Panduan lengkap: docs/DEPLOY-SIT-GITHUB.md
 
 Urutan deploy:
   STEP 1 — Laptop/PC dev: commit + push ke origin/SIT

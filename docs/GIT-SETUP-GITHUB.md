@@ -1,11 +1,11 @@
 # KLIP — Hubungkan folder lokal ke GitHub
 
-Repo tim (dari dokumentasi SIT):
-
 | Item | Nilai |
 |------|--------|
+| Repository | [github.com/jerrypra0906/Logistic](https://github.com/jerrypra0906/Logistic) |
+| Branch SIT | [github.com/jerrypra0906/Logistic/tree/SIT](https://github.com/jerrypra0906/Logistic/tree/SIT) |
 | Remote HTTPS | `https://github.com/jerrypra0906/Logistic.git` |
-| Branch staging | `SIT` |
+| Deploy SIT | Lihat **`docs/DEPLOY-SIT-GITHUB.md`** |
 
 ## 1. Install Git
 
