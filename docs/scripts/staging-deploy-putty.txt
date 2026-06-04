@@ -1,0 +1,126 @@
+================================================================================
+KLIP — Deploy ke SIT (Staging)
+================================================================================
+Public URL:     http://8.215.6.189
+Repo di server: /opt/klip
+Branch:         SIT
+
+Urutan deploy:
+  STEP 1 — Laptop/PC dev: commit + push ke origin/SIT
+  STEP 2 — PuTTY: Backend (172.28.92.57) lalu Frontend (172.28.92.56)
+
+================================================================================
+STEP 1 — Push dari mesin development (Windows) — OTOMATIS
+================================================================================
+Jalankan SATU perintah ini di PowerShell (folder harus punya .git + remote):
+
+  cd D:\Project\Klip
+  Set-ExecutionPolicy -Scope Process Bypass -Force
+  .\docs\scripts\push-to-sit.ps1
+
+Atau Git Bash:
+
+  cd /d/Project/Klip
+  bash docs/scripts/push-to-sit.sh
+
+Manual (jika script gagal):
+
+  git checkout SIT
+  git pull origin SIT
+  git add -u backend/src frontend/src docs/scripts
+  git commit -m "fix(contract-perf): SAP-strict cash/DP cycles, ETA today fallback, linked tree alignment"
+  git push origin SIT
+
+Catatan:
+  - Push STEP 1 harus selesai sebelum STEP 2 di server.
+  - Jika push ditolak: git pull --rebase origin SIT && git push origin SIT
+  - Jika ERROR "folder .git tidak ada": buka folder clone Git yang benar (bukan copy tanpa .git).
+
+================================================================================
+STEP 2A — BACKEND (PuTTY → 172.28.92.57)
+================================================================================
+Login SSH ke backend server, lalu salin per blok berikut:
+
+  cd /opt/klip
+  git fetch origin
+  git checkout SIT
+  git pull origin SIT
+  docker compose -f docker-compose.backend.yml up -d --build
+  docker compose -f docker-compose.backend.yml ps
+  docker compose -f docker-compose.backend.yml logs --tail=50 backend
+  curl -s http://127.0.0.1:5001/health
+
+Opsional (script dari repo):
+
+  cd /opt/klip
+  bash docs/scripts/staging-deploy-backend.sh
+
+Tunggu sampai health mengembalikan JSON sukses sebelum lanjut ke frontend.
+
+================================================================================
+STEP 2B — FRONTEND (PuTTY → 172.28.92.56)
+================================================================================
+Login SSH ke frontend server:
+
+  curl -s http://172.28.92.57:5001/health
+
+  cd /opt/klip
+  git fetch origin
+  git checkout SIT
+  git pull origin SIT
+  docker compose -f docker-compose.frontend.yml up -d --build
+  docker compose -f docker-compose.frontend.yml ps
+  docker compose -f docker-compose.frontend.yml logs --tail=50 frontend
+
+Opsional (script dari repo):
+
+  cd /opt/klip
+  bash docs/scripts/staging-deploy-frontend.sh
+
+Penting: frontend WAJIB --build setelah pull (NEXT_PUBLIC_* di-bake saat build).
+
+================================================================================
+STEP 3 — Verifikasi browser (setelah STEP 2)
+================================================================================
+  http://8.215.6.189
+  http://8.215.6.189/api/health
+
+Hard refresh: Ctrl+Shift+R (Contract Performance & Shipping Performance)
+
+Contract Performance (/contract-performance) — release ini:
+  - Section 2 / Section 3: hitungan linked tree selaras (contract_perf_in_tree)
+  - Shell Palm / produk: filter tab case-insensitive
+  - Cash / DP / Log Cycle (Open):
+      • Payoff Date & DP Date hanya dari SAP/SPD (bukan payments fallback)
+      • Today hanya menggantikan ETA kosong (Condition B)
+      • Tanpa Payoff/DP SAP → kolom cycle tampil "-"
+      • Avg DP & Avg Log Section 1: hanya rata-rata kontrak yang punya cycle valid
+  - Drilldown: tidak memaksa filter Late/On Time saat klik node
+
+Shipping Performance (jika ikut deploy):
+  - UNPLANNED tersembunyi; filter global; urutan section; drilldown count per kontrak
+
+Jika GET /contracts 500 setelah deploy:
+  docker compose -f docker-compose.backend.yml logs --tail=100 backend
+  docker compose -f docker-compose.backend.yml exec backend node dist/database/migrate.js
+
+================================================================================
+Rollback (jika perlu)
+================================================================================
+Di server yang bermasalah:
+
+  cd /opt/klip
+  git log -5 --oneline
+  git checkout <commit-hash-sebelumnya>
+  docker compose -f docker-compose.backend.yml up -d --build    # di .57
+  docker compose -f docker-compose.frontend.yml up -d --build  # di .56
+
+================================================================================
+Referensi
+================================================================================
+  docs/scripts/staging-deploy-backend.sh
+  docs/scripts/staging-deploy-frontend.sh
+  docs/scripts/staging-deploy-all.sh   (jump host dengan SSH ke .57 & .56)
+  docs/DEPLOYMENT.md
+
+================================================================================

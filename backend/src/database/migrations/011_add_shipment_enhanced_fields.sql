@@ -1,0 +1,18 @@
+ALTER TABLE shipments
+  ADD COLUMN IF NOT EXISTS estimated_km DECIMAL(15,2),
+  ADD COLUMN IF NOT EXISTS estimated_nautical_miles DECIMAL(15,2),
+  ADD COLUMN IF NOT EXISTS vessel_oa_budget DECIMAL(15,2),
+  ADD COLUMN IF NOT EXISTS vessel_oa_actual DECIMAL(15,2),
+  ADD COLUMN IF NOT EXISTS bl_quantity DECIMAL(15,2),
+  ADD COLUMN IF NOT EXISTS actual_vessel_qty_receive DECIMAL(15,2),
+  ADD COLUMN IF NOT EXISTS difference_final_qty_vs_bl_qty DECIMAL(15,2),
+  ADD COLUMN IF NOT EXISTS average_vessel_speed DECIMAL(10,2);
+
+ALTER TABLE vessel_loading_ports
+  ADD COLUMN IF NOT EXISTS quality_ffa DECIMAL(10,2),
+  ADD COLUMN IF NOT EXISTS quality_mi DECIMAL(10,2),
+  ADD COLUMN IF NOT EXISTS quality_dobi DECIMAL(10,2),
+  ADD COLUMN IF NOT EXISTS quality_red DECIMAL(10,2),
+  ADD COLUMN IF NOT EXISTS quality_ds DECIMAL(10,2),
+  ADD COLUMN IF NOT EXISTS quality_stone DECIMAL(10,2),
+  ADD COLUMN IF NOT EXISTS is_discharge_port BOOLEAN DEFAULT false;

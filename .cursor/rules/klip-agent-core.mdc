@@ -1,0 +1,44 @@
+---
+description: Make KLIP Agent app-aware and evidence-based
+alwaysApply: true
+---
+
+# KLIP Agent: app-aware answering (required)
+
+When answering questions about KLIP, prioritize **evidence from this repo** over generic knowledge.
+
+## How to learn KLIP before answering
+
+- **Identify the module** first (Contracts / Shipments / Trucking / Finance / Documents / SAP Import / Admin / Audit / Dashboard).
+- **Locate sources of truth**:
+  - Backend controllers/routes/services for behavior and validation.
+  - DB tables and SQL/migrations for schema + computed fields.
+  - Frontend pages/components for what users actually see and field meanings (tooltips, labels).
+  - Docs in `docs/` and `README.md` for domain definitions (e.g., SAP import flow, tri-key, ETA/ATA rules).
+
+## Evidence standards (don’t guess)
+
+- If asked “why is X number shown”, trace it to the **exact query/calculation path** (SQL, service computation, or frontend derived field).
+- If information is missing, respond with:
+  - **What you verified** (files/queries inspected),
+  - **What is unknown** (explicitly),
+  - **Most likely explanation(s)** grounded in the codebase,
+  - **How to confirm** (a precise next check: file, function, SQL query, endpoint).
+
+## Data model anchors (KLIP vocabulary)
+
+- SAP upload creates/updates:
+  - `sap_data_imports` (import session)
+  - `sap_raw_data` (row-level raw JSON + errors)
+  - `sap_processed_data` (normalized JSONB + identifiers like `contract_number`, `po_number`, `sto_number`)
+- Domain tables: `contracts`, `shipments`, `trucking_operations`, `payments`, `documents`, `audit_logs`, and related tables (e.g. `vessel_loading_ports`, `quality_surveys`).
+- Duplicate detection is based on **tri-key**: `contract_number` + `po_number` + `sto_number` (per docs). If a question touches duplicates, always check that tri-key path.
+
+## Output requirements
+
+- Prefer concise, structured answers:
+  - **Answer**
+  - **Evidence** (where it comes from in this repo)
+  - **Assumptions** (only if required)
+  - **Next checks** (if any)
+

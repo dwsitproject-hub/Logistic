@@ -1,0 +1,635 @@
+ 
+Product Requirement Document (PRD)
+Project Title: KPN Logistics Intelligence Platform (KLIP)
+Product Manager: Jerry Pratama
+Date: [Insert Date]
+ 
+1. Product Overview
+The KPN Logistics Intelligence Platform (KLIP) is a centralized, web-based solution 
+designed to digitalize logistics data management, automate tracking, and enable real-time 
+visibility across Trading, Logistics Operations, and Admin Support teams. 
+It eliminates manual spreadsheet processes and fragmented SAP exports by integrating 
+SAP logistics data into a unified platform equipped with analytics dashboards, AI insights, 
+and smart workflow automation.
+ 
+2. Problem Statement
+Current logistics tracking relies heavily on manual data extraction from SAP into Excel. 
+This creates:
+*	Data duplication and inconsistent records.
+*	Slow and error-prone reporting.
+*	Limited visibility for management to track performance, gain/loss, and delivery 
+SLAs.
+*	No predictive insights or automated alerts.
+Without transformation, KPN risks inefficient coordination, decision delay, and financial 
+leakage due to manual reconciliation errors.
+ 
+3. Objectives
+*	Provide real-time logistics data visibility across contracts, shipments, and 
+deliveries.
+*	Enable automated integration with SAP for daily data refresh.
+*	Build custom dashboards and KPIs for management visibility.
+*	Leverage AI to generate operational insights, risk alerts, and recommendations.
+*	Support multi-role access (Trading, Logistics Ops, Admin, Finance, 
+Management) with appropriate data visibility.
+ 
+4. Scope
+In-Scope
+*	Integration with SAP logistics, trading, and finance tables.
+*	Web-based data management and visualization platform.
+*	Role-based access control and approval workflows.
+*	Automated data refresh (daily at 7:00 AM).
+*	AI-driven dashboards and insights.
+*	KPI and variance reporting (e.g., Gain/Loss, Quantity Deviation, SLA).
+*	Export-to-Excel functionality for auditors and admins.
+Out-of-Scope
+*	SAP backend changes or data model redesign.
+*	Operational KPI calculation beyond defined contract metrics.
+ 
+5. Core Features
+Feature
+Description
+Benefit
+Data Sync & 
+Integration
+Connects with SAP (via API or middleware) to 
+pull real-time data for contracts, delivery orders, 
+weights, quality, and payments.
+Eliminates manual 
+export & data lag
+Logistics Data 
+Dashboard
+Displays per-contract shipment details, 
+gain/loss %, survey results, and payment 
+completion.
+Real-time visibility for 
+management
+Data Entry & 
+Validation 
+Portal
+Allows manual entry/validation for non-SAP data 
+(e.g., external shipment docs).
+Completes missing 
+data and ensures 
+accuracy
+AI Insights 
+Engine
+Analyzes trends (e.g., shipment delays, weight 
+loss, unpaid contracts) and provides 
+recommendations.
+Early warnings & 
+optimization
+Smart Alerts
+Automated email or dashboard notifications for 
+anomalies or overdue shipments.
+Proactive management
+Search & Filter 
+Interface
+Filter by contract, location, date range, 
+Incoterm, etc.
+Quick decision-making
+Role-based 
+Access
+Trading, Logistics, Admin, and Management see 
+only relevant data.
+Data security & 
+accountability
+Audit & History 
+Log
+Tracks user changes, exports, and approvals.
+Compliance & 
+traceability
+ 
+6. User Stories
+ID
+User
+Story
+Acceptance Criteria
+US-
+01
+Logistics 
+Admin
+I want to view all shipments linked to 
+a contract and their status (arrived, 
+unloaded, completed).
+Dashboard lists all contracts 
+with real-time updates and SLA 
+timers.
+US-
+02
+Trading
+I want to track product gain/loss 
+across all deliveries.
+Gain/Loss auto-calculated 
+using SAP weight in/out data.
+US-
+03
+Finance
+I want to verify that each contract’s 
+payment is completed.
+Dashboard shows “Paid / 
+Outstanding” indicator with 
+source from SAP FI.
+US-
+04
+Management
+I want to see which suppliers or 
+locations cause delays or losses.
+AI dashboard ranks top risk 
+suppliers or routes.
+US-
+05
+Compliance
+I want to see who modified or 
+exported specific data.
+System maintains full change 
+and export logs.
+US-
+06
+System
+Auto-refresh logistics data daily at 7 
+AM.
+Cron job executes and sends 
+success/failure logs.
+US-
+07
+AI Engine
+I want to detect outlier shipment 
+times and recommend 
+improvement.
+Insight cards generated for out-
+of-pattern SLA.
+
+1. User Story Breakdown
+US-01: View Shipments by Contract
+User: Logistics Admin 
+Goal: Track all shipments linked to a contract (status, quantity, location, progress).
+Process Flow:
+1.	System auto-syncs SAP deliveries, weight bridge, and transport status daily.
+2.	Admin can filter by contract, delivery date, product, or vessel.
+3.	Shipment record shows lifecycle from Arrived ? Sampling ? Unloading ? Completed.
+Fields Shown:
+Category
+Field
+Source
+Editable
+Contract Info
+Contract ID, Buyer, Supplier
+SAP
+No
+Delivery Details
+Delivery ID, Shipment Date, Vessel Name
+SAP
+No
+Quantity Info
+Qty Ordered, Qty Delivered, Gain/Loss %
+SAP
+No
+Logistics Status
+Status (Arrived / Unloading / Completed)
+System
+No
+Supporting 
+Docs
+Delivery Note, Bill of Lading, Survey Report (upload 
+link)
+User
+Yes
+Remarks
+Free-text notes per shipment
+User
+Yes
+Edge Cases:
+*	Missing data ? Highlighted red and flagged to admin.
+*	Multiple deliveries per contract ? Grouped view with summary at top.
+Integration: SAP MM (Delivery), SAP SD (Contract).
+ 
+US-02: Gain/Loss Tracking
+User: Trading / Logistics Ops 
+Goal: Monitor product gain/loss % from SAP and visualize trend.
+Process Flow:
+1.	System calculates gain/loss automatically from SAP in/out weight.
+2.	User can compare actual result vs expected tolerance per contract.
+Fields:
+Category
+Field
+Source
+Editable
+Contract Info
+Contract ID
+SAP
+No
+Plant / Location
+Loading Site, Unloading Site
+SAP
+No
+Weight Info
+Inbound Weight, Outbound Weight
+SAP
+No
+Gain/Loss
+Calculated automatically (%)
+System
+No
+Remarks
+Explanation if > tolerance
+User
+Yes
+Dashboard Output:
+*	Line chart: Gain/Loss trend by month or supplier.
+*	AI insight: “Top 5 routes with consistent negative loss pattern.”
+Edge Cases:
+*	Missing GR/PGI ? Gain/Loss shows “Incomplete Data.”
+*	Mixed product deliveries ? Breakdown by product category.
+ 
+US-03: Payment Verification
+User: Finance 
+Goal: Ensure each contract’s logistics data aligns with payment status.
+Process Flow:
+1.	SAP FI payment data integrated.
+2.	System compares “Delivered” vs “Paid” contracts.
+3.	Finance can filter unpaid / partially paid items.
+Fields:
+Category
+Field
+Source
+Editable
+Contract Info
+Contract ID, Vendor
+SAP
+No
+Financial Data
+Invoice No, Payment Date, Amount
+SAP
+No
+Payment Status
+Paid / Partial / Unpaid
+System
+No
+Document Link
+Upload Proof of Payment / Notes
+User
+Yes
+Dashboard Output:
+*	Payment Completion Ratio per supplier.
+*	AI card: “3 contracts delivered >30 days, unpaid.”
+ 
+US-04: Delay & Risk Monitoring
+User: Management / Logistics Ops 
+Goal: Identify which suppliers, routes, or sites cause delays.
+Process Flow:
+1.	SAP timestamps from GR/Delivery used to calculate SLA.
+2.	AI detects delay pattern beyond threshold.
+3.	Dashboard ranks top 5 delay sources.
+Fields:
+Category
+Field
+Source
+Editable
+Contract Info
+Contract ID, Product
+SAP
+No
+SLA Data
+Planned vs Actual Arrival
+SAP
+No
+Delay Cause
+System suggestion + Remarks
+System + User
+Partial
+Severity
+Auto-calculated (Low/Med/High)
+System
+No
+Dashboard Output:
+*	Heatmap by location (green = on time, red = delayed).
+*	AI insight: “Delays most frequent in Port Belawan — 22% of total shipments.”
+ 
+US-05: Audit & Change Tracking
+User: Compliance / Admin 
+Goal: Ensure all manual edits and uploads are traceable.
+Process Flow:
+*	System logs every edit, upload, and export with timestamp and user ID.
+Fields:
+Category
+Field
+Source
+Editable
+Record Type
+Shipment / Payment / Contract
+System
+No
+Change Type
+Add / Edit / Delete / Upload
+System
+No
+User
+Username / Department
+System
+No
+Timestamp
+Date & Time
+System
+No
+Details
+JSON of before vs after values
+System
+No
+Dashboard Output:
+*	Change log table with filters.
+*	Export to Excel / CSV.
+ 
+US-06: Auto Data Sync & Refresh
+User: System (Background) 
+Goal: Automatically pull data from SAP daily at 07:00 AM and notify success/failure.
+Process Flow:
+1.	Cron job runs SAP OData API sync.
+2.	Data validated against mapping schema.
+3.	Notifications sent to IT Admin.
+Edge Cases:
+*	API failure ? Retry 3x, alert via email.
+*	Partial sync ? Only new records updated, flagged yellow.
+ 
+US-07: AI Insights & Recommendation
+User: Management 
+Goal: Get automated insights on logistics performance and financial risk.
+Process Flow:
+1.	System runs daily analytics batch job (Python AI microservice).
+2.	AI generates “Insight Cards” shown on dashboard.
+Insight Examples:
+*	“Supplier PT XYZ shows consistent gain-loss deviation (+3.2%) — suggest review.”
+*	“Contract 1123 pending payment 45 days — finance follow-up.”
+*	“Route Belawan ? Surabaya exceeds SLA by avg. 6 hrs — logistics optimization 
+suggested.”
+Output Fields:
+Field
+Type
+Description
+Insight ID
+System
+Unique insight reference
+Insight Category
+Enum
+Delay / Finance / GainLoss / Compliance
+Root Cause
+Text
+AI summary
+Recommendation
+Text
+Action suggestion
+Severity
+Enum
+Low / Medium / High
+Status
+Enum
+New / Acknowledged / Closed
+ 
+2. Mock-up Menu & Access by Department
+Department
+Menu
+Description
+Access
+Trading
+Contract Overview
+See all contracts & shipment 
+summaries
+View
+
+Gain/Loss Monitor
+Auto-calc gain/loss
+View
+
+Remarks
+Add explanations to loss 
+variance
+Edit
+Logistics Ops
+Shipment Tracker
+Full shipment lifecycle 
+tracking
+View/Edit non-SAP 
+fields
+
+Delay Analysis
+SLA status by route & supplier
+View
+
+Upload Docs
+Add BoL, Sampling, Survey 
+docs
+Edit
+Admin Support
+Data Validation
+View and cross-check 
+incomplete SAP records
+Edit remarks
+
+Audit Log
+Full system activity history
+View
+Finance
+Payment Status
+Monitor invoice & payment 
+completion
+View
+
+Upload Payment 
+Proof
+Add scanned PoP files
+Edit
+Management
+Executive 
+Dashboard
+High-level KPIs and AI insights
+View
+
+AI 
+Recommendations
+Interactive insight cards
+View/Comment
+IT / System 
+Admin
+Integration Monitor
+SAP sync logs, API health, 
+user management
+Full Access
+ 
+3. Dashboard Widgets per Department
+Role
+Dashboard Widgets
+Key Insights
+Trading
+Contract Gain/Loss Trend, Top 5 Loss 
+Suppliers
+Profitability by trade flow
+Logistics 
+Ops
+SLA Performance, Shipment Status 
+Heatmap
+Delay hotspots
+Finance
+Payment Ratio, Unpaid Contract List
+Working capital health
+Management
+All KPIs + AI Insight Feed
+Risk + performance in one 
+view
+Admin
+Change Log, Upload Summary
+Governance & traceability
+ 
+4. System Fields (Data Model Summary)
+Table
+Field
+Source
+Editable
+Description
+Contract
+Contract_ID, Buyer, Supplier, Product, 
+Qty
+SAP
+No
+Core contract 
+data
+Shipment
+Shipment_ID, Date, Port, Vessel, Status
+SAP
+No
+Shipment record
+Quality
+COA_No, Density, FFA, Moisture
+SAP
+No
+Quality 
+parameters
+Payment
+Invoice_No, Amount, Date, Status
+SAP FI
+No
+Financial linkage
+Document
+File_Name, Type, Upload_Date, 
+Uploader
+User
+Yes
+Supporting docs
+Remarks
+Text, Category, Related_ID, Date
+User
+Yes
+User comments
+Audit_Log
+User_ID, Action, Timestamp, 
+Before/After
+System
+No
+Change tracking
+AI_Insights
+Insight_ID, Category, Severity, Text, 
+Recommendation
+AI 
+Engine
+No
+Predictive 
+intelligence
+ 
+5. Visual Navigation Mock-up (Text-based)
+Home
+ ??? Dashboard
+ ?     ??? Overview
+ ?     ??? AI Insights
+ ?     ??? Reports
+ ??? Contracts
+ ?     ??? Contract List
+ ?     ??? Contract Detail
+ ??? Shipments
+ ?     ??? Shipment Tracker
+ ?     ??? Gain/Loss Monitor
+ ?     ??? Delay Analytics
+ ??? Finance
+ ?     ??? Payment Status
+ ?     ??? Proof Upload
+ ??? Documents
+ ?     ??? Upload / View
+ ??? Administration
+ ?     ??? User Management
+ ?     ??? Audit Logs
+ ?     ??? Integration Monitor
+ 
+
+7. AI Features & Insights
+*	Predictive SLA Breach Detection: ML model to detect likely delay based on 
+historical shipment data.
+*	Gain/Loss Root Cause Analysis: AI compares quality, surveyor, and location data 
+to find loss patterns.
+*	Auto-Recommendations: Suggest corrective actions (e.g., supplier review, freight 
+optimization).
+*	Management Summary: Auto-generated weekly report in email, highlighting risks 
+and achievements.
+ 
+8. Dashboard Design (Executive View)
+Key KPIs:
+*	Shipment SLA Performance (% On-Time Deliveries)
+*	Gain/Loss Trend by Contract or Supplier
+*	Quality Deviation Report
+*	Payment Completion Ratio
+*	Top 5 High-Risk Contracts (AI flagged)
+*	Daily Logistics Volume Overview
+Visual Layout:
+*	Left Panel ? Filters (Date, Location, Contract, Supplier)
+*	Main Area ? Charts & Summary Cards
+*	Right Panel ? AI Insights & Recommendations Feed
+ 
+9. Data Model Overview
+Core Tables:
+*	Contracts (from SAP SD)
+*	Deliveries (SAP MM)
+*	Survey Results (SAP QM)
+*	Payments (SAP FI)
+*	Quality & Weight Metrics (SAP LO)
+*	Master Data (Supplier, Product, Plant, Location)
+Relationships:
+*	Contract ? Deliveries (1:N)
+*	Delivery ? Survey/Quality (1:1)
+*	Contract ? Payments (1:N)
+ 
+10. Technical Architecture
+Frontend: React.js / Next.js 
+Backend: Node.js with Express 
+Database: PostgreSQL 
+Integration: SAP OData APIs or middleware (SAP PI/PO) 
+AI Engine: Python (scikit-learn) integrated via microservice 
+Hosting: AWS / Azure (depending on KPN preference) 
+Security: OAuth2, RBAC, SSL, activity logging
+ 
+11. Success Metrics / KPIs
+KPI
+Target
+% Reduction in Manual Excel Usage
+? 90%
+Data Refresh Success Rate
+100% (daily)
+User Adoption Rate (Active Users)
+? 80% of targeted roles
+Time to Decision (reporting)
+-60% reduction
+Error Reduction in Manual Reports
+? 95%
+AI Insight Accuracy (vs actual)
+? 85%
+ 
+12. Risks & Mitigations
+Risk
+Mitigation
+SAP integration delays
+Early engagement with SAP Basis & Middleware team
+Data duplication
+Use unique IDs & daily sync logs
+Low adoption
+User training & dashboard simplification
+Data overload
+Limit history to 6 months for active dashboards
+AI misinterpretation
+Manual verification layer for critical insights
+ 
+

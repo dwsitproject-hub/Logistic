@@ -1,0 +1,1431 @@
+{
+  "analysis": {
+    "totalColumns": 230,
+    "totalDataRows": 25,
+    "userRoleBreakdown": [
+      {
+        "role": "TRADING",
+        "fieldCount": 0
+      },
+      {
+        "role": "LOGISTICS",
+        "fieldCount": 0
+      },
+      {
+        "role": "TRUCKING",
+        "fieldCount": 0
+      },
+      {
+        "role": "FINANCE",
+        "fieldCount": 0
+      },
+      {
+        "role": "MANAGEMENT",
+        "fieldCount": 0
+      },
+      {
+        "role": "VESSEL_ANALYSIS",
+        "fieldCount": 0
+      },
+      {
+        "role": "TRUCKING_ANALYSIS",
+        "fieldCount": 0
+      },
+      {
+        "role": "QUALITY",
+        "fieldCount": 4
+      },
+      {
+        "role": "ALL",
+        "fieldCount": 1
+      },
+      {
+        "role": "DATABASE",
+        "fieldCount": 0
+      }
+    ]
+  },
+  "fieldsByRole": {
+    "TRADING": [],
+    "LOGISTICS": [],
+    "TRUCKING": [],
+    "FINANCE": [],
+    "MANAGEMENT": [],
+    "VESSEL_ANALYSIS": [],
+    "TRUCKING_ANALYSIS": [],
+    "QUALITY": [
+      {
+        "columnIndex": 174,
+        "header": "FFA",
+        "sapField": "",
+        "sampleData": null,
+        "userRole": "QUALITY"
+      },
+      {
+        "columnIndex": 188,
+        "header": "FFA",
+        "sapField": "",
+        "sampleData": null,
+        "userRole": "QUALITY"
+      },
+      {
+        "columnIndex": 202,
+        "header": "FFA",
+        "sapField": "",
+        "sampleData": null,
+        "userRole": "QUALITY"
+      },
+      {
+        "columnIndex": 216,
+        "header": "FFA",
+        "sapField": "",
+        "sampleData": null,
+        "userRole": "QUALITY"
+      }
+    ],
+    "ALL": [
+      {
+        "columnIndex": 150,
+        "header": "Contract Completion Deviation (days)",
+        "sapField": "",
+        "sampleData": "-2",
+        "userRole": "ALL"
+      }
+    ],
+    "DATABASE": []
+  },
+  "allFields": [
+    {
+      "header": "Group",
+      "sapSource": "LFA1 - KONZS USING EKKO - LIFNR",
+      "columnIndex": 0,
+      "sampleData": "TAP"
+    },
+    {
+      "header": "Supplier\r\n(vendor -> name 1))",
+      "sapSource": "LFA1 - NAME1 USING EKKO - LIFNR",
+      "columnIndex": 1,
+      "sampleData": "PT Etam Bersama Lestari"
+    },
+    {
+      "header": "Contract Date\r\n(sama dengan PO date)",
+      "sapSource": "EKKO - BEDAT",
+      "columnIndex": 2,
+      "sampleData": "1-Sep-25"
+    },
+    {
+      "header": "Product\r\n(material desc)",
+      "sapSource": "ZTCONF_COMM_MAT-MATNR = EKPO-MATNR",
+      "columnIndex": 3,
+      "sampleData": "CPO"
+    },
+    {
+      "header": "Contract No.\r\n(no contract)\r\nini nomer kontrak auto generate ",
+      "sapSource": "EKPO - KONNR",
+      "columnIndex": 4,
+      "sampleData": "5120395862"
+    },
+    {
+      "header": "PO No.",
+      "sapSource": "EKPO - EBELN (GET USING DATE SELECTION SCREEN)",
+      "columnIndex": 5,
+      "sampleData": "1001021451"
+    },
+    {
+      "header": "Incoterm at Starting Point 1",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 6,
+      "sampleData": null
+    },
+    {
+      "header": "Incoterm",
+      "sapSource": "EKKO - INCO1 USING EBELN (ROW F)",
+      "columnIndex": 7,
+      "sampleData": "Loco"
+    },
+    {
+      "header": "Incoterm at Starting Point 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 8,
+      "sampleData": null
+    },
+    {
+      "header": "Incoterm at Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 9,
+      "sampleData": null
+    },
+    {
+      "header": "Incoterm at Starting Point 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 10,
+      "sampleData": null
+    },
+    {
+      "header": "Sea / Land",
+      "sapSource": "ZNEGO - TRANSPORT USING EBELN (ROW F)",
+      "columnIndex": 11,
+      "sampleData": "Land"
+    },
+    {
+      "header": "Contract Quantity\r\n(or PO Qty)",
+      "sapSource": "EKPO -MENGET USING EBELN (ROW F)",
+      "columnIndex": 12,
+      "sampleData": " 2,500,000 "
+    },
+    {
+      "header": "Unit Price",
+      "sapSource": "EKPO - NETPR / EKPO - PEINH USING EBELN (ROW F) ",
+      "columnIndex": 13,
+      "sampleData": " 1,055 "
+    },
+    {
+      "header": "Due Date Delivery\r\n(Start)",
+      "sapSource": "ZNEGO - BEG_DATE USING EBELN (ROW F)",
+      "columnIndex": 14,
+      "sampleData": null
+    },
+    {
+      "header": "Due Date Delivery\r\n(End)",
+      "sapSource": "ZNEGO - END_DATE USING EBELN (ROW F)",
+      "columnIndex": 15,
+      "sampleData": "19-Sep-25"
+    },
+    {
+      "header": "Source\r\n(3rd Party/Inhouse)",
+      "sapSource": "EKKO - LIFNR USING EBELN (ROW F)",
+      "columnIndex": 16,
+      "sampleData": "3rd Party"
+    },
+    {
+      "header": "LTC / Spot",
+      "sapSource": "ZNEGO - BUY_COND USING EBELN (ROW F)",
+      "columnIndex": 17,
+      "sampleData": "LTC"
+    },
+    {
+      "header": "Status",
+      "sapSource": "EKPO - ELIKZ USING EBELN (ROW F)",
+      "columnIndex": 18,
+      "sampleData": "Open"
+    },
+    {
+      "header": "STO No.",
+      "sapSource": "EKPO - EBELN USING  EKPO-BEDNR = ZGRNO-MBLNR & MBLNR2 USING EBELN",
+      "columnIndex": 19,
+      "sampleData": "2123958141"
+    },
+    {
+      "header": " STO Quantity ",
+      "sapSource": "EKPO - MENGE USING EBELN (ROW T)",
+      "columnIndex": 20,
+      "sampleData": " 1,000,000 "
+    },
+    {
+      "header": " Logistics Area Classification ",
+      "sapSource": "Notes : Skip for now",
+      "columnIndex": 21,
+      "sampleData": " Pre-Shipment "
+    },
+    {
+      "header": " PO Classification ",
+      "sapSource": "Baca line item STO (ZNEGO) IF line item=  1 maka single, Else multiple",
+      "columnIndex": 22,
+      "sampleData": " Single "
+    },
+    {
+      "header": "Due Date Payment",
+      "sapSource": "ZPO_ADDI - ESTPAYDATE USING EBELN (Row F)",
+      "columnIndex": 23,
+      "sampleData": "19-Sep-25"
+    },
+    {
+      "header": "DP Date",
+      "sapSource": "EKBE - BUDAT WHERE BEWTP = A USING EBELN (Row F)",
+      "columnIndex": 24,
+      "sampleData": "15-Sep-25"
+    },
+    {
+      "header": "Payoff Date",
+      "sapSource": "Need to confirm ",
+      "columnIndex": 25,
+      "sampleData": "20-Sep-25"
+    },
+    {
+      "header": "Payment Date Deviation\r\n(days)",
+      "sapSource": "Formulasi row Z35 - X35",
+      "columnIndex": 26,
+      "sampleData": "1"
+    },
+    {
+      "header": "Cargo Readiness at Starting Location",
+      "sapSource": "OFFLINE",
+      "columnIndex": 27,
+      "sampleData": "17-Sep-25"
+    },
+    {
+      "header": "Truck Loading at Starting Location",
+      "sapSource": "IF ZNEGO - INCO1 = FRC GET ZNEGO - PORT. IF ZNEGO - INCO 1 = LCO GET ZNEGO - INCO2",
+      "columnIndex": 28,
+      "sampleData": "PKS A"
+    },
+    {
+      "header": "Truck Unloading at Starting Location",
+      "sapSource": "IF ZNEGO - INCO1 = FRC GET ZNEGO - INCO2. IF ZNEGO - INCO 1 = LCO GET ZNEGO - DESTINATION",
+      "columnIndex": 29,
+      "sampleData": "Bulking A"
+    },
+    {
+      "header": "Cargo Readiness at Loading Port 1",
+      "sapSource": "OFFLINE",
+      "columnIndex": 30,
+      "sampleData": null
+    },
+    {
+      "header": "Loading Method\r\n(Pipeline / Trucking)",
+      "sapSource": "OFFLINE",
+      "columnIndex": 31,
+      "sampleData": null
+    },
+    {
+      "header": "Vessel Loading Port 1",
+      "sapSource": "IF ZNEGO - INCO1 = FOB GET ZNEGO - INCO2. IF ZNEGO - INCO 1 = CIF GET ZNEGO - ZPORT",
+      "columnIndex": 32,
+      "sampleData": null
+    },
+    {
+      "header": "Cargo Readiness at Starting Location 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 33,
+      "sampleData": null
+    },
+    {
+      "header": "Truck Loading at Starting Location 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 34,
+      "sampleData": null
+    },
+    {
+      "header": "Truck Unloading at Starting Location 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 35,
+      "sampleData": null
+    },
+    {
+      "header": "Cargo Readiness at Loading Port 2",
+      "sapSource": "OFFLINE",
+      "columnIndex": 36,
+      "sampleData": null
+    },
+    {
+      "header": "Loading Method\r\n(Pipeline / Trucking)",
+      "sapSource": "OFFLINE",
+      "columnIndex": 37,
+      "sampleData": null
+    },
+    {
+      "header": "Vessel Loading Port 2",
+      "sapSource": "OFFLINE",
+      "columnIndex": 38,
+      "sampleData": null
+    },
+    {
+      "header": "Cargo Readiness at Starting Location 3",
+      "sapSource": "OFFLINE",
+      "columnIndex": 39,
+      "sampleData": null
+    },
+    {
+      "header": "Truck Loading at Starting Location 3",
+      "sapSource": "OFFLINE",
+      "columnIndex": 40,
+      "sampleData": null
+    },
+    {
+      "header": "Truck Unloading at Starting Location 3",
+      "sapSource": "OFFLINE",
+      "columnIndex": 41,
+      "sampleData": null
+    },
+    {
+      "header": "Cargo Readiness at Loading Port 3",
+      "sapSource": "OFFLINE",
+      "columnIndex": 42,
+      "sampleData": null
+    },
+    {
+      "header": "Loading Method\r\n(Pipeline / Trucking)",
+      "sapSource": "OFFLINE",
+      "columnIndex": 43,
+      "sampleData": null
+    },
+    {
+      "header": "Vessel Loading Port 3",
+      "sapSource": "OFFLINE",
+      "columnIndex": 44,
+      "sampleData": null
+    },
+    {
+      "header": "Vessel Discharge Port",
+      "sapSource": "IF ZNEGO - INCO1 = FOB GET ZNEGO - DESTINATION2. IF ZNEGO - INCO 1 = CIF GET ZNEGO - INCO2",
+      "columnIndex": 45,
+      "sampleData": null
+    },
+    {
+      "header": "Discharge Method\r\n(Pipeline / Trucking)",
+      "sapSource": "OFFLINE",
+      "columnIndex": 46,
+      "sampleData": null
+    },
+    {
+      "header": "Truck Loading at Discharge Location",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 47,
+      "sampleData": null
+    },
+    {
+      "header": "Truck Unloading at Discharge Location",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 48,
+      "sampleData": null
+    },
+    {
+      "header": "Trucking Owner at Starting Location",
+      "sapSource": "GET DATA FROM LFA1 - NAME1 USING LIFNR = PRCD_ELEMENTS - LIFNR WHERE KSCHL = FRC2 / FRC5 USING KNUMV = EKKO - KNUMV USING EKKO - EBELN = ROW T",
+      "columnIndex": 49,
+      "sampleData": "PT A"
+    },
+    {
+      "header": " Trucking OA Budget at Starting Location ",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 50,
+      "sampleData": " 200 "
+    },
+    {
+      "header": " Trucking OA Actual at Starting Location ",
+      "sapSource": "GET DATA FROM PRCD_ELEMENTS - KEBTR WHERE KSCHL = FRC2 / FRC5 USING KNUMV = EKKO - KNUMV USING EKKO - EBELN = ROW T",
+      "columnIndex": 51,
+      "sampleData": " 210 "
+    },
+    {
+      "header": "Trucking Owner at Starting Location 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 52,
+      "sampleData": null
+    },
+    {
+      "header": " Trucking OA Budget at Starting Location 2 ",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 53,
+      "sampleData": null
+    },
+    {
+      "header": " Trucking OA Actual at Starting Location 2 ",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 54,
+      "sampleData": null
+    },
+    {
+      "header": "Trucking Owner at Starting Location 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 55,
+      "sampleData": null
+    },
+    {
+      "header": " Trucking OA Budget at Starting Location 3 ",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 56,
+      "sampleData": null
+    },
+    {
+      "header": " Trucking OA Actual at Starting Location 3 ",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 57,
+      "sampleData": null
+    },
+    {
+      "header": "Voyage No.",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 58,
+      "sampleData": null
+    },
+    {
+      "header": "Vessel Code",
+      "sapSource": "GET DATA FROM EKKO - ZZVESSEL USING EBELN (ROW T)",
+      "columnIndex": 59,
+      "sampleData": null
+    },
+    {
+      "header": "Vessel Name",
+      "sapSource": "GET DATA FROM ZVESSEL2 VSLNM USING VSLCD (ROW BH)",
+      "columnIndex": 60,
+      "sampleData": null
+    },
+    {
+      "header": "Vessel Owner",
+      "sapSource": "Need update data at Tcode ZVESSEL2",
+      "columnIndex": 61,
+      "sampleData": null
+    },
+    {
+      "header": " Vessel Draft ",
+      "sapSource": "Need update data at Tcode ZVESSEL2",
+      "columnIndex": 62,
+      "sampleData": null
+    },
+    {
+      "header": " LOA ",
+      "sapSource": "Need update data at Tcode ZVESSEL2",
+      "columnIndex": 63,
+      "sampleData": null
+    },
+    {
+      "header": " Vessel Capacity ",
+      "sapSource": "Need update data at Tcode ZVESSEL2",
+      "columnIndex": 64,
+      "sampleData": null
+    },
+    {
+      "header": " Vessel Hull Type ",
+      "sapSource": "Need update data at Tcode ZVESSEL2",
+      "columnIndex": 65,
+      "sampleData": null
+    },
+    {
+      "header": " Vessel Registration Year ",
+      "sapSource": "Need update data at Tcode ZVESSEL2",
+      "columnIndex": 66,
+      "sampleData": null
+    },
+    {
+      "header": "Charter Type\r\n(VC / TC / Mix)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 67,
+      "sampleData": null
+    },
+    {
+      "header": " Vessel OA Budget ",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 68,
+      "sampleData": null
+    },
+    {
+      "header": " Vessel OA Actual ",
+      "sapSource": "GET DATA FROM PRCD_ELEMENTS - KEBTR WHERE KSCHL = FRC2 / FRC5 USING KNUMV = EKKO - KNUMV USING EKKO - EBELN = ROW T",
+      "columnIndex": 69,
+      "sampleData": null
+    },
+    {
+      "header": " Estimated Nautical Miles ",
+      "sapSource": "GET ZDIST_MASTER - DISTANCE USING LOAD_PORT = EKPO - ZZLOADPORT & DEST_PORT = ZZDESTPORT",
+      "columnIndex": 70,
+      "sampleData": null
+    },
+    {
+      "header": " Average Vessel Speed ",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 71,
+      "sampleData": null
+    },
+    {
+      "header": "Truck Owner at Discharge",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 72,
+      "sampleData": null
+    },
+    {
+      "header": " Trucking OA Budget at Discharge ",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 73,
+      "sampleData": null
+    },
+    {
+      "header": " Trucking OA Actual at Discharge ",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 74,
+      "sampleData": null
+    },
+    {
+      "header": " Quantity Sent via Trucking (Based on Surat Jalan) ",
+      "sapSource": "GET DATA FROM ZWB_TRX - WNETTOKB USING WPO = EBELN (ROW F)",
+      "columnIndex": 83,
+      "sampleData": " 1,003,000.00 "
+    },
+    {
+      "header": " Quantity Delivered via Trucking ",
+      "sapSource": "GET DATA FROM ZWB_TRX - WNETTOPB1 USING WPO = EBELN (ROW F)",
+      "columnIndex": 84,
+      "sampleData": null
+    },
+    {
+      "header": " Selisih ",
+      "sapSource": "Formulasi dari CF - CG",
+      "columnIndex": 85,
+      "sampleData": null
+    },
+    {
+      "header": "Trucking Starting Date at Starting Location",
+      "sapSource": "GET DATA FROM ZWB_TRX - WTGLREF USING WPO = EBELN (ROW F)",
+      "columnIndex": 86,
+      "sampleData": "17-Sep-25"
+    },
+    {
+      "header": "Trucking Completion Date at Starting Location",
+      "sapSource": "GET DATA FROM ZWB_TRX - WTGLREF USING WPO = EBELN (ROW F)",
+      "columnIndex": 87,
+      "sampleData": "18-Sep-25"
+    },
+    {
+      "header": "Quantity at Loading Port 1\r\n(Based on BAST)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 88,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Vessel Arrival Loading Port 1",
+      "sapSource": "GET DATA ZMM_SLDI - ETA USING EBELN",
+      "columnIndex": 89,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Vessel Arrival at Loading Port 1",
+      "sapSource": "GET DATA ZMM_SLDI - VSL_ARRV USING EBELN",
+      "columnIndex": 90,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Vessel Berthed at Loading Port 1",
+      "sapSource": "GET DATA ZMM_SLDI - VSL_BERTH USING EBELN",
+      "columnIndex": 91,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Vessel Berthed at Loading Port 1",
+      "sapSource": "GET DATA ZMM_SLDI - VSL_BERTHTM USING EBELN",
+      "columnIndex": 92,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Loading Start at Loading Port 1",
+      "sapSource": "GET DATA ZMM_SLDI - VSL_HOSEON USING EBELN",
+      "columnIndex": 93,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Loading Start at Loading Port 1",
+      "sapSource": "GET DATA ZMM_SLDI - VSL_HOSEONT USING EBELN",
+      "columnIndex": 94,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Loading Completed at Loading Port 1",
+      "sapSource": "GET DATA ZMM_SLDI - VSL_COMP USING EBELN",
+      "columnIndex": 95,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Loading Completed at Loading Port 1",
+      "sapSource": "GET DATA ZMM_SLDI - VSL_COMPTM USING EBELN",
+      "columnIndex": 96,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Vessel Sailed at Loading Port 1",
+      "sapSource": "GET DATA ZMM_SLDI - VSL_SAIL USING EBELN",
+      "columnIndex": 97,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Vessel Sailed at Loading Port 1",
+      "sapSource": "GET DATA ZMM_SLDI - VSL_SAILTM USING EBELN",
+      "columnIndex": 98,
+      "sampleData": null
+    },
+    {
+      "header": "Loading Rate at Loading Port 1",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 99,
+      "sampleData": null
+    },
+    {
+      "header": "Quantity at Starting Location 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 100,
+      "sampleData": null
+    },
+    {
+      "header": "Trucking Starting Date at Starting Location 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 101,
+      "sampleData": null
+    },
+    {
+      "header": "Trucking Completion Date at Starting Location 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 102,
+      "sampleData": null
+    },
+    {
+      "header": "Quantity at Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 103,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Vessel Arrival at Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 104,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Vessel Arrival at Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 105,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Vessel Berthed at Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 106,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Vessel Berthed at Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 107,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Loading Start at Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 108,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Loading Start at Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 109,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Loading Completed at Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 110,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Loading Completed at Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 111,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Vessel Sailed at Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 112,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Vessel Sailed at Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 113,
+      "sampleData": null
+    },
+    {
+      "header": "Loading Rate at Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 114,
+      "sampleData": null
+    },
+    {
+      "header": "Quantity at Starting Location 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 115,
+      "sampleData": null
+    },
+    {
+      "header": "Trucking Starting Date at Starting Location 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 116,
+      "sampleData": null
+    },
+    {
+      "header": "Trucking Completion Date at Starting Location 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 117,
+      "sampleData": null
+    },
+    {
+      "header": "Quantity at Loading Port 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 118,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Vessel Arrival at Loading Port 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 119,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Vessel Arrival at Loading Port 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 120,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Vessel Berthed at Loading Port 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 121,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Vessel Berthed at Loading Port 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 122,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Loading Start at Loading Port 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 123,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Loading Start at Loading Port 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 124,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Loading Completed at Loading Port 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 125,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Loading Completed at Loading Port 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 126,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Vessel Sailed at Loading Port 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 127,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Vessel Sailed at Loading Port 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 128,
+      "sampleData": null
+    },
+    {
+      "header": "Loading Rate at Loading Port 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 129,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Arrival at Discharge Port",
+      "sapSource": "GET DATA FROM ZMM_SLDI  - VSL_DARRV USING EBELN",
+      "columnIndex": 130,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Vessel Arrival at Discharge Port",
+      "sapSource": "GET DATA FROM ZMM_SLDI  - VSL_DARRVTM USING EBELN",
+      "columnIndex": 131,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Vessel Berthed at Discharge Port",
+      "sapSource": "GET DATA FROM ZMM_SLDI  - VSL_ DBERTH USING EBELN",
+      "columnIndex": 132,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Vessel Berthed at Discharge Port",
+      "sapSource": "GET DATA FROM ZMM_SLDI - VSL _DBERTHT USING EBELN",
+      "columnIndex": 133,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Discharging Start at Discharge Port",
+      "sapSource": "GET DATA FROM ZMM_SLDI -ZMM_SLDI USING EBELN",
+      "columnIndex": 134,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Discharging Start at Discharge Port",
+      "sapSource": "GET DATA FROM ZMM_SLDI - VSL _DCOMMT USING EBELN",
+      "columnIndex": 135,
+      "sampleData": null
+    },
+    {
+      "header": "ETA Discharging Completed at Discharge Port",
+      "sapSource": "GET DATA FROM ZMM_SLDI - VSL _DCOMP USING EBELN",
+      "columnIndex": 136,
+      "sampleData": null
+    },
+    {
+      "header": "ATA Discharging Completed at Discharge Port",
+      "sapSource": "GET DATA FROM ZMM_SLDI - VSL _DCOMPT USING EBELN",
+      "columnIndex": 137,
+      "sampleData": null
+    },
+    {
+      "header": "Discharge Rate at Discharging Port ",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 138,
+      "sampleData": null
+    },
+    {
+      "header": "Trucking Gain/Loss at Starting Location",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 139,
+      "sampleData": " 3,000 "
+    },
+    {
+      "header": "Gain/Loss Loading Port 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 140,
+      "sampleData": null
+    },
+    {
+      "header": "Gain/Loss Loading Port 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 141,
+      "sampleData": null
+    },
+    {
+      "header": " B/L Quantity ",
+      "sapSource": "GET DATA ZMM_SLDI - ZLSHRQTY USING EBELN",
+      "columnIndex": 142,
+      "sampleData": null
+    },
+    {
+      "header": " Ship Figure After Loading (SFAL) ",
+      "sapSource": "GET DATA ZMM_SLDI - DSHPQTY USING EBELN",
+      "columnIndex": 143,
+      "sampleData": null
+    },
+    {
+      "header": "R1",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 144,
+      "sampleData": null
+    },
+    {
+      "header": " Ship Figure Before Discharge (SFBD) ",
+      "sapSource": "ZMM_SLDI - LSHPQTY USING EBELN",
+      "columnIndex": 145,
+      "sampleData": null
+    },
+    {
+      "header": "R2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 146,
+      "sampleData": null
+    },
+    {
+      "header": " Actual Quantity\r\n(at Final Location) ",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 147,
+      "sampleData": " 1,003,000.00 "
+    },
+    {
+      "header": "R3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 148,
+      "sampleData": null
+    },
+    {
+      "header": "R4",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 149,
+      "sampleData": null
+    },
+    {
+      "header": "Contract Completion Deviation (days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 150,
+      "sampleData": "-2"
+    },
+    {
+      "header": "Trucking Completion Rate (days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 151,
+      "sampleData": "1"
+    },
+    {
+      "header": "Trucking Completion at Starting Location 2",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 152,
+      "sampleData": null
+    },
+    {
+      "header": "Trucking Completion at Starting Location 3",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 153,
+      "sampleData": null
+    },
+    {
+      "header": "Discharging Duration\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 154,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Cargo Readiness at Loading Port 1 VS Due Date Delivery (days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 155,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Vessel Arrival VS Cargo Readiness\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 156,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Berthing at Loading Port 1 Duration\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 157,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Loading Duration at Loading Port 1\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 158,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Departing Preparation Duration at Loading Port 1 (days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 159,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Cargo Readiness at Loading Port 2 VS Due Date Delivery (days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 160,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Vessel Arrival VS Cargo Readiness\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 161,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Berthing at Loading Port 2 Duration\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 162,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Loading Duration at Loading Port 2\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 163,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Departing Preparation Duration at Loading Port 2 (days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 164,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Cargo Readiness at Loading Port 3 VS Due Date Delivery (days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 165,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Vessel Arrival VS Cargo Readiness\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 166,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Berthing at Loading Port 3 Duration\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 167,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Loading Duration at Loading Port 3\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 168,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Departing Preparation Duration at Loading Port 3 (days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 169,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Shipping Duration\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 170,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Berthing at Discharging Port Duration\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 171,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Discharge Duration\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 172,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "Total Lead Time - Vessel Arrival to Complete Discharge\r\n(days)",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 173,
+      "sampleData": "N/A"
+    },
+    {
+      "header": "FFA",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 174,
+      "sampleData": null
+    },
+    {
+      "header": "M&I",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 175,
+      "sampleData": null
+    },
+    {
+      "header": "DOBI",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 176,
+      "sampleData": null
+    },
+    {
+      "header": "IV",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 177,
+      "sampleData": null
+    },
+    {
+      "header": "Color-Red",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 178,
+      "sampleData": null
+    },
+    {
+      "header": "D&S",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 179,
+      "sampleData": null
+    },
+    {
+      "header": "Stone",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 180,
+      "sampleData": null
+    },
+    {
+      "header": "FFA",
+      "sapSource": "ZMM_SLDI _ FFA _LP USING EBELN ",
+      "columnIndex": 181,
+      "sampleData": null
+    },
+    {
+      "header": "M&I",
+      "sapSource": "ZMM_SLDI _ MNI - LP USING  EBELN ",
+      "columnIndex": 182,
+      "sampleData": null
+    },
+    {
+      "header": "DOBI",
+      "sapSource": "ZMM_SLDI - DOBI_LP USING EBELN",
+      "columnIndex": 183,
+      "sampleData": null
+    },
+    {
+      "header": "IV",
+      "sapSource": "ZMM_SLDI - IV_LP USING EBELN",
+      "columnIndex": 184,
+      "sampleData": null
+    },
+    {
+      "header": "Color-Red",
+      "sapSource": "ZMM_SLDI - RED_LP USING EBELN",
+      "columnIndex": 185,
+      "sampleData": null
+    },
+    {
+      "header": "D&S",
+      "sapSource": "ZMM_SLDI - DNS_LP USING EBELN",
+      "columnIndex": 186,
+      "sampleData": null
+    },
+    {
+      "header": "Stone",
+      "sapSource": "ZMM_SLDI - STONE_LP USING EBELN",
+      "columnIndex": 187,
+      "sampleData": null
+    },
+    {
+      "header": "FFA",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 188,
+      "sampleData": null
+    },
+    {
+      "header": "M&I",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 189,
+      "sampleData": null
+    },
+    {
+      "header": "DOBI",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 190,
+      "sampleData": null
+    },
+    {
+      "header": "IV",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 191,
+      "sampleData": null
+    },
+    {
+      "header": "Color-Red",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 192,
+      "sampleData": null
+    },
+    {
+      "header": "D&S",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 193,
+      "sampleData": null
+    },
+    {
+      "header": "Stone",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 194,
+      "sampleData": null
+    },
+    {
+      "header": "FFA",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 195,
+      "sampleData": null
+    },
+    {
+      "header": "M&I",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 196,
+      "sampleData": null
+    },
+    {
+      "header": "DOBI",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 197,
+      "sampleData": null
+    },
+    {
+      "header": "IV",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 198,
+      "sampleData": null
+    },
+    {
+      "header": "Color-Red",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 199,
+      "sampleData": null
+    },
+    {
+      "header": "D&S",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 200,
+      "sampleData": null
+    },
+    {
+      "header": "Stone",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 201,
+      "sampleData": null
+    },
+    {
+      "header": "FFA",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 202,
+      "sampleData": null
+    },
+    {
+      "header": "M&I",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 203,
+      "sampleData": null
+    },
+    {
+      "header": "DOBI",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 204,
+      "sampleData": null
+    },
+    {
+      "header": "IV",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 205,
+      "sampleData": null
+    },
+    {
+      "header": "Color-Red",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 206,
+      "sampleData": null
+    },
+    {
+      "header": "D&S",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 207,
+      "sampleData": null
+    },
+    {
+      "header": "Stone",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 208,
+      "sampleData": null
+    },
+    {
+      "header": "FFA",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 209,
+      "sampleData": null
+    },
+    {
+      "header": "M&I",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 210,
+      "sampleData": null
+    },
+    {
+      "header": "DOBI",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 211,
+      "sampleData": null
+    },
+    {
+      "header": "IV",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 212,
+      "sampleData": null
+    },
+    {
+      "header": "Color-Red",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 213,
+      "sampleData": null
+    },
+    {
+      "header": "D&S",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 214,
+      "sampleData": null
+    },
+    {
+      "header": "Stone",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 215,
+      "sampleData": null
+    },
+    {
+      "header": "FFA",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 216,
+      "sampleData": null
+    },
+    {
+      "header": "M&I",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 217,
+      "sampleData": null
+    },
+    {
+      "header": "DOBI",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 218,
+      "sampleData": null
+    },
+    {
+      "header": "IV",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 219,
+      "sampleData": null
+    },
+    {
+      "header": "Color-Red",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 220,
+      "sampleData": null
+    },
+    {
+      "header": "D&S",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 221,
+      "sampleData": null
+    },
+    {
+      "header": "Stone",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 222,
+      "sampleData": null
+    },
+    {
+      "header": "FFA",
+      "sapSource": "ZMM_SLDI -  FFA_DP USING EBELN",
+      "columnIndex": 223,
+      "sampleData": null
+    },
+    {
+      "header": "M&I",
+      "sapSource": "ZMM_SLDI -  MNI_DP USING EBELN",
+      "columnIndex": 224,
+      "sampleData": null
+    },
+    {
+      "header": "DOBI",
+      "sapSource": "ZMM_SLDI -  DOBI_DP USING EBELN",
+      "columnIndex": 225,
+      "sampleData": null
+    },
+    {
+      "header": "IV",
+      "sapSource": "ZMM_SLDI -  IV_DP USING EBELN",
+      "columnIndex": 226,
+      "sampleData": null
+    },
+    {
+      "header": "Color-Red",
+      "sapSource": "ZMM_SLDI -  RED_DP USING EBELN",
+      "columnIndex": 227,
+      "sampleData": null
+    },
+    {
+      "header": "D&S",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 228,
+      "sampleData": null
+    },
+    {
+      "header": "Stone",
+      "sapSource": "MANUAL_INPUT",
+      "columnIndex": 229,
+      "sampleData": null
+    }
+  ]
+}

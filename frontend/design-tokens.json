@@ -1,0 +1,324 @@
+{
+  "$metadata": {
+    "name": "KPN Downstream Design System",
+    "version": "1.0.0",
+    "description": "Industrial clarity over decoration. A production-ready design system for manufacturing and industrial enterprises.",
+    "industry": "Manufacturing / Downstream / Industrial"
+  },
+  "color": {
+    "primitive": {
+      "brand": {
+        "red": {
+          "primary": {
+            "value": "#C43A31",
+            "type": "color",
+            "description": "Primary brand red - use for accents, CTAs, and key interactive elements"
+          },
+          "deep": {
+            "value": "#9E2C25",
+            "type": "color",
+            "description": "Deeper red for hover states and emphasis"
+          }
+        }
+      },
+      "text": {
+        "charcoal": {
+          "value": "#2B2B2B",
+          "type": "color",
+          "description": "Primary text color - high contrast charcoal"
+        },
+        "steel": {
+          "value": "#6B6B6B",
+          "type": "color",
+          "description": "Secondary text color - industrial steel gray"
+        },
+        "white": {
+          "value": "#FFFFFF",
+          "type": "color",
+          "description": "White text for dark backgrounds"
+        }
+      },
+      "background": {
+        "white": {
+          "value": "#FFFFFF",
+          "type": "color",
+          "description": "Pure white background"
+        },
+        "light": {
+          "value": "#F4F4F4",
+          "type": "color",
+          "description": "Light gray background for subtle contrast"
+        },
+        "lighter": {
+          "value": "#FAFAFA",
+          "type": "color",
+          "description": "Very light gray for nested backgrounds"
+        }
+      },
+      "border": {
+        "light": {
+          "value": "#E0E0E0",
+          "type": "color",
+          "description": "Light border for subtle separation"
+        },
+        "medium": {
+          "value": "#C4C4C4",
+          "type": "color",
+          "description": "Medium border for inputs and focus states"
+        },
+        "dark": {
+          "value": "#9E9E9E",
+          "type": "color",
+          "description": "Dark border for emphasis"
+        }
+      }
+    },
+    "semantic": {
+      "primary": {
+        "default": {
+          "value": "{color.primitive.brand.red.primary}",
+          "type": "color",
+          "description": "Primary action color"
+        },
+        "foreground": {
+          "value": "{color.primitive.text.white}",
+          "type": "color",
+          "description": "Text on primary background"
+        },
+        "hover": {
+          "value": "{color.primitive.brand.red.deep}",
+          "type": "color",
+          "description": "Primary hover state"
+        }
+      },
+      "secondary": {
+        "default": {
+          "value": "{color.primitive.background.light}",
+          "type": "color",
+          "description": "Secondary action color"
+        },
+        "foreground": {
+          "value": "{color.primitive.text.charcoal}",
+          "type": "color",
+          "description": "Text on secondary background"
+        },
+        "hover": {
+          "value": "#E8E8E8",
+          "type": "color",
+          "description": "Secondary hover state"
+        }
+      },
+      "destructive": {
+        "default": {
+          "value": "{color.primitive.brand.red.primary}",
+          "type": "color",
+          "description": "Destructive/error action color"
+        },
+        "foreground": {
+          "value": "{color.primitive.text.white}",
+          "type": "color",
+          "description": "Text on destructive background"
+        }
+      }
+    }
+  },
+  "typography": {
+    "fontFamily": {
+      "primary": {
+        "value": "'Inter', system-ui, -apple-system, sans-serif",
+        "type": "fontFamily",
+        "description": "Primary UI font for all interface elements"
+      },
+      "heading": {
+        "value": "'Merriweather', Georgia, serif",
+        "type": "fontFamily",
+        "description": "Optional serif font for large headings and brand moments"
+      }
+    },
+    "fontSize": {
+      "h1": {
+        "value": "40px",
+        "type": "dimension",
+        "description": "Large page headings"
+      },
+      "h2": {
+        "value": "32px",
+        "type": "dimension",
+        "description": "Section headings"
+      },
+      "h3": {
+        "value": "24px",
+        "type": "dimension",
+        "description": "Subsection headings"
+      },
+      "base": {
+        "value": "16px",
+        "type": "dimension",
+        "description": "Body text, buttons, inputs"
+      },
+      "small": {
+        "value": "14px",
+        "type": "dimension",
+        "description": "Small labels, captions"
+      },
+      "xs": {
+        "value": "12px",
+        "type": "dimension",
+        "description": "Fine print, metadata"
+      }
+    },
+    "fontWeight": {
+      "normal": {
+        "value": "400",
+        "type": "number",
+        "description": "Regular text"
+      },
+      "medium": {
+        "value": "500",
+        "type": "number",
+        "description": "Labels, buttons, medium emphasis"
+      },
+      "semibold": {
+        "value": "600",
+        "type": "number",
+        "description": "Headings, strong emphasis"
+      },
+      "bold": {
+        "value": "700",
+        "type": "number",
+        "description": "Extra emphasis (use sparingly)"
+      }
+    },
+    "lineHeight": {
+      "default": {
+        "value": "1.5",
+        "type": "number",
+        "description": "Standard line height for readability"
+      }
+    }
+  },
+  "spacing": {
+    "1": {
+      "value": "4px",
+      "type": "dimension",
+      "description": "Micro spacing - icon padding, tight gaps"
+    },
+    "2": {
+      "value": "8px",
+      "type": "dimension",
+      "description": "Extra small - compact layouts"
+    },
+    "3": {
+      "value": "16px",
+      "type": "dimension",
+      "description": "Small - standard gaps between related elements"
+    },
+    "4": {
+      "value": "24px",
+      "type": "dimension",
+      "description": "Medium - gaps between sections"
+    },
+    "5": {
+      "value": "32px",
+      "type": "dimension",
+      "description": "Large - major section spacing"
+    },
+    "6": {
+      "value": "40px",
+      "type": "dimension",
+      "description": "Extra large - page-level spacing"
+    },
+    "7": {
+      "value": "64px",
+      "type": "dimension",
+      "description": "Massive - hero sections, major dividers"
+    }
+  },
+  "borderRadius": {
+    "sm": {
+      "value": "6px",
+      "type": "dimension",
+      "description": "Small elements - badges, small buttons"
+    },
+    "md": {
+      "value": "8px",
+      "type": "dimension",
+      "description": "Standard - buttons, inputs, cards"
+    },
+    "lg": {
+      "value": "12px",
+      "type": "dimension",
+      "description": "Large - modals, large cards"
+    },
+    "xl": {
+      "value": "16px",
+      "type": "dimension",
+      "description": "Extra large - hero cards (use sparingly)"
+    }
+  },
+  "elevation": {
+    "none": {
+      "value": "none",
+      "type": "shadow",
+      "description": "No shadow - flat design preferred"
+    },
+    "sm": {
+      "value": "0 1px 2px 0 rgba(0, 0, 0, 0.05)",
+      "type": "shadow",
+      "description": "Subtle lift - cards, buttons"
+    },
+    "md": {
+      "value": "0 2px 4px 0 rgba(0, 0, 0, 0.08)",
+      "type": "shadow",
+      "description": "Medium lift - dropdowns, popovers"
+    },
+    "lg": {
+      "value": "0 4px 8px 0 rgba(0, 0, 0, 0.10)",
+      "type": "shadow",
+      "description": "High lift - modals, important overlays"
+    }
+  },
+  "animation": {
+    "duration": {
+      "fast": {
+        "value": "150ms",
+        "type": "duration",
+        "description": "Quick interactions - button hovers"
+      },
+      "base": {
+        "value": "200ms",
+        "type": "duration",
+        "description": "Standard transitions"
+      },
+      "slow": {
+        "value": "250ms",
+        "type": "duration",
+        "description": "Deliberate transitions - panels, modals"
+      }
+    },
+    "easing": {
+      "default": {
+        "value": "ease-out",
+        "type": "string",
+        "description": "Default easing - feels responsive and snappy"
+      }
+    }
+  },
+  "usage": {
+    "principles": [
+      "Industrial clarity over decoration",
+      "Red is accent, not dominant",
+      "Prefer borders over heavy shadows",
+      "Strong vertical rhythm with 8pt spacing",
+      "Left-aligned layouts, no center-heavy designs",
+      "Subtle, professional motion (150-250ms, ease-out only)"
+    ],
+    "restrictions": [
+      "No playful UI or rounded bubble design",
+      "No bright gradients",
+      "No startup/fintech aesthetic",
+      "No lifestyle imagery",
+      "No bounce or playful animations"
+    ]
+  }
+}

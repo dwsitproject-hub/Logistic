@@ -1,0 +1,24 @@
+# Development Dockerfile for Next.js
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies with retry for flaky networks
+RUN npm config set fetch-retries 5 \
+  && npm config set fetch-retry-mintimeout 20000 \
+  && npm config set fetch-retry-maxtimeout 120000 \
+  && npm config set fetch-timeout 300000 \
+  && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund)
+
+# Copy source files
+COPY . .
+
+# Expose port
+EXPOSE 3001
+
+# Start development server with hot reload
+CMD ["npm", "run", "dev"]
+

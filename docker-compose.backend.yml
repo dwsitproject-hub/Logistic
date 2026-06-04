@@ -1,0 +1,82 @@
+# Backend server stack: PostgreSQL + Backend API
+# Run on backend server (e.g. 172.28.92.57): docker compose -f docker-compose.backend.yml up -d
+#
+# --- Database credentials (IMPORTANT) ---
+# - Docker Compose substitutes ${DB_NAME} etc. from a ".env" file in THIS DIRECTORY (/opt/klip/.env),
+#   NOT from backend/.env alone. Copy or symlink:  cp backend/.env .env
+# - The backend container MUST use DB_HOST=postgres and DB_PORT=5432 (Docker network to klip-postgres).
+#   Values like DB_HOST=127.0.0.1 / DB_PORT=5433 in backend/.env are for running Node ON THE HOST
+#   against a published Postgres port; they are overridden below so the container does not loop back
+#   to itself.
+# - Publish Postgres to the host (optional, for psql / ts-node on the server): POSTGRES_PORT default 5433
+#
+# Optional in /opt/klip/.env: DB_NAME, DB_USER, DB_PASSWORD, POSTGRES_PORT, BACKEND_PORT, JWT_SECRET
+
+services:
+  postgres:
+    image: postgres:14-alpine
+    container_name: klip-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-klip_db}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres123}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - klip-backend-network
+    ports:
+      # Host-only: tools on the server use 127.0.0.1:${POSTGRES_PORT}; backend container still uses postgres:5432
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: klip-backend
+    env_file:
+      - ./backend/.env
+    environment:
+      NODE_ENV: production
+      PORT: 5001
+      # Override host-oriented DB settings from env_file — required for in-stack networking
+      # Use container_name to avoid DNS edge cases on some hosts
+      DB_HOST: klip-postgres
+      DB_PORT: "5432"
+      # DB_NAME, DB_USER, DB_PASSWORD, JWT_SECRET: from env_file (backend/.env) unless you set them in /opt/klip/.env
+      JWT_EXPIRES_IN: 7d
+      # GEMINI_API_KEY comes from env_file: ./backend/.env (do not override here or it will be empty)
+    ports:
+      - "${BACKEND_PORT:-5001}:5001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - klip-backend-network
+    volumes:
+      - backend_uploads:/app/uploads
+      - backend_logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5001/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  postgres_data:
+    driver: local
+  backend_uploads:
+    driver: local
+  backend_logs:
+    driver: local
+
+networks:
+  klip-backend-network:
+    driver: bridge

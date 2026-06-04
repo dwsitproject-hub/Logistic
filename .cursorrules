@@ -1,0 +1,134 @@
+# KLIP Project Rules
+
+## Project Context
+This is the KPN Logistics Intelligence Platform (KLIP) - a web-based logistics management system.
+
+## Tech Stack
+- Frontend: Next.js 14, React 18, TypeScript, Tailwind CSS
+- Backend: Node.js, Express, TypeScript
+- Database: PostgreSQL
+- Auth: JWT with role-based access control
+
+## Code Standards
+
+### TypeScript
+- Use strict mode
+- Prefer interfaces over types for objects
+- Use proper type annotations
+- Avoid 'any' type unless absolutely necessary
+
+### Frontend
+- Use 'use client' directive for client components
+- Keep components small and focused
+- Use shadcn/ui components when possible
+- Follow Next.js App Router conventions
+- API calls should use the centralized api.ts client
+
+### Backend
+- Use async/await for database operations
+- Always use parameterized queries (prevent SQL injection)
+- Log errors with Winston logger
+- Use middleware for authentication and authorization
+- Return consistent API response format: { success, data/error }
+
+### Database
+- All tables use UUID primary keys
+- Include created_at and updated_at timestamps
+- Use proper foreign keys and indexes
+- Follow naming convention: snake_case for database columns
+
+### Security
+- Never commit .env files
+- Use JWT for authentication
+- Implement RBAC for all protected routes
+- Hash passwords with bcrypt
+- Validate all user inputs
+
+## File Organization
+
+### Frontend
+- Pages: src/app/[module]/page.tsx
+- Components: src/components/
+- UI Components: src/components/ui/
+- Utilities: src/lib/
+- API Client: src/lib/api.ts
+
+### Backend
+- Routes: src/routes/[module].routes.ts
+- Controllers: src/controllers/[module].controller.ts
+- Middleware: src/middleware/
+- Database: src/database/
+- Utils: src/utils/
+
+## Common Patterns
+
+### API Endpoint Structure
+```typescript
+router.get('/', authenticateToken, authorize('ROLE1', 'ROLE2'), controllerFunction);
+```
+
+### Controller Structure
+```typescript
+export const functionName = async (req: AuthRequest, res: Response) => {
+  try {
+    // Logic here
+    res.json({ success: true, data: result });
+  } catch (error) {
+    logger.error('Error:', error);
+    res.status(500).json({ success: false, error: { message: 'Error message' } });
+  }
+};
+```
+
+### Frontend API Call
+```typescript
+const response = await api.get('/endpoint');
+const data = response.data.data;
+```
+
+## User Roles
+- ADMIN: Full access
+- TRADING: Contracts, gain/loss
+- LOGISTICS: Shipments, SLA
+- FINANCE: Payments, invoices
+- MANAGEMENT: Dashboards, insights
+- SUPPORT: Data validation, audit logs
+
+## Database Tables
+- users, contracts, shipments, quality_surveys, payments
+- documents, remarks, audit_logs, ai_insights, alerts
+
+## Environment Variables
+
+### Backend Required
+- DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+- JWT_SECRET, JWT_EXPIRES_IN
+- PORT, NODE_ENV
+
+### Frontend Required
+- NEXT_PUBLIC_API_URL
+
+## Documentation
+- README.md: Main overview
+- INSTALLATION.md: Setup instructions
+- QUICKSTART.md: Fast setup guide
+- FEATURES.md: Feature documentation
+- API.md: API reference
+- DATABASE.md: Database documentation
+- ARCHITECTURE.md: System architecture
+- PROJECT_SUMMARY.md: Project summary
+
+## Development Workflow
+1. Make changes to code
+2. Test locally
+3. Check for TypeScript errors
+4. Test API endpoints
+5. Update documentation if needed
+6. Commit with meaningful message
+
+## Key Commands
+- npm run dev: Start development servers
+- npm run build: Build for production
+- npm run db:migrate: Run database migration
+- npm run db:seed: Seed test data
+
