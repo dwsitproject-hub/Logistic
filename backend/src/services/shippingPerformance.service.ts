@@ -52,7 +52,7 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const ROW_CACHE_KEY = 'shipping-performance-rows-v3';
+const ROW_CACHE_KEY = 'shipping-performance-rows-v4';
 
 const SHIPPING_PERFORMANCE_SQL = `
       WITH latest_spd_contract AS (
@@ -225,6 +225,7 @@ const SHIPPING_PERFORMANCE_SQL = `
           s.bl_quantity,
           0
         )::numeric AS received_qty,
+        COALESCE(sa.quantity_delivered_sap, 0)::numeric AS delivered_qty,
         GREATEST(
           COALESCE(NULLIF(sa.sto_quantity, 0), c.sto_quantity, 0)::numeric
           - COALESCE(

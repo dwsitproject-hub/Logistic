@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Layout from '@/components/Layout'
 import api from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -11,6 +11,9 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { ArrowDown, ArrowUp, ChevronRight, Database, GripVertical, Search, SlidersHorizontal, X } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
+import VesselHistoryModal, {
+  type VesselHistoryModalSelection,
+} from '@/components/shipping-performance/VesselHistoryModal'
 import {
   rowMatchesGlobalSearch,
   rowMatchesToolbarMultiFilters,
@@ -21,6 +24,28 @@ import {
   formatSignedDeltaDays,
   signedCycleDaysClass,
 } from '@/lib/cycleDaysDisplay'
+import {
+  formatShippingPerfDisplayLabel,
+  getShippingSummaryMetricLabel,
+  perfDataModeFromCard,
+  resolveShippingPerfLabelMode,
+  SHIPPING_PERF_CARD_TITLES,
+  shippingPerfCardTitleLines,
+  type ShippingPerfCardFilter,
+  type ShippingSummaryMetricKey,
+} from '@/lib/shippingPerformanceLabels'
+import {
+  SHIPPING_PERF_TABLE_BODY_CLASS,
+  SHIPPING_PERF_TABLE_CELL_PAD,
+  SHIPPING_PERF_TABLE_HEADER_ROW_CLASS,
+  SHIPPING_PERF_TABLE_ROW_MIN_H,
+  SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS,
+  shippingPerfCellTooltipText,
+  shippingPerfTableColumnWidthPx,
+  shippingPerfTableMinWidthPx,
+} from '@/lib/shippingPerformanceTableUi'
+import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
+import { cn } from '@/lib/utils'
 
 interface ShippingPerformanceRow {
   id: string
@@ -46,6 +71,7 @@ interface ShippingPerformanceRow {
   total_delta_days: number | null
   sto_qty?: number | null
   received_qty?: number | null
+  delivered_qty?: number | null
   outstanding_qty?: number | null
   shipment_count?: number | null
   cargo_readiness_date?: string | null
@@ -82,7 +108,6 @@ type TableColumnKey = keyof ShippingPerformanceRow
 const DETAIL_COLUMN_KEYS = new Set<string>([
   'status',
   'po_number',
-  'contract_ext_no',
   'contract_number',
   'sto_number',
   'group_name',
@@ -100,6 +125,9 @@ const ALL_SHIPMENTS_HIDDEN_COLUMNS = new Set<string>(['group_name'])
 
 /** Hidden in the By Vessel summary table. */
 const BY_VESSEL_HIDDEN_COLUMNS = new Set<string>(['group_name'])
+
+/** Section 3 — shown only in the By Vessel aggregated view. */
+const BY_VESSEL_ONLY_COLUMNS = new Set<string>(['contract_ext_no'])
 
 const OPEN_TABLE_STATUSES = new Set([
   'PLANNED',
@@ -130,6 +158,19 @@ function avgMetric(rows: ShippingPerformanceRow[], key: TableColumnKey): number 
 
 function sumMetric(rows: ShippingPerformanceRow[], key: TableColumnKey): number {
   return rows.reduce((sum, r) => sum + Number(r[key] ?? 0), 0)
+}
+
+/** By Vessel view — unique non-empty contract ext numbers, comma-separated. */
+function aggregateUniqueContractExtNos(vesselRows: ShippingPerformanceRow[]): string | null {
+  const seen = new Set<string>()
+  const values: string[] = []
+  for (const row of vesselRows) {
+    const value = String(row.contract_ext_no ?? '').trim()
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    values.push(value)
+  }
+  return values.length > 0 ? values.join(', ') : null
 }
 
 /** Logical delta column keys in the table — map to ATA payload fields when Close card is active. */
@@ -166,14 +207,13 @@ function resolvePerfTableDataKey(
   return PERF_DELTA_ATA_KEY_MAP[logicalKey as keyof typeof PERF_DELTA_ATA_KEY_MAP]
 }
 
-function resolvePerfColumnLabel(label: string, mode: PerfDashMode): string {
-  if (mode === 'eta') return label
-  return label.replace(/\bETA\b/g, 'ATA')
-}
-
-function resolvePerfColumnTooltip(tooltip: string | undefined, mode: PerfDashMode): string | undefined {
-  if (!tooltip || mode === 'eta') return tooltip
-  return tooltip.replace(/\bETA\b/g, 'ATA')
+/** UI tooltip text only — same E→A replacements as column headers when Close. */
+function resolvePerfColumnTooltip(
+  tooltip: string | undefined,
+  labelMode: ReturnType<typeof resolveShippingPerfLabelMode>,
+): string | undefined {
+  if (!tooltip) return tooltip
+  return formatShippingPerfDisplayLabel(tooltip, labelMode)
 }
 
 function aggregateByVessel(rows: ShippingPerformanceRow[], mode: PerfDashMode = 'eta'): ShippingPerformanceRow[] {
@@ -195,7 +235,7 @@ function aggregateByVessel(rows: ShippingPerformanceRow[], mode: PerfDashMode = 
     group_name: null,
     vessel_name: vesselKey,
     po_number: null,
-    contract_ext_no: null,
+    contract_ext_no: aggregateUniqueContractExtNos(vesselRows),
     sto_number: null,
     contract_date: null,
     incoterm: null,
@@ -241,24 +281,24 @@ type PerVesselPerfSummary = {
   vesselCount: number
   contractCount: number
   totalQty: number
-  avgLoadingEtaEtr: number
-  avgLoadingEtaEtb: number
-  avgLoadingEtbEtc: number
-  avgDischargeEtaEtb: number
-  avgDischargeEtbEtc: number
-  avgTotalDelta: number
+  avgLoadingEtaEtr: number | null
+  avgLoadingEtaEtb: number | null
+  avgLoadingEtbEtc: number | null
+  avgDischargeEtaEtb: number | null
+  avgDischargeEtbEtc: number | null
+  avgTotalDelta: number | null
 }
 
 const EMPTY_PER_VESSEL_SUMMARY: PerVesselPerfSummary = {
   vesselCount: 0,
   contractCount: 0,
   totalQty: 0,
-  avgLoadingEtaEtr: 0,
-  avgLoadingEtaEtb: 0,
-  avgLoadingEtbEtc: 0,
-  avgDischargeEtaEtb: 0,
-  avgDischargeEtbEtc: 0,
-  avgTotalDelta: 0,
+  avgLoadingEtaEtr: null,
+  avgLoadingEtaEtb: null,
+  avgLoadingEtbEtc: null,
+  avgDischargeEtaEtb: null,
+  avgDischargeEtbEtc: null,
+  avgTotalDelta: null,
 }
 
 const ETA_DATE_FIELDS: Array<keyof ShippingPerformanceRow> = [
@@ -304,7 +344,11 @@ function countUniqueVessels(rows: ShippingPerformanceRow[]): number {
   return new Set(rows.map((row) => normalizeVesselKey(row.vessel_name))).size
 }
 
-type ContractActivityFlags = { hasOpenEtaRow: boolean; hasAtaRow: boolean }
+type ContractActivityFlags = {
+  hasOpenEtaRow: boolean
+  hasOpenNoEtaRow: boolean
+  hasAtaRow: boolean
+}
 
 /** One entry per contract across all rows in scope (may include multiple shipments). */
 function getContractActivityByContract(rows: ShippingPerformanceRow[]): Map<string, ContractActivityFlags> {
@@ -313,26 +357,33 @@ function getContractActivityByContract(rows: ShippingPerformanceRow[]): Map<stri
     const contractNumber = String(row.contract_number || '').trim()
     if (!contractNumber) continue
     let acc = byContract.get(contractNumber)
-    if (!acc) acc = { hasOpenEtaRow: false, hasAtaRow: false }
+    if (!acc) acc = { hasOpenEtaRow: false, hasOpenNoEtaRow: false, hasAtaRow: false }
     if (rowHasAta(row)) acc.hasAtaRow = true
-    if (rowHasEta(row) && !rowHasAta(row)) acc.hasOpenEtaRow = true
+    else if (rowHasEta(row)) acc.hasOpenEtaRow = true
+    else acc.hasOpenNoEtaRow = true
     byContract.set(contractNumber, acc)
   }
   return byContract
 }
 
 /**
- * Contract-level counts for summary cards (disjoint across On Going vs Close):
- * - On Going: contract has at least one ETA-only shipment and no shipment with ATA in scope
- * - Close: contract has at least one shipment with ATA in scope
+ * Contract-level counts for summary cards:
+ * - On Going (with ETA): at least one open shipment with ETA, no ATA on contract
+ * - On Going (no ETA): at least one open shipment without ETA, no ATA on contract
+ * - Close: at least one shipment with ATA in scope
  */
-function countUniqueContractsForPerfMode(scopeRows: ShippingPerformanceRow[], mode: PerfDashMode): number {
+function countUniqueContractsForPerfCard(
+  scopeRows: ShippingPerformanceRow[],
+  card: ShippingPerfCardFilter,
+): number {
   const byContract = getContractActivityByContract(scopeRows)
   let count = 0
   for (const acc of byContract.values()) {
-    if (mode === 'ata') {
+    if (card === 'close') {
       if (acc.hasAtaRow) count += 1
-    } else if (acc.hasOpenEtaRow && !acc.hasAtaRow) {
+    } else if (card === 'ongoingWithEta') {
+      if (acc.hasOpenEtaRow && !acc.hasAtaRow) count += 1
+    } else if (acc.hasOpenNoEtaRow && !acc.hasAtaRow) {
       count += 1
     }
   }
@@ -375,9 +426,16 @@ const EMPTY_DRILLDOWN_FILTERS: DrilldownFilters = {
   vessel: null,
 }
 
-function applyPerfModeFilter(rows: ShippingPerformanceRow[], mode: PerfDashMode): ShippingPerformanceRow[] {
-  if (mode === 'eta') return rows.filter((row) => rowHasEta(row) && !rowHasAta(row))
-  return rows.filter((row) => rowHasAta(row))
+/** Row-level partition for Section 1 cards and global Section 2/3 scope. */
+function applyPerfCardFilter(
+  rows: ShippingPerformanceRow[],
+  card: ShippingPerfCardFilter,
+): ShippingPerformanceRow[] {
+  if (card === 'close') return rows.filter((row) => rowHasAta(row))
+  if (card === 'ongoingWithEta') {
+    return rows.filter((row) => rowHasEta(row) && !rowHasAta(row))
+  }
+  return rows.filter((row) => !rowHasEta(row) && !rowHasAta(row))
 }
 
 function applyDrilldownFiltersToRows(
@@ -461,13 +519,14 @@ type PerfDatasetBundle = {
 
 function buildPerfDatasetBundle(
   modeRows: ShippingPerformanceRow[],
-  mode: PerfDashMode,
+  card: ShippingPerfCardFilter,
   contractScopeRows: ShippingPerformanceRow[],
 ): PerfDatasetBundle {
+  const dataMode = perfDataModeFromCard(card)
   const tree = buildPerfTree(modeRows)
-  const metrics = buildCardSummary(modeRows, mode)
+  const metrics = buildCardSummary(modeRows, dataMode)
   const vesselCount = countUniqueVessels(modeRows)
-  const contractCount = countUniqueContractsForPerfMode(contractScopeRows, mode)
+  const contractCount = countUniqueContractsForPerfCard(contractScopeRows, card)
 
   return {
     rows: modeRows,
@@ -481,53 +540,32 @@ function buildPerfDatasetBundle(
 }
 
 function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): PerVesselPerfSummary {
+  if (rows.length === 0) return { ...EMPTY_PER_VESSEL_SUMMARY }
+
   const vessels = new Set<string>()
   const contracts = new Set<string>()
-  let rowCount = 0
   let totalQty = 0
-  let sumLoadingEtr = 0
-  let sumLoadingEtb = 0
-  let sumLoadingEtbEtc = 0
-  let sumDischargeEtb = 0
-  let sumDischargeEtbEtc = 0
-  let sumTotalDelta = 0
 
   for (const row of rows) {
-    rowCount += 1
     vessels.add(normalizeVesselKey(row.vessel_name))
     const contractNumber = String(row.contract_number || '').trim()
     if (contractNumber) contracts.add(contractNumber)
     totalQty += Number(row.outstanding_qty ?? 0)
-
-    if (mode === 'eta') {
-      sumLoadingEtr += Number(row.loading_delta_eta_etr_days ?? 0)
-      sumLoadingEtb += Number(row.loading_delta_eta_etb_days ?? 0)
-      sumLoadingEtbEtc += Number(row.loading_delta_etb_etc_days ?? 0)
-      sumDischargeEtb += Number(row.discharge_delta_eta_etb_days ?? 0)
-      sumDischargeEtbEtc += Number(row.discharge_delta_etb_etc_days ?? 0)
-      sumTotalDelta += Number(row.total_delta_days ?? 0)
-    } else {
-      sumLoadingEtr += Number(row.ata_loading_delta_eta_etr_days ?? 0)
-      sumLoadingEtb += Number(row.ata_loading_delta_eta_etb_days ?? 0)
-      sumLoadingEtbEtc += Number(row.ata_loading_delta_etb_etc_days ?? 0)
-      sumDischargeEtb += Number(row.ata_discharge_delta_eta_etb_days ?? 0)
-      sumDischargeEtbEtc += Number(row.ata_discharge_delta_etb_etc_days ?? 0)
-      sumTotalDelta += Number(row.ata_total_delta_days ?? 0)
-    }
   }
 
-  if (rowCount === 0) return { ...EMPTY_PER_VESSEL_SUMMARY }
+  const avgDelta = (logicalKey: (typeof PERF_DELTA_LOGICAL_KEYS)[number]) =>
+    avgMetric(rows, resolvePerfTableDataKey(logicalKey, mode))
 
   return {
     vesselCount: vessels.size,
     contractCount: contracts.size,
     totalQty,
-    avgLoadingEtaEtr: sumLoadingEtr / rowCount,
-    avgLoadingEtaEtb: sumLoadingEtb / rowCount,
-    avgLoadingEtbEtc: sumLoadingEtbEtc / rowCount,
-    avgDischargeEtaEtb: sumDischargeEtb / rowCount,
-    avgDischargeEtbEtc: sumDischargeEtbEtc / rowCount,
-    avgTotalDelta: sumTotalDelta / rowCount,
+    avgLoadingEtaEtr: avgDelta('loading_delta_eta_etr_days'),
+    avgLoadingEtaEtb: avgDelta('loading_delta_eta_etb_days'),
+    avgLoadingEtbEtc: avgDelta('loading_delta_etb_etc_days'),
+    avgDischargeEtaEtb: avgDelta('discharge_delta_eta_etb_days'),
+    avgDischargeEtbEtc: avgDelta('discharge_delta_etb_etc_days'),
+    avgTotalDelta: avgDelta('total_delta_days'),
   }
 }
 
@@ -609,7 +647,16 @@ type ColumnDef = {
   label: string
   type: ColumnType
   defaultVisible?: boolean
+  /** Default visibility when the By Vessel toggle is active. */
+  byVesselDefaultVisible?: boolean
   tooltip?: string
+}
+
+function columnDefaultVisible(col: ColumnDef, tableViewMode: TableViewMode): boolean {
+  if (tableViewMode === 'by_vessel' && col.byVesselDefaultVisible !== undefined) {
+    return col.byVesselDefaultVisible
+  }
+  return col.defaultVisible !== false
 }
 
 /** Shipping Performance Section 3 only — SAP delta column header tooltips. */
@@ -628,6 +675,13 @@ const SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS: Partial<Record<keyof ShippingPerforma
 
 const COLUMN_DEFS: ColumnDef[] = [
   { key: 'vessel_name', label: 'Vessel', type: 'text', defaultVisible: true },
+  {
+    key: 'contract_ext_no',
+    label: 'Contract Ext No',
+    type: 'text',
+    defaultVisible: false,
+    byVesselDefaultVisible: true,
+  },
   { key: 'loading_port', label: 'Loading Port', type: 'text', defaultVisible: true },
   { key: 'discharge_port', label: 'Discharge Port', type: 'text', defaultVisible: true },
   { key: 'incoterm', label: 'Incoterm', type: 'text', defaultVisible: true },
@@ -638,7 +692,6 @@ const COLUMN_DEFS: ColumnDef[] = [
   { key: 'shipment_count', label: 'Shipments', type: 'number', defaultVisible: false },
   { key: 'status', label: 'Status', type: 'text', defaultVisible: true },
   { key: 'po_number', label: 'PO No', type: 'text', defaultVisible: false },
-  { key: 'contract_ext_no', label: 'Contract Ext No', type: 'text', defaultVisible: false },
   { key: 'contract_number', label: 'Contract No', type: 'text', defaultVisible: false },
   { key: 'sto_number', label: 'STO No', type: 'text', defaultVisible: false },
   { key: 'sto_qty', label: 'STO Qty (MT)', type: 'number', defaultVisible: false },
@@ -646,35 +699,35 @@ const COLUMN_DEFS: ColumnDef[] = [
   { key: 'outstanding_qty', label: 'Outstanding Qty (MT)', type: 'number', defaultVisible: true },
   {
     key: 'loading_delta_eta_etr_days',
-    label: 'Loading ETA-ETR',
+    label: 'Loading ETA - ETR',
     type: 'number',
     defaultVisible: true,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.loading_delta_eta_etr_days,
   },
   {
     key: 'loading_delta_eta_etb_days',
-    label: 'Loading ETA-ETB',
+    label: 'Loading ETA - ETB',
     type: 'number',
     defaultVisible: true,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.loading_delta_eta_etb_days,
   },
   {
     key: 'loading_delta_etb_etc_days',
-    label: 'Loading ETB-ETC',
+    label: 'Loading ETB - ETC',
     type: 'number',
     defaultVisible: true,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.loading_delta_etb_etc_days,
   },
   {
     key: 'discharge_delta_eta_etb_days',
-    label: 'Discharge ETA-ETB',
+    label: 'Discharge ETA - ETB',
     type: 'number',
     defaultVisible: true,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.discharge_delta_eta_etb_days,
   },
   {
     key: 'discharge_delta_etb_etc_days',
-    label: 'Discharge ETB-ETC',
+    label: 'Discharge ETB - ETC',
     type: 'number',
     defaultVisible: true,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.discharge_delta_etb_etc_days,
@@ -685,6 +738,9 @@ const COLUMN_DEFS: ColumnDef[] = [
 const COLUMN_MAP = Object.fromEntries(COLUMN_DEFS.map((col) => [col.key, col])) as Record<string, ColumnDef>
 
 function isColumnEligibleForView(key: string, tableViewMode: TableViewMode): boolean {
+  if (BY_VESSEL_ONLY_COLUMNS.has(key)) {
+    return tableViewMode === 'by_vessel'
+  }
   if (tableViewMode === 'all') {
     if (ALL_SHIPMENTS_HIDDEN_COLUMNS.has(key)) return false
     if (key === 'shipment_count') return false
@@ -713,6 +769,34 @@ function resolveVisibleTableColumnKeys(
   return resolveManageableColumnKeys(columnOrder, tableViewMode).filter(
     (key) => visibleColumns[String(key)],
   )
+}
+
+/** Keep Contract Ext No immediately after Vessel in table + column modal order. */
+function ensureContractExtNoAfterVessel(
+  order: Array<keyof ShippingPerformanceRow>,
+): Array<keyof ShippingPerformanceRow> {
+  const defOrder = COLUMN_DEFS.map((c) => c.key)
+  const deduped = order.filter((key) => defOrder.includes(key))
+  const missing = defOrder.filter((key) => !deduped.includes(key))
+  const merged: Array<keyof ShippingPerformanceRow> = [...deduped, ...missing]
+  const vesselIdx = merged.indexOf('vessel_name')
+  const extIdx = merged.indexOf('contract_ext_no')
+  if (vesselIdx < 0 || extIdx < 0 || extIdx === vesselIdx + 1) return merged
+  const extKey: keyof ShippingPerformanceRow = 'contract_ext_no'
+  const withoutExt: Array<keyof ShippingPerformanceRow> = merged.filter((key) => key !== extKey)
+  withoutExt.splice(vesselIdx + 1, 0, extKey)
+  return withoutExt
+}
+
+function applyByVesselColumnDefaults(
+  visibleColumns: Record<string, boolean>,
+): Record<string, boolean> {
+  const next = { ...visibleColumns }
+  for (const col of COLUMN_DEFS) {
+    if (!isColumnEligibleForView(String(col.key), 'by_vessel')) continue
+    next[String(col.key)] = columnDefaultVisible(col, 'by_vessel')
+  }
+  return next
 }
 
 function reorderColumnsInOrder(
@@ -759,17 +843,23 @@ function NumberCell({
   isDeltaDays?: boolean
   decimalPlaces?: number
 }) {
-  if (value === null || value === undefined || value === '') return <span className="text-gray-400">-</span>
+  if (value === null || value === undefined || value === '') {
+    return <span className="text-sm text-gray-400">-</span>
+  }
   const n = Number(value)
-  if (Number.isNaN(n)) return <span className="text-gray-400">-</span>
+  if (Number.isNaN(n)) return <span className="text-sm text-gray-400">-</span>
   if (isDeltaDays) {
     const formatted =
       decimalPlaces != null
         ? (n === 0 ? (0).toFixed(decimalPlaces) : Math.abs(n).toFixed(decimalPlaces))
         : formatSignedDeltaDays(n)
-    return <span className={`font-semibold ${signedCycleDaysClass(n)}`}>{formatted}</span>
+    return (
+      <span className={`text-sm font-semibold tabular-nums ${signedCycleDaysClass(n)}`}>
+        {formatted}
+      </span>
+    )
   }
-  return <span>{n}</span>
+  return <span className="text-sm tabular-nums">{n}</span>
 }
 
 export default function ShippingPerformancePage() {
@@ -779,10 +869,10 @@ export default function ShippingPerformancePage() {
   const [authReady, setAuthReady] = useState(false)
   const [showColumnManager, setShowColumnManager] = useState(false)
   const [columnOrder, setColumnOrder] = useState<Array<keyof ShippingPerformanceRow>>(
-    COLUMN_DEFS.map((c) => c.key)
+    () => ensureContractExtNoAfterVessel(COLUMN_DEFS.map((c) => c.key)),
   )
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(
-    Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultVisible !== false]))
+    Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, columnDefaultVisible(c, 'all')])),
   )
   const [dragColId, setDragColId] = useState<string | null>(null)
   const [draggingColumn, setDraggingColumn] = useState<string | null>(null)
@@ -812,9 +902,12 @@ export default function ShippingPerformancePage() {
     const day = String(d.getDate()).padStart(2, '0')
     return `${d.getFullYear()}-${m}-${day}`
   })
-  const [perfDashMode, setPerfDashMode] = useState<PerfDashMode>('eta')
+  const [perfCardFilter, setPerfCardFilter] = useState<ShippingPerfCardFilter>('ongoingWithEta')
+  const perfDashMode = useMemo(() => perfDataModeFromCard(perfCardFilter), [perfCardFilter])
   const [drilldownFilters, setDrilldownFilters] = useState<DrilldownFilters>(EMPTY_DRILLDOWN_FILTERS)
   const [tableViewMode, setTableViewMode] = useState<TableViewMode>('all')
+  const [vesselModalOpen, setVesselModalOpen] = useState(false)
+  const [selectedVesselData, setSelectedVesselData] = useState<VesselHistoryModalSelection | null>(null)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -912,19 +1005,49 @@ export default function ShippingPerformancePage() {
     [baseFilteredRows, selectedIncoterms, selectedProducts, selectedGroupPlants, selectedVessels, statusFilter, dateFrom, dateTo, searchTerm],
   )
 
-  const etaFilteredData = useMemo(
-    () => applyPerfModeFilter(globallyFilteredRows, 'eta'),
+  /** Vessel history — Open + Close in toolbar scope; ignores summary card & status filter. */
+  const vesselHistorySourceRows = useMemo(
+    () =>
+      applyGlobalFiltersToRows(baseFilteredRows, {
+        selectedIncoterms,
+        selectedProducts,
+        selectedGroupPlants,
+        selectedVessels,
+        statusFilter: 'All',
+        dateFrom,
+        dateTo,
+        searchTerm,
+      }),
+    [
+      baseFilteredRows,
+      selectedIncoterms,
+      selectedProducts,
+      selectedGroupPlants,
+      selectedVessels,
+      dateFrom,
+      dateTo,
+      searchTerm,
+    ],
+  )
+
+  const ongoingWithEtaFilteredData = useMemo(
+    () => applyPerfCardFilter(globallyFilteredRows, 'ongoingWithEta'),
     [globallyFilteredRows],
   )
 
-  const ataFilteredData = useMemo(
-    () => applyPerfModeFilter(globallyFilteredRows, 'ata'),
+  const ongoingNoEtaFilteredData = useMemo(
+    () => applyPerfCardFilter(globallyFilteredRows, 'ongoingNoEta'),
+    [globallyFilteredRows],
+  )
+
+  const closeFilteredData = useMemo(
+    () => applyPerfCardFilter(globallyFilteredRows, 'close'),
     [globallyFilteredRows],
   )
 
   const perfModeFilteredRows = useMemo(
-    () => applyPerfModeFilter(globallyFilteredRows, perfDashMode),
-    [globallyFilteredRows, perfDashMode],
+    () => applyPerfCardFilter(globallyFilteredRows, perfCardFilter),
+    [globallyFilteredRows, perfCardFilter],
   )
 
   // Step C: apply drilldown node selection (product → plant → incoterm → vessel)
@@ -933,40 +1056,64 @@ export default function ShippingPerformancePage() {
     [perfModeFilteredRows, drilldownFilters],
   )
 
-  const etaDatasetBundle = useMemo(
-    () => buildPerfDatasetBundle(etaFilteredData, 'eta', globallyFilteredRows),
-    [etaFilteredData, globallyFilteredRows],
+  const ongoingWithEtaDatasetBundle = useMemo(
+    () => buildPerfDatasetBundle(ongoingWithEtaFilteredData, 'ongoingWithEta', globallyFilteredRows),
+    [ongoingWithEtaFilteredData, globallyFilteredRows],
   )
 
-  const ataDatasetBundle = useMemo(
-    () => buildPerfDatasetBundle(ataFilteredData, 'ata', globallyFilteredRows),
-    [ataFilteredData, globallyFilteredRows],
+  const ongoingNoEtaDatasetBundle = useMemo(
+    () => buildPerfDatasetBundle(ongoingNoEtaFilteredData, 'ongoingNoEta', globallyFilteredRows),
+    [ongoingNoEtaFilteredData, globallyFilteredRows],
   )
 
-  const activeDatasetBundle = useMemo(
-    () => (perfDashMode === 'eta' ? etaDatasetBundle : ataDatasetBundle),
-    [perfDashMode, etaDatasetBundle, ataDatasetBundle],
+  const closeDatasetBundle = useMemo(
+    () => buildPerfDatasetBundle(closeFilteredData, 'close', globallyFilteredRows),
+    [closeFilteredData, globallyFilteredRows],
   )
+
+  const activeDatasetBundle = useMemo(() => {
+    switch (perfCardFilter) {
+      case 'ongoingNoEta':
+        return ongoingNoEtaDatasetBundle
+      case 'close':
+        return closeDatasetBundle
+      default:
+        return ongoingWithEtaDatasetBundle
+    }
+  }, [
+    perfCardFilter,
+    ongoingWithEtaDatasetBundle,
+    ongoingNoEtaDatasetBundle,
+    closeDatasetBundle,
+  ])
 
   const perfTree = activeDatasetBundle.tree
 
-  const etaPerformanceSummary = etaDatasetBundle.summary
-  const ataPerformanceSummary = ataDatasetBundle.summary
+  const ongoingWithEtaPerformanceSummary = ongoingWithEtaDatasetBundle.summary
+  const ongoingNoEtaPerformanceSummary = ongoingNoEtaDatasetBundle.summary
+  const closePerformanceSummary = closeDatasetBundle.summary
 
   useEffect(() => {
     setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
     setCurrentPage(1)
-  }, [perfDashMode, selectedIncoterms, selectedProducts, selectedGroupPlants, selectedVessels, statusFilter, dateFrom, dateTo, searchTerm])
+  }, [perfCardFilter, selectedIncoterms, selectedProducts, selectedGroupPlants, selectedVessels, statusFilter, dateFrom, dateTo, searchTerm])
 
   useEffect(() => {
     const allKeys = COLUMN_DEFS.map((col) => col.key)
     setColumnOrder((prev) => {
       const deduped = prev.filter((key) => allKeys.includes(key))
       const missing = allKeys.filter((key) => !deduped.includes(key))
-      const next = [...deduped, ...missing]
+      const next = ensureContractExtNoAfterVessel([...deduped, ...missing])
       if (prev.length === next.length && prev.every((key, index) => key === next[index])) return prev
       return next
     })
+  }, [])
+
+  const activateByVesselTableView = useCallback(() => {
+    setTableViewMode('by_vessel')
+    setColumnOrder((prev) => ensureContractExtNoAfterVessel(prev))
+    setVisibleColumns((prev) => applyByVesselColumnDefaults(prev))
+    setCurrentPage(1)
   }, [])
 
   useEffect(() => {
@@ -997,37 +1144,134 @@ export default function ShippingPerformancePage() {
   }, [])
 
   const summaryCardClass = useCallback(
-    (mode: PerfDashMode) => {
-      const selected = perfDashMode === mode
-      const ring = mode === 'eta' ? 'ring-blue-500' : 'ring-indigo-500'
-      return `rounded-xl border bg-white p-5 shadow-sm text-left transition-all hover:shadow-md cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-300 ${
-        selected ? `ring-2 ${ring}` : ''
-      }`
+    (card: ShippingPerfCardFilter) => {
+      const selected = perfCardFilter === card
+      const ringByCard: Record<ShippingPerfCardFilter, string> = {
+        ongoingWithEta: 'ring-blue-500',
+        ongoingNoEta: 'ring-amber-500',
+        close: 'ring-indigo-500',
+      }
+      const widthClass =
+        card === 'ongoingNoEta'
+          ? 'w-full xl:w-1/4 xl:shrink-0'
+          : 'w-full xl:min-w-0 xl:flex-1'
+      return cn(
+        'flex min-h-full flex-col self-stretch rounded-xl border bg-white p-3 shadow-sm text-left transition-all hover:shadow-md cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-300',
+        widthClass,
+        selected && `ring-2 ${ringByCard[card]}`,
+      )
     },
-    [perfDashMode],
+    [perfCardFilter],
   )
 
-  const renderSummaryGapMetrics = (summary: PerVesselPerfSummary, mode: PerfDashMode) => {
-    const arrivalLabel = mode === 'ata' ? 'ATA' : 'ETA'
-    const fmt = (days: number) => formatAvgDays(Math.abs(days))
-    const metricValueClass = (days: number) =>
-      `font-semibold ${signedCycleDaysClass(days)}`
+  const renderSummaryPrimaryTotals = (
+    card: ShippingPerfCardFilter,
+    summary: PerVesselPerfSummary,
+  ) => {
+    const { main: titleMain, sub: titleSub } = shippingPerfCardTitleLines(card)
     return (
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
-        <span>Avg Loading {arrivalLabel}-ETR: <span className={metricValueClass(summary.avgLoadingEtaEtr)}>{fmt(summary.avgLoadingEtaEtr)}</span></span>
-        <span>Avg Loading {arrivalLabel}-ETB: <span className={metricValueClass(summary.avgLoadingEtaEtb)}>{fmt(summary.avgLoadingEtaEtb)}</span></span>
-        <span>Avg Loading ETB-ETC: <span className={metricValueClass(summary.avgLoadingEtbEtc)}>{fmt(summary.avgLoadingEtbEtc)}</span></span>
-        <span>Avg Discharge {arrivalLabel}-ETB: <span className={metricValueClass(summary.avgDischargeEtaEtb)}>{fmt(summary.avgDischargeEtaEtb)}</span></span>
-        <span>Avg Discharge ETB-ETC: <span className={metricValueClass(summary.avgDischargeEtbEtc)}>{fmt(summary.avgDischargeEtbEtc)}</span></span>
-        <span>Avg Total: <span className={metricValueClass(summary.avgTotalDelta)}>{fmt(summary.avgTotalDelta)}</span></span>
+    <>
+      <div className="mb-1">
+        <span className="block text-sm font-semibold leading-snug text-gray-800">{titleMain}</span>
+        {titleSub ? (
+          <span className="mt-0.5 block text-[10px] font-medium leading-tight text-gray-500">
+            {titleSub}
+          </span>
+        ) : null}
+      </div>
+      <div className="text-xs leading-tight text-gray-500">Total Vessels</div>
+      <div className="text-2xl font-bold leading-tight tabular-nums text-gray-900">
+        {summary.vesselCount.toLocaleString('en-US')}
+      </div>
+      <div className="mt-0.5 text-xs leading-tight text-gray-500">
+        Contracts:{' '}
+        <span className="font-semibold text-gray-800">
+          {summary.contractCount.toLocaleString('en-US')}
+        </span>
+      </div>
+    </>
+    )
+  }
+
+  const renderSummaryGapMetrics = (summary: PerVesselPerfSummary, card: ShippingPerfCardFilter) => {
+    const labelMode = card === 'close' ? 'actual' : 'estimated'
+    const fmt = (days: number | null) =>
+      formatAvgDays(days == null || !Number.isFinite(days) ? null : Math.abs(days))
+    const metricValueClass = (days: number | null) =>
+      cn('text-xs font-semibold text-gray-900 tabular-nums', signedCycleDaysClass(days))
+    const metrics: { key: ShippingSummaryMetricKey; value: number | null }[] = [
+      { key: 'loadingEtr', value: summary.avgLoadingEtaEtr },
+      { key: 'loadingEtb', value: summary.avgLoadingEtaEtb },
+      { key: 'loadingEtc', value: summary.avgLoadingEtbEtc },
+      { key: 'dischargeEtb', value: summary.avgDischargeEtaEtb },
+      { key: 'dischargeEtc', value: summary.avgDischargeEtbEtc },
+      { key: 'total', value: summary.avgTotalDelta },
+    ]
+
+    return (
+      <div className="flex w-full min-w-0 flex-col gap-y-1.5">
+        {metrics.map(({ key, value }) => {
+          const shortLabel = getShippingSummaryMetricLabel(key, labelMode, 'short')
+          const fullLabel = getShippingSummaryMetricLabel(key, labelMode, 'full')
+          const isTotal = key === 'total'
+          return (
+            <div
+              key={key}
+              className={cn(
+                'flex w-full min-w-0 flex-row items-center justify-between gap-2',
+                isTotal && 'mt-0.5 border-t border-gray-200 pt-1.5',
+              )}
+            >
+              <span
+                className="min-w-0 shrink text-xs text-gray-500 whitespace-nowrap"
+                title={fullLabel}
+              >
+                {shortLabel}
+              </span>
+              <span className={cn('shrink-0', metricValueClass(value))}>{fmt(value)}</span>
+            </div>
+          )
+        })}
       </div>
     )
   }
 
-  const tableScopeDescription = useMemo(() => {
-    const parts: string[] = [
-      perfDashMode === 'eta' ? 'On Going' : 'Close',
-    ]
+  /** Section 1 — asymmetrical layout: compact no-ETA card; expanded cards with inline averages. */
+  const renderShippingSummaryCardBody = (
+    card: ShippingPerfCardFilter,
+    summary: PerVesselPerfSummary,
+  ) => {
+    if (card === 'ongoingNoEta') {
+      return (
+        <div className="flex h-full min-h-full w-full flex-1 flex-col justify-center text-left">
+          {renderSummaryPrimaryTotals(card, summary)}
+        </div>
+      )
+    }
+
+    return (
+      <div className="flex h-full min-h-full w-full min-w-0 flex-row items-center gap-4 text-left">
+        <div className="w-[32%] shrink-0 border-r border-gray-200 pr-4 xl:w-[34%]">
+          {renderSummaryPrimaryTotals(card, summary)}
+        </div>
+        <div className="min-w-0 flex-1">{renderSummaryGapMetrics(summary, card)}</div>
+      </div>
+    )
+  }
+
+  /** Section 3 column headers — recompute when Close/Open card or global status filter changes. */
+  const tableLabelMode = useMemo(
+    () => resolveShippingPerfLabelMode(perfCardFilter, statusFilter),
+    [perfCardFilter, statusFilter],
+  )
+
+  const resolveTableColumnLabel = useCallback(
+    (baseLabel: string) => formatShippingPerfDisplayLabel(baseLabel, tableLabelMode),
+    [tableLabelMode],
+  )
+
+  const tableScopeParts = useMemo(() => {
+    const parts: string[] = [SHIPPING_PERF_CARD_TITLES[perfCardFilter]]
     if (selectedIncoterms.length > 0) {
       parts.push(`Incoterm: ${selectedIncoterms.map(displayGroupLabel).join(', ')}`)
     }
@@ -1045,9 +1289,9 @@ export default function ShippingPerformancePage() {
     if (drilldownFilters.incoterm) parts.push(`Incoterm node: ${displayGroupLabel(drilldownFilters.incoterm)}`)
     if (drilldownFilters.vessel) parts.push(`Vessel: ${drilldownFilters.vessel}`)
     if (statusFilter !== 'All') parts.push(`Status: ${statusFilter}`)
-    return parts.join(' · ')
+    return parts
   }, [
-    perfDashMode,
+    perfCardFilter,
     selectedIncoterms,
     selectedGroupPlants,
     selectedVessels,
@@ -1093,6 +1337,11 @@ export default function ShippingPerformancePage() {
     [columnOrder, visibleColumns, tableViewMode],
   )
 
+  const shippingPerfTableMinWidthPxValue = useMemo(
+    () => shippingPerfTableMinWidthPx(tableColumnKeys.map(String)),
+    [tableColumnKeys],
+  )
+
   const totalPages = Math.max(1, Math.ceil(tableRows.length / pageSize))
   const paginatedRows = useMemo(
     () => tableRows.slice((currentPage - 1) * pageSize, currentPage * pageSize),
@@ -1113,6 +1362,12 @@ export default function ShippingPerformancePage() {
     sortBy,
     sortDirection,
   ])
+
+  useEffect(() => {
+    if (tableViewMode !== 'by_vessel') return
+    setColumnOrder((prev) => ensureContractExtNoAfterVessel(prev))
+    setVisibleColumns((prev) => applyByVesselColumnDefaults(prev))
+  }, [tableViewMode])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1182,12 +1437,38 @@ export default function ShippingPerformancePage() {
                     Reset selection
                   </button>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="flex w-full flex-col gap-4 xl:flex-row xl:items-stretch">
+                  <div className="flex min-h-full w-full flex-col justify-center space-y-1.5 self-stretch rounded-xl border bg-white p-3 shadow-sm animate-pulse xl:w-1/4 xl:shrink-0">
+                    <div className="space-y-0.5">
+                      <div className="h-3.5 bg-gray-200 rounded w-20" />
+                      <div className="h-2.5 bg-gray-100 rounded w-14" />
+                    </div>
+                    <div className="h-3 bg-gray-100 rounded w-20" />
+                    <div className="h-7 bg-gray-200 rounded w-16" />
+                    <div className="h-3 bg-gray-100 rounded w-24" />
+                  </div>
                   {[0, 1].map((i) => (
-                    <div key={i} className="rounded-xl border bg-white p-5 shadow-sm animate-pulse">
-                      <div className="h-5 bg-gray-200 rounded w-40 mb-4" />
-                      <div className="h-8 bg-gray-200 rounded w-32 mb-3" />
-                      <div className="h-16 bg-gray-100 rounded" />
+                    <div
+                      key={i}
+                      className="flex min-h-full w-full min-w-0 flex-1 flex-row items-center gap-4 self-stretch rounded-xl border bg-white p-3 shadow-sm animate-pulse"
+                    >
+                      <div className="w-[32%] shrink-0 space-y-1 border-r border-gray-200 pr-4">
+                        <div className="space-y-0.5">
+                          <div className="h-3.5 bg-gray-200 rounded w-20" />
+                          <div className="h-2.5 bg-gray-100 rounded w-14" />
+                        </div>
+                        <div className="h-3 bg-gray-100 rounded w-20" />
+                        <div className="h-7 bg-gray-200 rounded w-16" />
+                        <div className="h-3 bg-gray-100 rounded w-24" />
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        {[0, 1, 2, 3, 4, 5].map((j) => (
+                          <div key={j} className="flex justify-between gap-2">
+                            <div className="h-3 flex-1 bg-gray-100 rounded" />
+                            <div className="h-3 w-12 bg-gray-200 rounded" />
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1206,47 +1487,38 @@ export default function ShippingPerformancePage() {
                   Reset selection
                 </button>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="flex w-full flex-col gap-4 xl:flex-row xl:items-stretch">
                 <button
                   type="button"
                   onClick={() => {
-                    setPerfDashMode('eta')
+                    setPerfCardFilter('ongoingNoEta')
                     revealTableView()
                   }}
-                  className={summaryCardClass('eta')}
+                  className={summaryCardClass('ongoingNoEta')}
                 >
-                  <div className="mb-3">
-                    <span className="text-base font-semibold text-gray-800">On Going</span>
-                  </div>
-                  <div className="text-sm text-gray-500 mb-1">Total Vessels</div>
-                  <div className="text-xl font-bold text-gray-900 mb-3">
-                    {etaPerformanceSummary.vesselCount.toLocaleString('en-US')}
-                  </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
-                    <span>Unique contracts: <span className="font-semibold text-gray-700">{etaPerformanceSummary.contractCount.toLocaleString('en-US')}</span></span>
-                  </div>
-                  {renderSummaryGapMetrics(etaPerformanceSummary, 'eta')}
+                  {renderShippingSummaryCardBody('ongoingNoEta', ongoingNoEtaPerformanceSummary)}
                 </button>
 
                 <button
                   type="button"
                   onClick={() => {
-                    setPerfDashMode('ata')
+                    setPerfCardFilter('ongoingWithEta')
                     revealTableView()
                   }}
-                  className={summaryCardClass('ata')}
+                  className={summaryCardClass('ongoingWithEta')}
                 >
-                  <div className="mb-3">
-                    <span className="text-base font-semibold text-gray-800">Close</span>
-                  </div>
-                  <div className="text-sm text-gray-500 mb-1">Total Vessels</div>
-                  <div className="text-xl font-bold text-gray-900 mb-3">
-                    {ataPerformanceSummary.vesselCount.toLocaleString('en-US')}
-                  </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mb-2">
-                    <span>Unique contracts: <span className="font-semibold text-gray-700">{ataPerformanceSummary.contractCount.toLocaleString('en-US')}</span></span>
-                  </div>
-                  {renderSummaryGapMetrics(ataPerformanceSummary, 'ata')}
+                  {renderShippingSummaryCardBody('ongoingWithEta', ongoingWithEtaPerformanceSummary)}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPerfCardFilter('close')
+                    revealTableView()
+                  }}
+                  className={summaryCardClass('close')}
+                >
+                  {renderShippingSummaryCardBody('close', closePerformanceSummary)}
                 </button>
               </div>
             </div>
@@ -1259,6 +1531,7 @@ export default function ShippingPerformancePage() {
             <div>
               <CardTitle className="text-base">
                 {perfDashMode === 'eta' ? 'Performance Drilldown (ETA)' : 'Performance Drilldown (ATA)'}
+                <span className="font-normal text-gray-500"> · {SHIPPING_PERF_CARD_TITLES[perfCardFilter]}</span>
               </CardTitle>
               <div className="text-sm text-gray-600 mt-1">
                 Navigate as a tree: <span className="font-medium">Product → Group Plant → Incoterm → Vessel</span>.
@@ -1290,7 +1563,7 @@ export default function ShippingPerformancePage() {
                     <p className="text-[11px] text-gray-500 mt-1 max-w-2xl">
                       Contract and vessel counts on each product card below are unique within that product only. The
                       same contract or vessel can appear on multiple product cards — do not add those numbers together;
-                      use the global total here (matches the selected On Going / Close card above).
+                      use the global total here (matches the selected summary card above).
                     </p>
                   </div>
                   <button
@@ -1513,18 +1786,32 @@ export default function ShippingPerformancePage() {
           <CardHeader className="space-y-3">
             <div>
               <CardTitle>{tableViewMode === 'all' ? 'All Shipments' : 'By Vessel'}</CardTitle>
-              <p className="text-sm text-gray-500 mt-1">
-                {summaryLoading
-                  ? 'Loading shipments…'
-                  : !shippingTableEnabled
-                  ? 'Click All Data to load the shipment list'
-                  : tableViewMode === 'all'
-                  ? `${tableRows.length} total shipments | Showing ${paginatedRows.length} on this page`
-                  : `${tableRows.length} vessel${tableRows.length === 1 ? '' : 's'} | Showing ${paginatedRows.length} on this page`}
-              </p>
-              {shippingTableEnabled && !summaryLoading && (
-                <p className="text-xs text-gray-500 mt-1">
-                  Active scope: {tableScopeDescription}
+              {summaryLoading ? (
+                <p className="text-xs text-gray-500 mt-1">Loading shipments…</p>
+              ) : !shippingTableEnabled ? (
+                <p className="text-xs text-gray-500 mt-1">Click All Data to load the shipment list</p>
+              ) : (
+                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                  <span className="whitespace-nowrap tabular-nums text-gray-700">
+                    <span className="font-semibold">{tableRows.length.toLocaleString('en-US')}</span>{' '}
+                    {tableViewMode === 'all' ? 'shipments' : `vessel${tableRows.length === 1 ? '' : 's'}`}
+                  </span>
+                  <span className="text-gray-400" aria-hidden>
+                    ·
+                  </span>
+                  <span className="whitespace-nowrap tabular-nums">
+                    Page {currentPage}/{totalPages} · {paginatedRows.length} rows
+                  </span>
+                  {tableScopeParts.length > 0 && (
+                    <>
+                      <span className="text-gray-400" aria-hidden>
+                        ·
+                      </span>
+                      <span className="whitespace-nowrap text-gray-600 font-medium">
+                        {tableScopeParts.join(' · ')}
+                      </span>
+                    </>
+                  )}
                 </p>
               )}
             </div>
@@ -1539,7 +1826,7 @@ export default function ShippingPerformancePage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setTableViewMode('by_vessel'); setCurrentPage(1) }}
+                  onClick={activateByVesselTableView}
                   className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tableViewMode === 'by_vessel' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
                 >
                   By Vessel
@@ -1587,7 +1874,13 @@ export default function ShippingPerformancePage() {
                         variant="ghost"
                         size="sm"
                         className="flex-1 text-xs h-7"
-                        onClick={() => setVisibleColumns(Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultVisible !== false])))}
+                        onClick={() =>
+                          setVisibleColumns(
+                            Object.fromEntries(
+                              COLUMN_DEFS.map((c) => [c.key, columnDefaultVisible(c, tableViewMode)]),
+                            ),
+                          )
+                        }
                       >
                         Reset
                       </Button>
@@ -1624,7 +1917,7 @@ export default function ShippingPerformancePage() {
                                 checked={Boolean(visibleColumns[String(col.key)])}
                                 onCheckedChange={() => onToggleColumn(col.key)}
                               />
-                              <span className="truncate">{resolvePerfColumnLabel(col.label, perfDashMode)}</span>
+                              <span className="truncate">{resolveTableColumnLabel(col.label)}</span>
                             </label>
                           </div>
                         )
@@ -1653,7 +1946,7 @@ export default function ShippingPerformancePage() {
                   <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages}>
                     Next
                   </Button>
-                  <span className="text-sm text-gray-500 ml-1">
+                  <span className="text-xs text-gray-500 ml-1 tabular-nums">
                     Page {currentPage} of {totalPages}
                   </span>
                 </div>
@@ -1674,11 +1967,11 @@ export default function ShippingPerformancePage() {
               </div>
             ) : (
             <>
-            <div className="border rounded-md">
+            <div className="border rounded-lg overflow-hidden">
               {/* Top scrollbar */}
               <div
                 ref={topScrollRef}
-                className="overflow-x-auto border-b bg-white rounded-t-md"
+                className="overflow-x-auto border-b bg-white"
                 onScroll={() => {
                   if (isSyncingScroll.current) return
                   const top = topScrollRef.current
@@ -1706,31 +1999,68 @@ export default function ShippingPerformancePage() {
                   window.requestAnimationFrame(() => { isSyncingScroll.current = false })
                 }}
               >
-                <table className="min-w-[1300px] w-full text-sm">
-                  <thead className="bg-gray-50">
-                    <tr className="border-b">
+                <div
+                  className="min-w-0"
+                  style={{ minWidth: shippingPerfTableMinWidthPxValue }}
+                >
+                <table className="w-full table-fixed border-collapse">
+                  <colgroup>
+                    {tableColumnKeys.map((key) => (
+                      <col
+                        key={String(key)}
+                        style={{ width: shippingPerfTableColumnWidthPx(String(key)) }}
+                      />
+                    ))}
+                  </colgroup>
+                  <thead>
+                    <tr className={SHIPPING_PERF_TABLE_HEADER_ROW_CLASS}>
                       {tableColumnKeys.map((key) => {
                         const col = COLUMN_MAP[String(key)]
-                        const columnLabel = resolvePerfColumnLabel(col.label, perfDashMode)
-                        const columnTooltip = resolvePerfColumnTooltip(col.tooltip, perfDashMode)
+                        const columnLabel = resolveTableColumnLabel(col.label)
+                        const columnTooltip = resolvePerfColumnTooltip(col.tooltip, tableLabelMode)
                         const isSorted = sortBy === key
                         const headerButton = (
-                          <button
-                            type="button"
-                            className={`inline-flex items-center gap-1 ${columnTooltip ? 'cursor-help' : ''}`}
-                            onClick={() => onHeaderSort(key)}
-                            title={columnTooltip ? undefined : 'Click to sort, drag to reorder'}
+                          <div
+                            className={cn(
+                              'flex min-w-0 max-w-full items-start gap-1',
+                              columnTooltip ? 'cursor-help' : '',
+                            )}
                           >
-                            <span>{columnLabel}</span>
-                            <span className="text-xs text-gray-500">
-                              {isSorted ? (sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : null}
-                            </span>
-                          </button>
+                            <button
+                              type="button"
+                              className="min-w-0 flex-1 text-left"
+                              onClick={() => onHeaderSort(key)}
+                              title={columnTooltip ? undefined : 'Click to sort, drag to reorder'}
+                            >
+                              <span className="block leading-snug whitespace-normal break-words [overflow-wrap:anywhere]">
+                                {columnLabel}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              className="shrink-0 p-0.5 rounded text-gray-500 hover:bg-gray-200"
+                              onClick={() => onHeaderSort(key)}
+                              title="Sort"
+                            >
+                              {isSorted ? (
+                                sortDirection === 'asc' ? (
+                                  <ArrowUp className="h-3 w-3" />
+                                ) : (
+                                  <ArrowDown className="h-3 w-3" />
+                                )
+                              ) : null}
+                            </button>
+                          </div>
                         )
                         return (
                           <th
                             key={String(key)}
-                            className="relative px-3 py-2 text-left font-medium whitespace-nowrap cursor-move select-none"
+                            scope="col"
+                            className={cn(
+                              'relative min-w-0 cursor-move select-none text-left font-semibold align-top',
+                              SHIPPING_PERF_TABLE_CELL_PAD,
+                              draggingColumn === String(key) && 'opacity-60',
+                            )}
                             draggable
                             onDragStart={() => setDraggingColumn(String(key))}
                             onDragEnd={() => setDraggingColumn(null)}
@@ -1756,55 +2086,142 @@ export default function ShippingPerformancePage() {
                       })}
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className={SHIPPING_PERF_TABLE_BODY_CLASS}>
                     {summaryLoading ? (
-                      <tr>
-                        <td colSpan={tableColumnKeys.length || 1} className="px-3 py-6 text-center text-gray-500">
+                      <tr className="bg-white">
+                        <td colSpan={tableColumnKeys.length || 1} className="px-4 py-10 text-center text-sm text-gray-500">
                           Loading shipping performance...
                         </td>
                       </tr>
                     ) : tableRows.length === 0 ? (
-                      <tr>
-                        <td colSpan={tableColumnKeys.length || 1} className="px-3 py-6 text-center text-gray-500">
+                      <tr className="bg-white">
+                        <td colSpan={tableColumnKeys.length || 1} className="px-4 py-10 text-center text-sm text-gray-500">
                           No data found
                         </td>
                       </tr>
                     ) : (
-                      paginatedRows.map((row) => (
-                        <tr key={row.id} className="border-t hover:bg-gray-50">
+                      paginatedRows.map((row, rowIdx) => {
+                        const stripeClass = rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                        return (
+                        <tr key={row.id} className={stripeClass}>
                           {tableColumnKeys.map((key) => {
                             const col = COLUMN_MAP[String(key)]
+                            const colKey = String(key)
                             const dataKey = resolvePerfTableDataKey(key, perfDashMode)
                             const rawValue = row[dataKey]
+                            const useTruncateTooltip = SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS.has(colKey)
+                            const truncateTooltip = useTruncateTooltip
+                              ? shippingPerfCellTooltipText(colKey, row)
+                              : null
+
+                            let cellContent: ReactNode
+                            if (key === 'vessel_name' && tableViewMode === 'by_vessel') {
+                              const vesselName = asDisplayValue(rawValue) || 'Unknown'
+                              cellContent = (
+                                <button
+                                  type="button"
+                                  className="w-full min-w-0 truncate text-left text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setSelectedVesselData({
+                                      vesselName,
+                                      vesselKey: normalizeVesselKey(rawValue),
+                                    })
+                                    setVesselModalOpen(true)
+                                  }}
+                                >
+                                  {vesselName}
+                                </button>
+                              )
+                            } else if (
+                              key === 'sto_qty' ||
+                              key === 'received_qty' ||
+                              key === 'outstanding_qty' ||
+                              key === 'contract_qty'
+                            ) {
+                              cellContent =
+                                rawValue === null || rawValue === undefined ? (
+                                  <span className="text-gray-400">-</span>
+                                ) : (
+                                  <span className="text-sm tabular-nums">
+                                    {(Number(rawValue) / 1000).toLocaleString('en-US', {
+                                      maximumFractionDigits: 2,
+                                    })}{' '}
+                                    MT
+                                  </span>
+                                )
+                            } else if (key === 'shipment_count') {
+                              cellContent = (
+                                <span className="text-sm font-medium tabular-nums">
+                                  {Number(rawValue ?? 0).toLocaleString('en-US')}
+                                </span>
+                              )
+                            } else if (key === 'status') {
+                              cellContent = rawValue ? (
+                                <Badge className={cn('text-xs', getStatusColor(String(rawValue)))}>
+                                  {String(rawValue)}
+                                </Badge>
+                              ) : (
+                                <span className="text-sm text-gray-400">-</span>
+                              )
+                            } else if (col.type === 'number') {
+                              cellContent = (
+                                <NumberCell
+                                  value={rawValue}
+                                  isDeltaDays={
+                                    String(key).includes('delta') || String(dataKey).includes('delta')
+                                  }
+                                  decimalPlaces={
+                                    tableViewMode === 'by_vessel' &&
+                                    (String(key).includes('delta') || String(dataKey).includes('delta'))
+                                      ? 1
+                                      : undefined
+                                  }
+                                />
+                              )
+                            } else {
+                              const text = asDisplayValue(rawValue) || '-'
+                              cellContent = <span className="text-sm">{text}</span>
+                            }
+
                             return (
-                              <td key={`${row.id}-${String(key)}`} className="px-3 py-2 whitespace-nowrap">
-                                {(key === 'sto_qty' || key === 'received_qty' || key === 'outstanding_qty' || key === 'contract_qty')
-                                  ? (rawValue === null || rawValue === undefined
-                                      ? <span className="text-gray-400">-</span>
-                                      : <span>{(Number(rawValue) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT</span>)
-                                  : key === 'shipment_count'
-                                  ? <span className="font-medium">{Number(rawValue ?? 0).toLocaleString('en-US')}</span>
-                                  : key === 'status'
-                                  ? (rawValue
-                                      ? <Badge className={getStatusColor(String(rawValue))}>{String(rawValue)}</Badge>
-                                      : <span className="text-gray-400">-</span>)
-                                  : col.type === 'number'
-                                  ? (
-                                    <NumberCell
-                                      value={rawValue}
-                                      isDeltaDays={String(key).includes('delta') || String(dataKey).includes('delta')}
-                                      decimalPlaces={tableViewMode === 'by_vessel' && (String(key).includes('delta') || String(dataKey).includes('delta')) ? 1 : undefined}
-                                    />
-                                  )
-                                  : asDisplayValue(rawValue) || '-'}
+                              <td
+                                key={`${row.id}-${colKey}`}
+                                className={cn(
+                                  'min-w-0 align-middle',
+                                  SHIPPING_PERF_TABLE_CELL_PAD,
+                                  stripeClass,
+                                )}
+                              >
+                                <div
+                                  className={cn(
+                                    'flex min-w-0 max-w-full items-center',
+                                    SHIPPING_PERF_TABLE_ROW_MIN_H,
+                                  )}
+                                >
+                                  {useTruncateTooltip ? (
+                                    <ContractPerfTruncatedCell
+                                      tooltip={truncateTooltip}
+                                      className="w-full"
+                                    >
+                                      {cellContent}
+                                    </ContractPerfTruncatedCell>
+                                  ) : (
+                                    <div className="min-w-0 max-w-full truncate text-sm">
+                                      {cellContent}
+                                    </div>
+                                  )}
+                                </div>
                               </td>
                             )
                           })}
                         </tr>
-                      ))
+                        )
+                      })
                     )}
                   </tbody>
                 </table>
+                </div>
               </div>
             </div>
 
@@ -1816,6 +2233,16 @@ export default function ShippingPerformancePage() {
           </CardContent>
         </Card>
         </div>
+
+        <VesselHistoryModal
+          open={vesselModalOpen}
+          onClose={() => {
+            setVesselModalOpen(false)
+            setSelectedVesselData(null)
+          }}
+          selection={selectedVesselData}
+          sourceRows={vesselHistorySourceRows}
+        />
       </div>
     </Layout>
   )

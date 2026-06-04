@@ -130,6 +130,19 @@ cd /opt/klip && bash docs/scripts/staging-deploy-frontend.sh
 
 ---
 
+## Local dev (agent / laptop — otomatis)
+
+Setelah perubahan kode, rebuild lokal (bukan SIT):
+
+```powershell
+cd D:\Project\Klip
+.\scripts\deploy-local.ps1 -Target frontend   # atau backend / all
+```
+
+Aturan agent: `.cursor/rules/klip-local-deploy.mdc` — deploy lokal otomatis; SIT manual via PuTTY.
+
+---
+
 ## Rebuild hanya frontend (tanpa pull)
 
 Di server **172.28.92.56**:

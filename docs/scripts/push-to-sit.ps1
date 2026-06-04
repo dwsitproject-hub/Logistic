@@ -9,7 +9,7 @@
 #   .\docs\scripts\push-to-sit.ps1 -SkipCommit   # hanya push (sudah commit)
 
 param(
-  [string]$Message = "fix(contract-perf): SAP-strict cash/DP cycles, ETA today fallback, linked tree alignment",
+  [string]$Message = "feat(shipping-perf): summary cards, vessel history modal, table UI, status partition",
   [switch]$SkipCommit,
   [string]$Branch = "SIT"
 )
