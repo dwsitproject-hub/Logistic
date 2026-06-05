@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import logger from '../utils/logger';
+import { query } from '../database/connection';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -61,5 +62,43 @@ export const authorize = (...roles: string[]) => {
 
     next();
   };
+};
+
+/** SAP Import Management — ADMIN/MANAGEMENT, or LOGISTICS with level Admin only. */
+export const authorizeSapImportsView = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  if (!req.user) {
+    res.status(401).json({
+      success: false,
+      error: { message: 'Unauthorized' },
+    });
+    return;
+  }
+
+  if (['ADMIN', 'MANAGEMENT'].includes(req.user.role)) {
+    next();
+    return;
+  }
+
+  if (req.user.role === 'LOGISTICS') {
+    try {
+      const result = await query('SELECT level FROM users WHERE id = $1', [req.user.id]);
+      const level = String(result.rows[0]?.level ?? '').trim().toUpperCase();
+      if (level === 'ADMIN') {
+        next();
+        return;
+      }
+    } catch (error) {
+      logger.error('authorizeSapImportsView level lookup failed:', error);
+    }
+  }
+
+  res.status(403).json({
+    success: false,
+    error: { message: 'Insufficient permissions' },
+  });
 };
 

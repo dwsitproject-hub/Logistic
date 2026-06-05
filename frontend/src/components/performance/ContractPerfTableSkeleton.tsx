@@ -71,6 +71,95 @@ export function ContractPerfTableSkeleton({
   )
 }
 
+export type ContractTableBodySkeletonProps = {
+  columnCount: number
+  rowCount?: number
+  actionsColMinWidth?: 'compact' | 'wide'
+  /** When false, skeleton rows match tables without a trailing Actions column. */
+  showActionsColumn?: boolean
+}
+
+/** Placeholder rows inside an existing <tbody> — keeps <thead> visible during refetch. */
+export function ContractTableBodySkeleton({
+  columnCount,
+  rowCount = 8,
+  actionsColMinWidth = 'wide',
+  showActionsColumn = true,
+}: ContractTableBodySkeletonProps) {
+  const cols = Math.max(1, columnCount)
+  const actionsMin = actionsColMinWidth === 'compact' ? 'min-w-[52px]' : 'min-w-[160px]'
+
+  return (
+    <>
+      {Array.from({ length: rowCount }).map((_, idx) => {
+        const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+        return (
+          <tr key={`sk-row-${idx}`} className={stripeClass} aria-hidden>
+            {Array.from({ length: cols }).map((__, colIdx) => (
+              <td
+                key={`sk-${idx}-${colIdx}`}
+                className={`min-w-0 align-middle px-2 py-1.5 ${stripeClass}`}
+              >
+                <div className="flex items-center min-h-[32px] min-w-0">
+                  <div
+                    className={`h-4 bg-gray-200 rounded animate-pulse ${
+                      colIdx % 3 === 0 ? 'w-full max-w-[128px]' : colIdx % 3 === 1 ? 'w-3/4' : 'w-1/2'
+                    }`}
+                  />
+                </div>
+              </td>
+            ))}
+            {showActionsColumn ? (
+              <td
+                className={`sticky right-0 z-10 border-l border-gray-200 align-middle px-2 py-1.5 ${stripeClass} ${actionsMin}`}
+              >
+                <div className="flex items-center justify-end gap-2">
+                  <div className="h-8 w-8 bg-gray-200 rounded animate-pulse shrink-0" />
+                  {actionsColMinWidth === 'wide' ? (
+                    <>
+                      <div className="h-8 w-8 bg-gray-200 rounded animate-pulse shrink-0" />
+                      <div className="h-8 w-8 bg-gray-200 rounded animate-pulse shrink-0" />
+                    </>
+                  ) : null}
+                </div>
+              </td>
+            ) : null}
+          </tr>
+        )
+      })}
+    </>
+  )
+}
+
+/** Mobile card placeholders while Section 3 data loads. */
+export function ContractPerfTableMobileSkeleton({
+  rowCount = 6,
+  className,
+}: {
+  rowCount?: number
+  className?: string
+}) {
+  return (
+    <div className={cn('space-y-3', className)} role="status" aria-busy="true" aria-label="Loading contracts">
+      {Array.from({ length: rowCount }).map((_, i) => (
+        <div key={i} className="border rounded-lg p-4 space-y-3 bg-white">
+          <div className="flex items-center gap-3">
+            <div className="h-5 w-5 shrink-0 rounded bg-gray-200 animate-pulse" />
+            <div className="h-5 flex-1 max-w-[200px] rounded bg-gray-200 animate-pulse" />
+            <div className="h-6 w-16 rounded-full bg-gray-200 animate-pulse" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="h-4 w-full rounded bg-gray-200 animate-pulse" />
+            <div className="h-4 w-full rounded bg-gray-200 animate-pulse" />
+            <div className="h-4 w-3/4 rounded bg-gray-200 animate-pulse" />
+            <div className="h-4 w-2/3 rounded bg-gray-200 animate-pulse" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** Section 3 CardHeader subtitle — matches compact “N contracts · Linked · … · Page · rows” line. */
 export function ContractPerfTableSubtitleSkeleton({ className }: { className?: string }) {
   return (

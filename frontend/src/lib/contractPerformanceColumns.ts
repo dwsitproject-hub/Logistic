@@ -106,6 +106,12 @@ export function mergeContractPerfColumnOrder(saved: string[], allIds: string[]):
   return [...primary, ...extras]
 }
 
+/** Section 3 compact table — shared by Contract Performance and Contracts pages. */
+export const CONTRACT_PERF_TABLE_CELL_PAD = 'px-2 py-1.5'
+export const CONTRACT_PERF_TABLE_ROW_MIN_H = 'min-h-[32px]'
+export const CONTRACT_PERF_TABLE_HEADER_ROW_CLASS =
+  'text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10'
+
 /** Section 3 compact table — fixed px widths (Contract Performance only). */
 export const CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   contract_date: 100,

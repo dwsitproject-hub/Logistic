@@ -17,7 +17,13 @@
     "migrate:sea-trucking-to-shipments": "cd backend && npm run migrate:sea-trucking-to-shipments",
     "cleanup:false-land-trucking": "cd backend && npm run cleanup:false-land-trucking",
     "cleanup:false-sea-shipments": "cd backend && npm run cleanup:false-sea-shipments",
-    "db:reset-test-data": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reset-test-data.ps1"
+    "db:reset-test-data": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reset-test-data.ps1",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:shipping-performance": "playwright test e2e/shipping-performance.spec.ts",
+    "test:e2e:shipping-performance:headed": "playwright test e2e/shipping-performance.spec.ts --headed",
+    "playwright:install": "playwright install chromium"
   },
   "keywords": [
     "logistics",
@@ -28,6 +34,7 @@
   "author": "KPN",
   "license": "MIT",
   "devDependencies": {
+    "@playwright/test": "^1.52.0",
     "concurrently": "^8.2.2"
   }
 }

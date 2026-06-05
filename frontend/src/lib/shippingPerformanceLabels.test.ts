@@ -48,13 +48,14 @@ describe('shippingPerfCardTitleLines', () => {
   it('splits On Going cards into main line and smaller sub line', () => {
     expect(shippingPerfCardTitleLines('ongoingNoEta')).toEqual({
       main: 'On Going',
-      sub: '(no ETA)',
+      sub: 'no ETA',
     })
     expect(shippingPerfCardTitleLines('ongoingWithEta')).toEqual({
       main: 'On Going',
-      sub: '(with ETA)',
+      sub: 'with ETA',
     })
     expect(shippingPerfCardTitleLines('close')).toEqual({ main: 'Close' })
+    expect(shippingPerfCardTitleLines('all')).toEqual({ main: 'All' })
   })
 })
 
@@ -68,5 +69,6 @@ describe('resolveShippingPerfLabelMode', () => {
     expect(resolveShippingPerfLabelMode('close', 'All')).toBe('actual')
     expect(resolveShippingPerfLabelMode('ongoingWithEta', 'All')).toBe('estimated')
     expect(resolveShippingPerfLabelMode('ongoingNoEta', 'All')).toBe('estimated')
+    expect(resolveShippingPerfLabelMode('all', 'All')).toBe('estimated')
   })
 })

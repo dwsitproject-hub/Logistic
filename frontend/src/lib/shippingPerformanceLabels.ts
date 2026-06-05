@@ -5,14 +5,16 @@
 export type ShippingPerfLabelMode = 'estimated' | 'actual'
 
 export type PerfDashMode = 'eta' | 'ata'
-export type ShippingPerfCardFilter = 'ongoingWithEta' | 'ongoingNoEta' | 'close'
+export type ShippingPerfCardFilter = 'all' | 'ongoingWithEta' | 'ongoingNoEta' | 'close'
 export type TableStatusFilter = 'All' | 'Open' | 'Closed'
 
 export function perfDataModeFromCard(card: ShippingPerfCardFilter): PerfDashMode {
-  return card === 'close' ? 'ata' : 'eta'
+  if (card === 'close') return 'ata'
+  return 'eta'
 }
 
 export const SHIPPING_PERF_CARD_TITLES: Record<ShippingPerfCardFilter, string> = {
+  all: 'All',
   ongoingWithEta: 'On Going (with ETA)',
   ongoingNoEta: 'On Going (no ETA)',
   close: 'Close',
@@ -24,11 +26,13 @@ export function shippingPerfCardTitleLines(
 ): { main: string; sub?: string } {
   switch (card) {
     case 'ongoingWithEta':
-      return { main: 'On Going', sub: '(with ETA)' }
+      return { main: 'On Going', sub: 'with ETA' }
     case 'ongoingNoEta':
-      return { main: 'On Going', sub: '(no ETA)' }
+      return { main: 'On Going', sub: 'no ETA' }
     case 'close':
       return { main: 'Close' }
+    case 'all':
+      return { main: 'All' }
   }
 }
 
@@ -39,7 +43,9 @@ export function resolveShippingPerfLabelMode(
 ): ShippingPerfLabelMode {
   if (statusFilter === 'Closed') return 'actual'
   if (statusFilter === 'Open') return 'estimated'
-  return perfCardFilter === 'close' ? 'actual' : 'estimated'
+  if (perfCardFilter === 'close') return 'actual'
+  if (perfCardFilter === 'all') return 'estimated'
+  return 'estimated'
 }
 
 /** Close: ETA→ATA and ETR/ETB/ETC→ATR/ATB/ATC. Open/All (estimated): unchanged. */

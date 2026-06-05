@@ -49,6 +49,12 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
                 ? `${digits.slice(0, 2)}/${digits.slice(2)}`
                 : `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`
           setDraft(next)
+          if (digits.length === 8) {
+            const iso = parseDdMmYyyyToIso(next)
+            if (iso && !(minIso && iso < minIso) && !(maxIso && iso > maxIso)) {
+              onChangeIso(iso)
+            }
+          }
         }}
         onPaste={(e) => {
           const text = e.clipboardData.getData('text')

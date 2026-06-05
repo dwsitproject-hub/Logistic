@@ -3,7 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { authenticateToken, authorize } from '../middleware/auth';
+import { authenticateToken, authorize, authorizeSapImportsView } from '../middleware/auth';
 import * as sapMasterV2Controller from '../controllers/sapMasterV2.controller';
 
 const router = Router();
@@ -59,14 +59,14 @@ router.post(
 router.get(
   '/imports',
   authenticateToken,
-  authorize('ADMIN', 'MANAGEMENT'),
+  authorizeSapImportsView,
   sapMasterV2Controller.getAllImports
 );
 
 router.get(
   '/imports/:importId',
   authenticateToken,
-  authorize('ADMIN', 'MANAGEMENT'),
+  authorizeSapImportsView,
   sapMasterV2Controller.getImportStatus
 );
 

@@ -4,7 +4,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
-import { BuyerCombobox } from '@/components/BuyerCombobox'
+// import { BuyerCombobox } from '@/components/BuyerCombobox' // restore when master unloading locations are ready
+// PlantSiteCombobox for loading_location — restore when master loading locations are ready
 import {
   AlertCircle,
   AlertTriangle,
@@ -33,6 +34,48 @@ const fmtQty = (val: string | number) => {
   const n = typeof val === 'number' ? val : parseFloat(String(val).replace(/,/g, '').trim())
   if (!Number.isFinite(n)) return String(val)
   return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: true })
+}
+
+/** Legacy per-day UI — restore when manual daily rows are needed again */
+const LEGACY_DAILY_DELIVERABLES_UI = false
+
+const enumerateInclusiveDates = (startIso: string, endIso: string): string[] => {
+  const startParts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startIso)
+  const endParts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(endIso)
+  if (!startParts || !endParts) return []
+  const start = new Date(Number(startParts[1]), Number(startParts[2]) - 1, Number(startParts[3]))
+  const end = new Date(Number(endParts[1]), Number(endParts[2]) - 1, Number(endParts[3]))
+  if (start.getTime() > end.getTime()) return []
+  const dates: string[] = []
+  for (let d = new Date(start); d.getTime() <= end.getTime(); d.setDate(d.getDate() + 1)) {
+    const yyyy = d.getFullYear()
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    dates.push(`${yyyy}-${mm}-${dd}`)
+  }
+  return dates
+}
+
+/** Distributes total MT evenly across inclusive date range; payload quantities are in Kg (calendar unit). */
+const buildDailyDeliverablesFromPlanning = (
+  startIso: string,
+  endIso: string,
+  totalMt: number,
+): Array<{ date: string; quantity_delivered: number }> => {
+  const dates = enumerateInclusiveDates(startIso, endIso)
+  if (dates.length === 0 || !Number.isFinite(totalMt) || totalMt <= 0) return []
+  const totalKg = totalMt * 1000
+  const numDays = dates.length
+  const perDay = Math.round((totalKg / numDays) * 100) / 100
+  let allocated = 0
+  return dates.map((date, idx) => {
+    if (idx === numDays - 1) {
+      const last = Math.round((totalKg - allocated) * 100) / 100
+      return { date, quantity_delivered: last }
+    }
+    allocated += perDay
+    return { date, quantity_delivered: perDay }
+  })
 }
 
 export const CreateTruckingOperationModal = memo(function CreateTruckingOperationModal({
@@ -83,6 +126,12 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     daily_deliverables: [] as DailyDeliverableDraft[],
   })
 
+  const [planning, setPlanning] = useState({
+    start_date: '',
+    end_date: '',
+    total_quantity_mt: '',
+  })
+
   const [contractValidation, setContractValidation] = useState<{
     checking: boolean
     exists: boolean
@@ -130,6 +179,10 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
           const buyerLabel = (cd.buyer || '').trim()
           if (buyerLabel) {
             setNewOperation((prev) => ({ ...prev, unloading_location: buyerLabel }))
+          }
+          const cargoReady = cd.cargo_readiness_date ? String(cd.cargo_readiness_date).slice(0, 10) : ''
+          if (cargoReady) {
+            setNewOperation((prev) => ({ ...prev, cargo_readiness_date: cargoReady }))
           }
         } else {
           setContractValidation({
@@ -234,6 +287,18 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       }
     }
 
+    if (!planning.start_date) errors.planning_start_date = 'Start Date (Planning) is required'
+    if (!planning.end_date) errors.planning_end_date = 'End Date (Planning) is required'
+    if (planning.start_date && planning.end_date && planning.end_date < planning.start_date) {
+      errors.planning_end_date = 'End Date cannot be before Start Date'
+    }
+    const totalMt = planning.total_quantity_mt
+      ? parseFloat(String(planning.total_quantity_mt).replace(/,/g, '').trim())
+      : NaN
+    if (!Number.isFinite(totalMt) || totalMt <= 0) {
+      errors.planning_total_quantity_mt = 'Total Quantity must be greater than 0'
+    }
+
     setFormErrors(errors)
     return Object.keys(errors).length === 0
   }
@@ -256,6 +321,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       status: 'PLANNED',
       daily_deliverables: [],
     })
+    setPlanning({ start_date: '', end_date: '', total_quantity_mt: '' })
     setContractValidation({ checking: false, exists: false, contractData: null, message: '' })
     setContractSearchTerm('')
     setContractSuggestions([])
@@ -266,40 +332,30 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   const handleCreateOperation = async () => {
     if (!validateForm()) return
 
-    const maxQty = newOperation.quantity_delivered
-      ? parseFloat(String(newOperation.quantity_delivered).replace(/,/g, '').trim())
-      : NaN
-    const rows = newOperation.daily_deliverables || []
-    if (rows.length > 0) {
-      let sum = 0
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i]
-        const d = (r.date || '').trim()
-        const qn = r.quantity ? parseFloat(String(r.quantity).replace(/,/g, '').trim()) : NaN
-        if (!d) { showNotification('error', `Row ${i + 1}: Date is required`); return }
-        if (!Number.isFinite(qn) || qn < 0) { showNotification('error', `Row ${i + 1}: Quantity must be a valid number`); return }
-        if (Number.isFinite(maxQty) && qn > maxQty) { showNotification('error', `Row ${i + 1}: Quantity cannot exceed Quantity Delivered (Kg)`); return }
-        sum += qn
-        if (Number.isFinite(maxQty) && sum > maxQty) { showNotification('error', 'Sum of daily quantities cannot exceed Quantity Delivered (Kg)'); return }
-      }
+    const totalMt = parseFloat(String(planning.total_quantity_mt).replace(/,/g, '').trim())
+    const generatedDaily = buildDailyDeliverablesFromPlanning(
+      planning.start_date,
+      planning.end_date,
+      totalMt,
+    )
+    if (generatedDaily.length === 0) {
+      showNotification('error', 'Invalid planning date range')
+      return
     }
+
+    const totalKg = totalMt * 1000
 
     setCreating(true)
     try {
       const payload = {
         ...newOperation,
         quantity_sent: newOperation.quantity_sent ? parseFloat(newOperation.quantity_sent) : null,
-        quantity_delivered: newOperation.quantity_delivered ? parseFloat(newOperation.quantity_delivered) : null,
+        quantity_delivered: totalKg,
         gain_loss_percentage: newOperation.gain_loss_percentage ? parseFloat(newOperation.gain_loss_percentage) : null,
         gain_loss_amount: newOperation.gain_loss_amount ? parseFloat(newOperation.gain_loss_amount) : null,
         oa_budget: newOperation.oa_budget ? parseFloat(newOperation.oa_budget) : null,
         oa_actual: newOperation.oa_actual ? parseFloat(newOperation.oa_actual) : null,
-        daily_deliverables: (newOperation.daily_deliverables || [])
-          .filter((r) => (r.date || '').trim() !== '' && (r.quantity || '').trim() !== '')
-          .map((r) => ({
-            date: String(r.date).slice(0, 10),
-            quantity_delivered: parseFloat(String(r.quantity).replace(/,/g, '').trim()),
-          })),
+        daily_deliverables: generatedDaily,
       }
 
       const response = await api.post('/trucking', payload)
@@ -320,18 +376,18 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
 
   if (!open) return null
 
-  const maxQty = newOperation.quantity_delivered
-    ? parseFloat(String(newOperation.quantity_delivered).replace(/,/g, '').trim())
-    : NaN
-  const sumQty = (newOperation.daily_deliverables || []).reduce((s, r) => {
-    const n = r.quantity ? parseFloat(String(r.quantity).replace(/,/g, '').trim()) : NaN
-    return s + (Number.isFinite(n) ? n : 0)
-  }, 0)
+  const planningDayCount =
+    planning.start_date && planning.end_date && planning.end_date >= planning.start_date
+      ? enumerateInclusiveDates(planning.start_date, planning.end_date).length
+      : 0
 
   const step1Done = contractValidation.exists
   const step2Done = Boolean(newOperation.location || newOperation.loading_location || newOperation.unloading_location)
   const step3Done = Boolean(contractValidation.contractData?.delivery_start_date)
   const cd = contractValidation.contractData
+  const cargoReadinessDisplay =
+    newOperation.cargo_readiness_date ||
+    (cd?.cargo_readiness_date ? String(cd.cargo_readiness_date).slice(0, 10) : '')
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
@@ -548,21 +604,27 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1.5">Loading Location</label>
-                    <PlantSiteCombobox
+                    <Input
                       value={newOperation.loading_location}
-                      onChange={(val) => { setNewOperation((prev) => ({ ...prev, loading_location: val })); clearFieldError('loading_location') }}
-                      className={formErrors.loading_location ? 'border-red-500' : ''}
-                      placeholder="Search loading location..."
+                      onChange={(e) => {
+                        setNewOperation((prev) => ({ ...prev, loading_location: e.target.value }))
+                        clearFieldError('loading_location')
+                      }}
+                      className={`h-9 ${formErrors.loading_location ? 'border-red-500' : ''}`}
+                      placeholder="Enter loading location..."
                     />
                     {formErrors.loading_location && <p className="text-xs mt-1 text-red-600">{formErrors.loading_location}</p>}
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1.5">Unloading Location</label>
-                    <BuyerCombobox
+                    <Input
                       value={newOperation.unloading_location}
-                      onChange={(val) => { setNewOperation((prev) => ({ ...prev, unloading_location: val })); clearFieldError('unloading_location') }}
-                      className={formErrors.unloading_location ? 'border-red-500' : ''}
-                      placeholder="Search buyer (unloading)..."
+                      onChange={(e) => {
+                        setNewOperation((prev) => ({ ...prev, unloading_location: e.target.value }))
+                        clearFieldError('unloading_location')
+                      }}
+                      className={`h-9 ${formErrors.unloading_location ? 'border-red-500' : ''}`}
+                      placeholder="Enter unloading location..."
                     />
                     {formErrors.unloading_location && <p className="text-xs mt-1 text-red-600">{formErrors.unloading_location}</p>}
                   </div>
@@ -608,11 +670,13 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1.5">
                       Cargo Readiness Date
+                      <span className="ml-1 font-normal text-gray-400">(dari contract)</span>
                     </label>
                     <DateInputDdMmYyyy
-                      valueIso={newOperation.cargo_readiness_date || ''}
-                      onChangeIso={(val) => setNewOperation((prev) => ({ ...prev, cargo_readiness_date: val }))}
-                      className={formErrors.cargo_readiness_date ? 'border-red-500' : ''}
+                      valueIso={cargoReadinessDisplay}
+                      onChangeIso={() => {}}
+                      disabled
+                      className={`bg-gray-100 cursor-not-allowed ${formErrors.cargo_readiness_date ? 'border-red-500' : ''}`}
                     />
                     {formErrors.cargo_readiness_date && (
                       <p className="text-xs mt-1 text-red-600">{formErrors.cargo_readiness_date}</p>
@@ -620,7 +684,101 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   </div>
                 </div>
 
-                {/* Daily Deliverables */}
+                {/* Simplified planning — auto-distributes to daily_deliverables on submit */}
+                <div className="rounded-lg border border-gray-200 overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+                    <div>
+                      <p className="text-xs font-semibold text-gray-700">Daily Planning Deliverables</p>
+                      <p className="text-[10px] text-gray-400 mt-0.5">
+                        Total quantity dibagi rata per hari antara Start dan End Date
+                      </p>
+                      {cd && Number.isFinite(Number(cd.outstanding_quantity)) && (
+                        <p className="text-[10px] text-amber-600 font-medium mt-0.5">
+                          Outstanding Qty: {fmtQty(Number(cd.outstanding_quantity))} Kg
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">
+                          Start Date (Planning)
+                        </label>
+                        <DateInputDdMmYyyy
+                          valueIso={planning.start_date}
+                          onChangeIso={(iso) => {
+                            setPlanning((prev) => ({ ...prev, start_date: iso }))
+                            clearFieldError('planning_start_date')
+                            clearFieldError('planning_end_date')
+                          }}
+                          className={`mt-1 ${formErrors.planning_start_date ? 'border-red-500' : ''}`}
+                        />
+                        {formErrors.planning_start_date && (
+                          <p className="text-xs mt-0.5 text-red-600">{formErrors.planning_start_date}</p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">
+                          End Date (Planning)
+                        </label>
+                        <DateInputDdMmYyyy
+                          valueIso={planning.end_date}
+                          onChangeIso={(iso) => {
+                            setPlanning((prev) => ({ ...prev, end_date: iso }))
+                            clearFieldError('planning_end_date')
+                          }}
+                          className={`mt-1 ${formErrors.planning_end_date ? 'border-red-500' : ''}`}
+                        />
+                        {formErrors.planning_end_date && (
+                          <p className="text-xs mt-0.5 text-red-600">{formErrors.planning_end_date}</p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">
+                          Total Quantity Delivered (MT)
+                        </label>
+                        <Input
+                          inputMode="decimal"
+                          value={planning.total_quantity_mt}
+                          onChange={(e) => {
+                            setPlanning((prev) => ({ ...prev, total_quantity_mt: e.target.value }))
+                            clearFieldError('planning_total_quantity_mt')
+                          }}
+                          onBlur={() => {
+                            const raw = String(planning.total_quantity_mt || '').replace(/,/g, '').trim()
+                            const n = parseFloat(raw)
+                            if (Number.isFinite(n)) {
+                              setPlanning((prev) => ({ ...prev, total_quantity_mt: fmtQty(n) }))
+                            }
+                          }}
+                          onFocus={() => {
+                            const raw = String(planning.total_quantity_mt || '').replace(/,/g, '').trim()
+                            setPlanning((prev) => ({ ...prev, total_quantity_mt: raw }))
+                          }}
+                          placeholder="0"
+                          className={`mt-1 h-9 ${formErrors.planning_total_quantity_mt ? 'border-red-500' : ''}`}
+                        />
+                        {formErrors.planning_total_quantity_mt && (
+                          <p className="text-xs mt-0.5 text-red-600">{formErrors.planning_total_quantity_mt}</p>
+                        )}
+                      </div>
+                    </div>
+                    {planningDayCount > 0 && (
+                      <div className="flex items-center justify-between mt-3 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs">
+                        <span className="text-gray-500">
+                          {planningDayCount} hari — qty harian dibagi rata saat submit
+                        </span>
+                        <span className="font-semibold tabular-nums text-gray-700">
+                          Total: {planning.total_quantity_mt || '0'} MT
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Legacy Daily Deliverables — restore with LEGACY_DAILY_DELIVERABLES_UI */}
+                {LEGACY_DAILY_DELIVERABLES_UI && (
                 <div className="rounded-lg border border-gray-200 overflow-hidden">
                   <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
                     <div>
@@ -737,14 +895,20 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                         {/* Qty summary */}
                         <div className="flex items-center justify-between mt-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs">
                           <span className="text-gray-500">Date is not restricted by Due Date range</span>
-                          <span className={`font-semibold tabular-nums ${Number.isFinite(maxQty) && sumQty > maxQty ? 'text-red-600' : 'text-gray-700'}`}>
-                            Total: {fmtQty(sumQty)}{Number.isFinite(maxQty) ? ` / ${fmtQty(maxQty)} Kg` : ' Kg'}
+                          <span className="font-semibold tabular-nums text-gray-700">
+                            Total: {fmtQty(
+                              (newOperation.daily_deliverables || []).reduce((s, r) => {
+                                const n = r.quantity ? parseFloat(String(r.quantity).replace(/,/g, '').trim()) : NaN
+                                return s + (Number.isFinite(n) ? n : 0)
+                              }, 0),
+                            )} Kg
                           </span>
                         </div>
                       </div>
                     )}
                   </div>
                 </div>
+                )}
               </div>
             </div>
 
@@ -764,9 +928,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       {newOperation.location}
                     </span>
                   )}
-                  {(newOperation.daily_deliverables || []).length > 0 && (
+                  {planningDayCount > 0 && (
                     <span className="flex items-center gap-1 rounded-full bg-violet-100 px-2.5 py-1 text-violet-700 font-medium">
-                      {(newOperation.daily_deliverables || []).length} hari direncanakan
+                      {planningDayCount} hari direncanakan
                     </span>
                   )}
                   {!contractValidation.exists && (

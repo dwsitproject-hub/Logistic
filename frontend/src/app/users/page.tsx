@@ -47,6 +47,7 @@ import {
 } from 'lucide-react'
 import api from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 
 interface User {
   id: string
@@ -57,6 +58,9 @@ interface User {
   level?: string
   transport_type?: string
   plant?: string
+  plants?: string[]
+  group_plants?: string[]
+  products?: string[]
   is_active: boolean
   is_first_login: boolean
   phone?: string
@@ -85,9 +89,10 @@ export default function UsersPage() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [currentUser, setCurrentUser] = useState<any>(null)
+  const [plantOptions, setPlantOptions] = useState<string[]>([])
+  const [productOptions, setProductOptions] = useState<string[]>([])
 
-  // Form states
-  const [formData, setFormData] = useState({
+  const emptyFormData = {
     username: '',
     email: '',
     password: '',
@@ -95,10 +100,14 @@ export default function UsersPage() {
     role: 'TRADING',
     level: 'Staff',
     transport_type: '',
-    plant: '',
+    plants: [] as string[],
+    products: [] as string[],
     phone: '',
     department: '',
-  })
+  }
+
+  // Form states
+  const [formData, setFormData] = useState(emptyFormData)
 
   const [resetPassword, setResetPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -126,13 +135,35 @@ export default function UsersPage() {
 
   const fetchData = async () => {
     try {
-      const [usersRes, rolesRes] = await Promise.all([
+      const [usersRes, rolesRes, groupPlantsRes, dashboardProductsRes, masterProductsRes] = await Promise.all([
         api.get('/users'),
         api.get('/roles'),
+        api.get('/contracts/filter-options/group-plants'),
+        api.get('/dashboard/filter-options/products'),
+        api.get('/products', { params: { page: 1, limit: 500 } }),
       ])
 
       setUsers(usersRes.data.data)
       setRoles(rolesRes.data.data)
+      const groupPlants = (groupPlantsRes.data?.data?.groupPlants ?? []) as string[]
+      setPlantOptions(
+        [...new Set(groupPlants.map((name) => String(name).trim()).filter(Boolean))].sort()
+      )
+
+      const productNames = new Set<string>()
+      const dashboardProducts = dashboardProductsRes.data?.data
+      if (Array.isArray(dashboardProducts)) {
+        dashboardProducts.forEach((name) => {
+          const trimmed = String(name).trim()
+          if (trimmed) productNames.add(trimmed)
+        })
+      }
+      const masterItems = (masterProductsRes.data?.data?.items ?? []) as Array<{ product_name: string }>
+      masterItems.forEach((row) => {
+        const trimmed = String(row.product_name ?? '').trim()
+        if (trimmed) productNames.add(trimmed)
+      })
+      setProductOptions([...productNames].sort())
     } catch (err) {
       console.error('Error fetching data:', err)
       setError('Failed to load users')
@@ -147,21 +178,14 @@ export default function UsersPage() {
     setSuccess('')
 
     try {
-      await api.post('/users', formData)
+      await api.post('/users', {
+        ...formData,
+        plants: showPlant ? formData.plants : [],
+        products: showPlant ? formData.products : [],
+      })
       setSuccess('User created successfully')
       setShowAddModal(false)
-      setFormData({
-        username: '',
-        email: '',
-        password: '',
-        full_name: '',
-        role: 'TRADING',
-        level: 'Staff',
-        transport_type: '',
-        plant: '',
-        phone: '',
-        department: '',
-      })
+      setFormData(emptyFormData)
       fetchData()
     } catch (err: any) {
       setError(err.response?.data?.error?.message || 'Failed to create user')
@@ -183,7 +207,8 @@ export default function UsersPage() {
         role: formData.role,
         level: formData.level,
         transport_type: showTransportType ? formData.transport_type : null,
-        plant: showPlant ? formData.plant : null,
+        plants: showPlant ? formData.plants : [],
+        products: showPlant ? formData.products : [],
         phone: formData.phone,
         department: formData.department,
         is_active: selectedUser.is_active,
@@ -245,7 +270,14 @@ export default function UsersPage() {
       role: user.role,
       level: user.level || 'Staff',
       transport_type: user.transport_type || '',
-      plant: user.plant || '',
+      plants: user.group_plants?.length
+        ? user.group_plants
+        : user.plants?.length
+          ? user.plants
+          : user.plant
+            ? [user.plant]
+            : [],
+      products: user.products ?? [],
       phone: user.phone || '',
       department: user.department || '',
     })
@@ -304,7 +336,7 @@ export default function UsersPage() {
               Manage Roles
             </Button>
             <Button onClick={() => {
-              setFormData({ username: '', email: '', password: '', full_name: '', role: 'TRADING', level: 'Staff', transport_type: '', plant: '', phone: '', department: '' })
+              setFormData(emptyFormData)
               setError('')
               setSuccess('')
               setShowAddModal(true)
@@ -358,7 +390,8 @@ export default function UsersPage() {
                     <TableHead>Role</TableHead>
                     <TableHead>Level</TableHead>
                     <TableHead>Transport Type</TableHead>
-                    <TableHead>Plant</TableHead>
+                    <TableHead>Group Plant</TableHead>
+                    <TableHead>Product</TableHead>
                     <TableHead>Department</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>First Login</TableHead>
@@ -368,7 +401,7 @@ export default function UsersPage() {
                 <TableBody>
                   {filteredUsers.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={10} className="text-center text-gray-500 py-8">
+                      <TableCell colSpan={11} className="text-center text-gray-500 py-8">
                         No users found
                       </TableCell>
                     </TableRow>
@@ -399,7 +432,16 @@ export default function UsersPage() {
                         </TableCell>
                         <TableCell>
                           <span className="text-sm text-gray-600">
-                            {user.plant || '-'}
+                            {(user.group_plants?.length
+                              ? user.group_plants.join(', ')
+                              : user.plants?.length
+                                ? user.plants.join(', ')
+                                : user.plant) || '-'}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-gray-600">
+                            {user.products?.length ? user.products.join(', ') : '-'}
                           </span>
                         </TableCell>
                         <TableCell>
@@ -559,7 +601,8 @@ export default function UsersPage() {
                         ...formData,
                         role: value,
                         transport_type: value === 'LOGISTICS' ? formData.transport_type : '',
-                        plant: ['LOGISTICS', 'TRADING'].includes(value) ? formData.plant : '',
+                        plants: ['LOGISTICS', 'TRADING'].includes(value) ? formData.plants : [],
+                        products: ['LOGISTICS', 'TRADING'].includes(value) ? formData.products : [],
                       })
                     }
                   >
@@ -576,7 +619,7 @@ export default function UsersPage() {
                   </Select>
                 </div>
 
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="level">Level *</Label>
                     <Select
@@ -624,15 +667,28 @@ export default function UsersPage() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="plant">Plant</Label>
-                    <Input
-                      id="plant"
-                      value={formData.plant}
-                      onChange={(e) => setFormData({ ...formData, plant: e.target.value })}
-                      disabled={!showPlant}
-                    />
-                  </div>
+                </div>
+
+                <div className={showPlant ? '' : 'opacity-50 pointer-events-none'}>
+                  <SearchableMultiSelect
+                    label="Group Plant"
+                    options={plantOptions}
+                    selected={formData.plants}
+                    onChange={(plants) => setFormData({ ...formData, plants })}
+                    placeholder="Select group plant(s)"
+                    emptyMessage="No group plants found"
+                  />
+                </div>
+
+                <div className={showPlant ? '' : 'opacity-50 pointer-events-none'}>
+                  <SearchableMultiSelect
+                    label="Product"
+                    options={productOptions}
+                    selected={formData.products}
+                    onChange={(products) => setFormData({ ...formData, products })}
+                    placeholder="Select products"
+                    emptyMessage="No products found"
+                  />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -723,7 +779,8 @@ export default function UsersPage() {
                         ...formData,
                         role: value,
                         transport_type: value === 'LOGISTICS' ? formData.transport_type : '',
-                        plant: ['LOGISTICS', 'TRADING'].includes(value) ? formData.plant : '',
+                        plants: ['LOGISTICS', 'TRADING'].includes(value) ? formData.plants : [],
+                        products: ['LOGISTICS', 'TRADING'].includes(value) ? formData.products : [],
                       })
                     }
                   >
@@ -740,7 +797,7 @@ export default function UsersPage() {
                   </Select>
                 </div>
 
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="edit_level">Level</Label>
                     <Select
@@ -788,15 +845,28 @@ export default function UsersPage() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="edit_plant">Plant</Label>
-                    <Input
-                      id="edit_plant"
-                      value={formData.plant}
-                      onChange={(e) => setFormData({ ...formData, plant: e.target.value })}
-                      disabled={!showPlant}
-                    />
-                  </div>
+                </div>
+
+                <div className={showPlant ? '' : 'opacity-50 pointer-events-none'}>
+                  <SearchableMultiSelect
+                    label="Group Plant"
+                    options={plantOptions}
+                    selected={formData.plants}
+                    onChange={(plants) => setFormData({ ...formData, plants })}
+                    placeholder="Select group plant(s)"
+                    emptyMessage="No group plants found"
+                  />
+                </div>
+
+                <div className={showPlant ? '' : 'opacity-50 pointer-events-none'}>
+                  <SearchableMultiSelect
+                    label="Product"
+                    options={productOptions}
+                    selected={formData.products}
+                    onChange={(products) => setFormData({ ...formData, products })}
+                    placeholder="Select products"
+                    emptyMessage="No products found"
+                  />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">

@@ -21,6 +21,18 @@ import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
 import { MasterLoadingPortCombobox } from '@/components/MasterLoadingPortCombobox'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
+import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
+import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
+import {
+  ContractPerfTableMobileSkeleton,
+  ContractPerfTableSubtitleSkeleton,
+  ContractTableBodySkeleton,
+} from '@/components/performance/ContractPerfTableSkeleton'
+import {
+  CONTRACT_PERF_TABLE_CELL_PAD,
+  CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
+  CONTRACT_PERF_TABLE_ROW_MIN_H,
+} from '@/lib/contractPerformanceColumns'
 import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { format } from 'date-fns'
@@ -38,6 +50,35 @@ function compactGridTrackMinPx(track: string): string {
   if (m) return `${m[1]}px`
   const px = track.match(/^(\d+)px$/)
   return px ? `${px[1]}px` : '96px'
+}
+
+type EtaBucketFilterKey = 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'
+
+const ETA_LOADING_FILTER_LABELS: Record<EtaBucketFilterKey, string> = {
+  MORE_THAN_7D: 'ETA Loading > 7D',
+  D_MINUS_2: 'ETA Loading D-2',
+  D: 'ETA Loading D',
+  DELAY: 'ETA Loading Delay',
+  NO_ETA: 'No ETA (Loading)',
+}
+
+const ETA_DISCHARGE_FILTER_LABELS: Record<EtaBucketFilterKey, string> = {
+  MORE_THAN_7D: 'ETA Discharge > 7D',
+  D_MINUS_2: 'ETA Discharge D-2',
+  D: 'ETA Discharge D',
+  DELAY: 'ETA Discharge Delay',
+  NO_ETA: 'No ETA (Discharge)',
+}
+
+const SHIPMENT_STATUS_LABELS: Record<string, string> = {
+  PLANNED: 'Planned',
+  IN_PROGRESS: 'In Progress',
+  LOADING: 'Loading',
+  IN_TRANSIT: 'In Transit',
+  ARRIVED: 'Arrived',
+  UNLOADING: 'Unloading',
+  COMPLETED: 'Completed',
+  CANCELLED: 'Cancelled',
 }
 
 const SHIPMENT_COLUMN_WIDTH_PX: Record<string, number> = {
@@ -412,10 +453,18 @@ function ShipmentsPageContent() {
   const [etaDischargeFilter, setEtaDischargeFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
   const [vesselFilter, setVesselFilter] = useState('')
   const [saving, setSaving] = useState(false)
-  const [selectedGroupPlants, setSelectedGroupPlants] = useState<string[]>([])
+  const {
+    selectedProducts,
+    setSelectedProducts,
+    selectedGroupPlants,
+    setSelectedGroupPlants,
+    userScopeReady,
+    resetUserScopeFilters,
+    handleProductsChange,
+    handleGroupPlantsChange,
+  } = useUserScopeFilterDefaults('shipments')
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
-  const [selectedProducts, setSelectedProducts] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
   
@@ -652,7 +701,10 @@ function ShipmentsPageContent() {
   const [portsListExpanded, setPortsListExpanded] = useState(true)
   const [addPortExpanded, setAddPortExpanded] = useState(true)
   const [editingShipmentInfo, setEditingShipmentInfo] = useState(false)
+  const [savingShipmentInfo, setSavingShipmentInfo] = useState(false)
   const [editedShipmentInfo, setEditedShipmentInfo] = useState<any>(null)
+  const editedShipmentInfoRef = useRef<any>(null)
+  editedShipmentInfoRef.current = editedShipmentInfo
   const [editingPortId, setEditingPortId] = useState<string | null>(null)
   const [editedPortData, setEditedPortData] = useState<Partial<VesselLoadingPort> | null>(null)
   const [cancelPortTarget, setCancelPortTarget] = useState<{ id: string; portName: string; portSequence: number } | null>(null)
@@ -843,10 +895,12 @@ function ShipmentsPageContent() {
   }, [searchParams])
 
   useEffect(() => {
+    if (!userScopeReady) return
     setPage(1)
     fetchShipments(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    userScopeReady,
     statusFilter,
     dateFrom,
     dateTo,
@@ -987,8 +1041,6 @@ function ShipmentsPageContent() {
       if (response.data && response.data.success && response.data.data && response.data.data.shipments) {
         setShipments(response.data.data.shipments)
         setTotalCount(Number(response.data.data.pagination?.total || 0))
-        setShipmentsSummary(response.data.data.summary || null)
-
         const hydrateParams = new URLSearchParams(params.toString())
         hydrateParams.delete('skipSapJoin')
         void api
@@ -1002,18 +1054,22 @@ function ShipmentsPageContent() {
           })
 
         if (shipmentsSummaryTimerRef.current) clearTimeout(shipmentsSummaryTimerRef.current)
-        const summaryParams = new URLSearchParams(params.toString())
-        summaryParams.set('summaryOnly', 'true')
-        summaryParams.delete('includeSummary')
-        summaryParams.delete('skipSapJoin')
+        const section1SummaryParams = new URLSearchParams(params.toString())
+        // Section 1 card totals: toolbar scope only — never narrow by status/ETA card selection.
+        section1SummaryParams.delete('status')
+        section1SummaryParams.delete('etaLoading')
+        section1SummaryParams.delete('etaDischarge')
+        section1SummaryParams.set('summaryOnly', 'true')
+        section1SummaryParams.delete('includeSummary')
+        section1SummaryParams.delete('skipSapJoin')
         shipmentsSummaryTimerRef.current = setTimeout(() => {
           void api
-            .get(`/shipments?${summaryParams.toString()}`)
+            .get(`/shipments?${section1SummaryParams.toString()}`)
             .then((res) => {
               if (res.data?.data?.summary) setShipmentsSummary(res.data.data.summary)
             })
             .catch(() => {
-              /* keep zeros / prior summary */
+              /* keep prior Section 1 summary */
             })
         }, 450)
       } else {
@@ -1693,15 +1749,15 @@ function ShipmentsPageContent() {
     hasActiveShipmentColumnFilters(columnFilters)
 
   const clearShipmentFilters = useCallback(() => {
+    markUserScopeFiltersCleared('shipments')
     setSearchDraft('')
     setSearchTerm('')
     setStatusFilter('ALL')
     setLateIndicatorFilter('ALL')
     setViewOption('all')
     setViewFilterValue('')
-    setSelectedGroupPlants([])
+    resetUserScopeFilters()
     setSelectedIncoterms([])
-    setSelectedProducts([])
     setDateFrom('')
     setDateTo('')
     setColumnFilters({})
@@ -1710,7 +1766,44 @@ function ShipmentsPageContent() {
     setPage(1)
     fetchShipments(1, '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetUserScopeFilters])
+
+  /** Section 1 status circles — mutually exclusive with ETA summary cards for count parity with Section 3. */
+  const handleStatusCardClick = useCallback((status: string) => {
+    setPage(1)
+    setStatusFilter((prev) => (prev === status ? 'ALL' : status))
+    setEtaLoadingFilter('ALL')
+    setEtaDischargeFilter('ALL')
   }, [])
+
+  const handleEtaLoadingCardClick = useCallback((key: EtaBucketFilterKey) => {
+    setPage(1)
+    setEtaLoadingFilter((prev) => (prev === key ? 'ALL' : key))
+    setStatusFilter('ALL')
+    setEtaDischargeFilter('ALL')
+  }, [])
+
+  const handleEtaDischargeCardClick = useCallback((key: EtaBucketFilterKey) => {
+    setPage(1)
+    setEtaDischargeFilter((prev) => (prev === key ? 'ALL' : key))
+    setStatusFilter('ALL')
+    setEtaLoadingFilter('ALL')
+  }, [])
+
+  const section3TableLoading = loading
+
+  const shipmentsTableScopeLabel = useMemo(() => {
+    if (statusFilter !== 'ALL') {
+      return SHIPMENT_STATUS_LABELS[statusFilter] ?? statusFilter
+    }
+    if (etaLoadingFilter !== 'ALL') {
+      return ETA_LOADING_FILTER_LABELS[etaLoadingFilter]
+    }
+    if (etaDischargeFilter !== 'ALL') {
+      return ETA_DISCHARGE_FILTER_LABELS[etaDischargeFilter]
+    }
+    return null
+  }, [statusFilter, etaLoadingFilter, etaDischargeFilter])
 
   // Helper function to calculate late indicator for shipments
   const getLateIndicator = (shipment: Shipment): { color: string; text: string } =>
@@ -2771,6 +2864,11 @@ function ShipmentsPageContent() {
 
     try {
       const portData = buildLoadingPortUpdatePayload(editedPortData as Record<string, unknown>, portId)
+      console.log('[Shipments] handleSavePort PUT loading-port payload', {
+        shipmentId: selectedShipment.id,
+        portId,
+        portData,
+      })
       const response = await api.put(`/shipments/${selectedShipment.id}/loading-ports/${portId}`, portData)
       
       if (response.data.success) {
@@ -2791,17 +2889,14 @@ function ShipmentsPageContent() {
   }
 
   const handleSaveAll = async () => {
-    // Save overall shipment info (includes first loading + first discharge port ETA)
-    await handleSaveShipmentInfo()
-
-    // Also save the edited port row (including first loading/discharge) so edits made in the table
-    // are not silently dropped when user presses "Save All".
-    if (editingPortId) {
-      await handleSavePort(editingPortId)
+    if (savingShipmentInfo) return
+    setSavingShipmentInfo(true)
+    try {
+      // Persists Detail Fields (incl. all ETA dates) via first loading + discharge port APIs.
+      await handleSaveShipmentInfo()
+    } finally {
+      setSavingShipmentInfo(false)
     }
-
-    setEditingPortId(null)
-    setEditedPortData(null)
   }
 
   const handleEditShipmentInfo = () => {
@@ -2845,11 +2940,17 @@ function ShipmentsPageContent() {
   }
 
   const handleSaveShipmentInfo = async () => {
-    if (!selectedShipment || !editedShipmentInfo) return
+    if (!selectedShipment || !editedShipmentInfoRef.current) return
 
     try {
+      const activeEl = document.activeElement
+      if (activeEl instanceof HTMLElement) {
+        activeEl.blur()
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      }
+
       const identifier = selectedShipment.id
-      const info = editedShipmentInfo
+      const info = editedShipmentInfoRef.current
 
       const updateData: Record<string, unknown> = {}
       if (info.quantity_delivered !== undefined && info.quantity_delivered !== null) {
@@ -2873,6 +2974,10 @@ function ShipmentsPageContent() {
       if (pod && pod !== '0.00') updateData.port_of_discharge = pod
 
       if (Object.keys(updateData).length > 0) {
+        console.log('[Shipments] handleSaveShipmentInfo PUT /shipments/:id payload', {
+          shipmentId: identifier,
+          updateData,
+        })
         const response = await api.put(`/shipments/${identifier}`, updateData)
         if (!response.data?.success) {
           throw new Error(response.data?.error?.message || 'Failed to update shipment')
@@ -2908,14 +3013,12 @@ function ShipmentsPageContent() {
             quality_red: info.quality_at_loading_loc_1_red ?? firstPort.quality_red ?? null,
             quality_ds: info.quality_at_loading_loc_1_ds ?? firstPort.quality_ds ?? null,
             quality_stone: info.quality_at_loading_loc_1_stone ?? firstPort.quality_stone ?? null,
-            eta_vessel_arrival: info.eta_vessel_arrival_at_loading_port ?? firstPort.eta_vessel_arrival,
-            eta_vessel_berthed_at_loading_port:
-              info.eta_vessel_berthed_at_loading_port ?? firstPort.eta_vessel_berthed_at_loading_port,
-            eta_vessel_berthed:
-              info.eta_vessel_berthed_at_loading_port ?? firstPort.eta_vessel_berthed_at_loading_port ?? firstPort.eta_vessel_berthed,
-            eta_loading_start: info.eta_vessel_start_loading ?? firstPort.eta_loading_start,
-            eta_loading_completed: info.eta_vessel_completed_loading ?? firstPort.eta_loading_completed,
-            eta_vessel_sailed: info.eta_vessel_sailed_from_loading_port ?? firstPort.eta_vessel_sailed,
+            eta_vessel_arrival: info.eta_vessel_arrival_at_loading_port,
+            eta_vessel_berthed_at_loading_port: info.eta_vessel_berthed_at_loading_port,
+            eta_vessel_berthed: info.eta_vessel_berthed_at_loading_port,
+            eta_loading_start: info.eta_vessel_start_loading,
+            eta_loading_completed: info.eta_vessel_completed_loading,
+            eta_vessel_sailed: info.eta_vessel_sailed_from_loading_port,
             eta_vessel_arrive_at_discharge_port: null,
             eta_vessel_berthed_at_discharge_port: null,
             eta_vessel_start_discharging: null,
@@ -2923,6 +3026,11 @@ function ShipmentsPageContent() {
           },
           firstPort.id,
         )
+        console.log('[Shipments] handleSaveShipmentInfo PUT loading-port payload', {
+          shipmentId: identifier,
+          portId: firstPort.id,
+          loadingPortUpdateData,
+        })
         await api.put(`/shipments/${identifier}/loading-ports/${firstPort.id}`, loadingPortUpdateData)
       } else if (
         !hasAnyLoadingPort &&
@@ -2955,6 +3063,10 @@ function ShipmentsPageContent() {
           '',
         )
         delete newPortData.id
+        console.log('[Shipments] handleSaveShipmentInfo POST loading-port payload', {
+          shipmentId: identifier,
+          newPortData,
+        })
         await api.post(`/shipments/${identifier}/loading-ports`, newPortData)
       }
 
@@ -2975,14 +3087,10 @@ function ShipmentsPageContent() {
             port_name: info.vessel_discharge_port_1 || dischargePort.port_name || 'Discharge Port',
             port_sequence: dischargePort.port_sequence ?? 999,
             is_discharge_port: true,
-            eta_vessel_arrive_at_discharge_port:
-              info.eta_vessel_arrive_at_discharge_port ?? dischargePort.eta_vessel_arrive_at_discharge_port,
-            eta_vessel_berthed_at_discharge_port:
-              info.eta_vessel_berthed_at_discharge_port ?? dischargePort.eta_vessel_berthed_at_discharge_port,
-            eta_vessel_start_discharging:
-              info.eta_vessel_start_discharging ?? dischargePort.eta_vessel_start_discharging,
-            eta_vessel_complete_discharge:
-              info.eta_vessel_complete_discharge ?? dischargePort.eta_vessel_complete_discharge,
+            eta_vessel_arrive_at_discharge_port: info.eta_vessel_arrive_at_discharge_port,
+            eta_vessel_berthed_at_discharge_port: info.eta_vessel_berthed_at_discharge_port,
+            eta_vessel_start_discharging: info.eta_vessel_start_discharging,
+            eta_vessel_complete_discharge: info.eta_vessel_complete_discharge,
             eta_vessel_arrival: null,
             eta_vessel_berthed_at_loading_port: null,
             eta_loading_start: null,
@@ -2991,12 +3099,20 @@ function ShipmentsPageContent() {
           },
           dischargePort.id,
         )
+        console.log('[Shipments] handleSaveShipmentInfo PUT discharge-port payload', {
+          shipmentId: identifier,
+          portId: dischargePort.id,
+          dischargePortUpdateData,
+        })
         await api.put(`/shipments/${identifier}/loading-ports/${dischargePort.id}`, dischargePortUpdateData)
       }
 
       await fetchLoadingPorts(identifier, true)
+      setEditingPortId(null)
+      setEditedPortData(null)
       setEditingShipmentInfo(false)
       setEditedShipmentInfo(null)
+      await fetchShipments(page)
       alert('Shipment information updated successfully!')
     } catch (error) {
       console.error('Error saving shipment info:', error)
@@ -3269,12 +3385,17 @@ function ShipmentsPageContent() {
                               : statusInfo.status === 'COMPLETED' ? Number(summary?.completed ?? 0)
                                 : statusInfo.status === 'CANCELLED' ? Number(summary?.cancelled ?? 0)
                                   : 0
+                const isStatusActive = statusFilter === statusInfo.status
                 return (
                   <div key={statusInfo.status} className="flex items-center flex-shrink-0">
                     <div className="relative">
-                      <div
+                      <button
+                        type="button"
                         title={statusInfo.tooltip}
-                        className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full border-2 border-white shadow-lg hover:shadow-xl transition-shadow cursor-help ${statusInfo.color} flex items-center justify-center`}
+                        onClick={() => handleStatusCardClick(statusInfo.status)}
+                        className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full border-2 border-white shadow-lg transition-all cursor-pointer hover:shadow-xl hover:scale-[1.02] ${statusInfo.color} flex items-center justify-center ${
+                          isStatusActive ? 'ring-4 ring-blue-400 ring-offset-2' : ''
+                        }`}
                       >
                         {/* Count Badge */}
                         <div className={`absolute -top-3 -right-3 text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10 ${statusInfo.badgeColor}`}>
@@ -3284,7 +3405,7 @@ function ShipmentsPageContent() {
                         <span className={`text-xs md:text-sm font-semibold px-2 leading-tight ${statusInfo.textColor} text-center`}>
                           {statusInfo.label}
                         </span>
-                      </div>
+                      </button>
                     </div>
                     {index < array.length - 1 && (
                       <div className="flex-shrink-0 mx-2 md:mx-3">
@@ -3345,9 +3466,9 @@ function ShipmentsPageContent() {
                   <button
                     key={bucket.key}
                     type="button"
-                    onClick={() => setEtaLoadingFilter((prev) => (prev === bucket.key ? 'ALL' : bucket.key))}
-                    className={`flex flex-col items-start justify-between rounded-xl border px-3 py-3 text-left shadow-sm hover:shadow-md transition-shadow ${bucket.color} ${
-                      isActive ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-200'
+                    onClick={() => handleEtaLoadingCardClick(bucket.key)}
+                    className={`flex flex-col items-start justify-between rounded-xl border px-3 py-3 text-left shadow-sm transition-colors cursor-pointer hover:bg-gray-50 hover:shadow-md ${bucket.color} ${
+                      isActive ? 'border-blue-500 bg-blue-50/60 ring-2 ring-blue-100' : 'border-gray-200'
                     }`}
                   >
                     <div className="text-xs text-gray-600 mb-1">{bucket.label}</div>
@@ -3408,9 +3529,9 @@ function ShipmentsPageContent() {
                   <button
                     key={bucket.key}
                     type="button"
-                    onClick={() => setEtaDischargeFilter((prev) => (prev === bucket.key ? 'ALL' : bucket.key))}
-                    className={`flex flex-col items-start justify-between rounded-xl border px-3 py-3 text-left shadow-sm hover:shadow-md transition-shadow ${bucket.color} ${
-                      isActive ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-200'
+                    onClick={() => handleEtaDischargeCardClick(bucket.key)}
+                    className={`flex flex-col items-start justify-between rounded-xl border px-3 py-3 text-left shadow-sm transition-colors cursor-pointer hover:bg-gray-50 hover:shadow-md ${bucket.color} ${
+                      isActive ? 'border-blue-500 bg-blue-50/60 ring-2 ring-blue-100' : 'border-gray-200'
                     }`}
                   >
                     <div className="text-xs text-gray-600 mb-1">{bucket.label}</div>
@@ -3450,7 +3571,12 @@ function ShipmentsPageContent() {
                 </div>
                 <select
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
+                  onChange={(e) => {
+                    setPage(1)
+                    setStatusFilter(e.target.value)
+                    setEtaLoadingFilter('ALL')
+                    setEtaDischargeFilter('ALL')
+                  }}
                   className="rounded-lg border px-4 py-2"
                 >
                 <option value="ALL">All Status</option>
@@ -3529,10 +3655,10 @@ function ShipmentsPageContent() {
                 showProductFilter
                 productOptions={availableProducts}
                 selectedProducts={selectedProducts}
-                onProductsChange={setSelectedProducts}
+                onProductsChange={handleProductsChange}
                 groupPlantOptions={availableGroupPlants}
                 selectedGroupPlants={selectedGroupPlants}
-                onGroupPlantsChange={setSelectedGroupPlants}
+                onGroupPlantsChange={handleGroupPlantsChange}
                 dateFrom={dateFrom}
                 dateTo={dateTo}
                 onDateFromChange={setDateFrom}
@@ -3947,10 +4073,31 @@ function ShipmentsPageContent() {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <CardTitle>All Shipments</CardTitle>
-                <p className="text-sm text-gray-500 mt-1">
-                  {totalCount} total shipments | Showing {sortedShipments.length} on this page
-                  {totalPages > 1 && ` (Page ${page} of ${totalPages})`}
-                </p>
+                {section3TableLoading ? (
+                  <ContractPerfTableSubtitleSkeleton />
+                ) : (
+                  <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                    <span className="whitespace-nowrap tabular-nums text-gray-700">
+                      <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> shipments
+                    </span>
+                    <span className="text-gray-400" aria-hidden>
+                      ·
+                    </span>
+                    <span className="whitespace-nowrap tabular-nums">
+                      Page {page}/{totalPages} · {sortedShipments.length} rows
+                    </span>
+                    {shipmentsTableScopeLabel ? (
+                      <>
+                        <span className="text-gray-400" aria-hidden>
+                          ·
+                        </span>
+                        <span className="whitespace-nowrap font-medium text-blue-700">
+                          {shipmentsTableScopeLabel}
+                        </span>
+                      </>
+                    ) : null}
+                  </p>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="relative">
@@ -3958,7 +4105,7 @@ function ShipmentsPageContent() {
                     variant="outline"
                     size="sm"
                     onClick={() => setShowColumnsMenu(v => !v)}
-                    disabled={loading}
+                    disabled={section3TableLoading}
                   >
                     <SlidersHorizontal className="h-4 w-4 mr-2" />
                     Columns
@@ -4014,7 +4161,7 @@ function ShipmentsPageContent() {
                     variant="outline"
                     size="sm"
                     onClick={() => (allExpanded ? collapseAll() : expandAll(allVisibleIds))}
-                    disabled={loading || sortedShipments.length === 0}
+                    disabled={section3TableLoading || sortedShipments.length === 0}
                   >
                     {allExpanded ? (
                       <>
@@ -4035,7 +4182,7 @@ function ShipmentsPageContent() {
                       variant="outline"
                       size="sm"
                       onClick={() => handlePageChange(page - 1)}
-                      disabled={page <= 1 || loading}
+                      disabled={page <= 1 || section3TableLoading}
                     >
                       Previous
                     </Button>
@@ -4057,7 +4204,7 @@ function ShipmentsPageContent() {
                             variant={page === pageNum ? 'default' : 'outline'}
                             size="sm"
                             onClick={() => handlePageChange(pageNum)}
-                            disabled={loading}
+                            disabled={section3TableLoading}
                             className="min-w-[40px]"
                           >
                             {pageNum}
@@ -4069,7 +4216,7 @@ function ShipmentsPageContent() {
                       variant="outline"
                       size="sm"
                       onClick={() => handlePageChange(page + 1)}
-                      disabled={page >= totalPages || loading}
+                      disabled={page >= totalPages || section3TableLoading}
                     >
                       Next
                     </Button>
@@ -4079,10 +4226,7 @@ function ShipmentsPageContent() {
             </div>
           </CardHeader>
           <CardContent>
-            {loading ? (
-              <div className="text-center py-8">Loading shipments...</div>
-            ) : (
-              <>
+            <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
                 {/* Desktop compact table */}
                 <div className="hidden lg:block border rounded-lg overflow-hidden">
                   {/* Top scrollbar (synced) */}
@@ -4129,8 +4273,8 @@ function ShipmentsPageContent() {
                           <col style={{ width: '160px' }} />
                         </colgroup>
                         <thead>
-                        <tr className="text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10">
-                          <th scope="col" className="w-10 px-2 py-2 align-bottom" />
+                        <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_CLASS}>
+                          <th scope="col" className={`w-10 align-bottom ${CONTRACT_PERF_TABLE_CELL_PAD}`} />
                         {visibleColumns.map(col => {
                           const active = sortKey === col.id
                           const filterActive = isColumnFilterActive(col.id)
@@ -4141,7 +4285,7 @@ function ShipmentsPageContent() {
                             <th
                               key={col.id}
                               scope="col"
-                              className={`relative min-w-0 px-3 py-2 text-left align-bottom font-semibold cursor-move ${dragColId === col.id ? 'opacity-60' : ''}`}
+                              className={`relative min-w-0 text-left align-bottom font-semibold cursor-move ${CONTRACT_PERF_TABLE_CELL_PAD} ${dragColId === col.id ? 'opacity-60' : ''}`}
                               draggable
                               onDragStart={(e) => {
                                 setDragColId(col.id)
@@ -4438,7 +4582,7 @@ function ShipmentsPageContent() {
                             </th>
                           )
                         })}
-                        <th scope="col" className="sticky right-0 z-20 bg-gray-50 border-l px-3 py-2 text-center align-bottom font-semibold whitespace-nowrap shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]">
+                        <th scope="col" className={`sticky right-0 z-20 bg-gray-50 border-l text-center align-bottom font-semibold whitespace-nowrap shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD}`}>
                           Actions
                         </th>
                         </tr>
@@ -4446,7 +4590,12 @@ function ShipmentsPageContent() {
                         <tbody>
 
                       {/* Rows */}
-                        {sortedShipments.length === 0 ? (
+                        {section3TableLoading ? (
+                          <ContractTableBodySkeleton
+                            columnCount={visibleColumns.length + 1}
+                            rowCount={8}
+                          />
+                        ) : sortedShipments.length === 0 ? (
                           <tr>
                             <td colSpan={visibleColumns.length + 2} className="px-4 py-10 text-center text-gray-500 bg-white">
                               <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />
@@ -4461,7 +4610,7 @@ function ShipmentsPageContent() {
                           return (
                             <>
                               <tr key={shipment.id} className={rowBg}>
-                                <td className="px-2 py-2 align-middle w-10">
+                                <td className={`align-middle w-10 ${CONTRACT_PERF_TABLE_CELL_PAD}`}>
                                   <div className="hidden">
                                     <button
                                       type="button"
@@ -4479,8 +4628,8 @@ function ShipmentsPageContent() {
                                 </td>
 
                                   {visibleColumns.map(col => (
-                                    <td key={col.id} className="px-3 py-2 align-middle min-w-0">
-                                      <div className="min-h-[40px] flex items-center">
+                                    <td key={col.id} className={`align-middle min-w-0 ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
+                                      <div className={`flex items-center ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
                                       {col.id === 'vessel_name' && isEditing ? (
                                         <div className="relative">
                                           <Input
@@ -4551,7 +4700,7 @@ function ShipmentsPageContent() {
                                             onFocus={() => (editedData.port_of_loading ?? shipment.port_of_loading ?? '').trim().length >= 2 && setShowPortSuggestions(true)}
                                             onBlur={() => setTimeout(() => setShowPortSuggestions(false), 200)}
                                             className="h-8 text-sm"
-                                            placeholder="Type to search port (Master Loading Port)"
+                                            placeholder="Type to search port (Master Port)"
                                           />
                                           {showPortSuggestions && portSuggestions.length > 0 && (
                                             <div className="absolute z-20 mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-52 overflow-y-auto">
@@ -4609,7 +4758,7 @@ function ShipmentsPageContent() {
                                     </td>
                                   ))}
 
-                                  <td className={`sticky right-0 z-10 border-l px-3 py-2 align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${rowBg}`}>
+                                  <td className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
                                   <div className="flex items-center justify-end gap-2 min-h-[40px]">
                                     {isEditing ? (
                                       <>
@@ -4822,7 +4971,9 @@ function ShipmentsPageContent() {
 
                 {/* Mobile/tablet cards */}
                 <div className="lg:hidden space-y-2">
-                  {sortedShipments.map((shipment) => {
+                  {section3TableLoading ? (
+                    <ContractPerfTableMobileSkeleton rowCount={6} />
+                  ) : sortedShipments.map((shipment) => {
                     const isEditing = editingId === shipment.id
                     const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
                     return (
@@ -5060,7 +5211,7 @@ function ShipmentsPageContent() {
                         variant="outline"
                         size="sm"
                         onClick={() => handlePageChange(page - 1)}
-                        disabled={page <= 1 || loading}
+                        disabled={page <= 1 || section3TableLoading}
                       >
                         Previous
                       </Button>
@@ -5082,7 +5233,7 @@ function ShipmentsPageContent() {
                               variant={page === pageNum ? 'default' : 'outline'}
                               size="sm"
                               onClick={() => handlePageChange(pageNum)}
-                              disabled={loading}
+                              disabled={section3TableLoading}
                               className="min-w-[40px]"
                             >
                               {pageNum}
@@ -5094,15 +5245,14 @@ function ShipmentsPageContent() {
                         variant="outline"
                         size="sm"
                         onClick={() => handlePageChange(page + 1)}
-                        disabled={page >= totalPages || loading}
+                        disabled={page >= totalPages || section3TableLoading}
                       >
                         Next
                       </Button>
                     </div>
                   </div>
                 )}
-              </>
-            )}
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -5176,11 +5326,23 @@ function ShipmentsPageContent() {
                         <div className="flex gap-2">
                           {editingShipmentInfo ? (
                             <>
-                              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleCancelEditAll}>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={handleCancelEditAll}
+                                disabled={savingShipmentInfo}
+                              >
                                 <X className="h-3.5 w-3.5 mr-1" /> Cancel
                               </Button>
-                              <Button size="sm" className="h-7 text-xs bg-green-600 hover:bg-green-700" onClick={handleSaveAll}>
-                                <Save className="h-3.5 w-3.5 mr-1" /> Save Changes
+                              <Button
+                                size="sm"
+                                className="h-7 text-xs bg-green-600 hover:bg-green-700"
+                                onClick={handleSaveAll}
+                                disabled={savingShipmentInfo}
+                              >
+                                <Save className="h-3.5 w-3.5 mr-1" />
+                                {savingShipmentInfo ? 'Saving...' : 'Save Changes'}
                               </Button>
                             </>
                           ) : (
@@ -5188,12 +5350,7 @@ function ShipmentsPageContent() {
                               variant="outline"
                               size="sm"
                               className="h-7 text-xs"
-                              onClick={() => {
-                                handleEditShipmentInfo()
-                                if (loadingPorts.length > 0) {
-                                  handleEditPort(loadingPorts[0])
-                                }
-                              }}
+                              onClick={handleEditShipmentInfo}
                             >
                               <Edit2 className="h-3.5 w-3.5 mr-1" />
                               Edit
@@ -5254,7 +5411,7 @@ function ShipmentsPageContent() {
                                 onChange={(value) =>
                                   setEditedShipmentInfo({ ...editedShipmentInfo, vessel_loading_port_1: value })
                                 }
-                                placeholder="Search Master Loading Port..."
+                                placeholder="Search Master Port..."
                                 className="h-8 text-sm"
                               />
                             </div>

@@ -22,7 +22,7 @@ interface Props {
 export function MasterLoadingPortCombobox({
   value,
   onChange,
-  placeholder = 'Search Master Loading Port...',
+  placeholder = 'Search Master Port...',
   className,
   disabled,
 }: Props) {

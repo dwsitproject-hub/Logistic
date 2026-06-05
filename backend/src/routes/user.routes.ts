@@ -39,7 +39,11 @@ router.post(
     body('full_name').notEmpty(),
     body('role').isIn(['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT']),
     body('level').optional({ nullable: true }).isIn(['Dept Head', 'Section Head', 'Staff', 'Admin']),
-    body('transport_type').optional({ nullable: true }).isIn(['SEA', 'LAND', 'sea', 'land']),
+    body('transport_type').optional({ nullable: true }).isIn(['SEA', 'LAND', 'ALL', 'MIX', 'sea', 'land', 'all', 'mix']),
+    body('plants').optional({ nullable: true }).isArray(),
+    body('plants.*').optional().isString(),
+    body('products').optional({ nullable: true }).isArray(),
+    body('products.*').optional().isString(),
   ],
   createUser
 );
@@ -51,7 +55,11 @@ router.put(
     body('email').optional().isEmail(),
     body('role').optional().isIn(['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT']),
     body('level').optional({ nullable: true }).isIn(['Dept Head', 'Section Head', 'Staff', 'Admin']),
-    body('transport_type').optional({ nullable: true }).isIn(['SEA', 'LAND', 'sea', 'land']),
+    body('transport_type').optional({ nullable: true }).isIn(['SEA', 'LAND', 'ALL', 'MIX', 'sea', 'land', 'all', 'mix']),
+    body('plants').optional({ nullable: true }).isArray(),
+    body('plants.*').optional().isString(),
+    body('products').optional({ nullable: true }).isArray(),
+    body('products.*').optional().isString(),
   ],
   updateUser
 );

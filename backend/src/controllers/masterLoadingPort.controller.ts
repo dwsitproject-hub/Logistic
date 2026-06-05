@@ -50,7 +50,7 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
     });
   } catch (error) {
     logger.error('List master loading ports error:', error);
-    res.status(500).json({ success: false, error: { message: 'Failed to fetch master loading ports' } });
+    res.status(500).json({ success: false, error: { message: 'Failed to fetch master ports' } });
   }
 };
 
@@ -109,7 +109,7 @@ export const createMasterLoadingPort = async (req: AuthRequest, res: Response): 
     res.status(201).json({ success: true, data: result.rows[0] });
   } catch (error) {
     logger.error('Create master loading port error:', error);
-    res.status(500).json({ success: false, error: { message: 'Failed to create master loading port' } });
+    res.status(500).json({ success: false, error: { message: 'Failed to create master port' } });
   }
 };
 
@@ -183,14 +183,14 @@ export const updateMasterLoadingPort = async (req: AuthRequest, res: Response): 
     ]);
 
     if (result.rows.length === 0) {
-      res.status(404).json({ success: false, error: { message: 'Master loading port not found' } });
+      res.status(404).json({ success: false, error: { message: 'Master port not found' } });
       return;
     }
 
     res.json({ success: true, data: result.rows[0] });
   } catch (error) {
     logger.error('Update master loading port error:', error);
-    res.status(500).json({ success: false, error: { message: 'Failed to update master loading port' } });
+    res.status(500).json({ success: false, error: { message: 'Failed to update master port' } });
   }
 };
 
@@ -322,7 +322,7 @@ export const bulkUploadMasterLoadingPorts = async (req: AuthRequest, res: Respon
     });
   } catch (error) {
     logger.error('Bulk upload master loading ports error:', error);
-    res.status(500).json({ success: false, error: { message: 'Failed to upload master loading ports' } });
+    res.status(500).json({ success: false, error: { message: 'Failed to upload master ports' } });
   }
 };
 
@@ -331,13 +331,13 @@ export const deleteMasterLoadingPort = async (req: AuthRequest, res: Response): 
     const { id } = req.params;
     const result = await query('DELETE FROM master_loading_ports WHERE id = $1 RETURNING id', [id]);
     if (result.rows.length === 0) {
-      res.status(404).json({ success: false, error: { message: 'Master loading port not found' } });
+      res.status(404).json({ success: false, error: { message: 'Master port not found' } });
       return;
     }
     res.json({ success: true, data: { id: result.rows[0].id } });
   } catch (error) {
     logger.error('Delete master loading port error:', error);
-    res.status(500).json({ success: false, error: { message: 'Failed to delete master loading port' } });
+    res.status(500).json({ success: false, error: { message: 'Failed to delete master port' } });
   }
 };
 

@@ -781,6 +781,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         c.contract_date,
         c.delivery_start_date,
         c.delivery_end_date,
+        c.cargo_readiness_date,
         c.plant_code,
         mp.plant_name,
         mp.company_name AS plant_company_name,

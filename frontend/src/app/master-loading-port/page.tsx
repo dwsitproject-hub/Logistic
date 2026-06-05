@@ -68,7 +68,7 @@ export default function MasterLoadingPortPage() {
       setItems(res.data?.data?.items || [])
     } catch (err) {
       console.error('Failed to load master loading ports', err)
-      alert('Failed to load master loading ports')
+      alert('Failed to load master ports')
     } finally {
       setLoading(false)
     }
@@ -157,7 +157,7 @@ export default function MasterLoadingPortPage() {
       void fetchData(debouncedSearch)
     } catch (err: any) {
       console.error('Save master loading port error', err)
-      const msg = err?.response?.data?.error?.message || 'Failed to save master loading port'
+      const msg = err?.response?.data?.error?.message || 'Failed to save master port'
       alert(msg)
     }
   }
@@ -279,7 +279,7 @@ export default function MasterLoadingPortPage() {
       void fetchData(debouncedSearch)
     } catch (err) {
       console.error('Upload master loading port file error', err)
-      alert('Failed to parse or upload file. Please upload CSV exported from Master Loading Port.xlsx')
+      alert('Failed to parse or upload file. Please upload CSV exported from Master Port.xlsx')
     } finally {
       e.target.value = ''
     }
@@ -294,7 +294,7 @@ export default function MasterLoadingPortPage() {
       await fetchData(debouncedSearch)
     } catch (err: any) {
       console.error('Delete master loading port error', err)
-      const msg = err?.response?.data?.error?.message || 'Failed to delete master loading port'
+      const msg = err?.response?.data?.error?.message || 'Failed to delete master port'
       alert(msg)
     }
   }
@@ -304,9 +304,9 @@ export default function MasterLoadingPortPage() {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Master Loading Port</h1>
+            <h1 className="text-3xl font-bold text-gray-900">Master Port</h1>
             <p className="text-gray-600 mt-2">
-              Maintain reference data for loading ports used in shipments.
+              Maintain reference data for ports used in shipments.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -347,7 +347,7 @@ export default function MasterLoadingPortPage() {
         {isFormOpen && (
           <Card>
             <CardHeader>
-              <CardTitle>{editing ? 'Edit Loading Port' : 'New Loading Port'}</CardTitle>
+              <CardTitle>{editing ? 'Edit Port' : 'New Port'}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -515,13 +515,13 @@ export default function MasterLoadingPortPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Master Loading Port List</CardTitle>
+            <CardTitle>Master Port List</CardTitle>
           </CardHeader>
           <CardContent>
             {loading ? (
               <div className="py-8 text-center text-gray-500">Loading...</div>
             ) : items.length === 0 ? (
-              <div className="py-8 text-center text-gray-500">No loading ports found</div>
+              <div className="py-8 text-center text-gray-500">No ports found</div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">

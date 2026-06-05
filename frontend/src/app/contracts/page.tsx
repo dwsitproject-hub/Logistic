@@ -1,7 +1,7 @@
 'use client'
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react'
-import { usePathname, useSearchParams } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -36,11 +36,18 @@ import {
 import { formatDateDMY, toSortableTimestamp } from '@/lib/dateFormat'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import {
-  ContractPerfTableSkeleton,
+  ContractPerfTableMobileSkeleton,
   ContractPerfTableSubtitleSkeleton,
+  ContractTableBodySkeleton,
 } from '@/components/performance/ContractPerfTableSkeleton'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
+import { canViewPermission, usePermissions } from '@/components/PermissionsContext'
+
+const CONTRACT_PAYMENT_INFO_PERMISSION = 'data.contract_payment_info'
+const CONTRACT_PERFORMANCE_PAGE_PERMISSION = 'page.contract_performance'
+import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
+import { getInitialUserScopeFilters, markUserScopeFiltersCleared, wereUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import {
   type ContractPerfColumnFilter,
   type ContractPerfDrilldownFilters,
@@ -80,6 +87,9 @@ import {
   contractPerfCompactColumnFallbackOrder,
   contractPerfDefaultVisibleColumnIds,
   contractPerfTableColumnWidthPx,
+  CONTRACT_PERF_TABLE_CELL_PAD,
+  CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
+  CONTRACT_PERF_TABLE_ROW_MIN_H,
   isContractPerformancePathname,
   mergeContractPerfColumnOrder,
   orderContractPerformanceColumns,
@@ -238,26 +248,28 @@ function isContractB2b(c: Pick<Contract, 'b2b_flag' | 'contract_type'>): boolean
 
 type ContractsUnassignedCardFilter = 'sea' | 'land' | 'mix'
 
+function contractsListTableScopeLabel(
+  unassignedFilter: ContractsUnassignedCardFilter | null,
+  statusFilter: string,
+): { text: string; emphasized: boolean } {
+  if (unassignedFilter === 'sea') {
+    return { text: 'SEA · Without shipment', emphasized: true }
+  }
+  if (unassignedFilter === 'land') {
+    return { text: 'LAND · Without trucking', emphasized: true }
+  }
+  if (unassignedFilter === 'mix') {
+    return { text: 'MIX · Without logistics', emphasized: true }
+  }
+  if (statusFilter !== 'All Status') {
+    return { text: `Global · ${statusFilter}`, emphasized: false }
+  }
+  return { text: 'Global · All', emphasized: false }
+}
+
 function contractCountGt0(v: unknown): boolean {
   const n = typeof v === 'string' ? parseFloat(v) : Number(v)
   return Number.isFinite(n) && n > 0
-}
-
-/** Client-side guard for summary-card filter (mirrors GET /contracts?unassigned=). */
-function contractIsOpen(c: Contract): boolean {
-  const raw = (c.import_status || c.status || '').toUpperCase()
-  return raw === 'OPEN' || raw === 'ACTIVE'
-}
-
-function contractMatchesUnassignedCardFilter(c: Contract, filter: ContractsUnassignedCardFilter): boolean {
-  if (!contractIsOpen(c)) return false
-  const mode = String(c.transport_mode || '').toUpperCase()
-  // Align with GET /contracts?unassigned= and /contracts/unassigned-counts (shipments/trucking rows only).
-  const noShipment = !contractCountGt0(c.shipment_count)
-  const noTrucking = !contractCountGt0(c.trucking_count)
-  if (filter === 'sea') return mode.startsWith('SEA') && noShipment
-  if (filter === 'land') return mode.startsWith('LAND') && noTrucking
-  return mode.startsWith('MIX') && (noShipment || noTrucking)
 }
 
 function getStatusColor(status: string) {
@@ -407,6 +419,51 @@ function formatContractPerfAppliedDrilldownLabel(d: ContractPerfDrilldownFilters
   return parts.join(' · ')
 }
 
+/** Section 2 column header — preserves parent path when drilling deeper (presentation only). */
+function contractPerfDrilldownColumnSubtitle(
+  level: 'product' | 'plant' | 'incoterm' | 'supplier',
+  d: ContractPerfDrilldownFilters,
+): string {
+  switch (level) {
+    case 'product':
+      return isContractPerfDrilldownValueSet(d.product) ? `Selected: ${d.product}` : 'Pick one'
+    case 'plant':
+      if (!isContractPerfDrilldownValueSet(d.product)) return 'Pick product first'
+      return isContractPerfDrilldownValueSet(d.plant)
+        ? `${d.product} › ${d.plant}`
+        : `Under ${d.product}`
+    case 'incoterm':
+      if (!isContractPerfDrilldownValueSet(d.product) || !isContractPerfDrilldownValueSet(d.plant)) {
+        return 'Pick plant first'
+      }
+      return isContractPerfDrilldownValueSet(d.incoterm)
+        ? `${d.product} › ${d.plant} › ${d.incoterm}`
+        : `Under ${d.product} › ${d.plant}`
+    case 'supplier': {
+      if (!isContractPerfDrilldownValueSet(d.incoterm)) return 'Pick incoterm first'
+      const base = [d.product, d.plant, d.incoterm].filter(isContractPerfDrilldownValueSet).join(' › ')
+      return isContractPerfDrilldownValueSet(d.supplier) ? `${base} › ${d.supplier}` : `Under ${base}`
+    }
+  }
+}
+
+function buildNextContractPerfDrilldownSelection(
+  prev: ContractPerfDrilldownFilters,
+  level: 'product' | 'plant' | 'incoterm' | 'supplier',
+  label: string,
+): ContractPerfDrilldownFilters {
+  if (level === 'product') {
+    return { product: label, plant: null, incoterm: null, supplier: null }
+  }
+  if (level === 'plant') {
+    return { ...prev, plant: label, incoterm: null, supplier: null }
+  }
+  if (level === 'incoterm') {
+    return { ...prev, incoterm: label, supplier: null }
+  }
+  return { ...prev, supplier: label }
+}
+
 function defaultContractPerfYtdDateRange(): { dateFrom: string; dateTo: string } {
   const d = new Date()
   const y = d.getFullYear()
@@ -447,6 +504,44 @@ function ContractPerfStatusPctBadges({ onTimeCount, lateCount }: { onTimeCount: 
   )
 }
 
+const CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP = {
+  avgTrade: 'ETA vs Due Date Delivery End',
+  avgDp: 'ETA Completion vs DP Date',
+  avgLog: 'ETA Completion vs Cargo Readiness Date',
+} as const
+
+const CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP = {
+  avgTrade: 'ATA Completion vs Due Date Delivery End',
+  avgDp: 'ATA Completion vs DP Date',
+  avgLog: 'ATA Completion vs Cargo Readiness Date',
+} as const
+
+/** Hover help on Open/Close summary metric labels (Contract Performance only). */
+function ContractPerfStatusCardMetricLabel({
+  label,
+  help,
+}: {
+  label: string
+  help: string
+}) {
+  return (
+    <Tooltip delayDuration={200}>
+      <TooltipTrigger asChild>
+        <span
+          className="cursor-help border-b border-dotted border-gray-400"
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {label}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs leading-relaxed max-w-xs">
+        {help}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 function contractToDrilldownRow(contract: Contract): ContractPerfDrilldownRow {
   const tradeCycleDays = contract.trade_cycle_days
   const days = contractPerfTradeCycleDaysForAgg(tradeCycleDays)
@@ -462,22 +557,6 @@ function contractToDrilldownRow(contract: Contract): ContractPerfDrilldownRow {
     maxDays: days,
     totalQtyDelivery: qty,
   }
-}
-
-function mergeUniqueContractCountsIntoBranchTree(
-  mtTree: ContractPerfBranchNode,
-  countTree: ContractPerfBranchNode,
-): ContractPerfBranchNode {
-  const countChild = (nodes: ContractPerfBranchNode[], label: string) =>
-    nodes.find((n) => n.label === label)
-
-  const mergeNode = (mtNode: ContractPerfBranchNode, countNode: ContractPerfBranchNode | undefined): ContractPerfBranchNode => ({
-    ...mtNode,
-    count: countNode?.count ?? mtNode.count,
-    children: mtNode.children.map((child) => mergeNode(child, countChild(countNode?.children ?? [], child.label))),
-  })
-
-  return mergeNode(mtTree, countTree)
 }
 
 function dedupeContractPerfDrilldownRows(rows: ContractPerfDrilldownRow[]): ContractPerfDrilldownRow[] {
@@ -959,7 +1038,17 @@ function ContractPerfDrilldownSectionHelp({
 function ContractsPageContent() {
   const searchParams = useSearchParams()
   const pathname = usePathname()
+  const router = useRouter()
   const isContractPerformance = isContractPerformancePathname(pathname)
+  const perms = usePermissions()
+  const canViewContractPaymentInfo = canViewPermission(perms, CONTRACT_PAYMENT_INFO_PERMISSION)
+
+  useEffect(() => {
+    if (!isContractPerformance || !perms.loaded) return
+    if (!canViewPermission(perms, CONTRACT_PERFORMANCE_PAGE_PERMISSION)) {
+      router.replace('/contracts')
+    }
+  }, [isContractPerformance, perms, router])
   const [contracts, setContracts] = useState<Contract[]>([])
   const [loading, setLoading] = useState(true)
   const [authReady, setAuthReady] = useState(false)
@@ -986,19 +1075,19 @@ function ContractsPageContent() {
   const [statusFilter, setStatusFilter] = useState<string>('All Status')
   const [b2bFlagFilter, setB2bFlagFilter] = useState<string>('ALL')
   /** Default YTD on first load so GET /contracts stays bounded (same as Contract Performance). */
-  const [dateFrom, setDateFrom] = useState(() => {
-    const d = new Date()
-    return `${d.getFullYear()}-01-01`
-  })
-  const [dateTo, setDateTo] = useState(() => {
-    const d = new Date()
-    const y = d.getFullYear()
-    const m = String(d.getMonth() + 1).padStart(2, '0')
-    const day = String(d.getDate()).padStart(2, '0')
-    return `${y}-${m}-${day}`
-  })
+  const [dateFrom, setDateFrom] = useState(() => defaultContractPerfYtdDateRange().dateFrom)
+  const [dateTo, setDateTo] = useState(() => defaultContractPerfYtdDateRange().dateTo)
   const [availableB2bFlags, setAvailableB2bFlags] = useState<string[]>([])
-  const [selectedProducts, setSelectedProducts] = useState<string[]>([])
+  const {
+    selectedProducts,
+    setSelectedProducts,
+    selectedGroupPlants,
+    setSelectedGroupPlants,
+    userScopeReady,
+    resetUserScopeFilters,
+    handleProductsChange,
+    handleGroupPlantsChange,
+  } = useUserScopeFilterDefaults('contracts')
   const [sourceFilter, setSourceFilter] = useState<ContractPerfSourceFilter>('All')
   const [selectedProductTab, setSelectedProductTab] = useState<ContractPerfProductTab>('All')
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
@@ -1008,7 +1097,6 @@ function ContractsPageContent() {
   const [summaryCardStatus, setSummaryCardStatus] = useState<'All' | 'Open' | 'Close'>('All')
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
-  const [selectedGroupPlants, setSelectedGroupPlants] = useState<string[]>([])
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
   const [uploadingId, setUploadingId] = useState<string>('')
   const [csvCargoUploading, setCsvCargoUploading] = useState(false)
@@ -1044,6 +1132,9 @@ function ContractsPageContent() {
   const [unassignedFilter, setUnassignedFilter] = useState<'sea' | 'land' | 'mix' | null>(null)
   const [updatingContractId, setUpdatingContractId] = useState<string | null>(null)
   const updatingContractIdRef = useRef<string | null>(null)
+  /** Monotonic id — only the latest GET /contracts response may update table state. */
+  const contractsFetchGenRef = useRef(0)
+  const appliedContractsUrlFiltersRef = useRef(false)
 
   type LatePerfNode = { key: string; count: number; totalDays: number; maxDays: number; totalQtyDelivery?: number; children: LatePerfNode[] }
   type StatusCardSummary = {
@@ -1144,6 +1235,8 @@ function ContractsPageContent() {
   const [appliedDrilldownSelection, setAppliedDrilldownSelection] = useState<ContractPerfDrilldownFilters>(
     EMPTY_CONTRACT_PERF_DRILLDOWN,
   )
+  const appliedDrilldownSelectionRef = useRef(appliedDrilldownSelection)
+  appliedDrilldownSelectionRef.current = appliedDrilldownSelection
 
   type ColumnFilter = ContractPerfColumnFilter
   const [columnFilters, setColumnFilters] = useState<Record<string, ColumnFilter>>({})
@@ -1226,6 +1319,19 @@ function ContractsPageContent() {
     [isContractPerformance, contractPerfSection3FilterApplied, loading, isTableLoading],
   )
 
+  const section3TableLoading = useMemo(
+    () =>
+      isContractPerformance
+        ? contractPerfSection3Loading
+        : loading,
+    [isContractPerformance, contractPerfSection3Loading, loading],
+  )
+
+  const contractsTableScope = useMemo(
+    () => contractsListTableScopeLabel(unassignedFilter, statusFilter),
+    [unassignedFilter, statusFilter],
+  )
+
   const contractPerfTableFetchScope = contractPerfPipeline.tableFetchScope
   const contractPerfTableColumnFilters = contractPerfTableFetchScope.columnFilters
   const contractPerfTablePlants = contractPerfTableFetchScope.plants
@@ -1236,6 +1342,29 @@ function ContractsPageContent() {
   const section2UnscheduledCount = contractPerfPipeline.unscheduledNodeContractCount
 
   const displayTotalContracts = totalContracts
+
+  /** Debug: track Section 3 filter + pagination sync (summary card vs table). */
+  useEffect(() => {
+    if (isContractPerformance) return
+    console.log('[Contracts] Section 3 table state', {
+      unassignedFilter,
+      statusFilter,
+      currentPage,
+      totalContracts,
+      totalPages,
+      contractsPerPage,
+      apiRowsOnPage: contracts.length,
+      fetchGeneration: contractsFetchGenRef.current,
+    })
+  }, [
+    isContractPerformance,
+    unassignedFilter,
+    statusFilter,
+    currentPage,
+    totalContracts,
+    totalPages,
+    contracts.length,
+  ])
 
   /** Top-level pipeline verification — section array lengths must align when drilldown is applied. */
   useEffect(() => {
@@ -1341,7 +1470,7 @@ function ContractsPageContent() {
   const applyDrilldownSelection = useCallback(
     (payload: ContractPerfDrilldownFilters) => {
       if (!isContractPerformance) return
-      if (contractPerfDrilldownSelectionsEqual(payload, appliedDrilldownSelection)) return
+      if (contractPerfDrilldownSelectionsEqual(payload, appliedDrilldownSelectionRef.current)) return
 
       lockSection1FilterChange()
       setAppliedDrilldownSelection(payload)
@@ -1356,12 +1485,7 @@ function ContractsPageContent() {
         return next
       })
     },
-    [
-      appliedDrilldownSelection,
-      collapseAll,
-      isContractPerformance,
-      lockSection1FilterChange,
-    ],
+    [collapseAll, isContractPerformance, lockSection1FilterChange],
   )
 
   /** Clears Section 2 drilldown only (e.g. when switching On Time / Late tab). */
@@ -1373,6 +1497,7 @@ function ContractsPageContent() {
   /** Section 1 reset — clears all Contract Performance filters (Sections 1–3). */
   const resetContractPerformancePage = useCallback(() => {
     if (!isContractPerformance) return
+    markUserScopeFiltersCleared('contracts')
     lockSection1FilterChange()
     const { dateFrom: ytdFrom, dateTo: ytdTo } = defaultContractPerfYtdDateRange()
     setSourceFilter('All')
@@ -1380,8 +1505,7 @@ function ContractsPageContent() {
     setSummaryCardStatus('All')
     setStatusFilter('All Status')
     setSelectedIncoterms([])
-    setSelectedGroupPlants([])
-    setSelectedProducts([])
+    resetUserScopeFilters()
     setPerfTransportMode('ALL')
     setLateOnTimeFilter(perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE')
     setSearchDraft('')
@@ -1393,26 +1517,16 @@ function ContractsPageContent() {
     collapseAll()
     setAppliedDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
     setColumnFilters({})
-  }, [collapseAll, isContractPerformance, lockSection1FilterChange, perfDashMode])
+  }, [collapseAll, isContractPerformance, lockSection1FilterChange, perfDashMode, resetUserScopeFilters])
 
-  /** Section 2 browse tree — full active branch (structure never collapses on node click). */
-  const latePerfBranchTreeBrowse = useMemo(
+  /**
+   * Section 2 browse tree — global branch totals at every level.
+   * Drilldown selection only drives navigation + Section 3; it must not overwrite parent card counts.
+   */
+  const latePerfBranchTree = useMemo(
     () => buildLatePerfBranchTreeFromHotspots(contractPerfActiveBranchHotspots),
     [contractPerfActiveBranchHotspots],
   )
-
-  /** Linked scope counts — same hotspot filter as Section 3; merged onto browse tree for display. */
-  const latePerfBranchTreeLinked = useMemo(() => {
-    if (!hasContractPerfDrilldownSelection(appliedDrilldownSelection)) return null
-    return buildLatePerfBranchTreeFromHotspots(contractPerfUnifiedFilteredHotspots)
-  }, [appliedDrilldownSelection, contractPerfUnifiedFilteredHotspots])
-
-  const latePerfBranchTree = useMemo(() => {
-    if (latePerfBranchTreeLinked) {
-      return mergeUniqueContractCountsIntoBranchTree(latePerfBranchTreeBrowse, latePerfBranchTreeLinked)
-    }
-    return latePerfBranchTreeBrowse
-  }, [latePerfBranchTreeBrowse, latePerfBranchTreeLinked])
 
   const applySummaryStatusCard = useCallback(
     (status: 'Open' | 'Close') => {
@@ -1545,12 +1659,31 @@ function ContractsPageContent() {
   }, [])
 
   useEffect(() => {
-    if (!authReady) return
-    // Read URL parameters
-    const statusParam = searchParams.get('status')
-    if (statusParam) {
-      setStatusFilter(statusParam)
+    if (!userScopeReady || !isContractPerformance || wereUserScopeFiltersCleared('contracts')) return
+    const { products } = getInitialUserScopeFilters()
+    if (products.length !== 1) return
+    const match = CONTRACT_PERF_PRODUCT_TABS.find(
+      (tab) =>
+        tab !== 'All' &&
+        normalizePerfProductGroupKey(tab) === normalizePerfProductGroupKey(products[0]),
+    )
+    if (match) setSelectedProductTab(match)
+  }, [userScopeReady, isContractPerformance])
+
+  /** Apply URL query filters once on load (do not re-apply on every toolbar change). */
+  useEffect(() => {
+    if (!authReady || appliedContractsUrlFiltersRef.current) return
+    appliedContractsUrlFiltersRef.current = true
+    if (!isContractPerformance) {
+      const statusParam = searchParams.get('status')
+      if (statusParam) {
+        setStatusFilter(statusParam)
+      }
     }
+  }, [authReady, isContractPerformance, searchParams])
+
+  useEffect(() => {
+    if (!authReady || !userScopeReady) return
     // Reset to page 1 when filters change
     setCurrentPage(1)
     if (isContractPerformance && !contractPerfSection3FilterApplied) {
@@ -1569,6 +1702,7 @@ function ContractsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     authReady,
+    userScopeReady,
     searchParams,
     statusFilter,
     b2bFlagFilter,
@@ -1620,9 +1754,7 @@ function ContractsPageContent() {
   // Debounced refetch: global search runs on the server (full dataset), not only the current page
   const applySearch = useCallback(() => {
     setCurrentPage(1)
-    setSearchTerm(searchDraft)
-    fetchContracts(1, searchDraft)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setSearchTerm(searchDraft.trim())
   }, [searchDraft])
 
   // Column header filters apply only when user presses Enter inside the filter popover.
@@ -1656,7 +1788,9 @@ function ContractsPageContent() {
   const sortStorageKey = isContractPerformance ? 'contract-performance.compact.sort' : 'contracts.compact.sort.v2'
 
   const fetchContracts = async (page: number = currentPage, searchOverride?: string, sortKeyOverride?: string, sortDirOverride?: 'asc' | 'desc') => {
+    const fetchGen = ++contractsFetchGenRef.current
     let trackContractPerfTableLoad = false
+    const activeUnassignedFilter = unassignedFilter
     try {
       if (!authReady) return
       if (isContractPerformance && !contractPerfSection3FilterApplied) {
@@ -1695,7 +1829,7 @@ function ContractsPageContent() {
       }
 
       // Status: summary-card drilldown always Open; otherwise respect global status filter.
-      if (!isContractPerformance && unassignedFilter) {
+      if (!isContractPerformance && activeUnassignedFilter) {
         params.append('status', 'Open')
       } else if (statusFilter && statusFilter !== 'All Status') {
         params.append('status', statusFilter)
@@ -1727,8 +1861,8 @@ function ContractsPageContent() {
       if (outstandingParam === 'true') {
         params.append('outstanding', 'true')
       }
-      if (unassignedFilter) {
-        params.append('unassigned', unassignedFilter)
+      if (activeUnassignedFilter) {
+        params.append('unassigned', activeUnassignedFilter)
       }
       if (isContractPerformance && contractPerfTablePlants.length > 0) {
         contractPerfTablePlants.forEach((p) => params.append('plant', p))
@@ -1761,16 +1895,42 @@ function ContractsPageContent() {
         params.append('sortDir', activeSortDir)
       }
 
+      console.log('[Contracts] fetchContracts request', {
+        fetchGen,
+        page,
+        unassigned: activeUnassignedFilter,
+        status: params.get('status'),
+        search: params.get('search'),
+      })
+
       const response = await api.get(`/contracts?${params.toString()}`)
+      if (fetchGen !== contractsFetchGenRef.current) {
+        console.log('[Contracts] Ignoring stale fetch response', {
+          fetchGen,
+          latestGen: contractsFetchGenRef.current,
+          page,
+          unassigned: activeUnassignedFilter,
+        })
+        return
+      }
+
       const loadedContracts: Contract[] = response.data?.data?.contracts || []
       setContracts(loadedContracts)
-      
+
       // Update pagination state
       if (response.data.data.pagination) {
         setTotalContracts(response.data.data.pagination.total)
         setTotalPages(response.data.data.pagination.totalPages)
         setCurrentPage(response.data.data.pagination.page)
       }
+
+      console.log('[Contracts] fetchContracts applied', {
+        fetchGen,
+        page,
+        unassigned: activeUnassignedFilter,
+        total: response.data.data.pagination?.total,
+        rows: loadedContracts.length,
+      })
       
       // Extract unique B2B flags from contracts
       // Use fresh response data; state updates are async.
@@ -1785,14 +1945,15 @@ function ContractsPageContent() {
       if (status === 401 || status === 403) return
       alert('Failed to load contracts. Please try again.')
     } finally {
-      setLoading(false)
       if (trackContractPerfTableLoad) finishContractPerfTableLoad()
+      if (fetchGen !== contractsFetchGenRef.current) return
+      setLoading(false)
     }
   }
 
   /** Section 1 cards — toolbar globals only; Open/Close tab does not refetch or reshape totals. */
   const fetchLatePerformanceSummary = useCallback(async () => {
-    if (!authReady || !isContractPerformance) return
+    if (!authReady || !userScopeReady || !isContractPerformance) return
     const query = buildLatePerformanceCardSummaryApiParams(contractPerfToolbarGlobal).toString()
     if (query.includes('status=')) {
       console.error('Contract Performance card summary must not include status filter:', query)
@@ -1816,11 +1977,11 @@ function ContractsPageContent() {
         setLatePerfSummaryLoading(false)
       }
     }
-  }, [authReady, isContractPerformance, cardSummaryRequestKey, contractPerfToolbarGlobal])
+  }, [authReady, userScopeReady, isContractPerformance, cardSummaryRequestKey, contractPerfToolbarGlobal])
 
   /** Section 2 drilldown tree — global scope only; node clicks do not refetch or collapse card counts. */
   const fetchLatePerformanceTree = useCallback(async () => {
-    if (!authReady || !isContractPerformance) return
+    if (!authReady || !userScopeReady || !isContractPerformance) return
     try {
       setLatePerfTreeLoading(true)
       const treeResp = await api.get(
@@ -1840,7 +2001,7 @@ function ContractsPageContent() {
     } finally {
       setLatePerfTreeLoading(false)
     }
-  }, [authReady, isContractPerformance, contractPerfPipeline.treeApiParams])
+  }, [authReady, userScopeReady, isContractPerformance, contractPerfPipeline.treeApiParams])
 
   useEffect(() => {
     void fetchLatePerformanceSummary()
@@ -1854,20 +2015,14 @@ function ContractsPageContent() {
   const applyDrilldownNodeSelection = useCallback(
     (level: 'product' | 'plant' | 'incoterm' | 'supplier', label: string) => {
       if (!isContractPerformance) return
-      const prev = appliedDrilldownSelection
-      let next: ContractPerfDrilldownFilters
-      if (level === 'product') {
-        next = { product: label, plant: null, incoterm: null, supplier: null }
-      } else if (level === 'plant') {
-        next = { ...prev, plant: label, incoterm: null, supplier: null }
-      } else if (level === 'incoterm') {
-        next = { ...prev, incoterm: label, supplier: null }
-      } else {
-        next = { ...prev, supplier: label }
-      }
+      const next = buildNextContractPerfDrilldownSelection(
+        appliedDrilldownSelectionRef.current,
+        level,
+        label,
+      )
       applyDrilldownSelection(next)
     },
-    [appliedDrilldownSelection, applyDrilldownSelection, isContractPerformance],
+    [applyDrilldownSelection, isContractPerformance],
   )
 
   useEffect(() => {
@@ -1919,7 +2074,7 @@ function ContractsPageContent() {
 
   // Summary alert cards — always Open contracts; other global filters still apply.
   const fetchUnassignedCounts = useCallback(async () => {
-    if (!authReady) return
+    if (!authReady || !userScopeReady) return
     try {
       const params = new URLSearchParams()
       if (searchTerm.trim().length >= 2) params.append('search', searchTerm.trim())
@@ -1955,6 +2110,7 @@ function ContractsPageContent() {
     }
   }, [
     authReady,
+    userScopeReady,
     searchTerm,
     b2bFlagFilter,
     selectedProducts,
@@ -1966,37 +2122,39 @@ function ContractsPageContent() {
   ])
 
   useEffect(() => {
-    if (isContractPerformance) return
+    if (isContractPerformance || !userScopeReady) return
     fetchUnassignedCounts()
-  }, [fetchUnassignedCounts, isContractPerformance])
+  }, [fetchUnassignedCounts, isContractPerformance, userScopeReady])
 
   const toggleContractsUnassignedFilter = useCallback((mode: ContractsUnassignedCardFilter) => {
-    setCurrentPage(1)
     setUnassignedFilter((prev) => {
       const next = prev === mode ? null : mode
+      setCurrentPage(1)
       if (next) {
-        setStatusFilter('Open')
-        setTimeout(() => contractsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
+        window.setTimeout(
+          () => contractsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+          100,
+        )
       }
       return next
     })
   }, [])
 
   const clearContractsPageFilters = useCallback(() => {
+    markUserScopeFiltersCleared('contracts')
     setDateFrom('')
     setDateTo('')
     setSearchDraft('')
     setSearchTerm('')
     setTransportModeFilter('ALL')
-    setSelectedProducts([])
+    resetUserScopeFilters()
     setSelectedIncoterms([])
-    setSelectedGroupPlants([])
     setB2bFlagFilter('ALL')
     setStatusFilter('All Status')
     setUnassignedFilter(null)
     setColumnFilters({})
     setCurrentPage(1)
-  }, [])
+  }, [resetUserScopeFilters])
 
   const hasActiveContractsPageFilters =
     Boolean(dateFrom) ||
@@ -2139,9 +2297,8 @@ function ContractsPageContent() {
 
   const handleFilterChange = () => {
     setCurrentPage(1)
-    // Single Apply: apply date range + current search draft together
-    setSearchTerm(searchDraft)
-    fetchContracts(1, searchDraft)
+    // Single Apply: apply date range + current search draft together (useEffect refetches)
+    setSearchTerm(searchDraft.trim())
   }
 
   const handleUploadFileChange = async (contract: Contract, e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2607,24 +2764,38 @@ function ContractsPageContent() {
     return true
   }
 
-  // Search + most column filters run on the server; summary-card filter also applied client-side on the current page slice.
+  // Search + most column filters run on the server. Summary-card unassigned filter is server-side only (GET ?unassigned=).
   const filteredContracts = useMemo(() => {
     let rows = contracts.filter((contract) => passesColumnFilters(contract, clientOnlyColumnFilters))
     if (isContractPerformance && section3FilterMode === 'linked') {
       const alignedIds = new Set(contractPerfPipeline.alignedTableContracts.map((c) => c.contract_id))
       rows = rows.filter((c) => alignedIds.has(c.contract_id))
     }
-    if (!isContractPerformance && unassignedFilter) {
-      rows = rows.filter((contract) => contractMatchesUnassignedCardFilter(contract, unassignedFilter))
-    }
     return rows
   }, [
     contracts,
     clientOnlyColumnFilters,
     isContractPerformance,
-    unassignedFilter,
     section3FilterMode,
     contractPerfPipeline.alignedTableContracts,
+  ])
+
+  useEffect(() => {
+    if (isContractPerformance) return
+    console.log('[Contracts] Section 3 filtered rows before render', {
+      unassignedFilter,
+      filteredRows: filteredContracts.length,
+      displayTotalContracts,
+      currentPage,
+      totalPages,
+    })
+  }, [
+    isContractPerformance,
+    unassignedFilter,
+    filteredContracts.length,
+    displayTotalContracts,
+    currentPage,
+    totalPages,
   ])
 
   type CompactColumn = {
@@ -3622,8 +3793,8 @@ function ContractsPageContent() {
     [compactGridColumnTracks]
   )
 
-  const contractPerfTableCellPad = isContractPerformance ? 'px-2 py-1.5' : 'px-3 py-2'
-  const contractPerfTableRowMinH = isContractPerformance ? 'min-h-[32px]' : 'min-h-[40px]'
+  const contractPerfTableCellPad = CONTRACT_PERF_TABLE_CELL_PAD
+  const contractPerfTableRowMinH = CONTRACT_PERF_TABLE_ROW_MIN_H
 
   const isColumnFilterActive = (colId: string) => {
     const f = columnFilters[colId]
@@ -3841,24 +4012,31 @@ function ContractsPageContent() {
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 items-center">
                     <span>
-                      Avg Trade:{' '}
+                      <ContractPerfStatusCardMetricLabel
+                        label="Avg Trade:"
+                        help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgTrade}
+                      />{' '}
                       <span className={`font-semibold ${statusCardAvgDaysClass(openTradeAvgDays, statusCardSummary.openIsLateContext)}`}>
                         {formatAvgDays(openTradeAvgDays)}
                       </span>
                     </span>
-                    <span className="inline-flex items-center gap-0.5">
-                      Avg DP:{' '}
+                    <span>
+                      <ContractPerfStatusCardMetricLabel
+                        label="Avg DP:"
+                        help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgDp}
+                      />{' '}
                       <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.openAvgDpCycle, statusCardSummary.openIsLateContext)}`}>
                         {formatAvgDays(statusCardSummary.openAvgDpCycle)}
                       </span>
-                      <FieldHelp text={FIELD_HELP.statusCardAvgDp} />
                     </span>
-                    <span className="inline-flex items-center gap-0.5">
-                      Avg Log:{' '}
+                    <span>
+                      <ContractPerfStatusCardMetricLabel
+                        label="Avg Log:"
+                        help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgLog}
+                      />{' '}
                       <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.openAvgLogCycle, statusCardSummary.openIsLateContext)}`}>
                         {formatAvgDays(statusCardSummary.openAvgLogCycle)}
                       </span>
-                      <FieldHelp text={FIELD_HELP.statusCardAvgLog} />
                     </span>
                   </div>
                 </button>
@@ -3883,24 +4061,31 @@ function ContractsPageContent() {
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 items-center">
                     <span>
-                      Avg Trade:{' '}
+                      <ContractPerfStatusCardMetricLabel
+                        label="Avg Trade:"
+                        help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgTrade}
+                      />{' '}
                       <span className={`font-semibold ${statusCardAvgDaysClass(closeTradeAvgDays, statusCardSummary.closeIsLateContext)}`}>
                         {formatAvgDays(closeTradeAvgDays)}
                       </span>
                     </span>
-                    <span className="inline-flex items-center gap-0.5">
-                      Avg DP:{' '}
+                    <span>
+                      <ContractPerfStatusCardMetricLabel
+                        label="Avg DP:"
+                        help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgDp}
+                      />{' '}
                       <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.closeAvgDpCycle, statusCardSummary.closeIsLateContext)}`}>
                         {formatAvgDays(statusCardSummary.closeAvgDpCycle)}
                       </span>
-                      <FieldHelp text={FIELD_HELP.statusCardAvgDp} />
                     </span>
-                    <span className="inline-flex items-center gap-0.5">
-                      Avg Log:{' '}
+                    <span>
+                      <ContractPerfStatusCardMetricLabel
+                        label="Avg Log:"
+                        help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgLog}
+                      />{' '}
                       <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.closeAvgLogCycle, statusCardSummary.closeIsLateContext)}`}>
                         {formatAvgDays(statusCardSummary.closeAvgLogCycle)}
                       </span>
-                      <FieldHelp text={FIELD_HELP.statusCardAvgLog} />
                     </span>
                   </div>
                 </button>
@@ -4003,9 +4188,13 @@ function ContractsPageContent() {
                           {perfDashMode === 'late' ? 'late' : 'on-time'} drilldown tree
                           {section3FilterMode === 'linked' ? (
                             <span className="ml-1 text-blue-700">
-                              · Linked to Section 3 (
-                              {section2ActiveNodeContractCount.toLocaleString('en-US')} contracts — counts on
-                              nodes match this scope)
+                              · Active path
+                              {contractPerfAppliedDrilldownLabel
+                                ? `: ${contractPerfAppliedDrilldownLabel}`
+                                : ''}{' '}
+                              — Section 3 shows{' '}
+                              {section2ActiveNodeContractCount.toLocaleString('en-US')} contracts; node cards
+                              keep branch totals at each level
                             </span>
                           ) : (
                             <span className="ml-1 text-gray-600">· Section 3 uses global filters only</span>
@@ -4033,11 +4222,12 @@ function ContractsPageContent() {
                       aria-busy={isSection2TreeLoading}
                     >
                       {([
-                        { title: 'Product', subtitle: 'Pick one', level: 'product' as const },
-                        { title: 'Plant', subtitle: appliedDrilldownSelection.product ? `Under ${appliedDrilldownSelection.product}` : 'Pick product first', level: 'plant' as const },
-                        { title: 'Incoterm', subtitle: appliedDrilldownSelection.plant ? `Under ${appliedDrilldownSelection.plant}` : 'Pick plant first', level: 'incoterm' as const },
-                        { title: 'Supplier', subtitle: appliedDrilldownSelection.incoterm ? `Under ${appliedDrilldownSelection.incoterm}` : 'Pick incoterm first', level: 'supplier' as const },
+                        { title: 'Product', level: 'product' as const },
+                        { title: 'Plant', level: 'plant' as const },
+                        { title: 'Incoterm', level: 'incoterm' as const },
+                        { title: 'Supplier', level: 'supplier' as const },
                       ] as const).map((col) => {
+                        const subtitle = contractPerfDrilldownColumnSubtitle(col.level, appliedDrilldownSelection)
                         const denom = (activePerformanceTreeForUi as LatePerfApiTreeNode[]).reduce((sum, node) => sum + (node.totalDays || 0), 0) || 1
                         const levelStyles: Record<string, { headerBg: string; badge: string; bar: string; border: string }> = {
                           incoterm: { headerBg: 'bg-violet-50', badge: 'bg-violet-100 text-violet-800', bar: 'bg-violet-600', border: 'border-violet-200' },
@@ -4058,7 +4248,13 @@ function ContractsPageContent() {
                           action()
                         }
 
-                        const renderItem = (node: ContractPerfBranchNode, selected: boolean, onClick: () => void, rightAction?: React.ReactNode, rightStat?: React.ReactNode) => {
+                        const renderItem = (
+                          node: ContractPerfBranchNode,
+                          selected: boolean,
+                          onClick: () => void,
+                          rightAction?: React.ReactNode,
+                          rightStat?: React.ReactNode,
+                        ) => {
                           const pct = Math.max(1, Math.round((Number(node.totalDays || 0) / denom) * 100))
                           return (
                             <div key={node.id} className={itemClass(selected)}>
@@ -4094,7 +4290,7 @@ function ContractsPageContent() {
                         const panelHeader = (
                           <div className={`rounded-lg border px-3 py-2 ${style.headerBg} ${style.border}`}>
                             <div className="text-sm font-semibold text-gray-900">{col.title}</div>
-                            <div className="text-[11px] text-gray-500">{col.subtitle}</div>
+                            <div className="text-[11px] text-gray-500">{subtitle}</div>
                           </div>
                         )
 
@@ -4374,7 +4570,7 @@ function ContractsPageContent() {
                   selectedGroupPlants={selectedGroupPlants}
                   onGroupPlantsChange={(selected) => {
                     lockSection1FilterChange()
-                    setSelectedGroupPlants(selected)
+                    handleGroupPlantsChange(selected)
                   }}
                   dateFrom={dateFrom}
                   dateTo={dateTo}
@@ -4400,10 +4596,10 @@ function ContractsPageContent() {
                   showProductFilter
                   productOptions={availableProducts}
                   selectedProducts={selectedProducts}
-                  onProductsChange={setSelectedProducts}
+                  onProductsChange={handleProductsChange}
                   groupPlantOptions={availableGroupPlants}
                   selectedGroupPlants={selectedGroupPlants}
-                  onGroupPlantsChange={setSelectedGroupPlants}
+                  onGroupPlantsChange={handleGroupPlantsChange}
                   dateFrom={dateFrom}
                   dateTo={dateTo}
                   onDateFromChange={setDateFrom}
@@ -4501,7 +4697,7 @@ function ContractsPageContent() {
                   </CardTitle>
                   {isContractPerformance ? (
                     contractPerfSection3FilterApplied ? (
-                    contractPerfSection3Loading ? (
+                    section3TableLoading ? (
                       <ContractPerfTableSubtitleSkeleton />
                     ) : (
                     <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
@@ -4541,11 +4737,33 @@ function ContractsPageContent() {
                         Select Source, Product, Open or Close summary, or a drilldown node to load the list.
                       </p>
                     )
+                  ) : section3TableLoading ? (
+                    <ContractPerfTableSubtitleSkeleton />
                   ) : (
-                    <p className="text-sm text-gray-500 mt-1">
-                      {displayTotalContracts.toLocaleString('en-US')} total contracts · Showing{' '}
-                      {filteredContracts.length} on this page
-                      {totalPages > 1 ? ` · Page ${currentPage}/${totalPages}` : ''}
+                    <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                      <span className="whitespace-nowrap tabular-nums text-gray-700">
+                        <span className="font-semibold">
+                          {displayTotalContracts.toLocaleString('en-US')}
+                        </span>{' '}
+                        contracts
+                      </span>
+                      <span className="text-gray-400" aria-hidden>
+                        ·
+                      </span>
+                      <span
+                        className={cn(
+                          'whitespace-nowrap font-medium',
+                          contractsTableScope.emphasized ? 'text-blue-700' : 'text-gray-600',
+                        )}
+                      >
+                        {contractsTableScope.text}
+                      </span>
+                      <span className="text-gray-400" aria-hidden>
+                        ·
+                      </span>
+                      <span className="whitespace-nowrap tabular-nums">
+                        Page {currentPage}/{totalPages} · {filteredContracts.length} rows
+                      </span>
                     </p>
                   )}
                 </div>
@@ -4571,7 +4789,7 @@ function ContractsPageContent() {
                     variant="outline"
                     size="sm"
                     onClick={() => setShowColumnsMenu(v => !v)}
-                    disabled={loading || contractPerfSection3Loading}
+                    disabled={section3TableLoading}
                   >
                     <SlidersHorizontal className="h-4 w-4 mr-2" />
                     Columns
@@ -4667,7 +4885,7 @@ function ContractsPageContent() {
                       variant="outline"
                       size="sm"
                       onClick={() => handlePageChange(currentPage - 1)}
-                      disabled={currentPage === 1 || loading || contractPerfSection3Loading}
+                      disabled={currentPage === 1 || section3TableLoading}
                     >
                       Previous
                     </Button>
@@ -4692,7 +4910,7 @@ function ContractsPageContent() {
                             variant={currentPage === pageNum ? "default" : "outline"}
                             size="sm"
                             onClick={() => handlePageChange(pageNum)}
-                            disabled={loading || contractPerfSection3Loading}
+                            disabled={section3TableLoading}
                             className="min-w-[40px]"
                           >
                             {pageNum}
@@ -4705,7 +4923,7 @@ function ContractsPageContent() {
                       variant="outline"
                       size="sm"
                       onClick={() => handlePageChange(currentPage + 1)}
-                      disabled={currentPage === totalPages || loading || contractPerfSection3Loading}
+                      disabled={currentPage === totalPages || section3TableLoading}
                     >
                       Next
                     </Button>
@@ -4722,14 +4940,8 @@ function ContractsPageContent() {
                   the contract list.
                 </p>
               </div>
-            ) : contractPerfSection3Loading ? (
-              <ContractPerfTableSkeleton
-                columnCount={Math.max(visibleColumns.length + 1, 8)}
-                rowCount={8}
-              />
-            ) : loading ? (
-              <div className="text-center py-8">Loading contracts...</div>
             ) : (
+              <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
               <>
                 {/* Desktop compact table (Contracts + Contract Performance): semantic <table>, zebra on <tr>/<td> */}
                 <div className="hidden lg:block border rounded-lg overflow-hidden">
@@ -4794,7 +5006,7 @@ function ContractsPageContent() {
                         </colgroup>
                       {/* Header */}
                       <thead>
-                      <tr className="text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10">
+                      <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_CLASS}>
                         {visibleColumns.map(col => {
                           const activeSort = sortKey === col.id
                           const filterActive = isColumnFilterActive(col.id)
@@ -4810,8 +5022,7 @@ function ContractsPageContent() {
                               key={col.id}
                               scope="col"
                               className={cn(
-                                'relative min-w-0 text-left font-semibold cursor-move',
-                                isContractPerformance ? 'align-top' : 'align-bottom',
+                                'relative min-w-0 text-left font-semibold cursor-move align-top',
                                 contractPerfTableCellPad,
                                 dragColId === col.id && 'opacity-60',
                               )}
@@ -4833,12 +5044,7 @@ function ContractsPageContent() {
                                 setDragColId(null)
                               }}
                             >
-                              <div
-                                className={cn(
-                                  'flex gap-1 min-w-0',
-                                  isContractPerformance ? 'items-start' : 'items-center',
-                                )}
-                              >
+                              <div className="flex gap-1 min-w-0 items-start">
                                 <span className="leading-snug whitespace-normal break-words [overflow-wrap:anywhere]">
                                   {col.label}
                                 </span>
@@ -5157,8 +5363,8 @@ function ContractsPageContent() {
                         <th
                           scope="col"
                           className={cn(
-                            'text-center align-bottom font-semibold sticky right-0 z-30 top-0 bg-gray-50 border-l border-gray-200',
-                            isContractPerformance ? 'min-w-[52px] px-1.5 py-1.5' : 'min-w-[160px] pl-3 pr-2 py-2',
+                            'text-center align-top font-semibold sticky right-0 z-30 top-0 bg-gray-50 border-l border-gray-200 px-2 py-1.5',
+                            isContractPerformance ? 'min-w-[52px]' : 'min-w-[160px]',
                           )}
                         >
                           Actions
@@ -5168,7 +5374,13 @@ function ContractsPageContent() {
 
                       {/* Rows */}
                       <tbody className="divide-y divide-gray-200">
-                        {sortedContracts.length === 0 ? (
+                        {section3TableLoading ? (
+                          <ContractTableBodySkeleton
+                            columnCount={visibleColumns.length}
+                            rowCount={8}
+                            actionsColMinWidth={isContractPerformance ? 'compact' : 'wide'}
+                          />
+                        ) : sortedContracts.length === 0 ? (
                           <tr className="bg-white">
                             <td colSpan={visibleColumns.length + 1} className="px-4 py-10 text-center text-gray-500">
                               <p>No contracts found</p>
@@ -5209,12 +5421,7 @@ function ContractsPageContent() {
                                           {rendered}
                                         </ContractPerfTruncatedCell>
                                       ) : (
-                                        <div
-                                          className={cn(
-                                            'min-w-0 max-w-full',
-                                            isContractPerformance && 'truncate text-sm',
-                                          )}
-                                        >
+                                        <div className="min-w-0 max-w-full truncate text-sm">
                                           {rendered}
                                         </div>
                                       )}
@@ -5304,7 +5511,9 @@ function ContractsPageContent() {
 
                 {/* Mobile/tablet cards */}
                 <div className="lg:hidden space-y-2">
-                  {sortedContracts.map((contract) => (
+                  {section3TableLoading ? (
+                    <ContractPerfTableMobileSkeleton rowCount={6} />
+                  ) : sortedContracts.map((contract) => (
                     <div
                       key={contract.id}
                       className="border rounded-lg hover:bg-gray-50 transition-colors"
@@ -5478,12 +5687,13 @@ function ContractsPageContent() {
                 ))}
                 </div>
               </>
+              </div>
             )}
             
             {/* Pagination Controls */}
             {(!isContractPerformance || contractPerfSection3FilterApplied) && totalPages > 1 && (
               <div className="mt-6 flex items-center justify-between border-t pt-4">
-                <div className="text-sm text-gray-600 tabular-nums">
+                <div className="text-xs text-gray-500 tabular-nums">
                   Page {currentPage}/{totalPages} · {displayTotalContracts.toLocaleString('en-US')} contracts
                 </div>
                 <div className="flex items-center gap-2">
@@ -5491,7 +5701,7 @@ function ContractsPageContent() {
                     variant="outline"
                     size="sm"
                     onClick={() => handlePageChange(currentPage - 1)}
-                    disabled={currentPage === 1 || loading || contractPerfSection3Loading}
+                    disabled={currentPage === 1 || section3TableLoading}
                   >
                     Previous
                   </Button>
@@ -5516,7 +5726,7 @@ function ContractsPageContent() {
                           variant={currentPage === pageNum ? "default" : "outline"}
                           size="sm"
                           onClick={() => handlePageChange(pageNum)}
-                          disabled={loading || contractPerfSection3Loading}
+                          disabled={section3TableLoading}
                           className="min-w-[40px]"
                         >
                           {pageNum}
@@ -5529,7 +5739,7 @@ function ContractsPageContent() {
                     variant="outline"
                     size="sm"
                     onClick={() => handlePageChange(currentPage + 1)}
-                    disabled={currentPage === totalPages || loading || contractPerfSection3Loading}
+                    disabled={currentPage === totalPages || section3TableLoading}
                   >
                     Next
                   </Button>
@@ -6002,52 +6212,53 @@ function ContractsPageContent() {
                     </div>
                   </div>
 
-                  {/* Payment Dates */}
-                  <div>
-                    <h3 className="text-lg font-semibold mb-3">Payment Information</h3>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Unit Price</div>
-                        <div className="font-medium mt-1">{formatCurrency(selectedContract.unit_price, selectedContract.currency)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Contract Value</div>
-                        <div className="font-medium mt-1">{formatCurrency(selectedContract.contract_value, selectedContract.currency)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Due Date Payment</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.due_date_payment as any)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">DP Date</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.dp_date as any)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Payoff Date</div>
-                        <div className="font-medium mt-1">{formatDate(selectedContract.payoff_date as any)}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">DP Date Deviation (Days)</div>
-                        <div className="font-medium mt-1">{selectedContract.dp_date_deviation_days ?? '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Payoff Date Deviation (Days)</div>
-                        <div className="font-medium mt-1">{selectedContract.payoff_date_deviation_days ?? '-'}</div>
-                      </div>
-                      <div className="p-3 bg-gray-50 rounded">
-                        <div className="text-gray-500">Payment Status</div>
-                        <div className="font-medium mt-1">
-                          {contractPaymentsLoading ? (
-                            <span className="text-gray-400">Loading...</span>
-                          ) : contractPayments.length === 0 ? (
-                            '-'
-                          ) : (
-                            contractPayments.map((p) => p.payment_status).filter(Boolean).join(', ') || '-'
-                          )}
+                  {canViewContractPaymentInfo && (
+                    <div>
+                      <h3 className="text-lg font-semibold mb-3">Payment Information</h3>
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div className="p-3 bg-gray-50 rounded">
+                          <div className="text-gray-500">Unit Price</div>
+                          <div className="font-medium mt-1">{formatCurrency(selectedContract.unit_price, selectedContract.currency)}</div>
+                        </div>
+                        <div className="p-3 bg-gray-50 rounded">
+                          <div className="text-gray-500">Contract Value</div>
+                          <div className="font-medium mt-1">{formatCurrency(selectedContract.contract_value, selectedContract.currency)}</div>
+                        </div>
+                        <div className="p-3 bg-gray-50 rounded">
+                          <div className="text-gray-500">Due Date Payment</div>
+                          <div className="font-medium mt-1">{formatDate(selectedContract.due_date_payment as any)}</div>
+                        </div>
+                        <div className="p-3 bg-gray-50 rounded">
+                          <div className="text-gray-500">DP Date</div>
+                          <div className="font-medium mt-1">{formatDate(selectedContract.dp_date as any)}</div>
+                        </div>
+                        <div className="p-3 bg-gray-50 rounded">
+                          <div className="text-gray-500">Payoff Date</div>
+                          <div className="font-medium mt-1">{formatDate(selectedContract.payoff_date as any)}</div>
+                        </div>
+                        <div className="p-3 bg-gray-50 rounded">
+                          <div className="text-gray-500">DP Date Deviation (Days)</div>
+                          <div className="font-medium mt-1">{selectedContract.dp_date_deviation_days ?? '-'}</div>
+                        </div>
+                        <div className="p-3 bg-gray-50 rounded">
+                          <div className="text-gray-500">Payoff Date Deviation (Days)</div>
+                          <div className="font-medium mt-1">{selectedContract.payoff_date_deviation_days ?? '-'}</div>
+                        </div>
+                        <div className="p-3 bg-gray-50 rounded">
+                          <div className="text-gray-500">Payment Status</div>
+                          <div className="font-medium mt-1">
+                            {contractPaymentsLoading ? (
+                              <span className="text-gray-400">Loading...</span>
+                            ) : contractPayments.length === 0 ? (
+                              '-'
+                            ) : (
+                              contractPayments.map((p) => p.payment_status).filter(Boolean).join(', ') || '-'
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Documents */}
                   <div>

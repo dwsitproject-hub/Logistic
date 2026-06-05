@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
+import { MasterLoadingPortCombobox } from '@/components/MasterLoadingPortCombobox'
 import {
   AlertCircle,
   AlertTriangle,
@@ -210,11 +210,8 @@ export function AddShipmentModal({
     }>
   >([])
   const [showVesselSuggestions, setShowVesselSuggestions] = useState(false)
-  const [portSuggestions, setPortSuggestions] = useState<Array<{ port: string; region: string | null }>>([])
-  const [showPortSuggestions, setShowPortSuggestions] = useState(false)
-  const [activeEtaPortRowId, setActiveEtaPortRowId] = useState<string | null>(null)
+  const [mappedPlantSiteName, setMappedPlantSiteName] = useState('')
   const vesselSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const portSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const formatShortDate = (dateStr: string) => formatDateDMY(dateStr)
 
@@ -409,7 +406,9 @@ export function AddShipmentModal({
   const getPoLabel = useCallback(
     (contractId: string) => {
       const data = contractValidations[contractId]?.contractData
-      return (data?.po_number || contractId) as string
+      const poNumber = (data?.po_number || contractId) as string
+      const plantCode = String(data?.plant_code ?? '').trim()
+      return plantCode ? `${poNumber} - ${plantCode}` : poNumber
     },
     [contractValidations],
   )
@@ -501,21 +500,6 @@ export function AddShipmentModal({
     }
   }
 
-  const fetchPortSuggestions = async (search: string) => {
-    if (!search || search.trim().length < 2) {
-      setPortSuggestions([])
-      return
-    }
-    try {
-      const res = await api.get('/master-loading-ports', { params: { search: search.trim(), limit: 20 } })
-      const items = res.data?.data?.items ?? []
-      setPortSuggestions(items)
-      setShowPortSuggestions(true)
-    } catch {
-      setPortSuggestions([])
-    }
-  }
-
   const handleVesselNameChange = (value: string) => {
     setNewShipment((prev) => ({ ...prev, vesselName: value }))
     if (vesselSearchTimeoutRef.current) clearTimeout(vesselSearchTimeoutRef.current)
@@ -594,6 +578,37 @@ export function AddShipmentModal({
     return 'mixed'
   }, [newShipment.contractNumbers, contractValidations])
 
+  const resolvedPlantCode = useMemo(() => {
+    const firstContractId = newShipment.contractNumbers[0]
+    if (!firstContractId) return ''
+    const data = contractValidations[firstContractId]?.contractData
+    return String(data?.plant_code ?? '').trim()
+  }, [newShipment.contractNumbers, contractValidations])
+
+  useEffect(() => {
+    if (!resolvedPlantCode) {
+      setMappedPlantSiteName('')
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await api.get('/master-plants', { params: { search: resolvedPlantCode, limit: 50 } })
+        const items: Array<{ plant_code?: string; plant_name?: string }> = res.data?.data?.items ?? []
+        const codeUpper = resolvedPlantCode.toUpperCase()
+        const match = items.find((p) => String(p.plant_code ?? '').trim().toUpperCase() === codeUpper)
+        if (!cancelled) {
+          setMappedPlantSiteName(match?.plant_name?.trim() || resolvedPlantCode)
+        }
+      } catch {
+        if (!cancelled) setMappedPlantSiteName(resolvedPlantCode)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [resolvedPlantCode])
+
   const clearFieldError = (field: string) =>
     setFormErrors((prev) => { const next = { ...prev }; delete next[field]; return next })
 
@@ -607,8 +622,7 @@ export function AddShipmentModal({
     setShowContractSuggestions(false)
     setVesselSuggestions([])
     setShowVesselSuggestions(false)
-    setPortSuggestions([])
-    setShowPortSuggestions(false)
+    setMappedPlantSiteName('')
     setFormErrors({})
   }, [])
 
@@ -663,6 +677,7 @@ export function AddShipmentModal({
     if (mode === 'sea' || mode === 'mixed') {
       if (!newShipment.vesselName.trim()) errors.vesselName = 'Vessel Name is required for Sea contracts'
       if (!newShipment.charterType) errors.charterType = 'Charter Type is required for Sea contracts'
+      if (!newShipment.portOfDischarge.trim()) errors.portOfDischarge = 'Discharge Port is required for Sea contracts'
     }
 
     const usedContractIds = new Set<string>()
@@ -670,6 +685,12 @@ export function AddShipmentModal({
       const prefix = `eta_${block.id}`
       const hasDates = etaDetailHasAnyDate(block)
       const selectedIds = block.contractIds.filter(Boolean)
+
+      if ((mode === 'sea' || mode === 'mixed') && newShipment.contractNumbers.length > 0) {
+        if (!block.loadingPort.trim()) {
+          errors[`${prefix}_loadingPort`] = 'Loading Port is required'
+        }
+      }
 
       if (hasDates && selectedIds.length === 0) {
         errors[`${prefix}_contract`] = 'Select at least one PO for this shipment detail'
@@ -786,7 +807,6 @@ export function AddShipmentModal({
   }
 
   const vesselDropdownOpen = showVesselSuggestions && vesselSuggestions.length > 0
-  const portDropdownOpen = showPortSuggestions && portSuggestions.length > 0
   const section2DropdownOpen = vesselDropdownOpen
 
   const step1Done = newShipment.contractNumbers.length > 0 && newShipment.contractNumbers.every((id) => contractValidations[id]?.exists)
@@ -1288,15 +1308,37 @@ export function AddShipmentModal({
                   </select>
                   {formErrors.charterType && <p className="text-xs mt-1 text-red-600">{formErrors.charterType}</p>}
                 </div>
+                <div className="relative z-0">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Discharge Port
+                    {(selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') && (
+                      <span className="text-red-500"> *</span>
+                    )}
+                  </label>
+                  <MasterLoadingPortCombobox
+                    value={newShipment.portOfDischarge}
+                    onChange={(val) => {
+                      setNewShipment((prev) => ({ ...prev, portOfDischarge: val }))
+                      clearFieldError('portOfDischarge')
+                    }}
+                    placeholder="Search port name..."
+                    className={formErrors.portOfDischarge ? 'border-red-500' : ''}
+                  />
+                  {formErrors.portOfDischarge && (
+                    <p className="text-xs mt-1 text-red-600">{formErrors.portOfDischarge}</p>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 overflow-visible">
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Plant/Site (Discharge Port) (Optional)</label>
-                  <PlantSiteCombobox
-                    value={newShipment.portOfDischarge}
-                    onChange={(val) => setNewShipment((prev) => ({ ...prev, portOfDischarge: val }))}
-                    placeholder="Search plant/site..."
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Plant/Site</label>
+                  <Input
+                    value={mappedPlantSiteName}
+                    readOnly
+                    disabled
+                    placeholder={resolvedPlantCode ? 'Resolving plant name...' : 'Add a contract in Section 1'}
+                    className="bg-gray-50 cursor-not-allowed"
                   />
                 </div>
               </div>
@@ -1358,51 +1400,21 @@ export function AddShipmentModal({
                           </div>
 
                           <div className="px-2 py-1.5 border-b bg-white space-y-2">
-                            <div
-                              className={`relative overflow-visible ${activeEtaPortRowId === block.id && portDropdownOpen ? 'z-[100]' : 'z-0'}`}
-                            >
+                            <div className="relative overflow-visible z-0">
                               <label className="block text-[11px] font-medium text-gray-600 mb-1">
-                                Loading Port (Optional)
+                                Loading Port <span className="text-red-500">*</span>
                               </label>
-                              <Input
+                              <MasterLoadingPortCombobox
                                 value={block.loadingPort}
-                                onChange={(e) => {
-                                  const value = e.target.value
-                                  updateEtaDetailBlock(block.id, { loadingPort: value })
-                                  if (portSearchTimeoutRef.current) clearTimeout(portSearchTimeoutRef.current)
-                                  portSearchTimeoutRef.current = setTimeout(() => fetchPortSuggestions(value), 300)
+                                onChange={(val) => {
+                                  updateEtaDetailBlock(block.id, { loadingPort: val })
+                                  clearFieldError(`${prefix}_loadingPort`)
                                 }}
-                                onFocus={() => {
-                                  setActiveEtaPortRowId(block.id)
-                                  if ((block.loadingPort || '').trim().length >= 2) setShowPortSuggestions(true)
-                                }}
-                                onBlur={() => {
-                                  setTimeout(() => {
-                                    setShowPortSuggestions(false)
-                                    setActiveEtaPortRowId((prev) => (prev === block.id ? null : prev))
-                                  }, 200)
-                                }}
-                                placeholder="Type to search port (from Master Loading Port)"
-                                className="h-8 text-xs"
+                                placeholder="Search port name..."
+                                className={`h-8 text-xs ${formErrors[`${prefix}_loadingPort`] ? 'border-red-500' : ''}`}
                               />
-                              {activeEtaPortRowId === block.id && portDropdownOpen && (
-                                <div className={AUTOCOMPLETE_PANEL_CLASS}>
-                                  {portSuggestions.map((p, idx) => (
-                                    <div
-                                      key={`${block.id}-${p.port}-${p.region || ''}-${idx}`}
-                                      className="px-3 py-2 hover:bg-gray-100 cursor-pointer border-b last:border-b-0"
-                                      onMouseDown={() => {
-                                        updateEtaDetailBlock(block.id, { loadingPort: p.port })
-                                        setShowPortSuggestions(false)
-                                        setPortSuggestions([])
-                                        setActiveEtaPortRowId(null)
-                                      }}
-                                    >
-                                      <div className="font-medium text-sm">{p.port}</div>
-                                      {p.region && <div className="text-xs text-gray-500">{p.region}</div>}
-                                    </div>
-                                  ))}
-                                </div>
+                              {formErrors[`${prefix}_loadingPort`] && (
+                                <p className="text-[11px] mt-1 text-red-600">{formErrors[`${prefix}_loadingPort`]}</p>
                               )}
                             </div>
                             <div className="flex flex-wrap items-center justify-between gap-1 mb-1">

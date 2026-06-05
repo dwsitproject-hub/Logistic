@@ -3009,6 +3009,20 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         c.delivery_start_date,
         c.delivery_end_date,
         c.transport_mode,
+        COALESCE(
+          NULLIF(TRIM(c.plant_code), ''),
+          (
+            SELECT NULLIF(TRIM(COALESCE(
+              spd.data->'contract'->>'plant_code',
+              spd.data->'raw'->>'Plant Code',
+              spd.data->'raw'->>'plant code'
+            )), '')
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = c.contract_id
+            ORDER BY spd.created_at DESC NULLS LAST
+            LIMIT 1
+          )
+        ) AS plant_code,
         -- Ports are not stored on contracts; derive from latest SAP processed data if available
         NULLIF(NULLIF((
           SELECT spd.data->'shipment'->>'vessel_loading_port_1'
