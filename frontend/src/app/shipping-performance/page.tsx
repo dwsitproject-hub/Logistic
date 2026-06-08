@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { ArrowDown, ArrowUp, GripVertical, Search, SlidersHorizontal, X } from 'lucide-react'
+import { GripVertical, Search, SlidersHorizontal, X } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import VesselHistoryModal, {
@@ -46,7 +46,9 @@ import {
   shippingPerfTableColumnWidthPx,
   shippingPerfTableMinWidthPx,
 } from '@/lib/shippingPerformanceTableUi'
+import { COMPACT_TABLE_CLASS } from '@/lib/compactTableUi'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
+import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
   ContractPerfTableSubtitleSkeleton,
   ContractTableBodySkeleton,
@@ -1441,8 +1443,17 @@ function ShippingPerformancePageContent() {
   )
 
   const shippingPerfTableMinWidthPxValue = useMemo(
-    () => shippingPerfTableMinWidthPx(tableColumnKeys.map(String)),
-    [tableColumnKeys],
+    () =>
+      shippingPerfTableMinWidthPx(
+        tableColumnKeys.map((key) => {
+          const col = COLUMN_MAP[String(key)]
+          return {
+            key: String(key),
+            label: resolveTableColumnLabel(col.label),
+          }
+        }),
+      ),
+    [tableColumnKeys, tableLabelMode, resolveTableColumnLabel],
   )
 
   const totalPages = Math.max(1, Math.ceil(tableRows.length / pageSize))
@@ -1504,12 +1515,11 @@ function ShippingPerformancePageContent() {
   }
 
   const onHeaderSort = (key: keyof ShippingPerformanceRow) => {
-    if (sortBy === key) {
-      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))
-      return
-    }
+    const nextDir: 'asc' | 'desc' =
+      sortBy === key ? (sortDirection === 'asc' ? 'desc' : 'asc') : 'asc'
+    setSortDirection(nextDir)
     setSortBy(key)
-    setSortDirection('asc')
+    setCurrentPage(1)
   }
 
   const moveColumn = (fromKey: string, toKey: string) => {
@@ -2122,12 +2132,17 @@ function ShippingPerformancePageContent() {
                   className="min-w-0"
                   style={{ minWidth: shippingPerfTableMinWidthPxValue }}
                 >
-                <table className="w-full table-fixed border-collapse">
+                <table className={COMPACT_TABLE_CLASS}>
                   <colgroup>
                     {tableColumnKeys.map((key) => (
                       <col
                         key={String(key)}
-                        style={{ width: shippingPerfTableColumnWidthPx(String(key)) }}
+                        style={{
+                          width: shippingPerfTableColumnWidthPx(
+                            String(key),
+                            resolveTableColumnLabel(COLUMN_MAP[String(key)].label),
+                          ),
+                        }}
                       />
                     ))}
                   </colgroup>
@@ -2139,37 +2154,12 @@ function ShippingPerformancePageContent() {
                         const columnTooltip = resolvePerfColumnTooltip(col.tooltip, tableLabelMode)
                         const isSorted = sortBy === key
                         const headerButton = (
-                          <div
-                            className={cn(
-                              'flex min-w-0 max-w-full items-start gap-1',
-                              columnTooltip ? 'cursor-help' : '',
-                            )}
-                          >
-                            <button
-                              type="button"
-                              className="min-w-0 flex-1 text-left"
-                              onClick={() => onHeaderSort(key)}
-                              title={columnTooltip ? undefined : 'Click to sort, drag to reorder'}
-                            >
-                              <span className="block leading-snug whitespace-normal break-words [overflow-wrap:anywhere]">
-                                {columnLabel}
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              className="shrink-0 p-0.5 rounded text-gray-500 hover:bg-gray-200"
-                              onClick={() => onHeaderSort(key)}
-                              title="Sort"
-                            >
-                              {isSorted ? (
-                                sortDirection === 'asc' ? (
-                                  <ArrowUp className="h-3 w-3" />
-                                ) : (
-                                  <ArrowDown className="h-3 w-3" />
-                                )
-                              ) : null}
-                            </button>
-                          </div>
+                          <ContractPerfTableSortHeader
+                            label={columnLabel}
+                            activeSort={isSorted}
+                            sortDir={sortDirection}
+                            onSortClick={() => onHeaderSort(key)}
+                          />
                         )
                         return (
                           <th

@@ -3,6 +3,14 @@
  * Isolated from `/contracts` and other pages; do not import from shared table configs elsewhere.
  */
 
+import {
+  buildCompactTableColumnWidthTracks,
+  resolveCompactColumnWidthPx,
+  type CompactTableColumnWidthInput,
+} from '@/lib/compactTableUi'
+
+export { COMPACT_TABLE_HEADER_ROW_CLASS as CONTRACT_PERF_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
+
 /** Left-to-right table order and Visible Column modal sequence (primary columns first). */
 export const CONTRACT_PERF_COLUMN_ORDER: readonly string[] = [
   'contract_date',
@@ -109,8 +117,6 @@ export function mergeContractPerfColumnOrder(saved: string[], allIds: string[]):
 /** Section 3 compact table — shared by Contract Performance and Contracts pages. */
 export const CONTRACT_PERF_TABLE_CELL_PAD = 'px-2 py-1.5'
 export const CONTRACT_PERF_TABLE_ROW_MIN_H = 'min-h-[32px]'
-export const CONTRACT_PERF_TABLE_HEADER_ROW_CLASS =
-  'text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10'
 
 /** Section 3 compact table — fixed px widths (Contract Performance only). */
 export const CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
@@ -165,8 +171,16 @@ export const CONTRACT_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS = new Set([
 
 const CONTRACT_PERF_DEFAULT_COLUMN_WIDTH_PX = 96
 
-export function contractPerfTableColumnWidthPx(colId: string): number {
-  return CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX[colId] ?? CONTRACT_PERF_DEFAULT_COLUMN_WIDTH_PX
+export function contractPerfTableColumnWidthPx(
+  colId: string,
+  headerLabel?: string,
+  options?: { hasFormulaHelp?: boolean },
+): number {
+  const base = CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX[colId] ?? CONTRACT_PERF_DEFAULT_COLUMN_WIDTH_PX
+  return resolveCompactColumnWidthPx(base, headerLabel, {
+    hasFormulaHelp: options?.hasFormulaHelp,
+    hasSort: true,
+  })
 }
 
 export function contractPerfTableColumnTrack(colId: string): string {
@@ -175,13 +189,11 @@ export function contractPerfTableColumnTrack(colId: string): string {
 }
 
 export function buildContractPerfColumnWidthTracks(
-  visibleColumnIds: readonly string[],
+  visibleColumns: ReadonlyArray<string | CompactTableColumnWidthInput>,
 ): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const id of visibleColumnIds) {
-    out[id] = contractPerfTableColumnTrack(id)
-  }
-  return out
+  return buildCompactTableColumnWidthTracks(visibleColumns, (id, label, formulaHelp) =>
+    contractPerfTableColumnWidthPx(id, label, { hasFormulaHelp: Boolean(formulaHelp) }),
+  )
 }
 
 export type ContractPerfCellTooltipSource = {

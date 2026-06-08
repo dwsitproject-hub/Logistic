@@ -97,6 +97,22 @@ import {
   mergeContractPerfColumnOrder,
   orderContractPerformanceColumns,
 } from '@/lib/contractPerformanceColumns'
+import {
+  COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+  COMPACT_TABLE_CLASS,
+  COMPACT_TABLE_HEADER_LABEL_CLASS,
+  compactTableColumnTrackPx,
+  resolveVisibleColumnWidthPx,
+} from '@/lib/compactTableUi'
+import {
+  getOperationalColumnLayout,
+  OperationalNowrapCell,
+  OperationalStackedCommaCell,
+  operationalTableColumnClass,
+} from '@/lib/operationalTableLayout'
 import { useContractPerformanceFilters } from '@/hooks/useContractPerformanceFilters'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
@@ -364,7 +380,7 @@ type B2bPartyRow = {
   certification?: string | null
 }
 
-/** Matches compact grid `minmax(Npx, …)` — used for <col /> widths with table-fixed */
+/** Matches compact grid `minmax(Npx, …)` — Contract Performance <col /> widths only. */
 function compactGridTrackMinPx(track: string): string {
   const m = track.match(/minmax\((\d+)px/)
   return m ? `${m[1]}px` : '96px'
@@ -2822,11 +2838,16 @@ function ContractsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.po_numbers || c.po_number || '',
-      render: (c) => (
-        <span className="text-sm truncate block" title={c.po_numbers || c.po_number || ''}>
-          {c.po_numbers || c.po_number || '-'}
-        </span>
-      ),
+      render: (c) => {
+        const val = c.po_numbers || c.po_number || ''
+        return isContractPerformance ? (
+          <span className="text-sm truncate block" title={val}>
+            {val || '-'}
+          </span>
+        ) : (
+          <OperationalNowrapCell value={val} title={val} />
+        )
+      },
     }
     const columns: CompactColumn[] = [
     {
@@ -2846,8 +2867,12 @@ function ContractsPageContent() {
             formulaHelp: isContractPerformance ? undefined : FIELD_HELP.contractUrgentFlag,
             getSortValue: (c: Contract) => c.contract_id || '',
             render: (c: Contract) => (
-              <div className="flex items-center gap-1 min-w-0">
-                <span className="text-sm truncate">{c.contract_id}</span>
+              <div className={cn('flex items-center gap-1', isContractPerformance && 'min-w-0')}>
+                {isContractPerformance ? (
+                  <span className="text-sm truncate">{c.contract_id}</span>
+                ) : (
+                  <OperationalNowrapCell value={c.contract_id} fallback="-" />
+                )}
                 {showUrgentFlag(c) && !isContractPerformance && (
                   <span title="Urgent: delivery window ≤14 days and missing shipment/STO or trucking per transport mode (see column help)" className="shrink-0 inline-flex">
                     <Flag className="h-3.5 w-3.5 text-red-500 fill-red-500" />
@@ -2884,11 +2909,14 @@ function ContractsPageContent() {
       defaultVisible: !isContractPerformance,
       sortable: true,
       getSortValue: (c) => c.contract_ext_no || '',
-      render: (c) => (
-        <span className="text-sm break-words whitespace-normal" title={c.contract_ext_no || ''}>
-          {c.contract_ext_no || '-'}
-        </span>
-      )
+      render: (c) =>
+        isContractPerformance ? (
+          <span className="text-sm break-words whitespace-normal" title={c.contract_ext_no || ''}>
+            {c.contract_ext_no || '-'}
+          </span>
+        ) : (
+          <OperationalStackedCommaCell value={c.contract_ext_no} title={c.contract_ext_no || ''} />
+        ),
     },
     {
       id: 'product',
@@ -3184,11 +3212,16 @@ function ContractsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.sto_numbers || c.sto_number || '',
-      render: (c) => (
-        <span className="text-sm truncate block" title={c.sto_numbers || c.sto_number || ''}>
-          {c.sto_numbers || c.sto_number || '-'}
-        </span>
-      )
+      render: (c) => {
+        const val = c.sto_numbers || c.sto_number || ''
+        return isContractPerformance ? (
+          <span className="text-sm truncate block" title={val}>
+            {val || '-'}
+          </span>
+        ) : (
+          <OperationalNowrapCell value={val} title={val} />
+        )
+      },
     },
     {
       id: 'delivery_start',
@@ -3599,203 +3632,44 @@ function ContractsPageContent() {
 
   const contractPerfTableMinWidthPx = useMemo(() => {
     if (!isContractPerformance) return 1100
-    const cols = contractPerfVisibleColumnIds.reduce(
-      (sum, id) => sum + contractPerfTableColumnWidthPx(id),
+    const cols = visibleColumns.reduce(
+      (sum, col) =>
+        sum +
+        contractPerfTableColumnWidthPx(col.id, col.label, {
+          hasFormulaHelp: Boolean(col.formulaHelp),
+        }),
       0,
     )
     return cols + 52
-  }, [contractPerfVisibleColumnIds, isContractPerformance])
+  }, [visibleColumns, isContractPerformance])
 
-  /** Grid column widths — Contract Performance uses fixed compact px; /contracts uses content-sized tracks. */
+  /** Grid column widths — Contract Performance only; /contracts uses CSS min-content shrink-wrap. */
   const compactGridColumnTracks = useMemo(() => {
-    if (isContractPerformance) {
-      return buildContractPerfColumnWidthTracks(contractPerfVisibleColumnIds)
-    }
+    if (!isContractPerformance) return {} as Record<string, string>
+    return buildContractPerfColumnWidthTracks(
+      visibleColumns.map((c) => ({
+        id: c.id,
+        label: c.label,
+        formulaHelp: c.formulaHelp,
+      })),
+    )
+  }, [visibleColumns, isContractPerformance])
 
-    const fmtQtyMt = (kg: unknown) =>
-      `${((Number(kg) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
-
-    const H = {
-      contract_date: 'Contract Date',
-      contract_id: 'Contract',
-      supplier: 'Supplier',
-      group_name: 'Group',
-      contract_aging: 'Contract Aging',
-      contract_ext_no: 'Contract Ext No',
-      product: 'Product',
-      delivery_status: 'Delivery Status',
-      status_overall: 'Status',
-      unusual_status: 'Unusual Status',
-      log_cycle_days: 'Log Cycle',
-      contract_qty: 'Contract Qty (MT)',
-      received_qty: 'Received Qty (MT)',
-      qty_delivery: 'Contract Qty (MT)',
-      outstanding_qty: 'Outstanding Qty',
-      outstanding_qty_mt: 'Outstanding Qty (MT)',
-      trade_cycle_days: 'Trade Cycle',
-      cash_cycle_days: 'Cash Cycle',
-      dp_cycle_days: 'DP Cycle',
-      over_under_delivery_status: 'Over/Under Delivery Status',
-      company_name: 'Buyer',
-      lt_spot: 'LT/SPOT',
-      po_number: isContractPerformance ? 'PO' : 'PO Number',
-      source_type: 'Source',
-      sto_number: 'STO Number',
-      delivery_start: 'Due Date Delivery Start',
-      delivery_end: 'Due Date Delivery End',
-      month_delivery_end: 'Month Delivery End',
-      cargo_readiness_date: 'Cargo Readiness Date',
-      vessel_name: 'Vessel',
-      eta_vessel_completed_loading: 'ETA Completed Loading',
-      eta_vessel_complete_discharge: 'ETA Completed Discharge',
-      created_at: 'Created',
-      company_code: 'Co.',
-      status: 'Status',
-    }
-
-    const track = (header: string, contentChars: number, minPx: number, maxPx: number, charPx = 7.2, pad = 52) => {
-      const n = Math.max(header.length, contentChars)
-      const px = Math.min(maxPx, Math.max(minPx, Math.round(n * charPx + pad)))
-      return `minmax(${px}px, ${px}px)`
-    }
-
-    let contractIdLen = H.contract_id.length
-    let contractDateLen = H.contract_date.length
-    let supplierLen = H.supplier.length
-    let groupLen = H.group_name.length
-    let agingContentLen = H.contract_aging.length
-    let extNoLen = H.contract_ext_no.length
-    let productLen = H.product.length
-    let deliveryStatusLen = H.delivery_status.length
-    let statusOverallLen = H.status_overall.length
-    let poLen = H.po_number.length
-    let sourceLen = H.source_type.length
-    let stoLen = H.sto_number.length
-    let buyerLen = H.company_name.length
-    let ltLen = H.lt_spot.length
-    let qtyFmtLen = H.contract_qty.length
-    let recvFmtLen = H.received_qty.length
-    let outMtFmtLen = H.outstanding_qty_mt.length
-    let outQtyFmtLen = H.outstanding_qty.length
-    let tradeLen = H.trade_cycle_days.length
-    let cashLen = H.cash_cycle_days.length
-    let dpLen = H.dp_cycle_days.length
-    let overUnderLen = H.over_under_delivery_status.length
-    let logCycleLen = H.log_cycle_days.length
-    let dsLen = H.delivery_start.length
-    let deLen = H.delivery_end.length
-    let monthEndLen = H.month_delivery_end.length
-    let createdLen = H.created_at.length
-    let vesselLen = H.vessel_name.length
-    let etaLoadLen = H.eta_vessel_completed_loading.length
-    let etaDischargeLen = H.eta_vessel_complete_discharge.length
-
-    for (const c of sortedContracts) {
-      contractIdLen = Math.max(contractIdLen, String(c.contract_id ?? '').length)
-      contractDateLen = Math.max(contractDateLen, formatDateDMY(c.contract_date || '').length)
-      supplierLen = Math.max(supplierLen, String(c.supplier ?? '').length)
-      groupLen = Math.max(groupLen, String(c.group_name ?? '').length)
-      extNoLen = Math.max(extNoLen, String(c.contract_ext_no ?? '').length)
-      productLen = Math.max(productLen, String(c.product ?? '').length)
-      deliveryStatusLen = Math.max(deliveryStatusLen, String(c.import_status || c.status || '').length)
-      const delivery = String(c.import_status || c.status || '').toUpperCase()
-      const paid = String(c.payment_status || '').toUpperCase() === 'PAID'
-      const overall =
-        delivery === 'CLOSE' && paid ? 'Close' : String(c.import_status || c.status || '-')
-      statusOverallLen = Math.max(statusOverallLen, overall.length)
-      poLen = Math.max(poLen, String(c.po_numbers || c.po_number || '').length)
-      sourceLen = Math.max(sourceLen, String(c.source_type ?? '').length)
-      stoLen = Math.max(stoLen, String(c.sto_numbers || c.sto_number || '').length)
-      buyerLen = Math.max(buyerLen, String(c.company_name ?? '').length)
-      ltLen = Math.max(ltLen, String(c.lt_spot ?? '').length)
-      qtyFmtLen = Math.max(qtyFmtLen, fmtQtyMt(typeof c.quantity_ordered === 'number' ? c.quantity_ordered : 0).length)
-      recvFmtLen = Math.max(recvFmtLen, fmtQtyMt(typeof c.quantity_receive === 'number' ? c.quantity_receive : 0).length)
-      const oq = typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : 0
-      outMtFmtLen = Math.max(outMtFmtLen, fmtQtyMt(oq).length)
-      outQtyFmtLen = Math.max(outQtyFmtLen, fmtQtyMt(oq).length)
-      overUnderLen = Math.max(overUnderLen, String(c.over_under_delivery_status ?? '').length)
-
-      const info = getContractAgingInfo(c)
-      if (info) {
-        agingContentLen = Math.max(agingContentLen, formatContractAgingDays(info.days).length)
-      } else {
-        agingContentLen = Math.max(agingContentLen, 1)
-      }
-
-      if (c.trade_cycle_days != null) {
-        tradeLen = Math.max(tradeLen, formatSignedCycleDays(c.trade_cycle_days).length)
-      }
-      if (c.cash_cycle_days != null) {
-        cashLen = Math.max(cashLen, formatSignedCycleDays(c.cash_cycle_days).length)
-      }
-      if (c.dp_cycle_days != null) {
-        dpLen = Math.max(dpLen, formatSignedCycleDays(c.dp_cycle_days).length)
-      }
-      if (c.log_cycle_days != null) {
-        logCycleLen = Math.max(logCycleLen, formatLogCycleDays(c.log_cycle_days, c.trade_cycle_days).length)
-      }
-
-      dsLen = Math.max(dsLen, formatDateDMY(c.delivery_start_date || '').length)
-      deLen = Math.max(deLen, formatDateDMY(c.delivery_end_date || '').length)
-      monthEndLen = Math.max(monthEndLen, formatMonthDeliveryEnd(c.delivery_end_date || '').length)
-      createdLen = Math.max(createdLen, formatDateDMY(c.created_at || '').length)
-      vesselLen = Math.max(vesselLen, String(c.vessel_name ?? '').length)
-      etaLoadLen = Math.max(
-        etaLoadLen,
-        c.eta_vessel_completed_loading ? formatDateDMY(c.eta_vessel_completed_loading).length : 1,
-      )
-      etaDischargeLen = Math.max(
-        etaDischargeLen,
-        c.eta_vessel_complete_discharge ? formatDateDMY(c.eta_vessel_complete_discharge).length : 1,
-      )
-    }
-
-    const supplierTrack = track(H.supplier, supplierLen, 100, 360)
-    const qtyTrack = (header: string, len: number, minPx: number, maxPx: number) =>
-      track(header, len, minPx, maxPx, 7.5, 44)
-
-    return {
-      contract_id: track(H.contract_id, contractIdLen, 76, 280, 8, 52),
-      contract_date: track(H.contract_date, contractDateLen, 96, 140),
-      supplier: supplierTrack,
-      group_name: track(H.group_name, groupLen, 96, 260),
-      contract_aging: track(H.contract_aging, agingContentLen, 108, 180),
-      contract_ext_no: track(H.contract_ext_no, extNoLen, 100, 320),
-      product: track(H.product, productLen, 96, 280),
-      delivery_status: track(H.delivery_status, deliveryStatusLen, 96, 200),
-      status_overall: track(H.status_overall, statusOverallLen, 88, 180),
-      unusual_status: track(H.unusual_status, 8, 96, 160),
-      log_cycle_days: track(H.log_cycle_days, logCycleLen, 88, 160),
-      contract_qty: qtyTrack(H.contract_qty, qtyFmtLen, 86, 200),
-      received_qty: qtyTrack(H.received_qty, recvFmtLen, 96, 220),
-      outstanding_qty: qtyTrack(H.outstanding_qty, outQtyFmtLen, 96, 220),
-      outstanding_qty_mt: qtyTrack(H.outstanding_qty_mt, outMtFmtLen, 96, 240),
-      trade_cycle_days: track(H.trade_cycle_days, tradeLen, 108, 220),
-      cash_cycle_days: track(H.cash_cycle_days, cashLen, 108, 220),
-      dp_cycle_days: track(H.dp_cycle_days, dpLen, 108, 220),
-      over_under_delivery_status: track(H.over_under_delivery_status, overUnderLen, 120, 260),
-      company_name: track(H.company_name, buyerLen, 100, 380),
-      lt_spot: track(H.lt_spot, ltLen, 72, 140),
-      po_number: track(H.po_number, poLen, 88, 340),
-      source_type: track(H.source_type, sourceLen, 72, 160),
-      sto_number: track(H.sto_number, stoLen, 88, 340),
-      delivery_start: track(H.delivery_start, dsLen, 108, 280),
-      delivery_end: track(H.delivery_end, deLen, 108, 280),
-      month_delivery_end: track(H.month_delivery_end, monthEndLen, 96, 200),
-      cargo_readiness_date: track(H.cargo_readiness_date, 24, 220, 320),
-      vessel_name: track(H.vessel_name, vesselLen, 96, 280),
-      eta_vessel_completed_loading: track(H.eta_vessel_completed_loading, etaLoadLen, 120, 200),
-      eta_vessel_complete_discharge: track(H.eta_vessel_complete_discharge, etaDischargeLen, 120, 220),
-      created_at: track(H.created_at, createdLen, 96, 140),
-      company_code: track(H.company_code, 8, 72, 120),
-      status: track(H.status, 12, 88, 160),
-    } as Record<string, string>
-  }, [contractPerfVisibleColumnIds, formatMonthDeliveryEnd, isContractPerformance, sortedContracts])
+  const getColumnWidthPx = useCallback(
+    (col: CompactColumn): number =>
+      resolveVisibleColumnWidthPx(
+        { id: col.id, label: col.label, formulaHelp: col.formulaHelp },
+        { precomputedTrack: compactGridColumnTracks[col.id] },
+      ),
+    [compactGridColumnTracks],
+  )
 
   const getColumnWidth = useCallback(
-    (id: string): string => compactGridColumnTracks[id] ?? 'minmax(96px, 1fr)',
-    [compactGridColumnTracks]
+    (col: CompactColumn): string => compactTableColumnTrackPx(getColumnWidthPx(col)),
+    [getColumnWidthPx],
   )
+
+  const listTableMinWidthPx = contractPerfTableMinWidthPx
 
   const contractPerfTableCellPad = CONTRACT_PERF_TABLE_CELL_PAD
   const contractPerfTableRowMinH = CONTRACT_PERF_TABLE_ROW_MIN_H
@@ -4952,7 +4826,10 @@ function ContractsPageContent() {
                   {/* Top scrollbar (synced) */}
                   <div
                     ref={topScrollRef}
-                    className="overflow-x-auto border-b bg-white"
+                    className={cn(
+                      isContractPerformance ? 'overflow-x-auto' : COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+                      'border-b bg-white',
+                    )}
                     onScroll={() => {
                       if (isSyncingScroll.current) return
                       const top = topScrollRef.current
@@ -4970,7 +4847,7 @@ function ContractsPageContent() {
 
                   <div
                     ref={bottomScrollRef}
-                    className="overflow-x-auto"
+                    className={isContractPerformance ? 'overflow-x-auto' : COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
                     onScroll={() => {
                       if (isSyncingScroll.current) return
                       const top = topScrollRef.current
@@ -4984,30 +4861,21 @@ function ContractsPageContent() {
                     }}
                   >
                     <div
-                      className={isContractPerformance ? 'min-w-0' : 'min-w-[1100px]'}
-                      style={
-                        isContractPerformance
-                          ? { minWidth: contractPerfTableMinWidthPx }
-                          : undefined
-                      }
+                      className={cn(isContractPerformance && 'min-w-0')}
+                      style={isContractPerformance ? { minWidth: listTableMinWidthPx } : undefined}
                     >
                       <table
-                        className={cn(
-                          'w-full table-fixed border-collapse',
-                          isContractPerformance ? '' : 'min-w-[1100px]',
-                        )}
-                        style={
-                          isContractPerformance
-                            ? { minWidth: contractPerfTableMinWidthPx }
-                            : undefined
-                        }
+                        className={isContractPerformance ? COMPACT_TABLE_CLASS : COMPACT_OPERATIONAL_TABLE_CLASS}
+                        style={isContractPerformance ? { minWidth: listTableMinWidthPx } : undefined}
                       >
-                        <colgroup>
-                          {visibleColumns.map((c) => (
-                            <col key={c.id} style={{ width: compactGridTrackMinPx(getColumnWidth(c.id)) }} />
-                          ))}
-                          <col style={{ width: isContractPerformance ? 60 : 160 }} />
-                        </colgroup>
+                        {isContractPerformance && (
+                          <colgroup>
+                            {visibleColumns.map((c) => (
+                              <col key={c.id} style={{ width: compactGridTrackMinPx(getColumnWidth(c)) }} />
+                            ))}
+                            <col style={{ width: 60 }} />
+                          </colgroup>
+                        )}
                       {/* Header */}
                       <thead>
                       <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_CLASS}>
@@ -5020,14 +4888,19 @@ function ContractsPageContent() {
                           const currentNum   = current && current.type === 'number' ? current : null
                           const currentDate  = current && current.type === 'date'   ? current : null
                           const currentMulti = current && current.type === 'multi'  ? current : null
+                          const opColClass = !isContractPerformance
+                            ? operationalTableColumnClass(getOperationalColumnLayout('contracts', col.id))
+                            : ''
 
                           return (
                             <th
                               key={col.id}
                               scope="col"
                               className={cn(
-                                'relative min-w-0 text-left font-semibold cursor-move align-top',
+                                'relative text-left font-semibold cursor-move align-top',
                                 contractPerfTableCellPad,
+                                isContractPerformance && 'min-w-0',
+                                opColClass,
                                 dragColId === col.id && 'opacity-60',
                               )}
                               draggable
@@ -5049,7 +4922,7 @@ function ContractsPageContent() {
                               }}
                             >
                               <div className="flex gap-1 min-w-0 items-start">
-                                <span className="leading-snug whitespace-normal break-words [overflow-wrap:anywhere]">
+                                <span className={COMPACT_TABLE_HEADER_LABEL_CLASS}>
                                   {col.label}
                                 </span>
                                 {col.formulaHelp ? (
@@ -5404,6 +5277,22 @@ function ContractsPageContent() {
                                     ? contractPerfCellTooltipText(col.id, contract)
                                     : null
                                   const rendered = col.render(contract)
+                                  const opColClass = !isContractPerformance
+                                    ? operationalTableColumnClass(getOperationalColumnLayout('contracts', col.id))
+                                    : ''
+
+                                  if (!isContractPerformance) {
+                                    return (
+                                      <td
+                                        key={col.id}
+                                        className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${contractPerfTableCellPad} ${stripeClass}`}
+                                      >
+                                        <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${contractPerfTableRowMinH}`}>
+                                          {rendered}
+                                        </div>
+                                      </td>
+                                    )
+                                  }
 
                                   return (
                                   <td

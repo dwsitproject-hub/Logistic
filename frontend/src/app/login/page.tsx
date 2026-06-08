@@ -1,22 +1,51 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useEffect, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import ChangePasswordModal from '@/components/ChangePasswordModal'
 import api from '@/lib/api'
+import { resolvePostAuthRedirect } from '@/lib/navigationAccess'
 
-export default function LoginPage() {
+async function redirectAfterAuth(
+  userRole: string | undefined,
+  router: ReturnType<typeof useRouter>,
+  setError: (msg: string) => void,
+) {
+  try {
+    const route = await resolvePostAuthRedirect(userRole)
+    if (!route) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      setError('Your account has no accessible pages. Contact your administrator.')
+      return
+    }
+    router.push(route)
+  } catch {
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    setError('Failed to load your permissions. Please try again.')
+  }
+}
+
+function LoginPageContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [isFirstLogin, setIsFirstLogin] = useState(false)
+
+  useEffect(() => {
+    if (searchParams.get('error') === 'no_access') {
+      setError('Your account has no accessible pages. Contact your administrator.')
+    }
+  }, [searchParams])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -36,7 +65,8 @@ export default function LoginPage() {
         setShowPasswordModal(true)
         setLoading(false)
       } else {
-        router.push('/dashboard')
+        await redirectAfterAuth(user.role, router, setError)
+        setLoading(false)
       }
     } catch (err: any) {
       setError(err.response?.data?.error?.message || 'Login failed')
@@ -44,16 +74,17 @@ export default function LoginPage() {
     }
   }
 
-  const handlePasswordChangeSuccess = () => {
-    // Update user object to reflect password has been changed
+  const handlePasswordChangeSuccess = async () => {
     const userStr = localStorage.getItem('user')
+    let userRole: string | undefined
     if (userStr) {
       const user = JSON.parse(userStr)
       user.is_first_login = false
+      userRole = user.role
       localStorage.setItem('user', JSON.stringify(user))
     }
-    
-    router.push('/dashboard')
+
+    await redirectAfterAuth(userRole, router, setError)
   }
 
   return (
@@ -109,6 +140,20 @@ export default function LoginPage() {
       </Card>
     </div>
     </>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+          <p className="text-gray-500">Loading...</p>
+        </div>
+      }
+    >
+      <LoginPageContent />
+    </Suspense>
   )
 }
 

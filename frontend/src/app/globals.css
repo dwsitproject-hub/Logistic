@@ -75,3 +75,131 @@
   }
 }
 
+@layer components {
+  /* Compact data tables — headers may wrap between words, never inside a word */
+  .klip-compact-table-header-label {
+    overflow-wrap: normal;
+    word-break: normal;
+    hyphens: none;
+  }
+
+  .klip-compact-table.klip-compact-table {
+    table-layout: fixed;
+  }
+
+  /*
+   * Operational list tables (Shipments, Trucking): shrink-wrap columns to the longest
+   * unbreakable word/token in each column; wrap-type columns absorb leftover width.
+   */
+  .klip-compact-table.klip-compact-table--operational {
+    table-layout: auto;
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .klip-compact-table--operational th,
+  .klip-compact-table--operational td.klip-compact-table-cell {
+    word-break: normal;
+    overflow-wrap: normal;
+    hyphens: none;
+    position: relative;
+  }
+
+  .klip-compact-table--operational th {
+    white-space: normal;
+    vertical-align: top;
+  }
+
+  .klip-compact-table--operational td.klip-compact-table-cell {
+    white-space: normal;
+    vertical-align: middle;
+    overflow: visible;
+    max-width: none;
+  }
+
+  /* Sort header flex must not shrink below longest header word */
+  .klip-compact-table--operational th > div {
+    min-width: min-content;
+  }
+
+  .klip-compact-table--operational .klip-compact-table-cell-inner {
+    display: block;
+    width: min-content;
+    min-width: min-content;
+    max-width: 100%;
+    word-break: normal;
+    overflow-wrap: normal;
+    white-space: inherit;
+  }
+
+  /* Neutralize Tailwind break-words inside operational data cells */
+  .klip-compact-table--operational .klip-compact-table-cell-inner .break-words {
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  /* Shrink-wrapped: width = longest unbreakable token (header word or cell string) */
+  .klip-compact-table--operational th.klip-op-col--short,
+  .klip-compact-table--operational td.klip-op-col--short,
+  .klip-compact-table--operational th.klip-op-col--token,
+  .klip-compact-table--operational td.klip-op-col--token,
+  .klip-compact-table--operational th.klip-op-col--stack,
+  .klip-compact-table--operational td.klip-op-col--stack {
+    width: min-content;
+    max-width: max-content;
+    word-break: normal;
+    overflow-wrap: normal;
+  }
+
+  .klip-compact-table--operational th.klip-op-col--short,
+  .klip-compact-table--operational th.klip-op-col--token,
+  .klip-compact-table--operational th.klip-op-col--stack {
+    white-space: normal;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--short,
+  .klip-compact-table--operational td.klip-op-col--token {
+    white-space: nowrap;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--stack {
+    vertical-align: top;
+    white-space: normal;
+  }
+
+  .klip-compact-table-nowrap {
+    white-space: nowrap;
+    word-break: normal;
+    overflow-wrap: normal;
+  }
+
+  .klip-compact-table-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.125rem;
+    width: min-content;
+    min-width: min-content;
+  }
+
+  /* Multi-word columns (Vessel, Product, Supplier) absorb remaining table width */
+  .klip-compact-table--operational th.klip-op-col--wrap,
+  .klip-compact-table--operational td.klip-op-col--wrap {
+    width: auto;
+    min-width: min-content;
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: normal;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--wrap .klip-compact-table-cell-inner {
+    width: auto;
+    min-width: min-content;
+    max-width: 32rem;
+  }
+
+  .klip-compact-table--operational col.klip-op-col--fixed {
+    width: auto;
+  }
+}
+

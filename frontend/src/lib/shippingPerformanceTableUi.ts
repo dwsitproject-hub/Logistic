@@ -2,10 +2,11 @@
  * Shipping Performance Section 3 — compact table UI aligned with Contract Performance.
  */
 
+import { COMPACT_TABLE_HEADER_ROW_CLASS, resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
+
 export const SHIPPING_PERF_TABLE_CELL_PAD = 'px-2 py-1.5'
 export const SHIPPING_PERF_TABLE_ROW_MIN_H = 'min-h-[32px]'
-export const SHIPPING_PERF_TABLE_HEADER_ROW_CLASS =
-  'text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10'
+export const SHIPPING_PERF_TABLE_HEADER_ROW_CLASS = COMPACT_TABLE_HEADER_ROW_CLASS
 export const SHIPPING_PERF_TABLE_BODY_CLASS = 'divide-y divide-gray-200'
 
 /** Fixed px widths for table-fixed layout (compact, matches CP Section 3 pattern). */
@@ -37,12 +38,20 @@ export const SHIPPING_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
 
 const DEFAULT_COLUMN_WIDTH_PX = 88
 
-export function shippingPerfTableColumnWidthPx(colKey: string): number {
-  return SHIPPING_PERF_TABLE_COLUMN_WIDTH_PX[colKey] ?? DEFAULT_COLUMN_WIDTH_PX
+export function shippingPerfTableColumnWidthPx(colKey: string, headerLabel?: string): number {
+  const base = SHIPPING_PERF_TABLE_COLUMN_WIDTH_PX[colKey] ?? DEFAULT_COLUMN_WIDTH_PX
+  return resolveCompactColumnWidthPx(base, headerLabel, { hasSort: true })
 }
 
-export function shippingPerfTableMinWidthPx(visibleColumnKeys: readonly string[]): number {
-  return visibleColumnKeys.reduce((sum, key) => sum + shippingPerfTableColumnWidthPx(String(key)), 0)
+export function shippingPerfTableMinWidthPx(
+  visibleColumns: ReadonlyArray<{ key: string; label?: string } | string>,
+): number {
+  return visibleColumns.reduce((sum, item) => {
+    if (typeof item === 'string') {
+      return sum + shippingPerfTableColumnWidthPx(item)
+    }
+    return sum + shippingPerfTableColumnWidthPx(item.key, item.label)
+  }, 0)
 }
 
 /** Text columns that truncate with hover tooltip (same pattern as Contract Performance). */

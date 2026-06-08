@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, ArrowDown, ArrowUp, ArrowUpDown, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor } from 'lucide-react'
+import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor } from 'lucide-react'
 import api from '@/lib/api'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
@@ -28,11 +28,33 @@ import {
   ContractPerfTableSubtitleSkeleton,
   ContractTableBodySkeleton,
 } from '@/components/performance/ContractPerfTableSkeleton'
+import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
   CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
 } from '@/lib/contractPerformanceColumns'
+import {
+  COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+} from '@/lib/compactTableUi'
+import { formatQtyMtFromKg } from '@/lib/utils'
+import {
+  SHIPMENT_COLUMN_LAYOUT_VERSION,
+  SHIPMENT_COLUMN_LAYOUT_VERSION_KEY,
+  buildShipmentVisibleColumns,
+  mergeShipmentColumnOrder,
+  shipmentCompactColumnFallbackOrder,
+  shipmentDefaultVisibleColumnIds,
+} from '@/lib/shipmentColumns'
+import {
+  OperationalNowrapCell,
+  OperationalStackedCommaCell,
+  getOperationalColumnLayout,
+  operationalTableColumnClass,
+} from '@/lib/operationalTableLayout'
 import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { format } from 'date-fns'
@@ -43,14 +65,6 @@ import {
   canViewPermission,
 } from '@/components/PermissionsContext'
 // import * as XLSX from 'xlsx' // Temporarily disabled
-
-/** Extract fixed px width from a minmax(Npx, …) grid track for <col style>. */
-function compactGridTrackMinPx(track: string): string {
-  const m = track.match(/minmax\((\d+)px/)
-  if (m) return `${m[1]}px`
-  const px = track.match(/^(\d+)px$/)
-  return px ? `${px[1]}px` : '96px'
-}
 
 type EtaBucketFilterKey = 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'
 
@@ -79,30 +93,6 @@ const SHIPMENT_STATUS_LABELS: Record<string, string> = {
   UNLOADING: 'Unloading',
   COMPLETED: 'Completed',
   CANCELLED: 'Cancelled',
-}
-
-const SHIPMENT_COLUMN_WIDTH_PX: Record<string, number> = {
-  operation_id: 150,
-  shipment_id: 200,
-  status: 120,
-  contract_numbers: 180,
-  po_numbers: 150,
-  contract_reference_po: 150,
-  contract_ext_no: 150,
-  delivery_start: 180,
-  delivery_end: 180,
-  ata_vessel_completed_loading: 200,
-  ata_vessel_complete_discharge: 200,
-  late_indicator: 130,
-  vessel_name: 180,
-  sto_quantity: 140,
-  incoterm: 120,
-  b2b_flag: 100,
-  port_of_loading: 160,
-  port_of_discharge: 160,
-  quantity_receive: 140,
-  vessel_code: 120,
-  quantity_delivered: 140,
 }
 
 interface Shipment {
@@ -164,6 +154,7 @@ interface Shipment {
   contract_count: number
   // Additional fields for display
   po_numbers?: string
+  contract_date?: string
   delivery_start_date?: string
   delivery_end_date?: string
   sto_quantity?: number
@@ -333,6 +324,22 @@ interface DocumentItem {
   file_size?: number
   shipment_id?: string
   created_at?: string
+}
+
+/** Document type for PDF required to unlock quantity delivery/receive edits in the vessel modal. */
+const SHIPMENT_QUANTITY_UNLOCK_DOC_TYPE = 'QUANTITY_ADJUSTMENT'
+
+function shipmentQuantityValuesEqual(a: unknown, b: unknown): boolean {
+  const toNum = (v: unknown) => {
+    if (v === null || v === undefined || v === '') return null
+    const n = typeof v === 'number' ? v : Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  const na = toNum(a)
+  const nb = toNum(b)
+  if (na === null && nb === null) return true
+  if (na === null || nb === null) return false
+  return na === nb
 }
 
 function ShipmentRowEditButton({
@@ -705,6 +712,11 @@ function ShipmentsPageContent() {
   const [editedShipmentInfo, setEditedShipmentInfo] = useState<any>(null)
   const editedShipmentInfoRef = useRef<any>(null)
   editedShipmentInfoRef.current = editedShipmentInfo
+  const [isQuantityDocUploaded, setIsQuantityDocUploaded] = useState(false)
+  const [quantityUnlockDocId, setQuantityUnlockDocId] = useState<string | null>(null)
+  const [quantityUnlockDocUploading, setQuantityUnlockDocUploading] = useState(false)
+  const isQuantityDocUploadedRef = useRef(false)
+  isQuantityDocUploadedRef.current = isQuantityDocUploaded
   const [editingPortId, setEditingPortId] = useState<string | null>(null)
   const [editedPortData, setEditedPortData] = useState<Partial<VesselLoadingPort> | null>(null)
   const [cancelPortTarget, setCancelPortTarget] = useState<{ id: string; portName: string; portSequence: number } | null>(null)
@@ -1816,7 +1828,7 @@ function ShipmentsPageContent() {
   // Excel-like filtering helpers
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
     if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days') return 'number'
-    if (colId === 'shipment_date' || colId === 'arrival_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'ata_vessel_completed_loading' || colId === 'ata_vessel_complete_discharge' || colId === 'eta_vessel_complete_discharge' || colId === 'created_at') return 'date'
+    if (colId === 'shipment_date' || colId === 'arrival_date' || colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'ata_vessel_completed_loading' || colId === 'ata_vessel_complete_discharge' || colId === 'eta_vessel_complete_discharge' || colId === 'created_at') return 'date'
     return 'text'
   }
 
@@ -1869,6 +1881,7 @@ function ShipmentsPageContent() {
       case 'sla_days': return typeof s.sla_days === 'number' ? s.sla_days : null
       case 'shipment_date': return s.shipment_date || ''
       case 'arrival_date': return s.arrival_date || ''
+      case 'contract_date': return s.contract_date || ''
       case 'delivery_start': return s.delivery_start_date || ''
       case 'delivery_end': return s.delivery_end_date || ''
       case 'delivery_start_date': return s.delivery_start_date || ''
@@ -2071,7 +2084,7 @@ function ShipmentsPageContent() {
   const columnStorageKey = 'shipments.compact.visibleColumns'
   const columnOrderStorageKey = 'shipments.compact.columnOrder'
   const sortStorageKey = 'shipments.compact.sort'
-  const userViewPrefKey = 'shipments.compact.view.v1'
+  const userViewPrefKey = 'shipments.compact.view.v2'
 
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => {
     if (typeof window === 'undefined') return new Set()
@@ -2170,7 +2183,6 @@ function ShipmentsPageContent() {
   }, [sortKey, sortDir])
 
   const toggleColumn = (colId: string) => {
-    if (colId === 'late_indicator' || colId === 'operation_id' || colId === 'shipment_id' || colId === 'status') return // Always visible
     setVisibleColumnIds(prev => {
       const next = new Set(prev)
       if (next.has(colId)) {
@@ -2197,7 +2209,7 @@ function ShipmentsPageContent() {
   const compactColumns: CompactColumn[] = useMemo(() => [
     {
       id: 'late_indicator',
-      label: 'Late Indicator',
+      label: 'Late Indicators',
       formulaHelp: FIELD_HELP.shipmentLateIndicator,
       defaultVisible: true,
       sortable: true,
@@ -2211,28 +2223,38 @@ function ShipmentsPageContent() {
       }
     },
     {
-      id: 'operation_id',
-      label: 'Operation ID',
+      id: 'contract_date',
+      label: 'Contract Date',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => s.operation_id || '',
+      getSortValue: (s) => s.contract_date || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.contract_date || '')}</span>
+    },
+    {
+      id: 'contract_ext_no',
+      label: 'Contract Ext No',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.contract_ext_no || '',
       render: (s) => (
-        <span className="text-sm break-words block" title={s.operation_id || ''}>
-          {s.operation_id || '-'}
-        </span>
+        <OperationalStackedCommaCell value={s.contract_ext_no} title={s.contract_ext_no || ''} />
       )
     },
     {
-      id: 'shipment_id',
-      label: 'STO No',
+      id: 'po_numbers',
+      label: 'PO',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => s.sto_number || '',
-      render: (s) => (
-        <span className="text-sm break-words block">
-          {s.sto_number || ''}
-        </span>
-      )
+      getSortValue: (s) => s.po_numbers || '',
+      render: (s) => <OperationalNowrapCell value={s.po_numbers} title={s.po_numbers || ''} />
+    },
+    {
+      id: 'vessel_name',
+      label: 'Vessel',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.vessel_name || '',
+      render: (s) => <span className="text-sm break-words">{s.vessel_name || '-'}</span>
     },
     {
       id: 'status',
@@ -2247,118 +2269,12 @@ function ShipmentsPageContent() {
       )
     },
     {
-      id: 'contract_numbers',
-      label: 'Contract Numbers',
+      id: 'shipment_id',
+      label: 'STO',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => s.contract_numbers || s.contract_number || '',
-      render: (s) => (
-        <span className="text-sm break-words block" title={s.contract_numbers || s.contract_number || ''}>
-          {s.contract_numbers || s.contract_number || '-'}
-        </span>
-      )
-    },
-    {
-      id: 'po_numbers',
-      label: 'PO No',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.po_numbers || '',
-      render: (s) => (
-        <span className="text-sm break-words block" title={s.po_numbers || ''}>
-          {s.po_numbers || '-'}
-        </span>
-      )
-    },
-    {
-      id: 'contract_reference_po',
-      label: 'Contract Reff PO',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.contract_reference_po || '',
-      render: (s) => (
-        <span className="text-sm break-words block" title={s.contract_reference_po || ''}>
-          {s.contract_reference_po || '-'}
-        </span>
-      )
-    },
-    {
-      id: 'contract_ext_no',
-      label: 'Contract Ext No',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.contract_ext_no || '',
-      render: (s) => (
-        <span className="text-sm break-words block" title={s.contract_ext_no || ''}>
-          {s.contract_ext_no || '-'}
-        </span>
-      )
-    },
-    // Due Date Delivery Start/End are shown in the Contract Details section,
-    // so they are hidden from the compact view by default.
-    {
-      id: 'delivery_start',
-      label: 'Due Date Delivery Start',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (s) => s.delivery_start_date || '',
-      render: (s) => <span className="text-sm">{formatShortDate(s.delivery_start_date || '')}</span>
-    },
-    {
-      id: 'delivery_end',
-      label: 'Due Date Delivery End',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (s) => s.delivery_end_date || '',
-      render: (s) => <span className="text-sm">{formatShortDate(s.delivery_end_date || '')}</span>
-    },
-    {
-      id: 'ata_vessel_completed_loading',
-      label: 'ATA Vessel Completed Loading',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.ata_vessel_completed_loading || '',
-      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_completed_loading || '')}</span>
-    },
-    {
-      id: 'ata_vessel_complete_discharge',
-      label: 'ATA Vessel Complete Discharge',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.ata_vessel_complete_discharge || '',
-      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_complete_discharge || '')}</span>
-    },
-    {
-      id: 'vessel_name',
-      label: 'Vessel Name',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.vessel_name || '',
-      render: (s) => <span className="text-sm break-words">{s.vessel_name || '-'}</span>
-    },
-    {
-      id: 'sto_quantity',
-      label: 'STO Quantity',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.sto_quantity || s.total_quantity_shipped || s.quantity_shipped || 0,
-      render: (s) => (
-        <span className="text-sm break-words">
-          {formatNumber(s.sto_quantity || s.total_quantity_shipped || s.quantity_shipped || '-')} Kg
-        </span>
-      )
-    },
-    {
-      id: 'quantity_receive',
-      label: 'Quantity Received (Kg)',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => (s.quantity_receive ?? 0),
-      render: (s) => (
-        <span className="text-sm break-words">
-          {formatNumber(s.quantity_receive ?? '-')} Kg
-        </span>
-      )
+      getSortValue: (s) => s.sto_number || '',
+      render: (s) => <OperationalNowrapCell value={s.sto_number} fallback="" />
     },
     {
       id: 'product',
@@ -2379,9 +2295,113 @@ function ShipmentsPageContent() {
       render: (s) => <span className="text-sm break-words">{s.incoterm || '-'}</span>
     },
     {
+      id: 'sto_quantity',
+      label: 'STO Qty (MT)',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.sto_quantity || s.total_quantity_shipped || s.quantity_shipped || 0,
+      render: (s) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatQtyMtFromKg(s.sto_quantity || s.total_quantity_shipped || s.quantity_shipped)}
+        </span>
+      )
+    },
+    {
+      id: 'quantity_delivered',
+      label: 'Delivery Qty (MT)',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.quantity_delivered_sap || s.total_quantity_delivered || s.quantity_delivered || 0,
+      render: (s) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatQtyMtFromKg(s.quantity_delivered_sap ?? s.total_quantity_delivered ?? s.quantity_delivered)}
+        </span>
+      )
+    },
+    {
+      id: 'quantity_receive',
+      label: 'Received Qty (MT)',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => (s.quantity_receive ?? 0),
+      render: (s) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatQtyMtFromKg(s.quantity_receive)}
+        </span>
+      )
+    },
+    {
+      id: 'ata_vessel_completed_loading',
+      label: 'ATA Loading Complete',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_completed_loading || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_completed_loading || '')}</span>
+    },
+    {
+      id: 'ata_vessel_complete_discharge',
+      label: 'ATA Discharge Complete',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_complete_discharge || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_complete_discharge || '')}</span>
+    },
+    {
+      id: 'operation_id',
+      label: 'Operation ID',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.operation_id || '',
+      render: (s) => (
+        <span className="text-sm break-words block" title={s.operation_id || ''}>
+          {s.operation_id || '-'}
+        </span>
+      )
+    },
+    {
+      id: 'contract_numbers',
+      label: 'Contract Numbers',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.contract_numbers || s.contract_number || '',
+      render: (s) => (
+        <span className="text-sm break-words block" title={s.contract_numbers || s.contract_number || ''}>
+          {s.contract_numbers || s.contract_number || '-'}
+        </span>
+      )
+    },
+    {
+      id: 'contract_reference_po',
+      label: 'Contract Reff PO',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.contract_reference_po || '',
+      render: (s) => (
+        <span className="text-sm break-words block" title={s.contract_reference_po || ''}>
+          {s.contract_reference_po || '-'}
+        </span>
+      )
+    },
+    {
+      id: 'delivery_start',
+      label: 'Due Date Delivery Start',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.delivery_start_date || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.delivery_start_date || '')}</span>
+    },
+    {
+      id: 'delivery_end',
+      label: 'Due Date Delivery End',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.delivery_end_date || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.delivery_end_date || '')}</span>
+    },
+    {
       id: 'b2b_flag',
       label: 'B2B Flag',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.b2b_flag || '',
       render: (s) => <span className="text-sm break-words">{s.b2b_flag || '-'}</span>
@@ -2409,18 +2429,6 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.vessel_code || '',
       render: (s) => <span className="text-sm">{s.vessel_code || '-'}</span>
-    },
-    {
-      id: 'quantity_delivered',
-      label: 'Quantity Delivered',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.quantity_delivered_sap || s.total_quantity_delivered || s.quantity_delivered || 0,
-      render: (s) => (
-        <span className="text-sm break-words">
-          {formatNumber(s.quantity_delivered_sap ?? s.total_quantity_delivered ?? s.quantity_delivered ?? '-')} Kg
-        </span>
-      )
     },
     {
       id: 'estimated_nautical_miles',
@@ -2504,71 +2512,71 @@ function ShipmentsPageContent() {
     return compactColumns.filter(c => c.defaultVisible).map(c => c.id)
   }, [compactColumns])
 
+  const compactColumnIdsKey = useMemo(() => compactColumns.map((c) => c.id).join('|'), [compactColumns])
+
   useEffect(() => {
     if (visibleColumnIds.size === 0) {
       setVisibleColumnIds(new Set(defaultVisibleColumnIds))
-    } else {
-      // Ensure required columns are always included
-      const required = [
-        'late_indicator',
-        'operation_id',
-        'shipment_id',
-        'status',
-        'contract_numbers',
-        'contract_ext_no',
-        // Key operational quantities should never "disappear" due to stored user preferences
-        'sto_quantity',
-        'quantity_receive',
-        'quantity_delivered',
-      ]
-      const current = Array.from(visibleColumnIds)
-      const missing = required.filter(id => !current.includes(id))
-      if (missing.length > 0) {
-        setVisibleColumnIds(new Set([...current, ...missing]))
-      }
     }
   }, [defaultVisibleColumnIds, visibleColumnIds])
 
-  // Initialize / heal column order whenever column definitions change.
+  // Initialize / heal column order; apply layout version migration for users without saved prefs.
   useEffect(() => {
     const allIds = compactColumns.map((c) => c.id)
+    const canonical = shipmentCompactColumnFallbackOrder(allIds)
+    let forceLayoutReset = false
+    if (typeof window !== 'undefined') {
+      try {
+        if (localStorage.getItem(SHIPMENT_COLUMN_LAYOUT_VERSION_KEY) !== SHIPMENT_COLUMN_LAYOUT_VERSION) {
+          forceLayoutReset = true
+          localStorage.setItem(SHIPMENT_COLUMN_LAYOUT_VERSION_KEY, SHIPMENT_COLUMN_LAYOUT_VERSION)
+          localStorage.setItem(columnOrderStorageKey, JSON.stringify(canonical))
+          localStorage.setItem(columnStorageKey, JSON.stringify(shipmentDefaultVisibleColumnIds(allIds)))
+        }
+      } catch {
+        forceLayoutReset = true
+      }
+    }
+
+    if (forceLayoutReset) {
+      const defaultVis = shipmentDefaultVisibleColumnIds(allIds)
+      setVisibleColumnIds(new Set(defaultVis))
+      setColumnOrderIds(canonical)
+      void api
+        .post('/user-preferences/me', {
+          key: userViewPrefKey,
+          value: {
+            visibleColumnIds: defaultVis,
+            columnOrderIds: canonical,
+          },
+        })
+        .catch(() => {
+          /* localStorage already updated */
+        })
+      return
+    }
+
     setColumnOrderIds((prev) => {
-      const base = prev.length > 0 ? prev : allIds
-      const deduped = Array.from(new Set(base))
-      const missing = allIds.filter((id) => !deduped.includes(id))
-      return [...deduped, ...missing].filter((id) => allIds.includes(id))
+      const next = mergeShipmentColumnOrder(prev, allIds)
+      if (prev.length === next.length && prev.every((v, i) => v === next[i])) return prev
+      return next
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compactColumns])
+  }, [compactColumnIdsKey])
 
-  const visibleColumns = useMemo(() => {
-    const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
-    const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : compactColumns.map((c) => c.id))
-      .filter((id) => byId.has(id))
-    const orderedAll = orderedIds.map((id) => byId.get(id)!).filter(Boolean)
-    const visible = orderedAll.filter((c) => visibleColumnIds.has(c.id))
-
-    // Keep required columns always visible (order is controlled by drag & drop).
-    const required = ['late_indicator', 'operation_id', 'shipment_id', 'status']
-    const visibleIds = new Set(visible.map((c) => c.id))
-    const missingRequired = required
-      .map((id) => byId.get(id))
-      .filter((c): c is CompactColumn => Boolean(c))
-      .filter((c) => !visibleIds.has(c.id))
-
-    return [...visible, ...missingRequired]
-  }, [compactColumns, visibleColumnIds, editingId, columnOrderIds])
+  const visibleColumns = useMemo(
+    () => buildShipmentVisibleColumns(compactColumns, visibleColumnIds, columnOrderIds),
+    [compactColumns, visibleColumnIds, columnOrderIds],
+  )
 
   const moveColumnOrder = (id: string, direction: 'up' | 'down') => {
-    const pinned = new Set(['late_indicator', 'operation_id', 'shipment_id', 'status'])
-    if (pinned.has(id)) return
     setColumnOrderIds((prev) => {
-      const ids = prev.length > 0 ? [...prev] : compactColumns.map((c) => c.id)
+      const allIds = compactColumns.map((c) => c.id)
+      const ids = prev.length > 0 ? [...mergeShipmentColumnOrder(prev, allIds)] : [...shipmentCompactColumnFallbackOrder(allIds)]
       const idx = ids.indexOf(id)
       if (idx < 0) return ids
       const swapWith = direction === 'up' ? idx - 1 : idx + 1
       if (swapWith < 0 || swapWith >= ids.length) return ids
-      if (pinned.has(ids[swapWith])) return ids
       ;[ids[idx], ids[swapWith]] = [ids[swapWith], ids[idx]]
       return ids
     })
@@ -2577,7 +2585,8 @@ function ShipmentsPageContent() {
   const reorderColumnByDrag = (dragId: string, dropId: string) => {
     if (dragId === dropId) return
     setColumnOrderIds((prev) => {
-      const ids = prev.length > 0 ? [...prev] : compactColumns.map((c) => c.id)
+      const allIds = compactColumns.map((c) => c.id)
+      const ids = prev.length > 0 ? [...prev] : shipmentCompactColumnFallbackOrder(allIds)
       const from = ids.indexOf(dragId)
       const to = ids.indexOf(dropId)
       if (from < 0 || to < 0) return ids
@@ -2620,8 +2629,9 @@ function ShipmentsPageContent() {
   }, [totalPages])
 
   const resetCompactColumnView = useCallback(() => {
-    const vis = new Set(defaultVisibleColumnIds)
-    const order = compactColumns.map((c) => c.id)
+    const allIds = compactColumns.map((c) => c.id)
+    const vis = new Set(shipmentDefaultVisibleColumnIds(allIds))
+    const order = shipmentCompactColumnFallbackOrder(allIds)
     setVisibleColumnIds(vis)
     setColumnOrderIds(order)
     if (typeof window !== 'undefined') {
@@ -2632,15 +2642,7 @@ function ShipmentsPageContent() {
         // ignore
       }
     }
-  }, [defaultVisibleColumnIds, compactColumns, columnStorageKey, columnOrderStorageKey])
-
-  const compactGridColumnTracks = useMemo(() => {
-    const tracks: Record<string, string> = {}
-    for (const [id, px] of Object.entries(SHIPMENT_COLUMN_WIDTH_PX)) {
-      tracks[id] = `minmax(${px}px, ${px}px)`
-    }
-    return tracks
-  }, [])
+  }, [compactColumns, columnStorageKey, columnOrderStorageKey])
 
   const allVisibleIds = useMemo(() => sortedShipments.map(s => s.id), [sortedShipments])
   const expandedCount = expandedShipmentIds.size
@@ -2681,7 +2683,7 @@ function ShipmentsPageContent() {
     if (bottomEl) {
       setTableScrollWidth(bottomEl.scrollWidth)
     }
-  }, [visibleColumns, sortedShipments.length])
+  }, [visibleColumns, sortedShipments.length, editingId])
 
   // Vessel loading port functions
   const buildShipmentInfoFromShipment = (s: Record<string, unknown>) => ({
@@ -2883,9 +2885,21 @@ function ShipmentsPageContent() {
     }
   }
 
+  const resetQuantityUnlockState = () => {
+    setIsQuantityDocUploaded(false)
+    setQuantityUnlockDocId(null)
+    setQuantityUnlockDocUploading(false)
+  }
+
   const handleCancelEditAll = () => {
     handleCancelEditShipmentInfo()
     handleCancelEditPort()
+    resetQuantityUnlockState()
+  }
+
+  const closeLoadingPortsModal = () => {
+    setShowLoadingPorts(false)
+    handleCancelEditAll()
   }
 
   const handleSaveAll = async () => {
@@ -2901,6 +2915,7 @@ function ShipmentsPageContent() {
 
   const handleEditShipmentInfo = () => {
     if (shipmentInfo) {
+      resetQuantityUnlockState()
       // Initialize with all fields including ETA
       setEditedShipmentInfo({ 
         ...shipmentInfo,
@@ -2937,6 +2952,54 @@ function ShipmentsPageContent() {
   const handleCancelEditShipmentInfo = () => {
     setEditingShipmentInfo(false)
     setEditedShipmentInfo(null)
+    resetQuantityUnlockState()
+  }
+
+  const handleQuantityUnlockDocChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !selectedShipment) return
+
+    const isPdf =
+      file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+    if (!isPdf) {
+      alert('Only PDF files are allowed.')
+      e.target.value = ''
+      return
+    }
+
+    setQuantityUnlockDocUploading(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      form.append('document_type', SHIPMENT_QUANTITY_UNLOCK_DOC_TYPE)
+      form.append('shipment_id', selectedShipment.id)
+      form.append('description', 'PDF authorization for quantity delivery/receive edit')
+
+      const res = await api.post('/documents/upload', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      if (res.data?.success) {
+        const docId = res.data?.data?.id ? String(res.data.data.id) : null
+        setQuantityUnlockDocId(docId)
+        setIsQuantityDocUploaded(true)
+        if (showDocs) {
+          await fetchShipmentDocuments(selectedShipment.id)
+        }
+      } else {
+        alert(res.data?.error?.message || 'Failed to upload document')
+      }
+    } catch (err: any) {
+      console.error('Quantity unlock document upload error:', err)
+      const msg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.error?.detail ||
+        err?.message ||
+        'Failed to upload document. Please try again.'
+      alert(msg)
+    } finally {
+      setQuantityUnlockDocUploading(false)
+      e.target.value = ''
+    }
   }
 
   const handleSaveShipmentInfo = async () => {
@@ -2951,6 +3014,23 @@ function ShipmentsPageContent() {
 
       const identifier = selectedShipment.id
       const info = editedShipmentInfoRef.current
+
+      const deliveryChanged = !shipmentQuantityValuesEqual(
+        info.quantity_delivered,
+        shipmentInfo?.quantity_delivered,
+      )
+      const receiveChanged = !shipmentQuantityValuesEqual(
+        info.actual_vessel_qty_receive,
+        shipmentInfo?.actual_vessel_qty_receive,
+      )
+      if ((deliveryChanged || receiveChanged) && !isQuantityDocUploadedRef.current) {
+        alert('Please upload a PDF document before editing Quantity Delivery or Quantity Receive.')
+        return
+      }
+      if ((deliveryChanged || receiveChanged) && !quantityUnlockDocId) {
+        alert('A PDF document must be attached before saving quantity changes.')
+        return
+      }
 
       const updateData: Record<string, unknown> = {}
       if (info.quantity_delivered !== undefined && info.quantity_delivered !== null) {
@@ -3113,6 +3193,7 @@ function ShipmentsPageContent() {
       setEditingShipmentInfo(false)
       setEditedShipmentInfo(null)
       await fetchShipments(page)
+      resetQuantityUnlockState()
       alert('Shipment information updated successfully!')
     } catch (error) {
       console.error('Error saving shipment info:', error)
@@ -3266,19 +3347,13 @@ function ShipmentsPageContent() {
 
   const formatDateTime = (dateStr: string) => formatDateTimeDMY(dateStr)
 
-  const getColumnWidth = useCallback(
-    (colId: string): string => compactGridColumnTracks[colId] ?? 'minmax(150px, 150px)',
-    [compactGridColumnTracks]
-  )
-
   const onSortHeaderClick = (col: CompactColumn) => {
     if (!col.sortable) return
-    if (sortKey === col.id) {
-      setSortDir(prev => prev === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortKey(col.id)
-      setSortDir('asc')
-    }
+    const nextDir: 'asc' | 'desc' =
+      sortKey === col.id ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc'
+    setSortDir(nextDir)
+    setSortKey(col.id)
+    setPage(1)
   }
 
   return (
@@ -4120,21 +4195,22 @@ function ShipmentsPageContent() {
                       </div>
                       <div className="flex items-center gap-1 mb-2">
                         <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set(compactColumns.map(c => c.id)))}>Select All</Button>
-                        <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set(['late_indicator', 'operation_id', 'shipment_id', 'status']))}>Unselect All</Button>
+                        <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set())}>Unselect All</Button>
                         <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => resetCompactColumnView()}>Reset</Button>
                       </div>
                       <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
                         {(() => {
-                          const pinned = new Set(['late_indicator', 'operation_id', 'shipment_id', 'status'])
-                          const visibleInMenu = visibleColumns.filter(c => !pinned.has(c.id))
-                          const visibleIds = new Set(visibleInMenu.map(c => c.id))
-                          const byId = new Map(compactColumns.map(c => [c.id, c] as const))
-                          const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : compactColumns.map(c => c.id))
+                          const visibleIds = new Set(visibleColumns.map((c) => c.id))
+                          const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
+                          const orderedIds =
+                            columnOrderIds.length > 0
+                              ? columnOrderIds
+                              : shipmentCompactColumnFallbackOrder(compactColumns.map((c) => c.id))
                           const hiddenCols = orderedIds
-                            .map(id => byId.get(id))
-                            .filter((c): c is CompactColumn => !!c && !pinned.has(c.id) && !visibleIds.has(c.id))
+                            .map((id) => byId.get(id))
+                            .filter((c): c is CompactColumn => !!c && !visibleIds.has(c.id))
                             .sort((a, b) => a.label.localeCompare(b.label))
-                          return [...visibleInMenu, ...hiddenCols]
+                          return [...visibleColumns, ...hiddenCols]
                         })().map(col => (
                           <div
                             key={col.id}
@@ -4232,7 +4308,7 @@ function ShipmentsPageContent() {
                   {/* Top scrollbar (synced) */}
                   <div
                     ref={topScrollRef}
-                    className="overflow-x-auto border-b bg-white"
+                    className={`${COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS} border-b bg-white`}
                     onScroll={() => {
                       if (isSyncingScroll.current) return
                       const top = topScrollRef.current
@@ -4250,7 +4326,7 @@ function ShipmentsPageContent() {
 
                   <div
                     ref={bottomScrollRef}
-                    className="overflow-x-auto"
+                    className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
                     onScroll={() => {
                       if (isSyncingScroll.current) return
                       const top = topScrollRef.current
@@ -4263,29 +4339,21 @@ function ShipmentsPageContent() {
                       })
                     }}
                   >
-                    <div className="min-w-[1100px]">
-                      <table className="w-full min-w-[1100px] table-fixed border-collapse">
-                        <colgroup>
-                          <col style={{ width: '40px' }} />
-                          {visibleColumns.map((c) => (
-                            <col key={c.id} style={{ width: compactGridTrackMinPx(getColumnWidth(c.id)) }} />
-                          ))}
-                          <col style={{ width: '160px' }} />
-                        </colgroup>
+                      <table className={COMPACT_OPERATIONAL_TABLE_CLASS}>
                         <thead>
                         <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_CLASS}>
                           <th scope="col" className={`w-10 align-bottom ${CONTRACT_PERF_TABLE_CELL_PAD}`} />
                         {visibleColumns.map(col => {
                           const active = sortKey === col.id
-                          const filterActive = isColumnFilterActive(col.id)
-                          const filterType = getFilterTypeForColumn(col.id)
-                          const current = columnFilters[col.id]
+                          const opColClass = operationalTableColumnClass(
+                            getOperationalColumnLayout('shipments', col.id),
+                          )
 
                           return (
                             <th
                               key={col.id}
                               scope="col"
-                              className={`relative min-w-0 text-left align-bottom font-semibold cursor-move ${CONTRACT_PERF_TABLE_CELL_PAD} ${dragColId === col.id ? 'opacity-60' : ''}`}
+                              className={`relative text-left align-top font-semibold cursor-move ${CONTRACT_PERF_TABLE_CELL_PAD} ${opColClass} ${dragColId === col.id ? 'opacity-60' : ''}`}
                               draggable
                               onDragStart={(e) => {
                                 setDragColId(col.id)
@@ -4304,281 +4372,16 @@ function ShipmentsPageContent() {
                                 setDragColId(null)
                               }}
                             >
-                              <div className="flex items-center gap-1 min-w-0">
-                                <span className="whitespace-normal break-words leading-tight">{col.label}</span>
-                                {col.formulaHelp ? (
-                                  <span className="shrink-0 inline-flex items-center">
-                                    <FieldHelp text={col.formulaHelp} />
-                                  </span>
-                                ) : null}
-                                {col.sortable && (
-                                  <button
-                                    type="button"
-                                    className={`shrink-0 p-0.5 rounded hover:bg-gray-200 ${active ? 'text-blue-600' : 'text-gray-400'}`}
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      e.preventDefault()
-                                      onSortHeaderClick(col)
-                                    }}
-                                    title="Sort"
-                                  >
-                                    {active
-                                      ? sortDir === 'asc'
-                                        ? <ArrowUp className="h-3.5 w-3.5" />
-                                        : <ArrowDown className="h-3.5 w-3.5" />
-                                      : <ArrowUpDown className="h-3.5 w-3.5" />
-                                    }
-                                  </button>
-                                )}
+                              <ContractPerfTableSortHeader
+                                label={col.label}
+                                formulaHelp={col.formulaHelp}
+                                sortable={col.sortable}
+                                activeSort={active}
+                                sortDir={sortDir}
+                                onSortClick={() => onSortHeaderClick(col)}
+                              />
 
-                                <button
-                                  type="button"
-                                  className={`p-1 rounded hover:bg-gray-100 ${filterActive ? 'text-blue-700' : 'text-gray-500'}`}
-                                  title="Filter"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setOpenHeaderFilterId(prev => (prev === col.id ? null : col.id))
-                                  }}
-                                >
-                                  <Filter className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
 
-                              {openHeaderFilterId === col.id && (
-                                <div
-                                  ref={headerFilterPopoverRef}
-                                  className="absolute left-0 top-full mt-2 w-[280px] bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-30"
-                                  onClick={(e) => e.stopPropagation()}
-                                  onMouseDown={(e) => e.stopPropagation()}
-                                >
-                                  <div className="flex items-center justify-between mb-2">
-                                    <div className="text-xs font-semibold text-gray-700 truncate">{col.label} Filter</div>
-                                    <button
-                                      type="button"
-                                      className="text-xs text-gray-500 hover:text-gray-800"
-                                      onClick={() => setOpenHeaderFilterId(null)}
-                                    >
-                                      Close
-                                    </button>
-                                  </div>
-
-                                  {/* Text filter */}
-                                  {filterType === 'text' && (
-                                    <div className="space-y-2">
-                                      <Input
-                                        value={(current?.type === 'text' && current.value) ? current.value : ''}
-                                        onChange={(e) => {
-                                          const value = e.target.value
-                                          setOrClearFilter(col.id, {
-                                            type: 'text',
-                                            value,
-                                            exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                            emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
-                                            notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
-                                          })
-                                        }}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') {
-                                            e.preventDefault()
-                                            setPage(1)
-                                            fetchShipments(1)
-                                          }
-                                        }}
-                                        placeholder="Type to filter (contains)"
-                                        className="h-8 text-sm"
-                                      />
-                                      <div className="flex flex-col gap-2">
-                                        <label className="flex items-center gap-2 text-xs text-gray-700">
-                                          <Checkbox
-                                            checked={current?.type === 'text' ? Boolean(current.exact) : false}
-                                            onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
-                                              setOrClearFilter(col.id, {
-                                                type: 'text',
-                                                value,
-                                                exact: Boolean(checked),
-                                                emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
-                                              })
-                                            }}
-                                          />
-                                          Exact match
-                                        </label>
-                                        <label className="flex items-center gap-2 text-xs text-gray-700">
-                                          <Checkbox
-                                            checked={Boolean(current?.emptyOnly)}
-                                            onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
-                                              setOrClearFilter(col.id, {
-                                                type: 'text',
-                                                value,
-                                                exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                                emptyOnly: Boolean(checked),
-                                                notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
-                                              })
-                                            }}
-                                          />
-                                          Only blanks
-                                        </label>
-                                        <label className="flex items-center gap-2 text-xs text-gray-700">
-                                          <Checkbox
-                                            checked={Boolean((current as any)?.notBlankOnly)}
-                                            onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
-                                              setOrClearFilter(col.id, {
-                                                type: 'text',
-                                                value,
-                                                exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                                emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
-                                                notBlankOnly: Boolean(checked),
-                                              })
-                                            }}
-                                          />
-                                          Only not blanks
-                                        </label>
-                                      </div>
-                                    </div>
-                                  )}
-
-                                  {/* Number filter */}
-                                  {filterType === 'number' && (
-                                    <div className="space-y-2">
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <Input
-                                          value={(current?.type === 'number' && current.min) ? current.min : ''}
-                                          onChange={(e) => {
-                                            const min = e.target.value
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchShipments(1)
-                                            }
-                                          }}
-                                          placeholder="Min"
-                                          className="h-8 text-sm"
-                                        />
-                                        <Input
-                                          value={(current?.type === 'number' && current.max) ? current.max : ''}
-                                          onChange={(e) => {
-                                            const max = e.target.value
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchShipments(1)
-                                            }
-                                          }}
-                                          placeholder="Max"
-                                          className="h-8 text-sm"
-                                        />
-                                      </div>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean(current?.emptyOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                        />
-                                        Only blanks
-                                      </label>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean((current as any)?.notBlankOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
-                                          }}
-                                        />
-                                        Only not blanks
-                                      </label>
-                                    </div>
-                                  )}
-
-                                  {/* Date filter */}
-                                  {filterType === 'date' && (
-                                    <div className="space-y-2">
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <Input
-                                          type="date"
-                                          value={(current?.type === 'date' && current.from) ? current.from : ''}
-                                          onChange={(e) => {
-                                            const from = e.target.value
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchShipments(1)
-                                            }
-                                          }}
-                                          className="h-8 text-sm"
-                                        />
-                                        <Input
-                                          type="date"
-                                          value={(current?.type === 'date' && current.to) ? current.to : ''}
-                                          onChange={(e) => {
-                                            const to = e.target.value
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchShipments(1)
-                                            }
-                                          }}
-                                          className="h-8 text-sm"
-                                        />
-                                      </div>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean(current?.emptyOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                        />
-                                        Only blanks
-                                      </label>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean((current as any)?.notBlankOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
-                                          }}
-                                        />
-                                        Only not blanks
-                                      </label>
-                                    </div>
-                                  )}
-
-                                  <div className="flex items-center justify-between mt-3 pt-2 border-t">
-                                    <button
-                                      type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
-                                      onClick={() => clearColumnFilter(col.id)}
-                                      disabled={!filterActive}
-                                    >
-                                      Clear filter
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
                             </th>
                           )
                         })}
@@ -4627,9 +4430,13 @@ function ShipmentsPageContent() {
                                   </div>
                                 </td>
 
-                                  {visibleColumns.map(col => (
-                                    <td key={col.id} className={`align-middle min-w-0 ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
-                                      <div className={`flex items-center ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
+                                  {visibleColumns.map(col => {
+                                    const opColClass = operationalTableColumnClass(
+                                      getOperationalColumnLayout('shipments', col.id),
+                                    )
+                                    return (
+                                    <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
+                                      <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
                                       {col.id === 'vessel_name' && isEditing ? (
                                         <div className="relative">
                                           <Input
@@ -4756,7 +4563,8 @@ function ShipmentsPageContent() {
                                       )}
                                       </div>
                                     </td>
-                                  ))}
+                                    )
+                                  })}
 
                                   <td className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
                                   <div className="flex items-center justify-end gap-2 min-h-[40px]">
@@ -4965,7 +4773,6 @@ function ShipmentsPageContent() {
                         })}
                         </tbody>
                       </table>
-                    </div>
                   </div>
                 </div>
 
@@ -5275,7 +5082,7 @@ function ShipmentsPageContent() {
                     <p className="text-xs text-gray-500">Vessel Loading Ports &amp; Shipment Information</p>
                   </div>
                 </div>
-                <Button variant="ghost" size="icon" className="shrink-0 text-gray-400 hover:text-gray-600" aria-label="Close" onClick={() => setShowLoadingPorts(false)}>
+                <Button variant="ghost" size="icon" className="shrink-0 text-gray-400 hover:text-gray-600" aria-label="Close" onClick={closeLoadingPortsModal}>
                   <X className="h-5 w-5" />
                 </Button>
               </div>
@@ -5374,15 +5181,67 @@ function ShipmentsPageContent() {
                           value={shipmentModalContractDisplay(shipmentInfo, selectedShipment)}
                           locked={editingShipmentInfo}
                         />
+                        {editingShipmentInfo && (
+                          <div className="md:col-span-2 lg:col-span-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <p className="text-xs font-medium text-amber-900">
+                                  Upload PDF document to edit quantities
+                                </p>
+                                <p className="text-[11px] text-amber-800/80 mt-0.5">
+                                  Quantity Delivery and Quantity Receive stay locked until a PDF is uploaded.
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <input
+                                  id={`quantity-unlock-doc-${selectedShipment.id}`}
+                                  type="file"
+                                  accept=".pdf,application/pdf"
+                                  className="hidden"
+                                  onChange={handleQuantityUnlockDocChange}
+                                  disabled={quantityUnlockDocUploading || isQuantityDocUploaded}
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 text-xs border-amber-300 bg-white hover:bg-amber-50"
+                                  disabled={quantityUnlockDocUploading || isQuantityDocUploaded}
+                                  onClick={() =>
+                                    document.getElementById(`quantity-unlock-doc-${selectedShipment.id}`)?.click()
+                                  }
+                                >
+                                  {quantityUnlockDocUploading ? (
+                                    <>
+                                      <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                                      Uploading...
+                                    </>
+                                  ) : isQuantityDocUploaded ? (
+                                    <>
+                                      <Check className="h-3.5 w-3.5 mr-1 text-green-600" />
+                                      PDF uploaded
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Upload className="h-3.5 w-3.5 mr-1" />
+                                      Upload PDF
+                                    </>
+                                  )}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                         <div>
                           <div className="text-gray-500">Quantity Delivery</div>
                           {editingShipmentInfo ? (
                             <Input
                               type="number"
                               step="0.01"
+                              disabled={!isQuantityDocUploaded}
                               value={editedShipmentInfo?.quantity_delivered || ''}
                               onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, quantity_delivered: parseFloat(e.target.value) || 0 })}
-                              className="h-8 text-sm mt-1"
+                              className={`h-8 text-sm mt-1 ${!isQuantityDocUploaded ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                             />
                           ) : (
                             <div className="font-medium">{formatNumber(shipmentInfo.quantity_delivered)} Kg</div>
@@ -5394,9 +5253,10 @@ function ShipmentsPageContent() {
                             <Input
                               type="number"
                               step="0.01"
+                              disabled={!isQuantityDocUploaded}
                               value={editedShipmentInfo?.actual_vessel_qty_receive || ''}
                               onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, actual_vessel_qty_receive: parseFloat(e.target.value) || 0 })}
-                              className="h-8 text-sm mt-1"
+                              className={`h-8 text-sm mt-1 ${!isQuantityDocUploaded ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                             />
                           ) : (
                             <div className="font-medium">{formatNumber(shipmentInfo.actual_vessel_qty_receive)} Kg</div>

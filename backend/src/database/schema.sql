@@ -352,7 +352,7 @@ CREATE TABLE payments (
 -- Documents table
 CREATE TABLE documents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    document_type VARCHAR(50) NOT NULL CHECK (document_type IN ('BOL', 'INVOICE', 'SURVEY', 'COA', 'PAYMENT_PROOF', 'OTHER')),
+    document_type VARCHAR(50) NOT NULL CHECK (document_type IN ('BOL', 'INVOICE', 'SURVEY', 'COA', 'PAYMENT_PROOF', 'OTHER', 'QUANTITY_ADJUSTMENT')),
     file_name VARCHAR(255) NOT NULL,
     file_path VARCHAR(500) NOT NULL,
     file_size BIGINT,

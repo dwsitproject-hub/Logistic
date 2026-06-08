@@ -260,6 +260,7 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
         sa.sto_numbers AS sto_numbers,
         c.quantity_ordered as sto_quantity,
         c.quantity_ordered as contract_qty,
+        c.contract_date,
         c.delivery_start_date,
         c.delivery_end_date,
         c.supplier,

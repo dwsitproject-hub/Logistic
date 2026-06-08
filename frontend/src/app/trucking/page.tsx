@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, ArrowUp, ArrowDown, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
+import { Search, Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -27,11 +27,33 @@ import {
   ContractPerfTableSubtitleSkeleton,
   ContractTableBodySkeleton,
 } from '@/components/performance/ContractPerfTableSkeleton'
+import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
   CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
 } from '@/lib/contractPerformanceColumns'
+import {
+  COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+} from '@/lib/compactTableUi'
+import { formatQtyMtFromKg } from '@/lib/utils'
+import {
+  TRUCKING_COLUMN_LAYOUT_VERSION,
+  TRUCKING_COLUMN_LAYOUT_VERSION_KEY,
+  buildTruckingVisibleColumns,
+  mergeTruckingColumnOrder,
+  truckingCompactColumnFallbackOrder,
+  truckingDefaultVisibleColumnIds,
+} from '@/lib/truckingColumns'
+import {
+  OperationalNowrapCell,
+  OperationalStackedCommaCell,
+  getOperationalColumnLayout,
+  operationalTableColumnClass,
+} from '@/lib/operationalTableLayout'
 import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
 
 const TRUCKING_ACTIONS_COL_WIDTH = 140
@@ -41,11 +63,6 @@ const TRUCKING_STATUS_LABELS: Record<string, string> = {
   IN_PROGRESS: 'In Progress',
   COMPLETED: 'Completed',
   CANCELLED: 'Cancelled',
-}
-
-function columnWidthToPx(width: string): number {
-  const n = parseInt(width, 10)
-  return Number.isFinite(n) ? n : 120
 }
 
 /** Aligns with list `formatNumber` / `formatKg`: comma thousands, period decimals. */
@@ -64,6 +81,7 @@ interface TruckingOperation {
   sto_number: string
   sto_quantity?: number
   contract_qty?: number
+  contract_date?: string
   delivery_start_date?: string
   delivery_end_date?: string
   location: string
@@ -1034,9 +1052,20 @@ function TruckingPageContent() {
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [sortKey, setSortKey] = useState<string>('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
-  const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => new Set())
+  const columnStorageKey = 'trucking.compact.visibleColumns'
+  const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set()
+    try {
+      const stored = localStorage.getItem(columnStorageKey)
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        return new Set(Array.isArray(parsed) ? parsed.map(String) : [])
+      }
+    } catch {}
+    return new Set()
+  })
   const columnOrderStorageKey = 'trucking.compact.columnOrder'
-  const userViewPrefKey = 'trucking.compact.view.v1'
+  const userViewPrefKey = 'trucking.compact.view.v2'
   const [columnOrderIds, setColumnOrderIds] = useState<string[]>(() => {
     if (typeof window === 'undefined') return []
     try {
@@ -1524,14 +1553,16 @@ function TruckingPageContent() {
   // Excel-like filtering helpers
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
     if (colId === 'contract_qty' || colId === 'sto_quantity' || colId === 'quantity_sent' || colId === 'quantity_delivered' || colId === 'quantity_receive' || colId === 'oa_budget' || colId === 'oa_actual' || colId === 'estimated_km' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount') return 'number'
-    if (colId === 'cargo_readiness_date' || colId === 'trucking_start_date' || colId === 'trucking_completion_date' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'created_at') return 'date'
+    if (colId === 'cargo_readiness_date' || colId === 'contract_date' || colId === 'trucking_start_date' || colId === 'trucking_completion_date' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'created_at') return 'date'
     return 'text'
   }
 
   const getColumnRawValue = (o: TruckingOperation, colId: string): string | number | null => {
     switch (colId) {
       case 'operation_id': return o.operation_id || ''
-      case 'contract_number': return o.contract_number || ''
+      case 'contract_number':
+      case 'contract_ext_no': return o.contract_ext_no || o.contract_number || ''
+      case 'contract_date': return o.contract_date || ''
       case 'po_number': return o.po_number || ''
       case 'sto_number': return o.sto_number || ''
       case 'status': return o.status || ''
@@ -1584,7 +1615,7 @@ function TruckingPageContent() {
   const compactColumns: CompactColumn[] = useMemo(() => [
     {
       id: 'late_indicator',
-      label: 'Late Indicator',
+      label: 'Late Indicators',
       formulaHelp: FIELD_HELP.lateIndicator,
       defaultVisible: true,
       sortable: true,
@@ -1598,16 +1629,41 @@ function TruckingPageContent() {
       }
     },
     {
-      id: 'operation_id',
-      label: 'Operation ID',
+      id: 'contract_date',
+      label: 'Contract Date',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (o) => o.operation_id || '',
+      getSortValue: (o) => o.contract_date || '',
+      render: (o) => <span className="text-sm">{formatShortDate(o.contract_date || '')}</span>
+    },
+    {
+      id: 'contract_ext_no',
+      label: 'Contract Ext No',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.contract_ext_no || o.contract_number || '',
       render: (o) => (
-        <span className="text-sm break-words block" title={o.operation_id || ''}>
-          {o.operation_id || '-'}
-        </span>
+        <OperationalStackedCommaCell
+          value={o.contract_ext_no || o.contract_number}
+          title={(o.contract_ext_no || o.contract_number || '') as string}
+        />
       )
+    },
+    {
+      id: 'po_number',
+      label: 'PO',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.po_number || '',
+      render: (o) => <OperationalNowrapCell value={o.po_number} title={o.po_number || ''} />
+    },
+    {
+      id: 'supplier',
+      label: 'Supplier',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.supplier || '',
+      render: (o) => <span className="text-sm break-words">{o.supplier || '-'}</span>
     },
     {
       id: 'status',
@@ -1622,92 +1678,12 @@ function TruckingPageContent() {
       )
     },
     {
-      id: 'contract_number',
-      label: 'Contract Ext No',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.contract_ext_no || o.contract_number || '',
-      render: (o) => (
-        <span className="text-sm truncate block max-w-full" title={(o.contract_ext_no || o.contract_number || '') as string}>
-          {o.contract_ext_no || o.contract_number || '-'}
-        </span>
-      )
-    },
-    {
-      id: 'po_number',
-      label: 'PO No',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.po_number || '',
-      render: (o) => (
-        <span className="text-sm truncate block max-w-full" title={o.po_number || ''}>
-          {o.po_number || '-'}
-        </span>
-      )
-    },
-    {
       id: 'sto_number',
-      label: 'STO No',
+      label: 'STO',
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.sto_number || '',
-      render: (o) => (
-        <span className="text-sm truncate block max-w-full" title={o.sto_number || ''}>
-          {o.sto_number || '-'}
-        </span>
-      )
-    },
-    {
-      id: 'sto_quantity',
-      label: 'STO Quantity',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.sto_quantity || 0,
-      render: (o) => (
-        <span className="text-sm break-words">
-          {formatKg(o.sto_quantity || 0)}
-        </span>
-      )
-    },
-    {
-      id: 'location',
-      label: 'Location',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (o) => o.location || '',
-      render: (o) => <span className="text-sm break-words">{o.location || '-'}</span>
-    },
-    {
-      id: 'loading_location',
-      label: 'Truck Loading Location',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.loading_location || o.location || '',
-      render: (o) => <span className="text-sm break-words">{o.loading_location || o.location || '-'}</span>
-    },
-    {
-      id: 'unloading_location',
-      label: 'Truck Discharge Location',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.unloading_location || '',
-      render: (o) => <span className="text-sm break-words">{o.unloading_location || '-'}</span>
-    },
-    {
-      id: 'trucking_owner',
-      label: 'Trucking Owner',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.trucking_owner || '',
-      render: (o) => <span className="text-sm break-words">{o.trucking_owner || '-'}</span>
-    },
-    {
-      id: 'supplier',
-      label: 'Supplier',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.supplier || '',
-      render: (o) => <span className="text-sm break-words">{o.supplier || '-'}</span>
+      render: (o) => <OperationalNowrapCell value={o.sto_number} title={o.sto_number || ''} />
     },
     {
       id: 'product',
@@ -1726,38 +1702,122 @@ function TruckingPageContent() {
       render: (o) => <span className="text-sm break-words">{o.incoterm || '-'}</span>
     },
     {
-      id: 'quantity_sent',
-      label: 'Qty Sent (Kg)',
+      id: 'contract_qty',
+      label: 'Contract Qty (MT)',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (o) => o.quantity_sent || 0,
+      getSortValue: (o) => o.contract_qty || 0,
       render: (o) => (
-        <span className="text-sm break-words">
-          {formatKg(o.quantity_sent)}
+        <span className="text-sm break-words tabular-nums">
+          {formatQtyMtFromKg(o.contract_qty)}
+        </span>
+      )
+    },
+    {
+      id: 'sto_quantity',
+      label: 'STO Qty (MT)',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.sto_quantity || 0,
+      render: (o) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatQtyMtFromKg(o.sto_quantity)}
         </span>
       )
     },
     {
       id: 'quantity_delivered',
-      label: 'Quantity Delivery (Kg)',
+      label: 'Delivery Qty (MT)',
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.quantity_delivered || 0,
       render: (o) => (
-        <span className="text-sm break-words">
-          {formatKg(o.quantity_delivered)}
+        <span className="text-sm break-words tabular-nums">
+          {formatQtyMtFromKg(o.quantity_delivered)}
         </span>
       )
     },
     {
       id: 'quantity_receive',
-      label: 'Quantity Receive (Kg)',
+      label: 'Received Qty (MT)',
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.quantity_receive || o.quantity_delivered || 0,
       render: (o) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatQtyMtFromKg(o.quantity_receive || o.quantity_delivered)}
+        </span>
+      )
+    },
+    {
+      id: 'trucking_start_date',
+      label: 'Start Receive Date',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.trucking_start_date || '',
+      render: (o) => <span className="text-sm">{formatShortDate(o.trucking_start_date)}</span>
+    },
+    {
+      id: 'trucking_completion_date',
+      label: 'Last Receive Date',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.trucking_completion_date || '',
+      render: (o) => <span className="text-sm">{formatShortDate(o.trucking_completion_date)}</span>
+    },
+    {
+      id: 'operation_id',
+      label: 'Operation ID',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (o) => o.operation_id || '',
+      render: (o) => (
+        <span className="text-sm break-words block" title={o.operation_id || ''}>
+          {o.operation_id || '-'}
+        </span>
+      )
+    },
+    {
+      id: 'location',
+      label: 'Location',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (o) => o.location || '',
+      render: (o) => <span className="text-sm break-words">{o.location || '-'}</span>
+    },
+    {
+      id: 'loading_location',
+      label: 'Truck Loading Location',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (o) => o.loading_location || o.location || '',
+      render: (o) => <span className="text-sm break-words">{o.loading_location || o.location || '-'}</span>
+    },
+    {
+      id: 'unloading_location',
+      label: 'Truck Discharge Location',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (o) => o.unloading_location || '',
+      render: (o) => <span className="text-sm break-words">{o.unloading_location || '-'}</span>
+    },
+    {
+      id: 'trucking_owner',
+      label: 'Trucking Owner',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (o) => o.trucking_owner || '',
+      render: (o) => <span className="text-sm break-words">{o.trucking_owner || '-'}</span>
+    },
+    {
+      id: 'quantity_sent',
+      label: 'Qty Sent (Kg)',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (o) => o.quantity_sent || 0,
+      render: (o) => (
         <span className="text-sm break-words">
-          {formatKg(o.quantity_receive || o.quantity_delivered)}
+          {formatKg(o.quantity_sent)}
         </span>
       )
     },
@@ -1791,7 +1851,7 @@ function TruckingPageContent() {
       id: 'oa_budget',
       label: 'Trucking OA Budget',
       formulaHelp: FIELD_HELP.truckingOaBudget,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.oa_budget || 0,
       render: (o) => (
@@ -1804,7 +1864,7 @@ function TruckingPageContent() {
       id: 'oa_actual',
       label: 'Trucking OA Actual',
       formulaHelp: FIELD_HELP.truckingOaActual,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.oa_actual || 0,
       render: (o) => (
@@ -1816,7 +1876,7 @@ function TruckingPageContent() {
     {
       id: 'estimated_km',
       label: 'Estimated KM',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.estimated_km || 0,
       render: (o) => (
@@ -1834,27 +1894,10 @@ function TruckingPageContent() {
       render: (o) => <span className="text-sm">{formatShortDate(o.cargo_readiness_date)}</span>
     },
     {
-      id: 'trucking_start_date',
-      label: 'Trucking Start Receive Date',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.trucking_start_date || '',
-      render: (o) => <span className="text-sm">{formatShortDate(o.trucking_start_date)}</span>
-    },
-    {
-      id: 'trucking_completion_date',
-      label: 'Trucking Last Receive Date',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.trucking_completion_date || '',
-      render: (o) => <span className="text-sm">{formatShortDate(o.trucking_completion_date)}</span>
-    },
-    // ETA date columns removed from UI
-    {
       id: 'delivery_start_date',
       label: 'Due Date Delivery Start',
       formulaHelp: FIELD_HELP.etaVsDueDelivery,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.delivery_start_date || '',
       render: (o) => <span className="text-sm">{formatShortDate(o.delivery_start_date || '')}</span>
@@ -1863,22 +1906,10 @@ function TruckingPageContent() {
       id: 'delivery_end_date',
       label: 'Due Date Delivery End',
       formulaHelp: FIELD_HELP.etaVsDueDelivery,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.delivery_end_date || '',
       render: (o) => <span className="text-sm">{formatShortDate(o.delivery_end_date || '')}</span>
-    },
-    {
-      id: 'contract_qty',
-      label: 'Contract Qty',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.contract_qty || 0,
-      render: (o) => (
-        <span className="text-sm break-words">
-          {formatKg(o.contract_qty || 0)}
-        </span>
-      )
     },
     {
       id: 'buyer',
@@ -1904,11 +1935,22 @@ function TruckingPageContent() {
       .map(c => c.id)
   }, [compactColumns])
 
+  const compactColumnIdsKey = useMemo(() => compactColumns.map((c) => c.id).join('|'), [compactColumns])
+
   useEffect(() => {
     if (visibleColumnIds.size === 0) {
       setVisibleColumnIds(new Set(defaultVisibleColumnIds))
     }
   }, [defaultVisibleColumnIds, visibleColumnIds.size])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (visibleColumnIds.size > 0) {
+      try {
+        localStorage.setItem(columnStorageKey, JSON.stringify(Array.from(visibleColumnIds)))
+      } catch {}
+    }
+  }, [visibleColumnIds])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1920,15 +1962,49 @@ function TruckingPageContent() {
   }, [columnOrderIds])
 
   useEffect(() => {
-    // Initialize / heal column order with any missing ids.
     const allIds = compactColumns.map((c) => c.id)
+    const canonical = truckingCompactColumnFallbackOrder(allIds)
+    let forceLayoutReset = false
+    if (typeof window !== 'undefined') {
+      try {
+        if (localStorage.getItem(TRUCKING_COLUMN_LAYOUT_VERSION_KEY) !== TRUCKING_COLUMN_LAYOUT_VERSION) {
+          forceLayoutReset = true
+          localStorage.setItem(TRUCKING_COLUMN_LAYOUT_VERSION_KEY, TRUCKING_COLUMN_LAYOUT_VERSION)
+          localStorage.setItem(columnOrderStorageKey, JSON.stringify(canonical))
+          localStorage.setItem(columnStorageKey, JSON.stringify(truckingDefaultVisibleColumnIds(allIds)))
+        }
+      } catch {
+        forceLayoutReset = true
+      }
+    }
+
+    if (forceLayoutReset) {
+      const defaultVis = truckingDefaultVisibleColumnIds(allIds)
+      setVisibleColumnIds(new Set(defaultVis))
+      setColumnOrderIds(canonical)
+      void api
+        .post('/user-preferences/me', {
+          key: userViewPrefKey,
+          value: {
+            visibleColumnIds: defaultVis,
+            columnOrderIds: canonical,
+          },
+        })
+        .catch(() => {
+          /* localStorage already updated */
+        })
+      return
+    }
+
     setColumnOrderIds((prev) => {
-      const base = prev.length > 0 ? prev : allIds
-      const deduped = Array.from(new Set(base))
-      const missing = allIds.filter((id) => !deduped.includes(id))
-      return [...deduped, ...missing].filter((id) => allIds.includes(id))
+      const next = mergeTruckingColumnOrder(prev, allIds)
+      if (prev.length === next.length && prev.every((v, i) => v === next[i])) return prev
+      return next
     })
-    // Load per-user saved view
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compactColumnIdsKey])
+
+  useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
@@ -1947,20 +2023,28 @@ function TruckingPageContent() {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compactColumns])
+  }, [])
 
-  const visibleColumns = useMemo(() => {
-    const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
-    const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : compactColumns.map((c) => c.id))
-      .filter((id) => byId.has(id))
-    const orderedAll = orderedIds.map((id) => byId.get(id)!).filter(Boolean)
-    const visible = orderedAll.filter((c) => visibleColumnIds.has(c.id))
-    // Always include status even if hidden (editing requires it).
-    const visibleIds = new Set(visible.map((c) => c.id))
-    const statusCol = byId.get('status')
-    const withStatus = !visibleIds.has('status') && statusCol ? [...visible, statusCol] : visible
-    return withStatus
-  }, [columnOrderIds, compactColumns, editingId, visibleColumnIds])
+  const visibleColumns = useMemo(
+    () => buildTruckingVisibleColumns(compactColumns, visibleColumnIds, columnOrderIds),
+    [columnOrderIds, compactColumns, visibleColumnIds],
+  )
+
+  const resetCompactColumnView = useCallback(() => {
+    const allIds = compactColumns.map((c) => c.id)
+    const vis = new Set(truckingDefaultVisibleColumnIds(allIds))
+    const order = truckingCompactColumnFallbackOrder(allIds)
+    setVisibleColumnIds(vis)
+    setColumnOrderIds(order)
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(columnStorageKey, JSON.stringify(Array.from(vis)))
+        localStorage.setItem(columnOrderStorageKey, JSON.stringify(order))
+      } catch {
+        // ignore
+      }
+    }
+  }, [compactColumns])
 
   const handlePageChange = (newPage: number) => {
     if (newPage < 1 || newPage > totalPages || loading) return
@@ -1971,7 +2055,8 @@ function TruckingPageContent() {
   const reorderColumnByDrag = (dragId: string, dropId: string) => {
     if (dragId === dropId) return
     setColumnOrderIds((prev) => {
-      const ids = prev.length > 0 ? [...prev] : compactColumns.map((c) => c.id)
+      const allIds = compactColumns.map((c) => c.id)
+      const ids = prev.length > 0 ? [...prev] : truckingCompactColumnFallbackOrder(allIds)
       const from = ids.indexOf(dragId)
       const to = ids.indexOf(dropId)
       if (from < 0 || to < 0) return ids
@@ -2016,6 +2101,16 @@ function TruckingPageContent() {
 
     return sorted
   }, [compactColumns, filteredOperations, sortDir, sortKey])
+
+  const onSortHeaderClick = (col: CompactColumn) => {
+    if (!col.sortable) return
+    const nextDir: 'asc' | 'desc' =
+      sortKey === col.id ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc'
+    setSortDir(nextDir)
+    setSortKey(col.id)
+    setPage(1)
+    fetchTruckingOperations(1)
+  }
 
   const toggleColumn = (colId: string) => {
     setVisibleColumnIds(prev => {
@@ -2065,46 +2160,6 @@ function TruckingPageContent() {
     })
   }
 
-  const getColumnWidth = (colId: string): string => {
-    const widths: { [key: string]: string } = {
-      'late_indicator': '110px',
-      'operation_id': '180px',
-      'status': '110px',
-      'contract_number': '210px',
-      'po_number': '130px',
-      'sto_number': '130px',
-      'sto_quantity': '130px',
-      'location': '150px',
-      'loading_location': '170px',
-      'unloading_location': '180px',
-      'trucking_owner': '150px',
-      'supplier': '150px',
-      'product': '120px',
-      'quantity_sent': '130px',
-      'quantity_delivered': '150px',
-      'quantity_receive': '150px',
-      'gain_loss_percentage': '120px',
-      'gain_loss_amount': '150px',
-      'oa_budget': '150px',
-      'oa_actual': '150px',
-      'estimated_km': '130px',
-      'cargo_readiness_date': '140px',
-      'trucking_start_date': '180px',
-      'trucking_completion_date': '200px',
-      'delivery_start_date': '180px',
-      'delivery_end_date': '180px',
-      'contract_qty': '130px',
-      'buyer': '150px',
-      'group_name': '120px'
-    }
-    return widths[colId] || '120px'
-  }
-
-  const tableMinWidthPx = useMemo(() => {
-    const colSum = visibleColumns.reduce((sum, c) => sum + columnWidthToPx(getColumnWidth(c.id)), 0)
-    return colSum + TRUCKING_ACTIONS_COL_WIDTH
-  }, [visibleColumns])
-
   // Calculate table scroll width (match semantic table width for top scrollbar sync)
   useEffect(() => {
     const calculateWidth = () => {
@@ -2123,7 +2178,7 @@ function TruckingPageContent() {
       window.clearTimeout(t)
       window.removeEventListener('resize', calculateWidth)
     }
-  }, [visibleColumns, sortedOperations, tableMinWidthPx, editingId])
+  }, [visibleColumns, sortedOperations, editingId])
 
   return (
     <Layout>
@@ -2773,7 +2828,7 @@ function TruckingPageContent() {
                           variant="ghost"
                           size="sm"
                           className="flex-1 text-xs h-7"
-                          onClick={() => setVisibleColumnIds(new Set(['operation_id', 'status']))}
+                          onClick={() => setVisibleColumnIds(new Set())}
                         >
                           Unselect All
                         </Button>
@@ -2781,19 +2836,24 @@ function TruckingPageContent() {
                           variant="ghost"
                           size="sm"
                           className="flex-1 text-xs h-7"
-                          onClick={() => setVisibleColumnIds(new Set(defaultVisibleColumnIds))}
+                          onClick={() => resetCompactColumnView()}
                         >
                           Reset
                         </Button>
                       </div>
                       <div className="border-t pt-2 space-y-1 max-h-72 overflow-auto pr-1">
                         {(() => {
-                          const excluded = new Set(['operation_id', 'status'])
-                          const byId = new Map(compactColumns.map(c => [c.id, c] as const))
-                          const orderedIds = columnOrderIds.length > 0 ? columnOrderIds : compactColumns.map(c => c.id)
-                          const visibleInMenu = orderedIds.map(id => byId.get(id)).filter((c): c is typeof compactColumns[0] => !!c && !excluded.has(c.id) && visibleColumnIds.has(c.id))
-                          const hiddenCols = orderedIds.map(id => byId.get(id)).filter((c): c is typeof compactColumns[0] => !!c && !excluded.has(c.id) && !visibleColumnIds.has(c.id)).sort((a, b) => a.label.localeCompare(b.label))
-                          return [...visibleInMenu, ...hiddenCols]
+                          const visibleIds = new Set(visibleColumns.map((c) => c.id))
+                          const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
+                          const orderedIds =
+                            columnOrderIds.length > 0
+                              ? columnOrderIds
+                              : truckingCompactColumnFallbackOrder(compactColumns.map((c) => c.id))
+                          const hiddenCols = orderedIds
+                            .map((id) => byId.get(id))
+                            .filter((c): c is typeof compactColumns[0] => !!c && !visibleIds.has(c.id))
+                            .sort((a, b) => a.label.localeCompare(b.label))
+                          return [...visibleColumns, ...hiddenCols]
                         })().map(col => (
                           <div
                             key={col.id}
@@ -2879,7 +2939,7 @@ function TruckingPageContent() {
                   {/* Top scrollbar (synced) */}
                   <div
                     ref={topScrollRef}
-                    className="overflow-x-auto border-b bg-white"
+                    className={`${COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS} border-b bg-white`}
                     onScroll={() => {
                       if (isSyncingScroll.current) return
                       const top = topScrollRef.current
@@ -2897,7 +2957,7 @@ function TruckingPageContent() {
 
                   <div
                     ref={bottomScrollRef}
-                    className="overflow-x-auto"
+                    className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
                     onScroll={() => {
                       if (isSyncingScroll.current) return
                       const top = topScrollRef.current
@@ -2912,28 +2972,21 @@ function TruckingPageContent() {
                   >
                     <table
                       data-trucking-list-table
-                      className="w-full table-fixed border-collapse"
-                      style={{ minWidth: tableMinWidthPx }}
+                      className={COMPACT_OPERATIONAL_TABLE_CLASS}
                     >
-                      <colgroup>
-                        {visibleColumns.map((c) => (
-                          <col key={c.id} style={{ width: getColumnWidth(c.id) }} />
-                        ))}
-                        <col style={{ width: TRUCKING_ACTIONS_COL_WIDTH }} />
-                      </colgroup>
                       <thead>
                       <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_CLASS}>
                         {visibleColumns.map(col => {
                           const active = sortKey === col.id
-                          const filterActive = isColumnFilterActive(col.id)
-                          const filterType = getFilterTypeForColumn(col.id)
-                          const current = columnFilters[col.id]
+                          const opColClass = operationalTableColumnClass(
+                            getOperationalColumnLayout('trucking', col.id),
+                          )
 
                           return (
                             <th
                               key={col.id}
                               scope="col"
-                              className={`relative min-w-0 text-left align-bottom font-semibold cursor-move ${CONTRACT_PERF_TABLE_CELL_PAD} ${dragColId === col.id ? 'opacity-60' : ''}`}
+                              className={`relative text-left align-top font-semibold cursor-move ${CONTRACT_PERF_TABLE_CELL_PAD} ${opColClass} ${dragColId === col.id ? 'opacity-60' : ''}`}
                               draggable
                               onDragStart={(e) => {
                                 setDragColId(col.id)
@@ -2952,282 +3005,16 @@ function TruckingPageContent() {
                                 setDragColId(null)
                               }}
                             >
-                              <div className="flex items-center gap-1 min-w-0">
-                                <button
-                                  type="button"
-                                  className={`flex items-center gap-1 text-left min-w-0 ${col.sortable ? 'hover:text-gray-900' : ''}`}
-                                  onClick={() => {
-                                    if (col.sortable) {
-                                      if (sortKey === col.id) {
-                                        setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
-                                      } else {
-                                        setSortKey(col.id)
-                                        setSortDir('asc')
-                                      }
-                                      setPage(1)
-                                      fetchTruckingOperations(1)
-                                    }
-                                  }}
-                                  title={col.sortable ? 'Sort' : undefined}
-                                >
-                                  <span className="truncate">{col.label}</span>
-                                  {col.formulaHelp ? <FieldHelp text={col.formulaHelp} /> : null}
-                                  {col.sortable && active && (
-                                    sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                                  )}
-                                </button>
+                              <ContractPerfTableSortHeader
+                                label={col.label}
+                                formulaHelp={col.formulaHelp}
+                                sortable={col.sortable}
+                                activeSort={active}
+                                sortDir={sortDir}
+                                onSortClick={() => onSortHeaderClick(col)}
+                              />
 
-                                <button
-                                  type="button"
-                                  className={`p-1 rounded hover:bg-gray-100 ${filterActive ? 'text-blue-700' : 'text-gray-500'}`}
-                                  title="Filter"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setOpenHeaderFilterId(prev => (prev === col.id ? null : col.id))
-                                  }}
-                                >
-                                  <Filter className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
 
-                              {openHeaderFilterId === col.id && (
-                                <div
-                                  ref={headerFilterPopoverRef}
-                                  className="absolute left-0 top-full mt-2 w-[280px] bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-30"
-                                  onClick={(e) => e.stopPropagation()}
-                                  onMouseDown={(e) => e.stopPropagation()}
-                                >
-                                  <div className="flex items-center justify-between mb-2">
-                                    <div className="text-xs font-semibold text-gray-700 truncate">{col.label} Filter</div>
-                                    <button
-                                      type="button"
-                                      className="text-xs text-gray-500 hover:text-gray-800"
-                                      onClick={() => setOpenHeaderFilterId(null)}
-                                    >
-                                      Close
-                                    </button>
-                                  </div>
-
-                                  {/* Text filter */}
-                                  {filterType === 'text' && (
-                                    <div className="space-y-2">
-                                      <Input
-                                        value={(current?.type === 'text' && current.value) ? current.value : ''}
-                                        onChange={(e) => {
-                                          const value = e.target.value
-                                          setOrClearFilter(col.id, {
-                                            type: 'text',
-                                            value,
-                                            exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                            emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
-                                            notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
-                                          })
-                                        }}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') {
-                                            e.preventDefault()
-                                            setPage(1)
-                                            fetchTruckingOperations(1)
-                                          }
-                                        }}
-                                        placeholder="Type to filter (contains)"
-                                        className="h-8 text-sm"
-                                      />
-                                      <div className="flex flex-col gap-2">
-                                        <label className="flex items-center gap-2 text-xs text-gray-700">
-                                          <Checkbox
-                                            checked={current?.type === 'text' ? Boolean(current.exact) : false}
-                                            onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
-                                              setOrClearFilter(col.id, {
-                                                type: 'text',
-                                                value,
-                                                exact: Boolean(checked),
-                                                emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
-                                              })
-                                            }}
-                                          />
-                                          Exact match
-                                        </label>
-                                        <label className="flex items-center gap-2 text-xs text-gray-700">
-                                          <Checkbox
-                                            checked={Boolean(current?.emptyOnly)}
-                                            onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
-                                              setOrClearFilter(col.id, {
-                                                type: 'text',
-                                                value,
-                                                exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                                emptyOnly: Boolean(checked),
-                                                notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
-                                              })
-                                            }}
-                                          />
-                                          Only blanks
-                                        </label>
-                                        <label className="flex items-center gap-2 text-xs text-gray-700">
-                                          <Checkbox
-                                            checked={Boolean((current as any)?.notBlankOnly)}
-                                            onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
-                                              setOrClearFilter(col.id, {
-                                                type: 'text',
-                                                value,
-                                                exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                                emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
-                                                notBlankOnly: Boolean(checked),
-                                              })
-                                            }}
-                                          />
-                                          Only not blanks
-                                        </label>
-                                      </div>
-                                    </div>
-                                  )}
-
-                                  {/* Number filter */}
-                                  {filterType === 'number' && (
-                                    <div className="space-y-2">
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <Input
-                                          value={(current?.type === 'number' && current.min) ? current.min : ''}
-                                          onChange={(e) => {
-                                            const min = e.target.value
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchTruckingOperations(1)
-                                            }
-                                          }}
-                                          placeholder="Min"
-                                          className="h-8 text-sm"
-                                        />
-                                        <Input
-                                          value={(current?.type === 'number' && current.max) ? current.max : ''}
-                                          onChange={(e) => {
-                                            const max = e.target.value
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchTruckingOperations(1)
-                                            }
-                                          }}
-                                          placeholder="Max"
-                                          className="h-8 text-sm"
-                                        />
-                                      </div>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean(current?.emptyOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                        />
-                                        Only blanks
-                                      </label>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean((current as any)?.notBlankOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
-                                          }}
-                                        />
-                                        Only not blanks
-                                      </label>
-                                    </div>
-                                  )}
-
-                                  {/* Date filter */}
-                                  {filterType === 'date' && (
-                                    <div className="space-y-2">
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <Input
-                                          type="date"
-                                          value={(current?.type === 'date' && current.from) ? current.from : ''}
-                                          onChange={(e) => {
-                                            const from = e.target.value
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchTruckingOperations(1)
-                                            }
-                                          }}
-                                          className="h-8 text-sm"
-                                        />
-                                        <Input
-                                          type="date"
-                                          value={(current?.type === 'date' && current.to) ? current.to : ''}
-                                          onChange={(e) => {
-                                            const to = e.target.value
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchTruckingOperations(1)
-                                            }
-                                          }}
-                                          className="h-8 text-sm"
-                                        />
-                                      </div>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean(current?.emptyOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                        />
-                                        Only blanks
-                                      </label>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean((current as any)?.notBlankOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
-                                          }}
-                                        />
-                                        Only not blanks
-                                      </label>
-                                    </div>
-                                  )}
-
-                                  <div className="flex items-center justify-between mt-3 pt-2 border-t">
-                                    <button
-                                      type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
-                                      onClick={() => clearColumnFilter(col.id)}
-                                      disabled={!filterActive}
-                                    >
-                                      Clear
-                                    </button>
-                                    <div className="text-[11px] text-gray-500">
-                                      {filterActive ? 'Filtered' : 'No filter'}
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
                             </th>
                           )
                         })}
@@ -3260,9 +3047,13 @@ function TruckingPageContent() {
                           const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                           return (
                               <tr key={operation.id} className={stripeClass}>
-                                {visibleColumns.map(col => (
-                                  <td key={col.id} className={`min-w-0 overflow-hidden align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}>
-                                    <div className={`flex items-center ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
+                                {visibleColumns.map(col => {
+                                  const opColClass = operationalTableColumnClass(
+                                    getOperationalColumnLayout('trucking', col.id),
+                                  )
+                                  return (
+                                  <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}>
+                                    <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
                                       {col.id === 'status' && isEditing ? (
                                         operation.status === 'CANCELLED' ? (
                                           <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
@@ -3281,7 +3072,8 @@ function TruckingPageContent() {
                                       )}
                                     </div>
                                   </td>
-                                ))}
+                                  )
+                                })}
                                 <td
                                   className={`sticky right-0 z-10 border-l border-gray-200 align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}
                                 >

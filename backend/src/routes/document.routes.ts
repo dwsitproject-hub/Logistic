@@ -3,6 +3,7 @@ import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import multer from 'multer';
 import { downloadDocument, listDocuments, uploadDocumentHandler, ensureUploadDir } from '../controllers/document.controller';
+import { buildUniqueStoredFilename } from '../utils/fileUpload';
 
 const router = express.Router();
 
@@ -13,8 +14,7 @@ const ALLOWED_DOC_MIMES = new Set(['application/pdf', 'image/png', 'image/jpeg']
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {
-    const unique = Date.now() + '_' + Math.round(Math.random() * 1e9);
-    cb(null, unique + '_' + file.originalname.replace(/\s+/g, '_'));
+    cb(null, buildUniqueStoredFilename(file.originalname));
   },
 });
 const upload = multer({
