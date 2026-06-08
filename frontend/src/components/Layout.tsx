@@ -29,7 +29,9 @@ import {
 import {
   PermissionsProvider,
   usePermissions,
+  canViewContractPerformancePage,
   canViewPermission,
+  canViewShippingPerformancePage,
   isAdminRole,
 } from '@/components/PermissionsContext'
 
@@ -228,6 +230,12 @@ function LayoutWithPermissions({
     const roleOk = item.roles.includes('ALL') || (user.role != null && item.roles.includes(user.role))
     if (!roleOk) return false
     if (isAdminRole(user.role)) return true
+    if (item.href === '/contract-performance') {
+      return canViewContractPerformancePage(perms) === true
+    }
+    if (item.href === '/shipping-performance') {
+      return canViewShippingPerformancePage(perms) === true
+    }
     return canViewPermission(perms, item.permissionKey)
   })
 

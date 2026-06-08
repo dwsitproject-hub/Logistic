@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
-import { canViewPermission, usePermissions } from '@/components/PermissionsContext'
+import { canViewShippingPerformancePage, usePermissions } from '@/components/PermissionsContext'
 import api from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -899,25 +899,20 @@ function NumberCell({
   return <span className="text-sm tabular-nums">{n}</span>
 }
 
-const SHIPPING_PERFORMANCE_PAGE_PERMISSION = 'page.shipping_performance'
-
 export default function ShippingPerformancePage() {
   const router = useRouter()
   const perms = usePermissions()
-  const [pageReady, setPageReady] = useState(false)
+  const canViewPage = canViewShippingPerformancePage(perms)
   const [rows, setRows] = useState<ShippingPerformanceRow[]>([])
-  const [summaryLoading, setSummaryLoading] = useState(true)
+  const [summaryLoading, setSummaryLoading] = useState(false)
   const section3TableLoading = summaryLoading
   const [authReady, setAuthReady] = useState(false)
 
   useEffect(() => {
-    if (!perms.loaded) return
-    if (!canViewPermission(perms, SHIPPING_PERFORMANCE_PAGE_PERMISSION)) {
+    if (canViewPage === false) {
       router.replace('/shipments')
-      return
     }
-    setPageReady(true)
-  }, [perms.loaded, perms, router])
+  }, [canViewPage, router])
   const [showColumnManager, setShowColumnManager] = useState(false)
   const [columnOrder, setColumnOrder] = useState<Array<keyof ShippingPerformanceRow>>(
     () => ensureContractExtNoAfterVessel(COLUMN_DEFS.map((c) => c.key)),
@@ -987,7 +982,6 @@ export default function ShippingPerformancePage() {
   }, [])
 
   const fetchShippingPerformanceDashboard = useCallback(async () => {
-    if (!authReady) return
     const params = buildShippingPerfFetchParams().toString()
     try {
       setSummaryLoading(true)
@@ -999,12 +993,12 @@ export default function ShippingPerformancePage() {
     } finally {
       setSummaryLoading(false)
     }
-  }, [authReady, buildShippingPerfFetchParams])
+  }, [buildShippingPerfFetchParams])
 
   useEffect(() => {
-    if (!authReady) return
+    if (!authReady || canViewPage !== true) return
     void fetchShippingPerformanceDashboard()
-  }, [authReady, fetchShippingPerformanceDashboard])
+  }, [authReady, canViewPage, fetchShippingPerformanceDashboard])
 
   // Step A: exclude UNPLANNED at base — single source of truth for Sections 1–3
   const baseFilteredRows = useMemo(() => excludeUnplannedShippingRows(rows), [rows])
@@ -1511,12 +1505,16 @@ export default function ShippingPerformancePage() {
     setColumnOrder((prev) => reorderColumnsInOrder(prev, fromKey, toKey))
   }
 
-  if (!pageReady) {
+  if (canViewPage === null) {
     return (
       <Layout>
         <div className="flex items-center justify-center h-64 text-gray-500">Loading...</div>
       </Layout>
     )
+  }
+
+  if (canViewPage === false) {
+    return null
   }
 
   return (

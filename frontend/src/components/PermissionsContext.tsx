@@ -78,6 +78,26 @@ export function canViewPermission(ctx: PermissionsContextValue, key: string): bo
   return !!ctx.byKey[key]?.canView
 }
 
+/** null = permissions still loading */
+export function canViewContractPerformancePage(ctx: PermissionsContextValue): boolean | null {
+  if (isAdminRole(ctx.userRole)) return true
+  if (!ctx.loaded) return null
+  const perf = ctx.byKey['page.contract_performance']
+  if (perf?.canView) return true
+  if (perf) return false
+  return !!ctx.byKey['page.contracts']?.canView
+}
+
+/** null = permissions still loading */
+export function canViewShippingPerformancePage(ctx: PermissionsContextValue): boolean | null {
+  if (isAdminRole(ctx.userRole)) return true
+  if (!ctx.loaded) return null
+  const perf = ctx.byKey['page.shipping_performance']
+  if (perf?.canView) return true
+  if (perf) return false
+  return !!ctx.byKey['page.shipments']?.canView
+}
+
 export function canCreatePermission(ctx: PermissionsContextValue, key: string): boolean {
   if (isAdminRole(ctx.userRole)) return true
   if (!ctx.loaded) return false

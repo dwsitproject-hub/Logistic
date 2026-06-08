@@ -42,10 +42,13 @@ import {
 } from '@/components/performance/ContractPerfTableSkeleton'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
-import { canViewPermission, usePermissions } from '@/components/PermissionsContext'
+import {
+  canViewContractPerformancePage,
+  canViewPermission,
+  usePermissions,
+} from '@/components/PermissionsContext'
 
 const CONTRACT_PAYMENT_INFO_PERMISSION = 'data.contract_payment_info'
-const CONTRACT_PERFORMANCE_PAGE_PERMISSION = 'page.contract_performance'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { getInitialUserScopeFilters, markUserScopeFiltersCleared, wereUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import {
@@ -1044,11 +1047,12 @@ function ContractsPageContent() {
   const canViewContractPaymentInfo = canViewPermission(perms, CONTRACT_PAYMENT_INFO_PERMISSION)
 
   useEffect(() => {
-    if (!isContractPerformance || !perms.loaded) return
-    if (!canViewPermission(perms, CONTRACT_PERFORMANCE_PAGE_PERMISSION)) {
+    if (!isContractPerformance) return
+    const allowed = canViewContractPerformancePage(perms)
+    if (allowed === false) {
       router.replace('/contracts')
     }
-  }, [isContractPerformance, perms, router])
+  }, [isContractPerformance, perms.loaded, perms.byKey, perms.userRole, router])
   const [contracts, setContracts] = useState<Contract[]>([])
   const [loading, setLoading] = useState(true)
   const [authReady, setAuthReady] = useState(false)
