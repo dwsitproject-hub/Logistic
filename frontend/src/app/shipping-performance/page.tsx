@@ -985,7 +985,7 @@ export default function ShippingPerformancePage() {
     const params = buildShippingPerfFetchParams().toString()
     try {
       setSummaryLoading(true)
-      const rowsResp = await api.get(`/shipments/performance?${params}`)
+      const rowsResp = await api.get(`/shipments/performance?${params}`, { timeout: 120000 })
       setRows(Array.isArray(rowsResp.data?.data) ? rowsResp.data.data : [])
     } catch (error) {
       console.error('Failed to load shipping performance dashboard:', error)
@@ -995,8 +995,11 @@ export default function ShippingPerformancePage() {
     }
   }, [buildShippingPerfFetchParams])
 
+  const fetchStartedRef = useRef(false)
+
   useEffect(() => {
-    if (!authReady || canViewPage !== true) return
+    if (!authReady || canViewPage !== true || fetchStartedRef.current) return
+    fetchStartedRef.current = true
     void fetchShippingPerformanceDashboard()
   }, [authReady, canViewPage, fetchShippingPerformanceDashboard])
 

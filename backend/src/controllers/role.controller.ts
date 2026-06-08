@@ -170,19 +170,20 @@ export const getUserPermissions = async (req: AuthRequest, res: Response): Promi
            CASE WHEN rp.transport_type IS NULL THEN 0 ELSE 1 END DESC
          LIMIT 1
        ) scoped ON true
-       WHERE r.role_name = $1 AND r.is_active = true`,
+       WHERE r.role_name = $1 AND r.is_active = true
+         AND scoped.can_view IS NOT NULL`,
       [userRole, userLevel, userTransportType]
     );
 
-    // Format permissions for easy frontend use
+    // Format permissions for easy frontend use (only granted/denied rows — omit catalog entries with no role grant)
     const permissions = permissionsResult.rows.reduce((acc: any, perm: any) => {
       acc[perm.permission_key] = {
         name: perm.permission_name,
         category: perm.category,
-        canView: perm.can_view,
-        canCreate: perm.can_create,
-        canEdit: perm.can_edit,
-        canDelete: perm.can_delete,
+        canView: !!perm.can_view,
+        canCreate: !!perm.can_create,
+        canEdit: !!perm.can_edit,
+        canDelete: !!perm.can_delete,
       };
       return acc;
     }, {});

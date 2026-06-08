@@ -78,24 +78,30 @@ export function canViewPermission(ctx: PermissionsContextValue, key: string): bo
   return !!ctx.byKey[key]?.canView
 }
 
-/** null = permissions still loading */
+/**
+ * null = permissions still loading.
+ * Explicit deny: perf key present with canView false (e.g. LOGISTICS Staff scoped row).
+ * Legacy fallback: perf key absent (pre-migration) → use operational page permission.
+ */
 export function canViewContractPerformancePage(ctx: PermissionsContextValue): boolean | null {
   if (isAdminRole(ctx.userRole)) return true
   if (!ctx.loaded) return null
-  const perf = ctx.byKey['page.contract_performance']
-  if (perf?.canView) return true
-  if (perf) return false
-  return !!ctx.byKey['page.contracts']?.canView
+  const perfKey = 'page.contract_performance'
+  const legacyKey = 'page.contracts'
+  if (ctx.byKey[perfKey]?.canView) return true
+  if (perfKey in ctx.byKey) return false
+  return !!ctx.byKey[legacyKey]?.canView
 }
 
-/** null = permissions still loading */
+/** null = permissions still loading — see canViewContractPerformancePage */
 export function canViewShippingPerformancePage(ctx: PermissionsContextValue): boolean | null {
   if (isAdminRole(ctx.userRole)) return true
   if (!ctx.loaded) return null
-  const perf = ctx.byKey['page.shipping_performance']
-  if (perf?.canView) return true
-  if (perf) return false
-  return !!ctx.byKey['page.shipments']?.canView
+  const perfKey = 'page.shipping_performance'
+  const legacyKey = 'page.shipments'
+  if (ctx.byKey[perfKey]?.canView) return true
+  if (perfKey in ctx.byKey) return false
+  return !!ctx.byKey[legacyKey]?.canView
 }
 
 export function canCreatePermission(ctx: PermissionsContextValue, key: string): boolean {
