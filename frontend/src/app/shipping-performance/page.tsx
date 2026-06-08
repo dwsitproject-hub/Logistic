@@ -900,6 +900,14 @@ function NumberCell({
 }
 
 export default function ShippingPerformancePage() {
+  return (
+    <Layout>
+      <ShippingPerformancePageContent />
+    </Layout>
+  )
+}
+
+function ShippingPerformancePageContent() {
   const router = useRouter()
   const perms = usePermissions()
   const canViewPage = canViewShippingPerformancePage(perms)
@@ -1510,9 +1518,7 @@ export default function ShippingPerformancePage() {
 
   if (canViewPage === null) {
     return (
-      <Layout>
-        <div className="flex items-center justify-center h-64 text-gray-500">Loading...</div>
-      </Layout>
+      <div className="flex items-center justify-center h-64 text-gray-500">Loading...</div>
     )
   }
 
@@ -1521,8 +1527,7 @@ export default function ShippingPerformancePage() {
   }
 
   return (
-    <Layout>
-      <div className="space-y-6">
+    <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -2360,6 +2365,5 @@ export default function ShippingPerformancePage() {
           sourceRows={vesselHistorySourceRows}
         />
       </div>
-    </Layout>
   )
 }
