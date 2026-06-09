@@ -6,7 +6,6 @@ import { Badge } from '@/components/ui/badge'
 import { formatDateDMY } from '@/lib/dateFormat'
 import { formatOilLossMtFromKg, formatOilLossPct } from '@/lib/oilLossFormat'
 import { oilLossTransporterGroupKey } from '@/lib/oilLossByTransporterColumns'
-import { partitionTransporterContractsByStatus } from '@/lib/oilLossTransporterPartition'
 import { cn } from '@/lib/utils'
 import { OperationalStackedCommaCell } from '@/lib/operationalTableLayout'
 import { Truck, X } from 'lucide-react'
@@ -220,19 +219,16 @@ export default function TransporterHistoryModal({
     )
   }, [sourceRows, selection])
 
-  const { onGoingContracts, closeContracts } = useMemo(() => {
-    const partitioned = partitionTransporterContractsByStatus(scopedRows)
-    return {
-      onGoingContracts: sortByContractDateDesc(partitioned.onGoingContracts),
-      closeContracts: sortByContractDateDesc(partitioned.closeContracts),
-    }
-  }, [scopedRows])
+  const contractRows = useMemo(
+    () => sortByContractDateDesc(scopedRows),
+    [scopedRows],
+  )
 
   if (!open || !selection) return null
 
   const loadingItems = splitLocationList(selection.loadingLocations)
   const unloadingItems = splitLocationList(selection.unloadingLocations)
-  const totalRecords = onGoingContracts.length + closeContracts.length
+  const totalRecords = contractRows.length
   const lossTone =
     selection.oilLossMtKg != null && selection.oilLossMtKg < 0
       ? 'text-red-700'
@@ -252,9 +248,8 @@ export default function TransporterHistoryModal({
               <div className="min-w-0">
                 <h3 className="truncate text-lg font-semibold text-gray-900">{selection.transporterName}</h3>
                 <p className="text-xs text-gray-500">
-                  {onGoingContracts.length.toLocaleString('en-US')} on going ·{' '}
-                  {closeContracts.length.toLocaleString('en-US')} close ·{' '}
-                  {totalRecords.toLocaleString('en-US')} total in scope
+                  {totalRecords.toLocaleString('en-US')} contract
+                  {totalRecords === 1 ? '' : 's'} in scope
                 </p>
               </div>
             </div>
@@ -303,23 +298,14 @@ export default function TransporterHistoryModal({
             </div>
           </section>
 
-          <section className="mb-6">
-            <h4 className="mb-3 text-sm font-semibold text-gray-800">On Going Contract</h4>
-            <TransporterContractTable
-              rows={onGoingContracts}
-              emptyMessage="No open contracts for this transporter"
-            />
-          </section>
-
           <section>
-            <h4 className="mb-3 text-sm font-semibold text-gray-800">Close Contract</h4>
+            <h4 className="mb-3 text-sm font-semibold text-gray-800">Contract Details</h4>
             <TransporterContractTable
-              rows={closeContracts}
-              emptyMessage="No close contracts for this transporter"
+              rows={contractRows}
+              emptyMessage="No contracts for this transporter"
             />
             <p className="mt-2 text-xs text-gray-500">
-              On Going = Open / In Progress; Close = Close, Closed, or Completed. Scope respects
-              toolbar filters on the Oil Loss page.
+              Scope respects toolbar filters on the Oil Loss page.
             </p>
           </section>
         </div>

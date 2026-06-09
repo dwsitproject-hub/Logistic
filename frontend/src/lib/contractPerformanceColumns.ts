@@ -156,17 +156,14 @@ export const CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   created_at: 100,
 }
 
+/** Multi-word / long text columns — ID columns use operational nowrap/stack layout instead. */
 export const CONTRACT_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS = new Set([
   'supplier',
-  'contract_ext_no',
-  'po_number',
   'product',
   'source_type',
   'group_name',
   'company_name',
-  'contract_id',
   'vessel_name',
-  'sto_number',
 ])
 
 const CONTRACT_PERF_DEFAULT_COLUMN_WIDTH_PX = 96

@@ -84,12 +84,10 @@ import {
   CONTRACT_PERF_DEFAULT_VISIBLE_COLUMN_IDS,
   CONTRACT_PERF_LEGACY_STORAGE_KEYS,
   CONTRACT_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS,
-  buildContractPerfColumnWidthTracks,
   buildContractPerfVisibleColumns,
   contractPerfCellTooltipText,
   contractPerfCompactColumnFallbackOrder,
   contractPerfDefaultVisibleColumnIds,
-  contractPerfTableColumnWidthPx,
   CONTRACT_PERF_TABLE_CELL_PAD,
   CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
@@ -102,10 +100,7 @@ import {
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
   COMPACT_OPERATIONAL_TABLE_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
-  COMPACT_TABLE_CLASS,
   COMPACT_TABLE_HEADER_LABEL_CLASS,
-  compactTableColumnTrackPx,
-  resolveVisibleColumnWidthPx,
 } from '@/lib/compactTableUi'
 import {
   getOperationalColumnLayout,
@@ -378,12 +373,6 @@ type B2bPartyRow = {
   supplier?: string | null
   incoterm?: string | null
   certification?: string | null
-}
-
-/** Matches compact grid `minmax(Npx, …)` — Contract Performance <col /> widths only. */
-function compactGridTrackMinPx(track: string): string {
-  const m = track.match(/minmax\((\d+)px/)
-  return m ? `${m[1]}px` : '96px'
 }
 
 /** Default left-to-right order on `/contracts` when no saved column order (Supplier & Buyer after PO Number). */
@@ -2840,10 +2829,8 @@ function ContractsPageContent() {
       getSortValue: (c) => c.po_numbers || c.po_number || '',
       render: (c) => {
         const val = c.po_numbers || c.po_number || ''
-        return isContractPerformance ? (
-          <span className="text-sm truncate block" title={val}>
-            {val || '-'}
-          </span>
+        return val.includes(',') ? (
+          <OperationalStackedCommaCell value={val} title={val} />
         ) : (
           <OperationalNowrapCell value={val} title={val} />
         )
@@ -2867,12 +2854,8 @@ function ContractsPageContent() {
             formulaHelp: isContractPerformance ? undefined : FIELD_HELP.contractUrgentFlag,
             getSortValue: (c: Contract) => c.contract_id || '',
             render: (c: Contract) => (
-              <div className={cn('flex items-center gap-1', isContractPerformance && 'min-w-0')}>
-                {isContractPerformance ? (
-                  <span className="text-sm truncate">{c.contract_id}</span>
-                ) : (
-                  <OperationalNowrapCell value={c.contract_id} fallback="-" />
-                )}
+              <div className="flex items-center gap-1">
+                <OperationalNowrapCell value={c.contract_id} fallback="-" />
                 {showUrgentFlag(c) && !isContractPerformance && (
                   <span title="Urgent: delivery window ≤14 days and missing shipment/STO or trucking per transport mode (see column help)" className="shrink-0 inline-flex">
                     <Flag className="h-3.5 w-3.5 text-red-500 fill-red-500" />
@@ -2909,14 +2892,9 @@ function ContractsPageContent() {
       defaultVisible: !isContractPerformance,
       sortable: true,
       getSortValue: (c) => c.contract_ext_no || '',
-      render: (c) =>
-        isContractPerformance ? (
-          <span className="text-sm break-words whitespace-normal" title={c.contract_ext_no || ''}>
-            {c.contract_ext_no || '-'}
-          </span>
-        ) : (
-          <OperationalStackedCommaCell value={c.contract_ext_no} title={c.contract_ext_no || ''} />
-        ),
+      render: (c) => (
+        <OperationalStackedCommaCell value={c.contract_ext_no} title={c.contract_ext_no || ''} />
+      ),
     },
     {
       id: 'product',
@@ -2924,7 +2902,7 @@ function ContractsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.product || '',
-      render: (c) => <span className="text-sm truncate">{c.product || '-'}</span>
+      render: (c) => <span className="text-sm">{c.product || '-'}</span>
     },
     {
       id: 'incoterm',
@@ -2932,7 +2910,7 @@ function ContractsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.incoterm || '',
-      render: (c) => <span className="text-sm truncate">{c.incoterm || '-'}</span>
+      render: (c) => <span className="text-sm">{c.incoterm || '-'}</span>
     },
     ...(isContractPerformance
       ? ([
@@ -3630,47 +3608,6 @@ function ContractsPageContent() {
     [visibleColumns],
   )
 
-  const contractPerfTableMinWidthPx = useMemo(() => {
-    if (!isContractPerformance) return 1100
-    const cols = visibleColumns.reduce(
-      (sum, col) =>
-        sum +
-        contractPerfTableColumnWidthPx(col.id, col.label, {
-          hasFormulaHelp: Boolean(col.formulaHelp),
-        }),
-      0,
-    )
-    return cols + 52
-  }, [visibleColumns, isContractPerformance])
-
-  /** Grid column widths — Contract Performance only; /contracts uses CSS min-content shrink-wrap. */
-  const compactGridColumnTracks = useMemo(() => {
-    if (!isContractPerformance) return {} as Record<string, string>
-    return buildContractPerfColumnWidthTracks(
-      visibleColumns.map((c) => ({
-        id: c.id,
-        label: c.label,
-        formulaHelp: c.formulaHelp,
-      })),
-    )
-  }, [visibleColumns, isContractPerformance])
-
-  const getColumnWidthPx = useCallback(
-    (col: CompactColumn): number =>
-      resolveVisibleColumnWidthPx(
-        { id: col.id, label: col.label, formulaHelp: col.formulaHelp },
-        { precomputedTrack: compactGridColumnTracks[col.id] },
-      ),
-    [compactGridColumnTracks],
-  )
-
-  const getColumnWidth = useCallback(
-    (col: CompactColumn): string => compactTableColumnTrackPx(getColumnWidthPx(col)),
-    [getColumnWidthPx],
-  )
-
-  const listTableMinWidthPx = contractPerfTableMinWidthPx
-
   const contractPerfTableCellPad = CONTRACT_PERF_TABLE_CELL_PAD
   const contractPerfTableRowMinH = CONTRACT_PERF_TABLE_ROW_MIN_H
 
@@ -3722,7 +3659,7 @@ function ContractsPageContent() {
     calc()
     window.addEventListener('resize', calc)
     return () => window.removeEventListener('resize', calc)
-  }, [visibleColumns, sortedContracts.length, compactGridColumnTracks])
+  }, [visibleColumns, sortedContracts.length, section3TableLoading])
 
   // If pagination/filtering changes, drop expansions that aren't on the current view to avoid stale set growth
   useEffect(() => {
@@ -4826,10 +4763,7 @@ function ContractsPageContent() {
                   {/* Top scrollbar (synced) */}
                   <div
                     ref={topScrollRef}
-                    className={cn(
-                      isContractPerformance ? 'overflow-x-auto' : COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
-                      'border-b bg-white',
-                    )}
+                    className={cn(COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS, 'border-b bg-white')}
                     onScroll={() => {
                       if (isSyncingScroll.current) return
                       const top = topScrollRef.current
@@ -4847,7 +4781,7 @@ function ContractsPageContent() {
 
                   <div
                     ref={bottomScrollRef}
-                    className={isContractPerformance ? 'overflow-x-auto' : COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
+                    className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
                     onScroll={() => {
                       if (isSyncingScroll.current) return
                       const top = topScrollRef.current
@@ -4860,22 +4794,8 @@ function ContractsPageContent() {
                       })
                     }}
                   >
-                    <div
-                      className={cn(isContractPerformance && 'min-w-0')}
-                      style={isContractPerformance ? { minWidth: listTableMinWidthPx } : undefined}
-                    >
-                      <table
-                        className={isContractPerformance ? COMPACT_TABLE_CLASS : COMPACT_OPERATIONAL_TABLE_CLASS}
-                        style={isContractPerformance ? { minWidth: listTableMinWidthPx } : undefined}
-                      >
-                        {isContractPerformance && (
-                          <colgroup>
-                            {visibleColumns.map((c) => (
-                              <col key={c.id} style={{ width: compactGridTrackMinPx(getColumnWidth(c)) }} />
-                            ))}
-                            <col style={{ width: 60 }} />
-                          </colgroup>
-                        )}
+                    <div className="min-w-0">
+                      <table className={COMPACT_OPERATIONAL_TABLE_CLASS}>
                       {/* Header */}
                       <thead>
                       <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_CLASS}>
@@ -4888,9 +4808,9 @@ function ContractsPageContent() {
                           const currentNum   = current && current.type === 'number' ? current : null
                           const currentDate  = current && current.type === 'date'   ? current : null
                           const currentMulti = current && current.type === 'multi'  ? current : null
-                          const opColClass = !isContractPerformance
-                            ? operationalTableColumnClass(getOperationalColumnLayout('contracts', col.id))
-                            : ''
+                          const opColClass = operationalTableColumnClass(
+                            getOperationalColumnLayout('contracts', col.id),
+                          )
 
                           return (
                             <th
@@ -4899,7 +4819,6 @@ function ContractsPageContent() {
                               className={cn(
                                 'relative text-left font-semibold cursor-move align-top',
                                 contractPerfTableCellPad,
-                                isContractPerformance && 'min-w-0',
                                 opColClass,
                                 dragColId === col.id && 'opacity-60',
                               )}
@@ -5270,56 +5189,32 @@ function ContractsPageContent() {
                             return (
                           <tr key={contract.id} className={stripeClass}>
                                 {visibleColumns.map(col => {
+                                  const layout = getOperationalColumnLayout('contracts', col.id)
                                   const useTruncateTooltip =
                                     isContractPerformance &&
+                                    (layout === 'wrap' || layout === 'truncate') &&
                                     CONTRACT_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS.has(col.id)
                                   const tooltip = useTruncateTooltip
                                     ? contractPerfCellTooltipText(col.id, contract)
                                     : null
                                   const rendered = col.render(contract)
-                                  const opColClass = !isContractPerformance
-                                    ? operationalTableColumnClass(getOperationalColumnLayout('contracts', col.id))
-                                    : ''
-
-                                  if (!isContractPerformance) {
-                                    return (
-                                      <td
-                                        key={col.id}
-                                        className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${contractPerfTableCellPad} ${stripeClass}`}
-                                      >
-                                        <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${contractPerfTableRowMinH}`}>
-                                          {rendered}
-                                        </div>
-                                      </td>
-                                    )
-                                  }
+                                  const opColClass = operationalTableColumnClass(layout)
 
                                   return (
-                                  <td
-                                    key={col.id}
-                                    className={cn(
-                                      'min-w-0 align-middle',
-                                      contractPerfTableCellPad,
-                                      stripeClass,
-                                    )}
-                                  >
-                                    <div
-                                      className={cn(
-                                        'flex items-center min-w-0 max-w-full',
-                                        contractPerfTableRowMinH,
-                                      )}
+                                    <td
+                                      key={col.id}
+                                      className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${contractPerfTableCellPad} ${stripeClass}`}
                                     >
-                                      {useTruncateTooltip ? (
-                                        <ContractPerfTruncatedCell tooltip={tooltip} className="w-full">
-                                          {rendered}
-                                        </ContractPerfTruncatedCell>
-                                      ) : (
-                                        <div className="min-w-0 max-w-full truncate text-sm">
-                                          {rendered}
-                                        </div>
-                                      )}
-                                    </div>
-                                  </td>
+                                      <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${contractPerfTableRowMinH}`}>
+                                        {useTruncateTooltip ? (
+                                          <ContractPerfTruncatedCell tooltip={tooltip} className="w-full">
+                                            {rendered}
+                                          </ContractPerfTruncatedCell>
+                                        ) : (
+                                          rendered
+                                        )}
+                                      </div>
+                                    </td>
                                   )
                                 })}
 

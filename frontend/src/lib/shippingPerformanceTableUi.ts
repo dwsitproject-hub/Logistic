@@ -3,6 +3,26 @@
  */
 
 import { COMPACT_TABLE_HEADER_ROW_CLASS, resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
+import {
+  getOperationalColumnLayout,
+  type OperationalColumnLayout,
+} from '@/lib/operationalTableLayout'
+
+/** Intrinsic nowrap columns — full text visible, horizontal scroll when needed. */
+const SHIPPING_PERF_INTRINSIC_TOKEN_COLUMN_LAYOUT: Partial<
+  Record<string, OperationalColumnLayout>
+> = {
+  vessel_name: 'token',
+}
+
+export function getShippingPerfTableColumnLayout(
+  colId: string,
+  _tableViewMode: 'all' | 'by_vessel',
+): OperationalColumnLayout {
+  const override = SHIPPING_PERF_INTRINSIC_TOKEN_COLUMN_LAYOUT[colId]
+  if (override) return override
+  return getOperationalColumnLayout('shipping_performance', colId)
+}
 
 export const SHIPPING_PERF_TABLE_CELL_PAD = 'px-2 py-1.5'
 export const SHIPPING_PERF_TABLE_ROW_MIN_H = 'min-h-[32px]'
@@ -54,15 +74,11 @@ export function shippingPerfTableMinWidthPx(
   }, 0)
 }
 
-/** Text columns that truncate with hover tooltip (same pattern as Contract Performance). */
+/** Multi-word / long text columns — ID and status columns use operational nowrap/stack layout. */
 export const SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS = new Set([
   'vessel_name',
-  'contract_ext_no',
-  'contract_number',
-  'po_number',
   'product',
   'supplier',
-  'incoterm',
   'loading_port',
   'discharge_port',
   'group_name',

@@ -6,6 +6,11 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatAvgDays, signedCycleDaysClass } from '@/lib/cycleDaysDisplay'
 import { partitionVesselHistoryByStatus } from '@/lib/vesselHistoryPartition'
+import {
+  resolveShippingPerfDischargePort,
+  resolveShippingPerfLoadingPort,
+  type ShippingPerformancePortSource,
+} from '@/lib/shippingPerformancePorts'
 import { cn } from '@/lib/utils'
 import { Anchor, Loader2, Ship, X } from 'lucide-react'
 
@@ -14,7 +19,7 @@ export type VesselHistoryModalSelection = {
   vesselKey: string
 }
 
-export type VesselHistoryShipmentRow = {
+export type VesselHistoryShipmentRow = ShippingPerformancePortSource & {
   id: string
   contract_date?: string | null
   contract_ext_no?: string | null
@@ -170,6 +175,12 @@ function renderHistoryCell(row: VesselHistoryShipmentRow, key: keyof VesselHisto
     const status = String(row.status ?? '').trim()
     if (!status) return <span className="text-gray-400">-</span>
     return <Badge className={getStatusColor(status)}>{status}</Badge>
+  }
+  if (key === 'loading_port') {
+    return <span>{displayLabel(resolveShippingPerfLoadingPort(row))}</span>
+  }
+  if (key === 'discharge_port') {
+    return <span>{displayLabel(resolveShippingPerfDischargePort(row))}</span>
   }
   return <span>{displayLabel(row[key])}</span>
 }

@@ -38,3 +38,13 @@ export function formatOilLossAvgPct(value: number | null | undefined): string {
     useGrouping: true,
   })}%`
 }
+
+/** YTD summary cards — total oil loss in MT (already in MT, not Kg). */
+export function formatOilLossTotalMt(value: number | null | undefined): string {
+  return formatOilLossAvgMt(value)
+}
+
+/** YTD summary cards — aggregate total oil loss % (weighted by base qty). */
+export function formatOilLossTotalPct(value: number | null | undefined): string {
+  return formatOilLossAvgPct(value)
+}

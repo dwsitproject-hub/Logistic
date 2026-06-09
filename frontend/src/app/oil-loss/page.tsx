@@ -21,15 +21,15 @@ import {
   formatOilLossAvgPct,
   formatOilLossMtFromKg,
   formatOilLossPct,
+  formatOilLossTotalMt,
+  formatOilLossTotalPct,
 } from '@/lib/oilLossFormat'
 import {
-  deriveOilLossStatusFilterOptions,
   filterOilLossEligibleRows,
   matchesOilLossModeFilter,
-  matchesOilLossStatusFilter,
   OIL_LOSS_MODE_FILTER_OPTIONS,
 } from '@/lib/oilLossEligibility'
-import { formatQtyMtFromKg } from '@/lib/utils'
+import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import {
   ContractPerfTableSubtitleSkeleton,
   ContractTableBodySkeleton,
@@ -94,6 +94,8 @@ type ROilLossKey = 'r1' | 'r2' | 'r3' | 'r4'
 type ROilLossSummary = {
   avgMt: number | null
   avgPct: number | null
+  totalMt: number | null
+  totalPct: number | null
   sampleCount?: number
 }
 
@@ -132,6 +134,13 @@ const R_OIL_LOSS_CARDS: Array<{ key: ROilLossKey; label: string; formula: string
   { key: 'r3', label: 'R3', formula: 'Quantity Receive - Quantity SFBD' },
   { key: 'r4', label: 'R4', formula: 'Quantity Receive - Quantity Delivery' },
 ]
+
+function oilLossValueTone(value: number | null, emphasis: 'primary' | 'secondary'): string {
+  if (value == null) return emphasis === 'primary' ? 'text-gray-400' : 'text-gray-300'
+  if (value < 0) return emphasis === 'primary' ? 'text-red-700' : 'text-red-600/90'
+  if (value > 0) return emphasis === 'primary' ? 'text-green-700' : 'text-green-600/90'
+  return emphasis === 'primary' ? 'text-gray-900' : 'text-gray-600'
+}
 
 function formatShortDate(dateStr: string) {
   return formatDateDMY(dateStr)
@@ -380,9 +389,11 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       sortable: true,
       getSortValue: (r) => ('transporter' in r ? r.transporter : '') || '',
       render: (r) => (
-        <span className="text-sm truncate block max-w-[200px]">
-          {('transporter' in r && r.transporter) || '—'}
-        </span>
+        <OperationalNowrapCell
+          value={'transporter' in r ? r.transporter : null}
+          title={('transporter' in r ? r.transporter : '') || ''}
+          className="text-sm"
+        />
       ),
     },
     {
@@ -452,10 +463,9 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       sortable: true,
       getSortValue: (r) => ('loading_location' in r ? r.loading_location : '') || '',
       render: (r) => (
-        <OperationalTruncatedCell
-          value={'loading_location' in r ? r.loading_location : null}
-          title={('loading_location' in r ? r.loading_location : '') || ''}
-        />
+        <span className="text-sm break-words">
+          {('loading_location' in r && r.loading_location) || '—'}
+        </span>
       ),
     },
     {
@@ -465,10 +475,9 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       sortable: true,
       getSortValue: (r) => ('unloading_location' in r ? r.unloading_location : '') || '',
       render: (r) => (
-        <OperationalTruncatedCell
-          value={'unloading_location' in r ? r.unloading_location : null}
-          title={('unloading_location' in r ? r.unloading_location : '') || ''}
-        />
+        <span className="text-sm break-words">
+          {('unloading_location' in r && r.unloading_location) || '—'}
+        </span>
       ),
     },
     {
@@ -811,7 +820,6 @@ export default function OilLossPage() {
   const isSyncingScroll = useRef(false)
   const [tableScrollWidth, setTableScrollWidth] = useState(0)
 
-  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([])
   const [selectedModes, setSelectedModes] = useState<string[]>([])
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
@@ -987,10 +995,7 @@ export default function OilLossPage() {
     )
   }, [columnPrefsByView])
 
-  const availableStatuses = useMemo(() => deriveOilLossStatusFilterOptions(rows), [rows])
-
   const hasActiveOilLossFilters =
-    selectedStatuses.length > 0 ||
     selectedModes.length > 0 ||
     selectedIncoterms.length > 0 ||
     selectedProducts.length > 0 ||
@@ -999,7 +1004,6 @@ export default function OilLossPage() {
     Boolean(dateTo)
 
   const clearOilLossFilters = useCallback(() => {
-    setSelectedStatuses([])
     setSelectedModes([])
     setSelectedIncoterms([])
     resetUserScopeFilters()
@@ -1013,7 +1017,6 @@ export default function OilLossPage() {
 
   const filteredByTopFilters = useMemo(() => {
     return rows.filter((row) => {
-      if (!matchesOilLossStatusFilter(row.status, selectedStatuses)) return false
       if (!matchesOilLossModeFilter(row.transport_mode, selectedModes)) return false
       const incoterm = String(row.incoterm || '').trim() || 'Blank'
       if (selectedIncoterms.length > 0 && !selectedIncoterms.includes(incoterm)) return false
@@ -1028,7 +1031,6 @@ export default function OilLossPage() {
     })
   }, [
     rows,
-    selectedStatuses,
     selectedModes,
     selectedIncoterms,
     selectedProducts,
@@ -1134,7 +1136,6 @@ export default function OilLossPage() {
   }, [
     filteredRows.length,
     search,
-    selectedStatuses,
     selectedModes,
     selectedIncoterms,
     selectedProducts,
@@ -1235,41 +1236,91 @@ export default function OilLossPage() {
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {R_OIL_LOSS_CARDS.map((card) => {
-            const summary = ytdSummary?.[card.key] ?? { avgMt: null, avgPct: null }
+            const summary = ytdSummary?.[card.key] ?? {
+              avgMt: null,
+              avgPct: null,
+              totalMt: null,
+              totalPct: null,
+            }
+            const totalMt = loading ? null : summary.totalMt
+            const totalPct = loading ? null : summary.totalPct
             const avgMt = loading ? null : summary.avgMt
             const avgPct = loading ? null : summary.avgPct
-            const lossTone =
-              avgMt != null && avgMt < 0
-                ? 'text-red-700'
-                : avgMt != null && avgMt > 0
-                  ? 'text-green-700'
-                  : 'text-gray-900'
 
             return (
-              <div key={card.key} className="rounded-xl border bg-white p-5 shadow-sm">
-                <div className="flex items-center gap-1.5 mb-3">
-                  <span className="text-base font-semibold text-gray-800">{card.label}</span>
+              <div
+                key={card.key}
+                className="flex min-h-full flex-col rounded-xl border bg-white p-4 sm:p-5 shadow-sm"
+              >
+                <div className="mb-4 flex items-start gap-2">
+                  <span className="text-3xl font-bold leading-none tracking-tight text-gray-900">
+                    {card.label}
+                  </span>
                   <FieldHelp text={`Formula: ${card.formula}`} />
                 </div>
+
                 <div className="space-y-3">
                   <div>
-                    <div className="text-xs font-medium uppercase tracking-wide text-gray-500">
-                      Avg Oil Loss (MT)
+                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                      Total
                     </div>
-                    <div
-                      className={`text-xl font-bold mt-0.5 tabular-nums ${loading ? 'text-gray-400' : lossTone}`}
-                    >
-                      {loading ? '…' : formatOilLossAvgMt(avgMt)}
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-gray-500 leading-snug">
+                          Total Oil Loss (MT)
+                        </div>
+                        <div
+                          className={`mt-0.5 text-lg font-semibold leading-tight tabular-nums ${
+                            loading ? 'text-gray-400' : oilLossValueTone(totalMt, 'primary')
+                          }`}
+                        >
+                          {loading ? '…' : formatOilLossTotalMt(totalMt)}
+                        </div>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                          Total Oil Loss (%)
+                        </div>
+                        <div
+                          className={`mt-0.5 text-lg font-semibold leading-tight tabular-nums ${
+                            loading ? 'text-gray-400' : oilLossValueTone(totalPct, 'primary')
+                          }`}
+                        >
+                          {loading ? '…' : formatOilLossTotalPct(totalPct)}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <div className="text-xs font-medium uppercase tracking-wide text-gray-500">
-                      Avg Oil Loss (%)
+
+                  <div className="border-t border-gray-100 pt-3">
+                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                      Average
                     </div>
-                    <div
-                      className={`text-xl font-bold mt-0.5 tabular-nums ${loading ? 'text-gray-400' : lossTone}`}
-                    >
-                      {loading ? '…' : formatOilLossAvgPct(avgPct)}
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400 leading-snug">
+                          Avg Oil Loss (MT)
+                        </div>
+                        <div
+                          className={`mt-0.5 text-sm font-medium leading-tight tabular-nums ${
+                            loading ? 'text-gray-300' : oilLossValueTone(avgMt, 'secondary')
+                          }`}
+                        >
+                          {loading ? '…' : formatOilLossAvgMt(avgMt)}
+                        </div>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">
+                          Avg Oil Loss (%)
+                        </div>
+                        <div
+                          className={`mt-0.5 text-sm font-medium leading-tight tabular-nums ${
+                            loading ? 'text-gray-300' : oilLossValueTone(avgPct, 'secondary')
+                          }`}
+                        >
+                          {loading ? '…' : formatOilLossAvgPct(avgPct)}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1298,16 +1349,6 @@ export default function OilLossPage() {
                       className="pl-10 h-10"
                     />
                   </div>
-                </div>
-                <div className="w-52 min-w-[180px]">
-                  <SearchableMultiSelect
-                    label="Status"
-                    options={availableStatuses}
-                    selected={selectedStatuses}
-                    onChange={setSelectedStatuses}
-                    placeholder="All statuses"
-                    emptyMessage={loading ? 'Loading...' : 'No statuses'}
-                  />
                 </div>
                 <div className="w-52 min-w-[180px]">
                   <SearchableMultiSelect
@@ -1583,7 +1624,10 @@ export default function OilLossPage() {
                   >
                     <table
                       data-oil-loss-table={viewMode}
-                      className={COMPACT_OPERATIONAL_TABLE_CLASS}
+                      className={cn(
+                        COMPACT_OPERATIONAL_TABLE_CLASS,
+                        viewMode === 'by_transporter' && 'klip-compact-table--intrinsic-token-cols',
+                      )}
                     >
                       <thead>
                         <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_CLASS}>
@@ -1672,8 +1716,7 @@ export default function OilLossPage() {
                                             return (
                                               <button
                                                 type="button"
-                                                className="w-full min-w-0 max-w-[200px] truncate text-left text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
-                                                title={name}
+                                                className="block w-max max-w-none whitespace-nowrap text-left text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
                                                 onClick={(e) => {
                                                   e.stopPropagation()
                                                   openTransporterModal(transporterRow)

@@ -43,17 +43,31 @@ import {
   SHIPPING_PERF_TABLE_HEADER_ROW_CLASS,
   SHIPPING_PERF_TABLE_ROW_MIN_H,
   SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS,
+  getShippingPerfTableColumnLayout,
   shippingPerfCellTooltipText,
-  shippingPerfTableColumnWidthPx,
-  shippingPerfTableMinWidthPx,
 } from '@/lib/shippingPerformanceTableUi'
-import { COMPACT_TABLE_CLASS } from '@/lib/compactTableUi'
+import {
+  COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+} from '@/lib/compactTableUi'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
+import {
+  OperationalNowrapCell,
+  OperationalStackedCommaCell,
+  operationalTableColumnClass,
+} from '@/lib/operationalTableLayout'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
   ContractPerfTableSubtitleSkeleton,
   ContractTableBodySkeleton,
 } from '@/components/performance/ContractPerfTableSkeleton'
+import {
+  applySection3PortDisplay,
+  resolveShippingPerfDischargePort,
+  resolveShippingPerfLoadingPort,
+} from '@/lib/shippingPerformancePorts'
 import { cn } from '@/lib/utils'
 
 interface ShippingPerformanceRow {
@@ -98,6 +112,18 @@ interface ShippingPerformanceRow {
   discharge_ata_completed?: string | null
   loading_port?: string | null
   discharge_port?: string | null
+  /** Shipment operation — raw from shipments.port_of_loading (may be null when unset). */
+  port_of_loading?: string | null
+  /** Shipment operation — raw from shipments.port_of_discharge (may be null when unset). */
+  port_of_discharge?: string | null
+  /** Shipment operation — vessel_loading_ports.port_name (loading leg). */
+  vlp_loading_port_name?: string | null
+  /** Shipment operation — vessel_loading_ports.port_name (discharge leg). */
+  vlp_discharge_port_name?: string | null
+  /** SAP fallback — Vessel Loading Port 1 text name. */
+  sap_vessel_loading_port_1?: string | null
+  /** SAP fallback — Vessel Discharge Port. */
+  sap_vessel_discharge_port?: string | null
   remark?: string | null
   ata_loading_delta_eta_etr_days?: number | null
   ata_loading_delta_eta_etb_days?: number | null
@@ -713,7 +739,7 @@ const COLUMN_DEFS: ColumnDef[] = [
     label: 'Contract Ext No',
     type: 'text',
     defaultVisible: false,
-    byVesselDefaultVisible: true,
+    byVesselDefaultVisible: false,
   },
   { key: 'loading_port', label: 'Loading Port', type: 'text', defaultVisible: true },
   { key: 'discharge_port', label: 'Discharge Port', type: 'text', defaultVisible: true },
@@ -802,6 +828,24 @@ function resolveVisibleTableColumnKeys(
   return resolveManageableColumnKeys(columnOrder, tableViewMode).filter(
     (key) => visibleColumns[String(key)],
   )
+}
+
+/** Column manager list — visible columns in table order, then hidden columns A→Z (shipments/trucking pattern). */
+function buildShippingPerfColumnManagerKeys(
+  columnOrder: Array<keyof ShippingPerformanceRow>,
+  visibleColumns: Record<string, boolean>,
+  tableViewMode: TableViewMode,
+): TableColumnKey[] {
+  const manageable = resolveManageableColumnKeys(columnOrder, tableViewMode)
+  const visibleInOrder = manageable.filter((key) => visibleColumns[String(key)])
+  const hiddenSorted = manageable
+    .filter((key) => !visibleColumns[String(key)])
+    .sort((a, b) => {
+      const labelA = COLUMN_MAP[String(a)]?.label ?? String(a)
+      const labelB = COLUMN_MAP[String(b)]?.label ?? String(b)
+      return labelA.localeCompare(labelB)
+    })
+  return [...visibleInOrder, ...hiddenSorted]
 }
 
 /** Keep Contract Ext No immediately after Vessel in table + column modal order. */
@@ -1062,7 +1106,7 @@ function ShippingPerformancePageContent() {
         dateFrom,
         dateTo,
         searchTerm,
-      }),
+      }).map(applySection3PortDisplay),
     [
       baseFilteredRows,
       selectedIncoterms,
@@ -1407,10 +1451,16 @@ function ShippingPerformancePageContent() {
     statusFilter,
   ])
 
+  /** Section 3 only — resolve port columns (shipment operation → SAP fallback) before sort/render. */
+  const section3DisplayRows = useMemo(
+    () => drilldownFilteredRows.map(applySection3PortDisplay),
+    [drilldownFilteredRows],
+  )
+
   // Step D: apply Section 3 sorting
   const filteredRows = useMemo(() => {
     const sortDataKey = resolvePerfTableDataKey(sortBy, perfDashMode)
-    const sorted = [...drilldownFilteredRows].sort((a, b) => {
+    const sorted = [...section3DisplayRows].sort((a, b) => {
       const aVal = a[sortDataKey]
       const bVal = b[sortDataKey]
       const colType = COLUMN_MAP[String(sortBy)]?.type ?? 'text'
@@ -1426,35 +1476,21 @@ function ShippingPerformancePageContent() {
       return 0
     })
     return sorted
-  }, [drilldownFilteredRows, sortBy, sortDirection, perfDashMode])
+  }, [section3DisplayRows, sortBy, sortDirection, perfDashMode])
 
   const tableRows = useMemo(() => {
     if (tableViewMode === 'all') return filteredRows
     return aggregateByVessel(filteredRows, perfDashMode)
   }, [filteredRows, tableViewMode, perfDashMode])
 
-  const manageableColumnKeys = useMemo(
-    () => resolveManageableColumnKeys(columnOrder, tableViewMode),
-    [columnOrder, tableViewMode],
+  const columnManagerKeys = useMemo(
+    () => buildShippingPerfColumnManagerKeys(columnOrder, visibleColumns, tableViewMode),
+    [columnOrder, visibleColumns, tableViewMode],
   )
 
   const tableColumnKeys = useMemo(
     () => resolveVisibleTableColumnKeys(columnOrder, visibleColumns, tableViewMode),
     [columnOrder, visibleColumns, tableViewMode],
-  )
-
-  const shippingPerfTableMinWidthPxValue = useMemo(
-    () =>
-      shippingPerfTableMinWidthPx(
-        tableColumnKeys.map((key) => {
-          const col = COLUMN_MAP[String(key)]
-          return {
-            key: String(key),
-            label: resolveTableColumnLabel(col.label),
-          }
-        }),
-      ),
-    [tableColumnKeys, tableLabelMode, resolveTableColumnLabel],
   )
 
   const totalPages = Math.max(1, Math.ceil(tableRows.length / pageSize))
@@ -2051,7 +2087,7 @@ function ShippingPerformancePageContent() {
                       </Button>
                     </div>
                     <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
-                      {manageableColumnKeys.map((key) => {
+                      {columnManagerKeys.map((key) => {
                         const col = COLUMN_MAP[String(key)]
                         if (!col) return null
                         return (
@@ -2125,7 +2161,7 @@ function ShippingPerformancePageContent() {
               {/* Top scrollbar */}
               <div
                 ref={topScrollRef}
-                className="overflow-x-auto border-b bg-white"
+                className={cn(COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS, 'border-b bg-white')}
                 onScroll={() => {
                   if (isSyncingScroll.current) return
                   const top = topScrollRef.current
@@ -2142,7 +2178,7 @@ function ShippingPerformancePageContent() {
               {/* Table */}
               <div
                 ref={bottomScrollRef}
-                className="overflow-x-auto"
+                className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
                 onScroll={() => {
                   if (isSyncingScroll.current) return
                   const top = topScrollRef.current
@@ -2153,24 +2189,13 @@ function ShippingPerformancePageContent() {
                   window.requestAnimationFrame(() => { isSyncingScroll.current = false })
                 }}
               >
-                <div
-                  className="min-w-0"
-                  style={{ minWidth: shippingPerfTableMinWidthPxValue }}
+                <div className="min-w-0">
+                <table
+                  className={cn(
+                    COMPACT_OPERATIONAL_TABLE_CLASS,
+                    'klip-compact-table--intrinsic-token-cols',
+                  )}
                 >
-                <table className={COMPACT_TABLE_CLASS}>
-                  <colgroup>
-                    {tableColumnKeys.map((key) => (
-                      <col
-                        key={String(key)}
-                        style={{
-                          width: shippingPerfTableColumnWidthPx(
-                            String(key),
-                            resolveTableColumnLabel(COLUMN_MAP[String(key)].label),
-                          ),
-                        }}
-                      />
-                    ))}
-                  </colgroup>
                   <thead>
                     <tr className={SHIPPING_PERF_TABLE_HEADER_ROW_CLASS}>
                       {tableColumnKeys.map((key) => {
@@ -2178,6 +2203,9 @@ function ShippingPerformancePageContent() {
                         const columnLabel = resolveTableColumnLabel(col.label)
                         const columnTooltip = resolvePerfColumnTooltip(col.tooltip, tableLabelMode)
                         const isSorted = sortBy === key
+                        const opColClass = operationalTableColumnClass(
+                          getShippingPerfTableColumnLayout(String(key), tableViewMode),
+                        )
                         const headerButton = (
                           <ContractPerfTableSortHeader
                             label={columnLabel}
@@ -2191,8 +2219,9 @@ function ShippingPerformancePageContent() {
                             key={String(key)}
                             scope="col"
                             className={cn(
-                              'relative min-w-0 cursor-move select-none text-left font-semibold align-top',
+                              'relative cursor-move select-none text-left font-semibold align-top',
                               SHIPPING_PERF_TABLE_CELL_PAD,
+                              opColClass,
                               draggingColumn === String(key) && 'opacity-60',
                             )}
                             draggable
@@ -2242,30 +2271,40 @@ function ShippingPerformancePageContent() {
                             const colKey = String(key)
                             const dataKey = resolvePerfTableDataKey(key, perfDashMode)
                             const rawValue = row[dataKey]
-                            const useTruncateTooltip = SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS.has(colKey)
+                            const layout = getShippingPerfTableColumnLayout(colKey, tableViewMode)
+                            const opColClass = operationalTableColumnClass(layout)
+                            const useTruncateTooltip =
+                              layout === 'truncate' &&
+                              SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS.has(colKey)
                             const truncateTooltip = useTruncateTooltip
                               ? shippingPerfCellTooltipText(colKey, row)
                               : null
 
                             let cellContent: ReactNode
-                            if (key === 'vessel_name' && tableViewMode === 'by_vessel') {
+                            if (key === 'vessel_name') {
                               const vesselName = asDisplayValue(rawValue) || 'Unknown'
-                              cellContent = (
-                                <button
-                                  type="button"
-                                  className="w-full min-w-0 truncate text-left text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setSelectedVesselData({
-                                      vesselName,
-                                      vesselKey: normalizeVesselKey(rawValue),
-                                    })
-                                    setVesselModalOpen(true)
-                                  }}
-                                >
-                                  {vesselName}
-                                </button>
-                              )
+                              if (tableViewMode === 'by_vessel') {
+                                cellContent = (
+                                  <button
+                                    type="button"
+                                    className="block w-max max-w-none whitespace-nowrap text-left text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setSelectedVesselData({
+                                        vesselName,
+                                        vesselKey: normalizeVesselKey(rawValue),
+                                      })
+                                      setVesselModalOpen(true)
+                                    }}
+                                  >
+                                    {vesselName}
+                                  </button>
+                                )
+                              } else {
+                                cellContent = (
+                                  <OperationalNowrapCell value={vesselName} className="text-sm" />
+                                )
+                              }
                             } else if (
                               key === 'sto_qty' ||
                               key === 'received_qty' ||
@@ -2291,12 +2330,36 @@ function ShippingPerformancePageContent() {
                               )
                             } else if (key === 'status') {
                               cellContent = rawValue ? (
-                                <Badge className={cn('text-xs', getStatusColor(String(rawValue)))}>
+                                <Badge
+                                  className={cn(
+                                    'text-xs whitespace-nowrap shrink-0',
+                                    getStatusColor(String(rawValue)),
+                                  )}
+                                >
                                   {String(rawValue)}
                                 </Badge>
                               ) : (
                                 <span className="text-sm text-gray-400">-</span>
                               )
+                            } else if (
+                              colKey === 'contract_ext_no' ||
+                              colKey === 'po_number' ||
+                              colKey === 'contract_number' ||
+                              colKey === 'sto_number'
+                            ) {
+                              const text = asDisplayValue(rawValue) || '-'
+                              cellContent =
+                                colKey === 'contract_ext_no' || colKey === 'po_number' ? (
+                                  <OperationalStackedCommaCell
+                                    value={text === '-' ? '' : text}
+                                    title={text}
+                                  />
+                                ) : (
+                                  <OperationalNowrapCell
+                                    value={text === '-' ? '' : text}
+                                    title={text}
+                                  />
+                                )
                             } else if (col.type === 'number') {
                               cellContent = (
                                 <NumberCell
@@ -2313,8 +2376,12 @@ function ShippingPerformancePageContent() {
                                 />
                               )
                             } else if (key === 'loading_port' || key === 'discharge_port') {
+                              const resolved =
+                                key === 'loading_port'
+                                  ? resolveShippingPerfLoadingPort(row)
+                                  : resolveShippingPerfDischargePort(row)
                               cellContent = (
-                                <span className="text-sm">{formatPortColumnDisplay(rawValue)}</span>
+                                <span className="text-sm">{formatPortColumnDisplay(resolved)}</span>
                               )
                             } else {
                               const text = asDisplayValue(rawValue) || '-'
@@ -2325,14 +2392,16 @@ function ShippingPerformancePageContent() {
                               <td
                                 key={`${row.id}-${colKey}`}
                                 className={cn(
-                                  'min-w-0 align-middle',
+                                  COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
+                                  opColClass,
+                                  'align-middle',
                                   SHIPPING_PERF_TABLE_CELL_PAD,
                                   stripeClass,
                                 )}
                               >
                                 <div
                                   className={cn(
-                                    'flex min-w-0 max-w-full items-center',
+                                    COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
                                     SHIPPING_PERF_TABLE_ROW_MIN_H,
                                   )}
                                 >
@@ -2344,9 +2413,7 @@ function ShippingPerformancePageContent() {
                                       {cellContent}
                                     </ContractPerfTruncatedCell>
                                   ) : (
-                                    <div className="min-w-0 max-w-full truncate text-sm">
-                                      {cellContent}
-                                    </div>
+                                    cellContent
                                   )}
                                 </div>
                               </td>

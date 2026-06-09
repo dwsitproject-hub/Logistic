@@ -75,14 +75,14 @@ const CONTRACT_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> 
 }
 
 const OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
-  transporter: 'truncate',
+  transporter: 'token',
   quantity_contract: 'short',
   quantity_delivery: 'short',
   quantity_received: 'short',
   gain_loss_amount: 'short',
   gain_loss_percentage: 'short',
-  loading_location: 'truncate',
-  unloading_location: 'truncate',
+  loading_location: 'wrap',
+  unloading_location: 'wrap',
   contract_ext_no: 'stack',
   sto_number: 'stack',
   contract_date: 'short',
@@ -125,6 +125,32 @@ const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT: Readonly<Record<string, OperationalCo
   quantity_sfbd: 'short',
 }
 
+const SHIPPING_PERF_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
+  vessel_name: 'truncate',
+  contract_ext_no: 'stack',
+  loading_port: 'wrap',
+  discharge_port: 'wrap',
+  incoterm: 'short',
+  product: 'wrap',
+  supplier: 'wrap',
+  contract_qty: 'short',
+  group_name: 'wrap',
+  shipment_count: 'short',
+  status: 'short',
+  po_number: 'stack',
+  contract_number: 'token',
+  sto_number: 'token',
+  sto_qty: 'short',
+  received_qty: 'short',
+  outstanding_qty: 'short',
+  loading_delta_eta_etr_days: 'short',
+  loading_delta_eta_etb_days: 'short',
+  loading_delta_etb_etc_days: 'short',
+  discharge_delta_eta_etb_days: 'short',
+  discharge_delta_etb_etc_days: 'short',
+  total_delta_days: 'short',
+}
+
 const TRUCKING_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
   late_indicator: 'short',
   contract_date: 'short',
@@ -153,7 +179,13 @@ const TRUCKING_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> 
 }
 
 export function getOperationalColumnLayout(
-  table: 'shipments' | 'trucking' | 'contracts' | 'oil_loss' | 'oil_loss_transporter',
+  table:
+    | 'shipments'
+    | 'trucking'
+    | 'contracts'
+    | 'oil_loss'
+    | 'oil_loss_transporter'
+    | 'shipping_performance',
   colId: string,
 ): OperationalColumnLayout {
   const map =
@@ -165,7 +197,9 @@ export function getOperationalColumnLayout(
           ? OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT
           : table === 'oil_loss_transporter'
             ? OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT
-            : CONTRACT_COLUMN_LAYOUT
+            : table === 'shipping_performance'
+              ? SHIPPING_PERF_COLUMN_LAYOUT
+              : CONTRACT_COLUMN_LAYOUT
   return map[colId] ?? 'wrap'
 }
 

@@ -25,6 +25,10 @@ import {
   sqlTruckingQuantityReceiveCoalesce,
   sqlTruckingQuantitySentCoalesce,
 } from '../utils/truckingQuantitySql';
+import {
+  truckingPageSapStoTypeTForContractWhereSql,
+  truckingPageSapStoTypeTWhereSql,
+} from '../utils/truckingStoTypeSql';
 
 function deriveTruckingStatus(
   truckingStartDate: any,
@@ -83,6 +87,7 @@ export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Resp
         UPPER(TRIM(COALESCE(l.b2b_flag, c.contract_type::text, ''))) = 'B2B'
         AND NULLIF(TRIM(COALESCE(l.contract_reference_po, '')), '') IS NOT NULL
       )
+      ${truckingPageSapStoTypeTForContractWhereSql}
       ORDER BY
         CASE
           WHEN COALESCE(c.po_number, '') = $2 THEN 0
@@ -306,6 +311,7 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
           AND UPPER(NULLIF(TRIM(COALESCE(b2b.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
           AND NULLIF(TRIM(COALESCE(b2b.contract_reference_po_raw, '')), '') IS NOT NULL
         )
+        ${truckingPageSapStoTypeTWhereSql}
     `;
     const queryParams: any[] = [];
     let paramIndex = 1;
@@ -506,7 +512,9 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
         c.unit
        FROM trucking_operations t
        LEFT JOIN contracts c ON t.contract_id = c.id
-       WHERE t.id = $1`,
+       LEFT JOIN shipments s ON t.shipment_id = s.id
+       WHERE t.id = $1
+         ${truckingPageSapStoTypeTWhereSql}`,
       [id]
     );
 
@@ -719,9 +727,12 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         SELECT c.*
         FROM contracts c
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-        WHERE COALESCE(c.po_number, '') = $1
+        WHERE (
+          COALESCE(c.po_number, '') = $1
            OR c.contract_id = $1
            OR COALESCE(l.contract_ext_no, '') = $1
+        )
+        ${truckingPageSapStoTypeTForContractWhereSql}
         ORDER BY
           (COALESCE(c.po_number, '') = $1) DESC,
           (c.contract_id = $1) DESC,
@@ -1063,6 +1074,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
         t.updated_at
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
+      LEFT JOIN shipments s ON t.shipment_id = s.id
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       WHERE
         NOT (
@@ -1070,6 +1082,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
           AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
           AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
         )
+        ${truckingPageSapStoTypeTWhereSql}
         AND
         COALESCE(
           c.delivery_start_date,

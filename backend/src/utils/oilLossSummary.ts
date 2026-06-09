@@ -3,6 +3,8 @@ export type ROilLossKey = 'r1' | 'r2' | 'r3' | 'r4';
 export type ROilLossSummary = {
   avgMt: number | null;
   avgPct: number | null;
+  totalMt: number | null;
+  totalPct: number | null;
   sampleCount: number;
 };
 
@@ -55,7 +57,7 @@ export function filterYtdOilLossRows(
 }
 
 export function computeROilLossSummary(rows: OilLossSummaryRow[], kind: ROilLossKey): ROilLossSummary {
-  const samples: { lossKg: number; pct: number }[] = [];
+  const samples: { lossKg: number; baseKg: number; pct: number }[] = [];
 
   for (const row of rows) {
     const delivery = parseQty(row.quantity_sent);
@@ -81,17 +83,22 @@ export function computeROilLossSummary(rows: OilLossSummaryRow[], kind: ROilLoss
     }
 
     if (lossKg == null || baseKg == null || baseKg <= 0) continue;
-    samples.push({ lossKg, pct: (lossKg / baseKg) * 100 });
+    samples.push({ lossKg, baseKg, pct: (lossKg / baseKg) * 100 });
   }
 
   if (samples.length === 0) {
-    return { avgMt: null, avgPct: null, sampleCount: 0 };
+    return { avgMt: null, avgPct: null, totalMt: null, totalPct: null, sampleCount: 0 };
   }
 
   const count = samples.length;
+  const totalLossKg = samples.reduce((sum, s) => sum + s.lossKg, 0);
+  const totalBaseKg = samples.reduce((sum, s) => sum + s.baseKg, 0);
+
   return {
-    avgMt: samples.reduce((sum, s) => sum + s.lossKg, 0) / count / 1000,
+    avgMt: totalLossKg / count / 1000,
     avgPct: samples.reduce((sum, s) => sum + s.pct, 0) / count,
+    totalMt: totalLossKg / 1000,
+    totalPct: totalBaseKg > 0 ? (totalLossKg / totalBaseKg) * 100 : null,
     sampleCount: count,
   };
 }

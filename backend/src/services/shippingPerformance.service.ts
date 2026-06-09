@@ -1,6 +1,7 @@
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import { toIsoDate10FromCell } from '../utils/planningSheetDate';
+import { buildSapStoTypeVExistsSql } from '../utils/shipmentStoTypeSql';
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
 export interface ShippingPerformanceFilters {
@@ -52,7 +53,7 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const ROW_CACHE_KEY = 'shipping-performance-rows-v4';
+const ROW_CACHE_KEY = 'shipping-performance-rows-v8';
 
 const SHIPPING_PERFORMANCE_SQL = `
       WITH latest_spd_contract AS (
@@ -68,9 +69,9 @@ const SHIPPING_PERFORMANCE_SQL = `
           s.id AS shipment_pk,
           c.contract_id,
           COALESCE(
-            NULLIF(TRIM(c.sto_number::text), ''),
-            NULLIF(TRIM(s.operation_id), ''),
             NULLIF(TRIM(s.shipment_id), ''),
+            NULLIF(TRIM(s.operation_id), ''),
+            NULLIF(TRIM(c.sto_number::text), ''),
             s.id::text
           ) AS sto_key
         FROM shipments s
@@ -90,6 +91,10 @@ const SHIPPING_PERFORMANCE_SQL = `
             spd.data->'shipment'->>'sto_no',
             spd.data->'contract'->>'sto_no'
           )), '') = TRIM(sk.sto_key::text)
+          AND (
+            NULLIF(TRIM(spd.contract_number), '') IS NULL
+            OR TRIM(spd.contract_number) = TRIM(sk.contract_id)
+          )
       ),
       sap_agg AS (
         SELECT
@@ -122,7 +127,16 @@ const SHIPPING_PERFORMANCE_SQL = `
             sk2.data->>'Remarks',
             sk2.data->'raw'->>'Remark',
             sk2.data->>'Remark'
-          )), '')) AS remark
+          )), '')) AS remark,
+          MAX(NULLIF(TRIM(COALESCE(
+            sk2.data->'raw'->>'Vessel Loading Port 1',
+            sk2.data->'raw'->>'Vessel Loading Port 1 ',
+            sk2.data->'shipment'->>'vessel_loading_port_1'
+          )), '')) AS sap_vessel_loading_port_1,
+          MAX(NULLIF(TRIM(COALESCE(
+            sk2.data->'raw'->>'Vessel Discharge Port',
+            sk2.data->'shipment'->>'vessel_discharge_port'
+          )), '')) AS sap_vessel_discharge_port
         FROM ship_keys sk
         LEFT JOIN spd_keyed sk2 ON sk2.shipment_pk = sk.shipment_pk
         GROUP BY sk.shipment_pk
@@ -172,6 +186,26 @@ const SHIPPING_PERFORMANCE_SQL = `
           NULLIF(TRIM(pna.group_plant), ''),
           'Blank'
         ) AS plant_site,
+        NULLIF(TRIM(s.port_of_loading), '') AS port_of_loading,
+        NULLIF(TRIM(s.port_of_discharge), '') AS port_of_discharge,
+        (
+          SELECT NULLIF(TRIM(vlp.port_name), '')
+          FROM vessel_loading_ports vlp
+          WHERE vlp.shipment_id = s.id
+            AND COALESCE(vlp.is_discharge_port, false) = false
+          ORDER BY vlp.port_sequence NULLS LAST, vlp.id
+          LIMIT 1
+        ) AS vlp_loading_port_name,
+        (
+          SELECT NULLIF(TRIM(vlp.port_name), '')
+          FROM vessel_loading_ports vlp
+          WHERE vlp.shipment_id = s.id
+            AND COALESCE(vlp.is_discharge_port, false) = true
+          ORDER BY vlp.port_sequence NULLS LAST, vlp.id
+          LIMIT 1
+        ) AS vlp_discharge_port_name,
+        sa.sap_vessel_loading_port_1,
+        sa.sap_vessel_discharge_port,
         COALESCE(NULLIF(TRIM(s.port_of_loading), ''), 'Blank') AS loading_port,
         COALESCE(NULLIF(TRIM(s.port_of_discharge), ''), 'Blank') AS discharge_port,
         c.group_name,
@@ -263,6 +297,7 @@ const SHIPPING_PERFORMANCE_SQL = `
         LIMIT 1
       ) pna ON TRUE
       WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
+        AND ${buildSapStoTypeVExistsSql()}
       ORDER BY s.created_at DESC`;
 
 function parseStringArray(value: unknown): string[] {

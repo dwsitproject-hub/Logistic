@@ -41,22 +41,6 @@ export function filterOilLossEligibleRows<
 /** Mode filter options for Oil Loss toolbar (SEA / LAND / MIX from SAP). */
 export const OIL_LOSS_MODE_FILTER_OPTIONS = ['SEA', 'LAND', 'MIX'] as const
 
-export function normalizeOilLossStatusForFilter(value: string | null | undefined): string {
-  return String(value ?? '').trim().toLowerCase()
-}
-
-export function matchesOilLossStatusFilter(
-  rowStatus: string | null | undefined,
-  selectedStatuses: readonly string[],
-): boolean {
-  if (selectedStatuses.length === 0) return true
-  const normalized = normalizeOilLossStatusForFilter(rowStatus)
-  if (!normalized) return false
-  return selectedStatuses.some(
-    (s) => normalizeOilLossStatusForFilter(s) === normalized,
-  )
-}
-
 export function matchesOilLossModeFilter(
   rowMode: string | null | undefined,
   selectedModes: readonly string[],
@@ -64,19 +48,4 @@ export function matchesOilLossModeFilter(
   if (selectedModes.length === 0) return true
   const normalized = normalizeOilLossMode(rowMode)
   return selectedModes.some((m) => normalizeOilLossMode(m) === normalized)
-}
-
-export function deriveOilLossStatusFilterOptions(
-  rows: readonly { status?: string | null }[],
-): string[] {
-  const displayByKey = new Map<string, string>()
-  for (const row of rows) {
-    const raw = String(row.status ?? '').trim()
-    if (!raw) continue
-    const key = normalizeOilLossStatusForFilter(raw)
-    if (!displayByKey.has(key)) displayByKey.set(key, raw)
-  }
-  return [...displayByKey.values()].sort((a, b) =>
-    a.localeCompare(b, undefined, { sensitivity: 'base' }),
-  )
 }

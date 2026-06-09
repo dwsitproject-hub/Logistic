@@ -223,5 +223,19 @@
   .klip-compact-table--operational col.klip-op-col--fixed {
     width: auto;
   }
+
+  /* Token columns grow to full content (vessel name, transporter, etc.) */
+  .klip-compact-table--intrinsic-token-cols th.klip-op-col--token,
+  .klip-compact-table--intrinsic-token-cols td.klip-op-col--token {
+    width: max-content;
+    min-width: min-content;
+    max-width: none;
+  }
+
+  .klip-compact-table--intrinsic-token-cols td.klip-op-col--token .klip-compact-table-cell-inner {
+    width: max-content;
+    min-width: min-content;
+    max-width: none;
+  }
 }
 
