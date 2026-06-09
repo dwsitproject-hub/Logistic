@@ -587,7 +587,8 @@ export class SapMasterV2ImportService {
       'vessel', 'voyage', 'loading port', 'discharge port', 'eta', 'ata',
       'berthed', 'sailed', 'arrival', 'quantity at', 'sto', 'shipment',
       'qty deliver', 'quantity delivery', 'qty receive', 'quantity receive', 'last receive',
-      'sto item' // New field
+      'sto item',
+      'ship figure', 'sfal', 'sfbd',
     ];
     return shipmentFields.some(sf => fieldName.toLowerCase().includes(sf));
   }

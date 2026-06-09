@@ -309,9 +309,6 @@ export const importSuppliersFromExcel = async (req: AuthRequest, res: Response) 
       // "PLANT CODE" col in file is a category ("MILL"), not a unique ID.
       // The actual unique identifier is "MILL CODE" (e.g. "ACEH/MILL - 0001").
       plant_code: headerRow.findIndex((h) => h.toUpperCase() === 'MILL CODE'),
-      prov_code:  headerRow.findIndex((h) => h.toUpperCase() === 'PROV CODE'),
-      prov_no:    headerRow.findIndex((h) => h.toUpperCase() === 'PROV #'),
-      mill_no:    headerRow.findIndex((h) => h.toUpperCase() === 'MILL NO'),
       mill_code:  headerRow.findIndex((h) => h.toUpperCase() === 'MILL CODE'),
       mills:      headerRow.findIndex((h) => h.toUpperCase() === 'MILLS'),
       group_id:   headerRow.findIndex((h) => h.toUpperCase() === 'GROUP ID'),
@@ -415,9 +412,6 @@ export const importSuppliersFromExcel = async (req: AuthRequest, res: Response) 
 
       const payload = {
         plant_code,
-        prov_code:   parseStr(g(colPos.prov_code)),
-        prov_no:     parseStr(g(colPos.prov_no)),
-        mill_no:     parseStr(g(colPos.mill_no)),
         mill_code:   plant_code, // same as plant_code (both from MILL CODE column)
         mills:       parseStr(g(colPos.mills)),
         group_id:    parseStr(g(colPos.group_id)),
@@ -459,17 +453,17 @@ export const importSuppliersFromExcel = async (req: AuthRequest, res: Response) 
           const id = checkRes.rows[0].id as string;
           await query(
             `UPDATE ${TABLE} SET
-              prov_code=$1, prov_no=$2, mill_no=$3, mill_code=$4,
-              mills=$5, group_id=$6, group_type=$7, group_scale=$8, integrated_status=$9, cap=$10,
-              cpo_prod_est_month=$11, pk_prod_est_month=$12, pome_prod_est_month=$13, shell_prod_est_month=$14,
-              cpo_prod_est_year=$15, pk_prod_est_year=$16, pome_prod_est_year=$17, shell_prod_est_year=$18,
-              city_regency=$19, province=$20, island=$21, longitude=$22, latitude=$23, kml_folder=$24, map=$25,
-              rspo=$26, rspo_type=$27, ispo=$28, iscc=$29, ggl=$30,
-              year_commence=$31, updated_date=$32, update_year=$33, remarks=$34,
+              mill_code=$1,
+              mills=$2, group_id=$3, group_type=$4, group_scale=$5, integrated_status=$6, cap=$7,
+              cpo_prod_est_month=$8, pk_prod_est_month=$9, pome_prod_est_month=$10, shell_prod_est_month=$11,
+              cpo_prod_est_year=$12, pk_prod_est_year=$13, pome_prod_est_year=$14, shell_prod_est_year=$15,
+              city_regency=$16, province=$17, island=$18, longitude=$19, latitude=$20, kml_folder=$21, map=$22,
+              rspo=$23, rspo_type=$24, ispo=$25, iscc=$26, ggl=$27,
+              year_commence=$28, updated_date=$29, update_year=$30, remarks=$31,
               updated_at=NOW()
-            WHERE id=$35`,
+            WHERE id=$32`,
             [
-              payload.prov_code, payload.prov_no, payload.mill_no, payload.mill_code,
+              payload.mill_code,
               payload.mills, payload.group_id, payload.group_type, payload.group_scale, payload.integrated_status, payload.cap,
               payload.cpo_prod_est_month, payload.pk_prod_est_month, payload.pome_prod_est_month, payload.shell_prod_est_month,
               payload.cpo_prod_est_year, payload.pk_prod_est_year, payload.pome_prod_est_year, payload.shell_prod_est_year,
@@ -483,7 +477,7 @@ export const importSuppliersFromExcel = async (req: AuthRequest, res: Response) 
         } else {
           await query(
             `INSERT INTO ${TABLE} (
-              plant_code, prov_code, prov_no, mill_no, mill_code,
+              plant_code, mill_code,
               mills, group_id, group_type, group_scale, integrated_status, cap,
               cpo_prod_est_month, pk_prod_est_month, pome_prod_est_month, shell_prod_est_month,
               cpo_prod_est_year, pk_prod_est_year, pome_prod_est_year, shell_prod_est_year,
@@ -491,11 +485,11 @@ export const importSuppliersFromExcel = async (req: AuthRequest, res: Response) 
               rspo, rspo_type, ispo, iscc, ggl,
               year_commence, updated_date, update_year, remarks
             ) VALUES (
-              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-              $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35
+              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+              $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
             )`,
             [
-              payload.plant_code, payload.prov_code, payload.prov_no, payload.mill_no, payload.mill_code,
+              payload.plant_code, payload.mill_code,
               payload.mills, payload.group_id, payload.group_type, payload.group_scale, payload.integrated_status, payload.cap,
               payload.cpo_prod_est_month, payload.pk_prod_est_month, payload.pome_prod_est_month, payload.shell_prod_est_month,
               payload.cpo_prod_est_year, payload.pk_prod_est_year, payload.pome_prod_est_year, payload.shell_prod_est_year,

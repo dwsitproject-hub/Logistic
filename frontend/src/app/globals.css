@@ -198,6 +198,28 @@
     max-width: 32rem;
   }
 
+  /* Long text columns — cap width; cell content uses truncate + title tooltip */
+  .klip-compact-table--operational th.klip-op-col--truncate,
+  .klip-compact-table--operational td.klip-op-col--truncate {
+    width: auto;
+    max-width: 12.5rem;
+    min-width: min-content;
+    overflow: hidden;
+  }
+
+  .klip-compact-table--operational th.klip-op-col--truncate {
+    white-space: normal;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--truncate {
+    white-space: nowrap;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--truncate .klip-compact-table-cell-inner {
+    max-width: 12.5rem;
+    overflow: hidden;
+  }
+
   .klip-compact-table--operational col.klip-op-col--fixed {
     width: auto;
   }

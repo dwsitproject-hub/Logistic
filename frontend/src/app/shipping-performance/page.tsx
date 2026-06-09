@@ -13,6 +13,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { GripVertical, Search, SlidersHorizontal, X } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
+import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import VesselHistoryModal, {
   type VesselHistoryModalSelection,
 } from '@/components/shipping-performance/VesselHistoryModal'
@@ -1860,20 +1861,53 @@ function ShippingPerformancePageContent() {
             </p>
           </CardHeader>
           <CardContent className="pt-2 space-y-4">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
-              <Input
-                placeholder="Search by Contract, PO, STO, Vessel, Product, or Incoterm..."
-                value={searchDraft}
-                onChange={(e) => setSearchDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    setSearchTerm(searchDraft)
-                  }
-                }}
-                className="pl-10"
-              />
+            <div className="flex flex-wrap items-end gap-4">
+              <div className="flex min-w-[12rem] flex-1 flex-col gap-1">
+                <label htmlFor="shipping-perf-search" className="text-sm font-medium text-gray-700">
+                  Search
+                </label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
+                  <Input
+                    id="shipping-perf-search"
+                    placeholder="Search by Contract, PO, STO, Vessel, Product, or Incoterm..."
+                    value={searchDraft}
+                    onChange={(e) => setSearchDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        setSearchTerm(searchDraft)
+                      }
+                    }}
+                    className="h-10 pl-10"
+                  />
+                </div>
+              </div>
+              <div className="flex w-full min-w-[12rem] shrink-0 flex-col gap-1 sm:w-44">
+                <label htmlFor="shipping-perf-status-filter" className="text-sm font-medium text-gray-700">
+                  Status
+                </label>
+                <select
+                  id="shipping-perf-status-filter"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as TableStatusFilter)}
+                  className="flex h-10 w-full rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-900 shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                >
+                  <option value="All">All</option>
+                  <option value="Open">Open</option>
+                  <option value="Closed">Closed</option>
+                </select>
+              </div>
+              <div className="flex w-full min-w-[12rem] shrink-0 flex-col gap-1 sm:w-56">
+                <SearchableMultiSelect
+                  label="Vessel"
+                  options={availableVessels}
+                  selected={selectedVessels}
+                  onChange={setSelectedVessels}
+                  placeholder="Select vessel(s)"
+                  emptyMessage="No vessels"
+                />
+              </div>
             </div>
             <PerformanceScopeFilters
               hideGroupPlantFilter={false}
@@ -1887,13 +1921,6 @@ function ShippingPerformancePageContent() {
               groupPlantOptions={availableGroupPlants}
               selectedGroupPlants={selectedGroupPlants}
               onGroupPlantsChange={setSelectedGroupPlants}
-              showVesselFilter
-              vesselOptions={availableVessels}
-              selectedVessels={selectedVessels}
-              onVesselsChange={setSelectedVessels}
-              showStatusFilter
-              statusFilter={statusFilter}
-              onStatusFilterChange={setStatusFilter}
               dateFrom={dateFrom}
               dateTo={dateTo}
               onDateFromChange={setDateFrom}
@@ -1914,8 +1941,6 @@ function ShippingPerformancePageContent() {
               productEmptyMessage="No products"
               groupPlantPlaceholder="Select group plant(s)"
               groupPlantEmptyMessage="No group plants"
-              vesselPlaceholder="Select vessel(s)"
-              vesselEmptyMessage="No vessels"
             />
           </CardContent>
         </Card>

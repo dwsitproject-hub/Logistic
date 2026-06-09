@@ -27,6 +27,7 @@ import {
   ContractPerfTableSubtitleSkeleton,
   ContractTableBodySkeleton,
 } from '@/components/performance/ContractPerfTableSkeleton'
+import { StatusDistributionSkeleton } from '@/components/performance/StatusDistributionSkeleton'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
@@ -63,6 +64,22 @@ const TRUCKING_STATUS_LABELS: Record<string, string> = {
   IN_PROGRESS: 'In Progress',
   COMPLETED: 'Completed',
   CANCELLED: 'Cancelled',
+}
+
+/** Parse API qty (kg) — handles numeric strings with commas. */
+function parseTruckingQtyKg(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  const n = Number(String(value).replace(/,/g, '').replace(/\s+/g, '').trim())
+  return Number.isFinite(n) ? n : null
+}
+
+/** Display trucking qty stored in kg as MT (table, calendar, mobile). */
+function formatTruckingQtyMt(value: unknown): string {
+  const kg = parseTruckingQtyKg(value)
+  if (kg === null) return '—'
+  if (kg === 0) return '0 MT'
+  return formatQtyMtFromKg(kg)
 }
 
 /** Aligns with list `formatNumber` / `formatKg`: comma thousands, period decimals. */
@@ -406,11 +423,11 @@ function CalendarDeliverablesTable({
                             : id === 'product' ? 'Product'
                               : id === 'group_name' ? 'Group Name'
                                 : id === 'supplier' ? 'Supplier'
-                                  : id === 'outstanding_quantity' ? 'Outstanding Qty'
-                                    : id === 'qty_sent' ? 'Qty Sent'
-                                      : id === 'qty_sent_planning' ? 'QTY Sent (planning)'
-                                        : id === 'qty_delivered' ? 'Qty Delivered'
-                                          : 'Qty Received'
+                                  : id === 'outstanding_quantity' ? 'Outstanding Qty (MT)'
+                                    : id === 'qty_sent' ? 'Qty Sent (MT)'
+                                      : id === 'qty_sent_planning' ? 'Qty Sent planning (MT)'
+                                        : id === 'qty_delivered' ? 'Delivery Qty (MT)'
+                                          : 'Received Qty (MT)'
                 const alignRight = new Set(['outstanding_quantity', 'qty_sent', 'qty_sent_planning', 'qty_delivered', 'qty_received']).has(id)
                 return (
                   <th
@@ -507,15 +524,15 @@ function CalendarDeliverablesTable({
                         case 'supplier':
                           return r.supplier || '—'
                         case 'outstanding_quantity':
-                          return outQty ? formatQty(outQty) : '—'
+                          return formatTruckingQtyMt(outQty)
                         case 'qty_sent':
-                          return qtySent ? formatQty(qtySent) : '-'
+                          return formatTruckingQtyMt(qtySent)
                         case 'qty_sent_planning':
-                          return plannedSum ? formatQty(plannedSum) : '—'
+                          return formatTruckingQtyMt(plannedSum)
                         case 'qty_delivered':
-                          return qtyDel != null && Number.isFinite(qtyDel) ? formatQty(qtyDel) : '—'
+                          return formatTruckingQtyMt(qtyDel)
                         case 'qty_received':
-                          return qtyRecv != null && Number.isFinite(qtyRecv) ? formatQty(qtyRecv) : '—'
+                          return formatTruckingQtyMt(qtyRecv)
                         default:
                           return '-'
                       }
@@ -571,7 +588,7 @@ function CalendarDeliverablesTable({
                             className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-gray-50 text-right text-xs text-gray-700 hover:bg-white disabled:opacity-60"
                             title={`Click to edit ${date}`}
                           >
-                            {draftValue ? formatQty(Number(String(draftValue).replace(/,/g, ''))) : '0'}
+                            {draftValue ? formatTruckingQtyMt(Number(String(draftValue).replace(/,/g, ''))) : '0 MT'}
                           </button>
                         )}
                       </td>
@@ -636,6 +653,7 @@ function TruckingPageContent() {
   const [hasMore, setHasMore] = useState<boolean>(true)
   /** Section 1 status circles — toolbar scope only (excludes status card filter). */
   const [truckingSection1Summary, setTruckingSection1Summary] = useState<any>(null)
+  const [section1SummaryLoading, setSection1SummaryLoading] = useState(true)
 
   // View tabs
   const [activeTab, setActiveTab] = useState<'list' | 'calendar'>('list')
@@ -1184,6 +1202,7 @@ function TruckingPageContent() {
   const fetchTruckingOperations = async (forcedPage?: number, searchOverride?: string) => {
     try {
       setLoading(true)
+      setSection1SummaryLoading(true)
       const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
       params.append('limit', String(pageSize))
@@ -1246,6 +1265,7 @@ function TruckingPageContent() {
       if (section1SummaryResponse.data?.data?.summary) {
         setTruckingSection1Summary(section1SummaryResponse.data.data.summary)
       }
+      setSection1SummaryLoading(false)
       const total = Number(response.data.data.pagination?.total ?? 0)
       const pages = Number(response.data.data.pagination?.totalPages || 1)
       setTotalCount(total)
@@ -1255,6 +1275,7 @@ function TruckingPageContent() {
       console.error('Failed to fetch trucking operations:', error)
       alert('Failed to load trucking operations. Please refresh the page.')
       setTruckingSection1Summary(null)
+      setSection1SummaryLoading(false)
     } finally {
       setLoading(false)
     }
@@ -1578,8 +1599,8 @@ function TruckingPageContent() {
       case 'contract_qty': return typeof o.contract_qty === 'number' ? o.contract_qty : null
       case 'sto_quantity': return typeof o.sto_quantity === 'number' ? o.sto_quantity : null
       case 'quantity_sent': return typeof o.quantity_sent === 'number' ? o.quantity_sent : null
-      case 'quantity_delivered': return typeof o.quantity_delivered === 'number' ? o.quantity_delivered : null
-      case 'quantity_receive': return typeof o.quantity_receive === 'number' ? o.quantity_receive : (typeof o.quantity_delivered === 'number' ? o.quantity_delivered : null)
+      case 'quantity_delivered': return parseTruckingQtyKg(o.quantity_delivered)
+      case 'quantity_receive': return parseTruckingQtyKg(o.quantity_receive ?? o.quantity_delivered)
       case 'oa_budget': return typeof o.oa_budget === 'number' ? o.oa_budget : null
       case 'oa_actual': return typeof o.oa_actual === 'number' ? o.oa_actual : null
       case 'estimated_km': return typeof o.estimated_km === 'number' ? o.estimated_km : null
@@ -1730,10 +1751,10 @@ function TruckingPageContent() {
       label: 'Delivery Qty (MT)',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (o) => o.quantity_delivered || 0,
+      getSortValue: (o) => parseTruckingQtyKg(o.quantity_delivered) ?? 0,
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(o.quantity_delivered)}
+          {formatTruckingQtyMt(o.quantity_delivered)}
         </span>
       )
     },
@@ -1742,10 +1763,10 @@ function TruckingPageContent() {
       label: 'Received Qty (MT)',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (o) => o.quantity_receive || o.quantity_delivered || 0,
+      getSortValue: (o) => parseTruckingQtyKg(o.quantity_receive ?? o.quantity_delivered) ?? 0,
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(o.quantity_receive || o.quantity_delivered)}
+          {formatTruckingQtyMt(o.quantity_receive ?? o.quantity_delivered)}
         </span>
       )
     },
@@ -2234,6 +2255,9 @@ function TruckingPageContent() {
             <CardTitle>Status Distribution</CardTitle>
           </CardHeader>
           <CardContent>
+            {section1SummaryLoading ? (
+              <StatusDistributionSkeleton itemCount={4} variant="trucking" />
+            ) : (
             <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto py-4 px-4">
               {[
                 {
@@ -2310,6 +2334,7 @@ function TruckingPageContent() {
                 )
               })}
             </div>
+            )}
           </CardContent>
         </Card>
 
@@ -2489,8 +2514,8 @@ function TruckingPageContent() {
                             { id: 'due_end', label: 'Due End' },
                             { id: 'qty_sent', label: 'Qty Sent' },
                             { id: 'qty_sent_planning', label: 'Qty Sent (planning)' },
-                            { id: 'qty_delivered', label: 'Qty Delivered' },
-                            { id: 'qty_received', label: 'Qty Received' },
+                            { id: 'qty_delivered', label: 'Delivery Qty (MT)' },
+                            { id: 'qty_received', label: 'Received Qty (MT)' },
                             { id: 'source_type', label: 'Source Type' },
                             { id: 'lt_spot', label: 'LT/SPOT' },
                             { id: 'product', label: 'Product' },
@@ -3316,7 +3341,7 @@ function TruckingPageContent() {
                             )}
                           </div>
                           <div>
-                            <div className="text-gray-500 mb-1">Quantity Delivered (Kg)</div>
+                            <div className="text-gray-500 mb-1">Delivery Qty (MT)</div>
                             {isEditing ? (
                               <Input
                                 type="number"
@@ -3326,8 +3351,14 @@ function TruckingPageContent() {
                                 className="h-8 text-sm"
                               />
                             ) : (
-                              <div className="font-medium">{formatNumber(operation.quantity_delivered)}</div>
+                              <div className="font-medium">{formatTruckingQtyMt(operation.quantity_delivered)}</div>
                             )}
+                          </div>
+                          <div>
+                            <div className="text-gray-500 mb-1">Received Qty (MT)</div>
+                            <div className="font-medium">
+                              {formatTruckingQtyMt(operation.quantity_receive ?? operation.quantity_delivered)}
+                            </div>
                           </div>
                         </div>
 

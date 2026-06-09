@@ -60,6 +60,10 @@ export const FIELD_HELP = {
   truckingStatusCompleted: `Trucking Last Receive Date is set (SAP column AW, stored as trucking completion date). The land delivery leg is finished for this operation.`,
   truckingStatusCancelled: `Operation was set to Cancelled manually and is excluded from active execution. Use the Status filter below to view cancelled operations only.`,
 
+  // Oil Loss
+  oilLossAmount: `Formula: Qty Receive − Qty Delivery (displayed in MT). Negative values indicate oil loss.`,
+  oilLossPct: `Formula: (Qty Receive − Qty Delivery) ÷ Qty Delivery × 100%. Negative values indicate oil loss.`,
+
   // Shipping Performance
   shipmentTotalDelta: `Sum of all delay gaps in days: (Loading ETA−ETR) + (Loading ETA−ETB) + (Loading ETB−ETC) + (Discharge ETA−ETB) + (Discharge ETB−ETC). Positive = late, negative = ahead of schedule.`,
 

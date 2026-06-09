@@ -1,9 +1,14 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
+import { Loader2 } from 'lucide-react';
+import {
+  BulkUploadStatusModal,
+  type BulkUploadStatusResult,
+} from '@/components/BulkUploadStatusModal';
 import api from '../lib/api';
 
 /** Parses API error bodies (including HTML fallback) so alerts show the real backend message. */
@@ -30,6 +35,21 @@ function formatImportFailureMessage(error: unknown): string {
   return err.message || 'Request failed';
 }
 
+function parseImportErrors(errorLog: unknown): string[] {
+  if (errorLog == null || errorLog === '') return [];
+  if (Array.isArray(errorLog)) return errorLog.map(String);
+  if (typeof errorLog === 'string') {
+    try {
+      const parsed = JSON.parse(errorLog);
+      if (Array.isArray(parsed)) return parsed.map(String);
+      return [errorLog];
+    } catch {
+      return [errorLog];
+    }
+  }
+  return [String(errorLog)];
+}
+
 interface SapImport {
   id: string;
   import_date: string;
@@ -44,9 +64,9 @@ const SapImportDashboard: React.FC = () => {
   const [imports, setImports] = useState<SapImport[]>([]);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
-  const [showFileDialog, setShowFileDialog] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const pollTimerRef = React.useRef<number | null>(null);
+  const [bulkUploadResult, setBulkUploadResult] = useState<BulkUploadStatusResult | null>(null);
+  const pollTimerRef = useRef<number | null>(null);
+  const pendingImportIdRef = useRef<string | null>(null);
 
   const stopImportPolling = () => {
     if (pollTimerRef.current != null) {
@@ -67,18 +87,48 @@ const SapImportDashboard: React.FC = () => {
     return () => stopImportPolling();
   }, []);
 
+  const showImportResultModal = async (importId: string) => {
+    try {
+      const response = await api.get(`/sap-master-v2/imports/${importId}`);
+      const imp = response.data?.data?.import;
+      if (!imp) return;
+      setBulkUploadResult({
+        created: Number(imp.processed_records) || 0,
+        updated: Number(imp.skipped_records) || 0,
+        failed: Number(imp.failed_records) || 0,
+        errors: parseImportErrors(imp.error_log),
+      });
+    } catch (error) {
+      console.error('Failed to load import result:', error);
+    }
+  };
+
   const loadImports = async (fromPoll = false) => {
     try {
       const response = await api.get('/sap-master-v2/imports');
       const nextImports: SapImport[] = response.data.data;
       setImports(nextImports);
 
+      const pendingId = pendingImportIdRef.current;
+      if (pendingId) {
+        const pendingImport = nextImports.find((imp) => imp.id === pendingId);
+        if (
+          pendingImport &&
+          pendingImport.status !== 'processing' &&
+          pendingImport.status !== 'pending'
+        ) {
+          pendingImportIdRef.current = null;
+          setImporting(false);
+          await showImportResultModal(pendingId);
+        }
+      }
+
       const hasProcessing = nextImports.some((imp) => imp.status === 'processing');
       if (hasProcessing) {
         if (!fromPoll) startImportPolling();
       } else {
         stopImportPolling();
-        if (fromPoll) setImporting(false);
+        if (fromPoll && !pendingImportIdRef.current) setImporting(false);
       }
     } catch (error) {
       console.error('Failed to load imports:', error);
@@ -104,10 +154,9 @@ const SapImportDashboard: React.FC = () => {
         alert('Please select an Excel file (.xlsx, .xlsm, .xlsb, or .xls)');
         return;
       }
-      setSelectedFile(file);
-      setShowFileDialog(false);
-      // Automatically start import after file selection
-      handleStartImportWithFile(file);
+      void handleStartImportWithFile(file).finally(() => {
+        event.target.value = '';
+      });
     }
   };
 
@@ -124,30 +173,34 @@ const SapImportDashboard: React.FC = () => {
       });
 
       const data = response.data?.data;
-      const importId = data?.importId ?? '—';
-      const totalRecords = data?.totalRecords ?? '—';
+      const importId = data?.importId;
       const startedAsync = response.status === 202 || data?.status === 'processing';
 
-      if (startedAsync) {
-        alert(
-          `Import started in background.\nFile: ${file.name}\nImport ID: ${importId}\nTotal Records: ${totalRecords}\n\nProgress will update automatically in Import History.`
-        );
+      if (startedAsync && importId) {
+        pendingImportIdRef.current = importId;
         startImportPolling();
-      } else {
-        alert(
-          `Import completed.\nFile: ${file.name}\nImport ID: ${importId}\nTotal Records: ${totalRecords}`
-        );
+        await loadImports(true);
+      } else if (importId) {
+        pendingImportIdRef.current = null;
         setImporting(false);
+        await showImportResultModal(importId);
+        await loadImports();
+      } else {
+        setImporting(false);
+        await loadImports();
       }
-      loadImports();
     } catch (error: unknown) {
       const err = error as { response?: { status?: number; data?: unknown }; message?: string };
       console.error('Failed to start import:', formatImportFailureMessage(error));
       console.error('Import upload response:', err.response?.status, err.response?.data);
-      alert(`Import failed: ${formatImportFailureMessage(error)}`);
-    } finally {
+      pendingImportIdRef.current = null;
+      setBulkUploadResult({
+        created: 0,
+        updated: 0,
+        failed: 1,
+        errors: [formatImportFailureMessage(error)],
+      });
       setImporting(false);
-      setSelectedFile(null);
     }
   };
 
@@ -185,6 +238,7 @@ const SapImportDashboard: React.FC = () => {
         type="file"
         accept=".xlsx,.xlsm,.xlsb,.xls"
         onChange={handleFileSelect}
+        disabled={importing}
         style={{ display: 'none' }}
       />
 
@@ -203,7 +257,14 @@ const SapImportDashboard: React.FC = () => {
               disabled={importing}
               className="ml-4"
             >
-              {importing ? 'Importing...' : '📁 Browse & Import File'}
+              {importing ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                '📁 Browse & Import File'
+              )}
             </Button>
           </div>
         </CardHeader>
@@ -332,6 +393,17 @@ const SapImportDashboard: React.FC = () => {
           </Card>
         </div>
       )}
+
+      <BulkUploadStatusModal
+        open={!!bulkUploadResult}
+        onOpenChange={(open) => { if (!open) setBulkUploadResult(null) }}
+        title="SAP Data upload result"
+        result={bulkUploadResult}
+        createdLabel="Processed"
+        updatedLabel="Skipped"
+        failedLabel="Failed"
+        errorsTitle="Import issues"
+      />
     </div>
   );
 };

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { X, Pencil } from 'lucide-react'
 import api from '@/lib/api'
 import { formatDateDMY, toApiDateOnly } from '@/lib/dateFormat'
+import { formatQtyMtFromKg } from '@/lib/utils'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 
 type TruckingOperation = {
@@ -228,8 +229,8 @@ export function ContractTruckingDetailModal({
                       <Field label="Location" value={selected.location} />
                       <Field label="Loading location" value={selected.loading_location} />
                       <Field label="Unloading location" value={selected.unloading_location} />
-                      <Field label="Quantity sent (Kg)" value={fmtNum(selected.quantity_sent)} />
-                      <Field label="Quantity delivered (Kg)" value={fmtNum(selected.quantity_delivered)} />
+                      <Field label="Qty sent (MT)" value={formatQtyMtFromKg(selected.quantity_sent)} />
+                      <Field label="Delivery Qty (MT)" value={formatQtyMtFromKg(selected.quantity_delivered)} />
                     </div>
                   </div>
 

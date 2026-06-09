@@ -50,9 +50,9 @@ export const NAV_ITEMS: NavItem[] = [
   { name: 'Contracts', href: '/contracts', icon: FileText, roles: ['ALL'], permissionKey: 'page.contracts' },
   { name: 'Shipments', href: '/shipments', icon: Package, roles: ['ALL'], permissionKey: 'page.shipments' },
   { name: 'Trucking', href: '/trucking', icon: Truck, roles: ['ALL'], permissionKey: 'page.trucking' },
+  { name: 'Oil Loss', href: '/oil-loss', icon: Droplets, roles: ['ALL'], permissionKey: 'page.oil_loss' },
   { name: 'Claim Mutu', href: '/claim-mutu', icon: Truck, roles: ['ALL'], permissionKey: 'page.claim_mutu' },
   { name: 'Claim Susut', href: '/claim-susut', icon: Truck, roles: ['ALL'], permissionKey: 'page.claim_susut' },
-  { name: 'Oil Loss', href: '/oil-loss', icon: Droplets, roles: ['ALL'], permissionKey: 'page.oil_loss' },
   { name: 'Suppliers Dashboard', href: '/customer-360', icon: Users, roles: ['ALL'], permissionKey: 'page.customer_360' },
   { name: 'Suppliers', href: '/supplier', icon: Users, roles: ['ALL'], permissionKey: 'page.suppliers' },
   {

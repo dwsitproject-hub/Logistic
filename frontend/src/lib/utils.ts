@@ -31,7 +31,9 @@ export function formatKgFromMt(mt: number | string | null | undefined) {
 /** Contract/shipment quantities are stored in kg; display as MT. */
 export function formatQtyMtFromKg(kg: number | string | null | undefined, opts?: { maxFractionDigits?: number }) {
   if (kg === null || kg === undefined || kg === '') return '-'
-  const n = typeof kg === 'string' ? Number(kg) : kg
+  const raw =
+    typeof kg === 'string' ? kg.replace(/,/g, '').replace(/\s+/g, '').trim() : kg
+  const n = typeof raw === 'string' ? Number(raw) : raw
   if (!Number.isFinite(n)) return '-'
   const maxFractionDigits = opts?.maxFractionDigits ?? 2
   return `${(n / 1000).toLocaleString('en-US', { maximumFractionDigits: maxFractionDigits })} MT`

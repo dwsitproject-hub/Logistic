@@ -1,0 +1,71 @@
+/**
+ * SAP trucking quantity fields are often exported in MT while contracts.quantity_ordered is kg.
+ * When the SAP value is clearly MT-scale, normalize to kg for API consumers and UI MT formatting.
+ */
+export function sqlNormalizeSapTruckingQtyToKg(
+  sapNumericExpr: string,
+  contractQtyKgExpr = 'COALESCE(c.quantity_ordered, 0)',
+): string {
+  return `CASE
+    WHEN (${sapNumericExpr}) IS NULL THEN NULL
+    WHEN (${sapNumericExpr}) < (${contractQtyKgExpr}) / 10.0
+         AND (${sapNumericExpr}) * 1000 <= (${contractQtyKgExpr}) * 1.05
+      THEN (${sapNumericExpr}) * 1000
+    ELSE (${sapNumericExpr})
+  END`;
+}
+
+const SAP_QTY_CAST = `CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)`;
+
+function sqlSapNumericSubquery(fieldCoalesce: string): string {
+  return `(
+    SELECT ${sqlNormalizeSapTruckingQtyToKg(SAP_QTY_CAST)}
+    FROM (
+      SELECT COALESCE(${fieldCoalesce}) AS val
+      FROM sap_processed_data spd
+      WHERE spd.contract_number = c.contract_id
+      ORDER BY spd.created_at DESC NULLS LAST
+      LIMIT 1
+    ) q
+    WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
+  )`;
+}
+
+/** Resolved quantity_sent with SAP fallback (kg). */
+export function sqlTruckingQuantitySentCoalesce(tableCol = 't.quantity_sent'): string {
+  return `COALESCE(
+    ${tableCol},
+    ${sqlSapNumericSubquery(`
+      spd.data->'raw'->>'Quantity Sent via Trucking (Based on Surat Jalan)',
+      spd.data->>'quantity_sent_via_trucking_based_on_surat_jalan',
+      spd.data->'raw'->>'Quantity Sent via Trucking',
+      spd.data->'raw'->>'Quantity Sent',
+      spd.data->>'Quantity Sent'
+    `)}
+  )`;
+}
+
+/** Resolved quantity_delivered with SAP fallback (kg). */
+export function sqlTruckingQuantityDeliveredCoalesce(tableCol = 't.quantity_delivered'): string {
+  return `COALESCE(
+    ${tableCol},
+    ${sqlSapNumericSubquery(`
+      spd.data->'raw'->>'Quantity Delivered via Trucking',
+      spd.data->>'quantity_delivered_via_trucking',
+      spd.data->'raw'->>'Qty Receive',
+      spd.data->'raw'->>'Quantity Receive'
+    `)}
+  )`;
+}
+
+/** Resolved quantity_receive with SAP fallback (kg). */
+export function sqlTruckingQuantityReceiveCoalesce(): string {
+  return `COALESCE(
+    t.quantity_delivered,
+    ${sqlSapNumericSubquery(`
+      spd.data->'raw'->>'Qty Receive',
+      spd.data->'raw'->>'Quantity Receive',
+      spd.data->>'quantity_delivered_via_trucking'
+    `)}
+  )`;
+}

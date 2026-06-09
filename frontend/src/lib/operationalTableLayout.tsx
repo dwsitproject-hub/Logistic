@@ -5,7 +5,7 @@ import {
   longestHeaderWordLength,
 } from '@/lib/compactTableUi'
 
-export type OperationalColumnLayout = 'short' | 'token' | 'stack' | 'wrap'
+export type OperationalColumnLayout = 'short' | 'token' | 'stack' | 'wrap' | 'truncate'
 
 export const COMPACT_TABLE_NOWRAP_CLASS = 'klip-compact-table-nowrap'
 export const COMPACT_TABLE_STACK_CLASS = 'klip-compact-table-stack'
@@ -74,6 +74,57 @@ const CONTRACT_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> 
   status: 'short',
 }
 
+const OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
+  transporter: 'truncate',
+  quantity_contract: 'short',
+  quantity_delivery: 'short',
+  quantity_received: 'short',
+  gain_loss_amount: 'short',
+  gain_loss_percentage: 'short',
+  loading_location: 'truncate',
+  unloading_location: 'truncate',
+  contract_ext_no: 'stack',
+  sto_number: 'stack',
+  contract_date: 'short',
+  po_number: 'stack',
+  product: 'truncate',
+  incoterm: 'truncate',
+  status: 'short',
+  transport_mode: 'short',
+  group_name: 'wrap',
+  supplier: 'wrap',
+  buyer: 'wrap',
+  plant_site: 'wrap',
+  operation_id: 'token',
+  contract_number: 'token',
+  quantity_sfal: 'short',
+  quantity_sfbd: 'short',
+}
+
+const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
+  contract_date: 'short',
+  contract_ext_no: 'stack',
+  po_number: 'stack',
+  sto_number: 'stack',
+  product: 'truncate',
+  incoterm: 'truncate',
+  quantity_contract: 'short',
+  quantity_delivery: 'short',
+  quantity_received: 'short',
+  gain_loss_amount: 'short',
+  gain_loss_percentage: 'short',
+  status: 'short',
+  transport_mode: 'short',
+  group_name: 'wrap',
+  supplier: 'wrap',
+  buyer: 'wrap',
+  plant_site: 'wrap',
+  operation_id: 'token',
+  contract_number: 'token',
+  quantity_sfal: 'short',
+  quantity_sfbd: 'short',
+}
+
 const TRUCKING_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
   late_indicator: 'short',
   contract_date: 'short',
@@ -102,7 +153,7 @@ const TRUCKING_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> 
 }
 
 export function getOperationalColumnLayout(
-  table: 'shipments' | 'trucking' | 'contracts',
+  table: 'shipments' | 'trucking' | 'contracts' | 'oil_loss' | 'oil_loss_transporter',
   colId: string,
 ): OperationalColumnLayout {
   const map =
@@ -110,7 +161,11 @@ export function getOperationalColumnLayout(
       ? SHIPMENT_COLUMN_LAYOUT
       : table === 'trucking'
         ? TRUCKING_COLUMN_LAYOUT
-        : CONTRACT_COLUMN_LAYOUT
+        : table === 'oil_loss'
+          ? OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT
+          : table === 'oil_loss_transporter'
+            ? OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT
+            : CONTRACT_COLUMN_LAYOUT
   return map[colId] ?? 'wrap'
 }
 
@@ -122,10 +177,15 @@ export function operationalTableColumnClass(layout: OperationalColumnLayout): st
       return 'klip-op-col--token'
     case 'stack':
       return 'klip-op-col--stack'
+    case 'truncate':
+      return 'klip-op-col--truncate'
     default:
       return 'klip-op-col--wrap'
   }
 }
+
+/** Default max width for truncated operational cells (matches Tailwind max-w-[200px]). */
+export const OPERATIONAL_TRUNCATE_MAX_WIDTH_CLASS = 'max-w-[200px]'
 
 /** Longest single token — commas split first when stacking contract ext values. */
 export function longestUnbrokenTokenLength(text: string, splitCommas = false): number {
@@ -184,6 +244,8 @@ export function resolveOperationalColumnMinWidthPx(opts: {
       }
       return Math.min(headerMin, opts.basePx)
     }
+    case 'truncate':
+      return Math.max(headerMin, Math.min(estimateTokenWidthPx(24), 200 + CELL_PAD_PX), opts.basePx)
     case 'token':
     case 'stack':
       return Math.max(headerMin, cellPx, opts.basePx)
@@ -240,6 +302,34 @@ export function OperationalNowrapCell({
   return (
     <span className={`${className} ${COMPACT_TABLE_NOWRAP_CLASS} block`} title={title ?? (raw || undefined)}>
       {display}
+    </span>
+  )
+}
+
+/** Single-line ellipsis for long names/addresses; full value on hover via native title. */
+export function OperationalTruncatedCell({
+  value,
+  className = 'text-sm',
+  title,
+  fallback = '—',
+  maxWidthClass = OPERATIONAL_TRUNCATE_MAX_WIDTH_CLASS,
+}: {
+  value?: string | null
+  className?: string
+  title?: string
+  fallback?: string
+  maxWidthClass?: string
+}) {
+  const raw = String(value ?? '').trim()
+  if (!raw) {
+    return <span className={className}>{fallback}</span>
+  }
+  return (
+    <span
+      className={`${className} truncate block ${maxWidthClass}`}
+      title={title ?? raw}
+    >
+      {raw}
     </span>
   )
 }

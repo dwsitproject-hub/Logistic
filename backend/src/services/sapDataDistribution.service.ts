@@ -241,9 +241,12 @@ export class SapDataDistributionService {
             vessel_name: vesselData.vessel_name,
             contractId: result.contractId
           });
+          const shipmentPayload = { ...(parsedData.shipment || {}) };
+          this.enrichShipmentSfalSfbdFromRaw(shipmentPayload, parsedData.raw);
+
           result.shipmentId = await this.upsertShipment(
             client,
-            parsedData.shipment,
+            shipmentPayload,
             result.contractId, // ensure we link shipment to whatever contract id we resolved
             vesselData,
             userId
@@ -633,6 +636,8 @@ export class SapDataDistributionService {
     const quantityReceive = this.parseNumber(shipmentData.quantity_receive ?? shipmentData.actual_vessel_qty_receive ?? shipmentData.quantity_delivered);
     const actualVesselQtyReceive = quantityReceive;
     const blQuantity = this.parseNumber(shipmentData.bl_quantity);
+    const sfalQty = this.parseSapFigureQtyKg(shipmentData.sfal, shipmentData.sfal_qty);
+    const sfbdQty = this.parseSapFigureQtyKg(shipmentData.sfbd, shipmentData.sfbd_qty);
     const quantityDelivered = quantityDelivery ?? actualVesselQtyReceive ?? this.parseNumber(shipmentData.quantity_delivered);
     let difference = this.parseNumber(shipmentData.difference_final_qty_vs_bl_qty);
     if (difference === null && actualVesselQtyReceive !== null && blQuantity !== null) {
@@ -791,8 +796,10 @@ export class SapDataDistributionService {
           ata_discharge_start = COALESCE($43::date, ata_discharge_start),
           eta_discharge_complete = COALESCE($44::date, eta_discharge_complete),
           ata_discharge_complete = COALESCE($45::date, ata_discharge_complete),
+          sfal_qty = COALESCE($46::numeric, sfal_qty),
+          sfbd_qty = COALESCE($47::numeric, sfbd_qty),
           status = CASE
-            WHEN (CASE $46::text
+            WHEN (CASE $48::text
               WHEN 'UNPLANNED' THEN 0 WHEN 'PLANNED' THEN 1 WHEN 'IN_PROGRESS' THEN 2
               WHEN 'LOADING' THEN 3 WHEN 'IN_TRANSIT' THEN 4 WHEN 'ARRIVED' THEN 5
               WHEN 'UNLOADING' THEN 6 WHEN 'COMPLETED' THEN 7 ELSE 0 END)
@@ -800,11 +807,11 @@ export class SapDataDistributionService {
               WHEN 'UNPLANNED' THEN 0 WHEN 'PLANNED' THEN 1 WHEN 'IN_PROGRESS' THEN 2
               WHEN 'LOADING' THEN 3 WHEN 'IN_TRANSIT' THEN 4 WHEN 'ARRIVED' THEN 5
               WHEN 'UNLOADING' THEN 6 WHEN 'COMPLETED' THEN 7 ELSE 0 END)
-            THEN $46
+            THEN $48
             ELSE status
           END,
           updated_at = CURRENT_TIMESTAMP
-         WHERE id = $47`,
+         WHERE id = $49`,
         [
           contractUuid,
           voyageNo,
@@ -851,6 +858,8 @@ export class SapDataDistributionService {
           ataDischargeStart,
           etaDischargeComplete,
           ataDischargeComplete,
+          sfalQty,
+          sfbdQty,
           statusForInsert,
           id
         ]
@@ -869,14 +878,14 @@ export class SapDataDistributionService {
           eta_loading_complete, ata_loading_complete, eta_discharge_arrival, ata_discharge_arrival,
           eta_discharge_start, ata_discharge_start, eta_discharge_complete, ata_discharge_complete,
           loading_rate, discharge_rate, loading_duration_days, discharge_duration_days,
-          total_lead_time_days
+          total_lead_time_days, sfal_qty, sfbd_qty
         ) VALUES (
           $1, $2::uuid, $3, $4, $5, $6, $7, $8::numeric, $9::numeric, $10::numeric, $11, $12::int,
           $13, $14, $15, $16, $17, $18::date, $19::date, $20::date, $21::date, $22::date, $23::date,
           $24::numeric, $25::numeric, $26::numeric, $27::numeric, $28::numeric, $29::numeric, $30::numeric,
           $31::numeric, $32::numeric, $33::numeric, $34::date, $35::date, $36::date, $37::date,
           $38::date, $39::date, $40::date, $41::date, $42::date, $43::date, $44::numeric, $45::numeric,
-          $46::int, $47::int, $48::int
+          $46::int, $47::int, $48::int, $49::numeric, $50::numeric
         )
         ON CONFLICT (shipment_id) DO UPDATE SET
           contract_id   = COALESCE(EXCLUDED.contract_id, shipments.contract_id),
@@ -925,6 +934,8 @@ export class SapDataDistributionService {
           loading_duration_days = COALESCE(EXCLUDED.loading_duration_days, shipments.loading_duration_days),
           discharge_duration_days = COALESCE(EXCLUDED.discharge_duration_days, shipments.discharge_duration_days),
           total_lead_time_days = COALESCE(EXCLUDED.total_lead_time_days, shipments.total_lead_time_days),
+          sfal_qty = COALESCE(EXCLUDED.sfal_qty, shipments.sfal_qty),
+          sfbd_qty = COALESCE(EXCLUDED.sfbd_qty, shipments.sfbd_qty),
           status = CASE
             WHEN (CASE EXCLUDED.status
               WHEN 'UNPLANNED' THEN 0 WHEN 'PLANNED' THEN 1 WHEN 'IN_PROGRESS' THEN 2
@@ -987,7 +998,9 @@ export class SapDataDistributionService {
           dischargeRate,
           loadingDurationDays,
           dischargeDurationDays,
-          totalLeadTimeDays
+          totalLeadTimeDays,
+          sfalQty,
+          sfbdQty
         ]
       );
       return result.rows[0].id;
@@ -1766,6 +1779,36 @@ export class SapDataDistributionService {
   /**
    * Helper: Parse number from various formats
    */
+  /** Copy SFAL/SFBD from SAP raw row when normalized shipment object missed them. */
+  private static enrichShipmentSfalSfbdFromRaw(shipmentData: Record<string, unknown>, raw: Record<string, unknown> | undefined): void {
+    if (!shipmentData || !raw) return;
+    if (shipmentData.sfal == null && shipmentData.sfal_qty == null) {
+      const sfal = raw[' Ship Figure After Loading (SFAL) ']
+        ?? raw['Ship Figure After Loading (SFAL)']
+        ?? null;
+      if (sfal != null && String(sfal).trim() !== '') {
+        shipmentData.sfal = sfal;
+      }
+    }
+    if (shipmentData.sfbd == null && shipmentData.sfbd_qty == null) {
+      const sfbd = raw[' Ship Figure Before Discharge (SFBD) ']
+        ?? raw['Ship Figure Before Discharge (SFBD)']
+        ?? null;
+      if (sfbd != null && String(sfbd).trim() !== '') {
+        shipmentData.sfbd = sfbd;
+      }
+    }
+  }
+
+  /** SAP figure quantities are stored in Kg (same unit as Quantity Delivery / Receive). */
+  private static parseSapFigureQtyKg(...values: unknown[]): number | null {
+    for (const value of values) {
+      const kg = this.parseNumber(value);
+      if (kg !== null) return kg;
+    }
+    return null;
+  }
+
   private static parseNumber(value: any): number | null {
     if (!value) return null;
     

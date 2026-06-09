@@ -17,6 +17,10 @@ import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
+import {
+  BulkUploadStatusModal,
+  type BulkUploadStatusResult,
+} from '@/components/BulkUploadStatusModal'
 import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
 import { MasterLoadingPortCombobox } from '@/components/MasterLoadingPortCombobox'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
@@ -28,6 +32,7 @@ import {
   ContractPerfTableSubtitleSkeleton,
   ContractTableBodySkeleton,
 } from '@/components/performance/ContractPerfTableSkeleton'
+import { StatusDistributionSkeleton } from '@/components/performance/StatusDistributionSkeleton'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
@@ -433,6 +438,57 @@ function ShipmentDetailReadOnlyField({
   )
 }
 
+/** DB/API value is Kg; UI shows and edits in MT. */
+function ShipmentMtQuantityField({
+  label,
+  value,
+  editing,
+  disabled,
+  onChange,
+}: {
+  label: string
+  /** Quantity in kilograms (stored in DB). */
+  value: number | null | undefined
+  editing?: boolean
+  disabled?: boolean
+  /** Called with kilograms. */
+  onChange?: (nextKg: number | null) => void
+}) {
+  const kg = value === null || value === undefined || Number.isNaN(Number(value)) ? null : Number(value)
+  const mtDisplay = kg === null ? '' : String(kg / 1000)
+
+  return (
+    <div>
+      <div className="text-gray-500">{label}</div>
+      {editing ? (
+        <div className="relative mt-1">
+          <Input
+            type="number"
+            step="0.01"
+            disabled={disabled}
+            value={mtDisplay}
+            onChange={(e) => {
+              const raw = e.target.value
+              if (raw === '') {
+                onChange?.(null)
+                return
+              }
+              const mt = parseFloat(raw)
+              onChange?.(Number.isNaN(mt) ? null : mt * 1000)
+            }}
+            className={`h-8 text-sm pr-10 ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+          />
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-500">
+            MT
+          </span>
+        </div>
+      ) : (
+        <div className="font-medium">{formatQtyMtFromKg(kg)}</div>
+      )}
+    </div>
+  )
+}
+
 function ShipmentsPageContent() {
   const searchParams = useSearchParams()
   const perms = usePermissions()
@@ -611,7 +667,7 @@ function ShipmentsPageContent() {
     return () => window.removeEventListener('mousedown', onMouseDown)
   }, [openHeaderFilterId])
   const [uploading, setUploading] = useState(false)
-  const [bulkUploadResult, setBulkUploadResult] = useState<{ created: number; updated: number; failed: number; errors: string[] } | null>(null)
+  const [bulkUploadResult, setBulkUploadResult] = useState<BulkUploadStatusResult | null>(null)
   const [dateFrom, setDateFrom] = useState(() => {
     const now = new Date()
     const yyyy = now.getFullYear()
@@ -624,6 +680,7 @@ function ShipmentsPageContent() {
   })
   const [uploadingId, setUploadingId] = useState<string>('')
   const [shipmentsSummary, setShipmentsSummary] = useState<any>(null)
+  const [section1SummaryLoading, setSection1SummaryLoading] = useState(true)
   const shipmentsSummaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Vessel loading ports state
@@ -975,6 +1032,7 @@ function ShipmentsPageContent() {
 
   const fetchShipments = async (forcedPage?: number, searchOverride?: string) => {
     setLoading(true)
+    setSection1SummaryLoading(true)
     try {
       const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
@@ -1083,11 +1141,15 @@ function ShipmentsPageContent() {
             .catch(() => {
               /* keep prior Section 1 summary */
             })
+            .finally(() => {
+              setSection1SummaryLoading(false)
+            })
         }, 450)
       } else {
         console.error('Unexpected response structure:', response.data)
         setShipments([])
         setShipmentsSummary(null)
+        setSection1SummaryLoading(false)
         alert('Received unexpected response format from server. Please check console for details.')
       }
     } catch (error: any) {
@@ -1108,6 +1170,7 @@ function ShipmentsPageContent() {
       alert(`Failed to load shipments: ${errorMessage}\n\nPlease check the console for more details.`)
       setShipments([])
       setShipmentsSummary(null)
+      setSection1SummaryLoading(false)
     } finally {
       setLoading(false)
     }
@@ -2689,6 +2752,8 @@ function ShipmentsPageContent() {
   const buildShipmentInfoFromShipment = (s: Record<string, unknown>) => ({
     quantity_delivered: s.quantity_delivered,
     actual_vessel_qty_receive: s.actual_vessel_qty_receive,
+    sfal_qty: s.sfal_qty,
+    sfbd_qty: s.sfbd_qty,
     vessel_oa_actual: s.vessel_oa_actual,
     vessel_oa_budget: s.vessel_oa_budget,
     bl_quantity: s.bl_quantity,
@@ -3038,6 +3103,12 @@ function ShipmentsPageContent() {
       }
       if (info.actual_vessel_qty_receive !== undefined && info.actual_vessel_qty_receive !== null) {
         updateData.actual_vessel_qty_receive = info.actual_vessel_qty_receive
+      }
+      if (info.sfal_qty !== undefined) {
+        updateData.sfal_qty = info.sfal_qty
+      }
+      if (info.sfbd_qty !== undefined) {
+        updateData.sfbd_qty = info.sfbd_qty
       }
       if (info.vessel_oa_actual !== undefined && info.vessel_oa_actual !== null) {
         updateData.vessel_oa_actual = info.vessel_oa_actual
@@ -3437,6 +3508,9 @@ function ShipmentsPageContent() {
             <CardTitle>Status Distribution</CardTitle>
           </CardHeader>
           <CardContent>
+            {section1SummaryLoading ? (
+              <StatusDistributionSkeleton itemCount={8} variant="shipments" />
+            ) : (
             <div className="flex w-full min-w-0 items-center justify-start gap-3 overflow-x-auto py-4 px-4 md:gap-6">
               <div className="flex flex-nowrap items-center shrink-0">
               {[
@@ -3494,6 +3568,7 @@ function ShipmentsPageContent() {
               })}
               </div>
             </div>
+            )}
           </CardContent>
         </Card>
 
@@ -3674,52 +3749,6 @@ function ShipmentsPageContent() {
                 <option value="LATE">Late</option>
                 <option value="NA">N/A</option>
                 </select>
-                <select
-                  value={viewOption}
-                  onChange={(e) => {
-                    setViewOption(
-                      e.target.value as
-                        | 'all'
-                        | 'sto'
-                        | 'contract'
-                        | 'contract_ext'
-                        | 'vessel'
-                        | 'port_loading'
-                        | 'port_discharge',
-                    )
-                    setViewFilterValue('')
-                  }}
-                  className="rounded-lg border px-4 py-2"
-                >
-                  <option value="all">View by: All</option>
-                  <option value="sto">View by: STO Number</option>
-                  <option value="contract">View by: Contract Numbers</option>
-                  <option value="contract_ext">View by: Contract Ext No</option>
-                  <option value="vessel">View by: Vessel Name</option>
-                  <option value="port_loading">View by: Port of Loading</option>
-                  <option value="port_discharge">View by: Port of Discharge</option>
-                </select>
-                {viewOption !== 'all' && (
-                  <Input
-                    placeholder={`Filter by ${
-                      viewOption === 'sto' ? 'STO Number'
-                        : viewOption === 'contract' ? 'Contract Numbers'
-                          : viewOption === 'contract_ext' ? 'Contract Ext No'
-                          : viewOption === 'vessel' ? 'Vessel Name'
-                            : viewOption === 'port_loading' ? 'Port of Loading'
-                              : 'Port of Discharge'
-                    }...`}
-                    value={viewFilterValue}
-                    onChange={(e) => setViewFilterValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        applyViewFilter()
-                      }
-                    }}
-                    className="w-48"
-                  />
-                )}
               </div>
 
               <PerformanceScopeFilters
@@ -4106,41 +4135,12 @@ function ShipmentsPageContent() {
           </>
         )}
 
-        <Dialog open={!!bulkUploadResult} onOpenChange={(open) => { if (!open) setBulkUploadResult(null) }}>
-          <DialogContent className="max-w-2xl max-h-[88vh]">
-            <DialogHeader>
-              <DialogTitle>Shipment bulk upload result</DialogTitle>
-            </DialogHeader>
-            {bulkUploadResult && (
-              <div className="space-y-4 text-sm">
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="rounded-md border bg-green-50 px-3 py-2">
-                    <div className="text-xs text-muted-foreground">Created</div>
-                    <div className="text-lg font-semibold tabular-nums text-green-800">{bulkUploadResult!.created}</div>
-                  </div>
-                  <div className="rounded-md border bg-slate-50 px-3 py-2">
-                    <div className="text-xs text-muted-foreground">Updated</div>
-                    <div className="text-lg font-semibold tabular-nums">{bulkUploadResult!.updated}</div>
-                  </div>
-                  <div className="rounded-md border bg-red-50 px-3 py-2">
-                    <div className="text-xs text-muted-foreground">Failed</div>
-                    <div className="text-lg font-semibold tabular-nums text-red-800">{bulkUploadResult!.failed}</div>
-                  </div>
-                </div>
-                {bulkUploadResult!.errors.length > 0 && (
-                  <div>
-                    <div className="font-medium text-gray-900 mb-2">Row issues</div>
-                    <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
-                      {bulkUploadResult!.errors.map((e, i) => (
-                        <li key={i} className="text-gray-800">{e}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-          </DialogContent>
-        </Dialog>
+        <BulkUploadStatusModal
+          open={!!bulkUploadResult}
+          onOpenChange={(open) => { if (!open) setBulkUploadResult(null) }}
+          title="Shipment bulk upload result"
+          result={bulkUploadResult}
+        />
 
         {/* Shipments List */}
         <Card>
@@ -5262,6 +5262,18 @@ function ShipmentsPageContent() {
                             <div className="font-medium">{formatNumber(shipmentInfo.actual_vessel_qty_receive)} Kg</div>
                           )}
                         </div>
+                        <ShipmentMtQuantityField
+                          label="Quantity SFAL"
+                          value={editingShipmentInfo ? editedShipmentInfo?.sfal_qty : shipmentInfo.sfal_qty}
+                          editing={editingShipmentInfo}
+                          onChange={(next) => setEditedShipmentInfo({ ...editedShipmentInfo, sfal_qty: next })}
+                        />
+                        <ShipmentMtQuantityField
+                          label="Quantity SFBD"
+                          value={editingShipmentInfo ? editedShipmentInfo?.sfbd_qty : shipmentInfo.sfbd_qty}
+                          editing={editingShipmentInfo}
+                          onChange={(next) => setEditedShipmentInfo({ ...editedShipmentInfo, sfbd_qty: next })}
+                        />
                         <div>
                           <div className="text-gray-500">Vessel Loading Port 1</div>
                           {editingShipmentInfo ? (

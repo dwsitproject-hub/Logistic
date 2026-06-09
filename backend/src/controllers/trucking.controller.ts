@@ -20,6 +20,11 @@ import {
   sqlEffectiveTruckingStartDate,
 } from '../utils/truckingSapDates';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+import {
+  sqlTruckingQuantityDeliveredCoalesce,
+  sqlTruckingQuantityReceiveCoalesce,
+  sqlTruckingQuantitySentCoalesce,
+} from '../utils/truckingQuantitySql';
 
 function deriveTruckingStatus(
   truckingStartDate: any,
@@ -170,66 +175,10 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
         t.eta_trucking_completion_date,
         t.eta_delivery_start_date,
         t.eta_delivery_end_date,
-        -- Quantities: prefer trucking_operations, fallback to latest SAP row for the contract
-        COALESCE(
-          t.quantity_sent,
-          (
-            SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Quantity Sent via Trucking (Based on Surat Jalan)',
-                spd.data->>'quantity_sent_via_trucking_based_on_surat_jalan',
-                spd.data->'raw'->>'Quantity Sent via Trucking',
-                spd.data->'raw'->>'Quantity Sent',
-                spd.data->>'Quantity Sent'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) q
-            WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-          )
-        ) AS quantity_sent,
-        COALESCE(
-          t.quantity_delivered,
-          (
-            SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Quantity Delivered via Trucking',
-                spd.data->>'quantity_delivered_via_trucking',
-                spd.data->'raw'->>'Qty Receive',
-                spd.data->'raw'->>'Quantity Receive'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) q
-            WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-          )
-        ) AS quantity_delivered,
-        -- UI expects quantity_receive; use delivered as a practical default
-        COALESCE(
-          NULL,
-          t.quantity_delivered,
-          (
-            SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Qty Receive',
-                spd.data->'raw'->>'Quantity Receive',
-                spd.data->>'quantity_delivered_via_trucking'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) q
-            WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-          )
-        ) AS quantity_receive,
+        -- Quantities: prefer trucking_operations, fallback to latest SAP row (normalized to kg)
+        ${sqlTruckingQuantitySentCoalesce()} AS quantity_sent,
+        ${sqlTruckingQuantityDeliveredCoalesce()} AS quantity_delivered,
+        ${sqlTruckingQuantityReceiveCoalesce()} AS quantity_receive,
         t.gain_loss_percentage,
         t.gain_loss_amount,
         t.oa_budget,
@@ -1026,63 +975,9 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
     params.push(...li.params);
     idx = li.nextIndex;
 
-    const qtySentSql = `COALESCE(
-          t.quantity_sent,
-          (
-            SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Quantity Sent via Trucking (Based on Surat Jalan)',
-                spd.data->>'quantity_sent_via_trucking_based_on_surat_jalan',
-                spd.data->'raw'->>'Quantity Sent via Trucking',
-                spd.data->'raw'->>'Quantity Sent',
-                spd.data->>'Quantity Sent'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) q
-            WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-          )
-        )`;
-    const qtyDelSql = `COALESCE(
-          t.quantity_delivered,
-          (
-            SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Quantity Delivered via Trucking',
-                spd.data->>'quantity_delivered_via_trucking',
-                spd.data->'raw'->>'Qty Receive',
-                spd.data->'raw'->>'Quantity Receive'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) q
-            WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-          )
-        )`;
-    const qtyRecvSql = `COALESCE(
-          t.quantity_delivered,
-          (
-            SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Qty Receive',
-                spd.data->'raw'->>'Quantity Receive',
-                spd.data->>'quantity_delivered_via_trucking'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) q
-            WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-          )
-        )`;
+    const qtySentSql = sqlTruckingQuantitySentCoalesce();
+    const qtyDelSql = sqlTruckingQuantityDeliveredCoalesce();
+    const qtyRecvSql = sqlTruckingQuantityReceiveCoalesce();
     const contractExtSql = `COALESCE(
           l.contract_ext_no,
           (SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No')
@@ -1205,25 +1100,7 @@ export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Res
               t.eta_trucking_completion_date,
               t.trucking_start_date,
               t.trucking_completion_date,
-              COALESCE(
-                t.quantity_delivered,
-                (
-                  SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-                  FROM (
-                    SELECT COALESCE(
-                      spd.data->'raw'->>'Quantity Delivered via Trucking',
-                      spd.data->>'quantity_delivered_via_trucking',
-                      spd.data->'raw'->>'Qty Receive',
-                      spd.data->'raw'->>'Quantity Receive'
-                    ) AS val
-                    FROM sap_processed_data spd
-                    WHERE spd.contract_number = c.contract_id
-                    ORDER BY spd.created_at DESC NULLS LAST
-                    LIMIT 1
-                  ) q
-                  WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-                )
-              ) AS quantity_delivered
+              ${sqlTruckingQuantityDeliveredCoalesce()} AS quantity_delivered
        FROM trucking_operations t
        LEFT JOIN contracts c ON t.contract_id = c.id
        WHERE t.id = $1
@@ -1310,25 +1187,7 @@ function findPlanningColumnIndex(headers: unknown[], candidates: string[]): numb
 
 /** Same resolved quantity_delivered subquery as single-operation update (SAP fallback). */
 function sqlResolvedQuantityDelivered(): string {
-  return `COALESCE(
-                t.quantity_delivered,
-                (
-                  SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-                  FROM (
-                    SELECT COALESCE(
-                      spd.data->'raw'->>'Quantity Delivered via Trucking',
-                      spd.data->>'quantity_delivered_via_trucking',
-                      spd.data->'raw'->>'Qty Receive',
-                      spd.data->'raw'->>'Quantity Receive'
-                    ) AS val
-                    FROM sap_processed_data spd
-                    WHERE spd.contract_number = c.contract_id
-                    ORDER BY spd.created_at DESC NULLS LAST
-                    LIMIT 1
-                  ) q
-                  WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-                )
-              )`;
+  return sqlTruckingQuantityDeliveredCoalesce();
 }
 
 export const downloadDailyPlanningDeliverablesTemplate = async (_req: AuthRequest, res: Response) => {

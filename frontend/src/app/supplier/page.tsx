@@ -10,7 +10,11 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import Layout from '@/components/Layout'
-import { Plus, SlidersHorizontal, Upload, Edit2, Trash2, X, Eye, ArrowUp, ArrowDown, ArrowUpDown, ChevronDown } from 'lucide-react'
+import {
+  BulkUploadStatusModal,
+  type BulkUploadStatusResult,
+} from '@/components/BulkUploadStatusModal'
+import { Plus, SlidersHorizontal, Upload, Download, Edit2, Trash2, X, Eye, ArrowUp, ArrowDown, ArrowUpDown, ChevronDown, Loader2 } from 'lucide-react'
 
 interface Supplier {
   id: string
@@ -98,6 +102,8 @@ export default function SupplierPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [bulkUploadResult, setBulkUploadResult] = useState<BulkUploadStatusResult | null>(null)
+  const [uploading, setUploading] = useState(false)
 
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<Supplier | null>(null)
@@ -346,18 +352,24 @@ export default function SupplierPage() {
     if (!file) return
     setError('')
     setSuccess('')
+    setUploading(true)
     const fd = new FormData()
     fd.append('file', file)
     try {
       const res = await api.post('/suppliers/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
-      const r = res.data.data
-      const details = r.errors?.length ? r.errors.slice(0, 10).join(' | ') + (r.errors.length > 10 ? ' | ...' : '') : ''
-      setSuccess(`Imported: ${r.inserted} inserted, ${r.updated} updated${r.errors?.length ? `, ${r.errors.length} errors` : ''}`)
-      if (details) setError(details)
-      fetchData()
+      const r = res.data?.data ?? {}
+      const errors: string[] = Array.isArray(r.errors) ? r.errors.map(String) : []
+      setBulkUploadResult({
+        created: Number(r.inserted) || 0,
+        updated: Number(r.updated) || 0,
+        failed: errors.length,
+        errors,
+      })
+      await fetchData()
     } catch (e: any) {
       setError(e?.response?.data?.error?.message || 'Import failed')
     } finally {
+      setUploading(false)
       e.target.value = ''
     }
   }
@@ -386,9 +398,14 @@ export default function SupplierPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-<Button variant="outline" size="sm" onClick={() => document.getElementById('supplier-upload')?.click()}>
-              <Upload className="h-4 w-4 mr-2" />
-              Upload CSV
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-green-600 text-green-700 hover:bg-green-50"
+              onClick={downloadTemplate}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Download Template
             </Button>
             <input
               id="supplier-upload"
@@ -396,7 +413,26 @@ export default function SupplierPage() {
               accept=".xlsx,.xls,.csv"
               className="hidden"
               onChange={handleUpload}
+              disabled={uploading}
             />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => document.getElementById('supplier-upload')?.click()}
+              disabled={uploading}
+            >
+              {uploading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Upload CSV
+                </>
+              )}
+            </Button>
             <Button size="sm" onClick={openAdd}>
               <Plus className="h-4 w-4 mr-2" />
               Add Supplier
@@ -814,6 +850,14 @@ export default function SupplierPage() {
             </div>
           )
         })()}
+
+        <BulkUploadStatusModal
+          open={!!bulkUploadResult}
+          onOpenChange={(open) => { if (!open) setBulkUploadResult(null) }}
+          title="Supplier CSV upload result"
+          result={bulkUploadResult}
+          createdLabel="Inserted"
+        />
       </div>
     </Layout>
   )

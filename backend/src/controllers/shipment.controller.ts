@@ -1298,6 +1298,18 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
+    if (updateData.sfal_qty !== undefined) {
+      updateFields.push(`sfal_qty = $${paramIndex}::numeric`);
+      updateValues.push(updateData.sfal_qty);
+      paramIndex++;
+    }
+
+    if (updateData.sfbd_qty !== undefined) {
+      updateFields.push(`sfbd_qty = $${paramIndex}::numeric`);
+      updateValues.push(updateData.sfbd_qty);
+      paramIndex++;
+    }
+
     if (updateData.difference_final_qty_vs_bl_qty !== undefined && updateData.difference_final_qty_vs_bl_qty !== null) {
       updateFields.push(`difference_final_qty_vs_bl_qty = $${paramIndex}::numeric`);
       updateValues.push(updateData.difference_final_qty_vs_bl_qty);
@@ -1649,6 +1661,8 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
         `SELECT 
           s.quantity_delivered,
           s.actual_vessel_qty_receive,
+          s.sfal_qty,
+          s.sfbd_qty,
           s.vessel_oa_actual,
           s.vessel_oa_budget,
           s.bl_quantity,
@@ -1781,6 +1795,8 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
         `SELECT 
           MAX(s.quantity_delivered) as quantity_delivered,
           MAX(s.actual_vessel_qty_receive) as actual_vessel_qty_receive,
+          MAX(s.sfal_qty) as sfal_qty,
+          MAX(s.sfbd_qty) as sfbd_qty,
           MAX(s.vessel_oa_actual) as vessel_oa_actual,
           MAX(s.vessel_oa_budget) as vessel_oa_budget,
           MAX(s.bl_quantity) as bl_quantity,
