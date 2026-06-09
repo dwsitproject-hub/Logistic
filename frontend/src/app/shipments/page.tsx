@@ -1,6 +1,6 @@
 ﻿'use client'
 
-import { useEffect, useMemo, useRef, useState, Suspense, useCallback } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, Suspense, useCallback, type ReactNode } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -54,6 +54,7 @@ import {
   shipmentCompactColumnFallbackOrder,
   shipmentDefaultVisibleColumnIds,
 } from '@/lib/shipmentColumns'
+import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
 import {
   OperationalNowrapCell,
   OperationalStackedCommaCell,
@@ -732,6 +733,8 @@ function ShipmentsPageContent() {
 
   // Compact/Expand view state
   const [expandedShipmentIds, setExpandedShipmentIds] = useState<Set<string>>(() => new Set())
+  /** Section 3 — STO group headers collapsed (empty = all expanded). */
+  const [collapsedStoGroupKeys, setCollapsedStoGroupKeys] = useState<Set<string>>(() => new Set())
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [dragColId, setDragColId] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<string>('created_at')
@@ -2286,6 +2289,14 @@ function ShipmentsPageContent() {
       }
     },
     {
+      id: 'shipment_id',
+      label: 'STO',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.sto_number || '',
+      render: (s) => <OperationalNowrapCell value={s.sto_number} fallback="" />
+    },
+    {
       id: 'contract_date',
       label: 'Contract Date',
       defaultVisible: true,
@@ -2309,7 +2320,9 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => s.po_numbers || '',
-      render: (s) => <OperationalNowrapCell value={s.po_numbers} title={s.po_numbers || ''} />
+      render: (s) => (
+        <OperationalStackedCommaCell value={s.po_numbers} title={s.po_numbers || ''} />
+      )
     },
     {
       id: 'vessel_name',
@@ -2330,14 +2343,6 @@ function ShipmentsPageContent() {
           {s.status}
         </Badge>
       )
-    },
-    {
-      id: 'shipment_id',
-      label: 'STO',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.sto_number || '',
-      render: (s) => <OperationalNowrapCell value={s.sto_number} fallback="" />
     },
     {
       id: 'product',
@@ -2428,9 +2433,10 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.contract_numbers || s.contract_number || '',
       render: (s) => (
-        <span className="text-sm break-words block" title={s.contract_numbers || s.contract_number || ''}>
-          {s.contract_numbers || s.contract_number || '-'}
-        </span>
+        <OperationalStackedCommaCell
+          value={s.contract_numbers || s.contract_number}
+          title={s.contract_numbers || s.contract_number || ''}
+        />
       )
     },
     {
@@ -2440,9 +2446,10 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.contract_reference_po || '',
       render: (s) => (
-        <span className="text-sm break-words block" title={s.contract_reference_po || ''}>
-          {s.contract_reference_po || '-'}
-        </span>
+        <OperationalStackedCommaCell
+          value={s.contract_reference_po}
+          title={s.contract_reference_po || ''}
+        />
       )
     },
     {
@@ -2676,6 +2683,20 @@ function ShipmentsPageContent() {
 
     return sorted
   }, [compactColumns, filteredShipments, sortDir, sortKey])
+
+  const stoGroupedShipments = useMemo(
+    () => groupShipmentsBySto(sortedShipments),
+    [sortedShipments],
+  )
+
+  const toggleStoGroupCollapse = useCallback((stoKey: string) => {
+    setCollapsedStoGroupKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(stoKey)) next.delete(stoKey)
+      else next.add(stoKey)
+      return next
+    })
+  }, [])
 
   const totalPages = useMemo(
     () => Math.max(1, Math.ceil((totalCount || 0) / pageSize)),
@@ -4406,14 +4427,81 @@ function ShipmentsPageContent() {
                               {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
                             </td>
                           </tr>
-                        ) : sortedShipments.map((shipment, idx) => {
-                          const isEditing = editingId === shipment.id
-                          const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
-                          const rowBg = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
-                          return (
-                            <>
-                              <tr key={shipment.id} className={rowBg}>
+                        ) : (() => {
+                          let stripeIdx = 0
+                          return stoGroupedShipments.flatMap((group) => {
+                            const isMultiStoGroup = group.rows.length > 1
+                            const stoGroupCollapsed = collapsedStoGroupKeys.has(group.stoKey)
+                            const nodes: ReactNode[] = []
+
+                            if (isMultiStoGroup) {
+                              nodes.push(
+                                <tr
+                                  key={`sto-group-${group.stoKey}`}
+                                  className="bg-slate-100 border-y border-slate-200"
+                                >
+                                  <td className={`align-middle w-10 ${CONTRACT_PERF_TABLE_CELL_PAD}`}>
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleStoGroupCollapse(group.stoKey)}
+                                      className="p-1 text-slate-600 hover:text-slate-900"
+                                      title={stoGroupCollapsed ? 'Expand STO group' : 'Collapse STO group'}
+                                      aria-expanded={!stoGroupCollapsed}
+                                    >
+                                      {stoGroupCollapsed ? (
+                                        <ChevronRight className="h-5 w-5" />
+                                      ) : (
+                                        <ChevronDown className="h-5 w-5" />
+                                      )}
+                                    </button>
+                                  </td>
+                                  {visibleColumns.map((col) => {
+                                    const opColClass = operationalTableColumnClass(
+                                      getOperationalColumnLayout('shipments', col.id),
+                                    )
+                                    if (col.id === 'shipment_id') {
+                                      return (
+                                        <td
+                                          key={col.id}
+                                          className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
+                                        >
+                                          <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
+                                            <span className="text-sm font-semibold text-slate-900">{group.stoDisplay}</span>
+                                            <Badge variant="outline" className="ml-2 text-xs font-normal">
+                                              {group.rows.length} rows
+                                            </Badge>
+                                          </div>
+                                        </td>
+                                      )
+                                    }
+                                    return (
+                                      <td
+                                        key={col.id}
+                                        className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
+                                      />
+                                    )
+                                  })}
+                                  <td
+                                    className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
+                                  />
+                                </tr>,
+                              )
+                              if (stoGroupCollapsed) return nodes
+                            }
+
+                            for (const shipment of group.rows) {
+                              const isEditing = editingId === shipment.id
+                              const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
+                              const rowBg = stripeIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                              stripeIdx += 1
+                              const isStoChildRow = isMultiStoGroup
+                              nodes.push(
+                            <Fragment key={shipment.id}>
+                              <tr className={`${rowBg} ${isStoChildRow ? 'border-l-2 border-slate-200' : ''}`}>
                                 <td className={`align-middle w-10 ${CONTRACT_PERF_TABLE_CELL_PAD}`}>
+                                  {isStoChildRow ? (
+                                    <span className="inline-block w-5" aria-hidden />
+                                  ) : (
                                   <div className="hidden">
                                     <button
                                       type="button"
@@ -4428,6 +4516,7 @@ function ShipmentsPageContent() {
                                       )}
                                     </button>
                                   </div>
+                                  )}
                                 </td>
 
                                   {visibleColumns.map(col => {
@@ -4558,6 +4647,8 @@ function ShipmentsPageContent() {
                                             </select>
                                           )
                                         })()
+                                      ) : isStoChildRow && col.id === 'shipment_id' ? (
+                                        <span className="text-xs text-gray-400">—</span>
                                       ) : (
                                         col.render(shipment)
                                       )}
@@ -4768,9 +4859,12 @@ function ShipmentsPageContent() {
                                   </td>
                                 </tr>
                               )}
-                            </>
-                          )
-                        })}
+                            </Fragment>,
+                              )
+                            }
+                            return nodes
+                          })
+                        })()}
                         </tbody>
                       </table>
                   </div>
@@ -4780,13 +4874,45 @@ function ShipmentsPageContent() {
                 <div className="lg:hidden space-y-2">
                   {section3TableLoading ? (
                     <ContractPerfTableMobileSkeleton rowCount={6} />
-                  ) : sortedShipments.map((shipment) => {
+                  ) : stoGroupedShipments.flatMap((group) => {
+                    const isMultiStoGroup = group.rows.length > 1
+                    const stoGroupCollapsed = collapsedStoGroupKeys.has(group.stoKey)
+                    const nodes: ReactNode[] = []
+
+                    if (isMultiStoGroup) {
+                      nodes.push(
+                        <div
+                          key={`m-sto-group-${group.stoKey}`}
+                          className="border rounded-lg bg-slate-100 px-3 py-2 flex items-center gap-2"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleStoGroupCollapse(group.stoKey)}
+                            className="p-1 text-slate-600 hover:text-slate-900 shrink-0"
+                            aria-expanded={!stoGroupCollapsed}
+                          >
+                            {stoGroupCollapsed ? (
+                              <ChevronRight className="h-5 w-5" />
+                            ) : (
+                              <ChevronDown className="h-5 w-5" />
+                            )}
+                          </button>
+                          <span className="text-sm font-semibold text-slate-900">{group.stoDisplay}</span>
+                          <Badge variant="outline" className="text-xs font-normal">
+                            {group.rows.length} rows
+                          </Badge>
+                        </div>,
+                      )
+                      if (stoGroupCollapsed) return nodes
+                    }
+
+                    for (const shipment of group.rows) {
                     const isEditing = editingId === shipment.id
                     const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
-                    return (
+                    nodes.push(
                       <div
                         key={shipment.id}
-                        className={`border rounded-lg transition-colors ${isEditing ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
+                        className={`border rounded-lg transition-colors ${isMultiStoGroup ? 'ml-3 border-l-2 border-slate-200' : ''} ${isEditing ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
                       >
                         <div className="p-4">
                           <div className="flex items-center justify-between gap-3 mb-3">
@@ -5005,7 +5131,10 @@ function ShipmentsPageContent() {
                           )}
                         </div>
                       </div>
-                    )})}
+                    )
+                    }
+                    return nodes
+                  })}
                   </div>
 
                 {totalPages > 1 && (

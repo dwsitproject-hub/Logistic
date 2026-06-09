@@ -352,11 +352,6 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           END,
           0
         )
-        - COALESCE((
-          SELECT SUM(u.sto_qty_assigned)
-          FROM user_sto_contract_assignments u
-          WHERE u.contract_number = base.contract_id
-        ), 0)
       ) > 0`;
     }
 
@@ -415,11 +410,6 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         END,
         0
       )
-      - COALESCE((
-        SELECT SUM(u.sto_qty_assigned)
-        FROM user_sto_contract_assignments u
-        WHERE u.contract_number = contract_id
-      ), 0)
     )`;
     const allowedSort: Record<string, string> = {
       contract_date: 'contract_date::date',
@@ -1937,6 +1927,11 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
     }
     const contract = contractResult.rows[0];
     const deliveryEnd = contract.delivery_end_date ?? null;
+    const transportMode = String(contract.transport_mode ?? '').trim().toUpperCase();
+    const includeShipments =
+      transportMode === '' || transportMode === 'SEA' || transportMode === 'MIX';
+    const includeTrucking =
+      transportMode === '' || transportMode === 'LAND' || transportMode === 'MIX';
 
     // Shipment STOs: group by effective STO (prefer contracts.sto_number, then latest SAP STO, then operation/shipment ids)
     const shipmentStosQuery = `
@@ -2021,11 +2016,13 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       FROM shipment_base sb
       ORDER BY sb.sto_key
     `;
-    const shipmentRows = await query(shipmentStosQuery, [id]);
+    const shipmentRows = includeShipments
+      ? await query(shipmentStosQuery, [id])
+      : { rows: [] };
 
-    // Trucking STOs: one row per trucking operation, but show SAP aggregated STO numbers when contracts.sto_number is empty/partial
+    // Trucking STOs: prioritize operation_id / LAND SAP STO — never reuse vessel contracts.sto_number on SEA contracts
     const truckingStosQuery = `
-      WITH sto_agg AS (
+      WITH land_sto_agg AS (
         SELECT
           x.contract_number,
           STRING_AGG(DISTINCT x.effective_sto, ', ' ORDER BY x.effective_sto) AS sto_numbers
@@ -2038,15 +2035,31 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
               spd.data->'raw'->>'STO Number',
               spd.data->'shipment'->>'sto_no',
               spd.data->'contract'->>'sto_no'
-            )), '') AS effective_sto
+            )), '') AS effective_sto,
+            UPPER(TRIM(COALESCE(
+              spd.data->'raw'->>'SEA / LAND',
+              spd.data->'contract'->>'sea_land',
+              spd.data->'contract'->>'transport_mode',
+              ''
+            ))) AS sea_land
           FROM sap_processed_data spd
           WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ) x
         WHERE x.effective_sto IS NOT NULL AND x.effective_sto != ''
+          AND x.sea_land LIKE 'LAND%'
         GROUP BY x.contract_number
       )
       SELECT
-        COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers, t.operation_id::text, t.id::text) AS sto_number,
+        COALESCE(
+          NULLIF(TRIM(t.operation_id::text), ''),
+          NULLIF(TRIM(lsa.sto_numbers), ''),
+          CASE
+            WHEN UPPER(TRIM(COALESCE(c.transport_mode, ''))) IN ('LAND', 'MIX')
+            THEN NULLIF(TRIM(c.sto_number::text), '')
+            ELSE NULL
+          END,
+          t.id::text
+        ) AS sto_number,
         t.operation_id,
         t.status,
         c.quantity_ordered AS sto_quantity,
@@ -2090,11 +2103,13 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         )) AS trucking_completion_date
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
-      LEFT JOIN sto_agg sa ON sa.contract_number = c.contract_id
+      LEFT JOIN land_sto_agg lsa ON lsa.contract_number = c.contract_id
       WHERE t.contract_id = $1
       ORDER BY t.created_at DESC
     `;
-    const truckingRows = await query(truckingStosQuery, [id]);
+    const truckingRows = includeTrucking
+      ? await query(truckingStosQuery, [id])
+      : { rows: [] };
 
     const shipmentStos = shipmentRows.rows.map((r: any) => {
       const lateIndicator = computeLateIndicatorText(

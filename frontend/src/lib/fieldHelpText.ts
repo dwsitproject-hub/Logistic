@@ -31,7 +31,7 @@ export const FIELD_HELP = {
 
   receivedQty: `Actual quantity received based on contract data (quantity_receive). For sea shipments: received at destination. For land shipments: quantity delivered to plant/site.`,
 
-  outstandingQtyMt: `Remaining quantity yet to be delivered (in MT). Green = Over Delivered; Red = Still Outstanding.`,
+  outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery; others use total STO quantity. Not reduced by manual STO assignment on Shipments. Green = Over Delivered; Red = Still Outstanding.`,
 
   companyName: `From Buyer in latest SAP data. For B2B "origin" contracts (empty Contract Reff PO), Company Name may follow linked B2B child contracts per business rules.`,
 

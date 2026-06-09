@@ -12,12 +12,12 @@ import {
 /** Default visible columns in left-to-right table order. */
 export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
   'late_indicator',
+  'shipment_id',
   'contract_date',
   'contract_ext_no',
   'po_numbers',
   'vessel_name',
   'status',
-  'shipment_id',
   'product',
   'incoterm',
   'sto_quantity',
@@ -28,7 +28,7 @@ export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
 ] as const
 
 /** Bump when default column order/visibility changes — resets users without matching saved layout. */
-export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v1'
+export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v2'
 
 export const SHIPMENT_COLUMN_LAYOUT_VERSION_KEY = 'shipments.compact.columnLayoutVersion'
 

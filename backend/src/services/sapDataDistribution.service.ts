@@ -1388,6 +1388,18 @@ export class SapDataDistributionService {
     const shipmentUuid = this.toUuid(shipmentId);
     const contractUuid = this.toUuid(contractId);
     if (!shipmentUuid && !contractUuid) return null;
+
+    if (contractUuid) {
+      const modeRes = await client.query(
+        `SELECT UPPER(TRIM(COALESCE(transport_mode, ''))) AS transport_mode
+         FROM contracts WHERE id = $1 LIMIT 1`,
+        [contractUuid]
+      );
+      if (modeRes.rows[0]?.transport_mode === 'SEA') {
+        logger.warn('Skipping trucking upsert: contract is SEA-only', { contractUuid });
+        return null;
+      }
+    }
     
     const data = truckingData.data;
     if (!data || Object.keys(data).length === 0) return null;

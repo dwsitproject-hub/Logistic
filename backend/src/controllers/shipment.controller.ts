@@ -285,6 +285,33 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           -- Get ETA dates from shipments or vessel_loading_ports
           MAX(COALESCE(s.eta_discharge_complete, (SELECT vlpd.eta_vessel_complete_discharge::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) as eta_vessel_complete_discharge,`;
 
+    /** STO on grouped row — used to pull all contracts/POs sharing the same STO (multi-contract per vessel). */
+    const groupedStoTrimExpr = `TRIM(COALESCE(MAX(c.sto_number::text), MAX(l.effective_sto), ''))`;
+    const stoLinkedContractNumbersSql = `CASE
+          WHEN NULLIF(${groupedStoTrimExpr}, '') IS NOT NULL THEN
+            (SELECT STRING_AGG(DISTINCT cc.contract_id, ', ' ORDER BY cc.contract_id)
+             FROM contracts cc
+             WHERE TRIM(cc.sto_number::text) = ${groupedStoTrimExpr}
+               AND cc.contract_id IS NOT NULL)
+          ELSE STRING_AGG(DISTINCT c.contract_id, ', ' ORDER BY c.contract_id) FILTER (WHERE c.contract_id IS NOT NULL)
+        END`;
+    const stoLinkedPoNumbersSql = `CASE
+          WHEN NULLIF(${groupedStoTrimExpr}, '') IS NOT NULL THEN
+            (SELECT STRING_AGG(DISTINCT cc.po_number, ', ' ORDER BY cc.po_number)
+             FROM contracts cc
+             WHERE TRIM(cc.sto_number::text) = ${groupedStoTrimExpr}
+               AND cc.po_number IS NOT NULL AND TRIM(cc.po_number) != '')
+          ELSE STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '')
+        END`;
+    const stoLinkedContractCountSql = `CASE
+          WHEN NULLIF(${groupedStoTrimExpr}, '') IS NOT NULL THEN
+            (SELECT COUNT(DISTINCT cc.contract_id)::int
+             FROM contracts cc
+             WHERE TRIM(cc.sto_number::text) = ${groupedStoTrimExpr}
+               AND cc.contract_id IS NOT NULL)
+          ELSE COUNT(DISTINCT c.contract_id) FILTER (WHERE c.contract_id IS NOT NULL)
+        END`;
+
     const contractMetaSelect = compact
       ? `
           MAX(NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '')) AS contract_reference_po,
@@ -472,9 +499,9 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.sap_delivery_id) as sap_delivery_id,
           MAX(s.created_at) as created_at,
           MAX(s.updated_at) as updated_at,
-          -- Aggregate contract data
-          STRING_AGG(DISTINCT c.contract_id, ', ' ORDER BY c.contract_id) FILTER (WHERE c.contract_id IS NOT NULL) as contract_numbers,
-          STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') as po_numbers,
+          -- Aggregate contract data (STO-linked: all contracts on same sto_number, not only shipment join)
+          ${stoLinkedContractNumbersSql} as contract_numbers,
+          ${stoLinkedPoNumbersSql} as po_numbers,
           MAX(c.supplier) as supplier,
           STRING_AGG(DISTINCT c.supplier, ', ' ORDER BY c.supplier) FILTER (WHERE c.supplier IS NOT NULL) as suppliers,
           MAX(c.buyer) as buyer,
@@ -484,7 +511,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(c.incoterm) as incoterm,
           MAX(c.group_name) as group_name,
           STRING_AGG(DISTINCT c.group_name, ', ' ORDER BY c.group_name) FILTER (WHERE c.group_name IS NOT NULL) as group_names,
-          COUNT(DISTINCT c.contract_id) FILTER (WHERE c.contract_id IS NOT NULL) as contract_count,
+          ${stoLinkedContractCountSql} as contract_count,
           -- Get delivery dates from contracts
           MAX(c.contract_date) as contract_date,
           MAX(c.delivery_start_date) as delivery_start_date,
@@ -815,6 +842,25 @@ ${contractMetaSelect}
         WHERE q.v IS NOT NULL AND q.v != ''
         GROUP BY q.sto_key
       ),
+      po_numbers_agg AS (
+        SELECT
+          q.sto_key,
+          STRING_AGG(DISTINCT q.v, ', ' ORDER BY q.v) AS po_numbers
+        FROM (
+          SELECT
+            sk.sto_key,
+            NULLIF(TRIM(COALESCE(
+              sk.data->'raw'->>'PO No',
+              sk.data->'raw'->>'PO Number',
+              sk.data->'raw'->>'PO No.',
+              sk.data->'contract'->>'po_number',
+              sk.data->>'PO No'
+            )), '') AS v
+          FROM spd_keyed sk
+        ) q
+        WHERE q.v IS NOT NULL AND q.v != ''
+        GROUP BY q.sto_key
+      ),
       sap_agg AS (
         SELECT
           sk.sto_key,
@@ -864,6 +910,9 @@ ${contractMetaSelect}
       contract_ext_agg AS (
         SELECT NULL::text AS sto_key, NULL::text AS contract_ext_no WHERE false
       ),
+      po_numbers_agg AS (
+        SELECT NULL::text AS sto_key, NULL::text AS po_numbers WHERE false
+      ),
       sap_agg AS (
         SELECT NULL::text AS sto_key,
           0::numeric AS sto_quantity,
@@ -897,11 +946,13 @@ ${contractMetaSelect}
         COALESCE(sl.incoterm, sp.incoterm) AS incoterm,
         sl.b2b_flag AS b2b_flag,
         sl.source_type AS source_type,
-        COALESCE(cex.contract_ext_no, sp.contract_ext_no) AS contract_ext_no_merged
+        COALESCE(cex.contract_ext_no, sp.contract_ext_no) AS contract_ext_no_merged,
+        COALESCE(NULLIF(TRIM(pna.po_numbers), ''), sp.po_numbers) AS po_numbers_merged
       FROM shipment_page sp
       LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN contract_ext_agg cex ON TRIM(cex.sto_key::text) = TRIM(sp.sto_key::text)`;
+      LEFT JOIN contract_ext_agg cex ON TRIM(cex.sto_key::text) = TRIM(sp.sto_key::text)
+      LEFT JOIN po_numbers_agg pna ON TRIM(pna.sto_key::text) = TRIM(sp.sto_key::text)`;
     const mainParams = [...innerParams, ...outerParams, Number(limit), offset];
 
     debugSql = { text: queryText, params: mainParams };
@@ -942,6 +993,10 @@ ${contractMetaSelect}
       if (Object.prototype.hasOwnProperty.call(row, 'contract_ext_no_merged')) {
         row.contract_ext_no = row.contract_ext_no_merged as string | null;
         delete (row as { contract_ext_no_merged?: unknown }).contract_ext_no_merged;
+      }
+      if (Object.prototype.hasOwnProperty.call(row, 'po_numbers_merged')) {
+        row.po_numbers = row.po_numbers_merged as string | null;
+        delete (row as { po_numbers_merged?: unknown }).po_numbers_merged;
       }
 
       // Preserve explicit cancellations.

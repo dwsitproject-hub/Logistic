@@ -575,7 +575,7 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
       )
-      SELECT c.id
+      SELECT c.id, UPPER(TRIM(COALESCE(c.transport_mode, ''))) AS transport_mode
       FROM contracts c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       WHERE c.contract_id = $1 OR COALESCE(l.contract_ext_no, '') = $1
@@ -592,7 +592,18 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
       });
     }
 
-    const contractId = contractResult.rows[0].id;
+    const contractRow = contractResult.rows[0];
+    if (contractRow.transport_mode === 'SEA') {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message:
+            'Trucking operations cannot be created for SEA-only contracts. Use Shipments for sea logistics, or set transport mode to MIX/LAND.',
+        },
+      });
+    }
+
+    const contractId = contractRow.id;
 
     let finalOperationId =
       operation_id != null && String(operation_id).trim() !== ''
