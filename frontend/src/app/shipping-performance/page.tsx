@@ -61,10 +61,6 @@ import {
 } from '@/lib/operationalTableLayout'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
-  ContractPerfTableSubtitleSkeleton,
-  ContractTableBodySkeleton,
-} from '@/components/performance/ContractPerfTableSkeleton'
-import {
   applySection3PortDisplay,
   resolveShippingPerfDischargePort,
   resolveShippingPerfLoadingPort,
@@ -1603,59 +1599,12 @@ function ShippingPerformancePageContent() {
 
         {/* Section 1: Summary Cards */}
         {(() => {
-          if (summaryLoading && rows.length === 0) {
-            return (
-              <div className="space-y-2">
-                <div className="flex items-center justify-end">
-                  <button
-                    type="button"
-                    onClick={resetPerfSelections}
-                    className="text-sm text-blue-700 hover:underline"
-                  >
-                    Reset selection
-                  </button>
-                </div>
-                <div className="flex w-full flex-col gap-4 xl:flex-row xl:items-stretch">
-                  <div className="flex min-h-full w-full flex-col justify-center space-y-1.5 self-stretch rounded-xl border bg-white p-3 shadow-sm animate-pulse xl:w-1/4 xl:shrink-0">
-                    <div className="space-y-0.5">
-                      <div className="h-3.5 bg-gray-200 rounded w-20" />
-                      <div className="h-2.5 bg-gray-100 rounded w-14" />
-                    </div>
-                    <div className="h-3 bg-gray-100 rounded w-20" />
-                    <div className="h-7 bg-gray-200 rounded w-16" />
-                    <div className="h-3 bg-gray-100 rounded w-24" />
-                  </div>
-                  {[0, 1].map((i) => (
-                    <div
-                      key={i}
-                      className="flex min-h-full w-full min-w-0 flex-1 flex-row items-center gap-4 self-stretch rounded-xl border bg-white p-3 shadow-sm animate-pulse"
-                    >
-                      <div className="w-[32%] shrink-0 space-y-1 border-r border-gray-200 pr-4">
-                        <div className="space-y-0.5">
-                          <div className="h-3.5 bg-gray-200 rounded w-20" />
-                          <div className="h-2.5 bg-gray-100 rounded w-14" />
-                        </div>
-                        <div className="h-3 bg-gray-100 rounded w-20" />
-                        <div className="h-7 bg-gray-200 rounded w-16" />
-                        <div className="h-3 bg-gray-100 rounded w-24" />
-                      </div>
-                      <div className="min-w-0 flex-1 space-y-1.5">
-                        {[0, 1, 2, 3, 4, 5].map((j) => (
-                          <div key={j} className="flex justify-between gap-2">
-                            <div className="h-3 flex-1 bg-gray-100 rounded" />
-                            <div className="h-3 w-12 bg-gray-200 rounded" />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )
-          }
-
           return (
-            <div className="space-y-2">
+            <div
+              className={`space-y-2 transition-opacity duration-200 ${
+                (summaryLoading || summaryFetching) && rows.length > 0 ? 'opacity-65' : 'opacity-100'
+              }`}
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-gray-600">
                   {perfCardFilter === 'all' ? (
@@ -1735,9 +1684,14 @@ function ShippingPerformancePageContent() {
         <Card>
           <CardHeader className="pb-2">
             <div>
-              <CardTitle className="text-base">
-                {perfDashMode === 'eta' ? 'Performance Drilldown (ETA)' : 'Performance Drilldown (ATA)'}
-                <span className="font-normal text-gray-500"> · {SHIPPING_PERF_CARD_TITLES[perfCardFilter]}</span>
+              <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+                <span>
+                  {perfDashMode === 'eta' ? 'Performance Drilldown (ETA)' : 'Performance Drilldown (ATA)'}
+                  <span className="font-normal text-gray-500"> · {SHIPPING_PERF_CARD_TITLES[perfCardFilter]}</span>
+                </span>
+                {(summaryLoading || summaryFetching) ? (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+                ) : null}
               </CardTitle>
               <div className="text-sm text-gray-600 mt-1">
                 Navigate as a tree: <span className="font-medium">Product → Group Plant → Incoterm → Vessel</span>.
@@ -1746,19 +1700,14 @@ function ShippingPerformancePageContent() {
             </div>
           </CardHeader>
           <CardContent className="pt-2">
-            {summaryLoading && rows.length === 0 ? (
-              <div className="rounded-xl border bg-white p-6 animate-pulse">
-                <div className="h-5 bg-gray-200 rounded w-48 mb-4" />
-                <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
-                  {[0, 1, 2, 3].map((i) => (
-                    <div key={i} className="h-40 bg-gray-100 rounded-lg" />
-                  ))}
-                </div>
-              </div>
-            ) : perfTree.length === 0 ? (
+            {perfTree.length === 0 && !summaryLoading && !summaryFetching ? (
               <div className="text-sm text-gray-500">No shipments found for the current filters.</div>
             ) : (
-              <div className="rounded-xl border bg-white p-4">
+              <div
+                className={`rounded-xl border bg-white p-4 transition-opacity duration-200 ${
+                  (summaryLoading || summaryFetching) && rows.length > 0 ? 'opacity-65' : 'opacity-100'
+                }`}
+              >
                 <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
                   <div>
                     <div className="text-sm font-semibold text-gray-900">Drilldown</div>
@@ -2005,11 +1954,13 @@ function ShippingPerformancePageContent() {
         <Card>
           <CardHeader className="space-y-3">
             <div>
-              <CardTitle>{tableViewMode === 'all' ? 'All Shipments' : 'By Vessel'}</CardTitle>
-              {section3TableLoading ? (
-                <ContractPerfTableSubtitleSkeleton />
-              ) : (
-                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+              <CardTitle className="flex items-center gap-2">
+                <span>{tableViewMode === 'all' ? 'All Shipments' : 'By Vessel'}</span>
+                {summaryFetching ? (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+                ) : null}
+              </CardTitle>
+              <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                   <span className="whitespace-nowrap tabular-nums text-gray-700">
                     <span className="font-semibold">{scopedUniqueContractCount.toLocaleString('en-US')}</span>{' '}
                     unique contracts
@@ -2040,7 +1991,6 @@ function ShippingPerformancePageContent() {
                     </>
                   )}
                 </p>
-              )}
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="inline-flex rounded-lg border bg-white p-1">
@@ -2273,12 +2223,7 @@ function ShippingPerformancePageContent() {
                       summaryFetching && rows.length > 0 ? 'opacity-65' : 'opacity-100'
                     }`}
                   >
-                    {section3TableLoading ? (
-                      <ContractTableBodySkeleton
-                        columnCount={tableColumnKeys.length || 1}
-                        showActionsColumn={false}
-                      />
-                    ) : tableRows.length === 0 ? (
+                    {!summaryFetching && tableRows.length === 0 ? (
                       <tr className="bg-white">
                         <td colSpan={tableColumnKeys.length || 1} className="px-4 py-10 text-center text-sm text-gray-500">
                           No data found

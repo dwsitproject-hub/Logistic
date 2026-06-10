@@ -31,10 +31,6 @@ import {
   OIL_LOSS_MODE_FILTER_OPTIONS,
 } from '@/lib/oilLossEligibility'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
-import {
-  ContractPerfTableSubtitleSkeleton,
-  ContractTableBodySkeleton,
-} from '@/components/performance/ContractPerfTableSkeleton'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
@@ -1259,10 +1255,17 @@ export default function OilLossPage() {
     <Layout>
       <div className="space-y-6">
         <div className="space-y-4">
-          <h2 className="text-lg font-semibold text-gray-800">
-            Year-to-Date (YTD) Oil Loss Summary
+          <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+            <span>Year-to-Date (YTD) Oil Loss Summary</span>
+            {dataFetching && rows.length > 0 ? (
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+            ) : null}
           </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div
+            className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 transition-opacity duration-200 ${
+              dataFetching && rows.length > 0 ? 'opacity-65' : 'opacity-100'
+            }`}
+          >
           {R_OIL_LOSS_CARDS.map((card) => {
             const summary = ytdSummary?.[card.key] ?? {
               avgMt: null,
@@ -1447,10 +1450,7 @@ export default function OilLossPage() {
                     <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                   ) : null}
                 </CardTitle>
-                {showBlockingLoad ? (
-                  <ContractPerfTableSubtitleSkeleton />
-                ) : (
-                  <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
+                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
                     <span className="whitespace-nowrap tabular-nums text-gray-700">
                       Showing{' '}
                       <span className="font-semibold">
@@ -1470,7 +1470,6 @@ export default function OilLossPage() {
                       </>
                     ) : null}
                   </p>
-                )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="inline-flex rounded-lg border bg-white p-1">
@@ -1494,7 +1493,7 @@ export default function OilLossPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => setShowColumnsMenu((v) => !v)}
-                    disabled={tableLoading}
+                    disabled={dataFetching || tableLoading}
                   >
                       <SlidersHorizontal className="h-4 w-4 mr-2" />
                       Columns
@@ -1581,7 +1580,7 @@ export default function OilLossPage() {
                         variant="outline"
                         size="sm"
                         onClick={() => handlePageChange(currentPage - 1)}
-                        disabled={currentPage <= 1 || tableLoading}
+                        disabled={currentPage <= 1 || dataFetching || tableLoading}
                       >
                         Previous
                       </Button>
@@ -1598,7 +1597,7 @@ export default function OilLossPage() {
                               variant={currentPage === pageNum ? 'default' : 'outline'}
                               size="sm"
                               onClick={() => handlePageChange(pageNum)}
-                              disabled={tableLoading}
+                              disabled={dataFetching || tableLoading}
                               className="min-w-[40px]"
                             >
                               {pageNum}
@@ -1610,7 +1609,7 @@ export default function OilLossPage() {
                         variant="outline"
                         size="sm"
                         onClick={() => handlePageChange(currentPage + 1)}
-                        disabled={currentPage >= totalPages || tableLoading}
+                        disabled={currentPage >= totalPages || dataFetching || tableLoading}
                       >
                         Next
                       </Button>
@@ -1706,17 +1705,11 @@ export default function OilLossPage() {
                         </tr>
                       </thead>
                       <tbody
-                        className={`divide-y divide-gray-200 ${
-                          dataFetching && rows.length > 0 ? 'opacity-65' : 'opacity-100'
+                        className={`divide-y divide-gray-200 transition-opacity duration-200 ${
+                          (dataFetching || viewTransitionLoading) && rows.length > 0 ? 'opacity-65' : 'opacity-100'
                         }`}
                       >
-                        {showBlockingLoad ? (
-                          <ContractTableBodySkeleton
-                            columnCount={visibleColumns.length}
-                            rowCount={8}
-                            showActionsColumn={false}
-                          />
-                        ) : filteredRows.length === 0 ? (
+                        {!dataFetching && !viewTransitionLoading && filteredRows.length === 0 ? (
                           <tr className="bg-white">
                             <td
                               colSpan={visibleColumns.length || 1}
@@ -1790,7 +1783,7 @@ export default function OilLossPage() {
                         variant="outline"
                         size="sm"
                         onClick={() => handlePageChange(currentPage - 1)}
-                        disabled={currentPage <= 1 || tableLoading}
+                        disabled={currentPage <= 1 || dataFetching || tableLoading}
                       >
                         Previous
                       </Button>
@@ -1806,7 +1799,7 @@ export default function OilLossPage() {
                             variant={currentPage === p ? 'default' : 'outline'}
                             size="sm"
                             onClick={() => handlePageChange(p)}
-                            disabled={tableLoading}
+                            disabled={dataFetching || tableLoading}
                             className="min-w-[36px]"
                           >
                             {p}
@@ -1817,7 +1810,7 @@ export default function OilLossPage() {
                         variant="outline"
                         size="sm"
                         onClick={() => handlePageChange(currentPage + 1)}
-                        disabled={currentPage >= totalPages || tableLoading}
+                        disabled={currentPage >= totalPages || dataFetching || tableLoading}
                       >
                         Next
                       </Button>

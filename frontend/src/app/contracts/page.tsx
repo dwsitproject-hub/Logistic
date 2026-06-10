@@ -36,11 +36,6 @@ import {
 } from '@/lib/cycleDaysDisplay'
 import { formatDateDMY, toSortableTimestamp } from '@/lib/dateFormat'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
-import {
-  ContractPerfTableMobileSkeleton,
-  ContractPerfTableSubtitleSkeleton,
-  ContractTableBodySkeleton,
-} from '@/components/performance/ContractPerfTableSkeleton'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
 import {
@@ -1309,7 +1304,7 @@ function ContractsPageContent() {
     [appliedDrilldownSelection],
   )
 
-  /** Section 3 table/API after Source, Product, Open/Close card, or Section 2 drilldown. */
+  /** True when user narrowed Section 3 via Source, Product, Open/Close card, or drilldown (UI labels only). */
   const contractPerfSection3FilterApplied = useMemo(
     () =>
       isContractPerfSection3FilterApplied({
@@ -1325,9 +1320,8 @@ function ContractsPageContent() {
   const contractPerfSection3Loading = useMemo(
     () =>
       isContractPerformance &&
-      contractPerfSection3FilterApplied &&
       ((loading && contracts.length === 0) || isTableLoading),
-    [isContractPerformance, contractPerfSection3FilterApplied, loading, contracts.length, isTableLoading],
+    [isContractPerformance, loading, contracts.length, isTableLoading],
   )
 
   const section3TableLoading = useMemo(
@@ -1697,16 +1691,7 @@ function ContractsPageContent() {
     if (!authReady || !userScopeReady) return
     // Reset to page 1 when filters change
     setCurrentPage(1)
-    if (isContractPerformance && !contractPerfSection3FilterApplied) {
-      setContracts([])
-      setTotalContracts(0)
-      setTotalPages(1)
-      setLoading(false)
-      contractPerfPendingLoadsRef.current = 0
-      setIsTableLoading(false)
-      return
-    }
-    if (isContractPerformance && contractPerfSection3FilterApplied) {
+    if (isContractPerformance) {
       setIsTableLoading(true)
     }
     fetchContracts(1)
@@ -1734,7 +1719,6 @@ function ContractsPageContent() {
     selectedProductTab,
     appliedDrilldownSelection,
     searchTerm,
-    contractPerfSection3FilterApplied,
     summaryCardStatus,
     section3FilterMode,
     perfDashMode,
@@ -1804,15 +1788,6 @@ function ContractsPageContent() {
     const activeUnassignedFilter = unassignedFilter
     try {
       if (!authReady) return
-      if (isContractPerformance && !contractPerfSection3FilterApplied) {
-        setContracts([])
-        setTotalContracts(0)
-        setTotalPages(1)
-        setLoading(false)
-        contractPerfPendingLoadsRef.current = 0
-        setIsTableLoading(false)
-        return
-      }
       if (isContractPerformance) {
         trackContractPerfTableLoad = true
       }
@@ -3757,7 +3732,12 @@ function ContractsPageContent() {
 
         {isContractPerformance && (
           <div className="space-y-3">
-            <h1 className="text-3xl font-bold text-gray-900">Contract Performance</h1>
+            <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
+              <span>Contract Performance</span>
+              {latePerfSummaryLoading ? (
+                <Loader2 className="h-5 w-5 shrink-0 animate-spin text-gray-400" aria-hidden />
+              ) : null}
+            </h1>
             <div className="flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-6 flex-wrap">
                 <div className="flex items-center gap-3">
@@ -3817,21 +3797,6 @@ function ContractsPageContent() {
         )}
 
         {isContractPerformance && (() => {
-          if (latePerfSummaryLoading) {
-            return (
-              <div className="space-y-2">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {[0, 1].map((i) => (
-                    <div key={i} className="rounded-xl border bg-white p-5 shadow-sm animate-pulse">
-                      <div className="h-5 bg-gray-200 rounded w-24 mb-4" />
-                      <div className="h-8 bg-gray-200 rounded w-32 mb-3" />
-                      <div className="h-16 bg-gray-100 rounded" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )
-          }
           const openSelected = summaryCardStatus === 'Open'
           const closeSelected = summaryCardStatus === 'Close'
           const openStatusContractCount =
@@ -3843,7 +3808,7 @@ function ContractsPageContent() {
           const closeTradeAvgDays =
             closeStatusContractCount > 0 ? statusCardSummary.closeAvgDays : null
           return (
-            <div className="space-y-2">
+            <div className={`space-y-2 transition-opacity duration-200 ${latePerfSummaryLoading ? 'opacity-65' : 'opacity-100'}`}>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <button
                   type="button"
@@ -3969,8 +3934,11 @@ function ContractsPageContent() {
                     </button>
                   </div>
                   <div className="flex items-center gap-2">
-                    <CardTitle className="text-base mb-0">
-                      {perfDashMode === 'late' ? 'Late Performance (YTD)' : 'On Time Performance (YTD)'}
+                    <CardTitle className="text-base mb-0 flex items-center gap-2">
+                      <span>{perfDashMode === 'late' ? 'Late Performance (YTD)' : 'On Time Performance (YTD)'}</span>
+                      {latePerfTreeLoading && (activePerformanceTreeForUi as LatePerfApiTreeNode[]).length > 0 ? (
+                        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+                      ) : null}
                     </CardTitle>
                     <ContractPerfDrilldownSectionHelp
                       perfDashMode={perfDashMode}
@@ -3994,45 +3962,11 @@ function ContractsPageContent() {
               </div>
             </CardHeader>
             <CardContent className="pt-2">
-              {latePerfTreeLoading ? (
-                <div className="space-y-3 animate-pulse">
-                  <div className="rounded-xl border bg-white p-4 shadow-sm">
-                    <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-                      <div className="h-5 bg-gray-200 rounded w-52" />
-                      <div className="h-4 bg-gray-100 rounded w-28" />
-                    </div>
-                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
-                      {[0, 1, 2, 3].map((i) => (
-                        <div key={i} className="space-y-2">
-                          <div className="rounded-lg border border-gray-200 px-3 py-2 bg-gray-50">
-                            <div className="h-4 bg-gray-200 rounded w-20 mb-2" />
-                            <div className="h-3 bg-gray-100 rounded w-32" />
-                          </div>
-                          {[0, 1, 2].map((j) => (
-                            <div key={j} className="rounded-lg border border-gray-200 bg-white px-3 py-2">
-                              <div className="h-4 bg-gray-200 rounded w-full mb-2" />
-                              <div className="h-1.5 bg-gray-100 rounded mb-2" />
-                              <div className="flex justify-between gap-2">
-                                <div className="h-3 bg-gray-100 rounded w-12" />
-                                <div className="h-3 bg-gray-100 rounded w-16" />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (activePerformanceTreeForUi as LatePerfApiTreeNode[]).length === 0 ? (
+              {(activePerformanceTreeForUi as LatePerfApiTreeNode[]).length === 0 && !latePerfTreeLoading ? (
                 <div className="text-sm text-gray-500">{perfDashMode === 'late' ? 'No late contracts found in YTD.' : 'No on-time contracts found in YTD.'}</div>
               ) : (
                 <div className="space-y-3">
                   <div className="rounded-xl border bg-white p-4 relative">
-                    {isSection2TreeLoading && (
-                      <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-white/60">
-                        <span className="text-sm font-medium text-gray-600">Updating drilldown tree...</span>
-                      </div>
-                    )}
                     <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
                       <div>
                         <div className="text-sm font-semibold text-gray-900">{perfDashMode === 'late' ? 'Late' : 'On Time'} Performance drilldown</div>
@@ -4071,7 +4005,11 @@ function ContractsPageContent() {
                     </div>
 
                     <div
-                      className={`grid grid-cols-1 lg:grid-cols-4 gap-3 ${isSection2TreeLoading ? 'opacity-50 pointer-events-none cursor-not-allowed' : ''}`}
+                      className={`grid grid-cols-1 lg:grid-cols-4 gap-3 transition-opacity duration-200 ${
+                        isSection2TreeLoading && (activePerformanceTreeForUi as LatePerfApiTreeNode[]).length > 0
+                          ? 'opacity-65 pointer-events-none cursor-not-allowed'
+                          : 'opacity-100'
+                      }`}
                       aria-busy={isSection2TreeLoading}
                     >
                       {([
@@ -4554,10 +4492,6 @@ function ContractsPageContent() {
                     ) : null}
                   </CardTitle>
                   {isContractPerformance ? (
-                    contractPerfSection3FilterApplied ? (
-                    section3TableLoading ? (
-                      <ContractPerfTableSubtitleSkeleton />
-                    ) : (
                     <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                       <span className="whitespace-nowrap tabular-nums text-gray-700">
                         <span className="font-semibold">
@@ -4579,8 +4513,10 @@ function ContractsPageContent() {
                         <span className="whitespace-nowrap text-gray-600 font-medium">
                           Global · {summaryCardStatus}
                         </span>
+                      ) : contractPerfSection3FilterApplied ? (
+                        <span className="whitespace-nowrap text-gray-600 font-medium">Global · Filtered</span>
                       ) : (
-                        <span className="whitespace-nowrap text-gray-600">Global · Select drilldown</span>
+                        <span className="whitespace-nowrap text-gray-600 font-medium">Global · All</span>
                       )}
                       <span className="text-gray-400" aria-hidden>
                         ·
@@ -4589,14 +4525,6 @@ function ContractsPageContent() {
                         Page {currentPage}/{totalPages} · {filteredContracts.length} rows
                       </span>
                     </p>
-                    )
-                    ) : (
-                      <p className="text-xs text-gray-500 mt-1">
-                        Select Source, Product, Open or Close summary, or a drilldown node to load the list.
-                      </p>
-                    )
-                  ) : section3TableLoading ? (
-                    <ContractPerfTableSubtitleSkeleton />
                   ) : (
                     <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                       <span className="whitespace-nowrap tabular-nums text-gray-700">
@@ -4737,7 +4665,7 @@ function ContractsPageContent() {
                     </div>
                   )}
                 </div>
-                {(!isContractPerformance || contractPerfSection3FilterApplied) && totalPages > 1 && (
+                {totalPages > 1 && (
                   <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
                     <Button
                       variant="outline"
@@ -4791,14 +4719,6 @@ function ContractsPageContent() {
             </div>
           </CardHeader>
           <CardContent>
-            {isContractPerformance && !contractPerfSection3FilterApplied ? (
-              <div className="flex flex-col items-center justify-center py-16 px-6 text-center border border-dashed border-gray-200 rounded-lg bg-gray-50/50 min-h-[480px]">
-                <p className="text-sm text-gray-600 max-w-md">
-                  Please select a Source, Product, Open or Close summary card, or apply a Drilldown filter to view
-                  the contract list.
-                </p>
-              </div>
-            ) : (
               <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
               <>
                 {/* Desktop compact table (Contracts + Contract Performance): semantic <table>, zebra on <tr>/<td> */}
@@ -5213,17 +5133,15 @@ function ContractsPageContent() {
 
                       {/* Rows */}
                       <tbody
-                        className={`divide-y divide-gray-200 ${
-                          listFetching && contracts.length > 0 ? 'opacity-65' : 'opacity-100'
+                        className={`divide-y divide-gray-200 transition-opacity duration-200 ${
+                          (listFetching || (isContractPerformance && contractPerfSection3Loading)) &&
+                          contracts.length > 0
+                            ? 'opacity-65'
+                            : 'opacity-100'
                         }`}
                       >
-                        {section3TableLoading ? (
-                          <ContractTableBodySkeleton
-                            columnCount={visibleColumns.length}
-                            rowCount={8}
-                            actionsColMinWidth={isContractPerformance ? 'compact' : 'wide'}
-                          />
-                        ) : sortedContracts.length === 0 ? (
+                        {!(listFetching || (isContractPerformance && contractPerfSection3Loading)) &&
+                        sortedContracts.length === 0 ? (
                           <tr className="bg-white">
                             <td colSpan={visibleColumns.length + 1} className="px-4 py-10 text-center text-gray-500">
                               <p>No contracts found</p>
@@ -5346,9 +5264,13 @@ function ContractsPageContent() {
 
                 {/* Mobile/tablet cards */}
                 <div className="lg:hidden space-y-2">
-                  {section3TableLoading ? (
-                    <ContractPerfTableMobileSkeleton rowCount={6} />
-                  ) : sortedContracts.map((contract) => (
+                  {!(listFetching || (isContractPerformance && contractPerfSection3Loading)) &&
+                  sortedContracts.length === 0 ? (
+                    <div className="rounded-lg border bg-white px-4 py-10 text-center text-sm text-gray-500">
+                      No contracts found
+                    </div>
+                  ) : (
+                  sortedContracts.map((contract) => (
                     <div
                       key={contract.id}
                       className="border rounded-lg hover:bg-gray-50 transition-colors"
@@ -5519,14 +5441,14 @@ function ContractsPageContent() {
                       )}
                     </div>
                   </div>
-                ))}
+                  ))
+                  )}
                 </div>
               </>
               </div>
-            )}
             
             {/* Pagination Controls */}
-            {(!isContractPerformance || contractPerfSection3FilterApplied) && totalPages > 1 && (
+            {totalPages > 1 && (
               <div className="mt-6 flex items-center justify-between border-t pt-4">
                 <div className="text-xs text-gray-500 tabular-nums">
                   Page {currentPage}/{totalPages} · {displayTotalContracts.toLocaleString('en-US')} contracts

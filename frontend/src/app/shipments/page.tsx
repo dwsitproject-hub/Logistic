@@ -28,12 +28,6 @@ import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
-import {
-  ContractPerfTableMobileSkeleton,
-  ContractPerfTableSubtitleSkeleton,
-  ContractTableBodySkeleton,
-} from '@/components/performance/ContractPerfTableSkeleton'
-import { StatusDistributionSkeleton } from '@/components/performance/StatusDistributionSkeleton'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
@@ -1181,9 +1175,11 @@ function ShipmentsPageContent() {
             })
         }, 450)
       } else {
-        console.error('Unexpected response structure:', response.data)
-        setShipments([])
-        setShipmentsSummary(null)
+        console.error('Unexpected response structure:', listEnvelope)
+        if (!hadRows) {
+          setShipments([])
+          setShipmentsSummary(null)
+        }
         setSection1SummaryLoading(false)
         alert('Received unexpected response format from server. Please check console for details.')
       }
@@ -3563,16 +3559,17 @@ function ShipmentsPageContent() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <span>Status Distribution</span>
-              {section1SummaryLoading && shipmentsSummary ? (
+              {section1SummaryLoading ? (
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
               ) : null}
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {section1SummaryLoading && !shipmentsSummary ? (
-              <StatusDistributionSkeleton itemCount={8} variant="shipments" />
-            ) : (
-            <div className="flex w-full min-w-0 items-center justify-start gap-3 overflow-x-auto py-4 px-4 md:gap-6">
+            <div
+              className={`flex w-full min-w-0 items-center justify-start gap-3 overflow-x-auto py-4 px-4 md:gap-6 transition-opacity duration-200 ${
+                section1SummaryLoading && shipmentsSummary ? 'opacity-65' : 'opacity-100'
+              }`}
+            >
               <div className="flex flex-nowrap items-center shrink-0">
               {[
                 { status: 'PLANNED',     label: 'Planned',     color: 'bg-blue-100',   textColor: 'text-blue-800',   badgeColor: 'bg-blue-600',   tooltip: 'Shipment sudah memiliki ETA — minimal satu milestone ETA sudah diinput.' },
@@ -3629,7 +3626,6 @@ function ShipmentsPageContent() {
               })}
               </div>
             </div>
-            )}
           </CardContent>
         </Card>
 
@@ -4214,10 +4210,7 @@ function ShipmentsPageContent() {
                     <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                   ) : null}
                 </CardTitle>
-                {section3TableLoading ? (
-                  <ContractPerfTableSubtitleSkeleton />
-                ) : (
-                  <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                     <span className="whitespace-nowrap tabular-nums text-gray-700">
                       <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> shipments
                     </span>
@@ -4238,7 +4231,6 @@ function ShipmentsPageContent() {
                       </>
                     ) : null}
                   </p>
-                )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="relative">
@@ -4246,7 +4238,7 @@ function ShipmentsPageContent() {
                     variant="outline"
                     size="sm"
                     onClick={() => setShowColumnsMenu(v => !v)}
-                    disabled={section3TableLoading}
+                    disabled={listFetching || section3TableLoading}
                   >
                     <SlidersHorizontal className="h-4 w-4 mr-2" />
                     Columns
@@ -4457,18 +4449,13 @@ function ShipmentsPageContent() {
                         </tr>
                         </thead>
                         <tbody
-                          className={
+                          className={`transition-opacity duration-200 ${
                             listFetching && shipments.length > 0 ? 'opacity-65' : 'opacity-100'
-                          }
+                          }`}
                         >
 
                       {/* Rows */}
-                        {section3TableLoading ? (
-                          <ContractTableBodySkeleton
-                            columnCount={visibleColumns.length + 1}
-                            rowCount={8}
-                          />
-                        ) : sortedShipments.length === 0 ? (
+                        {!listFetching && sortedShipments.length === 0 ? (
                           <tr>
                             <td colSpan={visibleColumns.length + 2} className="px-4 py-10 text-center text-gray-500 bg-white">
                               <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />
@@ -4921,9 +4908,12 @@ function ShipmentsPageContent() {
 
                 {/* Mobile/tablet cards */}
                 <div className="lg:hidden space-y-2">
-                  {section3TableLoading ? (
-                    <ContractPerfTableMobileSkeleton rowCount={6} />
-                  ) : stoGroupedShipments.flatMap((group) => {
+                  {!listFetching && sortedShipments.length === 0 ? (
+                    <div className="rounded-lg border bg-white px-4 py-10 text-center text-sm text-gray-500">
+                      No shipments found
+                    </div>
+                  ) : (
+                  stoGroupedShipments.flatMap((group) => {
                     const isMultiStoGroup = group.rows.length > 1
                     const stoGroupCollapsed = collapsedStoGroupKeys.has(group.stoKey)
                     const nodes: ReactNode[] = []
@@ -5183,7 +5173,8 @@ function ShipmentsPageContent() {
                     )
                     }
                     return nodes
-                  })}
+                  })
+                  )}
                   </div>
 
                 {totalPages > 1 && (
