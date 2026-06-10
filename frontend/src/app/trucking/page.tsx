@@ -700,10 +700,16 @@ function TruckingPageContent() {
   const [bulkCreateSummary, setBulkCreateSummary] = useState<{
     processedRows: number
     operationsCreated: number
+    operationsUpdated?: number
     operationsFailed: number
     succeededRows: number
     rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[]
-    operationFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string }[]
+    operationFailures: {
+      contract_ext_no: string
+      rowNumbers: number[]
+      reason: string
+      operation_ids?: string[]
+    }[]
   } | null>(null)
   const planningFileInputRef = useRef<HTMLInputElement | null>(null)
   const [calendarColumnsOpen, setCalendarColumnsOpen] = useState(false)
@@ -2796,6 +2802,12 @@ function TruckingPageContent() {
                     <div className="text-xs text-muted-foreground">Operations created</div>
                     <div className="text-lg font-semibold tabular-nums text-green-800">{bulkCreateSummary.operationsCreated}</div>
                   </div>
+                  <div className="rounded-md border bg-blue-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Operations updated</div>
+                    <div className="text-lg font-semibold tabular-nums text-blue-800">
+                      {bulkCreateSummary.operationsUpdated ?? 0}
+                    </div>
+                  </div>
                   <div className="rounded-md border bg-red-50 px-3 py-2">
                     <div className="text-xs text-muted-foreground">Operations failed</div>
                     <div className="text-lg font-semibold tabular-nums text-red-800">{bulkCreateSummary.operationsFailed}</div>
@@ -2829,6 +2841,9 @@ function TruckingPageContent() {
                             <span className="text-gray-600"> (rows {f.rowNumbers.join(', ')})</span>
                           ) : null}
                           : {f.reason}
+                          {f.operation_ids?.length ? (
+                            <span className="text-gray-500"> [{f.operation_ids.join(', ')}]</span>
+                          ) : null}
                         </li>
                       ))}
                     </ul>

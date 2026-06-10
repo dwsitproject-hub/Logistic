@@ -27,6 +27,11 @@ import {
   invalidateTruckingListCache,
   resolveTruckingListForRequest,
 } from '../services/truckingList.service';
+import {
+  findActiveTruckingOpsByContractId,
+  formatDuplicateTruckingMessage,
+  resolveContractByExtNoOrId,
+} from '../utils/truckingOperationUniqueness';
 
 let truckingOpIdBackfillChecked = false;
 
@@ -303,6 +308,14 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
     }
 
     const contractId = contractRow.id;
+
+    const existingActive = await findActiveTruckingOpsByContractId(contractId);
+    if (existingActive.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: { message: formatDuplicateTruckingMessage(existingActive) },
+      });
+    }
 
     let finalOperationId =
       operation_id != null && String(operation_id).trim() !== ''
@@ -1398,87 +1411,65 @@ export const bulkCreateTruckingOperations = async (req: AuthRequest, res: Respon
       byContractExt.set(k, list);
     }
 
-    const opFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string }[] = [];
+    const opFailures: {
+      contract_ext_no: string;
+      rowNumbers: number[];
+      reason: string;
+      operation_ids?: string[];
+    }[] = [];
     let operationsCreated = 0;
+    let operationsUpdated = 0;
     let rowsSucceeded = 0;
 
     for (const [, groupLines] of byContractExt) {
       const contractExtNo = groupLines[0].contract_ext_no;
       const rowNumbers = groupLines.map((l) => l.lineNumber);
 
-      // Resolve contract via SAP ext no
-      const contractRes = await query(
-        `SELECT c.id, c.delivery_start_date, c.delivery_end_date
-         FROM trucking_operations t
-         LEFT JOIN contracts c ON t.contract_id = c.id
-         LEFT JOIN LATERAL (
-           SELECT NULLIF(trim(COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No')), '') AS ext_no
-           FROM sap_processed_data spd
-           WHERE spd.contract_number = c.contract_id
-           ORDER BY spd.created_at DESC NULLS LAST LIMIT 1
-         ) ext ON true
-         WHERE trim(upper(COALESCE(ext.ext_no, ''))) = trim(upper($1::text))
-         LIMIT 1`,
-        [contractExtNo],
-      );
-
-      if (contractRes.rows.length === 0) {
-        // Try resolving via contracts.contract_id directly or SAP lookup without existing trucking op
-        const contractDirectRes = await query(
-          `WITH latest_spd AS (
-             SELECT DISTINCT ON (spd.contract_number) spd.contract_number,
-               COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no
-             FROM sap_processed_data spd
-             WHERE spd.contract_number IS NOT NULL
-             ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-           )
-           SELECT c.id, c.delivery_start_date, c.delivery_end_date
-           FROM contracts c
-           LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-           WHERE trim(upper(COALESCE(l.contract_ext_no, ''))) = trim(upper($1::text))
-           LIMIT 1`,
-          [contractExtNo],
-        );
-
-        if (contractDirectRes.rows.length === 0) {
-          opFailures.push({
-            contract_ext_no: contractExtNo,
-            rowNumbers,
-            reason: 'Contract Ext No not found in SAP data. Ensure SAP data has been imported for this contract.',
-          });
-          continue;
-        }
-
-        // Contract found (no existing trucking op yet) — proceed with creation
-        const contract = contractDirectRes.rows[0];
-        try {
-          const ok = await createTruckingFromGroup(contract, contractExtNo, groupLines, rowNumbers, rowParseFailures, opFailures);
-          if (ok) { operationsCreated++; rowsSucceeded += groupLines.length; }
-        } catch (err) {
-          logger.error('createTruckingFromGroup error:', err);
-          opFailures.push({ contract_ext_no: contractExtNo, rowNumbers, reason: 'Internal error creating trucking operation' });
-        }
+      const contract = await resolveContractByExtNoOrId(contractExtNo);
+      if (!contract) {
+        opFailures.push({
+          contract_ext_no: contractExtNo,
+          rowNumbers,
+          reason: 'Contract Ext No not found in SAP data. Ensure SAP data has been imported for this contract.',
+        });
         continue;
       }
 
-      const contract = contractRes.rows[0];
       try {
-        const ok = await createTruckingFromGroup(contract, contractExtNo, groupLines, rowNumbers, rowParseFailures, opFailures);
-        if (ok) { operationsCreated++; rowsSucceeded += groupLines.length; }
+        const outcome = await upsertTruckingDailyFromGroup(
+          contract,
+          contractExtNo,
+          groupLines,
+          rowNumbers,
+          rowParseFailures,
+          opFailures,
+        );
+        if (outcome === 'created') {
+          operationsCreated += 1;
+          rowsSucceeded += groupLines.length;
+        } else if (outcome === 'updated') {
+          operationsUpdated += 1;
+          rowsSucceeded += groupLines.length;
+        }
       } catch (err) {
-        logger.error('createTruckingFromGroup error:', err);
-        opFailures.push({ contract_ext_no: contractExtNo, rowNumbers, reason: 'Internal error creating trucking operation' });
+        logger.error('upsertTruckingDailyFromGroup error:', err);
+        opFailures.push({
+          contract_ext_no: contractExtNo,
+          rowNumbers,
+          reason: 'Internal error saving trucking operation',
+        });
       }
     }
 
     const processedRows = lines.length + rowParseFailures.length;
 
-    if (operationsCreated > 0) invalidateTruckingListCache();
+    if (operationsCreated > 0 || operationsUpdated > 0) invalidateTruckingListCache();
     return res.json({
       success: true,
       data: {
         processedRows,
         operationsCreated,
+        operationsUpdated,
         operationsFailed: opFailures.length,
         succeededRows: rowsSucceeded,
         rowParseFailures,
@@ -1491,16 +1482,47 @@ export const bulkCreateTruckingOperations = async (req: AuthRequest, res: Respon
   }
 };
 
-async function createTruckingFromGroup(
+type BulkTruckingOpFailure = {
+  contract_ext_no: string;
+  rowNumbers: number[];
+  reason: string;
+  operation_ids?: string[];
+};
+
+function resolveTruckingDueWindow(cur: {
+  delivery_start_date?: unknown;
+  delivery_end_date?: unknown;
+  eta_delivery_start_date?: unknown;
+  eta_delivery_end_date?: unknown;
+  eta_trucking_start_date?: unknown;
+  eta_trucking_completion_date?: unknown;
+  trucking_start_date?: unknown;
+  trucking_completion_date?: unknown;
+}): { startRaw: unknown; endRaw: unknown } {
+  return {
+    startRaw:
+      cur.delivery_start_date ??
+      cur.eta_delivery_start_date ??
+      cur.eta_trucking_start_date ??
+      cur.trucking_start_date,
+    endRaw:
+      cur.delivery_end_date ??
+      cur.eta_delivery_end_date ??
+      cur.eta_trucking_completion_date ??
+      cur.trucking_completion_date,
+  };
+}
+
+/** Bulk-create: insert first operation per contract, otherwise update daily deliverables on the single active row. */
+async function upsertTruckingDailyFromGroup(
   contract: { id: string; delivery_start_date?: unknown; delivery_end_date?: unknown },
   contractExtNo: string,
   groupLines: { lineNumber: number; contract_ext_no: string; dateRaw: unknown; qtyRaw: unknown }[],
   rowNumbers: number[],
   rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[],
-  opFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string }[],
-): Promise<boolean> {
-  // Parse daily deliverables from the group rows
-  const dailyRows: { date: string; quantity_delivered: number }[] = [];
+  opFailures: BulkTruckingOpFailure[],
+): Promise<'created' | 'updated' | false> {
+  const dateToQty = new Map<string, { quantity_delivered: number; lineNumber: number }>();
   for (const ln of groupLines) {
     const ds = toIsoDate10FromCell(ln.dateRaw);
     if (!ds) {
@@ -1512,23 +1534,110 @@ async function createTruckingFromGroup(
       rowParseFailures.push({ rowNumber: ln.lineNumber, contract_ext_no: ln.contract_ext_no, reason: 'Invalid quantity' });
       continue;
     }
-    dailyRows.push({ date: ds, quantity_delivered: qty });
+    dateToQty.set(ds, { quantity_delivered: qty, lineNumber: ln.lineNumber });
   }
 
-  if (dailyRows.length === 0) {
+  if (dateToQty.size === 0) {
     opFailures.push({ contract_ext_no: contractExtNo, rowNumbers, reason: 'No valid date/qty rows after parsing' });
     return false;
   }
 
-  const dmy = formatDDMMYYYY(new Date());
-  const seq = await allocateNextSyntheticSequenceDefault('trucking_operations', 'LAND', dmy);
-  const operationId = buildSyntheticOperationId('LAND', dmy, seq);
+  const dailyDeliverablesWithLine = Array.from(dateToQty.entries())
+    .map(([date, v]) => ({
+      date,
+      quantity_delivered: v.quantity_delivered,
+      lineNumber: v.lineNumber,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 
+  const activeOps = await findActiveTruckingOpsByContractId(contract.id);
+
+  if (activeOps.length > 1) {
+    opFailures.push({
+      contract_ext_no: contractExtNo,
+      rowNumbers,
+      reason:
+        'Multiple trucking operations share this contract; merge duplicates or cancel extras before bulk upload',
+      operation_ids: activeOps
+        .map((r) => (r.operation_id && String(r.operation_id).trim()) || r.id)
+        .filter(Boolean),
+    });
+    return false;
+  }
+
+  if (activeOps.length === 1) {
+    const cur = activeOps[0];
+    const { startRaw, endRaw } = resolveTruckingDueWindow(cur);
+    const startS = toIsoDate10FromCell(startRaw);
+    const endS = toIsoDate10FromCell(endRaw);
+    const inWindow =
+      startS && endS
+        ? dailyDeliverablesWithLine.filter((r) => {
+            const ok = r.date >= startS && r.date <= endS;
+            if (!ok) {
+              rowParseFailures.push({
+                rowNumber: r.lineNumber,
+                contract_ext_no: contractExtNo,
+                reason: `date ${r.date} is outside Due Start (${startS}) … Due End (${endS}) and was skipped`,
+              });
+            }
+            return ok;
+          })
+        : dailyDeliverablesWithLine;
+
+    if (inWindow.length === 0) {
+      opFailures.push({
+        contract_ext_no: contractExtNo,
+        rowNumbers,
+        reason:
+          startS && endS
+            ? `All rows are outside Due Start (${startS}) … Due End (${endS}); nothing to upload`
+            : 'Due Start/Due End are required when daily deliverables are provided',
+        operation_ids: cur.operation_id ? [String(cur.operation_id)] : [cur.id],
+      });
+      return false;
+    }
+
+    const dailyDeliverables = inWindow.map(({ date, quantity_delivered }) => ({ date, quantity_delivered }));
+    const dd = normalizeAndValidateDailyDeliverables({
+      daily_deliverables: dailyDeliverables,
+      startRaw,
+      endRaw,
+      maxQtyRaw: cur.quantity_delivered,
+    });
+    if (!dd.ok) {
+      opFailures.push({
+        contract_ext_no: contractExtNo,
+        rowNumbers,
+        reason: dd.message,
+        operation_ids: cur.operation_id ? [String(cur.operation_id)] : [cur.id],
+      });
+      return false;
+    }
+
+    const lastDdDate =
+      dd.rows.length > 0
+        ? dd.rows.reduce((mx: string, r: { date: string }) => (!mx || r.date > mx ? r.date : mx), '')
+        : null;
+
+    await query(
+      `UPDATE trucking_operations
+       SET daily_deliverables = $2::jsonb,
+           last_daily_deliverable_date = $3::date,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1::uuid`,
+      [cur.id, JSON.stringify(dd.rows), lastDdDate],
+    );
+    return 'updated';
+  }
+
+  const dailyRows = dailyDeliverablesWithLine.map(({ date, quantity_delivered }) => ({
+    date,
+    quantity_delivered,
+  }));
   const sortedDates = dailyRows.map((r) => r.date).sort();
   const minDate = sortedDates[0];
   const maxDate = sortedDates[sortedDates.length - 1];
-
-  // Use toIsoDate10FromCell to handle both Date objects and ISO strings from pg
   const etaStart = contract.delivery_start_date
     ? (toIsoDate10FromCell(contract.delivery_start_date) ?? minDate)
     : minDate;
@@ -1536,15 +1645,34 @@ async function createTruckingFromGroup(
     ? (toIsoDate10FromCell(contract.delivery_end_date) ?? maxDate)
     : maxDate;
 
+  const dd = normalizeAndValidateDailyDeliverables({
+    daily_deliverables: dailyRows,
+    startRaw: contract.delivery_start_date ?? etaStart,
+    endRaw: contract.delivery_end_date ?? etaEnd,
+    maxQtyRaw: null,
+  });
+  if (!dd.ok) {
+    opFailures.push({ contract_ext_no: contractExtNo, rowNumbers, reason: dd.message });
+    return false;
+  }
+
+  const dmy = formatDDMMYYYY(new Date());
+  const seq = await allocateNextSyntheticSequenceDefault('trucking_operations', 'LAND', dmy);
+  const operationId = buildSyntheticOperationId('LAND', dmy, seq);
+  const lastDdDate =
+    dd.rows.length > 0
+      ? dd.rows.reduce((mx: string, r: { date: string }) => (!mx || r.date > mx ? r.date : mx), '')
+      : null;
+
   await query(
     `INSERT INTO trucking_operations (
        contract_id, operation_id,
        eta_delivery_start_date, eta_delivery_end_date,
-       status, daily_deliverables
+       status, daily_deliverables, last_daily_deliverable_date
      ) VALUES (
        $1::uuid, $2,
        $3::date, $4::date,
-       $5, $6::jsonb
+       $5, $6::jsonb, $7::date
      )`,
     [
       contract.id,
@@ -1552,10 +1680,11 @@ async function createTruckingFromGroup(
       etaStart,
       etaEnd,
       'PLANNED',
-      JSON.stringify(dailyRows),
+      JSON.stringify(dd.rows),
+      lastDdDate,
     ],
   );
-  return true;
+  return 'created';
 }
 
 export const downloadCargoReadinessTemplate = async (_req: AuthRequest, res: Response) => {
