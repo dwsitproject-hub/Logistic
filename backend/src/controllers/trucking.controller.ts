@@ -373,7 +373,7 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         eta_delivery_start_date, eta_delivery_end_date,
         quantity_sent, quantity_delivered,
         gain_loss_percentage, gain_loss_amount, oa_budget, oa_actual, status,
-        daily_deliverables
+        daily_deliverables, last_daily_deliverable_date
       ) VALUES (
         $1::uuid, $2, $3, $4, $5, $6, $7::date,
         $8::date, $9::date,
@@ -381,7 +381,7 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         $12::date, $13::date,
         $14::numeric, $15::numeric, $16::numeric,
         $17::numeric, $18::numeric, $19::numeric, $20,
-        $21::jsonb
+        $21::jsonb, $22::date
       ) RETURNING *`,
       [
         contractId,
@@ -403,8 +403,9 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         gain_loss_amount || null,
         oa_budget || null,
         oa_actual || null,
-        deriveTruckingStatus(trucking_start_date, trucking_completion_date, cargo_readiness_date),
-        JSON.stringify(dd.rows)
+        status,
+        JSON.stringify(dd.rows),
+        lastDdDate,
       ]
     );
 
