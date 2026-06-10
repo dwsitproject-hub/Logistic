@@ -36,6 +36,13 @@ const fmtQty = (val: string | number) => {
   return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: true })
 }
 
+/** Daily planning quantities in MT — fixed 2 decimal display. */
+const fmtQtyMt = (val: string | number) => {
+  const n = typeof val === 'number' ? val : parseFloat(String(val).replace(/,/g, '').trim())
+  if (!Number.isFinite(n)) return '0.00'
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: true })
+}
+
 /** Legacy per-day UI — restore when manual daily rows are needed again */
 const LEGACY_DAILY_DELIVERABLES_UI = false
 
@@ -381,6 +388,12 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       ? enumerateInclusiveDates(planning.start_date, planning.end_date).length
       : 0
 
+  const planningPerDayMt = (() => {
+    const totalMt = parseFloat(String(planning.total_quantity_mt || '').replace(/,/g, '').trim())
+    if (!Number.isFinite(totalMt) || planningDayCount <= 0) return null
+    return Math.round((totalMt / planningDayCount) * 100) / 100
+  })()
+
   const step1Done = contractValidation.exists
   const step2Done = Boolean(newOperation.location || newOperation.loading_location || newOperation.unloading_location)
   const step3Done = Boolean(contractValidation.contractData?.delivery_start_date)
@@ -473,7 +486,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
               <div className="p-4 space-y-3">
                 <div className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
                   <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
-                  <span><strong>Required:</strong> Contract Ext No &nbsp;•&nbsp; Location, Loading, dan Unloading akan terisi otomatis dari contract</span>
+                  <span><strong>Required:</strong> Contract Ext No &nbsp;•&nbsp; Location, Loading, and Unloading will be filled automatically from the contract</span>
                 </div>
 
                 <div>
@@ -482,7 +495,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       Contract Ext No <span className="text-red-500">*</span>
                     </label>
                     {!initialContractExtNo && (
-                      <span className="text-[10px] text-gray-400">Ketik untuk mencari contract</span>
+                      <span className="text-[10px] text-gray-400">Type to search contract</span>
                     )}
                   </div>
                   <div className="relative">
@@ -501,7 +514,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                           : contractValidation.message && !contractValidation.checking ? 'border-red-500 focus-visible:ring-red-400'
                           : ''
                         }`}
-                        placeholder="Masukkan Contract Ext No..."
+                        placeholder="Enter Contract Ext No..."
                       />
                       {contractValidation.checking && <Loader2 className="h-4 w-4 animate-spin text-gray-400 shrink-0" />}
                       {!contractValidation.checking && contractValidation.exists && <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />}
@@ -646,7 +659,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1.5">
                       Due Date Delivery Start
-                      <span className="ml-1 font-normal text-gray-400">(dari contract)</span>
+                      <span className="ml-1 font-normal text-gray-400">(from contract)</span>
                     </label>
                     <DateInputDdMmYyyy
                       valueIso={cd?.delivery_start_date || ''}
@@ -658,7 +671,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1.5">
                       Due Date Delivery End
-                      <span className="ml-1 font-normal text-gray-400">(dari contract)</span>
+                      <span className="ml-1 font-normal text-gray-400">(from contract)</span>
                     </label>
                     <DateInputDdMmYyyy
                       valueIso={cd?.delivery_end_date || ''}
@@ -670,7 +683,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1.5">
                       Cargo Readiness Date
-                      <span className="ml-1 font-normal text-gray-400">(dari contract)</span>
+                      <span className="ml-1 font-normal text-gray-400">(from contract)</span>
                     </label>
                     <DateInputDdMmYyyy
                       valueIso={cargoReadinessDisplay}
@@ -690,7 +703,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                     <div>
                       <p className="text-xs font-semibold text-gray-700">Daily Planning Deliverables</p>
                       <p className="text-[10px] text-gray-400 mt-0.5">
-                        Total quantity dibagi rata per hari antara Start dan End Date
+                        Total quantity split evenly per day between Start and End Date
                       </p>
                       {cd && Number.isFinite(Number(cd.outstanding_quantity)) && (
                         <p className="text-[10px] text-amber-600 font-medium mt-0.5">
@@ -749,7 +762,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                             const raw = String(planning.total_quantity_mt || '').replace(/,/g, '').trim()
                             const n = parseFloat(raw)
                             if (Number.isFinite(n)) {
-                              setPlanning((prev) => ({ ...prev, total_quantity_mt: fmtQty(n) }))
+                              setPlanning((prev) => ({ ...prev, total_quantity_mt: fmtQtyMt(n) }))
                             }
                           }}
                           onFocus={() => {
@@ -765,12 +778,21 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       </div>
                     </div>
                     {planningDayCount > 0 && (
-                      <div className="flex items-center justify-between mt-3 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mt-3 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs">
                         <span className="text-gray-500">
-                          {planningDayCount} hari — qty harian dibagi rata saat submit
+                          {planningDayCount} days — daily qty split evenly on submit
+                          {planningPerDayMt != null ? (
+                            <span className="ml-1 font-medium tabular-nums text-gray-700">
+                              (~{fmtQtyMt(planningPerDayMt)} MT/day)
+                            </span>
+                          ) : null}
                         </span>
                         <span className="font-semibold tabular-nums text-gray-700">
-                          Total: {planning.total_quantity_mt || '0'} MT
+                          Total:{' '}
+                          {fmtQtyMt(
+                            parseFloat(String(planning.total_quantity_mt || '').replace(/,/g, '').trim()) || 0,
+                          )}{' '}
+                          MT
                         </span>
                       </div>
                     )}
@@ -809,7 +831,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   <div className="p-4">
                     {(newOperation.daily_deliverables || []).length === 0 ? (
                       <div className="text-center py-4 text-sm text-gray-400 italic">
-                        Belum ada daily deliverables. Klik "Add Day" untuk menambahkan.
+                        No daily deliverables yet. Click &ldquo;Add Day&rdquo; to add one.
                       </div>
                     ) : (
                       <div className="space-y-2">
@@ -930,11 +952,11 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   )}
                   {planningDayCount > 0 && (
                     <span className="flex items-center gap-1 rounded-full bg-violet-100 px-2.5 py-1 text-violet-700 font-medium">
-                      {planningDayCount} hari direncanakan
+                      {planningDayCount} days planned
                     </span>
                   )}
                   {!contractValidation.exists && (
-                    <span className="italic text-gray-400">Masukkan Contract Ext No untuk melanjutkan</span>
+                    <span className="italic text-gray-400">Enter Contract Ext No to continue</span>
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">

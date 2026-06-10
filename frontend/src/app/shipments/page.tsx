@@ -30,6 +30,10 @@ import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
+  TableInitialLoadPlaceholder,
+  TableInitialLoadPlaceholderContent,
+} from '@/components/performance/TableInitialLoadPlaceholder'
+import {
   CONTRACT_PERF_TABLE_CELL_PAD,
   CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
@@ -1594,7 +1598,7 @@ function ShipmentsPageContent() {
         allContracts = cRes.data?.data?.contracts ?? []
         allShipmentsForLookup = sRes.data?.data?.shipments ?? []
       } catch {
-        alert('Gagal memuat data referensi. Silakan coba lagi.')
+        alert('Failed to load reference data. Please try again.')
         setUploading(false)
         e.target.value = ''
         return
@@ -1652,7 +1656,7 @@ function ShipmentsPageContent() {
         // Validate PO exists in contracts
         const contract = contractByPo.get(poNumber)
         if (!contract) {
-          errors.push(`Row ${i + 1}: PO Number "${poNumber}" tidak ditemukan di database contracts`)
+          errors.push(`Row ${i + 1}: PO Number "${poNumber}" not found in contracts database`)
           errorCount++
           continue
         }
@@ -1660,7 +1664,7 @@ function ShipmentsPageContent() {
         // Validate port against master data (Vessel Name & Loading Port validation temporarily disabled)
         const rowErrors: string[] = []
         if (row['Discharge Port'] && !portSet.has(row['Discharge Port'].toLowerCase())) {
-          rowErrors.push(`discharge port "${row['Discharge Port']}" tidak ada di Master Port`)
+          rowErrors.push(`discharge port "${row['Discharge Port']}" not found in Master Port`)
         }
         if (rowErrors.length > 0) {
           errors.push(`Row ${i + 1} (PO ${poNumber}): ${rowErrors.join('; ')}`)
@@ -1692,7 +1696,7 @@ function ShipmentsPageContent() {
 
             const shipRes = await api.put(`/shipments/${existingShipment.id}`, updateData)
             if (!shipRes.data.success) {
-              errors.push(`Row ${i + 1}: Gagal update shipment untuk PO ${poNumber}`)
+              errors.push(`Row ${i + 1}: Failed to update shipment for PO ${poNumber}`)
               errorCount++
               continue
             }
@@ -1772,7 +1776,7 @@ function ShipmentsPageContent() {
             if (createRes.data.success) {
               createCount++
             } else {
-              errors.push(`Row ${i + 1}: Gagal buat shipment untuk PO ${poNumber}: ${createRes.data.error?.message || ''}`)
+              errors.push(`Row ${i + 1}: Failed to create shipment for PO ${poNumber}: ${createRes.data.error?.message || ''}`)
               errorCount++
             }
           }
@@ -1787,7 +1791,7 @@ function ShipmentsPageContent() {
       await fetchShipments()
     } catch (error) {
       console.error('Bulk upload error:', error)
-      alert('Gagal memproses file CSV. Periksa format file dan coba lagi.')
+      alert('Failed to process CSV file. Check the file format and try again.')
     } finally {
       setUploading(false)
       e.target.value = ''
@@ -3572,14 +3576,14 @@ function ShipmentsPageContent() {
             >
               <div className="flex flex-nowrap items-center shrink-0">
               {[
-                { status: 'PLANNED',     label: 'Planned',     color: 'bg-blue-100',   textColor: 'text-blue-800',   badgeColor: 'bg-blue-600',   tooltip: 'Shipment sudah memiliki ETA — minimal satu milestone ETA sudah diinput.' },
-                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600', tooltip: 'Shipment sedang diproses — kapal menuju lokasi pemuatan (ATA arrival at loading port).' },
-                { status: 'LOADING',     label: 'Loading',     color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600', tooltip: 'Kapal sedang memuat muatan di pelabuhan asal.' },
-                { status: 'IN_TRANSIT',  label: 'In Transit',  color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600', tooltip: 'Kapal sudah berangkat dan sedang dalam perjalanan ke pelabuhan tujuan.' },
-                { status: 'ARRIVED',     label: 'Arrived',     color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600', tooltip: 'Kapal sudah tiba di pelabuhan tujuan, menunggu proses bongkar.' },
-                { status: 'UNLOADING',   label: 'Unloading',   color: 'bg-cyan-100',   textColor: 'text-cyan-800',   badgeColor: 'bg-cyan-600',   tooltip: 'Muatan sedang dibongkar dari kapal di pelabuhan tujuan.' },
-                { status: 'COMPLETED',   label: 'Completed',   color: 'bg-green-100',  textColor: 'text-green-800',  badgeColor: 'bg-green-600',  tooltip: 'Pengiriman selesai — muatan sudah diterima di tujuan.' },
-                { status: 'CANCELLED',   label: 'Cancelled',   color: 'bg-red-100',    textColor: 'text-red-800',    badgeColor: 'bg-red-600',    tooltip: 'Shipment dibatalkan dan tidak dilanjutkan.' },
+                { status: 'PLANNED',     label: 'Planned',     color: 'bg-blue-100',   textColor: 'text-blue-800',   badgeColor: 'bg-blue-600',   tooltip: 'Shipment has an ETA — at least one ETA milestone has been entered.' },
+                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600', tooltip: 'Shipment in progress — vessel en route to the loading port (ATA arrival at loading port).' },
+                { status: 'LOADING',     label: 'Loading',     color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600', tooltip: 'Vessel is loading cargo at the origin port.' },
+                { status: 'IN_TRANSIT',  label: 'In Transit',  color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600', tooltip: 'Vessel has departed and is en route to the destination port.' },
+                { status: 'ARRIVED',     label: 'Arrived',     color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600', tooltip: 'Vessel has arrived at the destination port, awaiting unloading.' },
+                { status: 'UNLOADING',   label: 'Unloading',   color: 'bg-cyan-100',   textColor: 'text-cyan-800',   badgeColor: 'bg-cyan-600',   tooltip: 'Cargo is being unloaded from the vessel at the destination port.' },
+                { status: 'COMPLETED',   label: 'Completed',   color: 'bg-green-100',  textColor: 'text-green-800',  badgeColor: 'bg-green-600',  tooltip: 'Shipment complete — cargo has been received at destination.' },
+                { status: 'CANCELLED',   label: 'Cancelled',   color: 'bg-red-100',    textColor: 'text-red-800',    badgeColor: 'bg-red-600',    tooltip: 'Shipment cancelled and will not continue.' },
               ].map((statusInfo, index, array) => {
                 const summary = shipmentsSummary?.status
                 const count =
@@ -4455,7 +4459,12 @@ function ShipmentsPageContent() {
                         >
 
                       {/* Rows */}
-                        {!listFetching && sortedShipments.length === 0 ? (
+                        {listFetching && shipments.length === 0 ? (
+                          <TableInitialLoadPlaceholder
+                            colSpan={visibleColumns.length + 2}
+                            icon={Package}
+                          />
+                        ) : !listFetching && sortedShipments.length === 0 ? (
                           <tr>
                             <td colSpan={visibleColumns.length + 2} className="px-4 py-10 text-center text-gray-500 bg-white">
                               <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />
@@ -4676,7 +4685,7 @@ function ShipmentsPageContent() {
                                                 }
                                               }}
                                               className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full bg-white"
-                                              title="Status diturunkan otomatis. Hanya dapat dibatalkan secara manual."
+                                              title="Status lowered automatically. Can only be cancelled manually."
                                             >
                                               <option value={currentStatus}>{shipment.status}</option>
                                               <option value="CANCELLED">CANCELLED</option>
@@ -4908,7 +4917,11 @@ function ShipmentsPageContent() {
 
                 {/* Mobile/tablet cards */}
                 <div className="lg:hidden space-y-2">
-                  {!listFetching && sortedShipments.length === 0 ? (
+                  {listFetching && shipments.length === 0 ? (
+                    <div className="rounded-lg border bg-white">
+                      <TableInitialLoadPlaceholderContent icon={Package} />
+                    </div>
+                  ) : !listFetching && sortedShipments.length === 0 ? (
                     <div className="rounded-lg border bg-white px-4 py-10 text-center text-sm text-gray-500">
                       No shipments found
                     </div>

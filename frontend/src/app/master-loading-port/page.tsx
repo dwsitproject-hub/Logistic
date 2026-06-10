@@ -373,26 +373,26 @@ export default function MasterLoadingPortPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Masuk Alur</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Channel Access</label>
                   <select
                     className="border rounded-md px-3 py-2 w-full text-sm"
                     value={form.masuk_alur || ''}
                     onChange={(e) => handleChange('masuk_alur', e.target.value || null)}
                   >
                     <option value="">Select...</option>
-                    <option value="Ya">Ya</option>
-                    <option value="Tidak">Tidak</option>
+                    <option value="Ya">Yes</option>
+                    <option value="Tidak">No</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Lebar Alur</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Channel Width</label>
                   <Input
                     value={form.lebar_alur || ''}
                     onChange={(e) => handleChange('lebar_alur', e.target.value)}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Jumlah Jembatan</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Bridge Count</label>
                   <Input
                     type="number"
                     value={form.jumlah_jembatan ?? ''}
@@ -402,26 +402,26 @@ export default function MasterLoadingPortPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Jenis Port</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Port Type</label>
                   <select
                     className="border rounded-md px-3 py-2 w-full text-sm"
                     value={form.jenis_port || ''}
                     onChange={(e) => handleChange('jenis_port', e.target.value || null)}
                   >
                     <option value="">Select...</option>
-                    <option value="Umum">Umum</option>
+                    <option value="Umum">General</option>
                     <option value="TUKS">TUKS</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Pemilik Port</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Port Owner</label>
                   <Input
                     value={form.pemilik_port || ''}
                     onChange={(e) => handleChange('pemilik_port', e.target.value)}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Antri Muat (hari)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Loading Queue (days)</label>
                   <Input
                     type="number"
                     value={form.antri_muat_hari ?? ''}
@@ -431,7 +431,7 @@ export default function MasterLoadingPortPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Jumlah Demaraga</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Berth Count</label>
                   <Input
                     type="number"
                     value={form.jumlah_demaraga ?? ''}
@@ -441,7 +441,7 @@ export default function MasterLoadingPortPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Panjang Demaraga</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Berth Length</label>
                   <Input
                     value={form.panjang_demaraga || ''}
                     onChange={(e) => handleChange('panjang_demaraga', e.target.value)}
@@ -462,7 +462,7 @@ export default function MasterLoadingPortPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Siklus Pasang</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Tide Cycle</label>
                   <Input
                     value={form.siklus_pasang || ''}
                     onChange={(e) => handleChange('siklus_pasang', e.target.value)}
@@ -530,17 +530,17 @@ export default function MasterLoadingPortPage() {
                       <th className="text-left px-3 py-2 font-medium">Region</th>
                       <th className="text-left px-3 py-2 font-medium">Port</th>
                       <th className="text-left px-3 py-2 font-medium">Coordinate</th>
-                      <th className="text-left px-3 py-2 font-medium">Masuk Alur</th>
-                      <th className="text-left px-3 py-2 font-medium">Lebar Alur</th>
-                      <th className="text-left px-3 py-2 font-medium">Jumlah Jembatan</th>
-                      <th className="text-left px-3 py-2 font-medium">Jenis Port</th>
-                      <th className="text-left px-3 py-2 font-medium">Pemilik Port</th>
-                      <th className="text-left px-3 py-2 font-medium">Antri Muat (hari)</th>
-                      <th className="text-left px-3 py-2 font-medium">Jumlah Demaraga</th>
-                      <th className="text-left px-3 py-2 font-medium">Panjang Demaraga</th>
+                      <th className="text-left px-3 py-2 font-medium">Channel Access</th>
+                      <th className="text-left px-3 py-2 font-medium">Channel Width</th>
+                      <th className="text-left px-3 py-2 font-medium">Bridge Count</th>
+                      <th className="text-left px-3 py-2 font-medium">Port Type</th>
+                      <th className="text-left px-3 py-2 font-medium">Port Owner</th>
+                      <th className="text-left px-3 py-2 font-medium">Loading Queue (days)</th>
+                      <th className="text-left px-3 py-2 font-medium">Berth Count</th>
+                      <th className="text-left px-3 py-2 font-medium">Berth Length</th>
                       <th className="text-left px-3 py-2 font-medium">Draft</th>
                       <th className="text-left px-3 py-2 font-medium">DWT</th>
-                      <th className="text-left px-3 py-2 font-medium">Siklus Pasang</th>
+                      <th className="text-left px-3 py-2 font-medium">Tide Cycle</th>
                       <th className="text-left px-3 py-2 font-medium">Loading Method</th>
                       <th className="text-left px-3 py-2 font-medium">Loading Rate (Kg/hour)</th>
                       <th className="text-left px-3 py-2 font-medium">Shipper</th>

@@ -25,6 +25,10 @@ import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
+  TableInitialLoadPlaceholder,
+  TableInitialLoadPlaceholderContent,
+} from '@/components/performance/TableInitialLoadPlaceholder'
+import {
   CONTRACT_PERF_TABLE_CELL_PAD,
   CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
@@ -75,6 +79,14 @@ function formatTruckingQtyMt(value: unknown): string {
   if (kg === null) return '—'
   if (kg === 0) return '0 MT'
   return formatQtyMtFromKg(kg)
+}
+
+/** Daily planning calendar date cells — always 2 decimal places in MT (stored qty is kg). */
+function formatDailyPlanningQtyMtFromKg(value: unknown): string {
+  const kg = parseTruckingQtyKg(value)
+  if (kg === null) return '—'
+  const mt = kg / 1000
+  return `${mt.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MT`
 }
 
 /** Aligns with list `formatNumber` / `formatKg`: comma thousands, period decimals. */
@@ -583,7 +595,9 @@ function CalendarDeliverablesTable({
                             className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-gray-50 text-right text-xs text-gray-700 hover:bg-white disabled:opacity-60"
                             title={`Click to edit ${date}`}
                           >
-                            {draftValue ? formatTruckingQtyMt(Number(String(draftValue).replace(/,/g, ''))) : '0 MT'}
+                            {formatDailyPlanningQtyMtFromKg(
+                              draftValue ? Number(String(draftValue).replace(/,/g, '')) : 0,
+                            )}
                           </button>
                         )}
                       </td>
@@ -3096,7 +3110,12 @@ function TruckingPageContent() {
                           listFetching && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
                         }`}
                       >
-                        {!listFetching && sortedOperations.length === 0 ? (
+                        {listFetching && truckingOperations.length === 0 ? (
+                          <TableInitialLoadPlaceholder
+                            colSpan={visibleColumns.length + 1}
+                            icon={Truck}
+                          />
+                        ) : !listFetching && sortedOperations.length === 0 ? (
                           <tr className="bg-white">
                             <td colSpan={visibleColumns.length + 1} className="px-4 py-10 text-center text-gray-500">
                               <Truck className="h-16 w-16 text-gray-400 mx-auto mb-4" />
@@ -3224,7 +3243,11 @@ function TruckingPageContent() {
                     listFetching && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
                   }`}
                 >
-                  {!listFetching && sortedOperations.length === 0 ? (
+                  {listFetching && truckingOperations.length === 0 ? (
+                    <div className="border rounded-lg bg-white">
+                      <TableInitialLoadPlaceholderContent icon={Truck} />
+                    </div>
+                  ) : !listFetching && sortedOperations.length === 0 ? (
                     <div className="text-center py-10 text-gray-500 border rounded-lg bg-white">
                       <Truck className="h-12 w-12 text-gray-400 mx-auto mb-3" />
                       <p>No trucking operations found</p>
@@ -3616,7 +3639,7 @@ export default function TruckingPage() {
         <Layout>
           <div className="space-y-6">
             <h1 className="text-3xl font-bold">Trucking Operations</h1>
-            <p className="text-sm text-gray-400">Memuat…</p>
+            <p className="text-sm text-gray-400">Loading…</p>
           </div>
         </Layout>
       }

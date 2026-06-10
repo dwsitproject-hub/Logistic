@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { GripVertical, Loader2, Search, SlidersHorizontal, X } from 'lucide-react'
+import { GripVertical, Loader2, Package, Search, SlidersHorizontal, X } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
@@ -60,6 +60,7 @@ import {
   operationalTableColumnClass,
 } from '@/lib/operationalTableLayout'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
+import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
 import {
   applySection3PortDisplay,
   resolveShippingPerfDischargePort,
@@ -2223,7 +2224,12 @@ function ShippingPerformancePageContent() {
                       summaryFetching && rows.length > 0 ? 'opacity-65' : 'opacity-100'
                     }`}
                   >
-                    {!summaryFetching && tableRows.length === 0 ? (
+                    {(summaryLoading || summaryFetching) && rows.length === 0 ? (
+                      <TableInitialLoadPlaceholder
+                        colSpan={tableColumnKeys.length || 1}
+                        icon={Package}
+                      />
+                    ) : !summaryFetching && tableRows.length === 0 ? (
                       <tr className="bg-white">
                         <td colSpan={tableColumnKeys.length || 1} className="px-4 py-10 text-center text-sm text-gray-500">
                           No data found

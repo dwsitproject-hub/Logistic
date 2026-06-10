@@ -956,7 +956,7 @@ export function AddShipmentModal({
                   <>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="text-xs font-semibold text-gray-700">PO Number <span className="text-red-500">*</span></label>
-                      <span className="text-[10px] text-gray-400">Ketik PO Number lalu tekan Enter atau klik Add PO</span>
+                      <span className="text-[10px] text-gray-400">Type PO Number then press Enter or click Add PO</span>
                     </div>
                     <div
                       className={`relative ${showContractSuggestions && contractSuggestions.length > 0 ? 'z-[100]' : 'z-0'}`}

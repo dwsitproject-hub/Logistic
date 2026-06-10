@@ -37,6 +37,10 @@ import {
 import { formatDateDMY, toSortableTimestamp } from '@/lib/dateFormat'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
+import {
+  TableInitialLoadPlaceholder,
+  TableInitialLoadPlaceholderContent,
+} from '@/components/performance/TableInitialLoadPlaceholder'
 import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
 import {
   canViewContractPerformancePage,
@@ -5140,8 +5144,16 @@ function ContractsPageContent() {
                             : 'opacity-100'
                         }`}
                       >
-                        {!(listFetching || (isContractPerformance && contractPerfSection3Loading)) &&
-                        sortedContracts.length === 0 ? (
+                        {(listFetching ||
+                          (isContractPerformance && contractPerfSection3Loading)) &&
+                        contracts.length === 0 ? (
+                          <TableInitialLoadPlaceholder
+                            colSpan={visibleColumns.length + 1}
+                            icon={FileText}
+                          />
+                        ) : !(listFetching ||
+                            (isContractPerformance && contractPerfSection3Loading)) &&
+                          sortedContracts.length === 0 ? (
                           <tr className="bg-white">
                             <td colSpan={visibleColumns.length + 1} className="px-4 py-10 text-center text-gray-500">
                               <p>No contracts found</p>
@@ -5264,8 +5276,15 @@ function ContractsPageContent() {
 
                 {/* Mobile/tablet cards */}
                 <div className="lg:hidden space-y-2">
-                  {!(listFetching || (isContractPerformance && contractPerfSection3Loading)) &&
-                  sortedContracts.length === 0 ? (
+                  {(listFetching ||
+                    (isContractPerformance && contractPerfSection3Loading)) &&
+                  contracts.length === 0 ? (
+                    <div className="rounded-lg border bg-white">
+                      <TableInitialLoadPlaceholderContent icon={FileText} />
+                    </div>
+                  ) : !(listFetching ||
+                      (isContractPerformance && contractPerfSection3Loading)) &&
+                    sortedContracts.length === 0 ? (
                     <div className="rounded-lg border bg-white px-4 py-10 text-center text-sm text-gray-500">
                       No contracts found
                     </div>
@@ -5834,7 +5853,7 @@ function ContractsPageContent() {
                           <div className="text-xs text-green-600 mt-1">Over Delivered</div>
                         )}
                         {selectedContract.outstanding_quantity > 0 && (
-                          <div className="text-xs text-red-500 mt-1">Belum selesai</div>
+                          <div className="text-xs text-red-500 mt-1">Incomplete</div>
                         )}
                       </div>
                       <div className="p-3 bg-gray-50 rounded">

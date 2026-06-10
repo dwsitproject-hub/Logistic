@@ -32,6 +32,7 @@ import {
 } from '@/lib/oilLossEligibility'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
+import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
   CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
@@ -1254,7 +1255,7 @@ export default function OilLossPage() {
   return (
     <Layout>
       <div className="space-y-6">
-        <div className="space-y-4">
+        <div className="space-y-3">
           <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
             <span>Year-to-Date (YTD) Oil Loss Summary</span>
             {dataFetching && rows.length > 0 ? (
@@ -1262,7 +1263,7 @@ export default function OilLossPage() {
             ) : null}
           </h2>
           <div
-            className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 transition-opacity duration-200 ${
+            className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 transition-opacity duration-200 ${
               dataFetching && rows.length > 0 ? 'opacity-65' : 'opacity-100'
             }`}
           >
@@ -1281,77 +1282,62 @@ export default function OilLossPage() {
             return (
               <div
                 key={card.key}
-                className="flex min-h-full flex-col rounded-xl border bg-white p-4 sm:p-5 shadow-sm"
+                className="flex min-h-full flex-col rounded-lg border bg-white px-3 py-2.5 shadow-sm"
               >
-                <div className="mb-4 flex items-start gap-2">
-                  <span className="text-3xl font-bold leading-none tracking-tight text-gray-900">
+                <div className="mb-1.5 flex items-center gap-1.5">
+                  <span className="text-lg font-bold leading-none tracking-tight text-gray-900">
                     {card.label}
                   </span>
                   <FieldHelp text={`Formula: ${card.formula}`} />
                 </div>
 
-                <div className="space-y-3">
-                  <div>
-                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-                      Total
+                <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500 leading-none">
+                      Total (MT)
                     </div>
-                    <div className="grid grid-cols-2 gap-x-3 gap-y-2">
-                      <div className="min-w-0">
-                        <div className="text-[11px] font-medium uppercase tracking-wide text-gray-500 leading-snug">
-                          Total Oil Loss (MT)
-                        </div>
-                        <div
-                          className={`mt-0.5 text-lg font-semibold leading-tight tabular-nums ${
-                            showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalMt, 'primary')
-                          }`}
-                        >
-                          {showBlockingLoad ? '…' : formatOilLossTotalMt(totalMt)}
-                        </div>
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                          Total Oil Loss (%)
-                        </div>
-                        <div
-                          className={`mt-0.5 text-lg font-semibold leading-tight tabular-nums ${
-                            showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalPct, 'primary')
-                          }`}
-                        >
-                          {showBlockingLoad ? '…' : formatOilLossTotalPct(totalPct)}
-                        </div>
-                      </div>
+                    <div
+                      className={`mt-0.5 text-base font-semibold leading-tight tabular-nums ${
+                        showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalMt, 'primary')
+                      }`}
+                    >
+                      {showBlockingLoad ? '…' : formatOilLossTotalMt(totalMt)}
                     </div>
                   </div>
-
-                  <div className="border-t border-gray-100 pt-3">
-                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-                      Average
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500 leading-none">
+                      Total (%)
                     </div>
-                    <div className="grid grid-cols-2 gap-x-3 gap-y-2">
-                      <div className="min-w-0">
-                        <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400 leading-snug">
-                          Avg Oil Loss (MT)
-                        </div>
-                        <div
-                          className={`mt-0.5 text-sm font-medium leading-tight tabular-nums ${
-                            showBlockingLoad ? 'text-gray-300' : oilLossValueTone(avgMt, 'secondary')
-                          }`}
-                        >
-                          {showBlockingLoad ? '…' : formatOilLossAvgMt(avgMt)}
-                        </div>
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">
-                          Avg Oil Loss (%)
-                        </div>
-                        <div
-                          className={`mt-0.5 text-sm font-medium leading-tight tabular-nums ${
-                            showBlockingLoad ? 'text-gray-300' : oilLossValueTone(avgPct, 'secondary')
-                          }`}
-                        >
-                          {showBlockingLoad ? '…' : formatOilLossAvgPct(avgPct)}
-                        </div>
-                      </div>
+                    <div
+                      className={`mt-0.5 text-base font-semibold leading-tight tabular-nums ${
+                        showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalPct, 'primary')
+                      }`}
+                    >
+                      {showBlockingLoad ? '…' : formatOilLossTotalPct(totalPct)}
+                    </div>
+                  </div>
+                  <div className="min-w-0 border-t border-gray-100 pt-1.5">
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400 leading-none">
+                      Avg (MT)
+                    </div>
+                    <div
+                      className={`mt-0.5 text-sm font-medium leading-tight tabular-nums ${
+                        showBlockingLoad ? 'text-gray-300' : oilLossValueTone(avgMt, 'secondary')
+                      }`}
+                    >
+                      {showBlockingLoad ? '…' : formatOilLossAvgMt(avgMt)}
+                    </div>
+                  </div>
+                  <div className="min-w-0 border-t border-gray-100 pt-1.5">
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400 leading-none">
+                      Avg (%)
+                    </div>
+                    <div
+                      className={`mt-0.5 text-sm font-medium leading-tight tabular-nums ${
+                        showBlockingLoad ? 'text-gray-300' : oilLossValueTone(avgPct, 'secondary')
+                      }`}
+                    >
+                      {showBlockingLoad ? '…' : formatOilLossAvgPct(avgPct)}
                     </div>
                   </div>
                 </div>
@@ -1709,7 +1695,12 @@ export default function OilLossPage() {
                           (dataFetching || viewTransitionLoading) && rows.length > 0 ? 'opacity-65' : 'opacity-100'
                         }`}
                       >
-                        {!dataFetching && !viewTransitionLoading && filteredRows.length === 0 ? (
+                        {(loading || dataFetching) && rows.length === 0 ? (
+                          <TableInitialLoadPlaceholder
+                            colSpan={visibleColumns.length || 1}
+                            icon={Droplets}
+                          />
+                        ) : !dataFetching && !viewTransitionLoading && filteredRows.length === 0 ? (
                           <tr className="bg-white">
                             <td
                               colSpan={visibleColumns.length || 1}

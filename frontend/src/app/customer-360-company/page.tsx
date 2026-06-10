@@ -251,9 +251,9 @@ export default function Customer360CompanyPage() {
                       )}
                     </div>
                   </div>
-                  {/* Jumlah Kontrak */}
+                  {/* Contract count */}
                   <div className="flex items-start gap-3 p-3 bg-gray-50 rounded">
-                    <span className="text-xs text-gray-500 w-32 shrink-0 pt-0.5">Jumlah Kontrak</span>
+                    <span className="text-xs text-gray-500 w-32 shrink-0 pt-0.5">Contract Count</span>
                     <span className="text-sm font-medium text-gray-800">
                       {g.jumlah_pks != null ? g.jumlah_pks.toLocaleString() : '—'}
                     </span>
