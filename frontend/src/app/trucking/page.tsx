@@ -81,12 +81,33 @@ function formatTruckingQtyMt(value: unknown): string {
   return formatQtyMtFromKg(kg)
 }
 
-/** Daily planning calendar date cells — always 2 decimal places in MT (stored qty is kg). */
-function formatDailyPlanningQtyMtFromKg(value: unknown): string {
-  const kg = parseTruckingQtyKg(value)
-  if (kg === null) return '—'
+/** API daily_deliverables.quantity_delivered is kg; calendar drafts/edits are MT. */
+function kgToDailyPlanningMtDraft(kg: number): string {
+  if (!Number.isFinite(kg) || kg <= 0) return ''
   const mt = kg / 1000
-  return `${mt.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MT`
+  const rounded = Math.round(mt * 100) / 100
+  return String(rounded)
+}
+
+function dailyPlanningMtToKg(mt: number): number {
+  return Math.round(mt * 1000 * 100) / 100
+}
+
+/** Parse MT qty from calendar cell draft (user input). */
+function parseDailyPlanningMtDraft(raw: string): number | 'invalid' {
+  const trimmed = raw.trim()
+  if (trimmed === '') return 0
+  const n = Number(String(raw).replace(/,/g, ''))
+  if (!Number.isFinite(n) || n < 0) return 'invalid'
+  return n
+}
+
+/** Format MT draft for display (no unit suffix — legend above table). */
+function formatDailyPlanningQtyMtDisplay(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '0.00'
+  const n = Number(String(value).replace(/,/g, '').trim())
+  if (!Number.isFinite(n)) return '—'
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 /** Aligns with list `formatNumber` / `formatKg`: comma thousands, period decimals. */
@@ -184,19 +205,11 @@ function buildCalendarCellDrafts(rows: TruckingCalendarRow[], month: Date): Reco
     )
     for (let d = 1; d <= daysInMonth; d++) {
       const date = `${yyyy}-${String(mm + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-      const qty = byDate.get(date) || 0
-      drafts[`${r.id}:${date}`] = qty ? String(qty) : ''
+      const qtyKg = byDate.get(date) || 0
+      drafts[`${r.id}:${date}`] = kgToDailyPlanningMtDraft(qtyKg)
     }
   }
   return drafts
-}
-
-function parseCalendarDraftQty(raw: string): number | 'invalid' {
-  const trimmed = raw.trim()
-  if (trimmed === '') return 0
-  const n = Number(String(raw).replace(/,/g, ''))
-  if (!Number.isFinite(n) || n < 0) return 'invalid'
-  return n
 }
 
 function isDateInCalendarMonth(dateIso: string, month: Date): boolean {
@@ -236,9 +249,9 @@ function buildRowDeliverablesFromDrafts(
   for (let d = 1; d <= daysInMonth; d++) {
     const date = `${yyyy}-${String(mm + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
     const key = `${row.id}:${date}`
-    const qty = parseCalendarDraftQty(drafts[key] ?? '')
-    if (qty === 'invalid') throw new Error(`Invalid quantity on ${date}`)
-    if (qty > 0) {
+    const qtyMt = parseDailyPlanningMtDraft(drafts[key] ?? '')
+    if (qtyMt === 'invalid') throw new Error(`Invalid quantity on ${date}`)
+    if (qtyMt > 0) {
       if (!isDateInDueWindow(row, date)) {
         const bounds = getRowDueDateBounds(row)
         throw new Error(
@@ -247,7 +260,7 @@ function buildRowDeliverablesFromDrafts(
             : `Date ${date} is outside the allowed due delivery window`,
         )
       }
-      inMonth.push({ date, quantity_delivered: qty })
+      inMonth.push({ date, quantity_delivered: dailyPlanningMtToKg(qtyMt) })
     }
   }
   return [...outsideMonth, ...inMonth].sort((a, b) => (a.date || '').localeCompare(b.date || ''))
@@ -397,6 +410,7 @@ function CalendarDeliverablesTable({
         <div className="text-center py-10 text-gray-500">No trucking operations in this month window</div>
       ) : (
         <>
+        <p className="text-xs text-gray-500 mb-2">Daily quantity values are in MT.</p>
         <div ref={scrollTopRef} className="overflow-x-auto border rounded-md bg-white">
           <div className="h-3" style={{ width: `${2000 + daysInMonth * 48}px` }} />
         </div>
@@ -595,9 +609,9 @@ function CalendarDeliverablesTable({
                             className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-gray-50 text-right text-xs text-gray-700 hover:bg-white disabled:opacity-60"
                             title={`Click to edit ${date}`}
                           >
-                            {formatDailyPlanningQtyMtFromKg(
-                              draftValue ? Number(String(draftValue).replace(/,/g, '')) : 0,
-                            )}
+                            {draftValue
+                              ? formatDailyPlanningQtyMtDisplay(draftValue)
+                              : '0.00'}
                           </button>
                         )}
                       </td>
@@ -920,12 +934,12 @@ function TruckingPageContent() {
         const key = `${r.id}:${date}`
         const raw = calendarCellDrafts[key] ?? ''
         if (!dirtyRowIds.has(r.id)) continue
-        const qty = parseCalendarDraftQty(raw)
-        if (qty === 'invalid') {
+        const qtyMt = parseDailyPlanningMtDraft(raw)
+        if (qtyMt === 'invalid') {
           alert(`Invalid quantity for ${r.operation_id || r.id} on ${formatDateDMY(date)}. Use numbers >= 0.`)
           return
         }
-        if (qty > 0 && bounds && !isDateInDueWindow(r, date)) {
+        if (qtyMt > 0 && bounds && !isDateInDueWindow(r, date)) {
           alert(
             `${r.operation_id || r.id}: ${formatDateDMY(date)} is outside the due delivery window (${formatDateDMY(bounds.start)} – ${formatDateDMY(bounds.end)}). Remove qty on that day or adjust Due End on the contract.`,
           )
@@ -2542,7 +2556,7 @@ function TruckingPageContent() {
                 <div>
                   <CardTitle className="text-base flex flex-wrap items-center gap-2">
                     Daily Planning Deliverables — Calendar
-                    <Badge variant="outline" className="text-[10px]">Unit: Kg</Badge>
+                    <Badge variant="outline" className="text-[10px]">Daily qty: MT</Badge>
                   </CardTitle>
                   <div className="text-xs text-gray-600 mt-1 max-w-xl">
                     Shows operations that overlap the selected month (due delivery / trucking dates). Edit cells or upload CSV/Excel (Contract Ext No, date, quantity) — same validation as the website (due date range, quantity caps).

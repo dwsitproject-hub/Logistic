@@ -90,12 +90,18 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   onClose,
   onCreated,
   initialContractExtNo,
+  initialContractId,
+  initialPoNumber,
 }: {
   open: boolean
   onClose: () => void
   onCreated: () => void
   /** When opening from Contracts page, prefill Contract Ext No and validate */
   initialContractExtNo?: string | null
+  /** Business contract_id for validation when ext no differs from contract_id */
+  initialContractId?: string | null
+  /** PO from Contracts page — shown in Section 1 before / alongside validation */
+  initialPoNumber?: string | null
 }) {
   const [creating, setCreating] = useState(false)
 
@@ -196,7 +202,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
             checking: false,
             exists: false,
             contractData: null,
-            message: 'Contract number does not exist',
+            message: response.data.message || 'Contract Ext No does not exist',
           })
         }
       }
@@ -206,7 +212,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         checking: false,
         exists: false,
         contractData: null,
-        message: 'Error validating contract number',
+        message: 'Error validating Contract Ext No',
       })
     }
   }, [])
@@ -249,12 +255,15 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
 
   useEffect(() => {
     if (!open) return
-    const raw = initialContractExtNo?.trim()
-    if (!raw) return
-    setNewOperation((prev) => ({ ...prev, contract_number: raw }))
-    setContractSearchTerm(raw)
-    void validateContractNumber(raw)
-  }, [open, initialContractExtNo, validateContractNumber])
+    const display = initialContractExtNo?.trim()
+    const validateKey = initialContractId?.trim() || display
+    if (!display && !validateKey) return
+    if (display) {
+      setNewOperation((prev) => ({ ...prev, contract_number: display }))
+      setContractSearchTerm(display)
+    }
+    if (validateKey) void validateContractNumber(validateKey)
+  }, [open, initialContractExtNo, initialContractId, validateContractNumber])
 
   const handleSelectContractSuggestion = async (c: any) => {
     const label = c.contract_ext_no || c.contract_id
@@ -356,6 +365,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     try {
       const payload = {
         ...newOperation,
+        trucking_start_date: planning.start_date || null,
+        trucking_completion_date: planning.end_date || null,
         quantity_sent: newOperation.quantity_sent ? parseFloat(newOperation.quantity_sent) : null,
         quantity_delivered: totalKg,
         gain_loss_percentage: newOperation.gain_loss_percentage ? parseFloat(newOperation.gain_loss_percentage) : null,
@@ -398,6 +409,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   const step2Done = Boolean(newOperation.location || newOperation.loading_location || newOperation.unloading_location)
   const step3Done = Boolean(contractValidation.contractData?.delivery_start_date)
   const cd = contractValidation.contractData
+  const poDisplay = (cd?.po_number || initialPoNumber || '').trim() || '—'
   const cargoReadinessDisplay =
     newOperation.cargo_readiness_date ||
     (cd?.cargo_readiness_date ? String(cd.cargo_readiness_date).slice(0, 10) : '')
@@ -566,7 +578,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       {[
                         { label: 'Contract Ext No', value: cd.contract_ext_no || cd.contract_id },
                         { label: 'Contract ID', value: cd.contract_id || '—' },
-                        { label: 'STO Number', value: cd.sto_number || '—' },
+                        { label: 'PO', value: poDisplay },
                       ].map((f) => (
                         <div key={f.label} className="px-3 py-2">
                           <div className="text-[10px] font-medium uppercase tracking-wide text-green-600">{f.label}</div>
@@ -576,6 +588,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                     </div>
                     <div className="grid grid-cols-2 md:grid-cols-3 divide-x divide-green-100 px-0">
                       {[
+                        { label: 'STO Number', value: cd.sto_number || '—' },
                         { label: 'Supplier', value: cd.supplier || '—' },
                         { label: 'Buyer', value: cd.buyer || '—' },
                         { label: 'Product', value: cd.product || '—' },

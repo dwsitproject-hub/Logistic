@@ -6279,6 +6279,16 @@ function ContractsPageContent() {
               ? contractLogisticsUi.contract.contract_ext_no || contractLogisticsUi.contract.contract_id
               : null
           }
+          initialContractId={
+            contractLogisticsUi?.kind === 'truck-create'
+              ? contractLogisticsUi.contract.contract_id
+              : null
+          }
+          initialPoNumber={
+            contractLogisticsUi?.kind === 'truck-create'
+              ? contractLogisticsUi.contract.po_numbers || contractLogisticsUi.contract.po_number
+              : null
+          }
         />
         <AddShipmentModal
           open={contractLogisticsUi?.kind === 'ship-create'}

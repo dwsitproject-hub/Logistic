@@ -19,8 +19,8 @@ import {
   sqlTruckingQuantitySentCoalesce,
 } from '../utils/truckingQuantitySql';
 import {
+  truckingPageListScopeWhereSql,
   truckingPageSapStoTypeTForContractWhereSql,
-  truckingPageSapStoTypeTWhereSql,
   truckingSapStoTypeTSapCteClause,
 } from '../utils/truckingStoTypeSql';
 import {
@@ -210,7 +210,7 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
        LEFT JOIN contracts c ON t.contract_id = c.id
        LEFT JOIN shipments s ON t.shipment_id = s.id
        WHERE t.id = $1
-         ${truckingPageSapStoTypeTWhereSql}`,
+         ${truckingPageListScopeWhereSql}`,
       [id]
     );
 
@@ -256,6 +256,7 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
       gain_loss_amount,
       oa_budget,
       oa_actual,
+      status: statusInput,
       daily_deliverables
     } = req.body;
 
@@ -343,6 +344,24 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
     if (!dd.ok) {
       return res.status(400).json({ success: false, error: { message: dd.message } });
     }
+
+    const allowedCreateStatuses = new Set([
+      'PLANNED',
+      'IN_TRANSIT',
+      'ARRIVED',
+      'UNLOADING',
+      'COMPLETED',
+      'CANCELLED',
+    ]);
+    const normalizedStatus = String(statusInput ?? '').trim().toUpperCase();
+    const status = allowedCreateStatuses.has(normalizedStatus)
+      ? normalizedStatus
+      : deriveTruckingStatus(trucking_start_date, trucking_completion_date, cargo_readiness_date);
+
+    const lastDdDate =
+      dd.rows.length > 0
+        ? dd.rows.reduce((max, row) => ((row.date || '') > max ? row.date : max), dd.rows[0].date)
+        : null;
 
     // Insert new trucking operation
     const result = await query(
@@ -437,7 +456,6 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
            OR c.contract_id = $1
            OR COALESCE(l.contract_ext_no, '') = $1
         )
-        ${truckingPageSapStoTypeTForContractWhereSql}
         ORDER BY
           (COALESCE(c.po_number, '') = $1) DESC,
           (c.contract_id = $1) DESC,
@@ -448,6 +466,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       SELECT
         c.id,
         c.contract_id,
+        c.po_number,
         l.contract_ext_no,
         c.sto_number,
         c.supplier,
@@ -459,6 +478,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         c.delivery_start_date,
         c.delivery_end_date,
         c.cargo_readiness_date,
+        c.transport_mode,
         c.plant_code,
         mp.plant_name,
         mp.company_name AS plant_company_name,
@@ -493,7 +513,17 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       return res.json({
         success: true,
         exists: false,
-        message: 'Contract number does not exist',
+        message: 'Contract Ext No does not exist',
+      });
+    }
+
+    const row = result.rows[0] as { transport_mode?: string | null };
+    if (String(row.transport_mode ?? '').trim().toUpperCase() === 'SEA') {
+      return res.json({
+        success: true,
+        exists: false,
+        message:
+          'Trucking operations cannot be created for SEA-only contracts. Use Shipments for sea logistics, or set transport mode to MIX/LAND.',
       });
     }
 
@@ -506,7 +536,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
     logger.error('Validate contract number error:', error);
     return res.status(500).json({
       success: false,
-      error: { message: 'Failed to validate contract number' },
+      error: { message: 'Failed to validate Contract Ext No' },
     });
   }
 };
@@ -789,7 +819,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
           AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
           AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
         )
-        ${truckingPageSapStoTypeTWhereSql}
+        ${truckingPageListScopeWhereSql}
         AND
         COALESCE(
           c.delivery_start_date,

@@ -145,6 +145,13 @@ function formatNumber(num: number | string) {
   })
 }
 
+/** DD/MM/YYYY for SAP delivery reference; explicit fallback when SAP has no date. */
+function formatSapDeliveryDate(dateStr: string | null | undefined): string {
+  if (dateStr == null || String(dateStr).trim() === '') return 'Not specified in SAP'
+  const formatted = formatDateDMY(dateStr)
+  return formatted === '-' ? 'Not specified in SAP' : formatted
+}
+
 function generateOperationId(contractId: string): string {
   return `OP-${contractId}-${Date.now().toString().slice(-8)}`
 }
@@ -813,6 +820,24 @@ export function AddShipmentModal({
   const step2Done = Boolean(newShipment.vesselName.trim() || selectedTransportMode === 'land')
   const step3Done = etaDetails.some((b) => etaDetailHasAnyDate(b))
 
+  const contractDeliveryReferences = useMemo(
+    () =>
+      newShipment.contractNumbers
+        .map((contractId) => {
+          const validation = contractValidations[contractId]
+          const data = validation?.contractData
+          if (!validation?.exists || !data) return null
+          return {
+            contractId,
+            label: String(data.po_number || data.contract_id || contractId).trim(),
+            deliveryStart: data.delivery_start_date as string | null | undefined,
+            deliveryEnd: data.delivery_end_date as string | null | undefined,
+          }
+        })
+        .filter((row): row is NonNullable<typeof row> => row != null),
+    [newShipment.contractNumbers, contractValidations],
+  )
+
   if (!open) return null
 
   return (
@@ -1355,6 +1380,34 @@ export function AddShipmentModal({
               {step3Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
             </div>
             <div className="p-4 space-y-3">
+              {contractDeliveryReferences.length > 0 ? (
+                <div className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                  <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
+                  <div className="min-w-0 space-y-1.5">
+                    <p className="font-medium text-blue-900">Official contract delivery timeframe (from SAP)</p>
+                    {contractDeliveryReferences.map((ref) => (
+                      <div key={ref.contractId} className="space-y-0.5">
+                        {contractDeliveryReferences.length > 1 ? (
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-blue-700/80">
+                            PO {ref.label}
+                          </p>
+                        ) : null}
+                        <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+                          <span>
+                            <span className="font-semibold">Due Date Delivery (Start):</span>{' '}
+                            {formatSapDeliveryDate(ref.deliveryStart)}
+                          </span>
+                          <span>
+                            <span className="font-semibold">Due Date Delivery (End):</span>{' '}
+                            {formatSapDeliveryDate(ref.deliveryEnd)}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-medium text-gray-500">ETA dates are optional — fill in as available</p>
                 {(selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') &&

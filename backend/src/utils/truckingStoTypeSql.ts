@@ -56,8 +56,65 @@ export function buildTruckingSapStoTypeTExistsSql(): string {
   )`;
 }
 
-/** AND-prefixed WHERE fragment for trucking list/calendar queries. */
+/** AND-prefixed WHERE fragment for trucking list/calendar queries (STO Type T only). */
 export const truckingPageSapStoTypeTWhereSql = `AND ${buildTruckingSapStoTypeTExistsSql()}`;
+
+/** Effective Sea/Land from contract row with SAP fallback (matches Contracts page). */
+export function contractEffectiveSeaLandExpr(contractAlias = 'c'): string {
+  return `UPPER(TRIM(COALESCE(
+    NULLIF(TRIM(${contractAlias}.transport_mode), ''),
+    (
+      SELECT COALESCE(
+        spd.data->'contract'->>'transport_mode',
+        spd.data->'contract'->>'sea_land',
+        spd.data->'raw'->>'Sea / Land',
+        spd.data->'raw'->>'Sea_Land'
+      )
+      FROM sap_processed_data spd
+      WHERE TRIM(spd.contract_number) = TRIM((${contractAlias}).contract_id::text)
+      ORDER BY spd.created_at DESC NULLS LAST
+      LIMIT 1
+    ),
+    ''
+  )))`;
+}
+
+/** Latest SAP STO Type is null/empty for the contract. */
+export function buildLatestSapStoTypeNullForContractSql(contractAlias = 'c'): string {
+  return `(
+    SELECT NULLIF(TRIM(${sapStoTypeNormalizedExpr('spd')}), '')
+    FROM sap_processed_data spd
+    WHERE TRIM(spd.contract_number) = TRIM((${contractAlias}).contract_id::text)
+    ORDER BY spd.created_at DESC NULLS LAST
+    LIMIT 1
+  ) IS NULL`;
+}
+
+/**
+ * Fallback when SAP STO Type is null: include when Sea/Land is LAND or MIX.
+ * Covers manually created trucking on LAND contracts without SAP STO Type T.
+ */
+export function buildTruckingLandMixStoTypeNullFallbackSql(contractAlias = 'c'): string {
+  const seaLand = contractEffectiveSeaLandExpr(contractAlias);
+  return `(
+    ${buildLatestSapStoTypeNullForContractSql(contractAlias)}
+    AND (${seaLand} LIKE 'LAND%' OR ${seaLand} LIKE 'MIX%')
+  )`;
+}
+
+/**
+ * Trucking page scope (Section 1 KPIs through table/calendar):
+ * SAP STO Type T OR (STO Type null + Sea/Land LAND/MIX).
+ */
+export function buildTruckingPageListScopeSql(): string {
+  return `(
+    ${buildTruckingSapStoTypeTExistsSql()}
+    OR ${buildTruckingLandMixStoTypeNullFallbackSql('c')}
+  )`;
+}
+
+/** AND-prefixed WHERE fragment for trucking list, calendar, and get-by-id. */
+export const truckingPageListScopeWhereSql = `AND ${buildTruckingPageListScopeSql()}`;
 
 /** Contract has at least one SAP row with STO Type 'T' (create modal / suggestions). */
 export function buildSapStoTypeTExistsForContractSql(contractIdSql = 'c.contract_id'): string {

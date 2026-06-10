@@ -17,7 +17,7 @@ import {
   sqlTruckingQuantitySentCoalesce,
 } from '../utils/truckingQuantitySql';
 import {
-  truckingPageSapStoTypeTWhereSql,
+  truckingPageListScopeWhereSql,
   truckingSapStoTypeTSapCteClause,
 } from '../utils/truckingStoTypeSql';
 
@@ -62,7 +62,7 @@ export interface TruckingListResponseData {
 
 const ROW_CACHE = new Map<string, { rows: TruckingListRow[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v1';
+const CACHE_VERSION = 'trucking-list-v3';
 const MAX_CACHE_ENTRIES = 40;
 
 const SORT_FIELD_BY_KEY: Record<string, string> = {
@@ -204,19 +204,24 @@ export function buildTruckingListSummaryFromRows(rows: TruckingListRow[]) {
     const truckingStart = row.trucking_start_date;
     const truckingCompletion = row.trucking_completion_date;
 
-    if (!isCancelled && !hasDateValue(truckingCompletion) && !hasDateValue(truckingStart)) {
+    if (isCancelled) {
+      cancelled += 1;
+      continue;
+    }
+
+    if (status === 'PLANNED') {
       planned += 1;
-    }
-    if (!isCancelled && !hasDateValue(truckingCompletion) && hasDateValue(truckingStart)) {
+    } else if (!hasDateValue(truckingCompletion) && !hasDateValue(truckingStart)) {
+      planned += 1;
+    } else if (!hasDateValue(truckingCompletion) && hasDateValue(truckingStart)) {
       inProgress += 1;
+    } else if (hasDateValue(truckingCompletion)) {
+      completed += 1;
     }
+
     if (status === 'LOADING') loading += 1;
     if (status === 'IN_TRANSIT') inTransit += 1;
     if (status === 'UNLOADING') unloading += 1;
-    if (!isCancelled && hasDateValue(truckingCompletion)) {
-      completed += 1;
-    }
-    if (isCancelled) cancelled += 1;
   }
 
   return {
@@ -397,7 +402,7 @@ export function buildTruckingListQuery(req: AuthRequest): TruckingListBuiltQuery
           AND UPPER(NULLIF(TRIM(COALESCE(b2b.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
           AND NULLIF(TRIM(COALESCE(b2b.contract_reference_po_raw, '')), '') IS NOT NULL
         )
-        ${truckingPageSapStoTypeTWhereSql}
+        ${truckingPageListScopeWhereSql}
     `;
 
   const queryParams: unknown[] = [];

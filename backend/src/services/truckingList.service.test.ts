@@ -10,6 +10,11 @@ describe('truckingList.service', () => {
   it('buildTruckingListSummaryFromRows mirrors SQL status partition counts', () => {
     const rows: TruckingListRow[] = [
       { status: 'PLANNED', trucking_start_date: null, trucking_completion_date: null },
+      {
+        status: 'PLANNED',
+        trucking_start_date: '2026-06-01',
+        trucking_completion_date: '2026-06-30',
+      },
       { status: 'IN_TRANSIT', trucking_start_date: '2025-01-01', trucking_completion_date: null },
       { status: 'LOADING', trucking_start_date: '2025-01-02', trucking_completion_date: null },
       { status: 'COMPLETED', trucking_start_date: '2025-01-01', trucking_completion_date: '2025-01-10' },
