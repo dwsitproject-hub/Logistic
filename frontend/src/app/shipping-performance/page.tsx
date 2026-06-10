@@ -5,12 +5,13 @@ import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { canViewShippingPerformancePage, usePermissions } from '@/components/PermissionsContext'
 import api from '@/lib/api'
+import { buildCacheKey, cachedGet, peekCache } from '@/lib/clientDataCache'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { GripVertical, Search, SlidersHorizontal, X } from 'lucide-react'
+import { GripVertical, Loader2, Search, SlidersHorizontal, X } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
@@ -960,7 +961,8 @@ function ShippingPerformancePageContent() {
   const canViewPage = canViewShippingPerformancePage(perms)
   const [rows, setRows] = useState<ShippingPerformanceRow[]>([])
   const [summaryLoading, setSummaryLoading] = useState(false)
-  const section3TableLoading = summaryLoading
+  const [summaryFetching, setSummaryFetching] = useState(false)
+  const section3TableLoading = summaryLoading && rows.length === 0
   const [authReady, setAuthReady] = useState(false)
 
   useEffect(() => {
@@ -1029,26 +1031,38 @@ function ShippingPerformancePageContent() {
     return () => window.clearInterval(interval)
   }, [])
 
-  const buildShippingPerfFetchParams = useCallback(() => {
-    const params = new URLSearchParams()
-    params.append('scope', 'ytd')
-    params.append('_ts', String(Date.now()))
-    return params
-  }, [])
+  const shippingPerfListUrl = '/shipments/performance?scope=ytd'
 
   const fetchShippingPerformanceDashboard = useCallback(async () => {
-    const params = buildShippingPerfFetchParams().toString()
+    const cacheKey = buildCacheKey('GET', shippingPerfListUrl)
+    const cached = peekCache<{ data?: ShippingPerformanceRow[] }>(cacheKey)
+    const hadRows = cached && Array.isArray(cached.data) && cached.data.length > 0
+    if (hadRows && cached?.data) {
+      setRows(cached.data)
+    }
     try {
-      setSummaryLoading(true)
-      const rowsResp = await api.get(`/shipments/performance?${params}`, { timeout: 120000 })
-      setRows(Array.isArray(rowsResp.data?.data) ? rowsResp.data.data : [])
+      if (!hadRows) setSummaryLoading(true)
+      setSummaryFetching(true)
+      const { data, revalidating } = await cachedGet(
+        cacheKey,
+        () => api.get(shippingPerfListUrl, { timeout: 120000 }).then((r) => r.data),
+        {
+          onRevalidate: (fresh) => {
+            setRows(Array.isArray(fresh?.data) ? fresh.data : [])
+            setSummaryFetching(false)
+          },
+        },
+      )
+      setRows(Array.isArray(data?.data) ? data.data : [])
+      if (!revalidating) setSummaryFetching(false)
     } catch (error) {
       console.error('Failed to load shipping performance dashboard:', error)
-      setRows([])
+      if (!hadRows) setRows([])
+      setSummaryFetching(false)
     } finally {
       setSummaryLoading(false)
     }
-  }, [buildShippingPerfFetchParams])
+  }, [shippingPerfListUrl])
 
   const fetchStartedRef = useRef(false)
 
@@ -1578,13 +1592,18 @@ function ShippingPerformancePageContent() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Shipping Performance</h1>
+            <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
+              <span>Shipping Performance</span>
+              {summaryFetching && rows.length > 0 ? (
+                <Loader2 className="h-5 w-5 shrink-0 animate-spin text-gray-400" aria-hidden />
+              ) : null}
+            </h1>
           </div>
         </div>
 
         {/* Section 1: Summary Cards */}
         {(() => {
-          if (summaryLoading) {
+          if (summaryLoading && rows.length === 0) {
             return (
               <div className="space-y-2">
                 <div className="flex items-center justify-end">
@@ -1727,7 +1746,7 @@ function ShippingPerformancePageContent() {
             </div>
           </CardHeader>
           <CardContent className="pt-2">
-            {summaryLoading ? (
+            {summaryLoading && rows.length === 0 ? (
               <div className="rounded-xl border bg-white p-6 animate-pulse">
                 <div className="h-5 bg-gray-200 rounded w-48 mb-4" />
                 <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
@@ -2042,7 +2061,7 @@ function ShippingPerformancePageContent() {
               </div>
               <div className="flex flex-wrap items-center gap-2 ml-auto">
               <div ref={columnsMenuRef} className="relative">
-                <Button variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)} disabled={section3TableLoading}>
+                <Button variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)} disabled={summaryFetching || section3TableLoading}>
                   <SlidersHorizontal className="h-4 w-4 mr-2" />
                   Columns
                 </Button>
@@ -2129,7 +2148,7 @@ function ShippingPerformancePageContent() {
               </div>
               {totalPages > 1 && (
                 <div className="flex flex-wrap items-center gap-1">
-                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1 || section3TableLoading}>
+                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1 || summaryFetching || section3TableLoading}>
                     Previous
                   </Button>
                   {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
@@ -2139,12 +2158,12 @@ function ShippingPerformancePageContent() {
                     else if (currentPage >= totalPages - 2) { pageNum = totalPages - 4 + i }
                     else { pageNum = currentPage - 2 + i }
                     return (
-                      <Button key={pageNum} variant={currentPage === pageNum ? 'default' : 'outline'} size="sm" onClick={() => handlePageChange(pageNum)} disabled={section3TableLoading} className="min-w-[36px]">
+                      <Button key={pageNum} variant={currentPage === pageNum ? 'default' : 'outline'} size="sm" onClick={() => handlePageChange(pageNum)} disabled={summaryFetching || section3TableLoading} className="min-w-[36px]">
                         {pageNum}
                       </Button>
                     )
                   })}
-                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages || section3TableLoading}>
+                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages || summaryFetching || section3TableLoading}>
                     Next
                   </Button>
                   <span className="text-xs text-gray-500 ml-1 tabular-nums">
@@ -2249,7 +2268,11 @@ function ShippingPerformancePageContent() {
                       })}
                     </tr>
                   </thead>
-                  <tbody className={SHIPPING_PERF_TABLE_BODY_CLASS}>
+                  <tbody
+                    className={`${SHIPPING_PERF_TABLE_BODY_CLASS} ${
+                      summaryFetching && rows.length > 0 ? 'opacity-65' : 'opacity-100'
+                    }`}
+                  >
                     {section3TableLoading ? (
                       <ContractTableBodySkeleton
                         columnCount={tableColumnKeys.length || 1}

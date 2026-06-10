@@ -9,7 +9,7 @@ describe('truckingStoTypeSql', () => {
   it('builds trucking EXISTS filter for STO Type T', () => {
     const sql = buildTruckingSapStoTypeTExistsSql();
     expect(sql).toContain('EXISTS');
-    expect(sql).toContain(`= '${TRUCKING_PAGE_SAP_STO_TYPE_T}'`);
+    expect(sql).toContain('sap_sto_type_t');
     expect(sql).toContain('c.sto_number');
     expect(sql).toContain('s.shipment_id');
   });

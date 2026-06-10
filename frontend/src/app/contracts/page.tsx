@@ -7,9 +7,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, HelpCircle, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, HelpCircle, Loader2, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import api from '@/lib/api'
+import { buildCacheKey, cachedGet } from '@/lib/clientDataCache'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
@@ -1060,6 +1061,7 @@ function ContractsPageContent() {
   }, [isContractPerformance, perms.loaded, perms.byKey, perms.userRole, router])
   const [contracts, setContracts] = useState<Contract[]>([])
   const [loading, setLoading] = useState(true)
+  const [listFetching, setListFetching] = useState(false)
   const [authReady, setAuthReady] = useState(false)
   // Search should apply only on Enter / Apply (not per keystroke)
   const [searchDraft, setSearchDraft] = useState('')
@@ -1324,16 +1326,16 @@ function ContractsPageContent() {
     () =>
       isContractPerformance &&
       contractPerfSection3FilterApplied &&
-      (loading || isTableLoading),
-    [isContractPerformance, contractPerfSection3FilterApplied, loading, isTableLoading],
+      ((loading && contracts.length === 0) || isTableLoading),
+    [isContractPerformance, contractPerfSection3FilterApplied, loading, contracts.length, isTableLoading],
   )
 
   const section3TableLoading = useMemo(
     () =>
       isContractPerformance
         ? contractPerfSection3Loading
-        : loading,
-    [isContractPerformance, contractPerfSection3Loading, loading],
+        : loading && contracts.length === 0,
+    [isContractPerformance, contractPerfSection3Loading, loading, contracts.length],
   )
 
   const contractsTableScope = useMemo(
@@ -1815,7 +1817,8 @@ function ContractsPageContent() {
         trackContractPerfTableLoad = true
       }
       if (trackContractPerfTableLoad) startContractPerfTableLoad()
-      setLoading(true)
+      if (contracts.length === 0) setLoading(true)
+      setListFetching(true)
       const params = new URLSearchParams()
       params.append('page', page.toString())
       params.append('limit', contractsPerPage.toString())
@@ -1912,7 +1915,41 @@ function ContractsPageContent() {
         search: params.get('search'),
       })
 
-      const response = await api.get(`/contracts?${params.toString()}`)
+      const listUrl = `/contracts?${params.toString()}`
+      const listCacheKey = buildCacheKey('GET', listUrl)
+      const applyContractsEnvelope = (envelope: {
+        data?: { contracts?: Contract[]; pagination?: { total: number; totalPages: number; page: number } }
+      }) => {
+        const loadedContracts: Contract[] = envelope?.data?.contracts || []
+        setContracts(loadedContracts)
+        if (envelope?.data?.pagination) {
+          setTotalContracts(envelope.data.pagination.total)
+          setTotalPages(envelope.data.pagination.totalPages)
+          setCurrentPage(envelope.data.pagination.page)
+        }
+        const b2bFlags = [...new Set(loadedContracts.map((c) => c.b2b_flag).filter((v): v is string => typeof v === 'string' && v.length > 0))].sort()
+        if (b2bFlags.length > 0) setAvailableB2bFlags((prev) => [...new Set([...prev, ...b2bFlags])].sort())
+        const products = [...new Set(loadedContracts.map((c) => c.product).filter((v): v is string => typeof v === 'string' && v.length > 0))].sort()
+        if (products.length > 0) setAvailableProducts((prev) => [...new Set([...prev, ...products])].sort())
+        return loadedContracts
+      }
+
+      const { data: responseData, revalidating } = await cachedGet(
+        listCacheKey,
+        () => api.get(listUrl).then((r) => r.data),
+        {
+          onRevalidate: (fresh) => {
+            if (fetchGen !== contractsFetchGenRef.current) return
+            const loadedContracts = applyContractsEnvelope(fresh)
+            console.log('[Contracts] fetchContracts revalidated', {
+              fetchGen,
+              page,
+              rows: loadedContracts.length,
+            })
+            setListFetching(false)
+          },
+        },
+      )
       if (fetchGen !== contractsFetchGenRef.current) {
         console.log('[Contracts] Ignoring stale fetch response', {
           fetchGen,
@@ -1923,36 +1960,23 @@ function ContractsPageContent() {
         return
       }
 
-      const loadedContracts: Contract[] = response.data?.data?.contracts || []
-      setContracts(loadedContracts)
-
-      // Update pagination state
-      if (response.data.data.pagination) {
-        setTotalContracts(response.data.data.pagination.total)
-        setTotalPages(response.data.data.pagination.totalPages)
-        setCurrentPage(response.data.data.pagination.page)
-      }
+      const loadedContracts = applyContractsEnvelope(responseData)
 
       console.log('[Contracts] fetchContracts applied', {
         fetchGen,
         page,
         unassigned: activeUnassignedFilter,
-        total: response.data.data.pagination?.total,
+        total: responseData?.data?.pagination?.total,
         rows: loadedContracts.length,
       })
-      
-      // Extract unique B2B flags from contracts
-      // Use fresh response data; state updates are async.
-      const b2bFlags = [...new Set(loadedContracts.map(c => c.b2b_flag).filter((v): v is string => typeof v === 'string' && v.length > 0))].sort()
-      if (b2bFlags.length > 0) setAvailableB2bFlags(prev => [...new Set([...prev, ...b2bFlags])].sort())
-      const products = [...new Set(loadedContracts.map(c => c.product).filter((v): v is string => typeof v === 'string' && v.length > 0))].sort()
-      if (products.length > 0) setAvailableProducts(prev => [...new Set([...prev, ...products])].sort())
+      if (!revalidating) setListFetching(false)
     } catch (error) {
       console.error('Failed to fetch contracts:', error)
       const status = (error as any)?.response?.status
       // 401 is handled by axios interceptor (redirects to /login)
       if (status === 401 || status === 403) return
       alert('Failed to load contracts. Please try again.')
+      if (fetchGen === contractsFetchGenRef.current) setListFetching(false)
     } finally {
       if (trackContractPerfTableLoad) finishContractPerfTableLoad()
       if (fetchGen !== contractsFetchGenRef.current) return
@@ -1969,22 +1993,36 @@ function ContractsPageContent() {
       return
     }
     const gen = ++cardSummaryFetchGenRef.current
+    const summaryUrl = `/contracts/late-performance/summary?${query}`
+    const summaryCacheKey = buildCacheKey('GET', summaryUrl)
     try {
-      setLatePerfSummaryLoading(true)
-      const summaryResp = await api.get(`/contracts/late-performance/summary?${query}`)
+      if (!statusCardSummaryRef.current) setLatePerfSummaryLoading(true)
+      const { data, revalidating } = await cachedGet(
+        summaryCacheKey,
+        () => api.get(summaryUrl).then((r) => r.data),
+        {
+          onRevalidate: (fresh) => {
+            if (gen !== cardSummaryFetchGenRef.current) return
+            const next = fresh?.data?.statusCardSummary as StatusCardSummary | undefined
+            if (!next) return
+            statusCardSummaryRef.current = next
+            setStatusCardSummary(next)
+            setLatePerfSummaryLoading(false)
+          },
+        },
+      )
       if (gen !== cardSummaryFetchGenRef.current) return
-      const next = summaryResp.data?.data?.statusCardSummary as StatusCardSummary | undefined
-      if (!next) return
-      statusCardSummaryRef.current = next
-      setStatusCardSummary(next)
+      const next = data?.data?.statusCardSummary as StatusCardSummary | undefined
+      if (next) {
+        statusCardSummaryRef.current = next
+        setStatusCardSummary(next)
+      }
+      if (!revalidating) setLatePerfSummaryLoading(false)
     } catch (e) {
       if (gen !== cardSummaryFetchGenRef.current) return
       console.error('Failed to load late performance summary:', e)
       setStatusCardSummary(statusCardSummaryRef.current)
-    } finally {
-      if (gen === cardSummaryFetchGenRef.current) {
-        setLatePerfSummaryLoading(false)
-      }
+      setLatePerfSummaryLoading(false)
     }
   }, [authReady, userScopeReady, isContractPerformance, cardSummaryRequestKey, contractPerfToolbarGlobal])
 
@@ -4499,16 +4537,21 @@ function ContractsPageContent() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div>
-                  <CardTitle>
-                    {unassignedFilter === 'sea'
-                      ? 'SEA Contracts Without Shipments'
-                      : unassignedFilter === 'land'
-                      ? 'LAND Contracts Without Trucking'
-                      : unassignedFilter === 'mix'
-                      ? 'MIX Contracts Without Shipment or Trucking'
-                      : isContractPerformance
-                      ? 'Contract Performance'
-                      : 'All Contracts'}
+                  <CardTitle className="flex items-center gap-2">
+                    <span>
+                      {unassignedFilter === 'sea'
+                        ? 'SEA Contracts Without Shipments'
+                        : unassignedFilter === 'land'
+                        ? 'LAND Contracts Without Trucking'
+                        : unassignedFilter === 'mix'
+                        ? 'MIX Contracts Without Shipment or Trucking'
+                        : isContractPerformance
+                        ? 'Contract Performance'
+                        : 'All Contracts'}
+                    </span>
+                    {listFetching ? (
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+                    ) : null}
                   </CardTitle>
                   {isContractPerformance ? (
                     contractPerfSection3FilterApplied ? (
@@ -4604,7 +4647,7 @@ function ContractsPageContent() {
                     variant="outline"
                     size="sm"
                     onClick={() => setShowColumnsMenu(v => !v)}
-                    disabled={section3TableLoading}
+                    disabled={listFetching || section3TableLoading}
                   >
                     <SlidersHorizontal className="h-4 w-4 mr-2" />
                     Columns
@@ -4700,7 +4743,7 @@ function ContractsPageContent() {
                       variant="outline"
                       size="sm"
                       onClick={() => handlePageChange(currentPage - 1)}
-                      disabled={currentPage === 1 || section3TableLoading}
+                      disabled={currentPage === 1 || listFetching || section3TableLoading}
                     >
                       Previous
                     </Button>
@@ -4725,7 +4768,7 @@ function ContractsPageContent() {
                             variant={currentPage === pageNum ? "default" : "outline"}
                             size="sm"
                             onClick={() => handlePageChange(pageNum)}
-                            disabled={section3TableLoading}
+                            disabled={listFetching || section3TableLoading}
                             className="min-w-[40px]"
                           >
                             {pageNum}
@@ -4738,7 +4781,7 @@ function ContractsPageContent() {
                       variant="outline"
                       size="sm"
                       onClick={() => handlePageChange(currentPage + 1)}
-                      disabled={currentPage === totalPages || section3TableLoading}
+                      disabled={currentPage === totalPages || listFetching || section3TableLoading}
                     >
                       Next
                     </Button>
@@ -5169,7 +5212,11 @@ function ContractsPageContent() {
                       </thead>
 
                       {/* Rows */}
-                      <tbody className="divide-y divide-gray-200">
+                      <tbody
+                        className={`divide-y divide-gray-200 ${
+                          listFetching && contracts.length > 0 ? 'opacity-65' : 'opacity-100'
+                        }`}
+                      >
                         {section3TableLoading ? (
                           <ContractTableBodySkeleton
                             columnCount={visibleColumns.length}
@@ -5489,7 +5536,7 @@ function ContractsPageContent() {
                     variant="outline"
                     size="sm"
                     onClick={() => handlePageChange(currentPage - 1)}
-                    disabled={currentPage === 1 || section3TableLoading}
+                    disabled={currentPage === 1 || listFetching || section3TableLoading}
                   >
                     Previous
                   </Button>
@@ -5514,7 +5561,7 @@ function ContractsPageContent() {
                           variant={currentPage === pageNum ? "default" : "outline"}
                           size="sm"
                           onClick={() => handlePageChange(pageNum)}
-                          disabled={section3TableLoading}
+                          disabled={listFetching || section3TableLoading}
                           className="min-w-[40px]"
                         >
                           {pageNum}
@@ -5527,7 +5574,7 @@ function ContractsPageContent() {
                     variant="outline"
                     size="sm"
                     onClick={() => handlePageChange(currentPage + 1)}
-                    disabled={currentPage === totalPages || section3TableLoading}
+                    disabled={currentPage === totalPages || listFetching || section3TableLoading}
                   >
                     Next
                   </Button>

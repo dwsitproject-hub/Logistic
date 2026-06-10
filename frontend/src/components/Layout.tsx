@@ -11,6 +11,8 @@ import { LogOut, Menu, X, BookOpen } from 'lucide-react'
 import { PermissionsProvider, usePermissions } from '@/components/PermissionsContext'
 import { NAV_ITEMS } from '@/lib/navigationConfig'
 import { filterNavigationItems, isPathAccessible } from '@/lib/navigationAccess'
+import { clearClientDataCache } from '@/lib/clientDataCache'
+import { prefetchNavigationPage } from '@/lib/pagePrefetch'
 
 type UserLite = {
   id?: string
@@ -27,6 +29,7 @@ function LayoutChrome({
   sidebarOpen,
   setSidebarOpen,
   handleLogout,
+  onNavHover,
 }: {
   children: React.ReactNode
   user: UserLite
@@ -36,6 +39,7 @@ function LayoutChrome({
   sidebarOpen: boolean
   setSidebarOpen: (v: boolean | ((p: boolean) => boolean)) => void
   handleLogout: () => void
+  onNavHover: (href: string) => void
 }) {
   const { startTour } = useAppTour()
   const pageTitle = navigation.find((item) => item.href === pathname)?.name || 'KLIP'
@@ -62,6 +66,8 @@ function LayoutChrome({
               <Link
                 key={item.name}
                 href={item.href}
+                prefetch={true}
+                onMouseEnter={() => onNavHover(item.href)}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
                   isActive ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100'
                 }`}
@@ -123,9 +129,14 @@ function LayoutWithPermissions({
   const perms = usePermissions()
 
   const handleLogout = () => {
+    clearClientDataCache()
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     router.push('/login')
+  }
+
+  const handleNavHover = (href: string) => {
+    prefetchNavigationPage(href)
   }
 
   const filteredNavigation = filterNavigationItems(NAV_ITEMS, user.role, perms)
@@ -158,6 +169,7 @@ function LayoutWithPermissions({
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
           handleLogout={handleLogout}
+          onNavHover={handleNavHover}
         >
           {children}
         </LayoutChrome>

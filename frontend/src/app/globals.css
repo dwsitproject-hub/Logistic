@@ -237,5 +237,40 @@
     min-width: min-content;
     max-width: none;
   }
+
+  /* Trucking page — progressive table loading (row-level shimmer, not per-cell) */
+  @keyframes klip-trucking-row-shimmer {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  .klip-trucking-table--loading tbody {
+    position: relative;
+  }
+
+  .klip-trucking-loading-row {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .klip-trucking-loading-row::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(148, 163, 184, 0.12) 45%,
+      rgba(148, 163, 184, 0.12) 55%,
+      transparent 100%
+    );
+    transform: translateX(-100%);
+    animation: klip-trucking-row-shimmer 2s ease-in-out infinite;
+    pointer-events: none;
+  }
 }
 

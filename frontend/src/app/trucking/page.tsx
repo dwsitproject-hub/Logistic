@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Search, Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
+import { buildCacheKey, cachedGet } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
@@ -22,12 +23,6 @@ import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
-import {
-  ContractPerfTableMobileSkeleton,
-  ContractPerfTableSubtitleSkeleton,
-  ContractTableBodySkeleton,
-} from '@/components/performance/ContractPerfTableSkeleton'
-import { StatusDistributionSkeleton } from '@/components/performance/StatusDistributionSkeleton'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
@@ -609,7 +604,8 @@ function CalendarDeliverablesTable({
 function TruckingPageContent() {
   const searchParams = useSearchParams()
   const [truckingOperations, setTruckingOperations] = useState<TruckingOperation[]>([])
-  const [loading, setLoading] = useState(true)
+  /** Stale-while-revalidate: true while list API is in flight; never clears existing rows. */
+  const [listFetching, setListFetching] = useState(false)
   // Search should apply only on Enter / Apply (not per keystroke)
   const [searchDraft, setSearchDraft] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
@@ -653,7 +649,11 @@ function TruckingPageContent() {
   const [hasMore, setHasMore] = useState<boolean>(true)
   /** Section 1 status circles — toolbar scope only (excludes status card filter). */
   const [truckingSection1Summary, setTruckingSection1Summary] = useState<any>(null)
-  const [section1SummaryLoading, setSection1SummaryLoading] = useState(true)
+  /** Stale-while-revalidate: true while summary API is in flight; keeps prior card counts. */
+  const [summaryFetching, setSummaryFetching] = useState(false)
+  const truckingSummaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const listFetchGenRef = useRef(0)
+  const summaryFetchGenRef = useRef(0)
 
   // View tabs
   const [activeTab, setActiveTab] = useState<'list' | 'calendar'>('list')
@@ -1134,7 +1134,6 @@ function TruckingPageContent() {
       setStatusFilter(statusParam)
     }
     setPage(1)
-    setTruckingOperations([])
     setHasMore(true)
   }, [searchParams])
 
@@ -1190,7 +1189,6 @@ function TruckingPageContent() {
 
   const applySearch = useCallback(() => {
     setPage(1)
-    setTruckingOperations([])
     setHasMore(true)
     setSearchTerm(searchDraft)
     fetchTruckingOperations(1, searchDraft)
@@ -1200,9 +1198,10 @@ function TruckingPageContent() {
   // Column header filters apply only when user presses Enter inside the filter popover.
 
   const fetchTruckingOperations = async (forcedPage?: number, searchOverride?: string) => {
+    const listGen = ++listFetchGenRef.current
+    setListFetching(true)
+    setSummaryFetching(true)
     try {
-      setLoading(true)
-      setSection1SummaryLoading(true)
       const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
       params.append('limit', String(pageSize))
@@ -1251,33 +1250,71 @@ function TruckingPageContent() {
         selectedGroupPlants.forEach((p) => params.append('plant', p))
       }
       
+      // List path: skip heavy summary SQL on the same round-trip; load Section 1 summary after (debounced).
+      params.append('includeSummary', 'false')
+
+      const listUrl = `/trucking?${params.toString()}`
+      const listCacheKey = buildCacheKey('GET', listUrl)
+      const applyListEnvelope = (envelope: {
+        data?: { truckingOperations?: TruckingOperation[]; pagination?: { total?: number; totalPages?: number } }
+      }) => {
+        const items = envelope?.data?.truckingOperations || []
+        setTruckingOperations(items)
+        const total = Number(envelope?.data?.pagination?.total ?? 0)
+        const pages = Number(envelope?.data?.pagination?.totalPages || 1)
+        setTotalCount(total)
+        setTotalPages(pages)
+        setHasMore(effectivePage < pages)
+      }
+
+      const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
+        listCacheKey,
+        () => api.get(listUrl).then((r) => r.data),
+        {
+          onRevalidate: (fresh) => {
+            if (listGen !== listFetchGenRef.current) return
+            applyListEnvelope(fresh)
+            setListFetching(false)
+          },
+        },
+      )
+      if (listGen !== listFetchGenRef.current) return
+      applyListEnvelope(listEnvelope)
+      if (!listRevalidating) setListFetching(false)
+
+      if (truckingSummaryTimerRef.current) clearTimeout(truckingSummaryTimerRef.current)
       const section1SummaryParams = new URLSearchParams(params.toString())
       section1SummaryParams.delete('status')
+      section1SummaryParams.delete('includeSummary')
+      section1SummaryParams.set('summaryOnly', 'true')
       section1SummaryParams.set('page', '1')
       section1SummaryParams.set('limit', '1')
-
-      const [response, section1SummaryResponse] = await Promise.all([
-        api.get(`/trucking?${params.toString()}`),
-        api.get(`/trucking?${section1SummaryParams.toString()}`),
-      ])
-      const items = response.data.data.truckingOperations || []
-      setTruckingOperations(items)
-      if (section1SummaryResponse.data?.data?.summary) {
-        setTruckingSection1Summary(section1SummaryResponse.data.data.summary)
-      }
-      setSection1SummaryLoading(false)
-      const total = Number(response.data.data.pagination?.total ?? 0)
-      const pages = Number(response.data.data.pagination?.totalPages || 1)
-      setTotalCount(total)
-      setTotalPages(pages)
-      setHasMore(effectivePage < pages)
+      const summaryUrl = `/trucking?${section1SummaryParams.toString()}`
+      const summaryCacheKey = buildCacheKey('GET', summaryUrl)
+      const summaryGen = ++summaryFetchGenRef.current
+      truckingSummaryTimerRef.current = setTimeout(() => {
+        void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+          onRevalidate: (fresh) => {
+            if (summaryGen !== summaryFetchGenRef.current) return
+            if (fresh?.data?.summary) setTruckingSection1Summary(fresh.data.summary)
+            setSummaryFetching(false)
+          },
+        })
+          .then(({ data, revalidating }) => {
+            if (summaryGen !== summaryFetchGenRef.current) return
+            if (data?.data?.summary) setTruckingSection1Summary(data.data.summary)
+            if (!revalidating) setSummaryFetching(false)
+          })
+          .catch(() => {
+            if (summaryGen === summaryFetchGenRef.current) setSummaryFetching(false)
+          })
+      }, 150)
     } catch (error) {
+      if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch trucking operations:', error)
       alert('Failed to load trucking operations. Please refresh the page.')
-      setTruckingSection1Summary(null)
-      setSection1SummaryLoading(false)
-    } finally {
-      setLoading(false)
+      setListFetching(false)
+      setSummaryFetching(false)
     }
   }
 
@@ -1322,8 +1359,8 @@ function TruckingPageContent() {
 
   const handleCreated = () => {
     setPage(1)
-    setTruckingOperations([])
     setHasMore(true)
+    void fetchTruckingOperations(1)
   }
 
   const downloadTemplate = async () => {
@@ -1552,19 +1589,15 @@ function TruckingPageContent() {
     setDateFrom(defaultContractDateRange.from)
     setDateTo(defaultContractDateRange.to)
     setPage(1)
-    setTruckingOperations([])
     setHasMore(true)
   }, [defaultContractDateRange, resetUserScopeFilters])
 
   /** Section 1 status circles — toggles Section 2 dropdown + Section 3 API `status` param. */
   const handleStatusCardClick = useCallback((status: string) => {
     setPage(1)
-    setTruckingOperations([])
     setHasMore(true)
     setStatusFilter((prev) => (prev === status ? 'ALL' : status))
   }, [])
-
-  const section3TableLoading = loading
 
   const truckingTableScopeLabel = useMemo(() => {
     if (statusFilter === 'ALL') return null
@@ -2068,7 +2101,7 @@ function TruckingPageContent() {
   }, [compactColumns])
 
   const handlePageChange = (newPage: number) => {
-    if (newPage < 1 || newPage > totalPages || loading) return
+    if (newPage < 1 || newPage > totalPages || listFetching) return
     setPage(newPage)
     fetchTruckingOperations(newPage)
   }
@@ -2252,12 +2285,14 @@ function TruckingPageContent() {
         {/* Status Distribution */}
         <Card>
           <CardHeader>
-            <CardTitle>Status Distribution</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              Status Distribution
+              {summaryFetching ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+              ) : null}
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            {section1SummaryLoading ? (
-              <StatusDistributionSkeleton itemCount={4} variant="trucking" />
-            ) : (
             <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto py-4 px-4">
               {[
                 {
@@ -2295,10 +2330,14 @@ function TruckingPageContent() {
               ].map((statusInfo, index, array) => {
                 const s = truckingSection1Summary?.status
                 const count =
-                  statusInfo.status === 'PLANNED' ? Number(s?.planned ?? 0)
-                    : statusInfo.status === 'IN_PROGRESS' ? Number(s?.inProgress ?? 0)
-                      : statusInfo.status === 'COMPLETED' ? Number(s?.completed ?? 0)
-                        : statusInfo.status === 'CANCELLED' ? Number(s?.cancelled ?? 0)
+                  statusInfo.status === 'PLANNED'
+                    ? Number(s?.planned ?? 0)
+                    : statusInfo.status === 'IN_PROGRESS'
+                      ? Number(s?.inProgress ?? 0)
+                      : statusInfo.status === 'COMPLETED'
+                        ? Number(s?.completed ?? 0)
+                        : statusInfo.status === 'CANCELLED'
+                          ? Number(s?.cancelled ?? 0)
                           : 0
                 const isStatusActive = statusFilter === statusInfo.status
                 return (
@@ -2334,7 +2373,6 @@ function TruckingPageContent() {
                 )
               })}
             </div>
-            )}
           </CardContent>
         </Card>
 
@@ -2387,7 +2425,6 @@ function TruckingPageContent() {
                   value={statusFilter}
                   onChange={(e) => {
                     setPage(1)
-                    setTruckingOperations([])
                     setHasMore(true)
                     setStatusFilter(e.target.value)
                   }}
@@ -2794,32 +2831,33 @@ function TruckingPageContent() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <div>
-                <CardTitle>All Trucking Operations</CardTitle>
-                {section3TableLoading ? (
-                  <ContractPerfTableSubtitleSkeleton />
-                ) : (
-                  <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
-                    <span className="whitespace-nowrap tabular-nums text-gray-700">
-                      <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> operations
-                    </span>
-                    <span className="text-gray-400" aria-hidden>
-                      ·
-                    </span>
-                    <span className="whitespace-nowrap tabular-nums">
-                      Page {page}/{totalPages} · {truckingOperations.length} rows
-                    </span>
-                    {truckingTableScopeLabel ? (
-                      <>
-                        <span className="text-gray-400" aria-hidden>
-                          ·
-                        </span>
-                        <span className="whitespace-nowrap font-medium text-blue-700">
-                          {truckingTableScopeLabel}
-                        </span>
-                      </>
-                    ) : null}
-                  </p>
-                )}
+                <CardTitle className="flex items-center gap-2">
+                  All Trucking Operations
+                  {listFetching ? (
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+                  ) : null}
+                </CardTitle>
+                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                  <span className="whitespace-nowrap tabular-nums text-gray-700">
+                    <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> operations
+                  </span>
+                  <span className="text-gray-400" aria-hidden>
+                    ·
+                  </span>
+                  <span className="whitespace-nowrap tabular-nums">
+                    Page {page}/{totalPages} · {truckingOperations.length} rows
+                  </span>
+                  {truckingTableScopeLabel ? (
+                    <>
+                      <span className="text-gray-400" aria-hidden>
+                        ·
+                      </span>
+                      <span className="whitespace-nowrap font-medium text-blue-700">
+                        {truckingTableScopeLabel}
+                      </span>
+                    </>
+                  ) : null}
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 <div className="relative">
@@ -2827,7 +2865,7 @@ function TruckingPageContent() {
                     variant="outline"
                     size="sm"
                     onClick={() => setShowColumnsMenu(v => !v)}
-                    disabled={section3TableLoading}
+                    disabled={listFetching}
                   >
                     <SlidersHorizontal className="h-4 w-4 mr-2" />
                     Columns
@@ -2909,7 +2947,7 @@ function TruckingPageContent() {
                       variant="outline"
                       size="sm"
                       onClick={() => handlePageChange(page - 1)}
-                      disabled={page <= 1 || section3TableLoading}
+                      disabled={page <= 1 || listFetching}
                     >
                       Previous
                     </Button>
@@ -2931,7 +2969,7 @@ function TruckingPageContent() {
                             variant={page === pageNum ? 'default' : 'outline'}
                             size="sm"
                             onClick={() => handlePageChange(pageNum)}
-                            disabled={section3TableLoading}
+                            disabled={listFetching}
                             className="min-w-[40px]"
                           >
                             {pageNum}
@@ -2943,7 +2981,7 @@ function TruckingPageContent() {
                       variant="outline"
                       size="sm"
                       onClick={() => handlePageChange(page + 1)}
-                      disabled={page >= totalPages || section3TableLoading}
+                      disabled={page >= totalPages || listFetching}
                     >
                       Next
                     </Button>
@@ -2958,7 +2996,7 @@ function TruckingPageContent() {
                 Create form is open. Close it to view the trucking list.
               </div>
             ) : (
-              <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
+              <div className="min-h-[480px]">
                 {/* Desktop compact table */}
                 <div className="hidden lg:block border rounded-lg overflow-hidden">
                   {/* Top scrollbar (synced) */}
@@ -3053,13 +3091,12 @@ function TruckingPageContent() {
                       </tr>
                       </thead>
 
-                      <tbody className="divide-y divide-gray-200">
-                        {section3TableLoading ? (
-                          <ContractTableBodySkeleton
-                            columnCount={visibleColumns.length}
-                            rowCount={8}
-                          />
-                        ) : sortedOperations.length === 0 ? (
+                      <tbody
+                        className={`divide-y divide-gray-200 transition-opacity duration-200 ${
+                          listFetching && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
+                        }`}
+                      >
+                        {!listFetching && sortedOperations.length === 0 ? (
                           <tr className="bg-white">
                             <td colSpan={visibleColumns.length + 1} className="px-4 py-10 text-center text-gray-500">
                               <Truck className="h-16 w-16 text-gray-400 mx-auto mb-4" />
@@ -3182,9 +3219,17 @@ function TruckingPageContent() {
                 </div>
 
                 {/* Mobile card view */}
-                <div className="lg:hidden space-y-4">
-                  {section3TableLoading ? (
-                    <ContractPerfTableMobileSkeleton rowCount={6} />
+                <div
+                  className={`lg:hidden space-y-4 min-h-[480px] transition-opacity duration-200 ${
+                    listFetching && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
+                  }`}
+                >
+                  {!listFetching && sortedOperations.length === 0 ? (
+                    <div className="text-center py-10 text-gray-500 border rounded-lg bg-white">
+                      <Truck className="h-12 w-12 text-gray-400 mx-auto mb-3" />
+                      <p>No trucking operations found</p>
+                      {searchTerm ? <p className="text-sm mt-2">Try adjusting your search filters</p> : null}
+                    </div>
                   ) : sortedOperations.map((operation) => {
                   const isEditing = editingId === operation.id
                   const currentData = isEditing ? editedData : operation
@@ -3468,7 +3513,7 @@ function TruckingPageContent() {
                         variant="outline"
                         size="sm"
                         onClick={() => handlePageChange(page - 1)}
-                        disabled={page <= 1 || section3TableLoading}
+                        disabled={page <= 1 || listFetching}
                       >
                         Previous
                       </Button>
@@ -3490,7 +3535,7 @@ function TruckingPageContent() {
                               variant={page === pageNum ? 'default' : 'outline'}
                               size="sm"
                               onClick={() => handlePageChange(pageNum)}
-                              disabled={section3TableLoading}
+                              disabled={listFetching}
                               className="min-w-[40px]"
                             >
                               {pageNum}
@@ -3502,7 +3547,7 @@ function TruckingPageContent() {
                         variant="outline"
                         size="sm"
                         onClick={() => handlePageChange(page + 1)}
-                        disabled={page >= totalPages || section3TableLoading}
+                        disabled={page >= totalPages || listFetching}
                       >
                         Next
                       </Button>
@@ -3566,7 +3611,16 @@ function TruckingPageContent() {
 
 export default function TruckingPage() {
   return (
-    <Suspense fallback={<Layout><div className="flex items-center justify-center p-8"><div className="text-gray-500">Loading...</div></div></Layout>}>
+    <Suspense
+      fallback={
+        <Layout>
+          <div className="space-y-6">
+            <h1 className="text-3xl font-bold">Trucking Operations</h1>
+            <p className="text-sm text-gray-400">Memuat…</p>
+          </div>
+        </Layout>
+      }
+    >
       <TruckingPageContent />
     </Suspense>
   )

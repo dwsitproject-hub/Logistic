@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Layout from '@/components/Layout'
 import api from '@/lib/api'
+import { buildCacheKey, cachedGet, peekCache } from '@/lib/clientDataCache'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Droplets, GripVertical, Search, SlidersHorizontal, X } from 'lucide-react'
+import { Droplets, GripVertical, Loader2, Search, SlidersHorizontal, X } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
@@ -788,6 +789,8 @@ export default function OilLossPage() {
   const [rows, setRows] = useState<OilLossRow[]>([])
   const [ytdSummary, setYtdSummary] = useState<YtdOilLossSummary | null>(null)
   const [loading, setLoading] = useState(true)
+  /** Background refresh while cached rows stay visible. */
+  const [dataFetching, setDataFetching] = useState(false)
   const [viewTransitionLoading, setViewTransitionLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
@@ -812,7 +815,8 @@ export default function OilLossPage() {
     viewMode === 'all_contract' ? ALL_CONTRACT_COMPACT_COLUMNS : BY_TRANSPORTER_COMPACT_COLUMNS
   const operationalTableType =
     viewMode === 'all_contract' ? 'oil_loss' : 'oil_loss_transporter'
-  const tableLoading = loading || viewTransitionLoading
+  const tableLoading = (loading && rows.length === 0) || viewTransitionLoading
+  const showBlockingLoad = loading && rows.length === 0
 
   const columnsMenuRef = useRef<HTMLDivElement | null>(null)
   const topScrollRef = useRef<HTMLDivElement | null>(null)
@@ -842,24 +846,48 @@ export default function OilLossPage() {
   })
 
   useEffect(() => {
+    const cacheKey = buildCacheKey('GET', '/oil-loss')
+    const cached = peekCache<{ data?: OilLossRow[]; ytdSummary?: YtdOilLossSummary | null }>(cacheKey)
+    if (cached) {
+      const raw: OilLossRow[] = Array.isArray(cached.data) ? cached.data : []
+      setRows(filterOilLossEligibleRows(raw))
+      setYtdSummary(cached.ytdSummary ?? null)
+      setLoading(false)
+    }
+
+    const applyOilLossEnvelope = (envelope: { data?: OilLossRow[]; ytdSummary?: YtdOilLossSummary | null }) => {
+      const raw: OilLossRow[] = Array.isArray(envelope?.data) ? envelope.data : []
+      setRows(filterOilLossEligibleRows(raw))
+      setYtdSummary(envelope?.ytdSummary ?? null)
+    }
+
     const fetch = async () => {
       try {
-        setLoading(true)
-        const res = await api.get('/oil-loss')
-        const raw: OilLossRow[] = Array.isArray(res.data?.data)
-          ? (res.data.data as OilLossRow[])
-          : []
-        setRows(filterOilLossEligibleRows(raw))
-        setYtdSummary(res.data?.ytdSummary ?? null)
+        if (!cached) setLoading(true)
+        setDataFetching(true)
+        const { data, revalidating } = await cachedGet(cacheKey, () =>
+          api.get('/oil-loss').then((r) => r.data),
+          {
+            onRevalidate: (fresh) => {
+              applyOilLossEnvelope(fresh)
+              setDataFetching(false)
+            },
+          },
+        )
+        applyOilLossEnvelope(data)
+        if (!revalidating) setDataFetching(false)
       } catch (err) {
         console.error('Oil loss load error:', err)
-        setRows([])
-        setYtdSummary(null)
+        if (!cached) {
+          setRows([])
+          setYtdSummary(null)
+        }
+        setDataFetching(false)
       } finally {
         setLoading(false)
       }
     }
-    fetch()
+    void fetch()
   }, [])
 
   useEffect(() => {
@@ -1242,10 +1270,10 @@ export default function OilLossPage() {
               totalMt: null,
               totalPct: null,
             }
-            const totalMt = loading ? null : summary.totalMt
-            const totalPct = loading ? null : summary.totalPct
-            const avgMt = loading ? null : summary.avgMt
-            const avgPct = loading ? null : summary.avgPct
+            const totalMt = showBlockingLoad ? null : summary.totalMt
+            const totalPct = showBlockingLoad ? null : summary.totalPct
+            const avgMt = showBlockingLoad ? null : summary.avgMt
+            const avgPct = showBlockingLoad ? null : summary.avgPct
 
             return (
               <div
@@ -1271,10 +1299,10 @@ export default function OilLossPage() {
                         </div>
                         <div
                           className={`mt-0.5 text-lg font-semibold leading-tight tabular-nums ${
-                            loading ? 'text-gray-400' : oilLossValueTone(totalMt, 'primary')
+                            showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalMt, 'primary')
                           }`}
                         >
-                          {loading ? '…' : formatOilLossTotalMt(totalMt)}
+                          {showBlockingLoad ? '…' : formatOilLossTotalMt(totalMt)}
                         </div>
                       </div>
                       <div className="min-w-0">
@@ -1283,10 +1311,10 @@ export default function OilLossPage() {
                         </div>
                         <div
                           className={`mt-0.5 text-lg font-semibold leading-tight tabular-nums ${
-                            loading ? 'text-gray-400' : oilLossValueTone(totalPct, 'primary')
+                            showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalPct, 'primary')
                           }`}
                         >
-                          {loading ? '…' : formatOilLossTotalPct(totalPct)}
+                          {showBlockingLoad ? '…' : formatOilLossTotalPct(totalPct)}
                         </div>
                       </div>
                     </div>
@@ -1303,10 +1331,10 @@ export default function OilLossPage() {
                         </div>
                         <div
                           className={`mt-0.5 text-sm font-medium leading-tight tabular-nums ${
-                            loading ? 'text-gray-300' : oilLossValueTone(avgMt, 'secondary')
+                            showBlockingLoad ? 'text-gray-300' : oilLossValueTone(avgMt, 'secondary')
                           }`}
                         >
-                          {loading ? '…' : formatOilLossAvgMt(avgMt)}
+                          {showBlockingLoad ? '…' : formatOilLossAvgMt(avgMt)}
                         </div>
                       </div>
                       <div className="min-w-0">
@@ -1315,10 +1343,10 @@ export default function OilLossPage() {
                         </div>
                         <div
                           className={`mt-0.5 text-sm font-medium leading-tight tabular-nums ${
-                            loading ? 'text-gray-300' : oilLossValueTone(avgPct, 'secondary')
+                            showBlockingLoad ? 'text-gray-300' : oilLossValueTone(avgPct, 'secondary')
                           }`}
                         >
-                          {loading ? '…' : formatOilLossAvgPct(avgPct)}
+                          {showBlockingLoad ? '…' : formatOilLossAvgPct(avgPct)}
                         </div>
                       </div>
                     </div>
@@ -1413,8 +1441,13 @@ export default function OilLossPage() {
           <CardHeader>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <CardTitle>{viewMode === 'all_contract' ? 'All Contract' : 'By Transporter'}</CardTitle>
-                {tableLoading ? (
+                <CardTitle className="flex items-center gap-2">
+                  <span>{viewMode === 'all_contract' ? 'All Contract' : 'By Transporter'}</span>
+                  {dataFetching ? (
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+                  ) : null}
+                </CardTitle>
+                {showBlockingLoad ? (
                   <ContractPerfTableSubtitleSkeleton />
                 ) : (
                   <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
@@ -1672,8 +1705,12 @@ export default function OilLossPage() {
                           })}
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-gray-200">
-                        {tableLoading ? (
+                      <tbody
+                        className={`divide-y divide-gray-200 ${
+                          dataFetching && rows.length > 0 ? 'opacity-65' : 'opacity-100'
+                        }`}
+                      >
+                        {showBlockingLoad ? (
                           <ContractTableBodySkeleton
                             columnCount={visibleColumns.length}
                             rowCount={8}

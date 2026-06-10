@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { clearClientDataCache } from '@/lib/clientDataCache';
 
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api',
@@ -47,6 +48,7 @@ api.interceptors.response.use(
     const message = error.response?.data?.error?.message || '';
     const isAuthFailure = status === 401 || (status === 403 && (message.includes('token') || message.includes('expired')));
     if (isAuthFailure && typeof window !== 'undefined') {
+      clearClientDataCache();
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.location.href = '/login';

@@ -1,0 +1,31 @@
+---
+description: Auto-deploy Docker locally after code changes; never deploy SIT unless user asks
+alwaysApply: true
+---
+
+# KLIP — Local deploy vs SIT
+
+## Local (agent runs automatically)
+
+After completing **backend** or **frontend** changes that should be verified in the browser:
+
+1. Run local Docker rebuild **without asking**, at end of the task:
+   - Frontend only: `docker compose up -d --build frontend` from repo root
+   - Backend only: `docker compose up -d --build backend` from repo root
+   - Both touched: rebuild both (backend first, then frontend)
+2. Prefer `D:\Project\Klip\scripts\deploy-local.ps1 -Target frontend|backend|all` when available.
+3. Briefly confirm in the reply: service rebuilt, URLs `http://localhost:3001` and `http://localhost:5001/health`.
+4. Remind user to hard refresh (Ctrl+Shift+R) for UI changes.
+
+Do **not** skip local deploy because of sandbox — request permissions if Docker needs them.
+
+## SIT / staging (manual only)
+
+- **Never** run PuTTY/SSH, `docker compose` on `172.28.92.56` / `172.28.92.57`, or `git push origin SIT` unless the user explicitly asks.
+- Point to `docs/DEPLOY-SIT-GITHUB.md` and `docs/scripts/staging-deploy-putty.txt` when they want staging steps.
+- Git push to GitHub is also manual unless the user requests it.
+
+## Scope
+
+- Local deploy = `docker-compose.yml` at repo root (localhost:3001 / :5001).
+- Not `docker-compose.frontend.yml` / `docker-compose.backend.yml` (those are SIT servers).

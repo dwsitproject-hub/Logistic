@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor } from 'lucide-react'
 import api from '@/lib/api'
+import { buildCacheKey, cachedGet } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -503,6 +504,8 @@ function ShipmentsPageContent() {
   const canImportShipments = canViewPermission(perms, 'action.import_excel')
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [loading, setLoading] = useState(true)
+  /** Stale-while-revalidate: in-flight list fetch without clearing visible rows. */
+  const [listFetching, setListFetching] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize] = useState(20)
   const [totalCount, setTotalCount] = useState(0)
@@ -1034,8 +1037,10 @@ function ShipmentsPageContent() {
   // Column header filters apply only when user presses Enter inside the filter popover.
 
   const fetchShipments = async (forcedPage?: number, searchOverride?: string) => {
-    setLoading(true)
-    setSection1SummaryLoading(true)
+    const hadRows = shipments.length > 0
+    if (!hadRows) setLoading(true)
+    setListFetching(true)
+    if (!shipmentsSummary) setSection1SummaryLoading(true)
     try {
       const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
@@ -1108,18 +1113,41 @@ function ShipmentsPageContent() {
       // First paint: skip joining sap_processed_data (often the slowest part); hydrate rows right after.
       params.append('skipSapJoin', 'true')
 
-      const response = await api.get(`/shipments?${params.toString()}`)
+      const listUrl = `/shipments?${params.toString()}`
+      const listCacheKey = buildCacheKey('GET', listUrl)
+      const applyListEnvelope = (envelope: {
+        success?: boolean
+        data?: { shipments?: Shipment[]; pagination?: { total?: number } }
+      }) => {
+        if (envelope?.success && envelope?.data?.shipments) {
+          setShipments(envelope.data.shipments)
+          setTotalCount(Number(envelope.data.pagination?.total || 0))
+        }
+      }
+
+      const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
+        listCacheKey,
+        () => api.get(listUrl).then((r) => r.data),
+        {
+          onRevalidate: (fresh) => {
+            applyListEnvelope(fresh)
+            setListFetching(false)
+          },
+        },
+      )
 
       // Check if response structure is correct
-      if (response.data && response.data.success && response.data.data && response.data.data.shipments) {
-        setShipments(response.data.data.shipments)
-        setTotalCount(Number(response.data.data.pagination?.total || 0))
+      if (listEnvelope && listEnvelope.success && listEnvelope.data && listEnvelope.data.shipments) {
+        applyListEnvelope(listEnvelope)
+        if (!listRevalidating) setListFetching(false)
+
         const hydrateParams = new URLSearchParams(params.toString())
         hydrateParams.delete('skipSapJoin')
-        void api
-          .get(`/shipments?${hydrateParams.toString()}`)
-          .then((res) => {
-            const rows = res.data?.data?.shipments
+        const hydrateUrl = `/shipments?${hydrateParams.toString()}`
+        const hydrateKey = buildCacheKey('GET', hydrateUrl)
+        void cachedGet(hydrateKey, () => api.get(hydrateUrl).then((r) => r.data))
+          .then(({ data }) => {
+            const rows = data?.data?.shipments
             if (Array.isArray(rows) && rows.length > 0) setShipments(rows)
           })
           .catch(() => {
@@ -1135,16 +1163,20 @@ function ShipmentsPageContent() {
         section1SummaryParams.set('summaryOnly', 'true')
         section1SummaryParams.delete('includeSummary')
         section1SummaryParams.delete('skipSapJoin')
+        const summaryUrl = `/shipments?${section1SummaryParams.toString()}`
+        const summaryCacheKey = buildCacheKey('GET', summaryUrl)
         shipmentsSummaryTimerRef.current = setTimeout(() => {
-          void api
-            .get(`/shipments?${section1SummaryParams.toString()}`)
-            .then((res) => {
-              if (res.data?.data?.summary) setShipmentsSummary(res.data.data.summary)
+          void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+            onRevalidate: (fresh) => {
+              if (fresh?.data?.summary) setShipmentsSummary(fresh.data.summary)
+              setSection1SummaryLoading(false)
+            },
+          })
+            .then(({ data, revalidating }) => {
+              if (data?.data?.summary) setShipmentsSummary(data.data.summary)
+              if (!revalidating) setSection1SummaryLoading(false)
             })
             .catch(() => {
-              /* keep prior Section 1 summary */
-            })
-            .finally(() => {
               setSection1SummaryLoading(false)
             })
         }, 450)
@@ -1171,9 +1203,12 @@ function ShipmentsPageContent() {
         || 'Unknown error occurred'
       
       alert(`Failed to load shipments: ${errorMessage}\n\nPlease check the console for more details.`)
-      setShipments([])
-      setShipmentsSummary(null)
+      if (!hadRows) {
+        setShipments([])
+        setShipmentsSummary(null)
+      }
       setSection1SummaryLoading(false)
+      setListFetching(false)
     } finally {
       setLoading(false)
     }
@@ -1868,7 +1903,7 @@ function ShipmentsPageContent() {
     setEtaLoadingFilter('ALL')
   }, [])
 
-  const section3TableLoading = loading
+  const section3TableLoading = loading && shipments.length === 0
 
   const shipmentsTableScopeLabel = useMemo(() => {
     if (statusFilter !== 'ALL') {
@@ -3526,10 +3561,15 @@ function ShipmentsPageContent() {
         {/* Status Distribution */}
         <Card>
           <CardHeader>
-            <CardTitle>Status Distribution</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <span>Status Distribution</span>
+              {section1SummaryLoading && shipmentsSummary ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+              ) : null}
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            {section1SummaryLoading ? (
+            {section1SummaryLoading && !shipmentsSummary ? (
               <StatusDistributionSkeleton itemCount={8} variant="shipments" />
             ) : (
             <div className="flex w-full min-w-0 items-center justify-start gap-3 overflow-x-auto py-4 px-4 md:gap-6">
@@ -4168,7 +4208,12 @@ function ShipmentsPageContent() {
           <CardHeader>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <CardTitle>All Shipments</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  <span>All Shipments</span>
+                  {listFetching ? (
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+                  ) : null}
+                </CardTitle>
                 {section3TableLoading ? (
                   <ContractPerfTableSubtitleSkeleton />
                 ) : (
@@ -4258,7 +4303,7 @@ function ShipmentsPageContent() {
                     variant="outline"
                     size="sm"
                     onClick={() => (allExpanded ? collapseAll() : expandAll(allVisibleIds))}
-                    disabled={section3TableLoading || sortedShipments.length === 0}
+                    disabled={listFetching || section3TableLoading || sortedShipments.length === 0}
                   >
                     {allExpanded ? (
                       <>
@@ -4279,7 +4324,7 @@ function ShipmentsPageContent() {
                       variant="outline"
                       size="sm"
                       onClick={() => handlePageChange(page - 1)}
-                      disabled={page <= 1 || section3TableLoading}
+                      disabled={page <= 1 || listFetching || section3TableLoading}
                     >
                       Previous
                     </Button>
@@ -4301,7 +4346,7 @@ function ShipmentsPageContent() {
                             variant={page === pageNum ? 'default' : 'outline'}
                             size="sm"
                             onClick={() => handlePageChange(pageNum)}
-                            disabled={section3TableLoading}
+                            disabled={listFetching || section3TableLoading}
                             className="min-w-[40px]"
                           >
                             {pageNum}
@@ -4313,7 +4358,7 @@ function ShipmentsPageContent() {
                       variant="outline"
                       size="sm"
                       onClick={() => handlePageChange(page + 1)}
-                      disabled={page >= totalPages || section3TableLoading}
+                      disabled={page >= totalPages || listFetching || section3TableLoading}
                     >
                       Next
                     </Button>
@@ -4411,7 +4456,11 @@ function ShipmentsPageContent() {
                         </th>
                         </tr>
                         </thead>
-                        <tbody>
+                        <tbody
+                          className={
+                            listFetching && shipments.length > 0 ? 'opacity-65' : 'opacity-100'
+                          }
+                        >
 
                       {/* Rows */}
                         {section3TableLoading ? (
@@ -5147,7 +5196,7 @@ function ShipmentsPageContent() {
                         variant="outline"
                         size="sm"
                         onClick={() => handlePageChange(page - 1)}
-                        disabled={page <= 1 || section3TableLoading}
+                        disabled={page <= 1 || listFetching || section3TableLoading}
                       >
                         Previous
                       </Button>
@@ -5169,7 +5218,7 @@ function ShipmentsPageContent() {
                               variant={page === pageNum ? 'default' : 'outline'}
                               size="sm"
                               onClick={() => handlePageChange(pageNum)}
-                              disabled={section3TableLoading}
+                              disabled={listFetching || section3TableLoading}
                               className="min-w-[40px]"
                             >
                               {pageNum}
@@ -5181,7 +5230,7 @@ function ShipmentsPageContent() {
                         variant="outline"
                         size="sm"
                         onClick={() => handlePageChange(page + 1)}
-                        disabled={page >= totalPages || section3TableLoading}
+                        disabled={page >= totalPages || listFetching || section3TableLoading}
                       >
                         Next
                       </Button>
