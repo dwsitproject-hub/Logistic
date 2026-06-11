@@ -45,6 +45,27 @@ const fmtQtyMt = (val: string | number) => {
 
 /** Legacy per-day UI — restore when manual daily rows are needed again */
 const LEGACY_DAILY_DELIVERABLES_UI = false
+const READONLY_FIELD_CLASS = 'bg-gray-50 cursor-not-allowed text-gray-600'
+
+function sliceIsoDate(value: string | null | undefined): string {
+  if (!value) return ''
+  return String(value).slice(0, 10)
+}
+
+function parseDailyDeliverables(
+  raw: unknown,
+): Array<{ date?: string; quantity_delivered?: number }> {
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
 
 const enumerateInclusiveDates = (startIso: string, endIso: string): string[] => {
   const startParts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startIso)
@@ -92,6 +113,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   initialContractExtNo,
   initialContractId,
   initialPoNumber,
+  mode = 'add',
 }: {
   open: boolean
   onClose: () => void
@@ -102,8 +124,13 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   initialContractId?: string | null
   /** PO from Contracts page — shown in Section 1 before / alongside validation */
   initialPoNumber?: string | null
+  /** `edit` locks all fields except Start/End Date (Planning) */
+  mode?: 'add' | 'edit'
 }) {
+  const isEditMode = mode === 'edit'
   const [creating, setCreating] = useState(false)
+  const [loadingEdit, setLoadingEdit] = useState(false)
+  const [editOperationId, setEditOperationId] = useState<string | null>(null)
 
   const [notification, setNotification] = useState<{
     type: 'success' | 'error' | 'warning'
@@ -253,18 +280,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     }
   }, [])
 
-  useEffect(() => {
-    if (!open) return
-    const display = initialContractExtNo?.trim()
-    const validateKey = initialContractId?.trim() || display
-    if (!display && !validateKey) return
-    if (display) {
-      setNewOperation((prev) => ({ ...prev, contract_number: display }))
-      setContractSearchTerm(display)
-    }
-    if (validateKey) void validateContractNumber(validateKey)
-  }, [open, initialContractExtNo, initialContractId, validateContractNumber])
-
   const handleSelectContractSuggestion = async (c: any) => {
     const label = c.contract_ext_no || c.contract_id
     const contractId = String(c.contract_id || '').trim()
@@ -291,6 +306,17 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
 
   const validateForm = (): boolean => {
     const errors: Record<string, string> = {}
+
+    if (isEditMode) {
+      if (!planning.start_date) errors.planning_start_date = 'Start Date (Planning) is required'
+      if (!planning.end_date) errors.planning_end_date = 'End Date (Planning) is required'
+      if (planning.start_date && planning.end_date && planning.end_date < planning.start_date) {
+        errors.planning_end_date = 'End Date cannot be before Start Date'
+      }
+      setFormErrors(errors)
+      return Object.keys(errors).length === 0
+    }
+
     if (!contractValidation.exists) errors.contract_number = 'Contract Ext No is required and must be valid'
 
     if (truckingDateRange) {
@@ -343,10 +369,145 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     setContractSuggestions([])
     setShowContractSuggestions(false)
     setFormErrors({})
+    setEditOperationId(null)
+    setLoadingEdit(false)
   }
 
+  const loadTruckingForEdit = useCallback(
+    async (contractId: string) => {
+      setLoadingEdit(true)
+      setEditOperationId(null)
+      try {
+        const listRes = await api.get('/trucking', {
+          params: { contract: contractId, limit: 100, page: 1 },
+        })
+        const ops: Array<Record<string, unknown>> = listRes.data?.data?.truckingOperations ?? []
+        const listRow = ops[0]
+        if (!listRow?.id) {
+          showNotification('error', 'No trucking operation found for this contract')
+          return
+        }
+        const operationId = String(listRow.id)
+        setEditOperationId(operationId)
+
+        const detailRes = await api.get(`/trucking/${operationId}`)
+        const op = (detailRes.data?.data ?? listRow) as Record<string, unknown>
+
+        const validateKey = initialContractId?.trim() || contractId
+        const display = String(
+          op.contract_ext_no || op.contract_number || listRow.contract_ext_no || listRow.contract_number || initialContractExtNo || '',
+        ).trim()
+        if (display) {
+          setNewOperation((prev) => ({ ...prev, contract_number: display }))
+          setContractSearchTerm(display)
+        }
+        await validateContractNumber(validateKey)
+
+        setNewOperation((prev) => ({
+          ...prev,
+          operation_id: String(op.operation_id ?? ''),
+          location: String(op.location ?? ''),
+          loading_location: String(op.loading_location ?? ''),
+          unloading_location: String(op.unloading_location ?? ''),
+          trucking_owner: String(op.trucking_owner ?? ''),
+          cargo_readiness_date: sliceIsoDate(op.cargo_readiness_date as string | undefined),
+          quantity_sent: op.quantity_sent != null ? String(op.quantity_sent) : '',
+          quantity_delivered: op.quantity_delivered != null ? String(op.quantity_delivered) : '',
+          status: String(op.status ?? 'PLANNED'),
+        }))
+
+        const dailyRows = parseDailyDeliverables(op.daily_deliverables)
+        const sortedDates = dailyRows
+          .map((r) => sliceIsoDate(r.date))
+          .filter(Boolean)
+          .sort()
+        const totalKg =
+          dailyRows.reduce((sum, r) => sum + (Number(r.quantity_delivered) || 0), 0) ||
+          Number(op.quantity_delivered) ||
+          Number(listRow.quantity_delivered) ||
+          0
+        const startDate =
+          sliceIsoDate(op.trucking_start_date as string | undefined) ||
+          sortedDates[0] ||
+          ''
+        const endDate =
+          sliceIsoDate(op.trucking_completion_date as string | undefined) ||
+          sortedDates[sortedDates.length - 1] ||
+          startDate
+
+        setPlanning({
+          start_date: startDate,
+          end_date: endDate,
+          total_quantity_mt: fmtQtyMt(totalKg / 1000),
+        })
+      } catch (error) {
+        console.error('Failed to load trucking operation for edit:', error)
+        showNotification('error', 'Failed to load trucking operation details')
+      } finally {
+        setLoadingEdit(false)
+      }
+    },
+    [initialContractExtNo, initialContractId, showNotification, validateContractNumber],
+  )
+
+  useEffect(() => {
+    if (!open) return
+    resetForm()
+    const display = initialContractExtNo?.trim()
+    const validateKey = initialContractId?.trim() || display
+    if (!display && !validateKey) return
+    if (isEditMode && validateKey) {
+      void loadTruckingForEdit(validateKey)
+      return
+    }
+    if (display) {
+      setNewOperation((prev) => ({ ...prev, contract_number: display }))
+      setContractSearchTerm(display)
+    }
+    if (validateKey) void validateContractNumber(validateKey)
+  }, [open, initialContractExtNo, initialContractId, isEditMode, validateContractNumber, loadTruckingForEdit])
+
   const handleCreateOperation = async () => {
+    if (isEditMode && !editOperationId) {
+      showNotification('error', 'Trucking operation not loaded')
+      return
+    }
     if (!validateForm()) return
+
+    if (isEditMode) {
+      const totalMt = parseFloat(String(planning.total_quantity_mt).replace(/,/g, '').trim())
+      const generatedDaily = buildDailyDeliverablesFromPlanning(
+        planning.start_date,
+        planning.end_date,
+        totalMt,
+      )
+      if (generatedDaily.length === 0) {
+        showNotification('error', 'Invalid planning date range')
+        return
+      }
+
+      setCreating(true)
+      try {
+        const response = await api.put(`/trucking/${editOperationId}`, {
+          daily_deliverables: generatedDaily,
+          trucking_start_date: planning.start_date || null,
+          trucking_completion_date: planning.end_date || null,
+        })
+        if (response.data.success) {
+          showNotification('success', 'Trucking operation updated successfully!')
+          resetForm()
+          onClose()
+          onCreated()
+        }
+      } catch (error: any) {
+        console.error('Update trucking operation error:', error)
+        const errorMessage = error.response?.data?.error?.message || 'Failed to update trucking operation'
+        showNotification('error', errorMessage)
+      } finally {
+        setCreating(false)
+      }
+      return
+    }
 
     const totalMt = parseFloat(String(planning.total_quantity_mt).replace(/,/g, '').trim())
     const generatedDaily = buildDailyDeliverablesFromPlanning(
@@ -426,8 +587,14 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                 <Truck className="h-4 w-4" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-gray-900">Add New Trucking</h3>
-                <p className="text-xs text-gray-500">Fill in contract, truck, and delivery details</p>
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {isEditMode ? 'Edit Trucking' : 'Add New Trucking'}
+                </h3>
+                <p className="text-xs text-gray-500">
+                  {isEditMode
+                    ? 'Only planning start and end dates can be changed'
+                    : 'Fill in contract, truck, and delivery details'}
+                </p>
               </div>
             </div>
             <Button
@@ -461,6 +628,12 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+          {loadingEdit && (
+            <div className="mb-4 flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading trucking operation…
+            </div>
+          )}
 
           {/* Notification banner */}
           {notification && (
@@ -506,7 +679,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                     <label className="text-xs font-semibold text-gray-700">
                       Contract Ext No <span className="text-red-500">*</span>
                     </label>
-                    {!initialContractExtNo && (
+                    {!initialContractExtNo && !isEditMode && (
                       <span className="text-[10px] text-gray-400">Type to search contract</span>
                     )}
                   </div>
@@ -517,11 +690,12 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                         onChange={(e) => handleContractNumberChange(e.target.value)}
                         onBlur={() => validateContractNumber(newOperation.contract_number)}
                         onFocus={() => {
-                          if (contractSuggestions.length > 0) setShowContractSuggestions(true)
-                          if (contractSearchTerm.trim().length >= 2) fetchContractSuggestions(contractSearchTerm)
+                          if (!isEditMode && contractSuggestions.length > 0) setShowContractSuggestions(true)
+                          if (!isEditMode && contractSearchTerm.trim().length >= 2) fetchContractSuggestions(contractSearchTerm)
                         }}
-                        readOnly={!!initialContractExtNo}
-                        className={`flex-1 h-9 ${initialContractExtNo ? 'bg-gray-50 cursor-default' : ''} ${
+                        readOnly={!!initialContractExtNo || isEditMode}
+                        disabled={isEditMode}
+                        className={`flex-1 h-9 ${initialContractExtNo || isEditMode ? READONLY_FIELD_CLASS : ''} ${
                           contractValidation.exists ? 'border-green-500 focus-visible:ring-green-400'
                           : contractValidation.message && !contractValidation.checking ? 'border-red-500 focus-visible:ring-red-400'
                           : ''
@@ -533,7 +707,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       {!contractValidation.checking && contractValidation.message && !contractValidation.exists && <AlertCircle className="h-4 w-4 text-red-500 shrink-0" />}
                     </div>
 
-                    {showContractSuggestions && contractSuggestions.length > 0 && (
+                    {!isEditMode && showContractSuggestions && contractSuggestions.length > 0 && (
                       <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
                         {contractSuggestions.map((c) => (
                           <button
@@ -621,10 +795,10 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                     <PlantSiteCombobox
                       value={newOperation.location}
                       onChange={(val) => { setNewOperation((prev) => ({ ...prev, location: val })); clearFieldError('location') }}
-                      className={formErrors.location ? 'border-red-500' : ''}
+                      className={`${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.location ? 'border-red-500' : ''}`}
                       placeholder="Search plant/site..."
                       valueField="plant_name"
-                      disabled={contractValidation.exists}
+                      disabled={contractValidation.exists || isEditMode}
                     />
                     {formErrors.location && <p className="text-xs mt-1 text-red-600">{formErrors.location}</p>}
                   </div>
@@ -636,7 +810,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                         setNewOperation((prev) => ({ ...prev, loading_location: e.target.value }))
                         clearFieldError('loading_location')
                       }}
-                      className={`h-9 ${formErrors.loading_location ? 'border-red-500' : ''}`}
+                      readOnly={isEditMode}
+                      disabled={isEditMode}
+                      className={`h-9 ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.loading_location ? 'border-red-500' : ''}`}
                       placeholder="Enter loading location..."
                     />
                     {formErrors.loading_location && <p className="text-xs mt-1 text-red-600">{formErrors.loading_location}</p>}
@@ -649,7 +825,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                         setNewOperation((prev) => ({ ...prev, unloading_location: e.target.value }))
                         clearFieldError('unloading_location')
                       }}
-                      className={`h-9 ${formErrors.unloading_location ? 'border-red-500' : ''}`}
+                      readOnly={isEditMode}
+                      disabled={isEditMode}
+                      className={`h-9 ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.unloading_location ? 'border-red-500' : ''}`}
                       placeholder="Enter unloading location..."
                     />
                     {formErrors.unloading_location && <p className="text-xs mt-1 text-red-600">{formErrors.unloading_location}</p>}
@@ -782,8 +960,10 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                             const raw = String(planning.total_quantity_mt || '').replace(/,/g, '').trim()
                             setPlanning((prev) => ({ ...prev, total_quantity_mt: raw }))
                           }}
+                          readOnly={isEditMode}
+                          disabled={isEditMode}
                           placeholder="0"
-                          className={`mt-1 h-9 ${formErrors.planning_total_quantity_mt ? 'border-red-500' : ''}`}
+                          className={`mt-1 h-9 ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.planning_total_quantity_mt ? 'border-red-500' : ''}`}
                         />
                         {formErrors.planning_total_quantity_mt && (
                           <p className="text-xs mt-0.5 text-red-600">{formErrors.planning_total_quantity_mt}</p>
@@ -973,23 +1153,23 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <Button variant="outline" className="h-9" onClick={() => { resetForm(); onClose() }} disabled={creating}>
+                  <Button variant="outline" className="h-9" onClick={() => { resetForm(); onClose() }} disabled={creating || loadingEdit}>
                     Cancel
                   </Button>
                   <Button
                     onClick={handleCreateOperation}
-                    disabled={creating || !contractValidation.exists}
+                    disabled={creating || loadingEdit || (!isEditMode && !contractValidation.exists)}
                     className="h-9 bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
                   >
                     {creating ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Creating...
+                        {isEditMode ? 'Saving...' : 'Creating...'}
                       </>
                     ) : (
                       <>
                         <Truck className="h-4 w-4 mr-2" />
-                        Create Trucking
+                        {isEditMode ? 'Save Changes' : 'Create Trucking'}
                       </>
                     )}
                   </Button>

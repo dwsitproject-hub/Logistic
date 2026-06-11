@@ -49,6 +49,15 @@ export function formatSignedCycleDays(days: number | null | undefined): string {
   return days > 0 ? `${abs} ${unit} late` : `${abs} ${unit} ahead`
 }
 
+/** Contract Performance Section 3 — magnitude only; late/ahead shown via text color. */
+export function formatSignedCycleDaysCompact(days: number | null | undefined): string {
+  if (days == null || !Number.isFinite(days)) return '-'
+  if (days === 0) return '0 days'
+  const abs = daysMagnitude(days)
+  const unit = abs === 1 ? 'day' : 'days'
+  return `${abs} ${unit}`
+}
+
 export function formatContractAgingDays(days: number): string {
   if (days === 0) return 'Due today'
   const abs = daysMagnitude(days)
@@ -68,6 +77,14 @@ export function formatLogCycleDays(
       ? tradeCycleDays > 0
       : count >= LOG_CYCLE_LATE_THRESHOLD_DAYS
   return late ? `${count} ${unit} late` : `${count} ${unit} ahead`
+}
+
+/** Contract Performance Section 3 — magnitude only; late/ahead shown via text color. */
+export function formatLogCycleDaysCompact(days: number | null | undefined): string {
+  if (days == null || !Number.isFinite(days)) return '-'
+  const count = daysMagnitude(days)
+  const unit = count === 1 ? 'day' : 'days'
+  return `${count} ${unit}`
 }
 
 /** Raw signed delta (e.g. shipping performance columns) — magnitude only, color shows late/ahead. */

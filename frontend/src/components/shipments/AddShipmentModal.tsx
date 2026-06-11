@@ -29,7 +29,7 @@ import {
   X,
 } from 'lucide-react'
 import api from '@/lib/api'
-import { formatDateDMY } from '@/lib/dateFormat'
+import { formatDateDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
   usePermissions,
@@ -117,6 +117,66 @@ function etaDetailHasAnyDate(d: EtaDetailFields): boolean {
 const COMPACT_TH = 'h-8 px-2 py-1 text-[11px] font-semibold text-gray-600 whitespace-nowrap'
 const COMPACT_TD = 'px-2 py-1.5 text-xs align-middle'
 const COMPACT_DATE_INPUT = 'h-8 text-xs min-w-[7.25rem]'
+const READONLY_FIELD_CLASS = 'bg-gray-50 cursor-not-allowed text-gray-600'
+
+function sliceIsoDate(value: string | null | undefined): string {
+  if (!value) return ''
+  return String(value).slice(0, 10)
+}
+
+type VesselLoadingPortRow = {
+  port_name?: string
+  port_sequence?: number
+  is_discharge_port?: boolean
+  eta_vessel_arrival?: string | null
+  eta_vessel_berthed_at_loading_port?: string | null
+  eta_vessel_berthed?: string | null
+  eta_loading_start?: string | null
+  eta_loading_completed?: string | null
+  eta_vessel_sailed?: string | null
+  eta_vessel_arrive_at_discharge_port?: string | null
+  eta_vessel_berthed_at_discharge_port?: string | null
+  eta_vessel_start_discharging?: string | null
+  eta_vessel_complete_discharge?: string | null
+}
+
+function applyShipmentEtaToBlock(
+  block: ShipmentEtaDetail,
+  shipment: Record<string, unknown>,
+  listRow: Record<string, unknown>,
+  loadingPort?: VesselLoadingPortRow | null,
+) {
+  block.loadingPort = String(
+    loadingPort?.port_name ?? shipment.port_of_loading ?? listRow.port_of_loading ?? block.loadingPort,
+  )
+  block.etaVesselArrivalAtLoadingPort =
+    sliceIsoDate(loadingPort?.eta_vessel_arrival) ||
+    sliceIsoDate((shipment.eta_arrival ?? listRow.eta_arrival) as string | undefined)
+  block.etaVesselBerthedAtLoadingPort =
+    sliceIsoDate(loadingPort?.eta_vessel_berthed_at_loading_port ?? loadingPort?.eta_vessel_berthed) ||
+    sliceIsoDate((shipment.eta_berthed ?? listRow.eta_berthed) as string | undefined)
+  block.etaVesselStartLoading =
+    sliceIsoDate(loadingPort?.eta_loading_start) ||
+    sliceIsoDate((shipment.eta_loading_start ?? listRow.eta_loading_start) as string | undefined)
+  block.etaVesselCompletedLoading =
+    sliceIsoDate(loadingPort?.eta_loading_completed) ||
+    sliceIsoDate((shipment.eta_loading_complete ?? listRow.eta_loading_complete) as string | undefined)
+  block.etaVesselSailedFromLoadingPort =
+    sliceIsoDate(loadingPort?.eta_vessel_sailed) ||
+    sliceIsoDate((shipment.eta_sailed ?? listRow.eta_sailed) as string | undefined)
+  block.etaVesselArriveAtDischargePort =
+    sliceIsoDate(loadingPort?.eta_vessel_arrive_at_discharge_port) ||
+    sliceIsoDate((shipment.eta_discharge_arrival ?? listRow.eta_discharge_arrival) as string | undefined)
+  block.etaVesselBerthedAtDischargePort =
+    sliceIsoDate(loadingPort?.eta_vessel_berthed_at_discharge_port) ||
+    sliceIsoDate((shipment.eta_discharge_berthed ?? listRow.eta_discharge_berthed) as string | undefined)
+  block.etaVesselStartDischarging =
+    sliceIsoDate(loadingPort?.eta_vessel_start_discharging) ||
+    sliceIsoDate((shipment.eta_discharge_start ?? listRow.eta_discharge_start) as string | undefined)
+  block.etaVesselCompleteDischarge =
+    sliceIsoDate(loadingPort?.eta_vessel_complete_discharge) ||
+    sliceIsoDate((shipment.eta_discharge_complete ?? listRow.eta_discharge_complete) as string | undefined)
+}
 
 const emptyShipment = () => ({
   operationId: '',
@@ -161,19 +221,23 @@ export function AddShipmentModal({
   onClose,
   onCreated,
   initialContractId,
+  mode = 'add',
 }: {
   open: boolean
   onClose: () => void
   onCreated: () => void
   /** When opening from Contracts: pre-load contract and hide PO Number search */
   initialContractId?: string | null
+  /** `edit` locks Sections 1–2 and loading port / PO mapping; only ETA dates are editable */
+  mode?: 'add' | 'edit'
 }) {
   const perms = usePermissions()
   const canAddShipment = canCreatePermission(perms, 'data.shipments')
   const canEditShipment = canEditPermission(perms, 'data.shipments')
   const canOpenAddShipmentModal = canAddShipment || canEditShipment
+  const isEditMode = mode === 'edit'
   /** Opened from Contracts menu: contract is pre-selected; PO search is only on Shipments page */
-  const openedFromContracts = Boolean(initialContractId?.trim())
+  const openedFromContracts = Boolean(initialContractId?.trim()) || isEditMode
 
   const [notification, setNotification] = useState<{
     type: 'success' | 'error' | 'warning'
@@ -191,6 +255,8 @@ export function AddShipmentModal({
   )
 
   const [saving, setSaving] = useState(false)
+  const [loadingEdit, setLoadingEdit] = useState(false)
+  const [editShipmentId, setEditShipmentId] = useState<string | null>(null)
   const [formErrors, setFormErrors] = useState<Record<string, string>>({})
   const [newShipment, setNewShipment] = useState(emptyShipment)
   const [contractQtyAssigned, setContractQtyAssigned] = useState<Record<string, string>>({})
@@ -631,24 +697,136 @@ export function AddShipmentModal({
     setShowVesselSuggestions(false)
     setMappedPlantSiteName('')
     setFormErrors({})
+    setEditShipmentId(null)
+    setLoadingEdit(false)
   }, [])
+
+  const loadShipmentForEdit = useCallback(
+    async (contractId: string) => {
+      setLoadingEdit(true)
+      setEditShipmentId(null)
+      try {
+        const listRes = await api.get('/shipments', {
+          params: { contract: contractId, limit: 100, page: 1, compact: 'true' },
+        })
+        const shipments: Array<Record<string, unknown>> = listRes.data?.data?.shipments ?? []
+        const row = shipments[0]
+        if (!row?.id) {
+          showNotification('error', 'No shipment found for this contract')
+          return
+        }
+        const shipmentId = String(row.id)
+        setEditShipmentId(shipmentId)
+
+        const detailRes = await api.get(`/shipments/${shipmentId}`)
+        const shipment = (detailRes.data?.data ?? row) as Record<string, unknown>
+
+        const contractNumbersRaw = String(
+          row.contract_numbers ?? shipment.contract_number ?? contractId,
+        )
+        const contractNumbers = contractNumbersRaw
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+        const uniqueContractIds = contractNumbers.length > 0 ? contractNumbers : [contractId]
+
+        for (const cid of uniqueContractIds) {
+          await validateContractNumber(cid)
+        }
+
+        const qtyAssigned: Record<string, string> = {}
+        for (const cid of uniqueContractIds) {
+          qtyAssigned[cid] = ''
+        }
+
+        const assignmentKey =
+          String(shipment.sto_number ?? row.sto_number ?? '').trim() ||
+          String(shipment.operation_id ?? row.operation_id ?? '').trim()
+        if (assignmentKey) {
+          try {
+            const detailsRes = await api.get('/shipments/contracts/details', {
+              params: {
+                sto: assignmentKey,
+                contractNumbers: uniqueContractIds.join(','),
+              },
+            })
+            if (detailsRes.data?.success && Array.isArray(detailsRes.data.data)) {
+              for (const detail of detailsRes.data.data as Array<{
+                contract_number?: string
+                sto_qty_assigned?: number | string
+              }>) {
+                const cn = String(detail.contract_number ?? '').trim()
+                if (cn && detail.sto_qty_assigned != null && detail.sto_qty_assigned !== '') {
+                  qtyAssigned[cn] = String(detail.sto_qty_assigned)
+                }
+              }
+            }
+          } catch {
+            // Read-only display fallback: keep empty if assignment lookup fails
+          }
+        }
+
+        let loadingPortRow: VesselLoadingPortRow | null = null
+        try {
+          const portsRes = await api.get(`/shipments/${shipmentId}/loading-ports`)
+          const ports: VesselLoadingPortRow[] = portsRes.data?.data?.ports ?? []
+          loadingPortRow =
+            ports.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
+            ports.find((p) => !p.is_discharge_port) ||
+            null
+        } catch {
+          // Shipment-level ETA fields are used when loading ports are unavailable
+        }
+
+        setNewShipment({
+          operationId: String(shipment.operation_id ?? row.operation_id ?? ''),
+          stoNumber: String(shipment.sto_number ?? row.sto_number ?? ''),
+          contractNumbers: uniqueContractIds,
+          vesselName: String(shipment.vessel_name ?? row.vessel_name ?? ''),
+          vesselCode: String(shipment.vessel_code ?? row.vessel_code ?? ''),
+          vesselOwner: String(shipment.vessel_owner ?? row.vessel_owner ?? ''),
+          vesselDraft: String(shipment.vessel_draft ?? row.vessel_draft ?? ''),
+          vesselCapacity: String(shipment.vessel_capacity ?? row.vessel_capacity ?? ''),
+          vesselHullType: String(shipment.vessel_hull_type ?? row.vessel_hull_type ?? ''),
+          charterType: String(shipment.charter_type ?? row.charter_type ?? ''),
+          portOfLoading: String(shipment.port_of_loading ?? row.port_of_loading ?? ''),
+          portOfDischarge: String(shipment.port_of_discharge ?? row.port_of_discharge ?? ''),
+        })
+        setContractQtyAssigned(qtyAssigned)
+
+        const etaBlock = createShipmentEtaDetail([...uniqueContractIds])
+        applyShipmentEtaToBlock(etaBlock, shipment, row, loadingPortRow)
+        setEtaDetails([etaBlock])
+      } catch (error) {
+        console.error('Failed to load shipment for edit:', error)
+        showNotification('error', 'Failed to load shipment details')
+      } finally {
+        setLoadingEdit(false)
+      }
+    },
+    [showNotification, validateContractNumber],
+  )
 
   useEffect(() => {
     if (!open) return
     resetForm()
     const cid = initialContractId?.trim()
     if (!cid) return
+    if (isEditMode) {
+      void loadShipmentForEdit(cid)
+      return
+    }
     void (async () => {
       const resolved = await validateContractNumber(cid)
       if (!resolved) return
       setNewShipment((prev) => ({ ...prev, contractNumbers: [resolved] }))
       setContractQtyAssigned((prev) => ({ ...prev, [resolved]: prev[resolved] ?? '' }))
     })()
-  }, [open, initialContractId, resetForm, validateContractNumber])
+  }, [open, initialContractId, isEditMode, resetForm, validateContractNumber, loadShipmentForEdit])
 
   /** Auto-show one ETA row when ≥1 PO is on the shipment (sea / mixed). */
   useEffect(() => {
-    if (!open) return
+    if (!open || isEditMode || loadingEdit) return
     const contractIds = newShipment.contractNumbers
     if (contractIds.length === 0) {
       setEtaDetails([])
@@ -667,10 +845,40 @@ export function AddShipmentModal({
         return { ...block, contractIds: [...kept, ...newlyAdded] }
       })
     })
-  }, [open, newShipment.contractNumbers, selectedTransportMode])
+  }, [open, isEditMode, loadingEdit, newShipment.contractNumbers, selectedTransportMode])
 
-  const validateShipmentForm = (mode: string | null): boolean => {
+  const validateShipmentForm = (transportMode: string | null): boolean => {
     const errors: Record<string, string> = {}
+
+    if (isEditMode) {
+      for (const block of etaDetails) {
+        const prefix = `eta_${block.id}`
+        const hasDates = etaDetailHasAnyDate(block)
+        if (!hasDates) continue
+        const range = getEtaDateRangeForContractIds(block.contractIds)
+        if (!range) {
+          errors[`${prefix}_contract`] =
+            'Selected POs have incompatible contract date ranges; split into separate shipment details.'
+        } else {
+          const rangeMsg = `Date must be between ${formatDateDMY(range.minIso)} (contract date − 30 days) and ${formatDateDMY(range.maxIso)} (contract date + 1 year)`
+          const checkEta = (iso: string, key: string) => {
+            if (iso && (iso < range.minIso || iso > range.maxIso)) errors[key] = rangeMsg
+          }
+          checkEta(block.etaVesselArrivalAtLoadingPort, `${prefix}_arrival`)
+          checkEta(block.etaVesselBerthedAtLoadingPort, `${prefix}_berthed`)
+          checkEta(block.etaVesselStartLoading, `${prefix}_startLoading`)
+          checkEta(block.etaVesselCompletedLoading, `${prefix}_completedLoading`)
+          checkEta(block.etaVesselSailedFromLoadingPort, `${prefix}_sailed`)
+          checkEta(block.etaVesselArriveAtDischargePort, `${prefix}_arriveDischarge`)
+          checkEta(block.etaVesselBerthedAtDischargePort, `${prefix}_berthedDischarge`)
+          checkEta(block.etaVesselStartDischarging, `${prefix}_startDischarging`)
+          checkEta(block.etaVesselCompleteDischarge, `${prefix}_completeDischarge`)
+        }
+      }
+      setFormErrors(errors)
+      return Object.keys(errors).length === 0
+    }
+
     if (newShipment.contractNumbers.length === 0)
       errors.contractNumbers = openedFromContracts
         ? 'Contract is required'
@@ -681,7 +889,7 @@ export function AddShipmentModal({
     const hasAnyQty = newShipment.contractNumbers.some((id) => parseFloat(contractQtyAssigned[id] ?? '') > 0)
     if (newShipment.contractNumbers.length > 0 && !hasAnyQty)
       errors.contractQty = 'Contract Qty assign to STO must be filled for at least one contract'
-    if (mode === 'sea' || mode === 'mixed') {
+    if (transportMode === 'sea' || transportMode === 'mixed') {
       if (!newShipment.vesselName.trim()) errors.vesselName = 'Vessel Name is required for Sea contracts'
       if (!newShipment.charterType) errors.charterType = 'Charter Type is required for Sea contracts'
       if (!newShipment.portOfDischarge.trim()) errors.portOfDischarge = 'Discharge Port is required for Sea contracts'
@@ -693,7 +901,7 @@ export function AddShipmentModal({
       const hasDates = etaDetailHasAnyDate(block)
       const selectedIds = block.contractIds.filter(Boolean)
 
-      if ((mode === 'sea' || mode === 'mixed') && newShipment.contractNumbers.length > 0) {
+      if ((transportMode === 'sea' || transportMode === 'mixed') && newShipment.contractNumbers.length > 0) {
         if (!block.loadingPort.trim()) {
           errors[`${prefix}_loadingPort`] = 'Loading Port is required'
         }
@@ -755,7 +963,50 @@ export function AddShipmentModal({
       return
     }
 
+    if (isEditMode && !editShipmentId) {
+      showNotification('error', 'Shipment record not loaded')
+      return
+    }
+
     if (!validateShipmentForm(selectedTransportMode)) return
+
+    if (isEditMode) {
+      try {
+        setSaving(true)
+        const primaryBlock = etaDetails[0]
+        if (!primaryBlock) {
+          showNotification('error', 'No ETA details to save')
+          return
+        }
+        const payload = {
+          eta_arrival: toApiDateOnly(primaryBlock.etaVesselArrivalAtLoadingPort),
+          eta_berthed: toApiDateOnly(primaryBlock.etaVesselBerthedAtLoadingPort),
+          eta_loading_start: toApiDateOnly(primaryBlock.etaVesselStartLoading),
+          eta_loading_complete: toApiDateOnly(primaryBlock.etaVesselCompletedLoading),
+          eta_sailed: toApiDateOnly(primaryBlock.etaVesselSailedFromLoadingPort),
+          eta_discharge_arrival: toApiDateOnly(primaryBlock.etaVesselArriveAtDischargePort),
+          eta_discharge_berthed: toApiDateOnly(primaryBlock.etaVesselBerthedAtDischargePort),
+          eta_discharge_start: toApiDateOnly(primaryBlock.etaVesselStartDischarging),
+          eta_discharge_complete: toApiDateOnly(primaryBlock.etaVesselCompleteDischarge),
+        }
+        const response = await api.put(`/shipments/${editShipmentId}`, payload)
+        if (response.data?.success) {
+          showNotification('success', 'Shipment updated successfully!')
+          resetForm()
+          onClose()
+          onCreated()
+        } else {
+          showNotification('error', response.data?.error?.message || 'Failed to update shipment')
+        }
+      } catch (error: any) {
+        console.error('Error updating shipment:', error)
+        const errorMsg = error.response?.data?.error?.message || 'Failed to update shipment'
+        showNotification('error', errorMsg)
+      } finally {
+        setSaving(false)
+      }
+      return
+    }
 
     if (contractQtyAssignedExceedsCapacity) {
       showNotification('warning', 'Quantity exceeds vessel capacity', 'Sum of "Assign STO (MT)" cannot exceed Vessel Capacity.')
@@ -851,8 +1102,14 @@ export function AddShipmentModal({
                 <Ship className="h-4.5 w-4.5" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-gray-900">Add New Shipment</h3>
-                <p className="text-xs text-gray-500">Fill in contract, vessel, and ETA details</p>
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {isEditMode ? 'Edit Shipment' : 'Add New Shipment'}
+                </h3>
+                <p className="text-xs text-gray-500">
+                  {isEditMode
+                    ? 'Only ETA schedule dates can be changed'
+                    : 'Fill in contract, vessel, and ETA details'}
+                </p>
               </div>
             </div>
             <Button
@@ -897,6 +1154,12 @@ export function AddShipmentModal({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        {loadingEdit && (
+          <div className="mb-4 flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading shipment details…
+          </div>
+        )}
         {/* Notification banner */}
         {notification && (
           <div
@@ -1136,18 +1399,20 @@ export function AddShipmentModal({
                                               [contractId]: e.target.value,
                                             }))
                                           }
-                                          className={`h-8 text-xs w-24 text-right bg-white ${exceed ? 'border-red-400 focus-visible:ring-red-400' : ''}`}
+                                          readOnly={isEditMode}
+                                          disabled={isEditMode}
+                                          className={`h-8 text-xs w-24 text-right ${isEditMode ? READONLY_FIELD_CLASS : 'bg-white'} ${exceed ? 'border-red-400 focus-visible:ring-red-400' : ''}`}
                                           placeholder="0"
                                         />
                                         <button
                                           type="button"
                                           className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-medium whitespace-nowrap transition-colors shrink-0 ${
-                                            outstandingQtyMt <= 0
+                                            outstandingQtyMt <= 0 || isEditMode
                                               ? 'cursor-not-allowed border-gray-200 bg-gray-50 text-gray-400'
                                               : 'cursor-pointer border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:border-blue-300'
                                           }`}
                                           onClick={() => fillAssignQtyFromOutstanding(contractId)}
-                                          disabled={outstandingQtyMt <= 0}
+                                          disabled={outstandingQtyMt <= 0 || isEditMode}
                                           title={`Set to outstanding quantity: ${formatNumber(outstandingQtyMt)} MT`}
                                         >
                                           <Check className="h-2.5 w-2.5" />
@@ -1273,10 +1538,12 @@ export function AddShipmentModal({
                   <Input
                     value={newShipment.vesselName}
                     onChange={(e) => { handleVesselNameChange(e.target.value); clearFieldError('vesselName') }}
-                    onFocus={() => newShipment.vesselName.trim().length >= 2 && setShowVesselSuggestions(true)}
+                    onFocus={() => !isEditMode && newShipment.vesselName.trim().length >= 2 && setShowVesselSuggestions(true)}
                     onBlur={() => setTimeout(() => setShowVesselSuggestions(false), 200)}
                     placeholder="Type to search vessel name (from Master Vessel)"
-                    className={formErrors.vesselName ? 'border-red-500' : ''}
+                    readOnly={isEditMode}
+                    disabled={isEditMode}
+                    className={`${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.vesselName ? 'border-red-500' : ''}`}
                   />
                   {vesselDropdownOpen && (
                     <div className={AUTOCOMPLETE_PANEL_CLASS}>
@@ -1324,7 +1591,8 @@ export function AddShipmentModal({
                   <select
                     value={newShipment.charterType}
                     onChange={(e) => { setNewShipment((prev) => ({ ...prev, charterType: e.target.value })); clearFieldError('charterType') }}
-                    className={`w-full h-10 rounded-md border bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${formErrors.charterType ? 'border-red-500' : 'border-input'}`}
+                    disabled={isEditMode}
+                    className={`w-full h-10 rounded-md border px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${isEditMode ? READONLY_FIELD_CLASS : 'bg-background'} ${formErrors.charterType ? 'border-red-500' : 'border-input'}`}
                   >
                     <option value="">Select charter type</option>
                     <option value="CIF">CIF</option>
@@ -1347,7 +1615,8 @@ export function AddShipmentModal({
                       clearFieldError('portOfDischarge')
                     }}
                     placeholder="Search port name..."
-                    className={formErrors.portOfDischarge ? 'border-red-500' : ''}
+                    disabled={isEditMode}
+                    className={`${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.portOfDischarge ? 'border-red-500' : ''}`}
                   />
                   {formErrors.portOfDischarge && (
                     <p className="text-xs mt-1 text-red-600">{formErrors.portOfDischarge}</p>
@@ -1410,7 +1679,8 @@ export function AddShipmentModal({
 
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-medium text-gray-500">ETA dates are optional — fill in as available</p>
-                {(selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') &&
+                {!isEditMode &&
+                  (selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') &&
                   newShipment.contractNumbers.length > 0 && (
                     <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={addEtaDetailBlock}>
                       <Plus className="h-3.5 w-3.5 mr-1" />
@@ -1442,14 +1712,16 @@ export function AddShipmentModal({
                         <div key={block.id} className="rounded-md border border-gray-200 overflow-hidden text-xs">
                           <div className="flex items-center justify-between bg-gray-50 px-2 py-1 border-b">
                             <span className="font-semibold text-gray-600">ETA #{index + 1}</span>
-                            <button
-                              type="button"
-                              className="text-gray-400 hover:text-gray-600 p-0.5"
-                              aria-label="Remove ETA row"
-                              onClick={() => removeEtaDetailBlock(block.id)}
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
+                            {!isEditMode && (
+                              <button
+                                type="button"
+                                className="text-gray-400 hover:text-gray-600 p-0.5"
+                                aria-label="Remove ETA row"
+                                onClick={() => removeEtaDetailBlock(block.id)}
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                           </div>
 
                           <div className="px-2 py-1.5 border-b bg-white space-y-2">
@@ -1464,7 +1736,8 @@ export function AddShipmentModal({
                                   clearFieldError(`${prefix}_loadingPort`)
                                 }}
                                 placeholder="Search port name..."
-                                className={`h-8 text-xs ${formErrors[`${prefix}_loadingPort`] ? 'border-red-500' : ''}`}
+                                disabled={isEditMode}
+                                className={`h-8 text-xs ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors[`${prefix}_loadingPort`] ? 'border-red-500' : ''}`}
                               />
                               {formErrors[`${prefix}_loadingPort`] && (
                                 <p className="text-[11px] mt-1 text-red-600">{formErrors[`${prefix}_loadingPort`]}</p>
@@ -1474,15 +1747,17 @@ export function AddShipmentModal({
                               <span className="text-gray-600 font-medium">
                                 Apply to PO <span className="text-red-500">*</span>
                               </span>
-                              <div className="flex gap-2 text-[11px]">
-                                <button type="button" className="text-blue-600 hover:underline" onClick={() => setAllPosForEtaBlock(block.id, true)}>
-                                  All
-                                </button>
-                                <span className="text-gray-300">|</span>
-                                <button type="button" className="text-blue-600 hover:underline" onClick={() => setAllPosForEtaBlock(block.id, false)}>
-                                  Clear
-                                </button>
-                              </div>
+                              {!isEditMode && (
+                                <div className="flex gap-2 text-[11px]">
+                                  <button type="button" className="text-blue-600 hover:underline" onClick={() => setAllPosForEtaBlock(block.id, true)}>
+                                    All
+                                  </button>
+                                  <span className="text-gray-300">|</span>
+                                  <button type="button" className="text-blue-600 hover:underline" onClick={() => setAllPosForEtaBlock(block.id, false)}>
+                                    Clear
+                                  </button>
+                                </div>
+                              )}
                             </div>
                             <div className="flex flex-wrap gap-1">
                               {newShipment.contractNumbers.map((cid) => {
@@ -1490,12 +1765,13 @@ export function AddShipmentModal({
                                 return (
                                   <label
                                     key={cid}
-                                    className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 cursor-pointer ${checked ? 'border-blue-300 bg-blue-50 text-blue-900' : 'border-gray-200 hover:bg-gray-50'}`}
+                                    className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 ${isEditMode ? 'cursor-not-allowed bg-gray-50 text-gray-500' : 'cursor-pointer'} ${!isEditMode && checked ? 'border-blue-300 bg-blue-50 text-blue-900' : !isEditMode ? 'border-gray-200 hover:bg-gray-50' : 'border-gray-200'}`}
                                   >
                                     <input
                                       type="checkbox"
                                       className="h-3 w-3"
                                       checked={checked}
+                                      disabled={isEditMode}
                                       onChange={() => togglePoForEtaBlock(block.id, cid)}
                                     />
                                     <span className="font-medium">{getPoLabel(cid)}</span>
@@ -1597,18 +1873,24 @@ export function AddShipmentModal({
                 </Button>
                 <Button
                   onClick={() => void handleCreateShipment()}
-                  disabled={saving || contractQtyAssignedExceedsCapacity || newShipment.contractNumbers.some((id) => !contractValidations[id]?.exists)}
+                  disabled={
+                    saving ||
+                    loadingEdit ||
+                    (!isEditMode &&
+                      (contractQtyAssignedExceedsCapacity ||
+                        newShipment.contractNumbers.some((id) => !contractValidations[id]?.exists)))
+                  }
                   className="h-9 bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
                 >
                   {saving ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Creating shipment...
+                      {isEditMode ? 'Saving changes...' : 'Creating shipment...'}
                     </>
                   ) : (
                     <>
                       <Ship className="h-4 w-4 mr-2" />
-                      Create Shipment
+                      {isEditMode ? 'Save Changes' : 'Create Shipment'}
                     </>
                   )}
                 </Button>

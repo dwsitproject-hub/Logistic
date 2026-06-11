@@ -2,58 +2,78 @@
  * Shipping Performance Section 3 — compact table UI aligned with Contract Performance.
  */
 
-import { COMPACT_TABLE_HEADER_ROW_CLASS, resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
+import {
+  COMPACT_TABLE_ACTIONS_CELL_CLASS,
+  COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
+  COMPACT_TABLE_ACTIONS_HEADER_CLASS,
+  COMPACT_TABLE_HEADER_ROW_PERF_CLASS,
+  resolveCompactColumnWidthPx,
+} from '@/lib/compactTableUi'
 import {
   getOperationalColumnLayout,
   type OperationalColumnLayout,
 } from '@/lib/operationalTableLayout'
 
-/** Intrinsic nowrap columns — full text visible, horizontal scroll when needed. */
-const SHIPPING_PERF_INTRINSIC_TOKEN_COLUMN_LAYOUT: Partial<
+/** Section 3 — narrower truncate layout overrides (Shipping Performance only). */
+const SHIPPING_PERF_TABLE_COLUMN_LAYOUT_OVERRIDES: Partial<
   Record<string, OperationalColumnLayout>
 > = {
-  vessel_name: 'token',
+  vessel_name: 'truncate',
+  loading_port: 'truncate',
+  discharge_port: 'truncate',
+  product: 'truncate',
+  supplier: 'truncate',
+  group_name: 'truncate',
+  contract_ext_no: 'truncate',
+  contract_number: 'truncate',
+  sto_number: 'truncate',
+  po_number: 'truncate',
 }
 
 export function getShippingPerfTableColumnLayout(
   colId: string,
   _tableViewMode: 'all' | 'by_vessel',
 ): OperationalColumnLayout {
-  const override = SHIPPING_PERF_INTRINSIC_TOKEN_COLUMN_LAYOUT[colId]
+  const override = SHIPPING_PERF_TABLE_COLUMN_LAYOUT_OVERRIDES[colId]
   if (override) return override
   return getOperationalColumnLayout('shipping_performance', colId)
 }
 
 export const SHIPPING_PERF_TABLE_CELL_PAD = 'px-2 py-1.5'
 export const SHIPPING_PERF_TABLE_ROW_MIN_H = 'min-h-[32px]'
-export const SHIPPING_PERF_TABLE_HEADER_ROW_CLASS = COMPACT_TABLE_HEADER_ROW_CLASS
+export const SHIPPING_PERF_TABLE_HEADER_ROW_CLASS = COMPACT_TABLE_HEADER_ROW_PERF_CLASS
+export {
+  COMPACT_TABLE_ACTIONS_CELL_CLASS,
+  COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
+  COMPACT_TABLE_ACTIONS_HEADER_CLASS,
+}
 export const SHIPPING_PERF_TABLE_BODY_CLASS = 'divide-y divide-gray-200'
 
 /** Fixed px widths for table-fixed layout (compact, matches CP Section 3 pattern). */
 export const SHIPPING_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
-  vessel_name: 128,
-  contract_ext_no: 120,
-  loading_port: 108,
-  discharge_port: 108,
-  incoterm: 72,
-  product: 112,
-  supplier: 140,
-  contract_qty: 100,
-  group_name: 100,
-  shipment_count: 72,
-  status: 96,
-  po_number: 100,
-  contract_number: 108,
-  sto_number: 100,
-  sto_qty: 96,
-  received_qty: 96,
-  outstanding_qty: 108,
-  loading_delta_eta_etr_days: 88,
-  loading_delta_eta_etb_days: 88,
-  loading_delta_etb_etc_days: 88,
-  discharge_delta_eta_etb_days: 96,
-  discharge_delta_etb_etc_days: 96,
-  total_delta_days: 72,
+  vessel_name: 96,
+  contract_ext_no: 96,
+  loading_port: 88,
+  discharge_port: 88,
+  incoterm: 64,
+  product: 96,
+  supplier: 112,
+  contract_qty: 88,
+  group_name: 88,
+  shipment_count: 64,
+  status: 80,
+  po_number: 80,
+  contract_number: 88,
+  sto_number: 80,
+  sto_qty: 80,
+  received_qty: 80,
+  outstanding_qty: 96,
+  loading_delta_eta_etr_days: 72,
+  loading_delta_eta_etb_days: 72,
+  loading_delta_etb_etc_days: 72,
+  discharge_delta_eta_etb_days: 80,
+  discharge_delta_etb_etc_days: 80,
+  total_delta_days: 56,
 }
 
 const DEFAULT_COLUMN_WIDTH_PX = 88
@@ -82,6 +102,14 @@ export const SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS = new Set([
   'loading_port',
   'discharge_port',
   'group_name',
+  'contract_ext_no',
+  'contract_number',
+  'po_number',
+  'sto_number',
+  'contract_qty',
+  'sto_qty',
+  'received_qty',
+  'outstanding_qty',
 ])
 
 export type ShippingPerfCellTooltipSource = {
@@ -95,6 +123,10 @@ export type ShippingPerfCellTooltipSource = {
   loading_port?: string | null
   discharge_port?: string | null
   group_name?: string | null
+  contract_qty?: number | null
+  sto_qty?: number | null
+  received_qty?: number | null
+  outstanding_qty?: number | null
 }
 
 export function shippingPerfCellTooltipText(
@@ -126,6 +158,22 @@ export function shippingPerfCellTooltipText(
     }
     case 'group_name':
       return String(row.group_name ?? '').trim() || null
+    case 'contract_qty':
+    case 'sto_qty':
+    case 'received_qty':
+    case 'outstanding_qty': {
+      const raw =
+        colKey === 'contract_qty'
+          ? row.contract_qty
+          : colKey === 'sto_qty'
+            ? row.sto_qty
+            : colKey === 'received_qty'
+              ? row.received_qty
+              : row.outstanding_qty
+      if (raw === null || raw === undefined) return null
+      const mt = Number(raw) / 1000
+      return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+    }
     default:
       return null
   }

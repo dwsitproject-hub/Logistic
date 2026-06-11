@@ -87,7 +87,7 @@ export function ContractTableBodySkeleton({
   showActionsColumn = true,
 }: ContractTableBodySkeletonProps) {
   const cols = Math.max(1, columnCount)
-  const actionsMin = actionsColMinWidth === 'compact' ? 'min-w-[52px]' : 'min-w-[160px]'
+  const actionsMin = actionsColMinWidth === 'compact' ? 'min-w-[100px]' : 'min-w-[160px]'
 
   return (
     <>
@@ -111,9 +111,13 @@ export function ContractTableBodySkeleton({
             ))}
             {showActionsColumn ? (
               <td
-                className={`sticky right-0 z-10 border-l border-gray-200 align-middle px-2 py-1.5 ${stripeClass} ${actionsMin}`}
+                className={`sticky right-0 z-10 border-l border-gray-200 align-middle px-4 py-1.5 ${stripeClass} ${actionsMin}`}
               >
-                <div className="flex items-center justify-end gap-2">
+                <div
+                  className={`flex items-center gap-2 ${
+                    actionsColMinWidth === 'compact' ? 'justify-center' : 'justify-end'
+                  }`}
+                >
                   <div className="h-8 w-8 bg-gray-200 rounded animate-pulse shrink-0" />
                   {actionsColMinWidth === 'wide' ? (
                     <>

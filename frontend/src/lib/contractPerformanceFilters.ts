@@ -208,6 +208,21 @@ export function normalizePerfProductGroupKey(value: unknown): string {
   return upper
 }
 
+/**
+ * Product tab filter — substring match aligned with GET /contracts `ILIKE '%value%'`.
+ * Used for toolbar tabs (POME, CPO, …); drilldown product nodes keep exact dimension match.
+ */
+export function matchesContractPerfProductTabFilter(
+  rowProduct: unknown,
+  tabProduct: string | undefined,
+): boolean {
+  if (!tabProduct?.trim()) return true
+  const row = String(rowProduct ?? '').trim().toUpperCase()
+  const needle = tabProduct.trim().toUpperCase()
+  if (!needle) return true
+  return row.includes(needle)
+}
+
 /** Filter sentinel "Blank" (or null/empty filter) matches nullish/empty row values. */
 export function isBlankFilterSentinel(value: string | null | undefined): boolean {
   if (value == null) return true
@@ -340,13 +355,12 @@ export function filterPerformanceHotspots(
       const plant = normalizePerfGroupKey(row.plant_site)
       if (!scope.resolvedPlants.includes(plant)) return false
     }
-    if (scope.resolvedProduct) {
-      if (
-        normalizePerfProductGroupKey(row.product) !==
-        normalizePerfProductGroupKey(scope.resolvedProduct)
-      ) {
-        return false
-      }
+    if (
+      scope.resolvedProduct &&
+      !isContractPerfDrilldownValueSet(drilldown.product) &&
+      !matchesContractPerfProductTabFilter(row.product, scope.resolvedProduct)
+    ) {
+      return false
     }
 
     if (!applyDrilldown) return true
@@ -445,13 +459,12 @@ export function filterContractsForPerformanceTable(
       const plant = normalizePerfGroupKey(c.plant_site)
       if (!scope.resolvedPlants.includes(plant)) return false
     }
-    if (scope.resolvedProduct) {
-      if (
-        normalizePerfProductGroupKey(c.product) !==
-        normalizePerfProductGroupKey(scope.resolvedProduct)
-      ) {
-        return false
-      }
+    if (
+      scope.resolvedProduct &&
+      !isContractPerfDrilldownValueSet(drilldown.product) &&
+      !matchesContractPerfProductTabFilter(c.product, scope.resolvedProduct)
+    ) {
+      return false
     }
 
     if (

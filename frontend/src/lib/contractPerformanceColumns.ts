@@ -8,8 +8,18 @@ import {
   resolveCompactColumnWidthPx,
   type CompactTableColumnWidthInput,
 } from '@/lib/compactTableUi'
+import {
+  getOperationalColumnLayout,
+  type OperationalColumnLayout,
+} from '@/lib/operationalTableLayout'
 
-export { COMPACT_TABLE_HEADER_ROW_CLASS as CONTRACT_PERF_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
+export {
+  COMPACT_TABLE_HEADER_ROW_CLASS as CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
+  COMPACT_TABLE_HEADER_ROW_PERF_CLASS as CONTRACT_PERF_TABLE_HEADER_ROW_PERF_CLASS,
+  COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
+  COMPACT_TABLE_ACTIONS_HEADER_CLASS,
+  COMPACT_TABLE_ACTIONS_CELL_CLASS,
+} from '@/lib/compactTableUi'
 
 /** Left-to-right table order and Visible Column modal sequence (primary columns first). */
 export const CONTRACT_PERF_COLUMN_ORDER: readonly string[] = [
@@ -118,22 +128,42 @@ export function mergeContractPerfColumnOrder(saved: string[], allIds: string[]):
 export const CONTRACT_PERF_TABLE_CELL_PAD = 'px-2 py-1.5'
 export const CONTRACT_PERF_TABLE_ROW_MIN_H = 'min-h-[32px]'
 
+/** Section 3 — narrower truncate layout overrides (Contract Performance only). */
+const CONTRACT_PERF_TABLE_COLUMN_LAYOUT_OVERRIDES: Partial<
+  Record<string, OperationalColumnLayout>
+> = {
+  supplier: 'truncate',
+  product: 'truncate',
+  source_type: 'truncate',
+  group_name: 'truncate',
+  company_name: 'truncate',
+  vessel_name: 'truncate',
+  contract_ext_no: 'truncate',
+  po_number: 'truncate',
+}
+
+export function getContractPerfTableColumnLayout(colId: string): OperationalColumnLayout {
+  const override = CONTRACT_PERF_TABLE_COLUMN_LAYOUT_OVERRIDES[colId]
+  if (override) return override
+  return getOperationalColumnLayout('contracts', colId)
+}
+
 /** Section 3 compact table — fixed px widths (Contract Performance only). */
 export const CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
-  contract_date: 100,
-  supplier: 150,
-  contract_ext_no: 120,
-  po_number: 110,
-  source_type: 88,
-  product: 120,
-  incoterm: 72,
-  contract_qty: 120,
-  outstanding_qty_mt: 130,
-  trade_cycle_days: 96,
-  dp_cycle_days: 88,
-  cash_cycle_days: 96,
-  log_cycle_days: 88,
-  month_delivery_end: 108,
+  contract_date: 88,
+  supplier: 112,
+  contract_ext_no: 96,
+  po_number: 80,
+  source_type: 72,
+  product: 96,
+  incoterm: 64,
+  contract_qty: 88,
+  outstanding_qty_mt: 96,
+  trade_cycle_days: 80,
+  dp_cycle_days: 72,
+  cash_cycle_days: 80,
+  log_cycle_days: 72,
+  month_delivery_end: 96,
   contract_id: 120,
   group_name: 120,
   contract_aging: 100,
@@ -164,6 +194,11 @@ export const CONTRACT_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS = new Set([
   'group_name',
   'company_name',
   'vessel_name',
+  'contract_ext_no',
+  'po_number',
+  'contract_qty',
+  'outstanding_qty_mt',
+  'received_qty',
 ])
 
 const CONTRACT_PERF_DEFAULT_COLUMN_WIDTH_PX = 96
@@ -206,6 +241,9 @@ export type ContractPerfCellTooltipSource = {
   vessel_name?: string | null
   sto_number?: string | null
   sto_numbers?: string | null
+  quantity_ordered?: number | null
+  quantity_receive?: number | null
+  outstanding_quantity?: number | null
 }
 
 export function contractPerfCellTooltipText(
@@ -233,6 +271,21 @@ export function contractPerfCellTooltipText(
       return row.vessel_name?.trim() || null
     case 'sto_number':
       return (row.sto_numbers || row.sto_number || '').trim() || null
+    case 'contract_qty': {
+      const mt = (Number(row.quantity_ordered) || 0) / 1000
+      return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+    }
+    case 'received_qty': {
+      const mt = (Number(row.quantity_receive) || 0) / 1000
+      return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+    }
+    case 'outstanding_qty_mt': {
+      const oqMt = (Number(row.outstanding_quantity) || 0) / 1000
+      if (oqMt < 0) {
+        return `+${Math.abs(oqMt).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+      }
+      return `${oqMt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+    }
     default:
       return null
   }

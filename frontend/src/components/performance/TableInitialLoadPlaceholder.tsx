@@ -1,6 +1,6 @@
 'use client'
 
-import { Loader2, Table2, type LucideIcon } from 'lucide-react'
+import { Table2, type LucideIcon } from 'lucide-react'
 
 type TableInitialLoadPlaceholderProps = {
   colSpan: number
@@ -37,16 +37,13 @@ export function TableInitialLoadPlaceholderContent({
 }: TableInitialLoadPlaceholderContentProps) {
   return (
     <div
-      className={`flex flex-col items-center justify-center py-16 gap-3 ${className}`.trim()}
+      className={`flex flex-col items-center justify-center py-12 gap-2 ${className}`.trim()}
       role="status"
       aria-busy="true"
       aria-live="polite"
     >
-      <Icon className="h-16 w-16 text-gray-300" strokeWidth={1.25} aria-hidden />
-      <div className="flex items-center gap-2 text-sm text-gray-500">
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
-        <span>{message}</span>
-      </div>
+      <Icon className="h-10 w-10 text-gray-300" strokeWidth={1.25} aria-hidden />
+      <span className="text-xs text-gray-400">{message}</span>
     </div>
   )
 }

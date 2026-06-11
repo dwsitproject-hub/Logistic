@@ -11,8 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { GripVertical, Loader2, Package, Search, SlidersHorizontal, X } from 'lucide-react'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Eye, GripVertical, Loader2, Package, Search, SlidersHorizontal, X } from 'lucide-react'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import VesselHistoryModal, {
@@ -39,6 +38,9 @@ import {
   type ShippingSummaryMetricKey,
 } from '@/lib/shippingPerformanceLabels'
 import {
+  COMPACT_TABLE_ACTIONS_CELL_CLASS,
+  COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
+  COMPACT_TABLE_ACTIONS_HEADER_CLASS,
   SHIPPING_PERF_TABLE_BODY_CLASS,
   SHIPPING_PERF_TABLE_CELL_PAD,
   SHIPPING_PERF_TABLE_HEADER_ROW_CLASS,
@@ -46,19 +48,17 @@ import {
   SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS,
   getShippingPerfTableColumnLayout,
   shippingPerfCellTooltipText,
+  shippingPerfTableColumnWidthPx,
 } from '@/lib/shippingPerformanceTableUi'
 import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
   COMPACT_OPERATIONAL_TABLE_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+  compactTableColWidthCss,
 } from '@/lib/compactTableUi'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
-import {
-  OperationalNowrapCell,
-  OperationalStackedCommaCell,
-  operationalTableColumnClass,
-} from '@/lib/operationalTableLayout'
+import { operationalTableColumnClass } from '@/lib/operationalTableLayout'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
 import {
@@ -67,6 +67,11 @@ import {
   resolveShippingPerfLoadingPort,
 } from '@/lib/shippingPerformancePorts'
 import { cn } from '@/lib/utils'
+import {
+  ContractDetailModal,
+  fetchContractForDetailModal,
+  type ContractDetailModalContract,
+} from '@/components/contracts/ContractDetailModal'
 
 interface ShippingPerformanceRow {
   id: string
@@ -716,18 +721,26 @@ function columnDefaultVisible(col: ColumnDef, tableViewMode: TableViewMode): boo
   return col.defaultVisible !== false
 }
 
-/** Shipping Performance Section 3 only — SAP delta column header tooltips. */
+/** Shipping Performance Section 3 — duration column header tooltips (ETA labels → ATA when Close). */
 const SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS: Partial<Record<keyof ShippingPerformanceRow, string>> = {
   loading_delta_eta_etr_days:
-    'This metric represents the duration calculated as: ETA Vessel Arrival at Loading Port − Cargo Readiness Date (ETR) based on SAP tables VBEP/LIPS/VTTK.',
+    'Duration in days: ETA Vessel Arrival at Loading Port − Cargo Readiness Date (ETR). ' +
+    'Uses vessel_loading_ports ETA arrival (first loading port), or shipment ETA arrival if missing, minus contracts.cargo_readiness_date.',
   loading_delta_eta_etb_days:
-    'This metric represents the duration calculated as: ETA Vessel Arrival at Loading Port − ETA Vessel Berthed at Loading Port based on SAP tables VBEP/LIPS/VTTK.',
+    'Duration in days: ETA Vessel Arrival at Loading Port − ETA Vessel Berthed at Loading Port. ' +
+    'Uses vessel_loading_ports loading-port dates, with shipment ETA arrival / ETA berthed as fallback.',
   loading_delta_etb_etc_days:
-    'This metric represents the duration calculated as: ETA Vessel Berthed at Loading Port − ETA Loading Completed based on SAP tables VBEP/LIPS/VTTK.',
+    'Duration in days: ETA Vessel Berthed at Loading Port − ETA Loading Completed. ' +
+    'Uses vessel_loading_ports loading-port dates, with shipment ETA berthed / ETA loading complete as fallback.',
   discharge_delta_eta_etb_days:
-    'This metric represents the duration calculated as: ETA Vessel Arrive at Discharge Port − ETA Vessel Berthed at Discharge Port based on SAP tables VBEP/LIPS/VTTK.',
+    'Duration in days: ETA Vessel Arrival at Discharge Port − ETA Vessel Berthed at Discharge Port. ' +
+    'Uses vessel_loading_ports discharge-port dates, with shipment ETA discharge arrival / berthed as fallback.',
   discharge_delta_etb_etc_days:
-    'This metric represents the duration calculated as: ETA Vessel Berthed at Discharge Port − ETA Vessel Complete Discharge based on SAP tables VBEP/LIPS/VTTK.',
+    'Duration in days: ETA Vessel Berthed at Discharge Port − ETA Vessel Complete Discharge. ' +
+    'Uses vessel_loading_ports discharge-port dates, with shipment ETA discharge berthed / complete as fallback.',
+  total_delta_days:
+    'Total duration in days: sum of Loading (ETA−ETR), Loading (ETA−ETB), Loading (ETB−ETC), ' +
+    'Discharge (ETA−ETB), and Discharge (ETB−ETC). Each missing segment counts as 0.',
 }
 
 const COLUMN_DEFS: ColumnDef[] = [
@@ -751,9 +764,9 @@ const COLUMN_DEFS: ColumnDef[] = [
   { key: 'po_number', label: 'PO No', type: 'text', defaultVisible: false },
   { key: 'contract_number', label: 'Contract No', type: 'text', defaultVisible: false },
   { key: 'sto_number', label: 'STO No', type: 'text', defaultVisible: false },
-  { key: 'sto_qty', label: 'STO Qty (MT)', type: 'number', defaultVisible: false },
-  { key: 'received_qty', label: 'Received Qty (MT)', type: 'number', defaultVisible: false },
-  { key: 'outstanding_qty', label: 'Outstanding Qty (MT)', type: 'number', defaultVisible: true },
+  { key: 'sto_qty', label: 'STO Qty', type: 'number', defaultVisible: false },
+  { key: 'received_qty', label: 'Received Qty', type: 'number', defaultVisible: false },
+  { key: 'outstanding_qty', label: 'Outstanding Qty', type: 'number', defaultVisible: true },
   {
     key: 'loading_delta_eta_etr_days',
     label: 'Loading ETA - ETR',
@@ -789,7 +802,13 @@ const COLUMN_DEFS: ColumnDef[] = [
     defaultVisible: true,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.discharge_delta_etb_etc_days,
   },
-  { key: 'total_delta_days', label: 'Total', type: 'number', defaultVisible: true },
+  {
+    key: 'total_delta_days',
+    label: 'Total',
+    type: 'number',
+    defaultVisible: true,
+    tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.total_delta_days,
+  },
 ]
 
 const COLUMN_MAP = Object.fromEntries(COLUMN_DEFS.map((col) => [col.key, col])) as Record<string, ColumnDef>
@@ -937,7 +956,7 @@ function NumberCell({
         : formatSignedDeltaDays(n)
     return (
       <span className={`text-sm font-semibold tabular-nums ${signedCycleDaysClass(n)}`}>
-        {formatted}
+        {formatted} days
       </span>
     )
   }
@@ -1008,6 +1027,23 @@ function ShippingPerformancePageContent() {
   const [tableViewMode, setTableViewMode] = useState<TableViewMode>('all')
   const [vesselModalOpen, setVesselModalOpen] = useState(false)
   const [selectedVesselData, setSelectedVesselData] = useState<VesselHistoryModalSelection | null>(null)
+  const [selectedContractForDetail, setSelectedContractForDetail] =
+    useState<ContractDetailModalContract | null>(null)
+  const [contractDetailLoading, setContractDetailLoading] = useState(false)
+
+  const openContractDetailFromRow = useCallback(async (contractNumber: string) => {
+    const contractId = String(contractNumber || '').trim()
+    if (!contractId) return
+    setContractDetailLoading(true)
+    try {
+      const contract = await fetchContractForDetailModal(contractId)
+      if (contract) {
+        setSelectedContractForDetail(contract)
+      }
+    } finally {
+      setContractDetailLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -2163,9 +2199,26 @@ function ShippingPerformancePageContent() {
                 <table
                   className={cn(
                     COMPACT_OPERATIONAL_TABLE_CLASS,
-                    'klip-compact-table--intrinsic-token-cols',
+                    'klip-compact-table--perf-narrow-cols',
                   )}
                 >
+                  <colgroup>
+                    {tableColumnKeys.map((key) => {
+                      const col = COLUMN_MAP[String(key)]
+                      const columnLabel = resolveTableColumnLabel(col.label)
+                      return (
+                        <col
+                          key={String(key)}
+                          style={{
+                            width: compactTableColWidthCss(
+                              shippingPerfTableColumnWidthPx(String(key), columnLabel),
+                            ),
+                          }}
+                        />
+                      )
+                    })}
+                    <col style={{ width: COMPACT_TABLE_ACTIONS_COL_WIDTH_PX }} />
+                  </colgroup>
                   <thead>
                     <tr className={SHIPPING_PERF_TABLE_HEADER_ROW_CLASS}>
                       {tableColumnKeys.map((key) => {
@@ -2176,20 +2229,12 @@ function ShippingPerformancePageContent() {
                         const opColClass = operationalTableColumnClass(
                           getShippingPerfTableColumnLayout(String(key), tableViewMode),
                         )
-                        const headerButton = (
-                          <ContractPerfTableSortHeader
-                            label={columnLabel}
-                            activeSort={isSorted}
-                            sortDir={sortDirection}
-                            onSortClick={() => onHeaderSort(key)}
-                          />
-                        )
                         return (
                           <th
                             key={String(key)}
                             scope="col"
                             className={cn(
-                              'relative cursor-move select-none text-left font-semibold align-top',
+                              'relative cursor-move select-none text-left font-semibold align-top sticky top-0 z-20 bg-gray-50',
                               SHIPPING_PERF_TABLE_CELL_PAD,
                               opColClass,
                               draggingColumn === String(key) && 'opacity-60',
@@ -2204,19 +2249,19 @@ function ShippingPerformancePageContent() {
                               setDraggingColumn(null)
                             }}
                           >
-                            {columnTooltip ? (
-                              <Tooltip delayDuration={200}>
-                                <TooltipTrigger asChild>{headerButton}</TooltipTrigger>
-                                <TooltipContent side="top" className="text-xs leading-relaxed max-w-sm">
-                                  {columnTooltip}
-                                </TooltipContent>
-                              </Tooltip>
-                            ) : (
-                              headerButton
-                            )}
+                            <ContractPerfTableSortHeader
+                              label={columnLabel}
+                              formulaHelp={columnTooltip}
+                              activeSort={isSorted}
+                              sortDir={sortDirection}
+                              onSortClick={() => onHeaderSort(key)}
+                            />
                           </th>
                         )
                       })}
+                      <th scope="col" className={COMPACT_TABLE_ACTIONS_HEADER_CLASS}>
+                        Actions
+                      </th>
                     </tr>
                   </thead>
                   <tbody
@@ -2226,12 +2271,12 @@ function ShippingPerformancePageContent() {
                   >
                     {(summaryLoading || summaryFetching) && rows.length === 0 ? (
                       <TableInitialLoadPlaceholder
-                        colSpan={tableColumnKeys.length || 1}
+                        colSpan={(tableColumnKeys.length || 0) + 1}
                         icon={Package}
                       />
                     ) : !summaryFetching && tableRows.length === 0 ? (
                       <tr className="bg-white">
-                        <td colSpan={tableColumnKeys.length || 1} className="px-4 py-10 text-center text-sm text-gray-500">
+                        <td colSpan={(tableColumnKeys.length || 0) + 1} className="px-4 py-10 text-center text-sm text-gray-500">
                           No data found
                         </td>
                       </tr>
@@ -2248,8 +2293,10 @@ function ShippingPerformancePageContent() {
                             const layout = getShippingPerfTableColumnLayout(colKey, tableViewMode)
                             const opColClass = operationalTableColumnClass(layout)
                             const useTruncateTooltip =
-                              layout === 'truncate' &&
-                              SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS.has(colKey)
+                              SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS.has(colKey) &&
+                              (layout === 'wrap' ||
+                                layout === 'truncate' ||
+                                layout === 'short')
                             const truncateTooltip = useTruncateTooltip
                               ? shippingPerfCellTooltipText(colKey, row)
                               : null
@@ -2261,7 +2308,7 @@ function ShippingPerformancePageContent() {
                                 cellContent = (
                                   <button
                                     type="button"
-                                    className="block w-max max-w-none whitespace-nowrap text-left text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
+                                    className="block w-full min-w-0 truncate text-left text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
                                     onClick={(e) => {
                                       e.stopPropagation()
                                       setSelectedVesselData({
@@ -2276,7 +2323,7 @@ function ShippingPerformancePageContent() {
                                 )
                               } else {
                                 cellContent = (
-                                  <OperationalNowrapCell value={vesselName} className="text-sm" />
+                                  <span className="text-sm">{vesselName}</span>
                                 )
                               }
                             } else if (
@@ -2292,8 +2339,8 @@ function ShippingPerformancePageContent() {
                                   <span className="text-sm tabular-nums">
                                     {(Number(rawValue) / 1000).toLocaleString('en-US', {
                                       maximumFractionDigits: 2,
-                                    })}{' '}
-                                    MT
+                                    })}
+                                    {' MT'}
                                   </span>
                                 )
                             } else if (key === 'shipment_count') {
@@ -2322,18 +2369,7 @@ function ShippingPerformancePageContent() {
                               colKey === 'sto_number'
                             ) {
                               const text = asDisplayValue(rawValue) || '-'
-                              cellContent =
-                                colKey === 'contract_ext_no' || colKey === 'po_number' ? (
-                                  <OperationalStackedCommaCell
-                                    value={text === '-' ? '' : text}
-                                    title={text}
-                                  />
-                                ) : (
-                                  <OperationalNowrapCell
-                                    value={text === '-' ? '' : text}
-                                    title={text}
-                                  />
-                                )
+                              cellContent = <span className="text-sm">{text}</span>
                             } else if (col.type === 'number') {
                               cellContent = (
                                 <NumberCell
@@ -2355,7 +2391,9 @@ function ShippingPerformancePageContent() {
                                   ? resolveShippingPerfLoadingPort(row)
                                   : resolveShippingPerfDischargePort(row)
                               cellContent = (
-                                <span className="text-sm">{formatPortColumnDisplay(resolved)}</span>
+                                <span className="text-sm">
+                                  {formatPortColumnDisplay(resolved)}
+                                </span>
                               )
                             } else {
                               const text = asDisplayValue(rawValue) || '-'
@@ -2393,6 +2431,22 @@ function ShippingPerformancePageContent() {
                               </td>
                             )
                           })}
+                          <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)}>
+                            <div className="flex items-center justify-center">
+                              {String(row.contract_number || '').trim() ? (
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  onClick={() => void openContractDetailFromRow(row.contract_number)}
+                                  title="View"
+                                  disabled={contractDetailLoading}
+                                  className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                >
+                                  <Eye className="h-4 w-4" />
+                                </Button>
+                              ) : null}
+                            </div>
+                          </td>
                         </tr>
                         )
                       })
@@ -2419,6 +2473,11 @@ function ShippingPerformancePageContent() {
           }}
           selection={selectedVesselData}
           sourceRows={vesselHistorySourceRows}
+        />
+
+        <ContractDetailModal
+          contract={selectedContractForDetail}
+          onClose={() => setSelectedContractForDetail(null)}
         />
       </div>
   )

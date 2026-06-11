@@ -237,6 +237,18 @@ describe('AC2 — Global Filter Propagation', () => {
     expect(result.length).toBe(2) // A1 and A4
   })
 
+  it('product tab uses substring match (aligned with GET /contracts ILIKE)', () => {
+    const rows = [
+      hotspot({ contract_id: 'P-1', product: 'POME', totalQtyDelivery: 100 }),
+      hotspot({ contract_id: 'P-2', product: 'CRUDE POME', totalQtyDelivery: 200 }),
+      hotspot({ contract_id: 'P-3', product: 'CPO', totalQtyDelivery: 50 }),
+    ]
+    const global = { ...BASE_GLOBAL, productTabQuery: 'POME' }
+    const scope = resolveContractPerformanceScope({ global, drilldown: EMPTY_CONTRACT_PERF_DRILLDOWN })
+    const result = filterPerformanceHotspots(rows, scope, { applyDrilldown: false })
+    expect(result.map((r) => r.contract_id).sort()).toEqual(['P-1', 'P-2'])
+  })
+
   it('Shell Palm tab matches DB product SHELL PALM in Section 2 hotspots', () => {
     expect(contractPerfProductQueryValue('Shell Palm')).toBe('SHELL PALM')
     const rows = [

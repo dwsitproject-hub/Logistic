@@ -28,6 +28,7 @@ import {
   sqlEffectiveDeliveryEndPresent,
 } from '../services/latePerformance.service';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+import { appendContractPerfProductSubstringSql } from '../utils/contractPerfProductFilterSql';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 
 export { B2B_CHILD_EXCLUSION_SQL };
@@ -46,6 +47,9 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const sortDir = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
     // Allow filtering by a specific contract id (used by shipment details fallback)
     const contractIdFilter = (req.query as any).contract_id || (req.query as any).contractId || null;
+    const isSingleContractLookup = Boolean(
+      contractIdFilter && String(contractIdFilter).trim().length > 0,
+    );
     const offset = (Number(page) - 1) * Number(limit);
 
     const queryParams: any[] = [];
@@ -278,7 +282,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       filtered AS (
         SELECT * FROM base
         WHERE 1=1
-        ${B2B_CHILD_EXCLUSION_SQL}
+        ${isSingleContractLookup ? '' : B2B_CHILD_EXCLUSION_SQL}
     `;
 
     const statusNorm = typeof status === 'string' ? status.trim() : '';
@@ -1204,10 +1208,11 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    if (productFilter && productFilter.toUpperCase() !== 'ALL') {
-      queryText += ` AND UPPER(COALESCE(base.product, '')) = UPPER($${paramIndex})`;
-      queryParams.push(productFilter);
-      paramIndex++;
+    const productClause = appendContractPerfProductSubstringSql(productFilter, 'base.product', paramIndex);
+    if (productClause) {
+      queryText += productClause.clause;
+      queryParams.push(productClause.param);
+      paramIndex = productClause.nextParamIndex;
     }
 
     // Plant filter is same as GET /contracts: exists in SEA discharge port or LAND location.

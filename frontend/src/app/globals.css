@@ -238,6 +238,76 @@
     max-width: none;
   }
 
+  /*
+   * Contract Performance + Shipping Performance Section 3 — narrower columns with
+   * word-boundary header wrap and single-line truncated cells.
+   */
+  .klip-compact-table--perf-narrow-cols {
+    table-layout: fixed;
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .klip-compact-table--perf-narrow-cols th.klip-op-col--truncate,
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--truncate {
+    max-width: 8.5rem;
+    overflow: hidden;
+  }
+
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--truncate .klip-compact-table-cell-inner {
+    width: 100%;
+    min-width: 0;
+    max-width: 8.5rem;
+    overflow: hidden;
+  }
+
+  .klip-compact-table--perf-narrow-cols th.klip-op-col--short,
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--short {
+    max-width: 6.5rem;
+    overflow: hidden;
+  }
+
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--short .klip-compact-table-cell-inner {
+    width: 100%;
+    min-width: 0;
+    max-width: 6.5rem;
+    overflow: hidden;
+  }
+
+  /*
+   * Sticky Actions column — header + body freeze on horizontal scroll.
+   * Perf tables put sticky-top on each th (not tr) so corner cell sticks correctly.
+   */
+  .klip-compact-table--operational th.klip-op-col--actions,
+  .klip-compact-table--operational td.klip-op-col--actions {
+    position: sticky;
+    right: 0;
+    width: 100px;
+    min-width: 100px;
+    max-width: 100px;
+    box-sizing: border-box;
+    border-left: 1px solid rgb(229 231 235);
+    box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.08);
+  }
+
+  .klip-compact-table--operational thead th.klip-op-col--actions {
+    top: 0;
+    z-index: 40;
+    background-color: rgb(249 250 251);
+  }
+
+  .klip-compact-table--operational tbody td.klip-op-col--actions {
+    z-index: 10;
+  }
+
+  .klip-compact-table--operational tbody tr.bg-white td.klip-op-col--actions {
+    background-color: rgb(255 255 255);
+  }
+
+  .klip-compact-table--operational tbody tr.bg-gray-50 td.klip-op-col--actions {
+    background-color: rgb(249 250 251);
+  }
+
   /* Trucking page — progressive table loading (row-level shimmer, not per-cell) */
   @keyframes klip-trucking-row-shimmer {
     0% {

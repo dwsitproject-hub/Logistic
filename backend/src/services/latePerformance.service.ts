@@ -10,6 +10,7 @@ import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
 import { CONTRACTS_QTY_MOVE_CTE } from '../controllers/contractsQtyMoveSql';
 import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL } from '../controllers/contractSqlFragments';
+import { appendContractPerfProductSubstringSql } from '../utils/contractPerfProductFilterSql';
 
 export type LatePerformancePart = 'summary' | 'tree' | 'all';
 
@@ -396,10 +397,11 @@ export function buildLatePerformanceQuery(filters: LatePerformanceFilters): {
     }
   }
 
-  if (productFilter && productFilter.toUpperCase() !== 'ALL') {
-    queryText += ` AND UPPER(COALESCE(base.product, '')) = UPPER($${paramIndex})`;
-    queryParams.push(productFilter);
-    paramIndex++;
+  const productClause = appendContractPerfProductSubstringSql(productFilter, 'base.product', paramIndex);
+  if (productClause) {
+    queryText += productClause.clause;
+    queryParams.push(productClause.param);
+    paramIndex = productClause.nextParamIndex;
   }
 
   queryText += appendContractPerfSourceTypeFilter(sourceTypeFilter, 'base.source_type');
