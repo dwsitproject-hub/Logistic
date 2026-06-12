@@ -14,6 +14,7 @@ import {
   BookOpen,
   Bot,
   Droplets,
+  FileCheck,
 } from 'lucide-react'
 
 export type NavItem = {
@@ -51,6 +52,13 @@ export const NAV_ITEMS: NavItem[] = [
   { name: 'Shipments', href: '/shipments', icon: Package, roles: ['ALL'], permissionKey: 'page.shipments' },
   { name: 'Trucking', href: '/trucking', icon: Truck, roles: ['ALL'], permissionKey: 'page.trucking' },
   { name: 'Oil Loss', href: '/oil-loss', icon: Droplets, roles: ['ALL'], permissionKey: 'page.oil_loss' },
+  {
+    name: 'Commercial Documents',
+    href: '/commercial-documents',
+    icon: FileCheck,
+    roles: ['ALL'],
+    permissionKey: 'page.commercial_documents',
+  },
   { name: 'Claim Mutu', href: '/claim-mutu', icon: Truck, roles: ['ALL'], permissionKey: 'page.claim_mutu' },
   { name: 'Claim Susut', href: '/claim-susut', icon: Truck, roles: ['ALL'], permissionKey: 'page.claim_susut' },
   { name: 'Suppliers Dashboard', href: '/customer-360', icon: Users, roles: ['ALL'], permissionKey: 'page.customer_360' },

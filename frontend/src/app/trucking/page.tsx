@@ -29,8 +29,9 @@ import {
   TableInitialLoadPlaceholderContent,
 } from '@/components/performance/TableInitialLoadPlaceholder'
 import {
+  COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
   CONTRACT_PERF_TABLE_CELL_PAD,
-  CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
+  CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
 } from '@/lib/contractPerformanceColumns'
 import {
@@ -3081,7 +3082,7 @@ function TruckingPageContent() {
                       className={COMPACT_OPERATIONAL_TABLE_CLASS}
                     >
                       <thead>
-                      <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_CLASS}>
+                      <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
                         {visibleColumns.map(col => {
                           const active = sortKey === col.id
                           const opColClass = operationalTableColumnClass(
@@ -3092,7 +3093,7 @@ function TruckingPageContent() {
                             <th
                               key={col.id}
                               scope="col"
-                              className={`relative text-left align-top font-semibold cursor-move ${CONTRACT_PERF_TABLE_CELL_PAD} ${opColClass} ${dragColId === col.id ? 'opacity-60' : ''}`}
+                              className={`relative text-left align-top font-semibold cursor-move sticky top-0 z-20 bg-gray-50 ${CONTRACT_PERF_TABLE_CELL_PAD} ${opColClass} ${dragColId === col.id ? 'opacity-60' : ''}`}
                               draggable
                               onDragStart={(e) => {
                                 setDragColId(col.id)
@@ -3126,7 +3127,7 @@ function TruckingPageContent() {
                         })}
                         <th
                           scope="col"
-                          className={`text-center align-bottom font-semibold sticky right-0 z-20 bg-gray-50 border-l border-gray-200 ${CONTRACT_PERF_TABLE_CELL_PAD}`}
+                          className={`${COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS} text-center align-bottom font-semibold border-l border-gray-200 ${CONTRACT_PERF_TABLE_CELL_PAD}`}
                           style={{ width: TRUCKING_ACTIONS_COL_WIDTH }}
                         >
                           Actions

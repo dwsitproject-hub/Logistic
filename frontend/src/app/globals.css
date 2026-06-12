@@ -282,9 +282,9 @@
   .klip-compact-table--operational td.klip-op-col--actions {
     position: sticky;
     right: 0;
-    width: 100px;
-    min-width: 100px;
-    max-width: 100px;
+    width: 80px;
+    min-width: 80px;
+    max-width: 80px;
     box-sizing: border-box;
     border-left: 1px solid rgb(229 231 235);
     box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.08);
@@ -305,6 +305,18 @@
   }
 
   .klip-compact-table--operational tbody tr.bg-gray-50 td.klip-op-col--actions {
+    background-color: rgb(249 250 251);
+  }
+
+  /*
+   * Operational list tables (Contract, Shipment, Trucking) — Actions header only.
+   * Body <td> sticky classes stay as-is on each page.
+   */
+  .klip-compact-table--operational thead th.klip-op-col--actions-header {
+    position: sticky;
+    right: 0;
+    top: 0;
+    z-index: 40;
     background-color: rgb(249 250 251);
   }
 

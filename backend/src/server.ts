@@ -43,6 +43,7 @@ import userPreferencesRoutes from './routes/userPreferences.routes';
 import activityRoutes from './routes/activity.routes';
 import agentAiRoutes from './routes/agentAi.routes';
 import oilLossRoutes from './routes/oilLoss.routes';
+import commercialDocumentsRoutes from './routes/commercialDocuments.routes';
 
 dotenv.config();
 
@@ -129,6 +130,7 @@ app.use('/api/claim-mutu', claimMutuRoutes);
 app.use('/api/claim-susut', claimSusutRoutes);
 app.use('/api/user-preferences', userPreferencesRoutes);
 app.use('/api/oil-loss', oilLossRoutes);
+app.use('/api/commercial-documents', commercialDocumentsRoutes);
 
 // Error handling
 app.use(notFoundHandler);

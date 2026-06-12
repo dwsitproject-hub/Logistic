@@ -9,11 +9,16 @@ export const COMPACT_TABLE_HEADER_LABEL_CLASS = 'klip-compact-table-header-label
 export const COMPACT_TABLE_HEADER_ROW_CLASS =
   'text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10 klip-compact-table-header-row'
 
-/** Perf tables (CP / Shipping Performance): sticky top on each th — not on tr (breaks Actions sticky-right). */
+/** Operational / perf tables: sticky top on each th — not on tr (breaks Actions sticky-right). */
 export const COMPACT_TABLE_HEADER_ROW_PERF_CLASS =
   'text-xs font-semibold text-gray-600 bg-gray-50 border-b klip-compact-table-header-row'
 
-export const COMPACT_TABLE_ACTIONS_COL_WIDTH_PX = 100
+export const COMPACT_TABLE_HEADER_ROW_OPERATIONAL_CLASS = COMPACT_TABLE_HEADER_ROW_PERF_CLASS
+
+/** Actions <th> only — sticky right + top corner cell (body <td> unchanged). */
+export const COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS = 'klip-op-col--actions-header'
+
+export const COMPACT_TABLE_ACTIONS_COL_WIDTH_PX = 80
 
 export const COMPACT_TABLE_ACTIONS_HEADER_CLASS =
   'klip-op-col--actions text-center align-middle font-semibold whitespace-nowrap px-4 py-1.5'

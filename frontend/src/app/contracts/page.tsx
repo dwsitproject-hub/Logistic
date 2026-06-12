@@ -92,7 +92,9 @@ import {
   COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
   CONTRACT_PERF_TABLE_CELL_PAD,
+  COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
   CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
+  CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS,
   CONTRACT_PERF_TABLE_HEADER_ROW_PERF_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
   getContractPerfTableColumnLayout,
@@ -4519,7 +4521,7 @@ function ContractsPageContent() {
                         className={
                           isContractPerformance
                             ? CONTRACT_PERF_TABLE_HEADER_ROW_PERF_CLASS
-                            : CONTRACT_PERF_TABLE_HEADER_ROW_CLASS
+                            : CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS
                         }
                       >
                         {visibleColumns.map(col => {
@@ -4544,7 +4546,7 @@ function ContractsPageContent() {
                                 'relative text-left font-semibold cursor-move align-top',
                                 contractPerfTableCellPad,
                                 opColClass,
-                                isContractPerformance && 'sticky top-0 z-20 bg-gray-50',
+                                'sticky top-0 z-20 bg-gray-50',
                                 dragColId === col.id && 'opacity-60',
                               )}
                               draggable
@@ -4886,9 +4888,11 @@ function ContractsPageContent() {
                           className={cn(
                             isContractPerformance
                               ? COMPACT_TABLE_ACTIONS_HEADER_CLASS
-                              : 'text-center align-top font-semibold sticky right-0 z-20 bg-gray-50 border-l border-gray-200',
-                            !isContractPerformance && 'min-w-[160px]',
-                            !isContractPerformance && contractPerfTableCellPad,
+                              : cn(
+                                  COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
+                                  'text-center align-top font-semibold border-l border-gray-200 min-w-[160px]',
+                                  contractPerfTableCellPad,
+                                ),
                           )}
                         >
                           Actions

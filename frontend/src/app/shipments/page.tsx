@@ -34,8 +34,9 @@ import {
   TableInitialLoadPlaceholderContent,
 } from '@/components/performance/TableInitialLoadPlaceholder'
 import {
+  COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
   CONTRACT_PERF_TABLE_CELL_PAD,
-  CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
+  CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
 } from '@/lib/contractPerformanceColumns'
 import {
@@ -4403,8 +4404,11 @@ function ShipmentsPageContent() {
                   >
                       <table className={COMPACT_OPERATIONAL_TABLE_CLASS}>
                         <thead>
-                        <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_CLASS}>
-                          <th scope="col" className={`w-10 align-bottom ${CONTRACT_PERF_TABLE_CELL_PAD}`} />
+                        <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
+                          <th
+                            scope="col"
+                            className={`w-10 align-bottom sticky top-0 z-20 bg-gray-50 ${CONTRACT_PERF_TABLE_CELL_PAD}`}
+                          />
                         {visibleColumns.map(col => {
                           const active = sortKey === col.id
                           const opColClass = operationalTableColumnClass(
@@ -4415,7 +4419,7 @@ function ShipmentsPageContent() {
                             <th
                               key={col.id}
                               scope="col"
-                              className={`relative text-left align-top font-semibold cursor-move ${CONTRACT_PERF_TABLE_CELL_PAD} ${opColClass} ${dragColId === col.id ? 'opacity-60' : ''}`}
+                              className={`relative text-left align-top font-semibold cursor-move sticky top-0 z-20 bg-gray-50 ${CONTRACT_PERF_TABLE_CELL_PAD} ${opColClass} ${dragColId === col.id ? 'opacity-60' : ''}`}
                               draggable
                               onDragStart={(e) => {
                                 setDragColId(col.id)
@@ -4447,7 +4451,10 @@ function ShipmentsPageContent() {
                             </th>
                           )
                         })}
-                        <th scope="col" className={`sticky right-0 z-20 bg-gray-50 border-l text-center align-bottom font-semibold whitespace-nowrap shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD}`}>
+                        <th
+                          scope="col"
+                          className={`${COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS} border-l text-center align-bottom font-semibold whitespace-nowrap shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD}`}
+                        >
                           Actions
                         </th>
                         </tr>

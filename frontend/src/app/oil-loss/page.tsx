@@ -35,7 +35,7 @@ import { ContractPerfTableSortHeader } from '@/components/performance/ContractPe
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
-  CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
+  CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
 } from '@/lib/contractPerformanceColumns'
 import {
@@ -1648,7 +1648,7 @@ export default function OilLossPage() {
                       )}
                     >
                       <thead>
-                        <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_CLASS}>
+                        <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
                           {visibleColumns.map((col) => {
                             const active = sortKey === col.id
                             const opColClass = operationalTableColumnClass(
@@ -1658,7 +1658,7 @@ export default function OilLossPage() {
                               <th
                                 key={col.id}
                                 scope="col"
-                                className={`relative text-left align-top font-semibold cursor-move ${CONTRACT_PERF_TABLE_CELL_PAD} ${opColClass} ${dragColId === col.id ? 'opacity-60' : ''}`}
+                                className={`relative text-left align-top font-semibold cursor-move sticky top-0 z-20 bg-gray-50 ${CONTRACT_PERF_TABLE_CELL_PAD} ${opColClass} ${dragColId === col.id ? 'opacity-60' : ''}`}
                                 draggable
                                 onDragStart={(e) => {
                                   setDragColId(col.id)

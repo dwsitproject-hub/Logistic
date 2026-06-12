@@ -178,11 +178,36 @@ const TRUCKING_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> 
   cargo_readiness_date: 'short',
 }
 
+const COMMERCIAL_DOCS_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
+  contract_date: 'short',
+  contract_ext_no: 'stack',
+  po_number: 'token',
+  supplier: 'wrap',
+  incoterm: 'short',
+  product: 'wrap',
+  payment_due_date: 'short',
+  dp_due_date: 'short',
+  contract_qty: 'short',
+  unit_price: 'short',
+  total_price: 'short',
+  buyer: 'wrap',
+  plant_site: 'wrap',
+  transport_mode: 'short',
+  b2b_flag: 'short',
+  doc_contract: 'short',
+  doc_faktur_pajak: 'short',
+  doc_dp: 'short',
+  doc_invoice_dp: 'short',
+  doc_ep_pelunasan: 'short',
+  doc_invoice_pelunasan: 'short',
+}
+
 export function getOperationalColumnLayout(
   table:
     | 'shipments'
     | 'trucking'
     | 'contracts'
+    | 'commercial_documents'
     | 'oil_loss'
     | 'oil_loss_transporter'
     | 'shipping_performance',
@@ -193,7 +218,9 @@ export function getOperationalColumnLayout(
       ? SHIPMENT_COLUMN_LAYOUT
       : table === 'trucking'
         ? TRUCKING_COLUMN_LAYOUT
-        : table === 'oil_loss'
+        : table === 'commercial_documents'
+          ? COMMERCIAL_DOCS_COLUMN_LAYOUT
+          : table === 'oil_loss'
           ? OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT
           : table === 'oil_loss_transporter'
             ? OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT

@@ -87,7 +87,7 @@ export function ContractTableBodySkeleton({
   showActionsColumn = true,
 }: ContractTableBodySkeletonProps) {
   const cols = Math.max(1, columnCount)
-  const actionsMin = actionsColMinWidth === 'compact' ? 'min-w-[100px]' : 'min-w-[160px]'
+  const actionsMin = actionsColMinWidth === 'compact' ? 'min-w-[80px]' : 'min-w-[160px]'
 
   return (
     <>
