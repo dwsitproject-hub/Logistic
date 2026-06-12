@@ -71,6 +71,11 @@ const PAGE_SIZE = 50
 
 type DocumentStatusFilter = '' | 'checked' | 'unchecked'
 
+function formatContractTotalLabel(count: number): string {
+  const formatted = count.toLocaleString('en-US')
+  return count === 1 ? `${formatted} contract` : `${formatted} contracts`
+}
+
 export default function CommercialDocumentsPage() {
   return (
     <Layout>
@@ -342,6 +347,13 @@ function CommercialDocumentsPageContent() {
   const applySummaryFilter = (type: CommercialDocumentType, status: 'checked' | 'unchecked') => {
     setDocumentTypeFilter(type)
     setDocumentStatusFilter(status)
+    setCurrentPage(1)
+  }
+
+  const resetSummarySelection = () => {
+    setDocumentTypeFilter('')
+    setDocumentStatusFilter('')
+    setCurrentPage(1)
   }
 
   const toggleColumn = (colId: CommercialDocsColumnId) => {
@@ -394,6 +406,7 @@ function CommercialDocumentsPageContent() {
         documentTypeFilter={documentTypeFilter}
         documentStatusFilter={documentStatusFilter}
         onFilter={applySummaryFilter}
+        onResetSelection={resetSummarySelection}
       />
 
       {/* Section 2 */}
@@ -487,14 +500,14 @@ function CommercialDocumentsPageContent() {
             <div className="flex items-center gap-3">
               <div>
                 <CardTitle className="flex items-center gap-2">
-                  <span>All Documents</span>
+                  <span>All Contracts</span>
                   {fetching && rows.length > 0 ? (
                     <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                   ) : null}
                 </CardTitle>
                 <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                   <span className="whitespace-nowrap tabular-nums text-gray-700">
-                    <span className="font-semibold">{totalRows.toLocaleString('en-US')}</span> documents
+                    <span className="font-semibold">{formatContractTotalLabel(totalRows)}</span>
                   </span>
                   <span className="text-gray-400" aria-hidden>
                     ·
@@ -708,7 +721,7 @@ function CommercialDocumentsPageContent() {
                   ) : sortedRows.length === 0 ? (
                     <tr className="bg-white">
                       <td colSpan={visibleColumns.length + 1} className="px-4 py-10 text-center text-gray-500">
-                        <p>No documents found</p>
+                        <p>No contracts found</p>
                         {debouncedSearch ? (
                           <p className="text-sm mt-2">Try adjusting your search filters</p>
                         ) : null}
@@ -738,9 +751,12 @@ function CommercialDocumentsPageContent() {
                               >
                                 <div
                                   className={cn(
-                                    COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
-                                    CONTRACT_PERF_TABLE_ROW_MIN_H,
-                                    centerCell && 'justify-center',
+                                    centerCell
+                                      ? 'flex w-full items-center justify-center min-h-[32px]'
+                                      : cn(
+                                          COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
+                                          CONTRACT_PERF_TABLE_ROW_MIN_H,
+                                        ),
                                   )}
                                 >
                                   {col.render(row)}

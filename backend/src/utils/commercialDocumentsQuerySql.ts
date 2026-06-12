@@ -200,6 +200,8 @@ export function buildCommercialDocumentsListQuery(params: CommercialDocumentsLis
     values.push(params.plant.trim());
   }
   if (params.documentType && params.documentStatus) {
+    // Section 1 summary cards only count open contracts — keep table total aligned.
+    where.push('e.is_open = true');
     const col = docTypeCheckedColumn(params.documentType);
     if (col) {
       where.push(params.documentStatus === 'checked' ? `e.${col} = true` : `e.${col} = false`);

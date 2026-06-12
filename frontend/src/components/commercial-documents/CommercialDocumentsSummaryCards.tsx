@@ -18,6 +18,7 @@ type Props = {
   documentTypeFilter: CommercialDocumentType | ''
   documentStatusFilter: DocumentStatusFilter
   onFilter: (type: CommercialDocumentType, status: 'checked' | 'unchecked') => void
+  onResetSelection?: () => void
 }
 
 type MetricRowProps = {
@@ -69,9 +70,27 @@ export function CommercialDocumentsSummaryCards({
   documentTypeFilter,
   documentStatusFilter,
   onFilter,
+  onResetSelection,
 }: Props) {
+  const hasSummarySelection = documentTypeFilter !== '' || documentStatusFilter !== ''
+
   return (
-    <div className="overflow-x-auto pb-0.5 -mx-1 px-1">
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3 px-1">
+        <p className="text-xs text-gray-500">
+          Click Checked or Unchecked to filter the contract table below.
+        </p>
+        {hasSummarySelection && onResetSelection ? (
+          <button
+            type="button"
+            onClick={onResetSelection}
+            className="text-sm text-blue-700 hover:underline shrink-0"
+          >
+            Reset selection
+          </button>
+        ) : null}
+      </div>
+      <div className="overflow-x-auto pb-0.5 -mx-1 px-1">
       <div className="grid grid-cols-6 gap-3 min-w-[920px] xl:min-w-0">
         {COMMERCIAL_DOCUMENT_TYPES.map((type) => {
           const card = summary?.[type]
@@ -133,6 +152,7 @@ export function CommercialDocumentsSummaryCards({
             </Card>
           )
         })}
+      </div>
       </div>
     </div>
   )

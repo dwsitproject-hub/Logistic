@@ -69,17 +69,9 @@ export function isCommercialDocStatusColumn(id: CommercialDocsColumnId): boolean
 
 function DocStatusCell({ checked }: { checked: boolean }) {
   if (checked) {
-    return (
-      <div className="flex h-full w-full items-center justify-center">
-        <Check className="h-4 w-4 text-green-600" aria-label="Checked" />
-      </div>
-    )
+    return <Check className="h-4 w-4 text-green-600" aria-label="Checked" />
   }
-  return (
-    <div className="flex h-full w-full items-center justify-center">
-      <span className="text-sm text-gray-400">-</span>
-    </div>
-  )
+  return <span className="text-sm text-gray-400">-</span>
 }
 
 const DOC_COL_MAP: Record<
