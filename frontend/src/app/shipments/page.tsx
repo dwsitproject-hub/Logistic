@@ -56,10 +56,9 @@ import {
 } from '@/lib/shipmentColumns'
 import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
 import {
-  SHIPMENTS_CATALOG_FETCH_LIMIT,
-  SHIPMENTS_CATALOG_PAGE_SIZE,
   computeEtaBuckets,
   computeSection1StatusCounts,
+  fetchShipmentsCatalogBatches,
   filterRowsForTableDisplay,
   filterRowsByStatusScope,
   type EtaBucketFilterKey,
@@ -912,7 +911,11 @@ function ShipmentsPageContent() {
 
   // Column header filters apply only when user presses Enter inside the filter popover.
 
-  const fetchShipments = async (_forcedPage?: number, searchOverride?: string) => {
+  const fetchShipments = async (
+    _forcedPage?: number,
+    searchOverride?: string,
+    options?: { force?: boolean },
+  ) => {
     const listGen = ++listFetchGenRef.current
     const hadRows = shipments.length > 0
     if (!hadRows) setLoading(true)
@@ -976,39 +979,26 @@ function ShipmentsPageContent() {
       params.append('includeSummary', 'false')
       params.append('skipSapJoin', 'true')
 
-      const catalogRows: Shipment[] = []
-      let catalogPage = 1
-      let catalogTotal = Number.POSITIVE_INFINITY
-
-      while (catalogRows.length < SHIPMENTS_CATALOG_FETCH_LIMIT && catalogRows.length < catalogTotal) {
-        const pageParams = new URLSearchParams(params.toString())
-        pageParams.set('limit', String(SHIPMENTS_CATALOG_PAGE_SIZE))
-        pageParams.set('page', String(catalogPage))
-        const listUrl = `/shipments?${pageParams.toString()}`
-
-        const listEnvelope = await api.get(listUrl).then((r) => r.data)
-        if (listGen !== listFetchGenRef.current) return
-
-        if (!listEnvelope?.success || !Array.isArray(listEnvelope?.data?.shipments)) {
-          const msg =
-            listEnvelope?.error?.message ||
-            listEnvelope?.message ||
-            'Unexpected response from shipments API'
-          throw new Error(msg)
-        }
-
-        const batch = listEnvelope.data.shipments as Shipment[]
-        if (batch.length === 0) break
-
-        catalogRows.push(...batch)
-        catalogTotal = Number(listEnvelope.data.pagination?.total ?? catalogRows.length)
-
-        if (batch.length < SHIPMENTS_CATALOG_PAGE_SIZE) break
-        catalogPage += 1
+      const catalogCacheKey = buildCacheKey('GET', `/shipments/catalog?${params.toString()}`)
+      const applyCatalog = (rows: Shipment[]) => {
+        setShipments(rows)
       }
 
-      setShipments(catalogRows)
-      setListFetching(false)
+      const { data: catalogRows, revalidating } = await cachedGet(
+        catalogCacheKey,
+        () => fetchShipmentsCatalogBatches<Shipment>((url) => api.get(url), params),
+        {
+          force: options?.force,
+          onRevalidate: (fresh) => {
+            if (listGen !== listFetchGenRef.current) return
+            applyCatalog(fresh)
+            setListFetching(false)
+          },
+        },
+      )
+      if (listGen !== listFetchGenRef.current) return
+      applyCatalog(catalogRows)
+      if (!revalidating) setListFetching(false)
     } catch (error: any) {
       if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch shipments:', error)
@@ -1609,7 +1599,7 @@ function ShipmentsPageContent() {
       }
 
       setBulkUploadResult({ created: createCount, updated: updateCount, failed: errorCount, errors })
-      await fetchShipments()
+      await fetchShipments(undefined, undefined, { force: true })
     } catch (error) {
       console.error('Bulk upload error:', error)
       alert('Failed to process CSV file. Check the file format and try again.')
@@ -3146,7 +3136,7 @@ function ShipmentsPageContent() {
       setEditedPortData(null)
       setEditingShipmentInfo(false)
       setEditedShipmentInfo(null)
-      await fetchShipments(page)
+      await fetchShipments(page, undefined, { force: true })
       resetQuantityUnlockState()
       alert('Shipment information updated successfully!')
     } catch (error) {
@@ -6267,7 +6257,7 @@ function ShipmentsPageContent() {
         open={showAddShipment}
         onClose={() => setShowAddShipment(false)}
         onCreated={() => {
-          void fetchShipments(1)
+          void fetchShipments(1, undefined, { force: true })
         }}
       />
     </Layout>

@@ -364,3 +364,50 @@ export function filterRowsForTableDisplay<T extends ShipmentsPageRow>(
 
   return out
 }
+
+type ShipmentsCatalogApiGet = (url: string) => Promise<{ data: unknown }>
+
+type ShipmentsCatalogPageEnvelope<T> = {
+  success?: boolean
+  data?: { shipments?: T[]; pagination?: { total?: number } }
+  error?: { message?: string }
+  message?: string
+}
+
+/** Paginated catalog fetch for Shipments SSOT (500 rows per round-trip). */
+export async function fetchShipmentsCatalogBatches<T>(
+  get: ShipmentsCatalogApiGet,
+  scopeParams: URLSearchParams,
+): Promise<T[]> {
+  const catalogRows: T[] = []
+  let catalogPage = 1
+  let catalogTotal = Number.POSITIVE_INFINITY
+
+  while (catalogRows.length < SHIPMENTS_CATALOG_FETCH_LIMIT && catalogRows.length < catalogTotal) {
+    const pageParams = new URLSearchParams(scopeParams.toString())
+    pageParams.set('limit', String(SHIPMENTS_CATALOG_PAGE_SIZE))
+    pageParams.set('page', String(catalogPage))
+    const listUrl = `/shipments?${pageParams.toString()}`
+
+    const listEnvelope = (await get(listUrl).then((r) => r.data)) as ShipmentsCatalogPageEnvelope<T>
+
+    if (!listEnvelope?.success || !Array.isArray(listEnvelope?.data?.shipments)) {
+      const msg =
+        listEnvelope?.error?.message ||
+        listEnvelope?.message ||
+        'Unexpected response from shipments API'
+      throw new Error(msg)
+    }
+
+    const batch = listEnvelope.data.shipments
+    if (batch.length === 0) break
+
+    catalogRows.push(...batch)
+    catalogTotal = Number(listEnvelope.data.pagination?.total ?? catalogRows.length)
+
+    if (batch.length < SHIPMENTS_CATALOG_PAGE_SIZE) break
+    catalogPage += 1
+  }
+
+  return catalogRows
+}

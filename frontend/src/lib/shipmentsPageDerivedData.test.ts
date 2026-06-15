@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   computeEtaBuckets,
   computeSection1StatusCounts,
+  fetchShipmentsCatalogBatches,
   filterRowsByStatusScope,
   filterRowsForTableDisplay,
   section1BadgeSum,
+  SHIPMENTS_CATALOG_PAGE_SIZE,
   type ShipmentsPageRow,
 } from './shipmentsPageDerivedData'
 
@@ -109,5 +111,42 @@ describe('filterRowsForTableDisplay', () => {
     )
     expect(filtered).toHaveLength(1)
     expect(filtered[0].id).toBe('1')
+  })
+})
+
+describe('fetchShipmentsCatalogBatches', () => {
+  it('merges paginated API responses into one catalog', async () => {
+    const scope = new URLSearchParams({ compact: 'true', includeSummary: 'false', skipSapJoin: 'true' })
+    const pageSize = SHIPMENTS_CATALOG_PAGE_SIZE
+    const get = async (url: string) => {
+      const params = new URLSearchParams(url.split('?')[1] ?? '')
+      const page = Number(params.get('page') || 1)
+      const limit = Number(params.get('limit') || pageSize)
+      if (page === 1) {
+        return {
+          data: {
+            success: true,
+            data: {
+              shipments: Array.from({ length: limit }, (_, i) => ({ id: `p1-${i}` })),
+              pagination: { total: limit + 2 },
+            },
+          },
+        }
+      }
+      return {
+        data: {
+          success: true,
+          data: {
+            shipments: [{ id: 'p2-0' }, { id: 'p2-1' }],
+            pagination: { total: limit + 2 },
+          },
+        },
+      }
+    }
+
+    const rows = await fetchShipmentsCatalogBatches<{ id: string }>(get, scope)
+    expect(rows).toHaveLength(pageSize + 2)
+    expect(rows[0].id).toBe('p1-0')
+    expect(rows[rows.length - 1].id).toBe('p2-1')
   })
 })
