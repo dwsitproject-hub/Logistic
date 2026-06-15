@@ -2269,6 +2269,25 @@ function TruckingPageContent() {
     }
   }, [visibleColumns, sortedOperations, editingId])
 
+  const truckingViewToggle = (
+    <div className="inline-flex rounded-lg border bg-white p-1">
+      <button
+        type="button"
+        onClick={() => setActiveTab('list')}
+        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'list' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+      >
+        List
+      </button>
+      <button
+        type="button"
+        onClick={() => setActiveTab('calendar')}
+        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'calendar' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+      >
+        Daily Planning Deliverables
+      </button>
+    </div>
+  )
+
   return (
     <Layout>
       <div className="space-y-6">
@@ -2411,31 +2430,6 @@ function TruckingPageContent() {
           </CardContent>
         </Card>
 
-        {/* View: List vs Daily Planning Deliverables — above main table/calendar */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex rounded-lg border bg-white p-1">
-            <button
-              type="button"
-              onClick={() => setActiveTab('list')}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'list' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-            >
-              List
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('calendar')}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'calendar' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-            >
-              Daily Planning Deliverables
-            </button>
-          </div>
-          {activeTab === 'calendar' ? (
-            <div className="text-xs text-slate-500 w-full sm:w-auto sm:text-right">
-              Enter qty only on days within each row&apos;s Due Start – Due End (gray days are blocked). Amber = unsaved; click Save.
-            </div>
-          ) : null}
-        </div>
-
         {/* Filters (list + daily planning) */}
         <Card>
           <CardContent className="pt-6">
@@ -2552,18 +2546,21 @@ function TruckingPageContent() {
         {activeTab === 'calendar' && (
           <>
           <Card>
-            <CardHeader className="space-y-4">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <CardTitle className="text-base flex flex-wrap items-center gap-2">
-                    Daily Planning Deliverables — Calendar
-                    <Badge variant="outline" className="text-[10px]">Daily qty: MT</Badge>
-                  </CardTitle>
-                  <div className="text-xs text-gray-600 mt-1 max-w-xl">
-                    Shows operations that overlap the selected month (due delivery / trucking dates). Edit cells or upload CSV/Excel (Contract Ext No, date, quantity) — same validation as the website (due date range, quantity caps).
-                  </div>
+            <CardHeader className="space-y-3">
+              <div>
+                <CardTitle className="text-base flex flex-wrap items-center gap-2">
+                  Daily Planning Deliverables — Calendar
+                  <Badge variant="outline" className="text-[10px]">Daily qty: MT</Badge>
+                </CardTitle>
+                <div className="text-xs text-gray-600 mt-1 max-w-xl">
+                  Shows operations that overlap the selected month (due delivery / trucking dates). Edit cells or upload CSV/Excel (Contract Ext No, date, quantity) — same validation as the website (due date range, quantity caps).
+                  {' '}
+                  Enter qty only on days within each row&apos;s Due Start – Due End (gray days are blocked). Amber = unsaved; click Save.
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                {truckingViewToggle}
+                <div className="flex flex-wrap items-center gap-2 ml-auto">
                   <div className="relative" ref={calendarColumnsRef}>
                     <Button
                       type="button"
@@ -2872,38 +2869,39 @@ function TruckingPageContent() {
         {/* Trucking Operations List */}
         {activeTab === 'list' && (
         <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  All Trucking Operations
-                  {listFetching ? (
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
-                  ) : null}
-                </CardTitle>
-                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
-                  <span className="whitespace-nowrap tabular-nums text-gray-700">
-                    <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> operations
-                  </span>
-                  <span className="text-gray-400" aria-hidden>
-                    ·
-                  </span>
-                  <span className="whitespace-nowrap tabular-nums">
-                    Page {page}/{totalPages} · {truckingOperations.length} rows
-                  </span>
-                  {truckingTableScopeLabel ? (
-                    <>
-                      <span className="text-gray-400" aria-hidden>
-                        ·
-                      </span>
-                      <span className="whitespace-nowrap font-medium text-blue-700">
-                        {truckingTableScopeLabel}
-                      </span>
-                    </>
-                  ) : null}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
+          <CardHeader className="space-y-3">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                All Trucking Operations
+                {listFetching ? (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+                ) : null}
+              </CardTitle>
+              <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                <span className="whitespace-nowrap tabular-nums text-gray-700">
+                  <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> operations
+                </span>
+                <span className="text-gray-400" aria-hidden>
+                  ·
+                </span>
+                <span className="whitespace-nowrap tabular-nums">
+                  Page {page}/{totalPages} · {truckingOperations.length} rows
+                </span>
+                {truckingTableScopeLabel ? (
+                  <>
+                    <span className="text-gray-400" aria-hidden>
+                      ·
+                    </span>
+                    <span className="whitespace-nowrap font-medium text-blue-700">
+                      {truckingTableScopeLabel}
+                    </span>
+                  </>
+                ) : null}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {truckingViewToggle}
+              <div className="flex flex-wrap items-center gap-2 ml-auto">
                 <div className="relative">
                   <Button
                     variant="outline"

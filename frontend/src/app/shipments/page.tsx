@@ -1725,6 +1725,7 @@ function ShipmentsPageContent() {
   }, [])
 
   const section3TableLoading = loading && shipments.length === 0
+  const section1DataLoading = listFetching || section3TableLoading
 
   const shipmentsTableScopeLabel = useMemo(() => {
     if (statusFilter !== 'ALL') {
@@ -3389,7 +3390,7 @@ function ShipmentsPageContent() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <span>Status Distribution</span>
-              {listFetching && processedShipments.length > 0 ? (
+              {section1DataLoading ? (
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
               ) : null}
             </CardTitle>
@@ -3397,7 +3398,7 @@ function ShipmentsPageContent() {
           <CardContent>
             <div
               className={`flex w-full min-w-0 items-center justify-start gap-3 overflow-x-auto py-4 px-4 md:gap-6 transition-opacity duration-200 ${
-                listFetching && processedShipments.length > 0 ? 'opacity-65' : 'opacity-100'
+                section1DataLoading ? 'opacity-65' : 'opacity-100'
               }`}
             >
               <div className="flex flex-nowrap items-center shrink-0">
