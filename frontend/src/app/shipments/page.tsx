@@ -986,10 +986,10 @@ function ShipmentsPageContent() {
         pageParams.set('page', String(catalogPage))
         const listUrl = `/shipments?${pageParams.toString()}`
 
-        const { data: listEnvelope } = await api.get(listUrl).then((r) => r.data)
+        const listEnvelope = await api.get(listUrl).then((r) => r.data)
         if (listGen !== listFetchGenRef.current) return
 
-        if (!listEnvelope?.success || !listEnvelope?.data?.shipments) {
+        if (!listEnvelope?.success || !Array.isArray(listEnvelope?.data?.shipments)) {
           const msg =
             listEnvelope?.error?.message ||
             listEnvelope?.message ||
