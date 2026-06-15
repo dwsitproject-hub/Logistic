@@ -5,6 +5,11 @@ import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserSto
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import { runShippingPerformance } from '../services/shippingPerformance.service';
+import {
+  buildShipmentListCacheKey,
+  invalidateShipmentsListCache,
+  resolveShipmentsListForRequest,
+} from '../services/shipmentList.service';
 import { normalizeAndValidateShipmentDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/shipmentDailyDeliverables';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
@@ -13,6 +18,7 @@ import {
   appendShipmentEtaBucketFilters,
   appendShipmentGlobalSearch,
   appendShipmentLateIndicatorFilter,
+  appendShipmentScopeStatusFilter,
   appendShipmentStatusFilter,
   appendShipmentViewOptionFilter,
   normalizeShipmentEtaBucketParam,
@@ -226,6 +232,10 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     const viewQueryParam = (req.query as any).viewQuery as string | undefined;
     const etaLoadingBucket = normalizeShipmentEtaBucketParam((req.query as any).etaLoading);
     const etaDischargeBucket = normalizeShipmentEtaBucketParam((req.query as any).etaDischarge);
+    const scopeStatusParam =
+      typeof (req.query as any).scopeStatus === 'string'
+        ? (req.query as any).scopeStatus
+        : undefined;
     const offset = (Number(page) - 1) * Number(limit);
     const compact = String((req.query as any).compact || '').toLowerCase() === 'true';
     const includeSummary =
@@ -584,7 +594,9 @@ ${contractMetaSelect}
     );
     fp = statusFilter.nextIndex;
 
-    const outerSql = `${gSearch.sql}${cCol.sql}${li.sql}${vo.sql}${etaBuckets.sql}${statusFilter.sql}`;
+    const toolbarOuterSql = `${gSearch.sql}${cCol.sql}${li.sql}${vo.sql}`;
+    const cardOuterSql = `${etaBuckets.sql}${statusFilter.sql}`;
+    const outerSql = `${toolbarOuterSql}${cardOuterSql}`;
     const outerParams = [
       ...gSearch.params,
       ...cCol.params,
@@ -592,7 +604,9 @@ ${contractMetaSelect}
       ...vo.params,
       ...statusFilter.params,
     ];
+    const toolbarOuterParams = [...gSearch.params, ...cCol.params, ...li.params, ...vo.params];
     const countParams = [...innerParams, ...outerParams];
+    const toolbarCountParams = [...innerParams, ...toolbarOuterParams];
 
     /**
      * Default list view (YTD, no toolbar filters): aggregate only the current page's STO keys.
@@ -660,13 +674,34 @@ ${contractMetaSelect}
       shipmentBaseCteSqlList = shipmentBaseCteSqlFull;
     }
 
+    const summaryScopeFilter = appendShipmentScopeStatusFilter(
+      summaryOnly ? scopeStatusParam : undefined,
+      1,
+    );
+    const summaryScopeCte =
+      summaryOnly && summaryScopeFilter.sql.trim().length > 0
+        ? `,
+      scoped_shipments AS (
+        SELECT sb.*
+        FROM filtered_shipments sb
+        WHERE 1=1 ${summaryScopeFilter.sql}
+      )`
+        : '';
+    const summaryEnrichedFrom =
+      summaryOnly && summaryScopeFilter.sql.trim().length > 0
+        ? 'scoped_shipments'
+        : 'filtered_shipments';
+    const summaryScopeParams = summaryOnly ? summaryScopeFilter.params : [];
+    const summaryFilterSql = summaryOnly ? toolbarOuterSql : outerSql;
+    const summaryFilterParams = summaryOnly ? toolbarCountParams : countParams;
+
     const summaryCountQuery = `${shipmentBaseCteSqlFull}
       , filtered_shipments AS (
         SELECT sb.*
         FROM shipment_base sb
-        WHERE 1=1 ${outerSql}
-      ),
-      enriched AS (
+        WHERE 1=1 ${summaryFilterSql}
+      )${summaryScopeCte}
+      , enriched AS (
         SELECT
           f.*,
           ${shipmentEffectiveStatusExpr('f')} AS effective_status,
@@ -728,11 +763,11 @@ ${contractMetaSelect}
             (f.eta_discharge_start IS NOT NULL AND (f.eta_discharge_start::date - CURRENT_DATE) > 7) OR
             (f.eta_vessel_complete_discharge IS NOT NULL AND (f.eta_vessel_complete_discharge::date - CURRENT_DATE) > 7)
           ) AS discharge_more_than_7d
-        FROM filtered_shipments f
+        FROM ${summaryEnrichedFrom} f
       )
       SELECT
         COUNT(*)::bigint AS total_count,
-        COUNT(*) FILTER (WHERE effective_status = 'PLANNED')::bigint AS planned_count,
+        COUNT(*) FILTER (WHERE effective_status IN ('PLANNED', 'UNPLANNED'))::bigint AS planned_count,
         COUNT(*) FILTER (WHERE effective_status = 'IN_PROGRESS')::bigint AS in_progress_count,
         COUNT(*) FILTER (WHERE effective_status = 'LOADING')::bigint AS loading_count,
         COUNT(*) FILTER (WHERE effective_status = 'IN_TRANSIT')::bigint AS in_transit_count,
@@ -752,9 +787,50 @@ ${contractMetaSelect}
         COUNT(*) FILTER (WHERE NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND NOT discharge_d_minus_2 AND discharge_more_than_7d)::bigint AS eta_discharge_more_than_7d
       FROM enriched`;
 
+    if (compact) {
+      const cacheKey = buildShipmentListCacheKey({
+        vessel,
+        port,
+        dateFrom,
+        dateTo,
+        delayed,
+        sto,
+        contract,
+        plants,
+        globalSearch,
+        colFilters,
+        lateIndicator: lateIndicatorParam,
+        viewOption: viewOptionParam,
+        viewQuery: viewQueryParam,
+        skipSapJoin,
+      });
+      const data = await resolveShipmentsListForRequest(req, {
+        shipmentBaseCteSqlFull,
+        toolbarOuterSql,
+        innerParams,
+        toolbarOuterParams,
+        skipSapJoin,
+        cacheKey,
+      });
+      timingsMs.total = performance.now() - tReq0;
+      emitShipmentListTimings(res, timingsMs, {
+        path: summaryOnly ? 'summaryOnly-cached' : 'list-cached',
+        compact,
+        skipSapJoin,
+        page: Number(page),
+        limit: Number(limit),
+        rowCount: data.shipments.length,
+        cacheKey,
+      });
+      return res.json({
+        success: true,
+        data,
+      });
+    }
+
     if (summaryOnly) {
       const tSum0 = performance.now();
-      const summaryResult = await query(summaryCountQuery, countParams);
+      const summaryResult = await query(summaryCountQuery, [...summaryFilterParams, ...summaryScopeParams]);
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
@@ -1047,7 +1123,7 @@ ${contractMetaSelect}
     let summaryRow: Record<string, unknown> = {};
     if (includeSummary) {
       const tSa0 = performance.now();
-      const summaryResult = await query(summaryCountQuery, countParams);
+      const summaryResult = await query(summaryCountQuery, [...summaryFilterParams, ...summaryScopeParams]);
       timingsMs.dbSummaryAgg = performance.now() - tSa0;
       summaryRow = summaryResult.rows[0] || {};
     }
@@ -1562,6 +1638,8 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
     }
 
     logger.info('Shipment updated:', { id, updatedFields: updateFields.length, autoStatus });
+
+    invalidateShipmentsListCache();
 
     return res.json({
       success: true,
@@ -2226,6 +2304,8 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
         );
       }
 
+      invalidateShipmentsListCache();
+
       return res.json({
         success: true,
         data: result.rows[0],
@@ -2285,6 +2365,8 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
           [actualShipmentId, eta_vessel_arrival_n, eta_vessel_berthed_at_loading_port_n, eta_loading_start_n, eta_loading_completed_n, eta_vessel_sailed_n]
         );
       }
+
+      invalidateShipmentsListCache();
 
       return res.json({
         success: true,
@@ -2373,6 +2455,8 @@ export const deleteVesselLoadingPort = async (req: AuthRequest, res: Response) =
            RETURNING *`,
           [portId, shipmentId, remark]
         );
+
+    invalidateShipmentsListCache();
 
     return res.json({
       success: true,
@@ -2879,6 +2963,8 @@ export const bulkUpdateShipments = async (req: AuthRequest, res: Response) => {
       successes.push(poNumber);
     }
 
+    if (successes.length > 0) invalidateShipmentsListCache();
+
     return res.json({
       success: true,
       data: {
@@ -3374,6 +3460,8 @@ export const updateStoQtyAssigned = async (req: AuthRequest, res: Response) => {
         updated_at = CURRENT_TIMESTAMP
     `, [sto, contractNumber, parseFloat(String(stoQtyAssigned)) || 0]);
 
+    invalidateShipmentsListCache();
+
     return res.json({
       success: true,
       message: 'STO quantity assigned updated successfully',
@@ -3738,6 +3826,8 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
         WHERE contract_id = ANY($2)
       `, [stoNumber, contractNumbers]);
     }
+
+    invalidateShipmentsListCache();
 
     return res.json({
       success: true,

@@ -391,6 +391,41 @@ export function appendShipmentStatusFilter(
     return { sql: '', params: [], nextIndex: startIndex }
   }
 
+  if (normalized === 'PLANNED') {
+    return {
+      sql: ` AND ${shipmentEffectiveStatusExpr('sb')} IN ('PLANNED', 'UNPLANNED')`,
+      params: [],
+      nextIndex: startIndex,
+    }
+  }
+
+  return {
+    sql: ` AND ${shipmentEffectiveStatusExpr('sb')} = $${startIndex}`,
+    params: [normalized],
+    nextIndex: startIndex + 1,
+  }
+}
+
+/** Section 2 ETA summary scope when a status card is active (toolbar scope unchanged). */
+export function appendShipmentScopeStatusFilter(
+  scopeStatusParam: string | undefined,
+  startIndex: number
+): { sql: string; params: unknown[]; nextIndex: number } {
+  const normalized = String(scopeStatusParam ?? '')
+    .trim()
+    .toUpperCase()
+  if (!normalized || normalized === 'ALL' || !SHIPMENT_STATUS_FILTER_VALUES.has(normalized)) {
+    return { sql: '', params: [], nextIndex: startIndex }
+  }
+
+  if (normalized === 'PLANNED') {
+    return {
+      sql: ` AND ${shipmentEffectiveStatusExpr('sb')} IN ('PLANNED', 'UNPLANNED')`,
+      params: [],
+      nextIndex: startIndex,
+    }
+  }
+
   return {
     sql: ` AND ${shipmentEffectiveStatusExpr('sb')} = $${startIndex}`,
     params: [normalized],

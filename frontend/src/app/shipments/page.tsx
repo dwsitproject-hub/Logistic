@@ -56,11 +56,6 @@ import {
 } from '@/lib/shipmentColumns'
 import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
 import {
-  computeEtaBuckets,
-  computeSection1StatusCounts,
-  fetchShipmentsCatalogBatches,
-  filterRowsForTableDisplay,
-  filterRowsByStatusScope,
   type EtaBucketFilterKey,
 } from '@/lib/shipmentsPageDerivedData'
 import {
@@ -513,6 +508,23 @@ function ShipmentsPageContent() {
   const [listFetching, setListFetching] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize] = useState(20)
+  const [totalCount, setTotalCount] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
+  /** Section 1 status circles — toolbar scope only (excludes status / ETA card filters). */
+  const [shipmentsSection1Summary, setShipmentsSection1Summary] = useState<{
+    total?: number
+    status?: Record<string, number>
+    etaLoading?: Record<string, number>
+    etaDischarge?: Record<string, number>
+  } | null>(null)
+  /** Section 2 ETA cards when a status circle is active (scoped via scopeStatus). */
+  const [section2EtaSummary, setSection2EtaSummary] = useState<{
+    etaLoading?: Record<string, number>
+    etaDischarge?: Record<string, number>
+  } | null>(null)
+  const [summaryFetching, setSummaryFetching] = useState(false)
+  const shipmentsSummaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const summaryFetchGenRef = useRef(0)
   // Search should apply only on Enter / Apply (not per keystroke)
   const [searchDraft, setSearchDraft] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
@@ -788,57 +800,7 @@ function ShipmentsPageContent() {
   const [cancelPortRemark, setCancelPortRemark] = useState('')
   const [cancelPortSubmitting, setCancelPortSubmitting] = useState(false)
 
-  // ---- Single source of truth: global catalog → Section 1 / 2 / 3 derived data ----
-  const processedShipments = useMemo(() => shipments, [shipments])
-
-  const section1StatusCounts = useMemo(
-    () => computeSection1StatusCounts(processedShipments),
-    [processedShipments],
-  )
-
-  const section2ScopeRows = useMemo(
-    () => filterRowsByStatusScope(processedShipments, statusFilter),
-    [processedShipments, statusFilter],
-  )
-
-  const section2EtaLoadingBuckets = useMemo(
-    () => computeEtaBuckets(section2ScopeRows, 'loading'),
-    [section2ScopeRows],
-  )
-
-  const section2EtaDischargeBuckets = useMemo(
-    () => computeEtaBuckets(section2ScopeRows, 'discharge'),
-    [section2ScopeRows],
-  )
-
-  const catalogEtaLoadingBuckets = useMemo(
-    () => computeEtaBuckets(processedShipments, 'loading'),
-    [processedShipments],
-  )
-
-  const catalogEtaDischargeBuckets = useMemo(
-    () => computeEtaBuckets(processedShipments, 'discharge'),
-    [processedShipments],
-  )
-
-  const displayShipments = useMemo(
-    () =>
-      filterRowsForTableDisplay(
-        processedShipments,
-        { statusFilter, etaLoadingFilter, etaDischargeFilter },
-        { loading: catalogEtaLoadingBuckets, discharge: catalogEtaDischargeBuckets },
-      ),
-    [
-      processedShipments,
-      statusFilter,
-      etaLoadingFilter,
-      etaDischargeFilter,
-      catalogEtaLoadingBuckets,
-      catalogEtaDischargeBuckets,
-    ],
-  )
-
-  const displayTotalCount = displayShipments.length
+  // ---- Section 1 / 2 summaries from API (toolbar + scoped ETA); Section 3 from paginated list ----
 
   // Sync URL params -> local filter state
   useEffect(() => {
@@ -849,19 +811,38 @@ function ShipmentsPageContent() {
 
   useEffect(() => {
     if (!userScopeReady) return
-    setPage(1)
-    fetchShipments(1)
+    fetchShipments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     userScopeReady,
-    dateFrom,
-    dateTo,
+    page,
+    statusFilter,
+    etaLoadingFilter,
+    etaDischargeFilter,
+    searchParams,
+    sortKey,
+    sortDir,
     selectedGroupPlants,
     selectedIncoterms,
     selectedProducts,
+    dateFrom,
+    dateTo,
+    searchTerm,
     lateIndicatorFilter,
     viewOption,
+    viewFilterValue,
   ])
+
+  const isFirstLateIndicatorEffect = useRef(true)
+  useEffect(() => {
+    if (isFirstLateIndicatorEffect.current) {
+      isFirstLateIndicatorEffect.current = false
+      return
+    }
+    setPage(1)
+    fetchShipments(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lateIndicatorFilter])
 
   useEffect(() => {
     let cancelled = false
@@ -912,7 +893,7 @@ function ShipmentsPageContent() {
   // Column header filters apply only when user presses Enter inside the filter popover.
 
   const fetchShipments = async (
-    _forcedPage?: number,
+    forcedPage?: number,
     searchOverride?: string,
     options?: { force?: boolean },
   ) => {
@@ -920,31 +901,37 @@ function ShipmentsPageContent() {
     const hadRows = shipments.length > 0
     if (!hadRows) setLoading(true)
     setListFetching(true)
+    setSummaryFetching(true)
     try {
+      const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
       params.append('compact', 'true')
+      params.append('skipSapJoin', 'true')
+      params.append('limit', String(pageSize))
+      params.append('page', String(effectivePage))
+      params.append('includeSummary', 'false')
+      if (statusFilter && statusFilter !== 'ALL') {
+        params.append('status', statusFilter)
+      }
+      if (etaLoadingFilter !== 'ALL') {
+        params.append('etaLoading', etaLoadingFilter)
+      }
+      if (etaDischargeFilter !== 'ALL') {
+        params.append('etaDischarge', etaDischargeFilter)
+      }
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
       const searchTrim = (searchOverride ?? searchTerm).trim()
       if (searchTrim.length >= 2) {
         params.append('search', searchTrim)
       }
-      const cfKeys = Object.keys(
-        appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
-          selectedIncoterms,
-          selectedProducts,
-        }),
-      )
+      const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+        selectedIncoterms,
+        selectedProducts,
+      })
+      const cfKeys = Object.keys(mergedColumnFilters)
       if (cfKeys.length > 0) {
-        params.append(
-          'columnFilters',
-          JSON.stringify(
-            appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
-              selectedIncoterms,
-              selectedProducts,
-            }),
-          ),
-        )
+        params.append('columnFilters', JSON.stringify(mergedColumnFilters))
       }
       if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
         params.append('lateIndicator', lateIndicatorFilter)
@@ -954,19 +941,16 @@ function ShipmentsPageContent() {
         params.append('viewQuery', viewFilterValue.trim())
       }
 
-      // Check for delayed parameter from URL
       const delayedParam = searchParams.get('delayed')
       if (delayedParam === 'true') {
         params.append('delayed', 'true')
       }
-      
-      // Check for STO parameter from URL
+
       const stoParam = searchParams.get('sto')
       if (stoParam) {
         params.append('sto', stoParam)
       }
-      
-      // Check for contract parameter from URL
+
       const contractParam = searchParams.get('contract')
       if (contractParam) {
         params.append('contract', contractParam)
@@ -975,30 +959,95 @@ function ShipmentsPageContent() {
         selectedGroupPlants.forEach((p) => params.append('plant', p))
       }
 
-      // Catalog SSOT: paginated fetches (500/page) — single limit=10000 often causes 500 on staging DB.
-      params.append('includeSummary', 'false')
-      params.append('skipSapJoin', 'true')
-
-      const catalogCacheKey = buildCacheKey('GET', `/shipments/catalog?${params.toString()}`)
-      const applyCatalog = (rows: Shipment[]) => {
-        setShipments(rows)
+      const listUrl = `/shipments?${params.toString()}`
+      const listCacheKey = buildCacheKey('GET', listUrl)
+      const applyListEnvelope = (envelope: {
+        data?: { shipments?: Shipment[]; pagination?: { total?: number; totalPages?: number } }
+      }) => {
+        const items = envelope?.data?.shipments || []
+        setShipments(items)
+        const total = Number(envelope?.data?.pagination?.total ?? 0)
+        const pages = Number(envelope?.data?.pagination?.totalPages || 1)
+        setTotalCount(total)
+        setTotalPages(Math.max(1, pages))
       }
 
-      const { data: catalogRows, revalidating } = await cachedGet(
-        catalogCacheKey,
-        () => fetchShipmentsCatalogBatches<Shipment>((url) => api.get(url), params),
+      const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
+        listCacheKey,
+        () => api.get(listUrl).then((r) => r.data),
         {
           force: options?.force,
           onRevalidate: (fresh) => {
             if (listGen !== listFetchGenRef.current) return
-            applyCatalog(fresh)
+            applyListEnvelope(fresh)
             setListFetching(false)
           },
         },
       )
       if (listGen !== listFetchGenRef.current) return
-      applyCatalog(catalogRows)
-      if (!revalidating) setListFetching(false)
+      applyListEnvelope(listEnvelope)
+      if (!listRevalidating) setListFetching(false)
+
+      if (shipmentsSummaryTimerRef.current) clearTimeout(shipmentsSummaryTimerRef.current)
+      const section1SummaryParams = new URLSearchParams(params.toString())
+      section1SummaryParams.delete('status')
+      section1SummaryParams.delete('etaLoading')
+      section1SummaryParams.delete('etaDischarge')
+      section1SummaryParams.delete('includeSummary')
+      section1SummaryParams.delete('skipSapJoin')
+      section1SummaryParams.set('summaryOnly', 'true')
+      section1SummaryParams.set('page', '1')
+      section1SummaryParams.set('limit', '1')
+      const summaryUrl = `/shipments?${section1SummaryParams.toString()}`
+      const summaryCacheKey = buildCacheKey('GET', summaryUrl)
+      const summaryGen = ++summaryFetchGenRef.current
+
+      shipmentsSummaryTimerRef.current = setTimeout(() => {
+        void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+          force: options?.force,
+          onRevalidate: (fresh) => {
+            if (summaryGen !== summaryFetchGenRef.current) return
+            if (fresh?.data?.summary) setShipmentsSection1Summary(fresh.data.summary)
+            if (statusFilter === 'ALL') {
+              setSection2EtaSummary(null)
+            }
+            setSummaryFetching(false)
+          },
+        })
+          .then(({ data, revalidating }) => {
+            if (summaryGen !== summaryFetchGenRef.current) return
+            if (data?.data?.summary) setShipmentsSection1Summary(data.data.summary)
+            if (statusFilter === 'ALL') {
+              setSection2EtaSummary(null)
+            }
+            if (!revalidating) setSummaryFetching(false)
+          })
+          .catch(() => {
+            if (summaryGen === summaryFetchGenRef.current) setSummaryFetching(false)
+          })
+
+        if (statusFilter !== 'ALL') {
+          const section2Params = new URLSearchParams(section1SummaryParams.toString())
+          section2Params.set('scopeStatus', statusFilter)
+          const section2Url = `/shipments?${section2Params.toString()}`
+          const section2CacheKey = buildCacheKey('GET', section2Url)
+          void cachedGet(section2CacheKey, () => api.get(section2Url).then((r) => r.data), {
+            force: options?.force,
+          })
+            .then(({ data }) => {
+              if (summaryGen !== summaryFetchGenRef.current) return
+              if (data?.data?.summary) {
+                setSection2EtaSummary({
+                  etaLoading: data.data.summary.etaLoading,
+                  etaDischarge: data.data.summary.etaDischarge,
+                })
+              }
+            })
+            .catch(() => {
+              if (summaryGen === summaryFetchGenRef.current) setSection2EtaSummary(null)
+            })
+        }
+      }, 150)
     } catch (error: any) {
       if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch shipments:', error)
@@ -1008,18 +1057,18 @@ function ShipmentsPageContent() {
         status: error.response?.status,
         url: error.config?.url
       })
-      
-      // Show more detailed error message
-      const errorMessage = error.response?.data?.error?.message 
-        || error.response?.data?.message 
-        || error.message 
+
+      const errorMessage = error.response?.data?.error?.message
+        || error.response?.data?.message
+        || error.message
         || 'Unknown error occurred'
-      
+
       alert(`Failed to load shipments: ${errorMessage}\n\nPlease check the console for more details.`)
       if (!hadRows) {
         setShipments([])
       }
       setListFetching(false)
+      setSummaryFetching(false)
     } finally {
       setLoading(false)
     }
@@ -1271,7 +1320,7 @@ function ShipmentsPageContent() {
 
     // Use the shipments that are currently displayed on the page (filtered by search and other filters)
     const rows: string[] = []
-    const data = displayShipments
+    const data = sortedShipments
     
     if (data.length === 0) {
       alert('No shipments to export. Please adjust your filters.')
@@ -1714,8 +1763,51 @@ function ShipmentsPageContent() {
     setEtaLoadingFilter('ALL')
   }, [])
 
+  const section1StatusCounts = useMemo(() => {
+    const s = shipmentsSection1Summary?.status
+    return {
+      planned: Number(s?.planned ?? 0),
+      inProgress: Number(s?.inProgress ?? 0),
+      loading: Number(s?.loading ?? 0),
+      inTransit: Number(s?.inTransit ?? 0),
+      arrived: Number(s?.arrived ?? 0),
+      unloading: Number(s?.unloading ?? 0),
+      completed: Number(s?.completed ?? 0),
+      cancelled: Number(s?.cancelled ?? 0),
+      total: Number(shipmentsSection1Summary?.total ?? 0),
+    }
+  }, [shipmentsSection1Summary])
+
+  const section2EtaLoadingCounts = useMemo(() => {
+    const src =
+      statusFilter !== 'ALL' && section2EtaSummary?.etaLoading
+        ? section2EtaSummary.etaLoading
+        : shipmentsSection1Summary?.etaLoading
+    return {
+      moreThan7D: Number(src?.moreThan7D ?? 0),
+      dMinus2: Number(src?.dMinus2 ?? 0),
+      d: Number(src?.d ?? 0),
+      delay: Number(src?.delay ?? 0),
+      noEta: Number(src?.noEta ?? 0),
+    }
+  }, [statusFilter, section2EtaSummary, shipmentsSection1Summary])
+
+  const section2EtaDischargeCounts = useMemo(() => {
+    const src =
+      statusFilter !== 'ALL' && section2EtaSummary?.etaDischarge
+        ? section2EtaSummary.etaDischarge
+        : shipmentsSection1Summary?.etaDischarge
+    return {
+      moreThan7D: Number(src?.moreThan7D ?? 0),
+      dMinus2: Number(src?.dMinus2 ?? 0),
+      d: Number(src?.d ?? 0),
+      delay: Number(src?.delay ?? 0),
+      noEta: Number(src?.noEta ?? 0),
+    }
+  }, [statusFilter, section2EtaSummary, shipmentsSection1Summary])
+
   const section3TableLoading = loading && shipments.length === 0
-  const section1DataLoading = listFetching || section3TableLoading
+  const section1DataLoading = listFetching || summaryFetching || section3TableLoading
 
   const shipmentsTableScopeLabel = useMemo(() => {
     if (statusFilter !== 'ALL') {
@@ -2512,7 +2604,7 @@ function ShipmentsPageContent() {
 
   const sortedShipments = useMemo(() => {
     const col = compactColumns.find(c => c.id === sortKey)
-    const base = displayShipments
+    const base = shipments
     if (!col?.sortable || !col.getSortValue) return base
 
     const sorted = [...base].sort((a, b) => {
@@ -2527,12 +2619,9 @@ function ShipmentsPageContent() {
     })
 
     return sorted
-  }, [compactColumns, displayShipments, sortDir, sortKey])
+  }, [compactColumns, shipments, sortDir, sortKey])
 
-  const paginatedShipments = useMemo(() => {
-    const start = (page - 1) * pageSize
-    return sortedShipments.slice(start, start + pageSize)
-  }, [sortedShipments, page, pageSize])
+  const paginatedShipments = sortedShipments
 
   const stoGroupedShipments = useMemo(
     () => groupShipmentsBySto(paginatedShipments),
@@ -2547,11 +2636,6 @@ function ShipmentsPageContent() {
       return next
     })
   }, [])
-
-  const totalPages = useMemo(
-    () => Math.max(1, Math.ceil((displayTotalCount || 0) / pageSize)),
-    [displayTotalCount, pageSize]
-  )
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages)
@@ -3460,31 +3544,31 @@ function ShipmentsPageContent() {
                 {
                   key: 'MORE_THAN_7D' as const,
                   label: 'ETA Loading > 7D',
-                  count: section2EtaLoadingBuckets.counts.moreThan7D,
+                  count: section2EtaLoadingCounts.moreThan7D,
                   color: 'bg-sky-50',
                 },
                 {
                   key: 'D_MINUS_2' as const,
                   label: 'ETA Loading D-2',
-                  count: section2EtaLoadingBuckets.counts.dMinus2,
+                  count: section2EtaLoadingCounts.dMinus2,
                   color: 'bg-amber-50',
                 },
                 {
                   key: 'D' as const,
                   label: 'ETA Loading D',
-                  count: section2EtaLoadingBuckets.counts.d,
+                  count: section2EtaLoadingCounts.d,
                   color: 'bg-emerald-50',
                 },
                 {
                   key: 'DELAY' as const,
                   label: 'ETA Loading Delay',
-                  count: section2EtaLoadingBuckets.counts.delay,
+                  count: section2EtaLoadingCounts.delay,
                   color: 'bg-rose-50',
                 },
                 {
                   key: 'NO_ETA' as const,
                   label: 'No ETA',
-                  count: section2EtaLoadingBuckets.counts.noEta,
+                  count: section2EtaLoadingCounts.noEta,
                   color: 'bg-gray-50',
                 },
               ].map((bucket) => {
@@ -3523,31 +3607,31 @@ function ShipmentsPageContent() {
                 {
                   key: 'MORE_THAN_7D' as const,
                   label: 'ETA Discharge > 7D',
-                  count: section2EtaDischargeBuckets.counts.moreThan7D,
+                  count: section2EtaDischargeCounts.moreThan7D,
                   color: 'bg-sky-50',
                 },
                 {
                   key: 'D_MINUS_2' as const,
                   label: 'ETA Discharge D-2',
-                  count: section2EtaDischargeBuckets.counts.dMinus2,
+                  count: section2EtaDischargeCounts.dMinus2,
                   color: 'bg-amber-50',
                 },
                 {
                   key: 'D' as const,
                   label: 'ETA Discharge D',
-                  count: section2EtaDischargeBuckets.counts.d,
+                  count: section2EtaDischargeCounts.d,
                   color: 'bg-emerald-50',
                 },
                 {
                   key: 'DELAY' as const,
                   label: 'ETA Discharge Delay',
-                  count: section2EtaDischargeBuckets.counts.delay,
+                  count: section2EtaDischargeCounts.delay,
                   color: 'bg-rose-50',
                 },
                 {
                   key: 'NO_ETA' as const,
                   label: 'No ETA',
-                  count: section2EtaDischargeBuckets.counts.noEta,
+                  count: section2EtaDischargeCounts.noEta,
                   color: 'bg-gray-50',
                 },
               ].map((bucket) => {
@@ -4032,13 +4116,13 @@ function ShipmentsPageContent() {
                 </CardTitle>
                 <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                     <span className="whitespace-nowrap tabular-nums text-gray-700">
-                      <span className="font-semibold">{displayTotalCount.toLocaleString('en-US')}</span> shipments
+                      <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> shipments
                     </span>
                     <span className="text-gray-400" aria-hidden>
                       ·
                     </span>
                     <span className="whitespace-nowrap tabular-nums">
-                      Page {page}/{totalPages} · {sortedShipments.length} rows
+                      Page {page}/{totalPages} · {totalCount.toLocaleString('en-US')} rows
                     </span>
                     {shipmentsTableScopeLabel ? (
                       <>
@@ -5015,7 +5099,7 @@ function ShipmentsPageContent() {
                 {totalPages > 1 && (
                   <div className="mt-6 flex items-center justify-between border-t pt-4">
                     <div className="text-sm text-gray-700">
-                      Showing page {page} of {totalPages} ({displayTotalCount} total shipments)
+                      Showing page {page} of {totalPages} ({totalCount} total shipments)
                     </div>
                     <div className="flex items-center gap-2">
                       <Button
