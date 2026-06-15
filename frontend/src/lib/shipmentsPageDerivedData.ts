@@ -3,7 +3,10 @@
  * Local to the Shipments page; do not import from shared hooks used by other pages.
  */
 
+/** Max STO rows loaded into the Shipments page catalog (client-side SSOT). */
 export const SHIPMENTS_CATALOG_FETCH_LIMIT = 10_000
+/** Page size per API round-trip when building the catalog (avoids single heavy limit=10000 query). */
+export const SHIPMENTS_CATALOG_PAGE_SIZE = 500
 
 export type ShipmentEffectiveStatus =
   | 'UNPLANNED'

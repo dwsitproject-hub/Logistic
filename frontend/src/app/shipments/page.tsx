@@ -57,6 +57,7 @@ import {
 import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
 import {
   SHIPMENTS_CATALOG_FETCH_LIMIT,
+  SHIPMENTS_CATALOG_PAGE_SIZE,
   computeEtaBuckets,
   computeSection1StatusCounts,
   filterRowsForTableDisplay,
@@ -911,15 +912,13 @@ function ShipmentsPageContent() {
 
   // Column header filters apply only when user presses Enter inside the filter popover.
 
-  const fetchShipments = async (forcedPage?: number, searchOverride?: string) => {
+  const fetchShipments = async (_forcedPage?: number, searchOverride?: string) => {
     const listGen = ++listFetchGenRef.current
     const hadRows = shipments.length > 0
     if (!hadRows) setLoading(true)
     setListFetching(true)
     try {
       const params = new URLSearchParams()
-      params.append('limit', String(SHIPMENTS_CATALOG_FETCH_LIMIT))
-      params.append('page', '1')
       params.append('compact', 'true')
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
@@ -973,61 +972,43 @@ function ShipmentsPageContent() {
         selectedGroupPlants.forEach((p) => params.append('plant', p))
       }
 
-      // List path: skip heavy enriched summary SQL on the same round-trip; load summary after (debounced).
+      // Catalog SSOT: paginated fetches (500/page) — single limit=10000 often causes 500 on staging DB.
       params.append('includeSummary', 'false')
-      // First paint: skip joining sap_processed_data (often the slowest part); hydrate rows right after.
       params.append('skipSapJoin', 'true')
 
-      const listUrl = `/shipments?${params.toString()}`
-      const listCacheKey = buildCacheKey('GET', listUrl)
-      const applyListEnvelope = (envelope: {
-        success?: boolean
-        data?: { shipments?: Shipment[] }
-      }) => {
-        if (envelope?.success && envelope?.data?.shipments) {
-          setShipments(envelope.data.shipments)
-        }
-      }
+      const catalogRows: Shipment[] = []
+      let catalogPage = 1
+      let catalogTotal = Number.POSITIVE_INFINITY
 
-      const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
-        listCacheKey,
-        () => api.get(listUrl).then((r) => r.data),
-        {
-          onRevalidate: (fresh) => {
-            if (listGen !== listFetchGenRef.current) return
-            applyListEnvelope(fresh)
-            setListFetching(false)
-          },
-        },
-      )
-      if (listGen !== listFetchGenRef.current) return
+      while (catalogRows.length < SHIPMENTS_CATALOG_FETCH_LIMIT && catalogRows.length < catalogTotal) {
+        const pageParams = new URLSearchParams(params.toString())
+        pageParams.set('limit', String(SHIPMENTS_CATALOG_PAGE_SIZE))
+        pageParams.set('page', String(catalogPage))
+        const listUrl = `/shipments?${pageParams.toString()}`
 
-      // Check if response structure is correct
-      if (listEnvelope && listEnvelope.success && listEnvelope.data && listEnvelope.data.shipments) {
-        applyListEnvelope(listEnvelope)
-        if (!listRevalidating) setListFetching(false)
-
-        const hydrateParams = new URLSearchParams(params.toString())
-        hydrateParams.delete('skipSapJoin')
-        const hydrateUrl = `/shipments?${hydrateParams.toString()}`
-        const hydrateKey = buildCacheKey('GET', hydrateUrl)
-        void cachedGet(hydrateKey, () => api.get(hydrateUrl).then((r) => r.data))
-          .then(({ data }) => {
-            if (listGen !== listFetchGenRef.current) return
-            const rows = data?.data?.shipments
-            if (Array.isArray(rows) && rows.length > 0) setShipments(rows)
-          })
-          .catch(() => {
-            /* keep first-paint rows */
-          })
-      } else {
+        const { data: listEnvelope } = await api.get(listUrl).then((r) => r.data)
         if (listGen !== listFetchGenRef.current) return
-        console.error('Unexpected response structure:', listEnvelope)
-        if (!hadRows) {
-          setShipments([])
+
+        if (!listEnvelope?.success || !listEnvelope?.data?.shipments) {
+          const msg =
+            listEnvelope?.error?.message ||
+            listEnvelope?.message ||
+            'Unexpected response from shipments API'
+          throw new Error(msg)
         }
-        alert('Received unexpected response format from server. Please check console for details.')
+
+        const batch = listEnvelope.data.shipments as Shipment[]
+        if (batch.length === 0) break
+
+        catalogRows.push(...batch)
+        catalogTotal = Number(listEnvelope.data.pagination?.total ?? catalogRows.length)
+
+        if (batch.length < SHIPMENTS_CATALOG_PAGE_SIZE) break
+        catalogPage += 1
       }
+
+      setShipments(catalogRows)
+      setListFetching(false)
     } catch (error: any) {
       if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch shipments:', error)
