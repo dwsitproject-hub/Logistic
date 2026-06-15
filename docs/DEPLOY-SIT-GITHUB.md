@@ -85,7 +85,7 @@ cd /opt/klip && bash docs/scripts/staging-deploy-backend.sh
 
 Tunggu `/health` OK sebelum lanjut ke frontend.
 
-**Upload files (Synology):** persistent uploads go to `172.30.1.94/APPs/dev/klip`. One-time setup: [docs/STAGING-SYNOLOGY-UPLOADS.md](STAGING-SYNOLOGY-UPLOADS.md)
+**Upload files:** default Docker volume `backend_uploads` (no Synology required). When NAS network is ready: [docs/STAGING-SYNOLOGY-UPLOADS.md](STAGING-SYNOLOGY-UPLOADS.md)
 
 ---
 

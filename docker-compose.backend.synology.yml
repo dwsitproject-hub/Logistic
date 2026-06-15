@@ -1,0 +1,15 @@
+# Optional override: bind-mount Synology share into backend /app/uploads.
+# Use only when backend server can reach Synology (ping 172.30.1.94, port 445 open).
+#
+#   cd /opt/klip
+#   sudo bash docs/scripts/staging-mount-synology-dev.sh
+#   docker compose -f docker-compose.backend.yml -f docker-compose.backend.synology.yml up -d --build backend
+#
+# Requires in /opt/klip/.env:
+#   KLIP_UPLOAD_MOUNT=/mnt/synology-apps/dev/klip
+
+services:
+  backend:
+    volumes:
+      - ${KLIP_UPLOAD_MOUNT:-/mnt/synology-apps/dev/klip}:/app/uploads
+      - backend_logs:/app/logs

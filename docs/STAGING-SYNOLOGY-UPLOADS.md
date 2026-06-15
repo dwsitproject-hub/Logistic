@@ -1,6 +1,21 @@
 # Staging — Synology upload storage (172.30.1.94 / APPs / dev / klip)
 
-All **persistent** KLIP uploads on SIT/staging are stored on the Synology share under the **klip** app folder (shared `dev` is used by multiple applications):
+## Fallback while Synology is unreachable (current default)
+
+If the backend server **cannot ping** `172.30.1.94` (cloud ↔ on-prem routing not ready), use the default compose stack — uploads go to Docker volume **`backend_uploads`**:
+
+```bash
+cd /opt/klip
+git pull origin SIT
+docker compose -f docker-compose.backend.yml up -d --build backend
+docker compose -f docker-compose.backend.yml ps
+```
+
+Files persist in the volume until you migrate to Synology. Switch to Synology only after `ping 172.30.1.94` succeeds.
+
+---
+
+When Synology is reachable, **persistent** KLIP uploads on SIT/staging should use the Synology share under the **klip** app folder (shared `dev` is used by multiple applications):
 
 | Item | Value |
 |------|--------|
@@ -74,12 +89,12 @@ KLIP_UPLOAD_MOUNT=/mnt/synology-apps/dev/klip
 UPLOAD_DIR=/app/uploads
 ```
 
-### 5. Deploy backend
+### 5. Deploy backend (Synology bind mount)
 
 ```bash
 cd /opt/klip
 git pull origin SIT
-docker compose -f docker-compose.backend.yml up -d --build
+docker compose -f docker-compose.backend.yml -f docker-compose.backend.synology.yml up -d --build backend
 ```
 
 ## Verify
