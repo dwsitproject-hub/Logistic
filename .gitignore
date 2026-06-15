@@ -23,6 +23,8 @@ backend/dist/
 .env.production.local
 backend/.env
 frontend/.env.local
+.synology-credentials
+/opt/klip/.synology-credentials
 
 # Logs
 *.log

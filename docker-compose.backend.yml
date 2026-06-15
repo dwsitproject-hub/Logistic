@@ -50,6 +50,8 @@ services:
       DB_PORT: "5432"
       # DB_NAME, DB_USER, DB_PASSWORD, JWT_SECRET: from env_file (backend/.env) unless you set them in /opt/klip/.env
       JWT_EXPIRES_IN: 7d
+      # Shared upload root inside container — host bind mount must point to Synology APPs/dev (staging)
+      UPLOAD_DIR: /app/uploads
       # GEMINI_API_KEY comes from env_file: ./backend/.env (do not override here or it will be empty)
     ports:
       - "${BACKEND_PORT:-5001}:5001"
@@ -59,7 +61,8 @@ services:
     networks:
       - klip-backend-network
     volumes:
-      - backend_uploads:/app/uploads
+      # Host: mount //172.30.1.94/APPs → /mnt/synology-apps, bind dev/klip (see docs/scripts/staging-mount-synology-dev.sh)
+      - ${KLIP_UPLOAD_MOUNT:-/mnt/synology-apps/dev/klip}:/app/uploads
       - backend_logs:/app/logs
     restart: unless-stopped
     healthcheck:
@@ -71,8 +74,6 @@ services:
 
 volumes:
   postgres_data:
-    driver: local
-  backend_uploads:
     driver: local
   backend_logs:
     driver: local

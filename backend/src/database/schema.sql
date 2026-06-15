@@ -80,6 +80,7 @@ INSERT INTO permissions (permission_key, permission_name, description, category)
 ('page.trucking', 'Trucking Access', 'Access to trucking operations page', 'page'),
 ('page.finance', 'Finance Access', 'Access to finance page', 'page'),
 ('page.documents', 'Documents Access', 'Access to documents page', 'page'),
+('page.commercial_documents', 'Commercial Documents', 'Access Commercial Documents page', 'page'),
 ('page.users', 'Users Access', 'Access to user management page', 'page'),
 ('page.audit', 'Audit Logs Access', 'Access to audit logs page', 'page'),
 ('page.sap', 'SAP Integration Access', 'Access to SAP integration features', 'page'),
@@ -88,6 +89,7 @@ INSERT INTO permissions (permission_key, permission_name, description, category)
 ('data.trucking', 'Trucking Data', 'Access to trucking data', 'data'),
 ('data.finance', 'Financial Data', 'Access to financial data', 'data'),
 ('data.documents', 'Document Data', 'Access to document data', 'data'),
+('data.commercial_documents', 'Commercial Documents Data', 'Access to commercial document files and uploads', 'data'),
 ('data.users', 'User Data', 'Access to user data', 'data'),
 ('data.audit', 'Audit Data', 'Access to audit logs', 'data'),
 ('dashboard.contracts_overview', 'Contracts Overview Widget', 'View contracts statistics', 'dashboard'),
@@ -138,9 +140,9 @@ INSERT INTO role_permissions (role_id, permission_id, can_view, can_create, can_
 SELECT
   r.id,
   p.id,
-  CASE WHEN p.permission_key IN ('page.dashboard', 'page.finance', 'page.documents', 'dashboard.contracts_overview', 'dashboard.finance_overview', 'dashboard.alerts', 'dashboard.top_performers') THEN true ELSE false END,
-  CASE WHEN p.permission_key IN ('data.finance', 'data.documents', 'action.import_excel', 'action.export_data') THEN true ELSE false END,
-  CASE WHEN p.permission_key IN ('data.finance', 'data.documents') THEN true ELSE false END,
+  CASE WHEN p.permission_key IN ('page.dashboard', 'page.finance', 'page.documents', 'page.commercial_documents', 'dashboard.contracts_overview', 'dashboard.finance_overview', 'dashboard.alerts', 'dashboard.top_performers') THEN true ELSE false END,
+  CASE WHEN p.permission_key IN ('data.finance', 'data.documents', 'data.commercial_documents', 'action.import_excel', 'action.export_data') THEN true ELSE false END,
+  CASE WHEN p.permission_key IN ('data.finance', 'data.documents', 'data.commercial_documents') THEN true ELSE false END,
   false
 FROM roles r
 CROSS JOIN permissions p

@@ -16,6 +16,7 @@ export const COMMERCIAL_DOCUMENT_TYPES: CommercialDocumentType[] = [
 ]
 
 export const COMMERCIAL_DOCUMENTS_PAGE_PERMISSION = 'page.commercial_documents'
+export const COMMERCIAL_DOCUMENTS_DATA_PERMISSION = 'data.commercial_documents'
 
 export const COMMERCIAL_DOCUMENT_LABELS: Record<CommercialDocumentType, string> = {
   contract: 'Contract',

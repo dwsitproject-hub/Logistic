@@ -56,6 +56,14 @@ import {
 } from '@/lib/shipmentColumns'
 import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
 import {
+  SHIPMENTS_CATALOG_FETCH_LIMIT,
+  computeEtaBuckets,
+  computeSection1StatusCounts,
+  filterRowsForTableDisplay,
+  filterRowsByStatusScope,
+  type EtaBucketFilterKey,
+} from '@/lib/shipmentsPageDerivedData'
+import {
   OperationalNowrapCell,
   OperationalStackedCommaCell,
   getOperationalColumnLayout,
@@ -71,8 +79,6 @@ import {
   canViewPermission,
 } from '@/components/PermissionsContext'
 // import * as XLSX from 'xlsx' // Temporarily disabled
-
-type EtaBucketFilterKey = 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'
 
 const ETA_LOADING_FILTER_LABELS: Record<EtaBucketFilterKey, string> = {
   MORE_THAN_7D: 'ETA Loading > 7D',
@@ -507,7 +513,6 @@ function ShipmentsPageContent() {
   const [listFetching, setListFetching] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize] = useState(20)
-  const [totalCount, setTotalCount] = useState(0)
   // Search should apply only on Enter / Apply (not per keystroke)
   const [searchDraft, setSearchDraft] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
@@ -682,9 +687,7 @@ function ShipmentsPageContent() {
     return `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   })
   const [uploadingId, setUploadingId] = useState<string>('')
-  const [shipmentsSummary, setShipmentsSummary] = useState<any>(null)
-  const [section1SummaryLoading, setSection1SummaryLoading] = useState(true)
-  const shipmentsSummaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const listFetchGenRef = useRef(0)
 
   // Vessel loading ports state
   const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null)
@@ -785,181 +788,57 @@ function ShipmentsPageContent() {
   const [cancelPortRemark, setCancelPortRemark] = useState('')
   const [cancelPortSubmitting, setCancelPortSubmitting] = useState(false)
 
-  // ---- ETA Loading Status buckets (counts for toolbar chips; scoped to current result page only) ----
-  const etaLoadingBuckets = useMemo(() => {
-    const buckets = {
-      MORE_THAN_7D: new Set<string>(),
-      D_MINUS_2: new Set<string>(),
-      D: new Set<string>(),
-      DELAY: new Set<string>(),
-      NO_ETA: new Set<string>(),
-    }
+  // ---- Single source of truth: global catalog → Section 1 / 2 / 3 derived data ----
+  const processedShipments = useMemo(() => shipments, [shipments])
 
-    const today = new Date()
-    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-    const msPerDay = 24 * 60 * 60 * 1000
+  const section1StatusCounts = useMemo(
+    () => computeSection1StatusCounts(processedShipments),
+    [processedShipments],
+  )
 
-    const toDayDiff = (value: any): number | null => {
-      if (!value) return null
-      const d = new Date(value)
-      if (Number.isNaN(d.getTime())) return null
-      const dMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate())
-      return Math.floor((dMidnight.getTime() - todayMidnight.getTime()) / msPerDay)
-    }
+  const section2ScopeRows = useMemo(
+    () => filterRowsByStatusScope(processedShipments, statusFilter),
+    [processedShipments, statusFilter],
+  )
 
-    const groupDiffs: Map<string, number[]> = new Map()
+  const section2EtaLoadingBuckets = useMemo(
+    () => computeEtaBuckets(section2ScopeRows, 'loading'),
+    [section2ScopeRows],
+  )
 
-    for (const s of shipments) {
-      if (s.status === 'COMPLETED') continue
-      const rawSto = (s as any).sto_number
-      const rawOp = (s as any).operation_id
-      const sto = rawSto && String(rawSto).trim()
-      const opId = rawOp && String(rawOp).trim()
-      const key = sto || opId || s.shipment_id || s.id
-      if (!key) continue
+  const section2EtaDischargeBuckets = useMemo(
+    () => computeEtaBuckets(section2ScopeRows, 'discharge'),
+    [section2ScopeRows],
+  )
 
-      const diffs: number[] = groupDiffs.get(key) ?? []
+  const catalogEtaLoadingBuckets = useMemo(
+    () => computeEtaBuckets(processedShipments, 'loading'),
+    [processedShipments],
+  )
 
-      const etaCandidates = [
-        s.eta_arrival,
-        s.eta_berthed,
-        s.eta_loading_start,
-        s.eta_loading_complete,
-        s.eta_sailed,
-      ]
+  const catalogEtaDischargeBuckets = useMemo(
+    () => computeEtaBuckets(processedShipments, 'discharge'),
+    [processedShipments],
+  )
 
-      for (const v of etaCandidates) {
-        const diff = toDayDiff(v)
-        if (diff !== null) diffs.push(diff)
-      }
+  const displayShipments = useMemo(
+    () =>
+      filterRowsForTableDisplay(
+        processedShipments,
+        { statusFilter, etaLoadingFilter, etaDischargeFilter },
+        { loading: catalogEtaLoadingBuckets, discharge: catalogEtaDischargeBuckets },
+      ),
+    [
+      processedShipments,
+      statusFilter,
+      etaLoadingFilter,
+      etaDischargeFilter,
+      catalogEtaLoadingBuckets,
+      catalogEtaDischargeBuckets,
+    ],
+  )
 
-      if (diffs.length > 0) {
-        groupDiffs.set(key, diffs)
-      } else if (!groupDiffs.has(key)) {
-        // Track groups that currently have no ETA values at all
-        groupDiffs.set(key, [])
-      }
-    }
-
-    for (const [key, diffs] of groupDiffs.entries()) {
-      if (diffs.length === 0) {
-        buckets.NO_ETA.add(key)
-        continue
-      }
-      const hasDelay = diffs.some((d) => d < 0)
-      const hasToday = diffs.some((d) => d === 0)
-      const hasDMinus2 = diffs.some((d) => d > 0 && d <= 2)
-      const hasMoreThan7 = diffs.some((d) => d > 7)
-
-      if (hasDelay) {
-        buckets.DELAY.add(key)
-      } else if (hasToday) {
-        buckets.D.add(key)
-      } else if (hasDMinus2) {
-        buckets.D_MINUS_2.add(key)
-      } else if (hasMoreThan7) {
-        buckets.MORE_THAN_7D.add(key)
-      }
-    }
-
-    return {
-      counts: {
-        moreThan7D: buckets.MORE_THAN_7D.size,
-        dMinus2: buckets.D_MINUS_2.size,
-        d: buckets.D.size,
-        delay: buckets.DELAY.size,
-        noEta: buckets.NO_ETA.size,
-      },
-      keysByFilter: buckets,
-    }
-  }, [shipments])
-
-  // ---- ETA Discharge Status buckets (counts for toolbar chips; scoped to current result page only) ----
-  const etaDischargeBuckets = useMemo(() => {
-    const buckets = {
-      MORE_THAN_7D: new Set<string>(),
-      D_MINUS_2: new Set<string>(),
-      D: new Set<string>(),
-      DELAY: new Set<string>(),
-      NO_ETA: new Set<string>(),
-    }
-
-    const today = new Date()
-    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-    const msPerDay = 24 * 60 * 60 * 1000
-
-    const toDayDiff = (value: any): number | null => {
-      if (!value) return null
-      const d = new Date(value)
-      if (Number.isNaN(d.getTime())) return null
-      const dMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate())
-      return Math.floor((dMidnight.getTime() - todayMidnight.getTime()) / msPerDay)
-    }
-
-    const groupDiffs: Map<string, number[]> = new Map()
-
-    for (const s of shipments) {
-      if (s.status === 'COMPLETED') continue
-      const rawSto = (s as any).sto_number
-      const rawOp = (s as any).operation_id
-      const sto = rawSto && String(rawSto).trim()
-      const opId = rawOp && String(rawOp).trim()
-      const key = sto || opId || s.shipment_id || s.id
-      if (!key) continue
-
-      const diffs: number[] = groupDiffs.get(key) ?? []
-
-      const etaCandidates = [
-        s.eta_discharge_arrival,
-        s.eta_discharge_berthed,
-        s.eta_discharge_start,
-        s.eta_discharge_complete,
-      ]
-
-      for (const v of etaCandidates) {
-        const diff = toDayDiff(v)
-        if (diff !== null) diffs.push(diff)
-      }
-
-      if (diffs.length > 0) {
-        groupDiffs.set(key, diffs)
-      } else if (!groupDiffs.has(key)) {
-        groupDiffs.set(key, [])
-      }
-    }
-
-    for (const [key, diffs] of groupDiffs.entries()) {
-      if (diffs.length === 0) {
-        buckets.NO_ETA.add(key)
-        continue
-      }
-      const hasDelay = diffs.some((d) => d < 0)
-      const hasToday = diffs.some((d) => d === 0)
-      const hasDMinus2 = diffs.some((d) => d > 0 && d <= 2)
-      const hasMoreThan7 = diffs.some((d) => d > 7)
-
-      if (hasDelay) {
-        buckets.DELAY.add(key)
-      } else if (hasToday) {
-        buckets.D.add(key)
-      } else if (hasDMinus2) {
-        buckets.D_MINUS_2.add(key)
-      } else if (hasMoreThan7) {
-        buckets.MORE_THAN_7D.add(key)
-      }
-    }
-
-    return {
-      counts: {
-        moreThan7D: buckets.MORE_THAN_7D.size,
-        dMinus2: buckets.D_MINUS_2.size,
-        d: buckets.D.size,
-        delay: buckets.DELAY.size,
-        noEta: buckets.NO_ETA.size,
-      },
-      keysByFilter: buckets,
-    }
-  }, [shipments])
+  const displayTotalCount = displayShipments.length
 
   // Sync URL params -> local filter state
   useEffect(() => {
@@ -975,7 +854,6 @@ function ShipmentsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     userScopeReady,
-    statusFilter,
     dateFrom,
     dateTo,
     selectedGroupPlants,
@@ -983,8 +861,6 @@ function ShipmentsPageContent() {
     selectedProducts,
     lateIndicatorFilter,
     viewOption,
-    etaLoadingFilter,
-    etaDischargeFilter,
   ])
 
   useEffect(() => {
@@ -1036,19 +912,15 @@ function ShipmentsPageContent() {
   // Column header filters apply only when user presses Enter inside the filter popover.
 
   const fetchShipments = async (forcedPage?: number, searchOverride?: string) => {
+    const listGen = ++listFetchGenRef.current
     const hadRows = shipments.length > 0
     if (!hadRows) setLoading(true)
     setListFetching(true)
-    if (!shipmentsSummary) setSection1SummaryLoading(true)
     try {
-      const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
-      params.append('limit', String(pageSize))
-      params.append('page', String(effectivePage))
+      params.append('limit', String(SHIPMENTS_CATALOG_FETCH_LIMIT))
+      params.append('page', '1')
       params.append('compact', 'true')
-      if (statusFilter && statusFilter !== 'ALL') {
-        params.append('status', statusFilter)
-      }
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
       const searchTrim = (searchOverride ?? searchTerm).trim()
@@ -1079,13 +951,7 @@ function ShipmentsPageContent() {
         params.append('viewOption', viewOption)
         params.append('viewQuery', viewFilterValue.trim())
       }
-      if (etaLoadingFilter !== 'ALL') {
-        params.append('etaLoading', etaLoadingFilter)
-      }
-      if (etaDischargeFilter !== 'ALL') {
-        params.append('etaDischarge', etaDischargeFilter)
-      }
-      
+
       // Check for delayed parameter from URL
       const delayedParam = searchParams.get('delayed')
       if (delayedParam === 'true') {
@@ -1116,11 +982,10 @@ function ShipmentsPageContent() {
       const listCacheKey = buildCacheKey('GET', listUrl)
       const applyListEnvelope = (envelope: {
         success?: boolean
-        data?: { shipments?: Shipment[]; pagination?: { total?: number } }
+        data?: { shipments?: Shipment[] }
       }) => {
         if (envelope?.success && envelope?.data?.shipments) {
           setShipments(envelope.data.shipments)
-          setTotalCount(Number(envelope.data.pagination?.total || 0))
         }
       }
 
@@ -1129,11 +994,13 @@ function ShipmentsPageContent() {
         () => api.get(listUrl).then((r) => r.data),
         {
           onRevalidate: (fresh) => {
+            if (listGen !== listFetchGenRef.current) return
             applyListEnvelope(fresh)
             setListFetching(false)
           },
         },
       )
+      if (listGen !== listFetchGenRef.current) return
 
       // Check if response structure is correct
       if (listEnvelope && listEnvelope.success && listEnvelope.data && listEnvelope.data.shipments) {
@@ -1146,49 +1013,23 @@ function ShipmentsPageContent() {
         const hydrateKey = buildCacheKey('GET', hydrateUrl)
         void cachedGet(hydrateKey, () => api.get(hydrateUrl).then((r) => r.data))
           .then(({ data }) => {
+            if (listGen !== listFetchGenRef.current) return
             const rows = data?.data?.shipments
             if (Array.isArray(rows) && rows.length > 0) setShipments(rows)
           })
           .catch(() => {
             /* keep first-paint rows */
           })
-
-        if (shipmentsSummaryTimerRef.current) clearTimeout(shipmentsSummaryTimerRef.current)
-        const section1SummaryParams = new URLSearchParams(params.toString())
-        // Section 1 card totals: toolbar scope only — never narrow by status/ETA card selection.
-        section1SummaryParams.delete('status')
-        section1SummaryParams.delete('etaLoading')
-        section1SummaryParams.delete('etaDischarge')
-        section1SummaryParams.set('summaryOnly', 'true')
-        section1SummaryParams.delete('includeSummary')
-        section1SummaryParams.delete('skipSapJoin')
-        const summaryUrl = `/shipments?${section1SummaryParams.toString()}`
-        const summaryCacheKey = buildCacheKey('GET', summaryUrl)
-        shipmentsSummaryTimerRef.current = setTimeout(() => {
-          void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
-            onRevalidate: (fresh) => {
-              if (fresh?.data?.summary) setShipmentsSummary(fresh.data.summary)
-              setSection1SummaryLoading(false)
-            },
-          })
-            .then(({ data, revalidating }) => {
-              if (data?.data?.summary) setShipmentsSummary(data.data.summary)
-              if (!revalidating) setSection1SummaryLoading(false)
-            })
-            .catch(() => {
-              setSection1SummaryLoading(false)
-            })
-        }, 450)
       } else {
+        if (listGen !== listFetchGenRef.current) return
         console.error('Unexpected response structure:', listEnvelope)
         if (!hadRows) {
           setShipments([])
-          setShipmentsSummary(null)
         }
-        setSection1SummaryLoading(false)
         alert('Received unexpected response format from server. Please check console for details.')
       }
     } catch (error: any) {
+      if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch shipments:', error)
       console.error('Error details:', {
         message: error.message,
@@ -1206,9 +1047,7 @@ function ShipmentsPageContent() {
       alert(`Failed to load shipments: ${errorMessage}\n\nPlease check the console for more details.`)
       if (!hadRows) {
         setShipments([])
-        setShipmentsSummary(null)
       }
-      setSection1SummaryLoading(false)
       setListFetching(false)
     } finally {
       setLoading(false)
@@ -1461,7 +1300,7 @@ function ShipmentsPageContent() {
 
     // Use the shipments that are currently displayed on the page (filtered by search and other filters)
     const rows: string[] = []
-    const data = filteredShipments // Use the filtered shipments that are actually displayed on the page
+    const data = displayShipments
     
     if (data.length === 0) {
       alert('No shipments to export. Please adjust your filters.')
@@ -2031,9 +1870,6 @@ function ShipmentsPageContent() {
       return copy
     })
   }
-
-  // Search, columns, view-by, late indicator, and ETA toolbar buckets are applied on the server (full DB).
-  const filteredShipments = shipments
 
   // Fetch contract details for a shipment
   const fetchContractDetails = async (shipment: Shipment) => {
@@ -2704,9 +2540,10 @@ function ShipmentsPageContent() {
 
   const sortedShipments = useMemo(() => {
     const col = compactColumns.find(c => c.id === sortKey)
-    if (!col?.sortable || !col.getSortValue) return filteredShipments
+    const base = displayShipments
+    if (!col?.sortable || !col.getSortValue) return base
 
-    const sorted = [...filteredShipments].sort((a, b) => {
+    const sorted = [...base].sort((a, b) => {
       const aVal = col.getSortValue!(a)
       const bVal = col.getSortValue!(b)
       const dirMul = sortDir === 'asc' ? 1 : -1
@@ -2718,11 +2555,16 @@ function ShipmentsPageContent() {
     })
 
     return sorted
-  }, [compactColumns, filteredShipments, sortDir, sortKey])
+  }, [compactColumns, displayShipments, sortDir, sortKey])
+
+  const paginatedShipments = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return sortedShipments.slice(start, start + pageSize)
+  }, [sortedShipments, page, pageSize])
 
   const stoGroupedShipments = useMemo(
-    () => groupShipmentsBySto(sortedShipments),
-    [sortedShipments],
+    () => groupShipmentsBySto(paginatedShipments),
+    [paginatedShipments],
   )
 
   const toggleStoGroupCollapse = useCallback((stoKey: string) => {
@@ -2735,17 +2577,19 @@ function ShipmentsPageContent() {
   }, [])
 
   const totalPages = useMemo(
-    () => Math.max(1, Math.ceil((totalCount || 0) / pageSize)),
-    [totalCount, pageSize]
+    () => Math.max(1, Math.ceil((displayTotalCount || 0) / pageSize)),
+    [displayTotalCount, pageSize]
   )
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages)
+  }, [page, totalPages])
 
   const handlePageChange = useCallback((nextPage: number) => {
     if (nextPage >= 1 && nextPage <= totalPages) {
       setPage(nextPage)
-      fetchShipments(nextPage)
       window.scrollTo({ top: 0, behavior: 'smooth' })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [totalPages])
 
   const resetCompactColumnView = useCallback(() => {
@@ -3564,7 +3408,7 @@ function ShipmentsPageContent() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <span>Status Distribution</span>
-              {section1SummaryLoading ? (
+              {listFetching && processedShipments.length > 0 ? (
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
               ) : null}
             </CardTitle>
@@ -3572,7 +3416,7 @@ function ShipmentsPageContent() {
           <CardContent>
             <div
               className={`flex w-full min-w-0 items-center justify-start gap-3 overflow-x-auto py-4 px-4 md:gap-6 transition-opacity duration-200 ${
-                section1SummaryLoading && shipmentsSummary ? 'opacity-65' : 'opacity-100'
+                listFetching && processedShipments.length > 0 ? 'opacity-65' : 'opacity-100'
               }`}
             >
               <div className="flex flex-nowrap items-center shrink-0">
@@ -3586,16 +3430,15 @@ function ShipmentsPageContent() {
                 { status: 'COMPLETED',   label: 'Completed',   color: 'bg-green-100',  textColor: 'text-green-800',  badgeColor: 'bg-green-600',  tooltip: 'Shipment complete — cargo has been received at destination.' },
                 { status: 'CANCELLED',   label: 'Cancelled',   color: 'bg-red-100',    textColor: 'text-red-800',    badgeColor: 'bg-red-600',    tooltip: 'Shipment cancelled and will not continue.' },
               ].map((statusInfo, index, array) => {
-                const summary = shipmentsSummary?.status
                 const count =
-                  statusInfo.status === 'PLANNED' ? Number(summary?.planned ?? 0)
-                    : statusInfo.status === 'IN_PROGRESS' ? Number(summary?.inProgress ?? 0)
-                      : statusInfo.status === 'LOADING' ? Number(summary?.loading ?? 0)
-                        : statusInfo.status === 'IN_TRANSIT' ? Number(summary?.inTransit ?? 0)
-                          : statusInfo.status === 'ARRIVED' ? Number(summary?.arrived ?? 0)
-                            : statusInfo.status === 'UNLOADING' ? Number(summary?.unloading ?? 0)
-                              : statusInfo.status === 'COMPLETED' ? Number(summary?.completed ?? 0)
-                                : statusInfo.status === 'CANCELLED' ? Number(summary?.cancelled ?? 0)
+                  statusInfo.status === 'PLANNED' ? section1StatusCounts.planned
+                    : statusInfo.status === 'IN_PROGRESS' ? section1StatusCounts.inProgress
+                      : statusInfo.status === 'LOADING' ? section1StatusCounts.loading
+                        : statusInfo.status === 'IN_TRANSIT' ? section1StatusCounts.inTransit
+                          : statusInfo.status === 'ARRIVED' ? section1StatusCounts.arrived
+                            : statusInfo.status === 'UNLOADING' ? section1StatusCounts.unloading
+                              : statusInfo.status === 'COMPLETED' ? section1StatusCounts.completed
+                                : statusInfo.status === 'CANCELLED' ? section1StatusCounts.cancelled
                                   : 0
                 const isStatusActive = statusFilter === statusInfo.status
                 return (
@@ -3645,31 +3488,31 @@ function ShipmentsPageContent() {
                 {
                   key: 'MORE_THAN_7D' as const,
                   label: 'ETA Loading > 7D',
-                  count: Number(shipmentsSummary?.etaLoading?.moreThan7D ?? etaLoadingBuckets.counts.moreThan7D),
+                  count: section2EtaLoadingBuckets.counts.moreThan7D,
                   color: 'bg-sky-50',
                 },
                 {
                   key: 'D_MINUS_2' as const,
                   label: 'ETA Loading D-2',
-                  count: Number(shipmentsSummary?.etaLoading?.dMinus2 ?? etaLoadingBuckets.counts.dMinus2),
+                  count: section2EtaLoadingBuckets.counts.dMinus2,
                   color: 'bg-amber-50',
                 },
                 {
                   key: 'D' as const,
                   label: 'ETA Loading D',
-                  count: Number(shipmentsSummary?.etaLoading?.d ?? etaLoadingBuckets.counts.d),
+                  count: section2EtaLoadingBuckets.counts.d,
                   color: 'bg-emerald-50',
                 },
                 {
                   key: 'DELAY' as const,
                   label: 'ETA Loading Delay',
-                  count: Number(shipmentsSummary?.etaLoading?.delay ?? etaLoadingBuckets.counts.delay),
+                  count: section2EtaLoadingBuckets.counts.delay,
                   color: 'bg-rose-50',
                 },
                 {
                   key: 'NO_ETA' as const,
                   label: 'No ETA',
-                  count: Number(shipmentsSummary?.etaLoading?.noEta ?? etaLoadingBuckets.counts.noEta),
+                  count: section2EtaLoadingBuckets.counts.noEta,
                   color: 'bg-gray-50',
                 },
               ].map((bucket) => {
@@ -3708,31 +3551,31 @@ function ShipmentsPageContent() {
                 {
                   key: 'MORE_THAN_7D' as const,
                   label: 'ETA Discharge > 7D',
-                  count: Number(shipmentsSummary?.etaDischarge?.moreThan7D ?? etaDischargeBuckets.counts.moreThan7D),
+                  count: section2EtaDischargeBuckets.counts.moreThan7D,
                   color: 'bg-sky-50',
                 },
                 {
                   key: 'D_MINUS_2' as const,
                   label: 'ETA Discharge D-2',
-                  count: Number(shipmentsSummary?.etaDischarge?.dMinus2 ?? etaDischargeBuckets.counts.dMinus2),
+                  count: section2EtaDischargeBuckets.counts.dMinus2,
                   color: 'bg-amber-50',
                 },
                 {
                   key: 'D' as const,
                   label: 'ETA Discharge D',
-                  count: Number(shipmentsSummary?.etaDischarge?.d ?? etaDischargeBuckets.counts.d),
+                  count: section2EtaDischargeBuckets.counts.d,
                   color: 'bg-emerald-50',
                 },
                 {
                   key: 'DELAY' as const,
                   label: 'ETA Discharge Delay',
-                  count: Number(shipmentsSummary?.etaDischarge?.delay ?? etaDischargeBuckets.counts.delay),
+                  count: section2EtaDischargeBuckets.counts.delay,
                   color: 'bg-rose-50',
                 },
                 {
                   key: 'NO_ETA' as const,
                   label: 'No ETA',
-                  count: Number(shipmentsSummary?.etaDischarge?.noEta ?? etaDischargeBuckets.counts.noEta),
+                  count: section2EtaDischargeBuckets.counts.noEta,
                   color: 'bg-gray-50',
                 },
               ].map((bucket) => {
@@ -4217,7 +4060,7 @@ function ShipmentsPageContent() {
                 </CardTitle>
                 <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                     <span className="whitespace-nowrap tabular-nums text-gray-700">
-                      <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> shipments
+                      <span className="font-semibold">{displayTotalCount.toLocaleString('en-US')}</span> shipments
                     </span>
                     <span className="text-gray-400" aria-hidden>
                       ·
@@ -5200,7 +5043,7 @@ function ShipmentsPageContent() {
                 {totalPages > 1 && (
                   <div className="mt-6 flex items-center justify-between border-t pt-4">
                     <div className="text-sm text-gray-700">
-                      Showing page {page} of {totalPages} ({totalCount} total shipments)
+                      Showing page {page} of {totalPages} ({displayTotalCount} total shipments)
                     </div>
                     <div className="flex items-center gap-2">
                       <Button

@@ -19,6 +19,19 @@ git fetch origin
 git checkout "${BRANCH}"
 git pull origin "${BRANCH}"
 
+if [[ -f "${APP_DIR}/docs/scripts/staging-mount-synology-dev.sh" ]]; then
+  echo "==> Ensure Synology upload mount (APPs/dev)"
+  if [[ -f "${APP_DIR}/.synology-credentials" ]]; then
+    sudo bash "${APP_DIR}/docs/scripts/staging-mount-synology-dev.sh" || {
+      echo "WARN: Synology mount failed — uploads may fail until mount is fixed."
+      echo "See docs/STAGING-SYNOLOGY-UPLOADS.md"
+    }
+  else
+    echo "WARN: ${APP_DIR}/.synology-credentials missing — skip auto-mount."
+    echo "See docs/STAGING-SYNOLOGY-UPLOADS.md"
+  fi
+fi
+
 echo "==> Rebuild and restart backend stack"
 docker compose -f "${COMPOSE_FILE}" up -d --build
 

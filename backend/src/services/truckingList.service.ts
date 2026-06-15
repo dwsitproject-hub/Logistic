@@ -209,14 +209,14 @@ export function buildTruckingListSummaryFromRows(rows: TruckingListRow[]) {
       continue;
     }
 
-    if (status === 'PLANNED') {
-      planned += 1;
-    } else if (!hasDateValue(truckingCompletion) && !hasDateValue(truckingStart)) {
-      planned += 1;
-    } else if (!hasDateValue(truckingCompletion) && hasDateValue(truckingStart)) {
-      inProgress += 1;
-    } else if (hasDateValue(truckingCompletion)) {
+    // Match list SQL filters (sqlEffectiveTruckingStartDate / sqlEffectiveTruckingCompletionDate):
+    // PLANNED = no start & no completion; IN_PROGRESS = start only; COMPLETED = completion set.
+    if (hasDateValue(truckingCompletion)) {
       completed += 1;
+    } else if (hasDateValue(truckingStart)) {
+      inProgress += 1;
+    } else {
+      planned += 1;
     }
 
     if (status === 'LOADING') loading += 1;

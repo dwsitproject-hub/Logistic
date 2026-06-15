@@ -362,6 +362,23 @@ export default function UsersPage() {
           </Alert>
         )}
 
+        <Card className="border-slate-200 bg-slate-50">
+          <CardContent className="pt-6">
+            <div className="flex gap-3">
+              <Shield className="h-5 w-5 text-slate-600 shrink-0 mt-0.5" />
+              <div className="text-sm text-slate-800">
+                <p className="font-semibold mb-1">Page access (including Commercial Documents)</p>
+                <p>
+                  User menu visibility and page access are controlled by role permissions. Use{' '}
+                  <strong>Manage Roles</strong> → <strong>Page Access</strong> to grant{' '}
+                  <code className="text-xs">page.commercial_documents</code> and{' '}
+                  <code className="text-xs">data.commercial_documents</code> for Commercial Documents upload and review.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Search */}
         <Card>
           <CardHeader>

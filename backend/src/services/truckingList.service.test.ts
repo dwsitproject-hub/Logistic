@@ -22,12 +22,12 @@ describe('truckingList.service', () => {
     ];
 
     const summary = buildTruckingListSummaryFromRows(rows);
-    expect(summary.total).toBe(5);
+    expect(summary.total).toBe(6);
     expect(summary.status.planned).toBe(1);
     expect(summary.status.inProgress).toBe(2);
     expect(summary.status.loading).toBe(1);
     expect(summary.status.inTransit).toBe(1);
-    expect(summary.status.completed).toBe(1);
+    expect(summary.status.completed).toBe(2);
     expect(summary.status.cancelled).toBe(1);
   });
 

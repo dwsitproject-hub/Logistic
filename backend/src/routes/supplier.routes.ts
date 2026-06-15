@@ -1,8 +1,7 @@
 import express from 'express';
 import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
 import { authenticateToken, authorize } from '../middleware/auth';
+import { ensureUploadDir } from '../utils/fileUpload';
 import {
   listSuppliers,
   getSupplierById,
@@ -17,10 +16,7 @@ import {
 
 const router = express.Router();
 
-// Ensure uploads directory exists
-const uploadDir = path.join(process.cwd(), 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
+const uploadDir = ensureUploadDir('suppliers');
 const upload = multer({ dest: uploadDir });
 
 router.use(authenticateToken);

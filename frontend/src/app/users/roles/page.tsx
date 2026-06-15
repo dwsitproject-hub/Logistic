@@ -163,6 +163,17 @@ export default function RolesPage() {
     }, {})
   }
 
+  const sortPermissionsInCategory = (perms: Permission[]): Permission[] =>
+    [...perms].sort((a, b) => {
+      const keyOrder = (key: string) => {
+        if (key === 'page.commercial_documents') return 'page.commercial_documents'
+        if (key === 'data.commercial_documents') return 'data.commercial_documents'
+        return key
+      }
+      return keyOrder(a.permission_key).localeCompare(keyOrder(b.permission_key))
+        || a.permission_name.localeCompare(b.permission_name)
+    })
+
   const getCategoryTitle = (category: string): string => {
     const titles: Record<string, string> = {
       page: 'Page Access',
@@ -326,11 +337,21 @@ export default function RolesPage() {
                   </CardTitle>
                   <CardDescription>
                     Configure {category} permissions for {selectedRole.display_name}
+                    {category === 'page' ? (
+                      <span className="block mt-1 text-gray-500">
+                        Includes <strong>Commercial Documents</strong> (<code className="text-xs">page.commercial_documents</code>) for contract payment document access.
+                      </span>
+                    ) : null}
+                    {category === 'data' ? (
+                      <span className="block mt-1 text-gray-500">
+                        <strong>Commercial Documents Data</strong> (<code className="text-xs">data.commercial_documents</code>) controls upload and file management on that page.
+                      </span>
+                    ) : null}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {perms.map((permission) => (
+                    {sortPermissionsInCategory(perms).map((permission) => (
                       <div
                         key={permission.id}
                         className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"
@@ -407,6 +428,11 @@ export default function RolesPage() {
                   <li><strong>Create:</strong> User can add new records</li>
                   <li><strong>Edit:</strong> User can modify existing records</li>
                   <li><strong>Delete:</strong> User can remove records</li>
+                  <li>
+                    <strong>Commercial Documents:</strong> Enable <code className="text-xs">page.commercial_documents</code> (View) and{' '}
+                    <code className="text-xs">data.commercial_documents</code> (View/Create/Edit for upload) under Page Access and Data Access.
+                    LOGISTICS Staff scope should remain denied unless explicitly granted.
+                  </li>
                 </ul>
                 <p className="mt-2">
                   Dashboard widgets control which statistics and charts appear on the user's dashboard.

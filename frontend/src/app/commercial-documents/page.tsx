@@ -59,6 +59,7 @@ import {
 import {
   COMMERCIAL_DOCUMENT_LABELS,
   COMMERCIAL_DOCUMENT_TYPES,
+  COMMERCIAL_DOCUMENTS_DATA_PERMISSION,
   COMMERCIAL_DOCUMENTS_PAGE_PERMISSION,
   defaultCommercialDocsYtdRange,
   type CommercialDocumentRow,
@@ -90,7 +91,9 @@ function CommercialDocumentsPageContent() {
   const canViewPage = canViewPermission(perms, COMMERCIAL_DOCUMENTS_PAGE_PERMISSION)
   const canModifyDocuments =
     canCreatePermission(perms, COMMERCIAL_DOCUMENTS_PAGE_PERMISSION) ||
-    canEditPermission(perms, COMMERCIAL_DOCUMENTS_PAGE_PERMISSION)
+    canEditPermission(perms, COMMERCIAL_DOCUMENTS_PAGE_PERMISSION) ||
+    canCreatePermission(perms, COMMERCIAL_DOCUMENTS_DATA_PERMISSION) ||
+    canEditPermission(perms, COMMERCIAL_DOCUMENTS_DATA_PERMISSION)
 
   useEffect(() => {
     if (perms.loaded && !canViewPage) {
