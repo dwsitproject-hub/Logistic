@@ -222,22 +222,15 @@ function LayoutWithPermissions({
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
-  const [user, setUser] = useState<UserLite | null>(readStoredUser)
+  const [user, setUser] = useState<UserLite | null>(null)
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
-    const userData = localStorage.getItem('user')
-
-    if (!token || !userData) {
+    const stored = readStoredUser()
+    if (!stored) {
       router.push('/login')
       return
     }
-
-    try {
-      setUser(JSON.parse(userData))
-    } catch {
-      router.push('/login')
-    }
+    setUser(stored)
   }, [router])
 
   if (!user) {
