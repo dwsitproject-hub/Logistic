@@ -1308,10 +1308,10 @@ function ContractsPageContent() {
 
   const displayTotalContracts = totalContracts
 
-  /** Section 1 unassigned cards — when a card filters Section 3, reuse pagination total as SSOT. */
-  const displayUnassignedSeaCount = unassignedFilter === 'sea' ? totalContracts : unassignedSeaContracts
-  const displayUnassignedLandCount = unassignedFilter === 'land' ? totalContracts : unassignedLandContracts
-  const displayUnassignedMixCount = unassignedFilter === 'mix' ? totalContracts : unassignedMixContracts
+  /** Section 1 unassigned cards — always show dedicated API totals (stable when switching filters). */
+  const displayUnassignedSeaCount = unassignedSeaContracts
+  const displayUnassignedLandCount = unassignedLandContracts
+  const displayUnassignedMixCount = unassignedMixContracts
 
   /** Debug: track Section 3 filter + pagination sync (summary card vs table). */
   useEffect(() => {

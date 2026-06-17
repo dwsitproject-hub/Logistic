@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -30,6 +30,9 @@ interface MasterPlant {
 
 export default function MasterPlantPage() {
   const [items, setItems] = useState<MasterPlant[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const PAGE_SIZE = 20
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
@@ -46,20 +49,38 @@ export default function MasterPlantPage() {
     errors: Array<{ row: number; plant_code: string; reason: string }>
   } | null>(null)
 
-  const fetchData = useCallback(async (searchQuery: string) => {
+  const fetchData = useCallback(async (pageNum: number, searchQuery: string) => {
     try {
       setLoading(true)
       const params = new URLSearchParams()
+      params.set('page', String(pageNum))
+      params.set('limit', String(PAGE_SIZE))
       if (searchQuery.length >= 2) params.set('search', searchQuery)
       const res = await api.get('/master-plants', { params })
       setItems(res.data?.data?.items || [])
+      setTotal(res.data?.data?.pagination?.total ?? 0)
     } catch (err) {
       console.error('Failed to load master plants', err)
       alert('Failed to load master plants')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [PAGE_SIZE])
+
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total, PAGE_SIZE])
+
+  const skipSearchPageReset = useRef(true)
+  useEffect(() => {
+    if (skipSearchPageReset.current) {
+      skipSearchPageReset.current = false
+      return
+    }
+    setPage(1)
+  }, [debouncedSearch])
+
+  useEffect(() => {
+    void fetchData(page, debouncedSearch)
+  }, [page, debouncedSearch, fetchData])
 
   useEffect(() => {
     try {
@@ -70,9 +91,9 @@ export default function MasterPlantPage() {
     }
   }, [])
 
-  useEffect(() => {
-    void fetchData(debouncedSearch)
-  }, [debouncedSearch, fetchData])
+  const handlePageChange = (newPage: number) => {
+    if (newPage >= 1 && newPage <= totalPages) setPage(newPage)
+  }
 
   const templateHint = useMemo(() => {
     return 'Template: Row 1 = header, columns A–G (Company Name, Plant Code, Plant Name, Postal Code, City, Plant Type, Group Plant)'
@@ -122,7 +143,7 @@ export default function MasterPlantPage() {
       setEditing(null)
       setForm({})
       setIsFormOpen(false)
-      await fetchData(debouncedSearch)
+      await fetchData(page, debouncedSearch)
     } catch (err: any) {
       console.error('Save master plant error', err)
       const msg = err?.response?.data?.error?.message || 'Failed to save master plant'
@@ -136,7 +157,7 @@ export default function MasterPlantPage() {
     if (!ok) return
     try {
       await api.delete(`/master-plants/${p.id}`)
-      await fetchData(debouncedSearch)
+      await fetchData(page, debouncedSearch)
     } catch (err: any) {
       console.error('Delete master plant error', err)
       const msg = err?.response?.data?.error?.message || 'Failed to delete master plant'
@@ -240,7 +261,7 @@ export default function MasterPlantPage() {
         errors: allErrors,
       })
 
-      await fetchData(debouncedSearch)
+      await fetchData(page, debouncedSearch)
     } catch (err: any) {
       console.error('Upload master plant file error', err)
       const msg =
@@ -349,6 +370,49 @@ export default function MasterPlantPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+            {!loading && total > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-4 border-t">
+                <span className="text-sm text-gray-600">
+                  Showing page {page} of {totalPages} ({total} plants)
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handlePageChange(page - 1)}
+                    disabled={page <= 1}
+                  >
+                    Previous
+                  </Button>
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum: number
+                    if (totalPages <= 5) pageNum = i + 1
+                    else if (page <= 3) pageNum = i + 1
+                    else if (page >= totalPages - 2) pageNum = totalPages - 4 + i
+                    else pageNum = page - 2 + i
+                    return (
+                      <Button
+                        key={pageNum}
+                        variant={page === pageNum ? 'default' : 'outline'}
+                        size="sm"
+                        onClick={() => handlePageChange(pageNum)}
+                        className="min-w-[36px]"
+                      >
+                        {pageNum}
+                      </Button>
+                    )
+                  })}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handlePageChange(page + 1)}
+                    disabled={page >= totalPages}
+                  >
+                    Next
+                  </Button>
+                </div>
               </div>
             )}
           </CardContent>

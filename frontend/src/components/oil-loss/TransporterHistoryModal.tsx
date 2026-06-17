@@ -12,8 +12,8 @@ import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 import { cn } from '@/lib/utils'
 import { OperationalStackedCommaCell } from '@/lib/operationalTableLayout'
 import {
-  isOilLossTruckTransportMode,
-  isOilLossVesselTransportMode,
+  matchesOilLossTruckSegment,
+  matchesOilLossVesselSegment,
 } from '@/lib/oilLossEligibility'
 import { Building2, Ship, Truck, X, type LucideIcon } from 'lucide-react'
 
@@ -264,8 +264,8 @@ function resolveTransporterEntityIcon(rows: OilLossGroupHistoryContractRow[]): L
   let vesselCount = 0
   let truckCount = 0
   for (const row of rows) {
-    if (isOilLossVesselTransportMode(row.transport_mode, row.sto_type)) vesselCount += 1
-    if (isOilLossTruckTransportMode(row.transport_mode, row.sto_type)) truckCount += 1
+    if (matchesOilLossVesselSegment(row)) vesselCount += 1
+    if (matchesOilLossTruckSegment(row)) truckCount += 1
   }
   if (vesselCount > 0 && truckCount === 0) return Ship
   if (truckCount > 0 && vesselCount === 0) return Truck
