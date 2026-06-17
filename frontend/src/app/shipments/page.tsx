@@ -94,6 +94,14 @@ const ETA_DISCHARGE_FILTER_LABELS: Record<EtaBucketFilterKey, string> = {
   NO_ETA: 'No ETA (Discharge)',
 }
 
+const EMPTY_ETA_BUCKET_COUNTS = {
+  moreThan7D: 0,
+  dMinus2: 0,
+  d: 0,
+  delay: 0,
+  noEta: 0,
+} as const
+
 const SHIPMENT_STATUS_LABELS: Record<string, string> = {
   PLANNED: 'Planned',
   IN_PROGRESS: 'In Progress',
@@ -1249,7 +1257,16 @@ function ShipmentsPageContent() {
           const section2Url = `/shipments?${section2Params.toString()}`
           const section2CacheKey = buildCacheKey('GET', section2Url)
           void cachedGet(section2CacheKey, () => api.get(section2Url).then((r) => r.data), {
-            force: options?.force || forceSummaryFetch,
+            force: true,
+            onRevalidate: (fresh) => {
+              if (summaryGen !== summaryFetchGenRef.current) return
+              if (fresh?.data?.summary) {
+                setSection2EtaSummary({
+                  etaLoading: fresh.data.summary.etaLoading,
+                  etaDischarge: fresh.data.summary.etaDischarge,
+                })
+              }
+            },
           })
             .then(({ data }) => {
               if (summaryGen !== summaryFetchGenRef.current) return
@@ -1263,6 +1280,8 @@ function ShipmentsPageContent() {
             .catch(() => {
               if (summaryGen === summaryFetchGenRef.current) setSection2EtaSummary(null)
             })
+        } else {
+          setSection2EtaSummary(null)
         }
       }, 150)
     } catch (error: any) {
@@ -1961,6 +1980,7 @@ function ShipmentsPageContent() {
   /** Section 1 status circles — mutually exclusive with ETA summary cards for count parity with Section 3. */
   const handleStatusCardClick = useCallback((status: string) => {
     setPage(1)
+    setSection2EtaSummary(null)
     setStatusFilter((prev) => (prev === status ? 'ALL' : status))
     setEtaLoadingFilter('ALL')
     setEtaDischargeFilter('ALL')
@@ -1997,31 +2017,38 @@ function ShipmentsPageContent() {
 
   const section2EtaLoadingCounts = useMemo(() => {
     const src =
-      statusFilter !== 'ALL' && section2EtaSummary?.etaLoading
-        ? section2EtaSummary.etaLoading
+      statusFilter !== 'ALL'
+        ? section2EtaSummary?.etaLoading ?? (summaryFetching ? EMPTY_ETA_BUCKET_COUNTS : null)
         : shipmentsSection1Summary?.etaLoading
+    if (!src) return { ...EMPTY_ETA_BUCKET_COUNTS }
     return {
-      moreThan7D: Number(src?.moreThan7D ?? 0),
-      dMinus2: Number(src?.dMinus2 ?? 0),
-      d: Number(src?.d ?? 0),
-      delay: Number(src?.delay ?? 0),
-      noEta: Number(src?.noEta ?? 0),
+      moreThan7D: Number(src.moreThan7D ?? 0),
+      dMinus2: Number(src.dMinus2 ?? 0),
+      d: Number(src.d ?? 0),
+      delay: Number(src.delay ?? 0),
+      noEta: Number(src.noEta ?? 0),
     }
-  }, [statusFilter, section2EtaSummary, shipmentsSection1Summary])
+  }, [statusFilter, section2EtaSummary, shipmentsSection1Summary, summaryFetching])
 
   const section2EtaDischargeCounts = useMemo(() => {
     const src =
-      statusFilter !== 'ALL' && section2EtaSummary?.etaDischarge
-        ? section2EtaSummary.etaDischarge
+      statusFilter !== 'ALL'
+        ? section2EtaSummary?.etaDischarge ?? (summaryFetching ? EMPTY_ETA_BUCKET_COUNTS : null)
         : shipmentsSection1Summary?.etaDischarge
+    if (!src) return { ...EMPTY_ETA_BUCKET_COUNTS }
     return {
-      moreThan7D: Number(src?.moreThan7D ?? 0),
-      dMinus2: Number(src?.dMinus2 ?? 0),
-      d: Number(src?.d ?? 0),
-      delay: Number(src?.delay ?? 0),
-      noEta: Number(src?.noEta ?? 0),
+      moreThan7D: Number(src.moreThan7D ?? 0),
+      dMinus2: Number(src.dMinus2 ?? 0),
+      d: Number(src.d ?? 0),
+      delay: Number(src.delay ?? 0),
+      noEta: Number(src.noEta ?? 0),
     }
-  }, [statusFilter, section2EtaSummary, shipmentsSection1Summary])
+  }, [statusFilter, section2EtaSummary, shipmentsSection1Summary, summaryFetching])
+
+  const section2EtaScopeLabel = useMemo(() => {
+    if (statusFilter === 'ALL') return null
+    return SHIPMENT_STATUS_LABELS[statusFilter] ?? statusFilter
+  }, [statusFilter])
 
   const section3TableLoading = loading && shipments.length === 0
   const section1DataLoading = listFetching || summaryFetching || section3TableLoading
@@ -3808,7 +3835,15 @@ function ShipmentsPageContent() {
         {/* ETA Loading Status */}
         <Card className="mt-4">
           <CardHeader>
-            <CardTitle>ETA Loading Status</CardTitle>
+            <CardTitle className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+              <span>ETA Loading Status</span>
+              {section2EtaScopeLabel ? (
+                <span className="text-xs font-normal text-blue-700">
+                  Scoped to {section2EtaScopeLabel}
+                  {summaryFetching && !section2EtaSummary ? ' · updating…' : ''}
+                </span>
+              ) : null}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -3871,7 +3906,15 @@ function ShipmentsPageContent() {
         {/* ETA Discharge Status */}
         <Card className="mt-4">
           <CardHeader>
-            <CardTitle>ETA Discharge Status</CardTitle>
+            <CardTitle className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+              <span>ETA Discharge Status</span>
+              {section2EtaScopeLabel ? (
+                <span className="text-xs font-normal text-blue-700">
+                  Scoped to {section2EtaScopeLabel}
+                  {summaryFetching && !section2EtaSummary ? ' · updating…' : ''}
+                </span>
+              ) : null}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">

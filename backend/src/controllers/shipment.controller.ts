@@ -792,16 +792,16 @@ ${contractMetaSelect}
         COUNT(*) FILTER (WHERE effective_status = 'UNLOADING')::bigint AS unloading_count,
         COUNT(*) FILTER (WHERE effective_status = 'COMPLETED')::bigint AS completed_count,
         COUNT(*) FILTER (WHERE effective_status = 'CANCELLED')::bigint AS cancelled_count,
-        COUNT(*) FILTER (WHERE loading_no_eta)::bigint AS eta_loading_no_eta,
-        COUNT(*) FILTER (WHERE NOT loading_no_eta AND loading_delay)::bigint AS eta_loading_delay,
-        COUNT(*) FILTER (WHERE NOT loading_no_eta AND NOT loading_delay AND loading_d)::bigint AS eta_loading_d,
-        COUNT(*) FILTER (WHERE NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND loading_d_minus_2)::bigint AS eta_loading_d_minus_2,
-        COUNT(*) FILTER (WHERE NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND NOT loading_d_minus_2 AND loading_more_than_7d)::bigint AS eta_loading_more_than_7d,
-        COUNT(*) FILTER (WHERE discharge_no_eta)::bigint AS eta_discharge_no_eta,
-        COUNT(*) FILTER (WHERE NOT discharge_no_eta AND discharge_delay)::bigint AS eta_discharge_delay,
-        COUNT(*) FILTER (WHERE NOT discharge_no_eta AND NOT discharge_delay AND discharge_d)::bigint AS eta_discharge_d,
-        COUNT(*) FILTER (WHERE NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND discharge_d_minus_2)::bigint AS eta_discharge_d_minus_2,
-        COUNT(*) FILTER (WHERE NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND NOT discharge_d_minus_2 AND discharge_more_than_7d)::bigint AS eta_discharge_more_than_7d
+        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'LOADING') AND loading_no_eta)::bigint AS eta_loading_no_eta,
+        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'LOADING') AND NOT loading_no_eta AND loading_delay)::bigint AS eta_loading_delay,
+        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'LOADING') AND NOT loading_no_eta AND NOT loading_delay AND loading_d)::bigint AS eta_loading_d,
+        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'LOADING') AND NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND loading_d_minus_2)::bigint AS eta_loading_d_minus_2,
+        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'LOADING') AND NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND NOT loading_d_minus_2 AND loading_more_than_7d)::bigint AS eta_loading_more_than_7d,
+        COUNT(*) FILTER (WHERE effective_status IN ('IN_TRANSIT', 'ARRIVED', 'UNLOADING') AND discharge_no_eta)::bigint AS eta_discharge_no_eta,
+        COUNT(*) FILTER (WHERE effective_status IN ('IN_TRANSIT', 'ARRIVED', 'UNLOADING') AND NOT discharge_no_eta AND discharge_delay)::bigint AS eta_discharge_delay,
+        COUNT(*) FILTER (WHERE effective_status IN ('IN_TRANSIT', 'ARRIVED', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND discharge_d)::bigint AS eta_discharge_d,
+        COUNT(*) FILTER (WHERE effective_status IN ('IN_TRANSIT', 'ARRIVED', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND discharge_d_minus_2)::bigint AS eta_discharge_d_minus_2,
+        COUNT(*) FILTER (WHERE effective_status IN ('IN_TRANSIT', 'ARRIVED', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND NOT discharge_d_minus_2 AND discharge_more_than_7d)::bigint AS eta_discharge_more_than_7d
       FROM enriched`;
 
     if (compact && summaryOnly) {

@@ -1,6 +1,7 @@
 /**
  * SAP STO Type helpers — shared JSON field expressions.
- * Shipments & Shipping Performance: STO Type 'V' (vessel).
+ * Shipments page: STO Type 'V' (vessel).
+ * Shipping Performance: transport mode SEA/MIX only (no STO Type filter).
  * Trucking page: STO Type 'T' — see truckingStoTypeSql.ts.
  */
 

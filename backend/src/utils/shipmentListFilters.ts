@@ -367,6 +367,16 @@ export function shipmentEffectiveStatusExpr(alias: string): string {
   )`
 }
 
+/** Statuses that contribute to ETA Loading buckets (matches shipmentsPageDerivedData). */
+export function shipmentLoadingEtaPhaseExpr(alias: string): string {
+  return `${shipmentEffectiveStatusExpr(alias)} IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'LOADING')`
+}
+
+/** Statuses that contribute to ETA Discharge buckets (matches shipmentsPageDerivedData). */
+export function shipmentDischargeEtaPhaseExpr(alias: string): string {
+  return `${shipmentEffectiveStatusExpr(alias)} IN ('IN_TRANSIT', 'ARRIVED', 'UNLOADING')`
+}
+
 const SHIPMENT_STATUS_FILTER_VALUES = new Set([
   'UNPLANNED',
   'PLANNED',
@@ -536,10 +546,10 @@ export function appendShipmentEtaBucketFilters(
 
   const parts: string[] = []
   if (etaLoading) {
-    parts.push(` AND (${loadingBucket}) = '${etaLoading}'`)
+    parts.push(` AND ${shipmentLoadingEtaPhaseExpr('sb')} AND (${loadingBucket}) = '${etaLoading}'`)
   }
   if (etaDischarge) {
-    parts.push(` AND (${dischargeBucket}) = '${etaDischarge}'`)
+    parts.push(` AND ${shipmentDischargeEtaPhaseExpr('sb')} AND (${dischargeBucket}) = '${etaDischarge}'`)
   }
 
   return { sql: parts.join(''), params: [], nextIndex: 0 }

@@ -1,7 +1,6 @@
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import { toIsoDate10FromCell } from '../utils/planningSheetDate';
-import { buildSapStoTypeVExistsSql } from '../utils/shipmentStoTypeSql';
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
 export interface ShippingPerformanceFilters {
@@ -53,7 +52,7 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const ROW_CACHE_KEY = 'shipping-performance-rows-v8';
+const ROW_CACHE_KEY = 'shipping-performance-rows-v9';
 
 const SHIPPING_PERFORMANCE_SQL = `
       WITH latest_spd_contract AS (
@@ -297,7 +296,6 @@ const SHIPPING_PERFORMANCE_SQL = `
         LIMIT 1
       ) pna ON TRUE
       WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
-        AND ${buildSapStoTypeVExistsSql()}
       ORDER BY s.created_at DESC`;
 
 function parseStringArray(value: unknown): string[] {

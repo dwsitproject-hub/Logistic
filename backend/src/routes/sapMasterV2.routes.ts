@@ -3,7 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { authenticateToken, authorize, authorizeSapImportsView } from '../middleware/auth';
+import { authenticateToken, authorizeSapImportsUpload, authorizeSapImportsView } from '../middleware/auth';
 import * as sapMasterV2Controller from '../controllers/sapMasterV2.controller';
 
 const router = Router();
@@ -40,14 +40,14 @@ const catchAsync =
 router.post(
   '/import',
   authenticateToken,
-  authorize('ADMIN'),
+  authorizeSapImportsUpload,
   sapMasterV2Controller.importMasterV2
 );
 
 router.post(
   '/import-upload',
   authenticateToken,
-  authorize('ADMIN'),
+  authorizeSapImportsUpload,
   (req, res, next) => {
     upload.single('file')(req, res, (err) => {
       if (err) return next(err);

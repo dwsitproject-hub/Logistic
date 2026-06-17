@@ -11,10 +11,26 @@ import {
   type BulkUploadStatusResult,
 } from '@/components/BulkUploadStatusModal';
 import api from '../lib/api';
+import { canCreatePermission, usePermissions } from '@/components/PermissionsContext';
 
 /** Parses API error bodies (including HTML fallback) so alerts show the real backend message. */
 function formatImportFailureMessage(error: unknown): string {
   const err = error as { message?: string; response?: { data?: unknown; status?: number } };
+  const status = err.response?.status;
+  if (status === 403) {
+    const d = err.response?.data;
+    if (d && typeof d === 'object') {
+      const o = d as { error?: { message?: string } };
+      if (o.error?.message) return o.error.message;
+    }
+    return 'You do not have permission to upload SAP data. Contact an administrator.';
+  }
+  if (!err.response) {
+    const msg = (err.message || '').toLowerCase();
+    if (msg.includes('network error') || msg.includes('timeout')) {
+      return 'Upload failed due to a network or timeout issue. Check your connection and try again.';
+    }
+  }
   const d = err.response?.data;
   if (typeof d === 'string' && d.trim()) {
     const stripped = d.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -75,6 +91,8 @@ function computeProcessingProgress(imp: SapImport): number {
 }
 
 const SapImportDashboard: React.FC = () => {
+  const perms = usePermissions();
+  const canUploadSap = canCreatePermission(perms, 'page.sap');
   const [imports, setImports] = useState<SapImport[]>([]);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
@@ -319,20 +337,26 @@ const SapImportDashboard: React.FC = () => {
                 Monitor and manage SAP MASTER v2 data imports
               </CardDescription>
             </div>
-            <Button
-              onClick={handleStartImport}
-              disabled={importing}
-              className="ml-4"
-            >
-              {importing ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                '📁 Browse & Import File'
-              )}
-            </Button>
+            {canUploadSap ? (
+              <Button
+                onClick={handleStartImport}
+                disabled={importing}
+                className="ml-4"
+              >
+                {importing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  '📁 Browse & Import File'
+                )}
+              </Button>
+            ) : (
+              <p className="ml-4 text-sm text-muted-foreground max-w-xs text-right">
+                View only — you do not have permission to upload SAP files.
+              </p>
+            )}
           </div>
         </CardHeader>
       </Card>
@@ -450,7 +474,9 @@ const SapImportDashboard: React.FC = () => {
 
             {imports.length === 0 && (
               <div className="text-center text-gray-500 py-12">
-                No import history available. Start your first import above.
+                {canUploadSap
+                  ? 'No import history available. Start your first import above.'
+                  : 'No import history available.'}
               </div>
             )}
           </div>
