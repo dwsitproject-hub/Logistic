@@ -10,8 +10,14 @@ import ChangePasswordModal from '@/components/ChangePasswordModal'
 import api from '@/lib/api'
 import { resolvePostAuthRedirect } from '@/lib/navigationAccess'
 
+type StoredAuthUser = {
+  id?: string
+  role?: string
+  is_first_login?: boolean
+}
+
 async function redirectAfterAuth(
-  user: { id?: string; role?: string },
+  user: StoredAuthUser,
   router: ReturnType<typeof useRouter>,
   setError: (msg: string) => void,
 ) {
@@ -76,9 +82,9 @@ function LoginPageContent() {
 
   const handlePasswordChangeSuccess = async () => {
     const userStr = localStorage.getItem('user')
-    let user: { id?: string; role?: string } = {}
+    let user: StoredAuthUser = {}
     if (userStr) {
-      user = JSON.parse(userStr)
+      user = JSON.parse(userStr) as StoredAuthUser
       user.is_first_login = false
       localStorage.setItem('user', JSON.stringify(user))
     }
