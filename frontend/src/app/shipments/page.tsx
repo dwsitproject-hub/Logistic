@@ -17,7 +17,10 @@ import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
-import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
+import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
+import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
+import { fetchContractPurchaseOrderOptions } from '@/components/shared/addNewShipmentTypes'
+import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
 import {
   BulkUploadStatusModal,
   type BulkUploadStatusResult,
@@ -45,7 +48,7 @@ import {
   COMPACT_OPERATIONAL_TABLE_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
 } from '@/lib/compactTableUi'
-import { formatQtyMtFromKg } from '@/lib/utils'
+import { formatQtyMtFromKg, formatNumber } from '@/lib/utils'
 import {
   SHIPMENT_COLUMN_LAYOUT_VERSION,
   SHIPMENT_COLUMN_LAYOUT_VERSION_KEY,
@@ -145,6 +148,7 @@ interface Shipment {
   buyer: string
   product: string
   group_name: string
+  sto_key?: string
   // STO-based aggregation fields
   sto_number: string
   total_quantity_shipped: number
@@ -352,6 +356,34 @@ function shipmentQuantityValuesEqual(a: unknown, b: unknown): boolean {
   return na === nb
 }
 
+function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipment[] {
+  if (!hydrated.length) return base
+  const byId = new Map<string, Shipment>()
+  for (const row of hydrated) {
+    if (row.id) byId.set(String(row.id), row)
+    const stoKey = row.sto_key ?? row.sto_number
+    if (stoKey) byId.set(String(stoKey), row)
+  }
+  return base.map((row) => {
+    const match =
+      (row.id ? byId.get(String(row.id)) : undefined) ??
+      (row.sto_key ? byId.get(String(row.sto_key)) : undefined) ??
+      (row.sto_number ? byId.get(String(row.sto_number)) : undefined)
+    if (!match) return row
+    return {
+      ...row,
+      contract_ext_no: match.contract_ext_no ?? row.contract_ext_no,
+      po_numbers: match.po_numbers ?? row.po_numbers,
+      sto_quantity: match.sto_quantity ?? row.sto_quantity,
+      quantity_receive: match.quantity_receive ?? row.quantity_receive,
+      quantity_delivered_sap: match.quantity_delivered_sap ?? row.quantity_delivered_sap,
+      incoterm: match.incoterm ?? row.incoterm,
+      b2b_flag: match.b2b_flag ?? row.b2b_flag,
+      source_type: match.source_type ?? row.source_type,
+    }
+  })
+}
+
 function ShipmentRowEditButton({
   visible,
   hasShipmentEditData,
@@ -395,26 +427,175 @@ function ShipmentRowEditButton({
   )
 }
 
-function shipmentModalPoDisplay(info: Record<string, unknown> | null | undefined, shipment: Shipment | null): string {
-  const po =
-    info?.po_number ??
-    info?.po_numbers ??
-    shipment?.po_numbers ??
-    ''
-  const value = String(po ?? '').trim()
-  return value || '-'
+function parseApiNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  const normalized = String(value).replace(/,/g, '').trim()
+  if (!normalized) return null
+  const parsed = parseFloat(normalized)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
-function shipmentModalContractDisplay(info: Record<string, unknown> | null | undefined, shipment: Shipment | null): string {
-  const contract =
-    info?.contract_number ??
-    info?.contract_numbers ??
-    info?.contract_id ??
-    shipment?.contract_numbers ??
-    shipment?.contract_number ??
+function joinUniqueCommaSeparated(values: (string | null | undefined)[]): string {
+  const seen = new Set<string>()
+  const parts: string[] = []
+  for (const value of values) {
+    const raw = String(value ?? '').trim()
+    if (!raw) continue
+    for (const piece of raw.split(/,\s*/)) {
+      const trimmed = piece.trim()
+      if (trimmed && !seen.has(trimmed)) {
+        seen.add(trimmed)
+        parts.push(trimmed)
+      }
+    }
+  }
+  return parts.length > 0 ? parts.join(', ') : '-'
+}
+
+function resolveShipmentContractNumbers(shipment: Shipment | null): string[] {
+  if (!shipment) return []
+  const raw =
+    shipment.contract_numbers ||
+    (shipment as { contract_number?: string }).contract_number ||
     ''
-  const value = String(contract ?? '').trim()
-  return value || '-'
+  return raw.split(/,\s*/).map((c) => c.trim()).filter(Boolean)
+}
+
+function shipmentModalStoDisplay(shipment: Shipment | null): string {
+  if (!shipment) return '-'
+  const sto =
+    (shipment.sto_number && String(shipment.sto_number).trim()) ||
+    (shipment.sto_key && String(shipment.sto_key).trim()) ||
+    (shipment.shipment_id && String(shipment.shipment_id).trim()) ||
+    ''
+  return sto || '-'
+}
+
+type PortsModalContractDetail = {
+  contract_number: string
+  contract_qty: number
+  outstanding_qty: number
+  sto_qty_assigned: number
+  po_number?: string
+  delivery_start_date?: string | null
+  delivery_end_date?: string | null
+  quantity_delivered?: number | null
+  quantity_receive?: number | null
+  contract_ext_no?: string | null
+  locked_from_sap?: boolean
+}
+
+function mapContractDetailFromApi(detail: Record<string, unknown>): PortsModalContractDetail {
+  return {
+    contract_number: String(detail.contract_number ?? '').trim(),
+    contract_qty: parseApiNumber(detail.contract_qty) ?? 0,
+    outstanding_qty: parseApiNumber(detail.outstanding_qty) ?? 0,
+    sto_qty_assigned: parseApiNumber(detail.sto_qty_assigned) ?? 0,
+    po_number: detail.po_number != null ? String(detail.po_number) : '',
+    delivery_start_date: (detail.delivery_start_date as string | null | undefined) ?? null,
+    delivery_end_date: (detail.delivery_end_date as string | null | undefined) ?? null,
+    quantity_delivered: parseApiNumber(detail.quantity_delivered),
+    quantity_receive: parseApiNumber(detail.quantity_receive),
+    contract_ext_no: detail.contract_ext_no != null ? String(detail.contract_ext_no) : null,
+    locked_from_sap: Boolean(detail.locked_from_sap),
+  }
+}
+
+function shipmentModalPoDisplay(
+  info: Record<string, unknown> | null | undefined,
+  shipment: Shipment | null,
+  contractDetails?: PortsModalContractDetail[],
+): string {
+  const fromDetails = contractDetails?.map((d) => d.po_number).filter(Boolean) ?? []
+  return joinUniqueCommaSeparated([
+    ...fromDetails,
+    info?.po_number as string | undefined,
+    info?.po_numbers as string | undefined,
+    shipment?.po_numbers,
+  ])
+}
+
+function shipmentModalContractExtNoDisplay(
+  info: Record<string, unknown> | null | undefined,
+  shipment: Shipment | null,
+  contractDetails?: PortsModalContractDetail[],
+): string {
+  const fromDetails = contractDetails?.map((d) => d.contract_ext_no).filter(Boolean) ?? []
+  return joinUniqueCommaSeparated([
+    ...fromDetails,
+    info?.contract_ext_no as string | undefined,
+    info?.contract_ext_nos as string | undefined,
+    shipment?.contract_ext_no,
+  ])
+}
+
+function sumContractDetailQuantities(
+  contractDetails: PortsModalContractDetail[] | undefined,
+  field: 'quantity_delivered' | 'quantity_receive' | 'contract_qty' | 'sto_qty_assigned' | 'outstanding_qty',
+): number | null {
+  if (!contractDetails?.length) return null
+  let sum = 0
+  let hasAny = false
+  for (const detail of contractDetails) {
+    const qty = parseApiNumber(detail[field])
+    if (qty !== null) {
+      sum += qty
+      hasAny = true
+    }
+  }
+  return hasAny ? sum : null
+}
+
+function resolvePortsModalQuantityDeliveredKg(
+  shipmentInfo: Record<string, unknown> | null | undefined,
+  shipment: Shipment | null,
+  contractDetails?: PortsModalContractDetail[],
+): number | null {
+  const fromContracts = sumContractDetailQuantities(contractDetails, 'quantity_delivered')
+  if (fromContracts !== null) return fromContracts
+  const fromShipmentSap = parseApiNumber(shipment?.quantity_delivered_sap)
+  if (fromShipmentSap !== null) return fromShipmentSap
+  const fromShipmentTotal = parseApiNumber(shipment?.total_quantity_delivered)
+  if (fromShipmentTotal !== null) return fromShipmentTotal
+  return parseApiNumber(shipmentInfo?.quantity_delivered)
+}
+
+function resolvePortsModalQuantityReceiveKg(
+  shipmentInfo: Record<string, unknown> | null | undefined,
+  shipment: Shipment | null,
+  contractDetails?: PortsModalContractDetail[],
+): number | null {
+  const fromContracts = sumContractDetailQuantities(contractDetails, 'quantity_receive')
+  if (fromContracts !== null) return fromContracts
+  const fromShipmentSap = parseApiNumber(shipment?.quantity_receive)
+  if (fromShipmentSap !== null) return fromShipmentSap
+  const fromShipmentRow = parseApiNumber(shipment?.actual_vessel_qty_receive)
+  if (fromShipmentRow !== null) return fromShipmentRow
+  return parseApiNumber(shipmentInfo?.actual_vessel_qty_receive)
+}
+
+function formatQuantityKgDisplay(value: unknown): string {
+  const parsed = parseApiNumber(value)
+  return parsed !== null ? `${formatNumber(parsed)} Kg` : '—'
+}
+
+function resolvePortsModalQuantityDelivered(
+  shipmentInfo: Record<string, unknown> | null | undefined,
+  shipment: Shipment | null,
+  contractDetails?: PortsModalContractDetail[],
+): string {
+  const kg = resolvePortsModalQuantityDeliveredKg(shipmentInfo, shipment, contractDetails)
+  return kg !== null ? formatQuantityKgDisplay(kg) : '—'
+}
+
+function resolvePortsModalQuantityReceive(
+  shipmentInfo: Record<string, unknown> | null | undefined,
+  shipment: Shipment | null,
+  contractDetails?: PortsModalContractDetail[],
+): string {
+  const kg = resolvePortsModalQuantityReceiveKg(shipmentInfo, shipment, contractDetails)
+  return kg !== null ? formatQuantityKgDisplay(kg) : '—'
 }
 
 function ShipmentDetailReadOnlyField({
@@ -772,19 +953,7 @@ function ShipmentsPageContent() {
   const isSyncingScroll = useRef(false)
 
   // Contract details state for expanded view
-  const [contractDetailsMap, setContractDetailsMap] = useState<{ [shipmentId: string]: Array<{
-    contract_number: string
-    contract_qty: number
-    outstanding_qty: number
-    sto_qty_assigned: number
-    po_number?: string
-    delivery_start_date?: string | null
-    delivery_end_date?: string | null
-    quantity_delivered?: number
-    quantity_receive?: number
-    contract_ext_no?: string | null
-    locked_from_sap?: boolean
-  }> }>({})
+  const [contractDetailsMap, setContractDetailsMap] = useState<{ [shipmentId: string]: PortsModalContractDetail[] }>({})
   const [loadingContractDetails, setLoadingContractDetails] = useState<{ [shipmentId: string]: boolean }>({})
   const [savingStoQty, setSavingStoQty] = useState<{ [key: string]: boolean }>({})
   const [editedContractDetails, setEditedContractDetails] = useState<{ [key: string]: number }>({})
@@ -1008,6 +1177,31 @@ function ShipmentsPageContent() {
       if (listGen !== listFetchGenRef.current) return
       applyListEnvelope(listEnvelope)
       if (!listRevalidating) setListFetching(false)
+
+      const hydrateParams = new URLSearchParams(params.toString())
+      hydrateParams.set('skipSapJoin', 'false')
+      const hydrateUrl = `/shipments?${hydrateParams.toString()}`
+      const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
+      void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
+        force: options?.force,
+        onRevalidate: (fresh) => {
+          if (listGen !== listFetchGenRef.current) return
+          const hydrated = fresh?.data?.shipments || []
+          if (hydrated.length) {
+            setShipments((prev) => mergeShipmentSapFields(prev, hydrated))
+          }
+        },
+      })
+        .then(({ data }) => {
+          if (listGen !== listFetchGenRef.current) return
+          const hydrated = data?.data?.shipments || []
+          if (hydrated.length) {
+            setShipments((prev) => mergeShipmentSapFields(prev, hydrated))
+          }
+        })
+        .catch((err) => {
+          console.warn('Shipment SAP hydrate failed (table shows shell data):', err)
+        })
 
       if (shipmentsSummaryTimerRef.current) clearTimeout(shipmentsSummaryTimerRef.current)
       const section1SummaryParams = new URLSearchParams(params.toString())
@@ -1960,81 +2154,86 @@ function ShipmentsPageContent() {
 
   // Fetch contract details for a shipment
   const fetchContractDetails = async (shipment: Shipment) => {
-    if (!shipment.contract_numbers) return
-    // Always fetch to get latest data, but skip if already loading
+    const contractNumbers = resolveShipmentContractNumbers(shipment)
+    const stoForDetails =
+      (shipment.sto_number && String(shipment.sto_number).trim()) ||
+      shipment.sto_key ||
+      shipment.shipment_id
+    const hasSto = Boolean(stoForDetails && String(stoForDetails).trim() !== '')
+
+    if (!hasSto && contractNumbers.length === 0) return
     if (loadingContractDetails[shipment.id]) return
 
     setLoadingContractDetails(prev => ({ ...prev, [shipment.id]: true }))
     try {
-      const contractNumbers = shipment.contract_numbers.split(/,\s*/).filter(c => c.trim())
-      const stoForDetails = (shipment.sto_number && String(shipment.sto_number).trim()) || (shipment as any).sto_key || shipment.shipment_id
-      const hasSto = Boolean(stoForDetails && String(stoForDetails).trim() !== '')
-      
       if (hasSto) {
-        // Use STO-specific endpoint when a real STO number exists (backend fills sto_number from sto_key when needed)
-        const stoNumber = String(stoForDetails)
-        const response = await api.get(`/shipments/contracts/details?sto=${encodeURIComponent(stoNumber)}&contractNumbers=${contractNumbers.join(',')}`)
-      
-        if (response.data.success && response.data.data.length > 0) {
-          const details = response.data.data.map((detail: any) => ({
-            contract_number: detail.contract_number,
-            contract_qty: detail.contract_qty || 0,
-            outstanding_qty: detail.outstanding_qty || 0,
-            sto_qty_assigned: detail.sto_qty_assigned || 0,
-            po_number: detail.po_number || '',
-            delivery_start_date: detail.delivery_start_date || null,
-            delivery_end_date: detail.delivery_end_date || null,
-            quantity_delivered: detail.quantity_delivered || 0,
-            quantity_receive: detail.quantity_receive || 0,
-            contract_ext_no: detail.contract_ext_no || null,
-            locked_from_sap: Boolean(detail.locked_from_sap)
-          }))
+        const stoNumber = String(stoForDetails).trim()
+        const contractNumbersParam =
+          contractNumbers.length > 0
+            ? `&contractNumbers=${encodeURIComponent(contractNumbers.join(','))}`
+            : ''
+        const response = await api.get(
+          `/shipments/contracts/details?sto=${encodeURIComponent(stoNumber)}${contractNumbersParam}`,
+        )
+
+        if (response.data.success && Array.isArray(response.data.data) && response.data.data.length > 0) {
+          const details = response.data.data.map((detail: Record<string, unknown>) =>
+            mapContractDetailFromApi(detail),
+          )
           setContractDetailsMap(prev => ({ ...prev, [shipment.id]: details }))
           return
         }
       }
 
-      // No STO, or STO-based API returned no data: use aggregated Contracts API so numbers match Contracts page
+      if (contractNumbers.length === 0) {
+        setContractDetailsMap(prev => ({ ...prev, [shipment.id]: [] }))
+        return
+      }
+
       const fallbackDetails = await Promise.all(
-          contractNumbers.map(async (contractNumber) => {
+        contractNumbers.map(async (contractNumber) => {
           const trimmed = contractNumber.trim()
-            try {
-            const contractResponse = await api.get(`/contracts?contract_id=${encodeURIComponent(trimmed)}&limit=1`)
-              if (contractResponse.data.success && contractResponse.data.data.contracts.length > 0) {
-                const contract = contractResponse.data.data.contracts[0]
-                return {
-                  contract_number: trimmed,
-                  contract_qty: contract.quantity_ordered || 0,
-                  outstanding_qty: contract.outstanding_quantity || 0,
-                  sto_qty_assigned: 0,
-                  po_number: contract.po_numbers || contract.po_number || '',
-                  delivery_start_date: contract.delivery_start_date || null,
-                  delivery_end_date: contract.delivery_end_date || null,
-                  contract_ext_no: contract.contract_ext_no || null,
-                  locked_from_sap: false
-                }
+          try {
+            const contractResponse = await api.get(
+              `/contracts?contract_id=${encodeURIComponent(trimmed)}&limit=1`,
+            )
+            if (contractResponse.data.success && contractResponse.data.data.contracts.length > 0) {
+              const contract = contractResponse.data.data.contracts[0]
+              return {
+                contract_number: trimmed,
+                contract_qty: parseApiNumber(contract.quantity_ordered) ?? 0,
+                outstanding_qty: parseApiNumber(contract.outstanding_quantity) ?? 0,
+                sto_qty_assigned: 0,
+                po_number: contract.po_numbers || contract.po_number || '',
+                delivery_start_date: contract.delivery_start_date || null,
+                delivery_end_date: contract.delivery_end_date || null,
+                quantity_delivered: parseApiNumber(contract.quantity_delivered),
+                quantity_receive: parseApiNumber(contract.quantity_receive),
+                contract_ext_no: contract.contract_ext_no || null,
+                locked_from_sap: false,
               }
-            } catch (err) {
+            }
+          } catch (err) {
             console.error(`Error fetching contract ${trimmed}:`, err)
-            }
-            return {
-              contract_number: trimmed,
-              contract_qty: 0,
-              outstanding_qty: 0,
-              sto_qty_assigned: 0,
-              po_number: '',
-              delivery_start_date: null,
-              delivery_end_date: null,
-              contract_ext_no: null,
-              locked_from_sap: false
-            }
-          })
-        )
+          }
+          return {
+            contract_number: trimmed,
+            contract_qty: 0,
+            outstanding_qty: 0,
+            sto_qty_assigned: 0,
+            po_number: '',
+            delivery_start_date: null,
+            delivery_end_date: null,
+            quantity_delivered: null,
+            quantity_receive: null,
+            contract_ext_no: null,
+            locked_from_sap: false,
+          }
+        }),
+      )
       setContractDetailsMap(prev => ({ ...prev, [shipment.id]: fallbackDetails }))
     } catch (error) {
       console.error('Error fetching contract details:', error)
-      // Fallback on error
-      const contractNumbers = shipment.contract_numbers.split(/,\s*/).filter(c => c.trim())
       const details = contractNumbers.map((contractNumber) => ({
         contract_number: contractNumber.trim(),
         contract_qty: 0,
@@ -2043,8 +2242,10 @@ function ShipmentsPageContent() {
         po_number: '',
         delivery_start_date: null,
         delivery_end_date: null,
+        quantity_delivered: null,
+        quantity_receive: null,
         contract_ext_no: null,
-        locked_from_sap: false
+        locked_from_sap: false,
       }))
       setContractDetailsMap(prev => ({ ...prev, [shipment.id]: details }))
     } finally {
@@ -2092,7 +2293,10 @@ function ShipmentsPageContent() {
         next.add(id)
         // Fetch contract details when expanding (for both single and multiple contracts)
         const shipment = sortedShipments.find(s => s.id === id)
-        if (shipment && shipment.contract_numbers) {
+        if (
+          shipment &&
+          (resolveShipmentContractNumbers(shipment).length > 0 || shipmentModalStoDisplay(shipment) !== '-')
+        ) {
           fetchContractDetails(shipment)
         }
       }
@@ -2819,6 +3023,7 @@ function ShipmentsPageContent() {
     setShipmentInfoError(null)
     // For editing/saving we always work per specific shipment (UUID)
     await fetchLoadingPorts(shipment.id)
+    void fetchContractDetails(shipment)
   }
 
   const handleSaveLoadingPort = async () => {
@@ -5270,8 +5475,24 @@ function ShipmentsPageContent() {
                       {/* Key Metrics Summary Bar */}
                       <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-gray-100 bg-gray-50 border-b border-gray-200">
                         {[
-                          { label: 'Qty Delivery', value: shipmentInfo.quantity_delivered ? `${formatNumber(shipmentInfo.quantity_delivered)} Kg` : '—', color: 'text-gray-800' },
-                          { label: 'Qty Receive', value: shipmentInfo.actual_vessel_qty_receive ? `${formatNumber(shipmentInfo.actual_vessel_qty_receive)} Kg` : '—', color: 'text-gray-800' },
+                          {
+                            label: 'Qty Delivery',
+                            value: resolvePortsModalQuantityDelivered(
+                              shipmentInfo,
+                              selectedShipment,
+                              contractDetailsMap[selectedShipment.id],
+                            ),
+                            color: 'text-gray-800',
+                          },
+                          {
+                            label: 'Qty Receive',
+                            value: resolvePortsModalQuantityReceive(
+                              shipmentInfo,
+                              selectedShipment,
+                              contractDetailsMap[selectedShipment.id],
+                            ),
+                            color: 'text-gray-800',
+                          },
                           { label: 'Loading Port', value: shipmentInfo.vessel_loading_port_1 || '—', color: 'text-blue-700' },
                           { label: 'Discharge Port', value: shipmentInfo.vessel_discharge_port_1 || '—', color: 'text-cyan-700' },
                         ].map((m) => (
@@ -5327,15 +5548,150 @@ function ShipmentsPageContent() {
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quantities &amp; Ports</p>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                         <ShipmentDetailReadOnlyField
-                          label="PO"
-                          value={shipmentModalPoDisplay(shipmentInfo, selectedShipment)}
+                          label="STO No"
+                          value={shipmentModalStoDisplay(selectedShipment)}
+                          locked
+                        />
+                        <ShipmentDetailReadOnlyField
+                          label="PO Number"
+                          value={shipmentModalPoDisplay(
+                            shipmentInfo,
+                            selectedShipment,
+                            contractDetailsMap[selectedShipment.id],
+                          )}
                           locked={editingShipmentInfo}
                         />
                         <ShipmentDetailReadOnlyField
-                          label="Contract"
-                          value={shipmentModalContractDisplay(shipmentInfo, selectedShipment)}
+                          label="Contract Ext No"
+                          value={shipmentModalContractExtNoDisplay(
+                            shipmentInfo,
+                            selectedShipment,
+                            contractDetailsMap[selectedShipment.id],
+                          )}
                           locked={editingShipmentInfo}
                         />
+                      </div>
+                      {(loadingContractDetails[selectedShipment.id] ||
+                        (contractDetailsMap[selectedShipment.id]?.length ?? 0) > 0) && (
+                        <div className="mt-3 space-y-2">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                            Associated Contracts
+                          </p>
+                          {loadingContractDetails[selectedShipment.id] ? (
+                            <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500">
+                              <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                              Loading contract details...
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              {contractDetailsMap[selectedShipment.id]?.map((detail, idx) => (
+                                <div
+                                  key={`${detail.contract_number}-${idx}`}
+                                  className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm"
+                                >
+                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2">
+                                    <div>
+                                      <div className="text-[10px] uppercase tracking-wide text-gray-400">Contract Ext No</div>
+                                      <div className="font-medium">{detail.contract_ext_no || '—'}</div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] uppercase tracking-wide text-gray-400">PO Number</div>
+                                      <div className="font-medium">{detail.po_number || '—'}</div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] uppercase tracking-wide text-gray-400">Contract Qty</div>
+                                      <div className="font-medium">
+                                        {parseApiNumber(detail.contract_qty) !== null
+                                          ? `${formatNumber(detail.contract_qty)} Kg`
+                                          : '—'}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] uppercase tracking-wide text-gray-400">STO Qty Assigned</div>
+                                      <div className="font-medium">
+                                        {parseApiNumber(detail.sto_qty_assigned) !== null
+                                          ? `${formatNumber(detail.sto_qty_assigned)} Kg`
+                                          : '—'}
+                                        {detail.locked_from_sap ? (
+                                          <span className="ml-1 text-xs text-gray-500">(SAP)</span>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] uppercase tracking-wide text-gray-400">Qty Delivered</div>
+                                      <div className="font-medium">
+                                        {parseApiNumber(detail.quantity_delivered) !== null
+                                          ? `${formatNumber(detail.quantity_delivered!)} Kg`
+                                          : '—'}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] uppercase tracking-wide text-gray-400">Qty Receive</div>
+                                      <div className="font-medium">
+                                        {parseApiNumber(detail.quantity_receive) !== null
+                                          ? `${formatNumber(detail.quantity_receive!)} Kg`
+                                          : '—'}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                              {(contractDetailsMap[selectedShipment.id]?.length ?? 0) > 1 ? (
+                                <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
+                                  <div className="text-[10px] font-semibold uppercase tracking-wide text-blue-700 mb-1">
+                                    Total ({contractDetailsMap[selectedShipment.id]?.length} contracts)
+                                  </div>
+                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2">
+                                    <div>
+                                      <div className="text-[10px] uppercase tracking-wide text-blue-600">Contract Qty</div>
+                                      <div className="font-semibold text-blue-900">
+                                        {formatQuantityKgDisplay(
+                                          sumContractDetailQuantities(
+                                            contractDetailsMap[selectedShipment.id],
+                                            'contract_qty',
+                                          ),
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] uppercase tracking-wide text-blue-600">STO Qty Assigned</div>
+                                      <div className="font-semibold text-blue-900">
+                                        {formatQuantityKgDisplay(
+                                          sumContractDetailQuantities(
+                                            contractDetailsMap[selectedShipment.id],
+                                            'sto_qty_assigned',
+                                          ),
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] uppercase tracking-wide text-blue-600">Qty Delivered</div>
+                                      <div className="font-semibold text-blue-900">
+                                        {resolvePortsModalQuantityDelivered(
+                                          shipmentInfo,
+                                          selectedShipment,
+                                          contractDetailsMap[selectedShipment.id],
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] uppercase tracking-wide text-blue-600">Qty Receive</div>
+                                      <div className="font-semibold text-blue-900">
+                                        {resolvePortsModalQuantityReceive(
+                                          shipmentInfo,
+                                          selectedShipment,
+                                          contractDetailsMap[selectedShipment.id],
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                         {editingShipmentInfo && (
                           <div className="md:col-span-2 lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
@@ -5441,14 +5797,30 @@ function ShipmentsPageContent() {
                         )}
                         <ShipmentMtQuantityField
                           label="Quantity Delivery"
-                          value={editingShipmentInfo ? editedShipmentInfo?.quantity_delivered : shipmentInfo.quantity_delivered}
+                          value={
+                            editingShipmentInfo
+                              ? editedShipmentInfo?.quantity_delivered
+                              : resolvePortsModalQuantityDeliveredKg(
+                                  shipmentInfo,
+                                  selectedShipment,
+                                  contractDetailsMap[selectedShipment.id],
+                                ) ?? shipmentInfo.quantity_delivered
+                          }
                           editing={editingShipmentInfo}
                           disabled={!isQuantityUnlocked}
                           onChange={(next) => setEditedShipmentInfo({ ...editedShipmentInfo, quantity_delivered: next })}
                         />
                         <ShipmentMtQuantityField
                           label="Quantity Receive"
-                          value={editingShipmentInfo ? editedShipmentInfo?.actual_vessel_qty_receive : shipmentInfo.actual_vessel_qty_receive}
+                          value={
+                            editingShipmentInfo
+                              ? editedShipmentInfo?.actual_vessel_qty_receive
+                              : resolvePortsModalQuantityReceiveKg(
+                                  shipmentInfo,
+                                  selectedShipment,
+                                  contractDetailsMap[selectedShipment.id],
+                                ) ?? shipmentInfo.actual_vessel_qty_receive
+                          }
                           editing={editingShipmentInfo}
                           disabled={!isQuantityUnlocked}
                           onChange={(next) => setEditedShipmentInfo({ ...editedShipmentInfo, actual_vessel_qty_receive: next })}
@@ -6196,18 +6568,35 @@ function ShipmentsPageContent() {
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Port Info</p>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                       <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">PO</label>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">STO No</label>
                         <Input
-                          value={shipmentModalPoDisplay(shipmentInfo, selectedShipment)}
+                          value={shipmentModalStoDisplay(selectedShipment)}
                           readOnly
                           disabled
                           className="h-9 text-sm bg-gray-100 text-gray-600 cursor-not-allowed"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Contract</label>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">PO Number</label>
                         <Input
-                          value={shipmentModalContractDisplay(shipmentInfo, selectedShipment)}
+                          value={shipmentModalPoDisplay(
+                            shipmentInfo,
+                            selectedShipment,
+                            contractDetailsMap[selectedShipment.id],
+                          )}
+                          readOnly
+                          disabled
+                          className="h-9 text-sm bg-gray-100 text-gray-600 cursor-not-allowed"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Contract Ext No</label>
+                        <Input
+                          value={shipmentModalContractExtNoDisplay(
+                            shipmentInfo,
+                            selectedShipment,
+                            contractDetailsMap[selectedShipment.id],
+                          )}
                           readOnly
                           disabled
                           className="h-9 text-sm bg-gray-100 text-gray-600 cursor-not-allowed"
@@ -6432,10 +6821,11 @@ function ShipmentsPageContent() {
         </div>
       )}
 
-      <AddShipmentModal
+      <AddNewShipmentModal
         open={showAddShipment}
         onClose={() => setShowAddShipment(false)}
-        onCreated={() => {
+        onSubmit={async (payload) => {
+          await submitAddNewShipmentPayload(payload)
           invalidateLogisticsListCaches()
           section1SummaryForceNextFetchRef.current = true
           void fetchShipments(1, undefined, { force: true })

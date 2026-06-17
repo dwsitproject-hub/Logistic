@@ -12,7 +12,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
-import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
+import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
+import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
+import { fetchContractPurchaseOrderOptions } from '@/components/shared/addNewShipmentTypes'
+import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg } from '@/lib/utils'
@@ -1522,10 +1525,40 @@ function ContractsPageContent() {
   type ContractLogisticsUi =
     | { kind: 'truck-create'; contract: Contract }
     | { kind: 'truck-edit'; contract: Contract }
-    | { kind: 'ship-create'; contractId: string }
+    | { kind: 'ship-create'; contract: Contract }
     | { kind: 'ship-edit'; contractId: string }
     | null
   const [contractLogisticsUi, setContractLogisticsUi] = useState<ContractLogisticsUi>(null)
+  const [shipPoOptions, setShipPoOptions] = useState<ShipmentPoOption[]>([])
+
+  useEffect(() => {
+    if (contractLogisticsUi?.kind !== 'ship-create') {
+      setShipPoOptions([])
+      return
+    }
+    const contractId = contractLogisticsUi.contract.contract_id
+    let cancelled = false
+    void fetchContractPurchaseOrderOptions(contractId)
+      .then((options) => {
+        if (!cancelled) setShipPoOptions(options)
+      })
+      .catch(() => {
+        if (!cancelled) setShipPoOptions([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [contractLogisticsUi])
+
+  const shipPrefilledPOs = useMemo((): ShipmentPoOption[] | null => {
+    if (contractLogisticsUi?.kind !== 'ship-create') return null
+    if (shipPoOptions.length === 0) return null
+    const c = contractLogisticsUi.contract
+    const primaryPo = String(c.po_number || '').trim()
+    const match =
+      (primaryPo && shipPoOptions.find((o) => o.poNumber === primaryPo)) || shipPoOptions[0]
+    return match ? [match] : null
+  }, [contractLogisticsUi, shipPoOptions])
 
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
   const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
@@ -2247,7 +2280,7 @@ function ContractsPageContent() {
         )
         return
       }
-      setContractLogisticsUi({ kind: 'ship-create', contractId: contract.contract_id })
+      setContractLogisticsUi({ kind: 'ship-create', contract })
       return
     }
     setContractLogisticsUi({ kind: 'ship-edit', contractId: contract.contract_id })
@@ -5473,18 +5506,28 @@ function ContractsPageContent() {
               : null
           }
         />
-        <AddShipmentModal
+        <AddNewShipmentModal
           open={
             contractLogisticsUi?.kind === 'ship-create' || contractLogisticsUi?.kind === 'ship-edit'
           }
           mode={contractLogisticsUi?.kind === 'ship-edit' ? 'edit' : 'add'}
           onClose={() => setContractLogisticsUi(null)}
-          onCreated={() => {
+          prefilledPOs={shipPrefilledPOs}
+          availablePOs={
+            contractLogisticsUi?.kind === 'ship-create' ? shipPoOptions : null
+          }
+          editContractId={
+            contractLogisticsUi?.kind === 'ship-edit'
+              ? contractLogisticsUi.contractId
+              : null
+          }
+          onSubmit={async (payload) => {
+            await submitAddNewShipmentPayload(payload)
             const ui = contractLogisticsUi
             setContractLogisticsUi(null)
             invalidateLogisticsListCaches()
             if (ui?.kind === 'ship-create') {
-              const contractId = ui.contractId
+              const contractId = ui.contract.contract_id
               setContracts((prev) =>
                 prev.map((c) =>
                   c.contract_id === contractId
@@ -5500,11 +5543,6 @@ function ContractsPageContent() {
             void fetchContracts(currentPage, undefined, undefined, undefined, { force: true })
             void fetchUnassignedCounts()
           }}
-          initialContractId={
-            contractLogisticsUi?.kind === 'ship-create' || contractLogisticsUi?.kind === 'ship-edit'
-              ? contractLogisticsUi.contractId
-              : null
-          }
         />
 
         <Dialog open={!!csvCargoResult} onOpenChange={(open) => { if (!open) setCsvCargoResult(null) }}>

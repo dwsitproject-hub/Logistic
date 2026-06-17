@@ -155,7 +155,32 @@ interface TruckingOperation {
   incoterm?: string
   group_name: string
   contract_ext_no?: string
+  sto_numbers?: string | null
   daily_deliverables?: Array<{ date: string; quantity_delivered: number }>
+}
+
+function mergeTruckingSapFields(
+  base: TruckingOperation[],
+  hydrated: TruckingOperation[],
+): TruckingOperation[] {
+  if (!hydrated.length) return base
+  const byId = new Map<string, TruckingOperation>()
+  for (const row of hydrated) {
+    if (row.id) byId.set(String(row.id), row)
+  }
+  return base.map((row) => {
+    const match = row.id ? byId.get(String(row.id)) : undefined
+    if (!match) return row
+    return {
+      ...row,
+      contract_ext_no: match.contract_ext_no ?? row.contract_ext_no,
+      sto_number: match.sto_number ?? row.sto_number,
+      sto_numbers: match.sto_numbers ?? row.sto_numbers,
+      quantity_sent: match.quantity_sent ?? row.quantity_sent,
+      quantity_delivered: match.quantity_delivered ?? row.quantity_delivered,
+      quantity_receive: match.quantity_receive ?? row.quantity_receive,
+    }
+  })
 }
 
 type TruckingCalendarRow = {
@@ -1253,6 +1278,7 @@ function TruckingPageContent() {
     try {
       const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
+      params.append('skipSapJoin', 'true')
       params.append('limit', String(pageSize))
       params.append('page', String(effectivePage))
       params.append('sortKey', sortKey)
@@ -1332,10 +1358,36 @@ function TruckingPageContent() {
       applyListEnvelope(listEnvelope)
       if (!listRevalidating) setListFetching(false)
 
+      const hydrateParams = new URLSearchParams(params.toString())
+      hydrateParams.set('skipSapJoin', 'false')
+      const hydrateUrl = `/trucking?${hydrateParams.toString()}`
+      const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
+      void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
+        force: options?.force,
+        onRevalidate: (fresh) => {
+          if (listGen !== listFetchGenRef.current) return
+          const hydrated = fresh?.data?.truckingOperations || []
+          if (hydrated.length) {
+            setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
+          }
+        },
+      })
+        .then(({ data }) => {
+          if (listGen !== listFetchGenRef.current) return
+          const hydrated = data?.data?.truckingOperations || []
+          if (hydrated.length) {
+            setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
+          }
+        })
+        .catch((err) => {
+          console.warn('Trucking SAP hydrate failed (table shows shell data):', err)
+        })
+
       if (truckingSummaryTimerRef.current) clearTimeout(truckingSummaryTimerRef.current)
       const section1SummaryParams = new URLSearchParams(params.toString())
       section1SummaryParams.delete('status')
       section1SummaryParams.delete('includeSummary')
+      section1SummaryParams.delete('skipSapJoin')
       section1SummaryParams.set('summaryOnly', 'true')
       section1SummaryParams.set('page', '1')
       section1SummaryParams.set('limit', '1')

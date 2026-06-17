@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
+import { Progress } from './ui/progress';
 import { Loader2 } from 'lucide-react';
 import {
   BulkUploadStatusModal,
@@ -60,13 +61,42 @@ interface SapImport {
   failed_records: number;
 }
 
+type UploadPhase = 'idle' | 'uploading' | 'processing';
+
+const IMPORT_POLL_MS = 2000;
+
+function computeProcessingProgress(imp: SapImport): number {
+  const total = Number(imp.total_records) || 0;
+  if (total <= 0) {
+    return imp.status === 'processing' || imp.status === 'pending' ? 5 : 0;
+  }
+  const done = (Number(imp.processed_records) || 0) + (Number(imp.failed_records) || 0);
+  return Math.min(100, Math.max(5, Math.round((done / total) * 100)));
+}
+
 const SapImportDashboard: React.FC = () => {
   const [imports, setImports] = useState<SapImport[]>([]);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
+  const [uploadPhase, setUploadPhase] = useState<UploadPhase>('idle');
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [activeImportId, setActiveImportId] = useState<string | null>(null);
   const [bulkUploadResult, setBulkUploadResult] = useState<BulkUploadStatusResult | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const pendingImportIdRef = useRef<string | null>(null);
+
+  const activeImport = useMemo(() => {
+    if (activeImportId) {
+      return imports.find((imp) => imp.id === activeImportId) ?? null;
+    }
+    return imports.find((imp) => imp.status === 'processing' || imp.status === 'pending') ?? null;
+  }, [imports, activeImportId]);
+
+  const processingProgress = activeImport ? computeProcessingProgress(activeImport) : 0;
+  const showProgressBar =
+    uploadPhase === 'uploading' ||
+    uploadPhase === 'processing' ||
+    (!!activeImport && (activeImport.status === 'processing' || activeImport.status === 'pending'));
 
   const stopImportPolling = () => {
     if (pollTimerRef.current != null) {
@@ -79,7 +109,7 @@ const SapImportDashboard: React.FC = () => {
     stopImportPolling();
     pollTimerRef.current = window.setInterval(() => {
       void loadImports(true);
-    }, 5000);
+    }, IMPORT_POLL_MS);
   };
 
   useEffect(() => {
@@ -118,17 +148,33 @@ const SapImportDashboard: React.FC = () => {
           pendingImport.status !== 'pending'
         ) {
           pendingImportIdRef.current = null;
+          setActiveImportId(null);
+          setUploadPhase('idle');
+          setUploadProgress(0);
           setImporting(false);
           await showImportResultModal(pendingId);
         }
       }
 
-      const hasProcessing = nextImports.some((imp) => imp.status === 'processing');
+      const hasProcessing = nextImports.some((imp) => imp.status === 'processing' || imp.status === 'pending');
       if (hasProcessing) {
-        if (!fromPoll) startImportPolling();
+        if (!activeImportId && !pendingImportIdRef.current) {
+          const running = nextImports.find((imp) => imp.status === 'processing' || imp.status === 'pending');
+          if (running) {
+            setActiveImportId(running.id);
+            setUploadPhase('processing');
+            setImporting(true);
+          }
+        }
+        if (pollTimerRef.current == null) startImportPolling();
       } else {
         stopImportPolling();
-        if (fromPoll && !pendingImportIdRef.current) setImporting(false);
+        if (fromPoll && !pendingImportIdRef.current) {
+          setActiveImportId(null);
+          setUploadPhase('idle');
+          setUploadProgress(0);
+          setImporting(false);
+        }
       }
     } catch (error) {
       console.error('Failed to load imports:', error);
@@ -162,6 +208,9 @@ const SapImportDashboard: React.FC = () => {
 
   const handleStartImportWithFile = async (file: File) => {
     setImporting(true);
+    setUploadPhase('uploading');
+    setUploadProgress(0);
+    setActiveImportId(null);
     try {
       // Create FormData for file upload
       const formData = new FormData();
@@ -170,6 +219,12 @@ const SapImportDashboard: React.FC = () => {
       // Do not set Content-Type: FormData needs multipart boundary from the browser/axios.
       const response = await api.post('/sap-master-v2/import-upload', formData, {
         timeout: 120000,
+        onUploadProgress: (event) => {
+          const total = event.total ?? 0;
+          if (total > 0) {
+            setUploadProgress(Math.min(100, Math.round((event.loaded * 100) / total)));
+          }
+        },
       });
 
       const data = response.data?.data;
@@ -177,15 +232,24 @@ const SapImportDashboard: React.FC = () => {
       const startedAsync = response.status === 202 || data?.status === 'processing';
 
       if (startedAsync && importId) {
+        setUploadProgress(100);
+        setUploadPhase('processing');
+        setActiveImportId(importId);
         pendingImportIdRef.current = importId;
         startImportPolling();
         await loadImports(true);
       } else if (importId) {
         pendingImportIdRef.current = null;
+        setActiveImportId(null);
+        setUploadPhase('idle');
+        setUploadProgress(0);
         setImporting(false);
         await showImportResultModal(importId);
         await loadImports();
       } else {
+        setActiveImportId(null);
+        setUploadPhase('idle');
+        setUploadProgress(0);
         setImporting(false);
         await loadImports();
       }
@@ -194,6 +258,9 @@ const SapImportDashboard: React.FC = () => {
       console.error('Failed to start import:', formatImportFailureMessage(error));
       console.error('Import upload response:', err.response?.status, err.response?.data);
       pendingImportIdRef.current = null;
+      setActiveImportId(null);
+      setUploadPhase('idle');
+      setUploadProgress(0);
       setBulkUploadResult({
         created: 0,
         updated: 0,
@@ -269,6 +336,54 @@ const SapImportDashboard: React.FC = () => {
           </div>
         </CardHeader>
       </Card>
+
+      {showProgressBar && (
+        <Card className="border-blue-200 bg-blue-50/50">
+          <CardContent className="pt-6 space-y-3">
+            {uploadPhase === 'uploading' && (
+              <>
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="font-medium text-blue-900 flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                    Uploading file to server...
+                  </span>
+                  <span className="tabular-nums text-blue-800">{uploadProgress}%</span>
+                </div>
+                <Progress value={uploadProgress} className="h-2" />
+                <p className="text-xs text-blue-800/80">
+                  Please keep this page open until the upload completes.
+                </p>
+              </>
+            )}
+
+            {(uploadPhase === 'processing' || (uploadPhase === 'idle' && activeImport)) && activeImport && (
+              <>
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="font-medium text-blue-900 flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                    Processing SAP data...
+                  </span>
+                  <span className="tabular-nums text-blue-800">{processingProgress}%</span>
+                </div>
+                <Progress value={processingProgress} className="h-2" />
+                <p className="text-xs text-blue-800/80">
+                  {(Number(activeImport.processed_records) || 0).toLocaleString()}
+                  {' / '}
+                  {(Number(activeImport.total_records) || 0).toLocaleString()} records processed
+                  {(Number(activeImport.failed_records) || 0) > 0 && (
+                    <>
+                      {' · '}
+                      <span className="text-red-700">
+                        {(Number(activeImport.failed_records) || 0).toLocaleString()} failed
+                      </span>
+                    </>
+                  )}
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Import History */}
       <Card>

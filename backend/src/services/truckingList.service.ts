@@ -12,20 +12,18 @@ import {
   sqlEffectiveTruckingStartDate,
 } from '../utils/truckingSapDates';
 import {
-  sqlTruckingQuantityDeliveredCoalesce,
-  sqlTruckingQuantityReceiveCoalesce,
-  sqlTruckingQuantitySentCoalesce,
-} from '../utils/truckingQuantitySql';
-import {
   truckingPageListScopeWhereSql,
   truckingSapStoTypeTSapCteClause,
 } from '../utils/truckingStoTypeSql';
+import {
+  buildTruckingListFromClause,
+  buildTruckingListSelectClause,
+} from '../utils/truckingListSelectSql';
 
 /**
- * Trucking list API — in-memory cache (TTL 5 min), same response shape as before:
- * - A: summary / summaryOnly computed from cached rows (no extra DB round-trip)
- * - B: full filtered row set cached per toolbar filter key; page/sort applied in memory
- * Cache is cleared on trucking mutations via invalidateTruckingListCache().
+ * Trucking list API:
+ * - Summary: SQL aggregate only (summaryOnly) — no full row scan
+ * - Table page: DB pagination + optional SAP fields (skipSapJoin shell vs hydrate)
  */
 
 export type TruckingListRow = Record<string, unknown>;
@@ -35,7 +33,9 @@ export interface TruckingListBuiltQuery {
   outerSql: string;
   innerParams: unknown[];
   outerParams: unknown[];
+  skipSapJoin: boolean;
   cacheKey: string;
+  filterCacheKey: string;
 }
 
 export interface TruckingListResponseData {
@@ -60,10 +60,11 @@ export interface TruckingListResponseData {
   };
 }
 
-const ROW_CACHE = new Map<string, { rows: TruckingListRow[]; expiresAt: number }>();
+const PAGE_CACHE = new Map<string, { rows: TruckingListRow[]; total: number; expiresAt: number }>();
+const COUNT_CACHE = new Map<string, { total: number; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v3';
-const MAX_CACHE_ENTRIES = 40;
+const CACHE_VERSION = 'trucking-list-v4';
+const MAX_CACHE_ENTRIES = 80;
 
 const SORT_FIELD_BY_KEY: Record<string, string> = {
   created_at: 'created_at',
@@ -107,6 +108,11 @@ function buildTruckingListCacheKey(input: {
   globalSearch: string;
   colFilters: Record<string, unknown>;
   lateIndicator?: string;
+  skipSapJoin: boolean;
+  page?: number;
+  limit?: number;
+  sortKey?: string;
+  sortDir?: string;
 }): string {
   const norm = {
     status: input.status != null ? String(input.status) : '',
@@ -121,25 +127,59 @@ function buildTruckingListCacheKey(input: {
     globalSearch: input.globalSearch,
     columnFilters: stableColumnFiltersKey(input.colFilters),
     lateIndicator: input.lateIndicator != null ? String(input.lateIndicator) : '',
+    skipSapJoin: input.skipSapJoin,
+    page: input.page ?? 1,
+    limit: input.limit ?? 20,
+    sortKey: input.sortKey ?? 'created_at',
+    sortDir: input.sortDir ?? 'desc',
   };
   return `${CACHE_VERSION}:${JSON.stringify(norm)}`;
 }
 
-function evictTruckingListCacheIfNeeded(): void {
+export function buildTruckingListFilterCacheKey(input: {
+  status?: unknown;
+  location?: unknown;
+  loadingLocation?: unknown;
+  unloadingLocation?: unknown;
+  dateFrom?: unknown;
+  dateTo?: unknown;
+  sto?: unknown;
+  contract?: unknown;
+  plants: string[];
+  globalSearch: string;
+  colFilters: Record<string, unknown>;
+  lateIndicator?: string;
+}): string {
+  return buildTruckingListCacheKey({
+    ...input,
+    skipSapJoin: false,
+    page: 1,
+    limit: 1,
+    sortKey: 'created_at',
+    sortDir: 'desc',
+  });
+}
+
+export function buildTruckingListCountCacheKey(filterCacheKey: string): string {
+  return `${filterCacheKey}:count`;
+}
+
+function evictMapIfNeeded(map: Map<string, { expiresAt: number }>, max: number): void {
   const now = Date.now();
-  for (const [key, entry] of ROW_CACHE.entries()) {
-    if (entry.expiresAt <= now) ROW_CACHE.delete(key);
+  for (const [key, entry] of map.entries()) {
+    if (entry.expiresAt <= now) map.delete(key);
   }
-  if (ROW_CACHE.size <= MAX_CACHE_ENTRIES) return;
-  const sorted = [...ROW_CACHE.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt);
-  const removeCount = ROW_CACHE.size - MAX_CACHE_ENTRIES;
+  if (map.size <= max) return;
+  const sorted = [...map.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+  const removeCount = map.size - max;
   for (let i = 0; i < removeCount; i += 1) {
-    ROW_CACHE.delete(sorted[i][0]);
+    map.delete(sorted[i][0]);
   }
 }
 
 export function invalidateTruckingListCache(): void {
-  ROW_CACHE.clear();
+  PAGE_CACHE.clear();
+  COUNT_CACHE.clear();
 }
 
 function normalizeSortValue(v: unknown): string | number | null {
@@ -238,7 +278,26 @@ export function buildTruckingListSummaryFromRows(rows: TruckingListRow[]) {
   };
 }
 
-export function buildTruckingListQuery(req: AuthRequest): TruckingListBuiltQuery {
+export function buildTruckingSummaryFromSqlRow(row: Record<string, unknown>) {
+  const total = parseInt(String(row.total_count ?? '0'), 10) || 0;
+  return {
+    total,
+    status: {
+      planned: Number(row.planned_count || 0),
+      inProgress: Number(row.in_progress_count || 0),
+      loading: Number(row.loading_count || 0),
+      inTransit: Number(row.in_transit_count || 0),
+      unloading: Number(row.unloading_count || 0),
+      completed: Number(row.completed_count || 0),
+      cancelled: Number(row.cancelled_count || 0),
+    },
+  };
+}
+
+export function buildTruckingListQuery(
+  req: AuthRequest,
+  options?: { skipSapJoin?: boolean },
+): TruckingListBuiltQuery {
   const {
     status,
     location,
@@ -249,7 +308,14 @@ export function buildTruckingListQuery(req: AuthRequest): TruckingListBuiltQuery
     sto,
     contract,
     plant,
+    page = 1,
+    limit = 20,
   } = req.query;
+  const skipSapJoin =
+    options?.skipSapJoin ??
+    String((req.query as { skipSapJoin?: string }).skipSapJoin || '').toLowerCase() === 'true';
+  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'created_at');
+  const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'desc').toLowerCase();
   const globalSearch =
     typeof (req.query as { search?: string }).search === 'string'
       ? (req.query as { search?: string }).search!.trim()
@@ -260,142 +326,8 @@ export function buildTruckingListQuery(req: AuthRequest): TruckingListBuiltQuery
   let queryText = `
       WITH ${truckingSapStoTypeTSapCteClause}
       SELECT 
-        t.id,
-        t.operation_id,
-        t.contract_id,
-        t.location,
-        t.loading_location,
-        t.unloading_location,
-        t.trucking_owner,
-        t.cargo_readiness_date,
-        ${sqlEffectiveTruckingStartDate('c')} AS trucking_start_date,
-        ${sqlEffectiveTruckingCompletionDate('c')} AS trucking_completion_date,
-        t.eta_trucking_start_date,
-        t.eta_trucking_completion_date,
-        t.eta_delivery_start_date,
-        t.eta_delivery_end_date,
-        ${sqlTruckingQuantitySentCoalesce()} AS quantity_sent,
-        ${sqlTruckingQuantityDeliveredCoalesce()} AS quantity_delivered,
-        ${sqlTruckingQuantityReceiveCoalesce()} AS quantity_receive,
-        t.gain_loss_percentage,
-        t.gain_loss_amount,
-        t.oa_budget,
-        t.oa_actual,
-        t.status,
-        t.created_at,
-        t.updated_at,
-        CASE
-          WHEN NULLIF(TRIM(c.sto_number::text), '') IS NOT NULL THEN
-            (
-              SELECT STRING_AGG(DISTINCT cc.contract_id, ', ' ORDER BY cc.contract_id)
-              FROM contracts cc
-              WHERE UPPER(COALESCE(NULLIF(TRIM(cc.transport_mode), ''), 'LAND')) = 'LAND'
-                AND NULLIF(TRIM(cc.sto_number::text), '') = NULLIF(TRIM(c.sto_number::text), '')
-            )
-          WHEN NULLIF(TRIM(t.operation_id::text), '') IS NOT NULL THEN
-            (
-              SELECT STRING_AGG(DISTINCT cc2.contract_id, ', ' ORDER BY cc2.contract_id)
-              FROM trucking_operations t2
-              INNER JOIN contracts cc2 ON t2.contract_id = cc2.id
-              WHERE NULLIF(TRIM(t2.operation_id::text), '') = NULLIF(TRIM(t.operation_id::text), '')
-            )
-          ELSE c.contract_id
-        END AS contract_number,
-        c.po_number,
-        COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers) AS sto_number,
-        sa.sto_numbers AS sto_numbers,
-        c.quantity_ordered as sto_quantity,
-        c.quantity_ordered as contract_qty,
-        c.contract_date,
-        c.delivery_start_date,
-        c.delivery_end_date,
-        c.supplier,
-        c.buyer,
-        c.product,
-        c.incoterm,
-        c.group_name,
-        s.estimated_km,
-        CASE
-          WHEN NULLIF(TRIM(c.sto_number::text), '') IS NOT NULL THEN
-            (
-              SELECT STRING_AGG(DISTINCT NULLIF(TRIM(z.v), ''), ', ' ORDER BY NULLIF(TRIM(z.v), ''))
-              FROM (
-                SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS v
-                FROM sap_processed_data spd
-                WHERE spd.contract_number IN (
-                  SELECT cc.contract_id
-                  FROM contracts cc
-                  WHERE UPPER(COALESCE(NULLIF(TRIM(cc.transport_mode), ''), 'LAND')) = 'LAND'
-                    AND NULLIF(TRIM(cc.sto_number::text), '') = NULLIF(TRIM(c.sto_number::text), '')
-                )
-              ) z
-              WHERE NULLIF(TRIM(z.v), '') IS NOT NULL
-            )
-          WHEN NULLIF(TRIM(t.operation_id::text), '') IS NOT NULL THEN
-            (
-              SELECT STRING_AGG(DISTINCT NULLIF(TRIM(z.v), ''), ', ' ORDER BY NULLIF(TRIM(z.v), ''))
-              FROM (
-                SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS v
-                FROM sap_processed_data spd
-                WHERE spd.contract_number IN (
-                  SELECT cc2.contract_id
-                  FROM trucking_operations t2
-                  INNER JOIN contracts cc2 ON t2.contract_id = cc2.id
-                  WHERE NULLIF(TRIM(t2.operation_id::text), '') = NULLIF(TRIM(t.operation_id::text), '')
-                )
-              ) z
-              WHERE NULLIF(TRIM(z.v), '') IS NOT NULL
-            )
-          ELSE
-            (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Contract Ext No',
-                spd.data->>'Contract Ext No'
-              )
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            )
-        END AS contract_ext_no
-      FROM trucking_operations t
-      LEFT JOIN contracts c ON t.contract_id = c.id
-      LEFT JOIN shipments s ON t.shipment_id = s.id
-      LEFT JOIN LATERAL (
-        SELECT
-          COALESCE(
-            spd.data->'contract'->>'contract_type',
-            spd.data->>'B2B Flag',
-            spd.data->'raw'->>'B2B Flag',
-            spd.data->>'Contract Type'
-          ) AS b2b_flag_raw,
-          COALESCE(
-            spd.data->'contract'->>'contract_reference_po',
-            spd.data->>'CONTRACT REFF PO',
-            spd.data->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'CONTRACT REFF PO'
-          ) AS contract_reference_po_raw
-        FROM sap_processed_data spd
-        WHERE spd.contract_number = c.contract_id
-        ORDER BY spd.created_at DESC NULLS LAST
-        LIMIT 1
-      ) b2b ON true
-      LEFT JOIN LATERAL (
-        SELECT STRING_AGG(DISTINCT x.effective_sto, ', ' ORDER BY x.effective_sto) AS sto_numbers
-        FROM (
-          SELECT NULLIF(TRIM(COALESCE(
-            spd.sto_number::text,
-            spd.data->'raw'->>'STO No.',
-            spd.data->'raw'->>'STO Number',
-            spd.data->'shipment'->>'sto_no',
-            spd.data->'contract'->>'sto_no'
-          )), '') AS effective_sto
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-        ) x
-        WHERE x.effective_sto IS NOT NULL AND x.effective_sto != ''
-      ) sa ON true
+        ${buildTruckingListSelectClause(skipSapJoin)}
+      ${buildTruckingListFromClause(skipSapJoin)}
       WHERE 1=1
         AND NOT (
           c.contract_id IS NOT NULL
@@ -491,7 +423,7 @@ export function buildTruckingListQuery(req: AuthRequest): TruckingListBuiltQuery
   const outerSql = `${gSearch.sql}${cCol.sql}${li.sql}`;
   const outerParams = [...gSearch.params, ...cCol.params, ...li.params];
 
-  const cacheKey = buildTruckingListCacheKey({
+  const filterCacheKey = buildTruckingListFilterCacheKey({
     status,
     location,
     loadingLocation,
@@ -506,36 +438,142 @@ export function buildTruckingListQuery(req: AuthRequest): TruckingListBuiltQuery
     lateIndicator: lateIndicatorParam,
   });
 
+  const cacheKey = buildTruckingListCacheKey({
+    status,
+    location,
+    loadingLocation,
+    unloadingLocation,
+    dateFrom,
+    dateTo,
+    sto,
+    contract,
+    plants,
+    globalSearch,
+    colFilters,
+    lateIndicator: lateIndicatorParam,
+    skipSapJoin,
+    page: Number(page),
+    limit: Number(limit),
+    sortKey,
+    sortDir: sortDirRaw,
+  });
+
   return {
     preOuterQuery: queryText,
     outerSql,
     innerParams,
     outerParams,
+    skipSapJoin,
     cacheKey,
+    filterCacheKey,
   };
 }
 
-async function loadTruckingListRowsCached(built: TruckingListBuiltQuery): Promise<TruckingListRow[]> {
-  const cached = ROW_CACHE.get(built.cacheKey);
-  if (cached && Date.now() < cached.expiresAt) {
-    return cached.rows;
-  }
-  if (cached) ROW_CACHE.delete(built.cacheKey);
+export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text: string; params: unknown[] } {
+  const text = `
+      WITH filtered AS (
+        SELECT
+          status,
+          trucking_start_date,
+          trucking_completion_date
+        FROM (
+          ${built.preOuterQuery}${built.outerSql}
+        ) trucking_source
+      )
+      SELECT
+        COUNT(*)::bigint AS total_count,
+        COUNT(*) FILTER (WHERE status = 'CANCELLED')::bigint AS cancelled_count,
+        COUNT(*) FILTER (
+          WHERE COALESCE(status, '') <> 'CANCELLED'
+            AND trucking_completion_date IS NOT NULL
+        )::bigint AS completed_count,
+        COUNT(*) FILTER (
+          WHERE COALESCE(status, '') <> 'CANCELLED'
+            AND trucking_completion_date IS NULL
+            AND trucking_start_date IS NOT NULL
+        )::bigint AS in_progress_count,
+        COUNT(*) FILTER (
+          WHERE COALESCE(status, '') <> 'CANCELLED'
+            AND trucking_completion_date IS NULL
+            AND trucking_start_date IS NULL
+        )::bigint AS planned_count,
+        COUNT(*) FILTER (WHERE status = 'LOADING')::bigint AS loading_count,
+        COUNT(*) FILTER (WHERE status = 'IN_TRANSIT')::bigint AS in_transit_count,
+        COUNT(*) FILTER (WHERE status = 'UNLOADING')::bigint AS unloading_count
+      FROM filtered`;
+  return { text, params: [...built.innerParams, ...built.outerParams] };
+}
 
-  const fullQuery = `${built.preOuterQuery}${built.outerSql}`;
-  const params = [...built.innerParams, ...built.outerParams];
-  const result = await query(fullQuery, params);
+function buildPaginatedListQuery(
+  built: TruckingListBuiltQuery,
+  sortKey: string,
+  sortDir: 'ASC' | 'DESC',
+  limit: number,
+  offset: number,
+): { text: string; params: unknown[] } {
+  const field = SORT_FIELD_BY_KEY[sortKey] || 'created_at';
+  const baseParams = [...built.innerParams, ...built.outerParams];
+  const limitIdx = baseParams.length + 1;
+  const offsetIdx = baseParams.length + 2;
+  const text = `
+      SELECT * FROM (
+        ${built.preOuterQuery}${built.outerSql}
+      ) trucking_filtered
+      ORDER BY ${field} ${sortDir} NULLS LAST, created_at DESC
+      LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
+  return { text, params: [...baseParams, limit, offset] };
+}
+
+function buildFilteredCountQuery(built: TruckingListBuiltQuery): { text: string; params: unknown[] } {
+  const text = `
+      SELECT COUNT(*)::bigint AS c FROM (
+        ${built.preOuterQuery}${built.outerSql}
+      ) trucking_filtered`;
+  return { text, params: [...built.innerParams, ...built.outerParams] };
+}
+
+async function loadFilteredTotal(built: TruckingListBuiltQuery): Promise<number> {
+  const countKey = buildTruckingListCountCacheKey(built.filterCacheKey);
+  const cached = COUNT_CACHE.get(countKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.total;
+  }
+  if (cached) COUNT_CACHE.delete(countKey);
+
+  const { text, params } = buildFilteredCountQuery(built);
+  const result = await query(text, params);
+  const total = parseInt(String(result.rows[0]?.c ?? '0'), 10) || 0;
+  COUNT_CACHE.set(countKey, { total, expiresAt: Date.now() + CACHE_TTL_MS });
+  evictMapIfNeeded(COUNT_CACHE, MAX_CACHE_ENTRIES);
+  return total;
+}
+
+async function loadTruckingListPage(
+  built: TruckingListBuiltQuery,
+  sortKey: string,
+  sortDir: 'ASC' | 'DESC',
+  page: number,
+  limit: number,
+): Promise<{ rows: TruckingListRow[]; total: number }> {
+  const cached = PAGE_CACHE.get(built.cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return { rows: cached.rows, total: cached.total };
+  }
+  if (cached) PAGE_CACHE.delete(built.cacheKey);
+
+  const offset = (page - 1) * limit;
+  const total = await loadFilteredTotal(built);
+  const { text, params } = buildPaginatedListQuery(built, sortKey, sortDir, limit, offset);
+  const result = await query(text, params);
   const rows = result.rows as TruckingListRow[];
 
-  ROW_CACHE.set(built.cacheKey, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
-  evictTruckingListCacheIfNeeded();
-  return rows;
+  PAGE_CACHE.set(built.cacheKey, { rows, total, expiresAt: Date.now() + CACHE_TTL_MS });
+  evictMapIfNeeded(PAGE_CACHE, MAX_CACHE_ENTRIES);
+  return { rows, total };
 }
 
 export async function resolveTruckingListForRequest(req: AuthRequest): Promise<TruckingListResponseData> {
-  const { page = 1, limit = 10 } = req.query;
-  const includeSummary =
-    String((req.query as { includeSummary?: string }).includeSummary ?? 'true').toLowerCase() !== 'false';
+  const { page = 1, limit = 20 } = req.query;
   const summaryOnly =
     String((req.query as { summaryOnly?: string }).summaryOnly || '').toLowerCase() === 'true';
   const sortKey = String((req.query as { sortKey?: string }).sortKey || 'created_at');
@@ -543,33 +581,30 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
   const sortDir: 'ASC' | 'DESC' = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
 
   const built = buildTruckingListQuery(req);
-  const allRows = await loadTruckingListRowsCached(built);
-  const total = allRows.length;
-  const pageNum = Number(page);
-  const limitNum = Number(limit);
-
-  const summary = buildTruckingListSummaryFromRows(allRows);
+  const pageNum = Math.max(1, Number(page) || 1);
+  const limitNum = Math.max(1, Math.min(500, Number(limit) || 20));
 
   if (summaryOnly) {
+    const summaryBuilt = buildTruckingListQuery(req, { skipSapJoin: true });
+    const { text, params } = buildTruckingSummaryQuery(summaryBuilt);
+    const summaryResult = await query(text, params);
+    const summary = buildTruckingSummaryFromSqlRow((summaryResult.rows[0] || {}) as Record<string, unknown>);
     return {
       truckingOperations: [],
       summary,
       pagination: {
-        total,
+        total: summary.total,
         page: pageNum,
         limit: limitNum,
-        totalPages: Math.ceil(total / limitNum) || 0,
+        totalPages: Math.ceil(summary.total / limitNum) || 0,
       },
     };
   }
 
-  const sorted = sortTruckingListRows(allRows, sortKey, sortDir);
-  const offset = (pageNum - 1) * limitNum;
-  const pageRows = sorted.slice(offset, offset + limitNum);
+  const { rows, total } = await loadTruckingListPage(built, sortKey, sortDir, pageNum, limitNum);
 
   return {
-    truckingOperations: pageRows,
-    ...(includeSummary ? { summary } : {}),
+    truckingOperations: rows,
     pagination: {
       total,
       page: pageNum,
