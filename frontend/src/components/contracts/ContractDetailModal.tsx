@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -92,41 +92,6 @@ export interface StoInfoRow {
   eta_trucking_completion_date?: string | null
   ata_discharge_complete?: string | null
   trucking_completion_date?: string | null
-}
-
-export type ContractEtaDateEntry = {
-  label: string
-  date?: string | null
-}
-
-/** Build Important Dates ETA rows from contract STO/shipment schedule (shared modal data source). */
-export function buildContractEtaDateEntries(
-  stos: StoInfoRow[] | undefined | null,
-): ContractEtaDateEntry[] {
-  if (!stos?.length) return []
-
-  const raw = stos.map((row) => {
-    const date =
-      row.type === 'shipment'
-        ? row.eta_vessel_arrival_loading_port
-        : row.eta_trucking_completion_date
-    const identifier =
-      row.type === 'shipment'
-        ? String(row.vessel_name ?? row.sto_number ?? '').trim()
-        : String(row.trucking_owner ?? row.sto_number ?? '').trim()
-    return { date, identifier }
-  })
-
-  const multiple = raw.length > 1
-  return raw.map((entry, index) => {
-    let label = 'ETA'
-    if (multiple) {
-      label = entry.identifier ? `ETA ${index + 1} - ${entry.identifier}` : `ETA ${index + 1}`
-    } else if (entry.identifier) {
-      label = `ETA - ${entry.identifier}`
-    }
-    return { label, date: entry.date }
-  })
 }
 
 export type B2bPartyRow = {
@@ -288,15 +253,12 @@ export function ContractDetailModal({
   onClose,
   showMonthDeliveryEnd = false,
   documentsRefreshKey = 0,
-  etaDates,
 }: {
   contract: ContractDetailModalContract | null
   onClose: () => void
   showMonthDeliveryEnd?: boolean
   /** Increment to refetch documents while the modal stays open (e.g. after table upload). */
   documentsRefreshKey?: number
-  /** Optional pre-built ETA rows; defaults to STO information fetched for this contract. */
-  etaDates?: ContractEtaDateEntry[]
 }) {
   const perms = usePermissions()
   const canViewContractPaymentInfo = canViewPermission(perms, CONTRACT_PAYMENT_INFO_PERMISSION)
@@ -340,12 +302,6 @@ export function ContractDetailModal({
   const [newRemarkSaving, setNewRemarkSaving] = useState(false)
   const [b2bParties, setB2bParties] = useState<B2bPartyRow[]>([])
   const [b2bPartiesLoading, setB2bPartiesLoading] = useState(false)
-
-  const importantDateEtaEntries = useMemo(() => {
-    if (etaDates?.length) return etaDates
-    if (stoInfoLoading) return []
-    return buildContractEtaDateEntries(stoInfo)
-  }, [etaDates, stoInfo, stoInfoLoading])
 
   const fetchContractDocuments = useCallback(async (contractInternalId: string) => {
     try {
@@ -516,44 +472,29 @@ export function ContractDetailModal({
 
   const openStoDetail = useCallback(
     (row: StoInfoRow) => {
-      if (!contract?.contract_id) return
+      if (!contract?.id) return
+      const sto = String(row.sto_number ?? '').trim()
+      const operationId = String(row.operation_id ?? '').trim()
+      if ((!sto || sto === '-') && (!operationId || operationId === '-')) return
+
       setStoDetailRow(row)
       setStoDetailData(null)
       setStoDetailLoading(true)
-      if (row.type === 'shipment') {
-        api
-          .get('/shipments', {
-            params: { sto: row.sto_number, contract: contract.contract_id, limit: 1 },
-          })
-          .then((res) => {
-            const list = res.data?.data?.shipments ?? res.data?.shipments ?? []
-            setStoDetailData(Array.isArray(list) && list.length > 0 ? list[0] : null)
-          })
-          .catch(() => setStoDetailData(null))
-          .finally(() => setStoDetailLoading(false))
-      } else {
-        api
-          .get('/trucking', { params: { contract: contract.contract_id, limit: 200 } })
-          .then((res) => {
-            const list =
-              res.data?.data?.truckingOperations ??
-              res.data?.data?.operations ??
-              res.data?.truckingOperations ??
-              res.data?.operations ??
-              []
-            const op =
-              Array.isArray(list) && row.operation_id
-                ? list.find((o: { operation_id?: string }) => String(o.operation_id || '') === String(row.operation_id))
-                : Array.isArray(list) && list.length > 0
-                  ? list[0]
-                  : null
-            setStoDetailData(op ?? null)
-          })
-          .catch(() => setStoDetailData(null))
-          .finally(() => setStoDetailLoading(false))
-      }
+      api
+        .get(`/contracts/${contract.id}/logistics-sto-detail`, {
+          params: {
+            type: row.type,
+            ...(sto && sto !== '-' ? { sto } : {}),
+            ...(operationId && operationId !== '-' ? { operation_id: operationId } : {}),
+          },
+        })
+        .then((res) => {
+          setStoDetailData(res.data?.data ?? null)
+        })
+        .catch(() => setStoDetailData(null))
+        .finally(() => setStoDetailLoading(false))
     },
-    [contract?.contract_id],
+    [contract?.id],
   )
 
   const closeStoDetail = useCallback(() => {
@@ -1004,12 +945,6 @@ export function ContractDetailModal({
                     <div className="text-gray-500">Cargo Readiness Date</div>
                     <div className="font-medium mt-1">{formatDate(contract.cargo_readiness_date)}</div>
                   </div>
-                  {importantDateEtaEntries.map((entry, index) => (
-                    <div key={`${entry.label}-${index}`} className="p-3 bg-gray-50 rounded">
-                      <div className="text-gray-500">{entry.label}</div>
-                      <div className="font-medium mt-1">{formatDate(entry.date)}</div>
-                    </div>
-                  ))}
                 </div>
               </div>
 

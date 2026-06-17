@@ -5,6 +5,7 @@ import {
   getUnassignedCounts,
   getContract,
   getContractStoInformation,
+  getContractLogisticsStoDetail,
   getContractActivityLog,
   getB2bPartiesForContract,
   getContractFilterIncoterms,
@@ -102,6 +103,7 @@ router.get('/buyers', getDistinctBuyers);
  *         description: Contract not found
  */
 router.get('/:id/sto-information', getContractStoInformation);
+router.get('/:id/logistics-sto-detail', getContractLogisticsStoDetail);
 router.get('/:id/activity-log', getContractActivityLog);
 router.get('/:id/remarks', getContractRemarks);
 router.post('/:id/remarks', createContractRemark);

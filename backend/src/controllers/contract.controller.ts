@@ -2208,6 +2208,159 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
   }
 };
 
+/** Shipment/trucking detail for Contract Detail modal (no shipments-page SAP STO Type filters). */
+export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const type = String(req.query.type ?? '').trim().toLowerCase();
+    const sto = String(req.query.sto ?? '').trim();
+    const operationId = String(req.query.operation_id ?? '').trim();
+    const lookupKeys = [sto, operationId].map((v) => v.trim()).filter((v) => v && v !== '-');
+    const uniqueKeys = [...new Set(lookupKeys)];
+
+    if (!['shipment', 'trucking'].includes(type) || uniqueKeys.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'type (shipment|trucking) and sto or operation_id are required' },
+      });
+    }
+
+    const contractResult = await query(
+      'SELECT id, contract_id, delivery_start_date, delivery_end_date, product FROM contracts WHERE id = $1',
+      [id],
+    );
+    if (contractResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { message: 'Contract not found' } });
+    }
+
+    if (type === 'shipment') {
+      const shipmentResult = await query(
+        `SELECT
+          s.id,
+          COALESCE(NULLIF(TRIM(c.sto_number::text), ''), NULLIF(TRIM(s.operation_id::text), ''), s.shipment_id) AS sto_number,
+          s.operation_id,
+          s.status,
+          s.vessel_name,
+          c.contract_id AS contract_numbers,
+          s.port_of_loading,
+          s.port_of_discharge,
+          COALESCE(s.quantity_shipped, 0) AS sto_quantity,
+          COALESCE(s.quantity_delivered, 0) AS quantity_delivered,
+          c.delivery_start_date,
+          c.delivery_end_date,
+          c.product,
+          COALESCE(s.ata_loading_complete, (
+            SELECT vlp.ata_loading_completed::date
+            FROM vessel_loading_ports vlp
+            WHERE vlp.shipment_id = s.id AND vlp.is_discharge_port = false
+            ORDER BY vlp.port_sequence ASC
+            LIMIT 1
+          )) AS ata_vessel_completed_loading,
+          COALESCE(s.ata_discharge_complete, (
+            SELECT COALESCE(vlp.ata_loading_completed, vlp.ata_discharge_complete)::date
+            FROM vessel_loading_ports vlp
+            WHERE vlp.shipment_id = s.id AND vlp.is_discharge_port = true
+            ORDER BY vlp.port_sequence ASC
+            LIMIT 1
+          )) AS ata_vessel_complete_discharge,
+          COALESCE(
+            s.eta_discharge_complete,
+            (
+              SELECT vlp.eta_vessel_complete_discharge::date
+              FROM vessel_loading_ports vlp
+              WHERE vlp.shipment_id = s.id AND vlp.is_discharge_port = true
+              ORDER BY vlp.port_sequence ASC
+              LIMIT 1
+            )
+          ) AS eta_vessel_complete_discharge
+        FROM shipments s
+        INNER JOIN contracts c ON s.contract_id = c.id
+        WHERE c.id = $1
+          AND (
+            TRIM(COALESCE(c.sto_number::text, '')) = ANY($2::text[])
+            OR TRIM(COALESCE(s.operation_id::text, '')) = ANY($2::text[])
+            OR TRIM(COALESCE(s.shipment_id::text, '')) = ANY($2::text[])
+          )
+        ORDER BY s.created_at DESC NULLS LAST
+        LIMIT 1`,
+        [id, uniqueKeys],
+      );
+
+      if (shipmentResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: { message: 'Shipment not found for this contract STO / operation' },
+        });
+      }
+
+      return res.json({ success: true, data: shipmentResult.rows[0] });
+    }
+
+    const truckingResult = await query(
+      `SELECT
+        t.id,
+        COALESCE(NULLIF(TRIM(lsa.sto_numbers), ''), NULLIF(TRIM(t.operation_id::text), ''), '-') AS sto_number,
+        t.operation_id,
+        t.status,
+        t.trucking_owner,
+        c.contract_id AS contract_number,
+        t.loading_location,
+        t.unloading_location,
+        COALESCE(c.quantity_ordered, 0) AS contract_qty,
+        COALESCE(t.quantity_delivered, 0) AS quantity_delivered,
+        c.delivery_start_date,
+        c.delivery_end_date,
+        c.product,
+        t.trucking_start_date,
+        t.trucking_completion_date,
+        t.eta_trucking_start_date,
+        t.eta_trucking_completion_date
+      FROM trucking_operations t
+      INNER JOIN contracts c ON t.contract_id = c.id
+      LEFT JOIN LATERAL (
+        SELECT STRING_AGG(DISTINCT x.effective_sto, ', ' ORDER BY x.effective_sto) AS sto_numbers
+        FROM (
+          SELECT NULLIF(TRIM(COALESCE(
+            spd.sto_number::text,
+            spd.data->'raw'->>'STO No.',
+            spd.data->'raw'->>'STO Number'
+          )), '') AS effective_sto
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = c.contract_id
+        ) x
+        WHERE x.effective_sto IS NOT NULL
+      ) lsa ON true
+      WHERE c.id = $1
+        AND (
+          TRIM(COALESCE(t.operation_id::text, '')) = ANY($2::text[])
+          OR EXISTS (
+            SELECT 1
+            FROM unnest(string_to_array(COALESCE(lsa.sto_numbers, ''), ',')) AS sto_part(sto)
+            WHERE TRIM(sto_part.sto) = ANY($2::text[])
+          )
+        )
+      ORDER BY t.created_at DESC NULLS LAST
+      LIMIT 1`,
+      [id, uniqueKeys],
+    );
+
+    if (truckingResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Trucking operation not found for this contract STO / operation' },
+      });
+    }
+
+    return res.json({ success: true, data: truckingResult.rows[0] });
+  } catch (error) {
+    logger.error('Get contract logistics STO detail error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch logistics STO detail' },
+    });
+  }
+};
+
 /** Get activity log for a contract: changes to contract, STO (shipments, trucking, loading ports), documents, payments */
 export const getContractActivityLog = async (req: AuthRequest, res: Response) => {
   try {
