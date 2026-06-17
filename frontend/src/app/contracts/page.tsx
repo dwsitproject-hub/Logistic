@@ -290,6 +290,11 @@ function contractCountGt0(v: unknown): boolean {
   return Number.isFinite(n) && n > 0
 }
 
+/** True when a Klip `shipments` row exists — matches SEA-without-shipment filter on the backend. */
+function contractHasKlipShipment(contract: { shipment_count?: unknown }): boolean {
+  return contractCountGt0(contract.shipment_count)
+}
+
 function getStatusColor(status: string) {
   switch (status) {
     case 'Close':
@@ -2272,8 +2277,8 @@ function ContractsPageContent() {
   }
 
   const handleShipIconClick = (contract: Contract) => {
-    const hasShipping = countGt0(contract.shipment_count) || countGt0(contract.sto_count)
-    if (!hasShipping) {
+    const hasKlipShipment = contractHasKlipShipment(contract)
+    if (!hasKlipShipment) {
       if (!transportIsSea(contract) && !transportIsMix(contract)) {
         alert(
           'Shipments apply to SEA contracts only. Open the Shipments page from the menu if you need to work across transport modes.',
@@ -5097,10 +5102,10 @@ function ContractsPageContent() {
                                     )
                                   })()}
                                   {!isContractPerformance && (transportIsSea(contract) || transportIsMix(contract)) && (() => {
-                                    const hasData = countGt0(contract.shipment_count) || countGt0(contract.sto_count)
+                                    const hasData = contractHasKlipShipment(contract)
                                     return (
                                       <Button variant="outline" size="icon" onClick={() => handleShipIconClick(contract)}
-                                        title={hasData ? 'Edit' : 'Add'}
+                                        title={hasData ? 'Edit shipment' : 'Add shipment'}
                                         className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100">
                                         {hasData ? <Pencil className="h-4 w-4" /> : <Ship className="h-4 w-4" />}
                                       </Button>
@@ -5237,7 +5242,7 @@ function ContractsPageContent() {
                             )
                           })()}
                           {!isContractPerformance && (transportIsSea(contract) || transportIsMix(contract)) && (() => {
-                            const hasData = countGt0(contract.shipment_count) || countGt0(contract.sto_count)
+                            const hasData = contractHasKlipShipment(contract)
                             return (
                               <Button variant="outline" size="sm" onClick={() => handleShipIconClick(contract)}
                                 className={hasData ? '' : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'}>
