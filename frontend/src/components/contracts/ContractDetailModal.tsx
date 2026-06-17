@@ -683,12 +683,6 @@ export function ContractDetailModal({
                       {formatSignedCycleDays(contract.cash_cycle_days)}
                     </div>
                   </div>
-                  <div className="p-3 bg-gray-50 rounded col-span-2">
-                    <div className="text-gray-500">
-                      PO Number{contract.po_count > 1 ? `s (${contract.po_count} total)` : ''}
-                    </div>
-                    <div className="font-medium mt-1 text-xs">{contract.po_numbers || contract.po_number || '-'}</div>
-                  </div>
                 </div>
               </div>
 
@@ -1268,8 +1262,16 @@ export function ContractDetailModal({
                       value={formatQtyMtFromKg(Number(stoDetailData.sto_quantity ?? 0))}
                     />
                     <StoDetailField
-                      label="Quantity Delivered (MT)"
-                      value={formatQtyMtFromKg(Number(stoDetailData.quantity_delivered ?? 0))}
+                      label="Quantity Delivery (MT)"
+                      value={formatQtyMtFromKg(
+                        Number(stoDetailData.quantity_delivered ?? stoDetailRow.quantity_delivered ?? 0),
+                      )}
+                    />
+                    <StoDetailField
+                      label="Quantity Receive (MT)"
+                      value={formatQtyMtFromKg(
+                        Number(stoDetailData.quantity_receive ?? stoDetailRow.quantity_receive ?? 0),
+                      )}
                     />
                   </StoDetailSection>
 
@@ -1281,18 +1283,6 @@ export function ContractDetailModal({
                     <StoDetailField
                       label="Due Date Delivery End"
                       value={formatDate(String(stoDetailData.delivery_end_date ?? ''))}
-                    />
-                    <StoDetailField
-                      label="Quantity Delivery (MT)"
-                      value={formatQtyMtFromKg(
-                        Number(stoDetailData.quantity_delivered ?? stoDetailRow.quantity_delivered ?? 0),
-                      )}
-                    />
-                    <StoDetailField
-                      label="Quantity Receive (MT)"
-                      value={formatQtyMtFromKg(
-                        Number(stoDetailData.quantity_receive ?? stoDetailRow.quantity_receive ?? 0),
-                      )}
                     />
                     <StoDetailField
                       label="ETA Vessel Completed Loading"
@@ -1331,8 +1321,16 @@ export function ContractDetailModal({
                       value={formatQtyMtFromKg(Number(stoDetailData.contract_qty ?? stoDetailData.sto_quantity ?? 0))}
                     />
                     <StoDetailField
+                      label="Quantity Delivery (MT)"
+                      value={formatQtyMtFromKg(
+                        Number(stoDetailData.quantity_delivered ?? stoDetailRow.quantity_delivered ?? 0),
+                      )}
+                    />
+                    <StoDetailField
                       label="Quantity Receive (MT)"
-                      value={formatQtyMtFromKg(Number(stoDetailData.quantity_delivered ?? 0))}
+                      value={formatQtyMtFromKg(
+                        Number(stoDetailData.quantity_receive ?? stoDetailRow.quantity_receive ?? 0),
+                      )}
                     />
                   </StoDetailSection>
 
@@ -1344,18 +1342,6 @@ export function ContractDetailModal({
                     <StoDetailField
                       label="Due Date Delivery End"
                       value={formatDate(String(stoDetailData.delivery_end_date ?? ''))}
-                    />
-                    <StoDetailField
-                      label="Quantity Delivery (MT)"
-                      value={formatQtyMtFromKg(
-                        Number(stoDetailData.quantity_delivered ?? stoDetailRow.quantity_delivered ?? 0),
-                      )}
-                    />
-                    <StoDetailField
-                      label="Quantity Receive (MT)"
-                      value={formatQtyMtFromKg(
-                        Number(stoDetailData.quantity_receive ?? stoDetailRow.quantity_receive ?? 0),
-                      )}
                     />
                     <StoDetailField
                       label="ETA Trucking Start Receive Date"
