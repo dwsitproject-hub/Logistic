@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from './ui/button'
@@ -8,8 +8,12 @@ import { TooltipProvider } from './ui/tooltip'
 import { AppTourProvider, useAppTour } from './AppTourProvider'
 import { PageActivityFab } from './PageActivityFab'
 import { LogOut, Menu, X, BookOpen } from 'lucide-react'
-import { PermissionsProvider, usePermissions } from '@/components/PermissionsContext'
-import { NAV_ITEMS } from '@/lib/navigationConfig'
+import {
+  PermissionsProvider,
+  clearPermissionsCache,
+  usePermissions,
+} from '@/components/PermissionsContext'
+import { NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
 import { filterNavigationItems, isPathAccessible } from '@/lib/navigationAccess'
 import { clearClientDataCache } from '@/lib/clientDataCache'
 import { prefetchNavigationPage } from '@/lib/pagePrefetch'
@@ -20,12 +24,25 @@ type UserLite = {
   role?: string
 }
 
+function readStoredUser(): UserLite | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const token = localStorage.getItem('token')
+    const userData = localStorage.getItem('user')
+    if (!token || !userData) return null
+    return JSON.parse(userData) as UserLite
+  } catch {
+    return null
+  }
+}
+
 function LayoutChrome({
   children,
   user,
   pathname,
   navigation,
   filteredNavigation,
+  sidebarNavigationLoading,
   sidebarOpen,
   setSidebarOpen,
   handleLogout,
@@ -36,6 +53,7 @@ function LayoutChrome({
   pathname: string
   navigation: { name: string; href: string; icon: ComponentType<{ className?: string }>; roles: string[] }[]
   filteredNavigation: { name: string; href: string; icon: ComponentType<{ className?: string }>; roles: string[] }[]
+  sidebarNavigationLoading?: boolean
   sidebarOpen: boolean
   setSidebarOpen: (v: boolean | ((p: boolean) => boolean)) => void
   handleLogout: () => void
@@ -59,7 +77,15 @@ function LayoutChrome({
           </Button>
         </div>
         <nav className="flex-1 overflow-y-auto p-4 space-y-2">
-          {filteredNavigation.map((item) => {
+          {sidebarNavigationLoading
+            ? Array.from({ length: 8 }).map((_, index) => (
+                <div
+                  key={`nav-skeleton-${index}`}
+                  className={`rounded-lg bg-gray-100 animate-pulse ${sidebarOpen ? 'h-9' : 'h-9 w-9'}`}
+                  aria-hidden
+                />
+              ))
+            : filteredNavigation.map((item) => {
             const Icon = item.icon
             const isActive = pathname === item.href
             return (
@@ -130,6 +156,7 @@ function LayoutWithPermissions({
 
   const handleLogout = () => {
     clearClientDataCache()
+    clearPermissionsCache()
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     router.push('/login')
@@ -139,7 +166,21 @@ function LayoutWithPermissions({
     prefetchNavigationPage(href)
   }
 
-  const filteredNavigation = filterNavigationItems(NAV_ITEMS, user.role, perms)
+  const filteredNavigation = useMemo(
+    () => filterNavigationItems(NAV_ITEMS, user.role, perms),
+    [user.role, perms.byKey, perms.loaded],
+  )
+
+  const lastSidebarNavigationRef = useRef<NavItem[]>([])
+  const sidebarNavigation = useMemo(() => {
+    if (filteredNavigation.length > 0) {
+      lastSidebarNavigationRef.current = filteredNavigation
+      return filteredNavigation
+    }
+    return lastSidebarNavigationRef.current
+  }, [filteredNavigation])
+
+  const sidebarNavigationLoading = !perms.loaded && sidebarNavigation.length === 0
 
   useEffect(() => {
     if (!perms.loaded) return
@@ -165,7 +206,8 @@ function LayoutWithPermissions({
           user={user}
           pathname={pathname}
           navigation={NAV_ITEMS}
-          filteredNavigation={filteredNavigation}
+          filteredNavigation={sidebarNavigation}
+          sidebarNavigationLoading={sidebarNavigationLoading}
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
           handleLogout={handleLogout}
@@ -180,7 +222,7 @@ function LayoutWithPermissions({
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
-  const [user, setUser] = useState<UserLite | null>(null)
+  const [user, setUser] = useState<UserLite | null>(readStoredUser)
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -188,8 +230,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
     if (!token || !userData) {
       router.push('/login')
-    } else {
+      return
+    }
+
+    try {
       setUser(JSON.parse(userData))
+    } catch {
+      router.push('/login')
     }
   }, [router])
 
@@ -198,7 +245,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <PermissionsProvider userRole={user.role}>
+    <PermissionsProvider userRole={user.role} userId={user.id}>
       <LayoutWithPermissions user={user}>{children}</LayoutWithPermissions>
     </PermissionsProvider>
   )

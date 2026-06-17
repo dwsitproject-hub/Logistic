@@ -11,12 +11,12 @@ import api from '@/lib/api'
 import { resolvePostAuthRedirect } from '@/lib/navigationAccess'
 
 async function redirectAfterAuth(
-  userRole: string | undefined,
+  user: { id?: string; role?: string },
   router: ReturnType<typeof useRouter>,
   setError: (msg: string) => void,
 ) {
   try {
-    const route = await resolvePostAuthRedirect(userRole)
+    const route = await resolvePostAuthRedirect(user.role, user.id)
     if (!route) {
       localStorage.removeItem('token')
       localStorage.removeItem('user')
@@ -65,7 +65,7 @@ function LoginPageContent() {
         setShowPasswordModal(true)
         setLoading(false)
       } else {
-        await redirectAfterAuth(user.role, router, setError)
+        await redirectAfterAuth(user, router, setError)
         setLoading(false)
       }
     } catch (err: any) {
@@ -76,15 +76,14 @@ function LoginPageContent() {
 
   const handlePasswordChangeSuccess = async () => {
     const userStr = localStorage.getItem('user')
-    let userRole: string | undefined
+    let user: { id?: string; role?: string } = {}
     if (userStr) {
-      const user = JSON.parse(userStr)
+      user = JSON.parse(userStr)
       user.is_first_login = false
-      userRole = user.role
       localStorage.setItem('user', JSON.stringify(user))
     }
 
-    await redirectAfterAuth(userRole, router, setError)
+    await redirectAfterAuth(user, router, setError)
   }
 
   return (

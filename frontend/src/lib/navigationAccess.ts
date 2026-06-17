@@ -3,6 +3,7 @@ import {
   canViewContractPerformancePage,
   canViewPermission,
   canViewShippingPerformancePage,
+  seedPermissionsCache,
   type PermFlags,
 } from '@/components/PermissionsContext'
 import { NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
@@ -70,8 +71,11 @@ export function isPathAccessible(pathname: string, allowed: NavItem[]): boolean 
   return allowed.some((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
 }
 
-export async function resolvePostAuthRedirect(userRole?: string): Promise<string | null> {
+export async function resolvePostAuthRedirect(userRole?: string, userId?: string): Promise<string | null> {
   const byKey = await loadUserPermissionsByKey()
+  if (userId) {
+    seedPermissionsCache(userId, byKey)
+  }
   const perms: NavAccessContext = { byKey, loaded: true, userRole }
   return getFirstAccessibleRoute(userRole, perms)
 }

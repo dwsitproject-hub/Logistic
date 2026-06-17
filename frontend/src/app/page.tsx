@@ -17,8 +17,8 @@ export default function Home() {
     }
 
     const userStr = localStorage.getItem('user')
-    const userRole = userStr ? (JSON.parse(userStr).role as string | undefined) : undefined
-    void resolvePostAuthRedirect(userRole)
+    const user = userStr ? (JSON.parse(userStr) as { id?: string; role?: string }) : null
+    void resolvePostAuthRedirect(user?.role, user?.id)
       .then((route) => {
         if (route) {
           router.replace(route)

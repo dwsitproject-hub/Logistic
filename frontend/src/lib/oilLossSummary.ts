@@ -143,7 +143,7 @@ function aggregateOilLossQuantitiesByContract(rows: OilLossSourceRow[]): Map<str
 function sampleFromContractAgg(
   agg: ContractQuantityAgg,
   kind: ROilLossKey,
-): { lossKg: number; baseKg: number; pct: number } | null {
+): { lossKg: number; baseKg: number; pct: number; deliveryKg: number } | null {
   const delivery = agg.quantity_sent
   const receive = agg.quantity_received
   const sfal = agg.quantity_sfal
@@ -167,12 +167,17 @@ function sampleFromContractAgg(
   }
 
   if (lossKg == null || baseKg == null || baseKg <= 0) return null
-  return { lossKg, baseKg, pct: (lossKg / baseKg) * 100 }
+  return {
+    lossKg,
+    baseKg,
+    pct: (lossKg / baseKg) * 100,
+    deliveryKg: agg.has_sent ? delivery : 0,
+  }
 }
 
 export function computeROilLossSummary(rows: OilLossSourceRow[], kind: ROilLossKey): ROilLossSummary {
   const byContract = aggregateOilLossQuantitiesByContract(rows)
-  const samples: { lossKg: number; baseKg: number; pct: number }[] = []
+  const samples: { lossKg: number; baseKg: number; pct: number; deliveryKg: number }[] = []
 
   for (const agg of byContract.values()) {
     const sample = sampleFromContractAgg(agg, kind)
@@ -186,12 +191,20 @@ export function computeROilLossSummary(rows: OilLossSourceRow[], kind: ROilLossK
   const count = samples.length
   const totalLossKg = samples.reduce((sum, s) => sum + s.lossKg, 0)
 
+  let weightedPctNumerator = 0
+  let deliveryWeightSum = 0
+  for (const s of samples) {
+    if (s.deliveryKg <= 0) continue
+    weightedPctNumerator += s.deliveryKg * s.pct
+    deliveryWeightSum += s.deliveryKg
+  }
+
   return {
     avgMt: totalLossKg / count / 1000,
     avgPct: samples.reduce((sum, s) => sum + s.pct, 0) / count,
     totalMt: totalLossKg / 1000,
-    /** Sum of contract-level oil loss % — mirrors additive total MT (not row average). */
-    totalPct: samples.reduce((sum, s) => sum + s.pct, 0),
+    /** Weighted avg % by Qty Delivery across active contracts. */
+    totalPct: deliveryWeightSum > 0 ? weightedPctNumerator / deliveryWeightSum : null,
     sampleCount: count,
   }
 }

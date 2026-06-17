@@ -21,15 +21,38 @@ const PermissionsContext = createContext<PermissionsContextValue>({
   loaded: false,
 })
 
+type PermissionsCache = {
+  userId: string
+  byKey: Record<string, PermFlags>
+}
+
+let permissionsCache: PermissionsCache | null = null
+
+export function seedPermissionsCache(userId: string, byKey: Record<string, PermFlags>) {
+  permissionsCache = { userId, byKey }
+}
+
+export function clearPermissionsCache() {
+  permissionsCache = null
+}
+
+function readPermissionsCache(userId?: string): PermissionsCache | null {
+  if (!userId || !permissionsCache || permissionsCache.userId !== userId) return null
+  return permissionsCache
+}
+
 export function PermissionsProvider({
   children,
   userRole,
+  userId,
 }: {
   children: ReactNode
   userRole?: string
+  userId?: string
 }) {
-  const [byKey, setByKey] = useState<Record<string, PermFlags>>({})
-  const [loaded, setLoaded] = useState(false)
+  const cached = readPermissionsCache(userId)
+  const [byKey, setByKey] = useState<Record<string, PermFlags>>(() => cached?.byKey ?? {})
+  const [loaded, setLoaded] = useState(() => !!cached)
 
   useEffect(() => {
     let cancelled = false
@@ -48,9 +71,12 @@ export function PermissionsProvider({
           }
         }
         setByKey(next)
+        if (userId) {
+          permissionsCache = { userId, byKey: next }
+        }
       })
       .catch(() => {
-        if (!cancelled) setByKey({})
+        if (!cancelled && !readPermissionsCache(userId)) setByKey({})
       })
       .finally(() => {
         if (!cancelled) setLoaded(true)
@@ -58,7 +84,7 @@ export function PermissionsProvider({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [userId])
 
   const value = useMemo(() => ({ byKey, loaded, userRole }), [byKey, loaded, userRole])
   return <PermissionsContext.Provider value={value}>{children}</PermissionsContext.Provider>
