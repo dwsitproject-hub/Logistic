@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -177,6 +177,36 @@ function formatMonthDeliveryEnd(dateStr: string) {
   if (Number.isNaN(d.getTime())) return '-'
   const mon = d.toLocaleString('en-US', { month: 'short' })
   return `${mon}-${d.getFullYear()}`
+}
+
+function StoDetailSection({
+  title,
+  children,
+}: {
+  title: string
+  children: ReactNode
+}) {
+  return (
+    <div>
+      <h3 className="text-lg font-semibold mb-3">{title}</h3>
+      <div className="grid grid-cols-2 gap-4 text-sm">{children}</div>
+    </div>
+  )
+}
+
+function StoDetailField({
+  label,
+  value,
+}: {
+  label: string
+  value: ReactNode
+}) {
+  return (
+    <div className="p-3 bg-gray-50 rounded">
+      <div className="text-gray-500">{label}</div>
+      <div className="font-medium mt-1">{value}</div>
+    </div>
+  )
 }
 
 export async function handleDownloadDocument(docId: string, fileName: string) {
@@ -1220,136 +1250,102 @@ export function ContractDetailModal({
               ) : !stoDetailData ? (
                 <div className="text-sm text-gray-500 py-8">No details found for this STO / Operation.</div>
               ) : stoDetailRow.type === 'shipment' ? (
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">STO No</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.sto_number ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Operation ID</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.operation_id ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Status</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.status ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Vessel Name</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.vessel_name ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Contract(s)</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.contract_numbers ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Port of Loading</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.port_of_loading ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Port of Discharge</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.port_of_discharge ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">STO Quantity (MT)</span>
-                    <div className="font-medium mt-1">{formatQtyMtFromKg(Number(stoDetailData.sto_quantity ?? 0))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Quantity Delivered (MT)</span>
-                    <div className="font-medium mt-1">{formatQtyMtFromKg(Number(stoDetailData.quantity_delivered ?? 0))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Due Date Delivery Start</span>
-                    <div className="font-medium mt-1">{formatDate(String(stoDetailData.delivery_start_date ?? ''))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Due Date Delivery End</span>
-                    <div className="font-medium mt-1">{formatDate(String(stoDetailData.delivery_end_date ?? ''))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">ATA Vessel Completed Loading</span>
-                    <div className="font-medium mt-1">{formatDate(String(stoDetailData.ata_vessel_completed_loading ?? ''))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">ATA Vessel Complete Discharge</span>
-                    <div className="font-medium mt-1">{formatDate(String(stoDetailData.ata_vessel_complete_discharge ?? ''))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">ETA Vessel Complete Discharge</span>
-                    <div className="font-medium mt-1">{formatDate(String(stoDetailData.eta_vessel_complete_discharge ?? ''))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded col-span-2">
-                    <span className="text-gray-500">Product</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.product ?? '-')}</div>
-                  </div>
+                <div className="space-y-6">
+                  <StoDetailSection title="STO Information">
+                    <StoDetailField label="STO No" value={String(stoDetailData.sto_number ?? '-')} />
+                    <StoDetailField label="Operation ID" value={String(stoDetailData.operation_id ?? '-')} />
+                    <StoDetailField label="Status" value={String(stoDetailData.status ?? '-')} />
+                    <StoDetailField label="Contract(s)" value={String(stoDetailData.contract_numbers ?? '-')} />
+                    <StoDetailField label="Vessel Name" value={String(stoDetailData.vessel_name ?? '-')} />
+                    <StoDetailField label="Port of Loading" value={String(stoDetailData.port_of_loading ?? '-')} />
+                    <StoDetailField label="Port of Discharge" value={String(stoDetailData.port_of_discharge ?? '-')} />
+                    <StoDetailField label="Product" value={String(stoDetailData.product ?? '-')} />
+                  </StoDetailSection>
+
+                  <StoDetailSection title="Quantity">
+                    <StoDetailField
+                      label="STO Quantity (MT)"
+                      value={formatQtyMtFromKg(Number(stoDetailData.sto_quantity ?? 0))}
+                    />
+                    <StoDetailField
+                      label="Quantity Delivered (MT)"
+                      value={formatQtyMtFromKg(Number(stoDetailData.quantity_delivered ?? 0))}
+                    />
+                  </StoDetailSection>
+
+                  <StoDetailSection title="Important Dates">
+                    <StoDetailField
+                      label="Due Date Delivery Start"
+                      value={formatDate(String(stoDetailData.delivery_start_date ?? ''))}
+                    />
+                    <StoDetailField
+                      label="Due Date Delivery End"
+                      value={formatDate(String(stoDetailData.delivery_end_date ?? ''))}
+                    />
+                    <StoDetailField
+                      label="ATA Vessel Completed Loading"
+                      value={formatDate(String(stoDetailData.ata_vessel_completed_loading ?? ''))}
+                    />
+                    <StoDetailField
+                      label="ATA Vessel Complete Discharge"
+                      value={formatDate(String(stoDetailData.ata_vessel_complete_discharge ?? ''))}
+                    />
+                    <StoDetailField
+                      label="ETA Vessel Complete Discharge"
+                      value={formatDate(String(stoDetailData.eta_vessel_complete_discharge ?? ''))}
+                    />
+                  </StoDetailSection>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">STO No</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.sto_number ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Operation ID</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.operation_id ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Status</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.status ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Trucking Owner</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.trucking_owner ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Contract</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.contract_number ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Loading Location</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.loading_location ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Unloading Location</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.unloading_location ?? '-')}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Contract Qty (MT)</span>
-                    <div className="font-medium mt-1">
-                      {formatQtyMtFromKg(Number(stoDetailData.contract_qty ?? stoDetailData.sto_quantity ?? 0))}
-                    </div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Quantity Receive (MT)</span>
-                    <div className="font-medium mt-1">{formatQtyMtFromKg(Number(stoDetailData.quantity_delivered ?? 0))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Due Date Delivery Start</span>
-                    <div className="font-medium mt-1">{formatDate(String(stoDetailData.delivery_start_date ?? ''))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Due Date Delivery End</span>
-                    <div className="font-medium mt-1">{formatDate(String(stoDetailData.delivery_end_date ?? ''))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Trucking Start Receive Date</span>
-                    <div className="font-medium mt-1">{formatDate(String(stoDetailData.trucking_start_date ?? ''))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">Trucking Last Receive Date</span>
-                    <div className="font-medium mt-1">{formatDate(String(stoDetailData.trucking_completion_date ?? ''))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">ETA Trucking Start Receive Date</span>
-                    <div className="font-medium mt-1">{formatDate(String(stoDetailData.eta_trucking_start_date ?? ''))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <span className="text-gray-500">ETA Trucking Completion Date</span>
-                    <div className="font-medium mt-1">{formatDate(String(stoDetailData.eta_trucking_completion_date ?? ''))}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded col-span-2">
-                    <span className="text-gray-500">Product</span>
-                    <div className="font-medium mt-1">{String(stoDetailData.product ?? '-')}</div>
-                  </div>
+                <div className="space-y-6">
+                  <StoDetailSection title="STO Information">
+                    <StoDetailField label="STO No" value={String(stoDetailData.sto_number ?? '-')} />
+                    <StoDetailField label="Operation ID" value={String(stoDetailData.operation_id ?? '-')} />
+                    <StoDetailField label="Status" value={String(stoDetailData.status ?? '-')} />
+                    <StoDetailField label="Contract" value={String(stoDetailData.contract_number ?? '-')} />
+                    <StoDetailField label="Trucking Owner" value={String(stoDetailData.trucking_owner ?? '-')} />
+                    <StoDetailField label="Loading Location" value={String(stoDetailData.loading_location ?? '-')} />
+                    <StoDetailField label="Unloading Location" value={String(stoDetailData.unloading_location ?? '-')} />
+                    <StoDetailField label="Product" value={String(stoDetailData.product ?? '-')} />
+                  </StoDetailSection>
+
+                  <StoDetailSection title="Quantity">
+                    <StoDetailField
+                      label="Contract Qty (MT)"
+                      value={formatQtyMtFromKg(Number(stoDetailData.contract_qty ?? stoDetailData.sto_quantity ?? 0))}
+                    />
+                    <StoDetailField
+                      label="Quantity Receive (MT)"
+                      value={formatQtyMtFromKg(Number(stoDetailData.quantity_delivered ?? 0))}
+                    />
+                  </StoDetailSection>
+
+                  <StoDetailSection title="Important Dates">
+                    <StoDetailField
+                      label="Due Date Delivery Start"
+                      value={formatDate(String(stoDetailData.delivery_start_date ?? ''))}
+                    />
+                    <StoDetailField
+                      label="Due Date Delivery End"
+                      value={formatDate(String(stoDetailData.delivery_end_date ?? ''))}
+                    />
+                    <StoDetailField
+                      label="Trucking Start Receive Date"
+                      value={formatDate(String(stoDetailData.trucking_start_date ?? ''))}
+                    />
+                    <StoDetailField
+                      label="Trucking Last Receive Date"
+                      value={formatDate(String(stoDetailData.trucking_completion_date ?? ''))}
+                    />
+                    <StoDetailField
+                      label="ETA Trucking Start Receive Date"
+                      value={formatDate(String(stoDetailData.eta_trucking_start_date ?? ''))}
+                    />
+                    <StoDetailField
+                      label="ETA Trucking Completion Date"
+                      value={formatDate(String(stoDetailData.eta_trucking_completion_date ?? ''))}
+                    />
+                  </StoDetailSection>
                 </div>
               )}
             </CardContent>
