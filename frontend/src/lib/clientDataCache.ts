@@ -135,6 +135,22 @@ export function clearClientDataCache(): void {
   hrefPrefetchAt.clear()
 }
 
+/** Drop cached GET responses whose path starts with the given prefix (e.g. `/contracts`). */
+export function invalidateClientCacheByPathPrefix(pathPrefix: string): void {
+  const normalized = pathPrefix.startsWith('/') ? pathPrefix : `/${pathPrefix}`
+  const needle = `GET:${normalized}`
+  for (const key of store.keys()) {
+    if (key.startsWith(needle)) store.delete(key)
+  }
+}
+
+/** After shipment/trucking create or edit — bust list caches so tables reflect mutations immediately. */
+export function invalidateLogisticsListCaches(): void {
+  invalidateClientCacheByPathPrefix('/contracts')
+  invalidateClientCacheByPathPrefix('/shipments')
+  invalidateClientCacheByPathPrefix('/trucking')
+}
+
 export type PrefetchRequest = {
   cacheKey: string
   fetch: () => Promise<unknown>

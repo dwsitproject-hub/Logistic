@@ -49,6 +49,38 @@ export function toRelativeUploadPath(absolutePath: string): string {
   return rel.split(path.sep).join('/');
 }
 
+export type ShipmentStructuredDocKind = 'sld' | 'sdd';
+
+const SHIPMENT_STRUCTURED_DOC_KINDS = new Set<ShipmentStructuredDocKind>(['sld', 'sdd']);
+
+/** Relative subdir under upload root for Synology-ready shipment document layout. */
+export function buildShipmentDocumentUploadSubdir(
+  shipmentId: string,
+  kind: ShipmentStructuredDocKind,
+): string {
+  const safeId = String(shipmentId ?? '')
+    .trim()
+    .replace(/[^\w-]/g, '_')
+    .slice(0, 64);
+  if (!safeId) {
+    throw new Error('shipment_id is required for structured shipment document uploads');
+  }
+  if (!SHIPMENT_STRUCTURED_DOC_KINDS.has(kind)) {
+    throw new Error(`Unsupported shipment document kind: ${kind}`);
+  }
+  return path.posix.join('shipments', safeId, kind);
+}
+
+/** Map API document_type to structured shipment subfolder (SLD/SDD only). */
+export function shipmentStructuredDocKindFromType(
+  documentType: string,
+): ShipmentStructuredDocKind | null {
+  const normalized = String(documentType ?? '').trim().toUpperCase();
+  if (normalized === 'SLD') return 'sld';
+  if (normalized === 'SDD') return 'sdd';
+  return null;
+}
+
 /** Resolve stored path for filesystem reads (supports legacy absolute rows). */
 export function resolveUploadAbsolutePath(storedPath: string): string {
   const raw = String(storedPath ?? '').trim();

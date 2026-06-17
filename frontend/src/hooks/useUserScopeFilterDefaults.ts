@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   getInitialUserScopeFilters,
   markUserScopeFiltersCleared,
@@ -9,16 +9,23 @@ import {
   type UserScopePage,
 } from '@/lib/userScopeFilters'
 
+function readInitialScopeFilters(page: UserScopePage): { products: string[]; groupPlants: string[] } {
+  if (typeof window === 'undefined') return { products: [], groupPlants: [] }
+  if (wereUserScopeFiltersCleared(page)) return { products: [], groupPlants: [] }
+  return getInitialUserScopeFilters()
+}
+
 export function useUserScopeFilterDefaults(page: UserScopePage) {
-  const [selectedProducts, setSelectedProducts] = useState<string[]>([])
-  const [selectedGroupPlants, setSelectedGroupPlants] = useState<string[]>([])
+  const [selectedProducts, setSelectedProducts] = useState<string[]>(
+    () => readInitialScopeFilters(page).products,
+  )
+  const [selectedGroupPlants, setSelectedGroupPlants] = useState<string[]>(
+    () => readInitialScopeFilters(page).groupPlants,
+  )
+  /** False until profile sync finishes and default Staff filters are applied. */
   const [userScopeReady, setUserScopeReady] = useState(false)
-  const initializedRef = useRef(false)
 
   useEffect(() => {
-    if (initializedRef.current) return
-    initializedRef.current = true
-
     let cancelled = false
     ;(async () => {
       await syncAuthUserScopeFromProfile()
@@ -26,8 +33,8 @@ export function useUserScopeFilterDefaults(page: UserScopePage) {
 
       if (!wereUserScopeFiltersCleared(page)) {
         const { products, groupPlants } = getInitialUserScopeFilters()
-        if (products.length > 0) setSelectedProducts(products)
-        if (groupPlants.length > 0) setSelectedGroupPlants(groupPlants)
+        setSelectedProducts(products)
+        setSelectedGroupPlants(groupPlants)
       }
 
       if (!cancelled) setUserScopeReady(true)

@@ -3,7 +3,6 @@ import {
   canViewContractPerformancePage,
   canViewPermission,
   canViewShippingPerformancePage,
-  isAdminRole,
   type PermFlags,
 } from '@/components/PermissionsContext'
 import { NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
@@ -38,7 +37,6 @@ export async function loadUserPermissionsByKey(): Promise<Record<string, PermFla
 export function canViewNavItem(item: NavItem, userRole: string | undefined, perms: NavAccessContext): boolean {
   const roleOk = item.roles.includes('ALL') || (userRole != null && item.roles.includes(userRole))
   if (!roleOk) return false
-  if (isAdminRole(userRole)) return true
   if (!perms.loaded) return false
   if (item.href === '/contract-performance') {
     return canViewContractPerformancePage(perms) === true

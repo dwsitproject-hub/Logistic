@@ -6,10 +6,28 @@ import { Badge } from '@/components/ui/badge'
 import { formatDateDMY } from '@/lib/dateFormat'
 import { formatOilLossMtFromKg, formatOilLossPct } from '@/lib/oilLossFormat'
 import { oilLossTransporterGroupKey } from '@/lib/oilLossByTransporterColumns'
+import { oilLossSupplierGroupKey } from '@/lib/oilLossBySupplierColumns'
+import { sumR4OilLossPctByContract } from '@/lib/oilLossSummary'
+import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 import { cn } from '@/lib/utils'
 import { OperationalStackedCommaCell } from '@/lib/operationalTableLayout'
-import { Truck, X } from 'lucide-react'
+import {
+  isOilLossTruckTransportMode,
+  isOilLossVesselTransportMode,
+} from '@/lib/oilLossEligibility'
+import { Building2, Ship, Truck, X, type LucideIcon } from 'lucide-react'
 
+export type OilLossGroupKind = 'transporter' | 'supplier'
+
+export type OilLossGroupHistoryModalSelection = {
+  kind: OilLossGroupKind
+  entityName: string
+  entityKey: string
+  loadingLocations: string | null
+  unloadingLocations: string | null
+}
+
+/** @deprecated Use OilLossGroupHistoryModalSelection */
 export type TransporterHistoryModalSelection = {
   transporterName: string
   transporterKey: string
@@ -19,9 +37,11 @@ export type TransporterHistoryModalSelection = {
   oilLossPct: number | null
 }
 
-export type TransporterHistoryContractRow = {
+export type OilLossGroupHistoryContractRow = {
   id: string
   transporter?: string | null
+  supplier?: string | null
+  contract_number?: string | null
   contract_date?: string | null
   contract_ext_no?: string | null
   po_number?: string | null
@@ -31,17 +51,22 @@ export type TransporterHistoryContractRow = {
   gain_loss_amount?: number | null
   gain_loss_percentage?: number | null
   status?: string | null
+  transport_mode?: string | null
+  sto_type?: string | null
 }
 
-type TransporterHistoryModalProps = {
+/** @deprecated Use OilLossGroupHistoryContractRow */
+export type TransporterHistoryContractRow = OilLossGroupHistoryContractRow
+
+type OilLossGroupHistoryModalProps = {
   open: boolean
   onClose: () => void
-  selection: TransporterHistoryModalSelection | null
-  sourceRows: TransporterHistoryContractRow[]
+  selection: OilLossGroupHistoryModalSelection | null
+  sourceRows: OilLossGroupHistoryContractRow[]
 }
 
 const CONTRACT_COLUMNS: Array<{
-  key: keyof TransporterHistoryContractRow
+  key: keyof OilLossGroupHistoryContractRow
   label: string
   align?: 'left' | 'right'
 }> = [
@@ -76,7 +101,7 @@ function getStatusColor(status: string) {
   return 'bg-gray-100 text-gray-800'
 }
 
-function sortByContractDateDesc(rows: TransporterHistoryContractRow[]): TransporterHistoryContractRow[] {
+function sortByContractDateDesc(rows: OilLossGroupHistoryContractRow[]): OilLossGroupHistoryContractRow[] {
   return [...rows].sort((a, b) => {
     const aDate = String(a.contract_date ?? '').slice(0, 10)
     const bDate = String(b.contract_date ?? '').slice(0, 10)
@@ -95,7 +120,18 @@ function splitLocationList(value: string | null | undefined): string[] {
   return [...parts]
 }
 
-function renderContractCell(row: TransporterHistoryContractRow, key: keyof TransporterHistoryContractRow) {
+function matchesGroupKey(
+  row: OilLossGroupHistoryContractRow,
+  kind: OilLossGroupKind,
+  entityKey: string,
+): boolean {
+  if (kind === 'transporter') {
+    return oilLossTransporterGroupKey(row) === entityKey
+  }
+  return oilLossSupplierGroupKey(row) === entityKey
+}
+
+function renderContractCell(row: OilLossGroupHistoryContractRow, key: keyof OilLossGroupHistoryContractRow) {
   if (key === 'contract_date') {
     const d = String(row.contract_date ?? '').slice(0, 10)
     return <span>{d ? formatDateDMY(d) : '—'}</span>
@@ -127,11 +163,11 @@ function renderContractCell(row: TransporterHistoryContractRow, key: keyof Trans
   return <span>—</span>
 }
 
-function TransporterContractTable({
+function GroupContractTable({
   rows,
   emptyMessage,
 }: {
-  rows: TransporterHistoryContractRow[]
+  rows: OilLossGroupHistoryContractRow[]
   emptyMessage: string
 }) {
   if (rows.length === 0) {
@@ -206,33 +242,89 @@ function LocationList({ label, items }: { label: string; items: string[] }) {
   )
 }
 
+const GROUP_META: Record<
+  OilLossGroupKind,
+  {
+    summaryTitle: string
+    emptyContracts: string
+  }
+> = {
+  transporter: {
+    summaryTitle: 'Transporter summary & performance',
+    emptyContracts: 'No contracts for this transporter',
+  },
+  supplier: {
+    summaryTitle: 'Supplier summary & performance',
+    emptyContracts: 'No contracts for this supplier',
+  },
+}
+
+function resolveTransporterEntityIcon(rows: OilLossGroupHistoryContractRow[]): LucideIcon {
+  if (rows.length === 0) return Truck
+  let vesselCount = 0
+  let truckCount = 0
+  for (const row of rows) {
+    if (isOilLossVesselTransportMode(row.transport_mode, row.sto_type)) vesselCount += 1
+    if (isOilLossTruckTransportMode(row.transport_mode, row.sto_type)) truckCount += 1
+  }
+  if (vesselCount > 0 && truckCount === 0) return Ship
+  if (truckCount > 0 && vesselCount === 0) return Truck
+  return vesselCount >= truckCount ? Ship : Truck
+}
+
+function resolveEntityIcon(
+  kind: OilLossGroupKind,
+  scopedRows: OilLossGroupHistoryContractRow[],
+): LucideIcon {
+  if (kind === 'supplier') return Building2
+  return resolveTransporterEntityIcon(scopedRows)
+}
+
 export default function TransporterHistoryModal({
   open,
   onClose,
   selection,
   sourceRows,
-}: TransporterHistoryModalProps) {
+}: OilLossGroupHistoryModalProps) {
   const scopedRows = useMemo(() => {
     if (!selection) return []
-    return sourceRows.filter(
-      (row) => oilLossTransporterGroupKey(row) === selection.transporterKey,
-    )
+    return sourceRows.filter((row) => matchesGroupKey(row, selection.kind, selection.entityKey))
   }, [sourceRows, selection])
 
-  const contractRows = useMemo(
-    () => sortByContractDateDesc(scopedRows),
-    [scopedRows],
-  )
+  const contractRows = useMemo(() => sortByContractDateDesc(scopedRows), [scopedRows])
+
+  const summaryMetrics = useMemo(() => {
+    const oilLossRows = scopedRows.map(
+      (row) =>
+        ({
+          id: row.id,
+          contract_number: row.contract_number,
+          contract_ext_no: row.contract_ext_no,
+          quantity_sent: row.quantity_delivery,
+          quantity_received: row.quantity_received,
+        }) satisfies Pick<
+          OilLossSourceRow,
+          'id' | 'contract_number' | 'contract_ext_no' | 'quantity_sent' | 'quantity_received'
+        >,
+    )
+    const mtKg = scopedRows.reduce((sum, row) => sum + Number(row.gain_loss_amount ?? 0), 0)
+    const pct = sumR4OilLossPctByContract(oilLossRows as OilLossSourceRow[])
+    return { mtKg, pct }
+  }, [scopedRows])
 
   if (!open || !selection) return null
 
+  const meta = GROUP_META[selection.kind]
+  const EntityIcon = resolveEntityIcon(selection.kind, scopedRows)
   const loadingItems = splitLocationList(selection.loadingLocations)
   const unloadingItems = splitLocationList(selection.unloadingLocations)
   const totalRecords = contractRows.length
+  const displayMtKg = summaryMetrics.mtKg
+  const displayPct = summaryMetrics.pct
   const lossTone =
-    selection.oilLossMtKg != null && selection.oilLossMtKg < 0
+    displayMtKg != null && displayMtKg < 0
       ? 'text-red-700'
-      : selection.oilLossMtKg != null && selection.oilLossMtKg > 0
+      : displayMtKg != null && displayMtKg > 0
         ? 'text-green-700'
         : 'text-gray-900'
 
@@ -243,10 +335,10 @@ export default function TransporterHistoryModal({
           <div className="flex items-center justify-between px-6 py-4">
             <div className="flex min-w-0 items-center gap-3">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white">
-                <Truck className="h-4.5 w-4.5" />
+                <EntityIcon className="h-4.5 w-4.5" />
               </div>
               <div className="min-w-0">
-                <h3 className="truncate text-lg font-semibold text-gray-900">{selection.transporterName}</h3>
+                <h3 className="truncate text-lg font-semibold text-gray-900">{selection.entityName}</h3>
                 <p className="text-xs text-gray-500">
                   {totalRecords.toLocaleString('en-US')} contract
                   {totalRecords === 1 ? '' : 's'} in scope
@@ -268,8 +360,8 @@ export default function TransporterHistoryModal({
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           <section className="mb-6">
             <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-800">
-              <Truck className="h-4 w-4 text-blue-600" />
-              Transporter summary & performance
+              <EntityIcon className="h-4 w-4 text-blue-600" />
+              {meta.summaryTitle}
             </div>
             <div className="grid grid-cols-1 gap-4 rounded-lg border border-gray-200 bg-gray-50/40 p-4 lg:grid-cols-2">
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -284,13 +376,13 @@ export default function TransporterHistoryModal({
                   <div>
                     <div className="text-xs font-medium text-gray-500">Oil Loss (MT)</div>
                     <div className={cn('mt-0.5 text-sm font-bold tabular-nums', lossTone)}>
-                      {formatOilLossMtFromKg(selection.oilLossMtKg)}
+                      {formatOilLossMtFromKg(displayMtKg)}
                     </div>
                   </div>
                   <div>
                     <div className="text-xs font-medium text-gray-500">Oil Loss (%)</div>
                     <div className={cn('mt-0.5 text-sm font-bold tabular-nums', lossTone)}>
-                      {formatOilLossPct(selection.oilLossPct)}
+                      {formatOilLossPct(displayPct)}
                     </div>
                   </div>
                 </div>
@@ -300,10 +392,7 @@ export default function TransporterHistoryModal({
 
           <section>
             <h4 className="mb-3 text-sm font-semibold text-gray-800">Contract Details</h4>
-            <TransporterContractTable
-              rows={contractRows}
-              emptyMessage="No contracts for this transporter"
-            />
+            <GroupContractTable rows={contractRows} emptyMessage={meta.emptyContracts} />
             <p className="mt-2 text-xs text-gray-500">
               Scope respects toolbar filters on the Oil Loss page.
             </p>

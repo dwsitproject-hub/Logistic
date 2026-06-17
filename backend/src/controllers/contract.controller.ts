@@ -1705,54 +1705,81 @@ export const getLatePerformanceData = async (req: AuthRequest, res: Response) =>
 /** Get counts of SEA/LAND/MIX contracts missing required logistics (for dashboard cards) */
 export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
   try {
-    const { search, b2bFlag, dateFrom, dateTo, product, transportMode } = req.query as Record<string, string>;
+    const { search, b2bFlag, dateFrom, dateTo, product, transportMode, plant, columnFilters } =
+      req.query as Record<string, string | string[]>;
 
     const params: any[] = [];
+    let paramIndex = 1;
 
     // Row-level conditions (applied before GROUP BY — work on individual contract rows)
     const rowConditions: string[] = [];
 
-    // Aggregate-level conditions (applied after GROUP BY — mirror getContracts filter logic)
+    // Post-aggregate conditions (mirror getContracts filter logic on `base` alias)
     const aggConditions: string[] = [];
-
-    if (search && search.trim().length >= 2) {
-      params.push(`%${search.trim()}%`);
-      const p = `$${params.length}`;
-      rowConditions.push(`(c.contract_id ILIKE ${p} OR c.group_name ILIKE ${p})`);
-    }
 
     if (dateFrom) {
       params.push(dateFrom);
-      rowConditions.push(`c.contract_date >= $${params.length}`);
+      rowConditions.push(`c.contract_date >= $${paramIndex++}`);
     }
 
     if (dateTo) {
       params.push(dateTo);
-      rowConditions.push(`c.contract_date <= $${params.length}`);
+      rowConditions.push(`c.contract_date <= $${paramIndex++}`);
     }
 
     // Summary alert cards always count Open contracts only (ignore global status filter from client).
     aggConditions.push(`(
-      (base.spd_data->'contract'->>'status' = 'Open' OR UPPER(base.spd_data->'contract'->>'status') = 'ACTIVE')
-      OR (base.spd_data IS NULL AND UPPER(base.raw_status) IN ('OPEN', 'ACTIVE'))
+      (base.latest_spd_data->'contract'->>'status' = 'Open' OR UPPER(base.latest_spd_data->'contract'->>'status') = 'ACTIVE')
+      OR (base.latest_spd_data IS NULL AND UPPER(base.raw_status) IN ('OPEN', 'ACTIVE'))
     )`);
 
     // B2B flag — use JSONB contract_type (same as getContracts)
     if (b2bFlag && b2bFlag !== 'ALL') {
       params.push(b2bFlag);
-      aggConditions.push(`COALESCE(base.spd_data->'contract'->>'contract_type', base.spd_data->>'B2B Flag', '') = $${params.length}`);
+      aggConditions.push(
+        `COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag', '') = $${paramIndex++}`,
+      );
     }
 
-    // Product — ILIKE with wildcard (same as getContracts)
-    if (product && product !== 'ALL') {
-      params.push(`%${product.trim()}%`);
-      aggConditions.push(`COALESCE(base.raw_product, '') ILIKE $${params.length}`);
+    // Legacy single-product query param (Contract Performance toolbar)
+    if (product && product !== 'ALL' && String(product).trim().length > 0) {
+      params.push(`%${String(product).trim()}%`);
+      aggConditions.push(`COALESCE(base.product, '') ILIKE $${paramIndex++}`);
     }
 
     // Transport mode — filter on effective_transport_mode (includes JSONB fallback)
-    if (transportMode && transportMode.toUpperCase() !== 'ALL') {
-      params.push(`${transportMode.toUpperCase()}%`);
-      aggConditions.push(`UPPER(base.effective_transport_mode) LIKE $${params.length}`);
+    if (transportMode && String(transportMode).toUpperCase() !== 'ALL') {
+      params.push(`${String(transportMode).toUpperCase()}%`);
+      aggConditions.push(`UPPER(base.effective_transport_mode) LIKE $${paramIndex++}`);
+    }
+
+    const plantArr = Array.isArray(plant) ? plant : plant ? [plant] : [];
+    const plants = plantArr.map((p) => String(p)).filter((p) => p.trim() !== '');
+    const groupPlantFilter = appendGroupPlantFilter(
+      plants,
+      paramIndex,
+      groupPlantExpr('base.plant_code', 'base.company_name'),
+    );
+    if (groupPlantFilter.sql) {
+      aggConditions.push(groupPlantFilter.sql.replace(/^\s*AND\s*/, ''));
+      params.push(...groupPlantFilter.params);
+      paramIndex = groupPlantFilter.nextIndex;
+    }
+
+    const globalSearch = typeof search === 'string' ? search.trim() : '';
+    const searchFrag = appendGlobalSearchBase(globalSearch, paramIndex);
+    if (searchFrag.sql) {
+      aggConditions.push(searchFrag.sql.replace(/^\s*AND\s*/, ''));
+      params.push(...searchFrag.params);
+      paramIndex = searchFrag.nextIndex;
+    }
+
+    const colFilters = parseColumnFiltersQuery(columnFilters);
+    const colFrag = appendColumnFiltersBase(colFilters, paramIndex);
+    if (colFrag.sql) {
+      aggConditions.push(colFrag.sql.replace(/^\s*AND\s*/, ''));
+      params.push(...colFrag.params);
+      paramIndex = colFrag.nextIndex;
     }
 
     const rowWhereSql = rowConditions.length > 0 ? `WHERE ${rowConditions.join(' AND ')}` : '';
@@ -1769,8 +1796,20 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
           c.contract_id,
           (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
           MAX(c.status) AS raw_status,
-          MAX(c.product) AS raw_product,
-          (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS spd_data,
+          MAX(c.status) AS status,
+          MAX(c.product) AS product,
+          MAX(c.incoterm) AS incoterm,
+          MAX(c.supplier) AS supplier,
+          MAX(c.buyer) AS buyer,
+          MAX(c.group_name) AS group_name,
+          MAX(c.plant_code) AS plant_code,
+          MAX(c.company_name) AS company_name,
+          MAX(c.transport_mode) AS transport_mode,
+          MAX(c.contract_date) AS contract_date,
+          STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') AS po_numbers,
+          MAX(c.sto_number) AS sto_number,
+          NULL::text AS sto_numbers_agg,
+          (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
           COALESCE(NULLIF(TRIM(MAX(c.transport_mode)), ''), (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'transport_mode', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'sea_land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea / Land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea_Land', '') AS effective_transport_mode
         FROM contracts c
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
@@ -1782,16 +1821,16 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
         WHERE 1=1 ${aggWhereSql}
         AND NOT (
           UPPER(TRIM(COALESCE(
-            base.spd_data->'contract'->>'contract_type',
-            base.spd_data->>'B2B Flag',
+            base.latest_spd_data->'contract'->>'contract_type',
+            base.latest_spd_data->>'B2B Flag',
             ''
           ))) = 'B2B'
           AND NULLIF(TRIM(COALESCE(
-            base.spd_data->'contract'->>'contract_reference_po',
-            base.spd_data->>'CONTRACT REFF PO',
-            base.spd_data->>'Contract Reff PO Ini',
-            base.spd_data->'raw'->>'Contract Reff PO Ini',
-            base.spd_data->'raw'->>'CONTRACT REFF PO'
+            base.latest_spd_data->'contract'->>'contract_reference_po',
+            base.latest_spd_data->>'CONTRACT REFF PO',
+            base.latest_spd_data->>'Contract Reff PO Ini',
+            base.latest_spd_data->'raw'->>'Contract Reff PO Ini',
+            base.latest_spd_data->'raw'->>'CONTRACT REFF PO'
           )), '') IS NOT NULL
         )
       ),

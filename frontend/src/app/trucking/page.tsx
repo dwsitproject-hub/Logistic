@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Search, Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
-import { buildCacheKey, cachedGet } from '@/lib/clientDataCache'
+import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
@@ -654,6 +654,10 @@ function TruckingPageContent() {
     handleProductsChange,
     handleGroupPlantsChange,
   } = useUserScopeFilterDefaults('trucking')
+  const scopeSummaryRequestKey = useMemo(
+    () => JSON.stringify({ p: [...selectedProducts].sort(), g: [...selectedGroupPlants].sort() }),
+    [selectedProducts, selectedGroupPlants],
+  )
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
@@ -683,6 +687,7 @@ function TruckingPageContent() {
   const truckingSummaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const listFetchGenRef = useRef(0)
   const summaryFetchGenRef = useRef(0)
+  const section1SummaryForceNextFetchRef = useRef(true)
 
   // View tabs
   const [activeTab, setActiveTab] = useState<'list' | 'calendar'>('list')
@@ -1080,7 +1085,7 @@ function TruckingPageContent() {
         setBulkCreateSummary(data)
         setBulkCreateUploadOpen(true)
       }
-      await fetchTruckingOperations(1)
+      await fetchTruckingOperations(1, undefined, { force: true })
     } catch (err: any) {
       alert(err?.response?.data?.error?.message || err?.message || 'Upload failed')
     } finally {
@@ -1174,6 +1179,11 @@ function TruckingPageContent() {
 
   useEffect(() => {
     if (!userScopeReady) return
+    section1SummaryForceNextFetchRef.current = true
+  }, [userScopeReady, scopeSummaryRequestKey])
+
+  useEffect(() => {
+    if (!userScopeReady) return
     fetchTruckingOperations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userScopeReady, page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir, selectedGroupPlants, selectedIncoterms, selectedProducts, dateFrom, dateTo, searchTerm, columnFilters])
@@ -1232,7 +1242,11 @@ function TruckingPageContent() {
 
   // Column header filters apply only when user presses Enter inside the filter popover.
 
-  const fetchTruckingOperations = async (forcedPage?: number, searchOverride?: string) => {
+  const fetchTruckingOperations = async (
+    forcedPage?: number,
+    searchOverride?: string,
+    options?: { force?: boolean },
+  ) => {
     const listGen = ++listFetchGenRef.current
     setListFetching(true)
     setSummaryFetching(true)
@@ -1306,6 +1320,7 @@ function TruckingPageContent() {
         listCacheKey,
         () => api.get(listUrl).then((r) => r.data),
         {
+          force: options?.force,
           onRevalidate: (fresh) => {
             if (listGen !== listFetchGenRef.current) return
             applyListEnvelope(fresh)
@@ -1328,7 +1343,10 @@ function TruckingPageContent() {
       const summaryCacheKey = buildCacheKey('GET', summaryUrl)
       const summaryGen = ++summaryFetchGenRef.current
       truckingSummaryTimerRef.current = setTimeout(() => {
+        const forceSummaryFetch = section1SummaryForceNextFetchRef.current || !!options?.force
+        section1SummaryForceNextFetchRef.current = false
         void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+          force: options?.force || forceSummaryFetch,
           onRevalidate: (fresh) => {
             if (summaryGen !== summaryFetchGenRef.current) return
             if (fresh?.data?.summary) setTruckingSection1Summary(fresh.data.summary)
@@ -1393,9 +1411,12 @@ function TruckingPageContent() {
   }
 
   const handleCreated = () => {
+    setShowCreateForm(false)
     setPage(1)
     setHasMore(true)
-    void fetchTruckingOperations(1)
+    invalidateLogisticsListCaches()
+    section1SummaryForceNextFetchRef.current = true
+    void fetchTruckingOperations(1, undefined, { force: true })
   }
 
   const downloadTemplate = async () => {

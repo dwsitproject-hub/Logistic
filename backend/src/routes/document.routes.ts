@@ -3,16 +3,34 @@ import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import multer from 'multer';
 import { downloadDocument, listDocuments, uploadDocumentHandler, ensureUploadDir } from '../controllers/document.controller';
-import { buildUniqueStoredFilename } from '../utils/fileUpload';
+import {
+  buildUniqueStoredFilename,
+  buildShipmentDocumentUploadSubdir,
+  shipmentStructuredDocKindFromType,
+} from '../utils/fileUpload';
 
 const router = express.Router();
 
 router.use(authenticateToken);
 
-const uploadDir = ensureUploadDir();
+const defaultUploadDir = ensureUploadDir();
 const ALLOWED_DOC_MIMES = new Set(['application/pdf', 'image/png', 'image/jpeg']);
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
+  destination: (req, _file, cb) => {
+    try {
+      const documentType = String(req.body?.document_type ?? '').trim();
+      const shipmentId = String(req.body?.shipment_id ?? '').trim();
+      const structuredKind = shipmentStructuredDocKindFromType(documentType);
+      if (structuredKind && shipmentId) {
+        const subdir = buildShipmentDocumentUploadSubdir(shipmentId, structuredKind);
+        cb(null, ensureUploadDir(subdir));
+        return;
+      }
+      cb(null, defaultUploadDir);
+    } catch (err) {
+      cb(err as Error, defaultUploadDir);
+    }
+  },
   filename: (_req, file, cb) => {
     cb(null, buildUniqueStoredFilename(file.originalname));
   },

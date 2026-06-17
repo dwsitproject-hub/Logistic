@@ -143,6 +143,7 @@ export default function RolesPage() {
       })
 
       setSuccess('Role permissions updated successfully')
+      await fetchRolePermissions(selectedRoleId)
       
       setTimeout(() => setSuccess(''), 3000)
     } catch (err: any) {

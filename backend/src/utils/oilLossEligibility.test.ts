@@ -1,28 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { isOilLossEligibleIncotermMode } from './oilLossEligibility';
 
-describe('isOilLossEligibleIncotermMode', () => {
-  it('allows CIF with LAND or MIX only', () => {
-    expect(isOilLossEligibleIncotermMode('CIF', 'LAND')).toBe(true);
-    expect(isOilLossEligibleIncotermMode('cif', 'mix')).toBe(true);
-    expect(isOilLossEligibleIncotermMode('CIF', 'SEA')).toBe(false);
-  });
-
-  it('allows FOB with SEA, LAND, or MIX', () => {
-    expect(isOilLossEligibleIncotermMode('FOB', 'SEA')).toBe(true);
-    expect(isOilLossEligibleIncotermMode('fob', 'land')).toBe(true);
+describe('oilLossEligibility transport segments', () => {
+  it('allows vessel segment: CIF/FOB with SEA, MIX, or STO V', () => {
+    expect(isOilLossEligibleIncotermMode('CIF', 'SEA')).toBe(true);
     expect(isOilLossEligibleIncotermMode('FOB', 'MIX')).toBe(true);
+    expect(isOilLossEligibleIncotermMode('fob', 'LAND', 'V')).toBe(true);
+    expect(isOilLossEligibleIncotermMode('CIF', 'LAND')).toBe(true);
+    expect(isOilLossEligibleIncotermMode('FOB', 'LAND')).toBe(false);
   });
 
-  it('allows LCO with SEA, LAND, or MIX', () => {
-    expect(isOilLossEligibleIncotermMode('LCO', 'SEA')).toBe(true);
-    expect(isOilLossEligibleIncotermMode('LCO', 'LAND')).toBe(true);
-    expect(isOilLossEligibleIncotermMode('lco', 'mix')).toBe(true);
+  it('allows truck segment: FRC/CIF with LAND, MIX, or STO T', () => {
+    expect(isOilLossEligibleIncotermMode('FRC', 'LAND')).toBe(true);
+    expect(isOilLossEligibleIncotermMode('CIF', 'MIX')).toBe(true);
+    expect(isOilLossEligibleIncotermMode('cif', 'SEA', 'T')).toBe(true);
+    expect(isOilLossEligibleIncotermMode('FRC', 'SEA')).toBe(false);
   });
 
-  it('rejects other incoterms and empty values', () => {
-    expect(isOilLossEligibleIncotermMode('CFR', 'SEA')).toBe(false);
+  it('excludes LCO, FOB+LAND-only, FRC+SEA-only, and unknown incoterms', () => {
+    expect(isOilLossEligibleIncotermMode('LCO', 'SEA')).toBe(false);
+    expect(isOilLossEligibleIncotermMode('CFR', 'LAND')).toBe(false);
     expect(isOilLossEligibleIncotermMode('', 'LAND')).toBe(false);
-    expect(isOilLossEligibleIncotermMode('CIF', '')).toBe(true);
   });
 });

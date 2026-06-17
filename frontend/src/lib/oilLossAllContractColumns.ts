@@ -50,6 +50,8 @@ export const OIL_LOSS_ALL_CONTRACT_COLUMN_WIDTH_PX: Readonly<Record<string, numb
 export type OilLossSourceRow = {
   id: string
   transport_mode?: 'LAND' | 'SEA' | string | null
+  /** SAP STO Type — V (vessel) or T (trucking). */
+  sto_type?: string | null
   operation_id?: string | null
   contract_number?: string | null
   contract_ext_no?: string | null

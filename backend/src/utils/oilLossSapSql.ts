@@ -65,6 +65,20 @@ export const SAP_SFBD_NUMERIC_EXPR = `CASE
   ELSE NULL
 END`;
 
+/** Truck transporter — primary SAP field: Truck Transporter. */
+export const SAP_OIL_LOSS_TRUCK_TRANSPORTER_RAW = `COALESCE(
+  NULLIF(TRIM(${sapRaw('Truck Transporter')}), ''),
+  NULLIF(TRIM(${sapRaw('Trucking Owner at Starting Location')}), ''),
+  ''
+)`;
+
+/** Vessel transporter label — primary SAP field: Vessel Name. */
+export const SAP_OIL_LOSS_VESSEL_NAME_RAW = `COALESCE(
+  NULLIF(TRIM(${sapRaw('Vessel Name')}), ''),
+  NULLIF(TRIM(${sapRaw('vessel name')}), ''),
+  ''
+)`;
+
 /** SFAL/SFBD: SAP raw first, then shipments.sfal_qty / sfbd_qty (Kg). */
 export const OIL_LOSS_SFAL_QTY_EXPR = `COALESCE(qty_sfal_raw, shipment_sfal_kg)`;
 export const OIL_LOSS_SFBD_QTY_EXPR = `COALESCE(qty_sfbd_raw, shipment_sfbd_kg)`;

@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, HelpCircle, Loader2, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import api from '@/lib/api'
-import { buildCacheKey, cachedGet } from '@/lib/clientDataCache'
+import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
@@ -321,6 +321,34 @@ const CONTRACTS_DEFAULT_COLUMN_ORDER: string[] = [
 ]
 
 /** Contract Performance page-only product tabs (Section 1–3) — tab list lives in contractPerformanceFilters. */
+
+/** Staff default product tab — sync on first render so Section 1 API matches toolbar scope. */
+function resolveStaffContractPerfProductTab(): (typeof CONTRACT_PERF_PRODUCT_TABS)[number] {
+  if (typeof window === 'undefined') return 'All'
+  if (wereUserScopeFiltersCleared('contracts')) return 'All'
+  const { products } = getInitialUserScopeFilters()
+  if (products.length !== 1) return 'All'
+  const match = CONTRACT_PERF_PRODUCT_TABS.find(
+    (tab) =>
+      tab !== 'All' &&
+      normalizePerfProductGroupKey(tab) === normalizePerfProductGroupKey(products[0]),
+  )
+  return match ?? 'All'
+}
+
+/** Contracts list (/contracts) — Staff with default product/plant scope starts on Open (matches Section 1 cards). */
+function hasStaffContractsScopeDefaults(): boolean {
+  if (typeof window === 'undefined') return false
+  if (wereUserScopeFiltersCleared('contracts')) return false
+  const { products, groupPlants } = getInitialUserScopeFilters()
+  return products.length > 0 || groupPlants.length > 0
+}
+
+function resolveContractsListInitialStatusFilter(): string {
+  if (typeof window === 'undefined') return 'All Status'
+  if (isContractPerformancePathname(window.location.pathname)) return 'All Status'
+  return hasStaffContractsScopeDefaults() ? 'Open' : 'All Status'
+}
 
 type ContractPerfDrilldownRow = {
   contract_id: string
@@ -1011,7 +1039,7 @@ function ContractsPageContent() {
   const bottomScrollRef = useRef<HTMLDivElement | null>(null)
   const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
   const isSyncingScroll = useRef(false)
-  const [statusFilter, setStatusFilter] = useState<string>('All Status')
+  const [statusFilter, setStatusFilter] = useState<string>(() => resolveContractsListInitialStatusFilter())
   const [b2bFlagFilter, setB2bFlagFilter] = useState<string>('ALL')
   /** Default YTD on first load so GET /contracts stays bounded (same as Contract Performance). */
   const [dateFrom, setDateFrom] = useState(() => defaultContractPerfYtdDateRange().dateFrom)
@@ -1028,7 +1056,9 @@ function ContractsPageContent() {
     handleGroupPlantsChange,
   } = useUserScopeFilterDefaults('contracts')
   const [sourceFilter, setSourceFilter] = useState<ContractPerfSourceFilter>('All')
-  const [selectedProductTab, setSelectedProductTab] = useState<ContractPerfProductTab>('All')
+  const [selectedProductTab, setSelectedProductTab] = useState<(typeof CONTRACT_PERF_PRODUCT_TABS)[number]>(
+    () => resolveStaffContractPerfProductTab(),
+  )
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const [transportModeFilter, setTransportModeFilter] = useState<string>('ALL')
   const [perfTransportMode, setPerfTransportMode] = useState<'ALL' | 'SEA' | 'LAND'>('ALL')
@@ -1058,6 +1088,9 @@ function ContractsPageContent() {
   /** Monotonic id — only the latest GET /contracts response may update table state. */
   const contractsFetchGenRef = useRef(0)
   const appliedContractsUrlFiltersRef = useRef(false)
+  const appliedStaffOpenStatusDefaultRef = useRef(
+    resolveContractsListInitialStatusFilter() === 'Open',
+  )
 
   type LatePerfNode = { key: string; count: number; totalDays: number; maxDays: number; totalQtyDelivery?: number; children: LatePerfNode[] }
   type StatusCardSummary = {
@@ -1103,6 +1136,8 @@ function ContractsPageContent() {
   const [statusCardSummary, setStatusCardSummary] = useState<StatusCardSummary>(EMPTY_STATUS_CARD_SUMMARY)
   const statusCardSummaryRef = useRef<StatusCardSummary>(EMPTY_STATUS_CARD_SUMMARY)
   const cardSummaryFetchGenRef = useRef(0)
+  /** Force next Section 1 summary fetch after Staff scope defaults / toolbar scope changes. */
+  const cardSummaryForceNextFetchRef = useRef(true)
   const [latePerfSummaryLoading, setLatePerfSummaryLoading] = useState(false)
   const [latePerfTreeLoading, setLatePerfTreeLoading] = useState(false)
   const [isTableLoading, setIsTableLoading] = useState(false)
@@ -1264,6 +1299,11 @@ function ContractsPageContent() {
   const section2UnscheduledCount = contractPerfPipeline.unscheduledNodeContractCount
 
   const displayTotalContracts = totalContracts
+
+  /** Section 1 unassigned cards — when a card filters Section 3, reuse pagination total as SSOT. */
+  const displayUnassignedSeaCount = unassignedFilter === 'sea' ? totalContracts : unassignedSeaContracts
+  const displayUnassignedLandCount = unassignedFilter === 'land' ? totalContracts : unassignedLandContracts
+  const displayUnassignedMixCount = unassignedFilter === 'mix' ? totalContracts : unassignedMixContracts
 
   /** Debug: track Section 3 filter + pagination sync (summary card vs table). */
   useEffect(() => {
@@ -1589,8 +1629,13 @@ function ContractsPageContent() {
         tab !== 'All' &&
         normalizePerfProductGroupKey(tab) === normalizePerfProductGroupKey(products[0]),
     )
-    if (match) setSelectedProductTab(match)
-  }, [userScopeReady, isContractPerformance])
+    if (match && selectedProductTab !== match) setSelectedProductTab(match)
+  }, [userScopeReady, isContractPerformance, selectedProductTab])
+
+  useEffect(() => {
+    if (!userScopeReady || !isContractPerformance) return
+    cardSummaryForceNextFetchRef.current = true
+  }, [userScopeReady, isContractPerformance, cardSummaryRequestKey])
 
   /** Apply URL query filters once on load (do not re-apply on every toolbar change). */
   useEffect(() => {
@@ -1599,10 +1644,30 @@ function ContractsPageContent() {
     if (!isContractPerformance) {
       const statusParam = searchParams.get('status')
       if (statusParam) {
+        appliedStaffOpenStatusDefaultRef.current = true
         setStatusFilter(statusParam)
       }
     }
   }, [authReady, isContractPerformance, searchParams])
+
+  /** Contracts list only — default Open once Staff scope (product/plant) is ready. */
+  useEffect(() => {
+    if (isContractPerformance || !userScopeReady || appliedStaffOpenStatusDefaultRef.current) return
+    if (wereUserScopeFiltersCleared('contracts')) return
+    if (searchParams.get('status')) {
+      appliedStaffOpenStatusDefaultRef.current = true
+      return
+    }
+    if (selectedProducts.length === 0 && selectedGroupPlants.length === 0) return
+    appliedStaffOpenStatusDefaultRef.current = true
+    setStatusFilter((prev) => (prev === 'All Status' ? 'Open' : prev))
+  }, [
+    isContractPerformance,
+    userScopeReady,
+    selectedProducts,
+    selectedGroupPlants,
+    searchParams,
+  ])
 
   useEffect(() => {
     if (!authReady || !userScopeReady) return
@@ -1699,7 +1764,13 @@ function ContractsPageContent() {
   // Bumped so saved "created_at" default does not fight API order (newest contract_date first).
   const sortStorageKey = isContractPerformance ? 'contract-performance.compact.sort' : 'contracts.compact.sort.v2'
 
-  const fetchContracts = async (page: number = currentPage, searchOverride?: string, sortKeyOverride?: string, sortDirOverride?: 'asc' | 'desc') => {
+  const fetchContracts = async (
+    page: number = currentPage,
+    searchOverride?: string,
+    sortKeyOverride?: string,
+    sortDirOverride?: 'asc' | 'desc',
+    options?: { force?: boolean },
+  ) => {
     const fetchGen = ++contractsFetchGenRef.current
     let trackContractPerfTableLoad = false
     const activeUnassignedFilter = unassignedFilter
@@ -1732,10 +1803,10 @@ function ContractsPageContent() {
         params.append('columnFilters', JSON.stringify(mergedColumnFilters))
       }
 
-      // Status: summary-card drilldown always Open; otherwise respect global status filter.
+      // Status: summary-card drilldown always Open; contracts list respects toolbar status only.
       if (!isContractPerformance && activeUnassignedFilter) {
         params.append('status', 'Open')
-      } else if (statusFilter && statusFilter !== 'All Status') {
+      } else if (!isContractPerformance && statusFilter && statusFilter !== 'All Status') {
         params.append('status', statusFilter)
       }
       if (!isContractPerformance) {
@@ -1830,6 +1901,7 @@ function ContractsPageContent() {
         listCacheKey,
         () => api.get(listUrl).then((r) => r.data),
         {
+          force: options?.force,
           onRevalidate: (fresh) => {
             if (fetchGen !== contractsFetchGenRef.current) return
             const loadedContracts = applyContractsEnvelope(fresh)
@@ -1887,12 +1959,15 @@ function ContractsPageContent() {
     const gen = ++cardSummaryFetchGenRef.current
     const summaryUrl = `/contracts/late-performance/summary?${query}`
     const summaryCacheKey = buildCacheKey('GET', summaryUrl)
+    const forceSummaryFetch = cardSummaryForceNextFetchRef.current
+    cardSummaryForceNextFetchRef.current = false
     try {
       setLatePerfSummaryLoading(true)
       const { data, revalidating } = await cachedGet(
         summaryCacheKey,
         () => api.get(summaryUrl).then((r) => r.data),
         {
+          force: forceSummaryFetch,
           onRevalidate: (fresh) => {
             if (gen !== cardSummaryFetchGenRef.current) return
             const next = fresh?.data?.statusCardSummary as StatusCardSummary | undefined
@@ -2019,16 +2094,13 @@ function ContractsPageContent() {
       const params = new URLSearchParams()
       if (searchTerm.trim().length >= 2) params.append('search', searchTerm.trim())
       if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
-      if (selectedProducts.length > 0 || selectedIncoterms.length > 0) {
-        params.append(
-          'columnFilters',
-          JSON.stringify(
-            appendToolbarMultiToColumnFilters({}, {
-              selectedProducts,
-              selectedIncoterms,
-            }),
-          ),
-        )
+      const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+        selectedProducts,
+        selectedIncoterms,
+      })
+      const cfKeys = Object.keys(mergedColumnFilters)
+      if (cfKeys.length > 0) {
+        params.append('columnFilters', JSON.stringify(mergedColumnFilters))
       }
       if (transportModeFilter && transportModeFilter !== 'ALL') params.append('transportMode', transportModeFilter)
       if (dateFrom) params.append('dateFrom', dateFrom)
@@ -2061,6 +2133,7 @@ function ContractsPageContent() {
     transportModeFilter,
     dateFrom,
     dateTo,
+    columnFilters,
   ])
 
   useEffect(() => {
@@ -3928,7 +4001,7 @@ function ContractsPageContent() {
                   <div>
                     <div className="text-sm text-gray-500">SEA contracts without shipments</div>
                     <div className="text-2xl font-semibold text-gray-900 mt-1">
-                      {unassignedSeaContracts}
+                      {displayUnassignedSeaCount}
                     </div>
                     <div className="text-xs text-gray-400 mt-1">
                       {unassignedFilter === 'sea' ? 'Click again to clear' : 'Click to filter table'}
@@ -3947,7 +4020,7 @@ function ContractsPageContent() {
                   <div>
                     <div className="text-sm text-gray-500">LAND contracts without trucking</div>
                     <div className="text-2xl font-semibold text-gray-900 mt-1">
-                      {unassignedLandContracts}
+                      {displayUnassignedLandCount}
                     </div>
                     <div className="text-xs text-gray-400 mt-1">
                       {unassignedFilter === 'land' ? 'Click again to clear' : 'Click to filter table'}
@@ -3966,7 +4039,7 @@ function ContractsPageContent() {
                   <div>
                     <div className="text-sm text-gray-500">MIX contracts without shipment or trucking</div>
                     <div className="text-2xl font-semibold text-gray-900 mt-1">
-                      {unassignedMixContracts}
+                      {displayUnassignedMixCount}
                     </div>
                     <div className="text-xs text-gray-400 mt-1">
                       {unassignedFilter === 'mix' ? 'Click again to clear' : 'Click to filter table'}
@@ -5368,8 +5441,20 @@ function ContractsPageContent() {
           mode={contractLogisticsUi?.kind === 'truck-edit' ? 'edit' : 'add'}
           onClose={() => setContractLogisticsUi(null)}
           onCreated={() => {
+            const ui = contractLogisticsUi
             setContractLogisticsUi(null)
-            void fetchContracts(currentPage)
+            invalidateLogisticsListCaches()
+            if (ui?.kind === 'truck-create') {
+              const contractId = ui.contract.contract_id
+              setContracts((prev) =>
+                prev.map((c) =>
+                  c.contract_id === contractId
+                    ? { ...c, trucking_count: Math.max(1, Number(c.trucking_count || 0)) }
+                    : c,
+                ),
+              )
+            }
+            void fetchContracts(currentPage, undefined, undefined, undefined, { force: true })
             void fetchUnassignedCounts()
           }}
           initialContractExtNo={
@@ -5395,8 +5480,24 @@ function ContractsPageContent() {
           mode={contractLogisticsUi?.kind === 'ship-edit' ? 'edit' : 'add'}
           onClose={() => setContractLogisticsUi(null)}
           onCreated={() => {
+            const ui = contractLogisticsUi
             setContractLogisticsUi(null)
-            void fetchContracts(currentPage)
+            invalidateLogisticsListCaches()
+            if (ui?.kind === 'ship-create') {
+              const contractId = ui.contractId
+              setContracts((prev) =>
+                prev.map((c) =>
+                  c.contract_id === contractId
+                    ? {
+                        ...c,
+                        shipment_count: Math.max(1, Number(c.shipment_count || 0)),
+                        sto_count: Math.max(1, Number(c.sto_count || 0)),
+                      }
+                    : c,
+                ),
+              )
+            }
+            void fetchContracts(currentPage, undefined, undefined, undefined, { force: true })
             void fetchUnassignedCounts()
           }}
           initialContractId={

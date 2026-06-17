@@ -10,7 +10,6 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Droplets, GripVertical, Loader2, Search, SlidersHorizontal, X } from 'lucide-react'
-import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { FieldHelp } from '@/components/FieldHelp'
@@ -18,8 +17,6 @@ import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY } from '@/lib/dateFormat'
 import {
-  formatOilLossAvgMt,
-  formatOilLossAvgPct,
   formatOilLossMtFromKg,
   formatOilLossPct,
   formatOilLossTotalMt,
@@ -27,9 +24,33 @@ import {
 } from '@/lib/oilLossFormat'
 import {
   filterOilLossEligibleRows,
-  matchesOilLossModeFilter,
   OIL_LOSS_MODE_FILTER_OPTIONS,
 } from '@/lib/oilLossEligibility'
+import {
+  buildOilLossSummaryForDateRange,
+  type ROilLossKey,
+} from '@/lib/oilLossSummary'
+import {
+  applyOilLossGlobalFilters,
+  buildOilLossPeriodOptions,
+  OIL_LOSS_GLOBAL_PRODUCT_OPTIONS,
+  OIL_LOSS_GLOBAL_TOGGLE_BUTTON_BASE,
+  OIL_LOSS_GLOBAL_TOGGLE_GROUP_CLASS,
+  OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS,
+  oilLossGlobalToggleButtonClass,
+  resolveOilLossPeriodDateRange,
+  type OilLossGlobalPeriodKey,
+  type OilLossGlobalProductFilter,
+  type OilLossGlobalTransportFilter,
+} from '@/lib/oilLossGlobalFilters'
+import OilLossDrilldownSection from '@/components/oil-loss/OilLossDrilldownSection'
+import {
+  applyOilLossDrilldownFilters,
+  EMPTY_OIL_LOSS_DRILLDOWN_FILTERS,
+  formatOilLossDrilldownPath,
+  hasOilLossDrilldownSelection,
+  type OilLossDrilldownFilters,
+} from '@/lib/oilLossDrilldown'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
@@ -74,9 +95,20 @@ import {
   oilLossByTransporterDefaultVisibleColumnIds,
   type OilLossByTransporterRow,
 } from '@/lib/oilLossByTransporterColumns'
+import {
+  OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION,
+  OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION_KEY,
+  OIL_LOSS_BY_SUPPLIER_DEFAULT_VISIBLE_COLUMN_IDS,
+  aggregateOilLossBySupplier,
+  buildOilLossBySupplierVisibleColumns,
+  mergeOilLossBySupplierColumnOrder,
+  oilLossBySupplierCompactColumnFallbackOrder,
+  oilLossBySupplierDefaultVisibleColumnIds,
+  type OilLossBySupplierRow,
+} from '@/lib/oilLossBySupplierColumns'
 import TransporterHistoryModal, {
-  type TransporterHistoryContractRow,
-  type TransporterHistoryModalSelection,
+  type OilLossGroupHistoryContractRow,
+  type OilLossGroupHistoryModalSelection,
 } from '@/components/oil-loss/TransporterHistoryModal'
 
 interface OilLossRow extends OilLossSourceRow {
@@ -85,29 +117,9 @@ interface OilLossRow extends OilLossSourceRow {
   contract_number: string
 }
 
-type OilLossTableViewMode = 'all_contract' | 'by_transporter'
+type OilLossTableViewMode = 'all_contract' | 'by_transporter' | 'by_supplier'
 
-type ROilLossKey = 'r1' | 'r2' | 'r3' | 'r4'
-
-type ROilLossSummary = {
-  avgMt: number | null
-  avgPct: number | null
-  totalMt: number | null
-  totalPct: number | null
-  sampleCount?: number
-}
-
-type YtdOilLossSummary = {
-  year: number
-  dateFrom: string
-  dateTo: string
-  r1: ROilLossSummary
-  r2: ROilLossSummary
-  r3: ROilLossSummary
-  r4: ROilLossSummary
-}
-
-type OilLossTableRow = OilLossAllContractRow | OilLossByTransporterRow
+type OilLossTableRow = OilLossAllContractRow | OilLossByTransporterRow | OilLossBySupplierRow
 
 type CompactColumn = {
   id: string
@@ -315,7 +327,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.supplier || '',
-      render: (r) => <span className="text-sm break-words">{r.supplier || '—'}</span>,
+      render: (r) => <span className="text-sm break-words">{r.supplier || '-'}</span>,
     },
     {
       id: 'buyer',
@@ -594,7 +606,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('supplier' in r ? r.supplier : '') || '',
-      render: (r) => <span className="text-sm break-words">{('supplier' in r && r.supplier) || '—'}</span>,
+      render: (r) => <span className="text-sm break-words">{('supplier' in r && r.supplier) || '-'}</span>,
     },
     {
       id: 'buyer',
@@ -667,10 +679,307 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
 
 const BY_TRANSPORTER_COMPACT_COLUMNS = buildByTransporterCompactColumns()
 
-function toTransporterHistoryContractRow(row: OilLossRow): TransporterHistoryContractRow {
+function buildBySupplierCompactColumns(): CompactColumn[] {
+  return [
+    {
+      id: 'supplier',
+      label: 'Supplier',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (r) => ('supplier' in r ? r.supplier : '') || '',
+      render: (r) => (
+        <OperationalNowrapCell
+          value={'supplier' in r ? r.supplier : null}
+          title={('supplier' in r ? r.supplier : '') || ''}
+          className="text-sm"
+        />
+      ),
+    },
+    {
+      id: 'quantity_contract',
+      label: 'Qty Contract',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (r) => ('quantity_contract' in r ? r.quantity_contract : 0) || 0,
+      render: (r) => (
+        <span className="text-sm tabular-nums">
+          {formatQtyMtFromKg('quantity_contract' in r ? r.quantity_contract : null)}
+        </span>
+      ),
+    },
+    {
+      id: 'quantity_delivery',
+      label: 'Qty Delivery',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (r) => r.quantity_delivery || 0,
+      render: (r) => (
+        <span className="text-sm tabular-nums">{formatQtyMtFromKg(r.quantity_delivery)}</span>
+      ),
+    },
+    {
+      id: 'quantity_received',
+      label: 'Qty Receive',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (r) => r.quantity_received || 0,
+      render: (r) => (
+        <span className="text-sm tabular-nums">{formatQtyMtFromKg(r.quantity_received)}</span>
+      ),
+    },
+    {
+      id: 'gain_loss_amount',
+      label: 'Oil Loss (MT)',
+      formulaHelp: FIELD_HELP.oilLossAmount,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (r) => r.gain_loss_amount || 0,
+      render: (r) => {
+        const kg = r.gain_loss_amount
+        const tone =
+          kg != null && kg < 0 ? 'text-red-600' : kg != null && kg > 0 ? 'text-green-600' : 'text-gray-900'
+        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossMtFromKg(kg)}</span>
+      },
+    },
+    {
+      id: 'gain_loss_percentage',
+      label: 'Oil Loss %',
+      formulaHelp: FIELD_HELP.oilLossPct,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (r) => r.gain_loss_percentage || 0,
+      render: (r) => {
+        const pct = r.gain_loss_percentage
+        const tone =
+          pct != null && pct < 0 ? 'text-red-600' : pct != null && pct > 0 ? 'text-green-600' : 'text-gray-900'
+        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossPct(pct)}</span>
+      },
+    },
+    {
+      id: 'loading_location',
+      label: 'Loading Location',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('loading_location' in r ? r.loading_location : '') || '',
+      render: (r) => (
+        <span className="text-sm break-words">
+          {('loading_location' in r && r.loading_location) || '—'}
+        </span>
+      ),
+    },
+    {
+      id: 'unloading_location',
+      label: 'Unloading Location',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('unloading_location' in r ? r.unloading_location : '') || '',
+      render: (r) => (
+        <span className="text-sm break-words">
+          {('unloading_location' in r && r.unloading_location) || '—'}
+        </span>
+      ),
+    },
+    {
+      id: 'contract_ext_no',
+      label: 'Contract Ext No',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => r.contract_ext_no || ('contract_number' in r ? r.contract_number : '') || '',
+      render: (r) => (
+        <OperationalStackedCommaCell
+          value={r.contract_ext_no || ('contract_number' in r ? r.contract_number : null)}
+          title={(r.contract_ext_no || ('contract_number' in r ? r.contract_number : '') || '') as string}
+        />
+      ),
+    },
+    {
+      id: 'sto_number',
+      label: 'STO',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => r.sto_number || '',
+      render: (r) => (
+        <OperationalStackedCommaCell value={r.sto_number} title={r.sto_number || ''} />
+      ),
+    },
+    {
+      id: 'contract_date',
+      label: 'Contract Date',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('contract_date' in r ? r.contract_date : '') || '',
+      render: (r) => (
+        <span className="text-sm">{formatShortDate(('contract_date' in r && r.contract_date) || '')}</span>
+      ),
+    },
+    {
+      id: 'po_number',
+      label: 'PO',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('po_number' in r ? r.po_number : '') || '',
+      render: (r) => (
+        <OperationalStackedCommaCell
+          value={'po_number' in r ? r.po_number : null}
+          title={('po_number' in r ? r.po_number : '') || ''}
+        />
+      ),
+    },
+    {
+      id: 'product',
+      label: 'Product',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('product' in r ? r.product : '') || '',
+      render: (r) => (
+        <OperationalTruncatedCell
+          value={'product' in r ? r.product : null}
+          title={('product' in r ? r.product : '') || ''}
+        />
+      ),
+    },
+    {
+      id: 'incoterm',
+      label: 'Incoterm',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('incoterm' in r ? r.incoterm : '') || '',
+      render: (r) => (
+        <OperationalTruncatedCell
+          value={'incoterm' in r ? r.incoterm : null}
+          title={('incoterm' in r ? r.incoterm : '') || ''}
+        />
+      ),
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('status' in r ? r.status : '') || '',
+      render: (r) => (
+        <Badge className={getStatusColor(('status' in r && r.status) || '')}>
+          {('status' in r && r.status) || '—'}
+        </Badge>
+      ),
+    },
+    {
+      id: 'transport_mode',
+      label: 'Mode',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('transport_mode' in r ? r.transport_mode : '') || '',
+      render: (r) => (
+        <Badge
+          className={
+            'transport_mode' in r && r.transport_mode === 'SEA'
+              ? 'bg-blue-100 text-blue-800'
+              : 'bg-orange-100 text-orange-800'
+          }
+        >
+          {('transport_mode' in r && r.transport_mode) || '—'}
+        </Badge>
+      ),
+    },
+    {
+      id: 'group_name',
+      label: 'Group',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('group_name' in r ? r.group_name : '') || '',
+      render: (r) => <span className="text-sm break-words">{('group_name' in r && r.group_name) || '—'}</span>,
+    },
+    {
+      id: 'transporter',
+      label: 'Transporter',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('transporter' in r ? r.transporter : '') || '',
+      render: (r) => (
+        <OperationalNowrapCell
+          value={'transporter' in r ? r.transporter : null}
+          title={('transporter' in r ? r.transporter : '') || ''}
+          className="text-sm"
+        />
+      ),
+    },
+    {
+      id: 'buyer',
+      label: 'Buyer',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('buyer' in r ? r.buyer : '') || '',
+      render: (r) => <span className="text-sm break-words">{('buyer' in r && r.buyer) || '—'}</span>,
+    },
+    {
+      id: 'plant_site',
+      label: 'Plant/Site',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('plant_site' in r ? r.plant_site : '') || '',
+      render: (r) => <span className="text-sm break-words">{('plant_site' in r && r.plant_site) || '—'}</span>,
+    },
+    {
+      id: 'operation_id',
+      label: 'Operation ID',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('operation_id' in r ? r.operation_id : '') || '',
+      render: (r) => (
+        <OperationalNowrapCell
+          value={'operation_id' in r ? r.operation_id : null}
+          title={('operation_id' in r ? r.operation_id : '') || ''}
+        />
+      ),
+    },
+    {
+      id: 'contract_number',
+      label: 'Contract No',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('contract_number' in r ? r.contract_number : '') || '',
+      render: (r) => (
+        <OperationalStackedCommaCell
+          value={'contract_number' in r ? r.contract_number : null}
+          title={('contract_number' in r ? r.contract_number : '') || ''}
+        />
+      ),
+    },
+    {
+      id: 'quantity_sfal',
+      label: 'Qty SFAL',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('quantity_sfal' in r ? r.quantity_sfal : 0) || 0,
+      render: (r) => (
+        <span className="text-sm tabular-nums">
+          {formatQtyMtFromKg('quantity_sfal' in r ? r.quantity_sfal : null)}
+        </span>
+      ),
+    },
+    {
+      id: 'quantity_sfbd',
+      label: 'Qty SFBD',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (r) => ('quantity_sfbd' in r ? r.quantity_sfbd : 0) || 0,
+      render: (r) => (
+        <span className="text-sm tabular-nums">
+          {formatQtyMtFromKg('quantity_sfbd' in r ? r.quantity_sfbd : null)}
+        </span>
+      ),
+    },
+  ]
+}
+
+const BY_SUPPLIER_COMPACT_COLUMNS = buildBySupplierCompactColumns()
+
+function toGroupHistoryContractRow(row: OilLossSourceRow): OilLossGroupHistoryContractRow {
   return {
     id: row.id,
     transporter: row.transporter ?? null,
+    supplier: row.supplier ?? null,
+    contract_number: row.contract_number ?? null,
     contract_date: String(row.contract_date ?? row.operation_date ?? '').slice(0, 10) || null,
     contract_ext_no: row.contract_ext_no ?? null,
     po_number: row.po_number ?? null,
@@ -680,6 +989,8 @@ function toTransporterHistoryContractRow(row: OilLossRow): TransporterHistoryCon
     gain_loss_amount: row.gain_loss_amount ?? null,
     gain_loss_percentage: row.gain_loss_percentage ?? null,
     status: row.status ?? null,
+    transport_mode: row.transport_mode ?? null,
+    sto_type: row.sto_type ?? null,
   }
 }
 
@@ -771,9 +1082,56 @@ function loadByTransporterColumnPrefs(allIds: string[]): ViewColumnPrefs {
   }
 }
 
+function loadBySupplierColumnPrefs(allIds: string[]): ViewColumnPrefs {
+  if (typeof window === 'undefined') {
+    return {
+      visibleIds: new Set(oilLossBySupplierDefaultVisibleColumnIds(allIds)),
+      orderIds: oilLossBySupplierCompactColumnFallbackOrder(allIds),
+      sortKey: 'supplier',
+      sortDir: 'asc',
+    }
+  }
+  const version = window.localStorage.getItem(OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION_KEY)
+  if (version !== OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION) {
+    return {
+      visibleIds: new Set(oilLossBySupplierDefaultVisibleColumnIds(allIds)),
+      orderIds: oilLossBySupplierCompactColumnFallbackOrder(allIds),
+      sortKey: 'supplier',
+      sortDir: 'asc',
+    }
+  }
+  try {
+    const savedVisible = JSON.parse(
+      window.localStorage.getItem('oil-loss.by-supplier.visibleColumns') || '[]',
+    ) as string[]
+    const savedOrder = JSON.parse(
+      window.localStorage.getItem('oil-loss.by-supplier.columnOrder') || '[]',
+    ) as string[]
+    const visibleIds = new Set(
+      savedVisible.filter((id) => allIds.includes(id)).length > 0
+        ? savedVisible.filter((id) => allIds.includes(id))
+        : oilLossBySupplierDefaultVisibleColumnIds(allIds),
+    )
+    return {
+      visibleIds,
+      orderIds: mergeOilLossBySupplierColumnOrder(savedOrder, allIds),
+      sortKey: 'supplier',
+      sortDir: 'asc',
+    }
+  } catch {
+    return {
+      visibleIds: new Set(oilLossBySupplierDefaultVisibleColumnIds(allIds)),
+      orderIds: oilLossBySupplierCompactColumnFallbackOrder(allIds),
+      sortKey: 'supplier',
+      sortDir: 'asc',
+    }
+  }
+}
+
 export default function OilLossPage() {
   const allContractColumnIds = useMemo(() => ALL_CONTRACT_COMPACT_COLUMNS.map((c) => c.id), [])
   const transporterColumnIds = useMemo(() => BY_TRANSPORTER_COMPACT_COLUMNS.map((c) => c.id), [])
+  const supplierColumnIds = useMemo(() => BY_SUPPLIER_COMPACT_COLUMNS.map((c) => c.id), [])
   const initialAllContractPrefs = useMemo(
     () => loadAllContractColumnPrefs(allContractColumnIds),
     [allContractColumnIds],
@@ -782,9 +1140,12 @@ export default function OilLossPage() {
     () => loadByTransporterColumnPrefs(transporterColumnIds),
     [transporterColumnIds],
   )
+  const initialSupplierPrefs = useMemo(
+    () => loadBySupplierColumnPrefs(supplierColumnIds),
+    [supplierColumnIds],
+  )
 
   const [rows, setRows] = useState<OilLossRow[]>([])
-  const [ytdSummary, setYtdSummary] = useState<YtdOilLossSummary | null>(null)
   const [loading, setLoading] = useState(true)
   /** Background refresh while cached rows stay visible. */
   const [dataFetching, setDataFetching] = useState(false)
@@ -794,13 +1155,13 @@ export default function OilLossPage() {
   const [columnPrefsByView, setColumnPrefsByView] = useState<Record<OilLossTableViewMode, ViewColumnPrefs>>({
     all_contract: initialAllContractPrefs,
     by_transporter: initialTransporterPrefs,
+    by_supplier: initialSupplierPrefs,
   })
   const [dragColId, setDragColId] = useState<string | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [viewMode, setViewMode] = useState<OilLossTableViewMode>('all_contract')
-  const [transporterModalOpen, setTransporterModalOpen] = useState(false)
-  const [selectedTransporterData, setSelectedTransporterData] =
-    useState<TransporterHistoryModalSelection | null>(null)
+  const [groupModalOpen, setGroupModalOpen] = useState(false)
+  const [selectedGroupData, setSelectedGroupData] = useState<OilLossGroupHistoryModalSelection | null>(null)
   const pageSize = 20
 
   const activePrefs = columnPrefsByView[viewMode]
@@ -809,11 +1170,18 @@ export default function OilLossPage() {
   const sortKey = activePrefs.sortKey
   const sortDir = activePrefs.sortDir
   const activeCompactColumns =
-    viewMode === 'all_contract' ? ALL_CONTRACT_COMPACT_COLUMNS : BY_TRANSPORTER_COMPACT_COLUMNS
+    viewMode === 'all_contract'
+      ? ALL_CONTRACT_COMPACT_COLUMNS
+      : viewMode === 'by_transporter'
+        ? BY_TRANSPORTER_COMPACT_COLUMNS
+        : BY_SUPPLIER_COMPACT_COLUMNS
   const operationalTableType =
-    viewMode === 'all_contract' ? 'oil_loss' : 'oil_loss_transporter'
+    viewMode === 'all_contract'
+      ? 'oil_loss'
+      : viewMode === 'by_transporter'
+        ? 'oil_loss_transporter'
+        : 'oil_loss_supplier'
   const tableLoading = (loading && rows.length === 0) || viewTransitionLoading
-  const showBlockingLoad = loading && rows.length === 0
 
   const columnsMenuRef = useRef<HTMLDivElement | null>(null)
   const topScrollRef = useRef<HTMLDivElement | null>(null)
@@ -832,7 +1200,20 @@ export default function OilLossPage() {
     handleProductsChange,
     handleGroupPlantsChange,
     resetUserScopeFilters,
+    userScopeReady,
   } = useUserScopeFilterDefaults('oil-loss')
+  const showBlockingLoad = (loading && rows.length === 0) || !userScopeReady
+  const [globalPeriod, setGlobalPeriod] = useState<OilLossGlobalPeriodKey>('MTD')
+  const [globalTransport, setGlobalTransport] = useState<OilLossGlobalTransportFilter>('All')
+  const [globalProduct, setGlobalProduct] = useState<OilLossGlobalProductFilter>('All')
+  const [drilldownFilters, setDrilldownFilters] = useState<OilLossDrilldownFilters>(
+    EMPTY_OIL_LOSS_DRILLDOWN_FILTERS,
+  )
+  const globalPeriodOptions = useMemo(() => buildOilLossPeriodOptions(), [])
+  const globalPeriodMeta = useMemo(
+    () => resolveOilLossPeriodDateRange(globalPeriod),
+    [globalPeriod],
+  )
   const [dateFrom, setDateFrom] = useState(() => {
     const d = new Date()
     return `${d.getFullYear()}-01-01`
@@ -843,19 +1224,22 @@ export default function OilLossPage() {
   })
 
   useEffect(() => {
+    setDateFrom(globalPeriodMeta.dateFrom)
+    setDateTo(globalPeriodMeta.dateTo)
+  }, [globalPeriodMeta.dateFrom, globalPeriodMeta.dateTo])
+
+  useEffect(() => {
     const cacheKey = buildCacheKey('GET', '/oil-loss')
-    const cached = peekCache<{ data?: OilLossRow[]; ytdSummary?: YtdOilLossSummary | null }>(cacheKey)
+    const cached = peekCache<{ data?: OilLossRow[] }>(cacheKey)
     if (cached) {
       const raw: OilLossRow[] = Array.isArray(cached.data) ? cached.data : []
       setRows(filterOilLossEligibleRows(raw))
-      setYtdSummary(cached.ytdSummary ?? null)
       setLoading(false)
     }
 
-    const applyOilLossEnvelope = (envelope: { data?: OilLossRow[]; ytdSummary?: YtdOilLossSummary | null }) => {
+    const applyOilLossEnvelope = (envelope: { data?: OilLossRow[] }) => {
       const raw: OilLossRow[] = Array.isArray(envelope?.data) ? envelope.data : []
       setRows(filterOilLossEligibleRows(raw))
-      setYtdSummary(envelope?.ytdSummary ?? null)
     }
 
     const fetch = async () => {
@@ -877,7 +1261,6 @@ export default function OilLossPage() {
         console.error('Oil loss load error:', err)
         if (!cached) {
           setRows([])
-          setYtdSummary(null)
         }
         setDataFetching(false)
       } finally {
@@ -973,13 +1356,22 @@ export default function OilLossPage() {
       })
       return
     }
+    if (viewMode === 'by_transporter') {
+      updateActivePrefs({
+        visibleIds: new Set(oilLossByTransporterDefaultVisibleColumnIds(transporterColumnIds)),
+        orderIds: oilLossByTransporterCompactColumnFallbackOrder(transporterColumnIds),
+        sortKey: 'transporter',
+        sortDir: 'asc',
+      })
+      return
+    }
     updateActivePrefs({
-      visibleIds: new Set(oilLossByTransporterDefaultVisibleColumnIds(transporterColumnIds)),
-      orderIds: oilLossByTransporterCompactColumnFallbackOrder(transporterColumnIds),
-      sortKey: 'transporter',
+      visibleIds: new Set(oilLossBySupplierDefaultVisibleColumnIds(supplierColumnIds)),
+      orderIds: oilLossBySupplierCompactColumnFallbackOrder(supplierColumnIds),
+      sortKey: 'supplier',
       sortDir: 'asc',
     })
-  }, [viewMode, updateActivePrefs, allContractColumnIds, transporterColumnIds])
+  }, [viewMode, updateActivePrefs, allContractColumnIds, transporterColumnIds, supplierColumnIds])
 
   useEffect(() => {
     setViewTransitionLoading(true)
@@ -1006,63 +1398,132 @@ export default function OilLossPage() {
       )
       return
     }
+    if (viewMode === 'by_transporter') {
+      window.localStorage.setItem(
+        OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION_KEY,
+        OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION,
+      )
+      window.localStorage.setItem(
+        'oil-loss.by-transporter.visibleColumns',
+        JSON.stringify([...columnPrefsByView.by_transporter.visibleIds]),
+      )
+      window.localStorage.setItem(
+        'oil-loss.by-transporter.columnOrder',
+        JSON.stringify(columnPrefsByView.by_transporter.orderIds),
+      )
+      return
+    }
     window.localStorage.setItem(
-      OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION_KEY,
-      OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION,
+      OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION_KEY,
+      OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION,
     )
     window.localStorage.setItem(
-      'oil-loss.by-transporter.visibleColumns',
-      JSON.stringify([...columnPrefsByView.by_transporter.visibleIds]),
+      'oil-loss.by-supplier.visibleColumns',
+      JSON.stringify([...columnPrefsByView.by_supplier.visibleIds]),
     )
     window.localStorage.setItem(
-      'oil-loss.by-transporter.columnOrder',
-      JSON.stringify(columnPrefsByView.by_transporter.orderIds),
+      'oil-loss.by-supplier.columnOrder',
+      JSON.stringify(columnPrefsByView.by_supplier.orderIds),
     )
-  }, [columnPrefsByView])
+  }, [columnPrefsByView, viewMode])
 
   const hasActiveOilLossFilters =
+    globalPeriod !== 'MTD' ||
+    globalTransport !== 'All' ||
+    globalProduct !== 'All' ||
     selectedModes.length > 0 ||
     selectedIncoterms.length > 0 ||
     selectedProducts.length > 0 ||
-    selectedGroupPlants.length > 0 ||
-    Boolean(dateFrom) ||
-    Boolean(dateTo)
+    selectedGroupPlants.length > 0
+
+  const resetGlobalBarFilters = useCallback(() => {
+    setGlobalPeriod('MTD')
+    setGlobalTransport('All')
+    setGlobalProduct('All')
+    setDrilldownFilters(EMPTY_OIL_LOSS_DRILLDOWN_FILTERS)
+    setCurrentPage(1)
+  }, [])
+
+  const resetOilLossDrilldown = useCallback(() => {
+    setDrilldownFilters(EMPTY_OIL_LOSS_DRILLDOWN_FILTERS)
+    setCurrentPage(1)
+  }, [])
+
+  const applyOilLossDrilldownChange = useCallback((next: OilLossDrilldownFilters) => {
+    setDrilldownFilters(next)
+    setCurrentPage(1)
+  }, [])
 
   const clearOilLossFilters = useCallback(() => {
     setSelectedModes([])
     setSelectedIncoterms([])
     resetUserScopeFilters()
+    resetGlobalBarFilters()
+    resetOilLossDrilldown()
     const d = new Date()
     setDateFrom(`${d.getFullYear()}-01-01`)
     setDateTo(
       `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
     )
     setCurrentPage(1)
-  }, [resetUserScopeFilters])
+  }, [resetUserScopeFilters, resetGlobalBarFilters, resetOilLossDrilldown])
 
-  const filteredByTopFilters = useMemo(() => {
-    return rows.filter((row) => {
-      if (!matchesOilLossModeFilter(row.transport_mode, selectedModes)) return false
-      const incoterm = String(row.incoterm || '').trim() || 'Blank'
-      if (selectedIncoterms.length > 0 && !selectedIncoterms.includes(incoterm)) return false
-      const product = String(row.product || '').trim() || 'Blank'
-      if (selectedProducts.length > 0 && !selectedProducts.includes(product)) return false
-      const groupPlant = String(row.group_plant || '').trim() || 'Blank'
-      if (selectedGroupPlants.length > 0 && !selectedGroupPlants.includes(groupPlant)) return false
-      const d = String(row.contract_date ?? row.operation_date ?? '').slice(0, 10)
-      if (dateFrom && d && d < dateFrom) return false
-      if (dateTo && d && d > dateTo) return false
-      return true
-    })
+  useEffect(() => {
+    setDrilldownFilters(EMPTY_OIL_LOSS_DRILLDOWN_FILTERS)
+    setCurrentPage(1)
   }, [
-    rows,
+    globalPeriod,
+    globalTransport,
+    globalProduct,
     selectedModes,
     selectedIncoterms,
     selectedProducts,
     selectedGroupPlants,
-    dateFrom,
-    dateTo,
   ])
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [globalPeriod, globalTransport, globalProduct])
+
+  const globallyFilteredRows = useMemo(() => {
+    return applyOilLossGlobalFilters({
+      rows,
+      period: globalPeriod,
+      transport: globalTransport,
+      product: globalProduct,
+      selectedStaffProducts: selectedProducts,
+      selectedStaffGroupPlants: selectedGroupPlants,
+      selectedModes,
+      selectedIncoterms,
+    })
+  }, [
+    rows,
+    globalPeriod,
+    globalTransport,
+    globalProduct,
+    selectedProducts,
+    selectedGroupPlants,
+    selectedModes,
+    selectedIncoterms,
+  ])
+
+  const periodSummary = useMemo(() => {
+    if (!userScopeReady) return null
+    return buildOilLossSummaryForDateRange(
+      globallyFilteredRows,
+      globalPeriodMeta.dateFrom,
+      globalPeriodMeta.dateTo,
+    )
+  }, [userScopeReady, globallyFilteredRows, globalPeriodMeta.dateFrom, globalPeriodMeta.dateTo])
+
+  const drilldownFilteredRows = useMemo(
+    () => applyOilLossDrilldownFilters(globallyFilteredRows, drilldownFilters),
+    [globallyFilteredRows, drilldownFilters],
+  )
+
+  const filteredByTopFilters = drilldownFilteredRows
+  const drilldownPathLabel = useMemo(() => formatOilLossDrilldownPath(drilldownFilters), [drilldownFilters])
+  const hasActiveDrilldown = hasOilLossDrilldownSelection(drilldownFilters)
 
   const aggregatedContractRows = useMemo(
     () => aggregateOilLossByContract(filteredByTopFilters),
@@ -1074,27 +1535,43 @@ export default function OilLossPage() {
     [filteredByTopFilters],
   )
 
-  const transporterHistorySourceRows = useMemo(
-    () => filteredByTopFilters.map(toTransporterHistoryContractRow),
+  const aggregatedSupplierRows = useMemo(
+    () => aggregateOilLossBySupplier(filteredByTopFilters),
+    [filteredByTopFilters],
+  )
+
+  const groupHistorySourceRows = useMemo(
+    () => filteredByTopFilters.map(toGroupHistoryContractRow),
     [filteredByTopFilters],
   )
 
   const openTransporterModal = useCallback((row: OilLossByTransporterRow) => {
-    setSelectedTransporterData({
-      transporterName: row.transporter || 'Unknown',
-      transporterKey: row.id,
+    setSelectedGroupData({
+      kind: 'transporter',
+      entityName: row.transporter || '-',
+      entityKey: row.id,
       loadingLocations: row.loading_location,
       unloadingLocations: row.unloading_location,
-      oilLossMtKg: row.gain_loss_amount,
-      oilLossPct: row.gain_loss_percentage,
     })
-    setTransporterModalOpen(true)
+    setGroupModalOpen(true)
   }, [])
 
-  const aggregatedRows = useMemo(
-    () => (viewMode === 'all_contract' ? aggregatedContractRows : aggregatedTransporterRows),
-    [viewMode, aggregatedContractRows, aggregatedTransporterRows],
-  )
+  const openSupplierModal = useCallback((row: OilLossBySupplierRow) => {
+    setSelectedGroupData({
+      kind: 'supplier',
+      entityName: row.supplier || '-',
+      entityKey: row.id,
+      loadingLocations: row.loading_location,
+      unloadingLocations: row.unloading_location,
+    })
+    setGroupModalOpen(true)
+  }, [])
+
+  const aggregatedRows = useMemo(() => {
+    if (viewMode === 'all_contract') return aggregatedContractRows
+    if (viewMode === 'by_transporter') return aggregatedTransporterRows
+    return aggregatedSupplierRows
+  }, [viewMode, aggregatedContractRows, aggregatedTransporterRows, aggregatedSupplierRows])
 
   const visibleColumns = useMemo(() => {
     if (viewMode === 'all_contract') {
@@ -1104,8 +1581,15 @@ export default function OilLossPage() {
         columnOrderIds,
       )
     }
-    return buildOilLossByTransporterVisibleColumns(
-      BY_TRANSPORTER_COMPACT_COLUMNS,
+    if (viewMode === 'by_transporter') {
+      return buildOilLossByTransporterVisibleColumns(
+        BY_TRANSPORTER_COMPACT_COLUMNS,
+        visibleColumnIds,
+        columnOrderIds,
+      )
+    }
+    return buildOilLossBySupplierVisibleColumns(
+      BY_SUPPLIER_COMPACT_COLUMNS,
       visibleColumnIds,
       columnOrderIds,
     )
@@ -1128,8 +1612,12 @@ export default function OilLossPage() {
               contractRow.incoterm,
             ].some((v) => String(v || '').toLowerCase().includes(q))
           }
-          const transporterRow = row as OilLossByTransporterRow
-          return [transporterRow.transporter].some((v) => String(v || '').toLowerCase().includes(q))
+          if (viewMode === 'by_transporter') {
+            const transporterRow = row as OilLossByTransporterRow
+            return [transporterRow.transporter].some((v) => String(v || '').toLowerCase().includes(q))
+          }
+          const supplierRow = row as OilLossBySupplierRow
+          return [supplierRow.supplier].some((v) => String(v || '').toLowerCase().includes(q))
         })
 
     const sortCol = activeCompactColumns.find((c) => c.id === sortKey)
@@ -1213,7 +1701,9 @@ export default function OilLossPage() {
       const fallback =
         viewMode === 'all_contract'
           ? oilLossAllContractCompactColumnFallbackOrder(allContractColumnIds)
-          : oilLossByTransporterCompactColumnFallbackOrder(transporterColumnIds)
+          : viewMode === 'by_transporter'
+            ? oilLossByTransporterCompactColumnFallbackOrder(transporterColumnIds)
+            : oilLossBySupplierCompactColumnFallbackOrder(supplierColumnIds)
       const order = prev.length > 0 ? [...prev] : fallback
       const fromIdx = order.indexOf(fromId)
       const toIdx = order.indexOf(toId)
@@ -1231,7 +1721,9 @@ export default function OilLossPage() {
     const fallback =
       viewMode === 'all_contract'
         ? oilLossAllContractCompactColumnFallbackOrder(allContractColumnIds)
-        : oilLossByTransporterCompactColumnFallbackOrder(transporterColumnIds)
+        : viewMode === 'by_transporter'
+          ? oilLossByTransporterCompactColumnFallbackOrder(transporterColumnIds)
+          : oilLossBySupplierCompactColumnFallbackOrder(supplierColumnIds)
     const orderedIds = columnOrderIds.length > 0 ? columnOrderIds : fallback
     const hiddenCols = orderedIds
       .map((id) => byId.get(id))
@@ -1245,6 +1737,7 @@ export default function OilLossPage() {
     viewMode,
     allContractColumnIds,
     transporterColumnIds,
+    supplierColumnIds,
   ])
 
   const switchViewMode = (mode: OilLossTableViewMode) => {
@@ -1256,19 +1749,78 @@ export default function OilLossPage() {
     <Layout>
       <div className="space-y-6">
         <div className="space-y-3">
-          <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
-            <span>Year-to-Date (YTD) Oil Loss Summary</span>
+          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
+            <span>Oil Loss</span>
             {dataFetching && rows.length > 0 ? (
-              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+              <Loader2 className="h-5 w-5 shrink-0 animate-spin text-gray-400" aria-hidden />
             ) : null}
-          </h2>
+          </h1>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-6 flex-wrap">
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium text-gray-700 shrink-0">Period:</span>
+                <select
+                  value={globalPeriod}
+                  onChange={(e) => setGlobalPeriod(e.target.value as OilLossGlobalPeriodKey)}
+                  className="px-4 py-2 border rounded-lg text-sm text-gray-900 bg-white min-w-[140px]"
+                >
+                  {globalPeriodOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium text-gray-700 shrink-0">Transport:</span>
+                <div className={OIL_LOSS_GLOBAL_TOGGLE_GROUP_CLASS}>
+                  {OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS.map((opt) => (
+                    <button
+                      key={opt}
+                      type="button"
+                      onClick={() => setGlobalTransport(opt)}
+                      className={`${OIL_LOSS_GLOBAL_TOGGLE_BUTTON_BASE} ${oilLossGlobalToggleButtonClass(globalTransport === opt)}`}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium text-gray-700 shrink-0">Product:</span>
+                <div className={OIL_LOSS_GLOBAL_TOGGLE_GROUP_CLASS}>
+                  {OIL_LOSS_GLOBAL_PRODUCT_OPTIONS.map((opt) => (
+                    <button
+                      key={opt}
+                      type="button"
+                      onClick={() => setGlobalProduct(opt)}
+                      className={`${OIL_LOSS_GLOBAL_TOGGLE_BUTTON_BASE} ${oilLossGlobalToggleButtonClass(globalProduct === opt)}`}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={resetGlobalBarFilters}
+              className="text-sm text-blue-700 hover:underline shrink-0"
+            >
+              Reset selection
+            </button>
+          </div>
+
           <div
             className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 transition-opacity duration-200 ${
               dataFetching && rows.length > 0 ? 'opacity-65' : 'opacity-100'
             }`}
           >
           {R_OIL_LOSS_CARDS.map((card) => {
-            const summary = ytdSummary?.[card.key] ?? {
+            const summary = periodSummary?.[card.key] ?? {
               avgMt: null,
               avgPct: null,
               totalMt: null,
@@ -1276,28 +1828,26 @@ export default function OilLossPage() {
             }
             const totalMt = showBlockingLoad ? null : summary.totalMt
             const totalPct = showBlockingLoad ? null : summary.totalPct
-            const avgMt = showBlockingLoad ? null : summary.avgMt
-            const avgPct = showBlockingLoad ? null : summary.avgPct
 
             return (
               <div
                 key={card.key}
-                className="flex min-h-full flex-col rounded-lg border bg-white px-3 py-2.5 shadow-sm"
+                className="flex min-h-full flex-col rounded-lg border bg-white px-3 py-3 shadow-sm"
               >
-                <div className="mb-1.5 flex items-center gap-1.5">
+                <div className="mb-2 flex items-center gap-1.5">
                   <span className="text-lg font-bold leading-none tracking-tight text-gray-900">
                     {card.label}
                   </span>
                   <FieldHelp text={`Formula: ${card.formula}`} />
                 </div>
 
-                <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
+                <div className="grid flex-1 grid-cols-2 gap-x-3 gap-y-1">
                   <div className="min-w-0">
                     <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500 leading-none">
                       Total (MT)
                     </div>
                     <div
-                      className={`mt-0.5 text-base font-semibold leading-tight tabular-nums ${
+                      className={`mt-1 text-lg font-semibold leading-tight tabular-nums ${
                         showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalMt, 'primary')
                       }`}
                     >
@@ -1309,35 +1859,11 @@ export default function OilLossPage() {
                       Total (%)
                     </div>
                     <div
-                      className={`mt-0.5 text-base font-semibold leading-tight tabular-nums ${
+                      className={`mt-1 text-lg font-semibold leading-tight tabular-nums ${
                         showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalPct, 'primary')
                       }`}
                     >
                       {showBlockingLoad ? '…' : formatOilLossTotalPct(totalPct)}
-                    </div>
-                  </div>
-                  <div className="min-w-0 border-t border-gray-100 pt-1.5">
-                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400 leading-none">
-                      Avg (MT)
-                    </div>
-                    <div
-                      className={`mt-0.5 text-sm font-medium leading-tight tabular-nums ${
-                        showBlockingLoad ? 'text-gray-300' : oilLossValueTone(avgMt, 'secondary')
-                      }`}
-                    >
-                      {showBlockingLoad ? '…' : formatOilLossAvgMt(avgMt)}
-                    </div>
-                  </div>
-                  <div className="min-w-0 border-t border-gray-100 pt-1.5">
-                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400 leading-none">
-                      Avg (%)
-                    </div>
-                    <div
-                      className={`mt-0.5 text-sm font-medium leading-tight tabular-nums ${
-                        showBlockingLoad ? 'text-gray-300' : oilLossValueTone(avgPct, 'secondary')
-                      }`}
-                    >
-                      {showBlockingLoad ? '…' : formatOilLossAvgPct(avgPct)}
                     </div>
                   </div>
                 </div>
@@ -1346,6 +1872,16 @@ export default function OilLossPage() {
           })}
           </div>
         </div>
+
+        <OilLossDrilldownSection
+          rows={globallyFilteredRows}
+          filters={drilldownFilters}
+          onFiltersChange={applyOilLossDrilldownChange}
+          onReset={resetOilLossDrilldown}
+          drilldownScopedRowCount={drilldownFilteredRows.length}
+          loading={showBlockingLoad}
+          dataFetching={dataFetching}
+        />
 
         <Card>
           <CardContent className="pt-6">
@@ -1359,7 +1895,9 @@ export default function OilLossPage() {
                       placeholder={
                         viewMode === 'all_contract'
                           ? 'Search contract, PO, STO, product, supplier...'
-                          : 'Search transporter...'
+                          : viewMode === 'by_transporter'
+                            ? 'Search transporter...'
+                            : 'Search supplier...'
                       }
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
@@ -1403,11 +1941,11 @@ export default function OilLossPage() {
               />
 
               <div className="flex flex-wrap items-center gap-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="text-sm font-medium text-gray-700">Contract Date:</label>
-                  <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={setDateFrom} className="w-40" />
-                  <span className="text-gray-500">to</span>
-                  <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={setDateTo} className="w-40" />
+                <div className="flex flex-wrap items-center gap-2 text-sm text-gray-600">
+                  <span className="font-medium text-gray-700">Period range:</span>
+                  <span className="tabular-nums">
+                    {formatShortDate(globalPeriodMeta.dateFrom)} — {formatShortDate(globalPeriodMeta.dateTo)}
+                  </span>
                   {hasActiveOilLossFilters ? (
                     <Button
                       type="button"
@@ -1427,53 +1965,76 @@ export default function OilLossPage() {
         </Card>
 
         <Card>
-          <CardHeader>
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <span>{viewMode === 'all_contract' ? 'All Contract' : 'By Transporter'}</span>
-                  {dataFetching ? (
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
-                  ) : null}
-                </CardTitle>
-                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
-                    <span className="whitespace-nowrap tabular-nums text-gray-700">
-                      Showing{' '}
-                      <span className="font-semibold">
-                        {rangeStart.toLocaleString('en-US')} to {rangeEnd.toLocaleString('en-US')}
-                      </span>{' '}
-                      of <span className="font-semibold">{filteredRows.length.toLocaleString('en-US')}</span>{' '}
-                      entries
+          <CardHeader className="space-y-3">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <span>
+                  {viewMode === 'all_contract'
+                    ? 'All Contract'
+                    : viewMode === 'by_transporter'
+                      ? 'By Transporter'
+                      : 'By Supplier'}
+                </span>
+                {dataFetching ? (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+                ) : null}
+              </CardTitle>
+              <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
+                <span className="whitespace-nowrap tabular-nums text-gray-700">
+                  Showing{' '}
+                  <span className="font-semibold">
+                    {rangeStart.toLocaleString('en-US')} to {rangeEnd.toLocaleString('en-US')}
+                  </span>{' '}
+                  of <span className="font-semibold">{filteredRows.length.toLocaleString('en-US')}</span>{' '}
+                  entries
+                </span>
+                {totalPages > 1 ? (
+                  <>
+                    <span className="text-gray-400" aria-hidden>
+                      ·
                     </span>
-                    {totalPages > 1 ? (
-                      <>
-                        <span className="text-gray-400" aria-hidden>
-                          ·
-                        </span>
-                        <span className="whitespace-nowrap tabular-nums">
-                          Page {currentPage}/{totalPages}
-                        </span>
-                      </>
-                    ) : null}
-                  </p>
+                    <span className="whitespace-nowrap tabular-nums">
+                      Page {currentPage}/{totalPages}
+                    </span>
+                  </>
+                ) : null}
+                {hasActiveDrilldown ? (
+                  <>
+                    <span className="text-gray-400" aria-hidden>
+                      ·
+                    </span>
+                    <span className="whitespace-nowrap text-blue-700 font-medium">
+                      Drilldown: {drilldownPathLabel}
+                    </span>
+                  </>
+                ) : null}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="inline-flex rounded-lg border bg-white p-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => switchViewMode('all_contract')}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'all_contract' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+                >
+                  All Contract
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchViewMode('by_transporter')}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'by_transporter' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+                >
+                  By Transporter
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchViewMode('by_supplier')}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'by_supplier' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+                >
+                  By Supplier
+                </button>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="inline-flex rounded-lg border bg-white p-1">
-                  <button
-                    type="button"
-                    onClick={() => switchViewMode('all_contract')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'all_contract' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-                  >
-                    All Contract
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => switchViewMode('by_transporter')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'by_transporter' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-                  >
-                    By Transporter
-                  </button>
-                </div>
+              <div className="flex flex-wrap items-center gap-2 ml-auto shrink-0">
                 <div ref={columnsMenuRef} className="relative">
                   <Button
                     variant="outline"
@@ -1481,127 +2042,130 @@ export default function OilLossPage() {
                     onClick={() => setShowColumnsMenu((v) => !v)}
                     disabled={dataFetching || tableLoading}
                   >
-                      <SlidersHorizontal className="h-4 w-4 mr-2" />
-                      Columns
-                    </Button>
-                    {showColumnsMenu && (
-                      <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
-                        <div className="flex items-center justify-between gap-2 mb-2">
-                          <div className="text-xs font-semibold text-gray-600">Visible columns</div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6"
-                            onClick={() => setShowColumnsMenu(false)}
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                        <div className="flex items-center gap-1 mb-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="flex-1 text-xs h-7"
-                            onClick={() =>
-                              setVisibleColumnIds(new Set(activeCompactColumns.map((c) => c.id)))
-                            }
-                          >
-                            Select All
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="flex-1 text-xs h-7"
-                            onClick={() =>
-                              setVisibleColumnIds(
-                                new Set([
-                                  viewMode === 'all_contract'
-                                    ? OIL_LOSS_ALL_CONTRACT_DEFAULT_VISIBLE_COLUMN_IDS[0]
-                                    : OIL_LOSS_BY_TRANSPORTER_DEFAULT_VISIBLE_COLUMN_IDS[0],
-                                ]),
-                              )
-                            }
-                          >
-                            Unselect All
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="flex-1 text-xs h-7"
-                            onClick={resetActiveColumnView}
-                          >
-                            Reset
-                          </Button>
-                        </div>
-                        <div className="border-t pt-2 space-y-1 max-h-72 overflow-auto pr-1">
-                          {columnsMenuItems.map((col) => (
-                            <div
-                              key={col.id}
-                              draggable
-                              onDragStart={() => setDragColId(col.id)}
-                              onDragEnd={() => setDragColId(null)}
-                              onDragOver={(e) => e.preventDefault()}
-                              onDrop={() => {
-                                if (dragColId && dragColId !== col.id) reorderColumnByDrag(dragColId, col.id)
-                              }}
-                              className={`flex items-center gap-2 text-sm cursor-grab select-none rounded px-1 py-0.5 ${dragColId === col.id ? 'opacity-40' : 'hover:bg-gray-50'}`}
-                            >
-                              <GripVertical className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-                              <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
-                                <Checkbox
-                                  checked={visibleColumnIds.has(col.id)}
-                                  onCheckedChange={() => toggleColumn(col.id)}
-                                />
-                                <span className="truncate">{col.label}</span>
-                              </label>
-                            </div>
-                          ))}
-                        </div>
+                    <SlidersHorizontal className="h-4 w-4 mr-2" />
+                    Columns
+                  </Button>
+                  {showColumnsMenu && (
+                    <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="text-xs font-semibold text-gray-600">Visible columns</div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          onClick={() => setShowColumnsMenu(false)}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
                       </div>
-                    )}
-                  </div>
-                  {totalPages > 1 && (
-                    <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handlePageChange(currentPage - 1)}
-                        disabled={currentPage <= 1 || dataFetching || tableLoading}
-                      >
-                        Previous
-                      </Button>
-                      <div className="flex items-center gap-1">
-                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                          let pageNum: number
-                          if (totalPages <= 5) pageNum = i + 1
-                          else if (currentPage <= 3) pageNum = i + 1
-                          else if (currentPage >= totalPages - 2) pageNum = totalPages - 4 + i
-                          else pageNum = currentPage - 2 + i
-                          return (
-                            <Button
-                              key={pageNum}
-                              variant={currentPage === pageNum ? 'default' : 'outline'}
-                              size="sm"
-                              onClick={() => handlePageChange(pageNum)}
-                              disabled={dataFetching || tableLoading}
-                              className="min-w-[40px]"
-                            >
-                              {pageNum}
-                            </Button>
-                          )
-                        })}
+                      <div className="flex items-center gap-1 mb-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() =>
+                            setVisibleColumnIds(new Set(activeCompactColumns.map((c) => c.id)))
+                          }
+                        >
+                          Select All
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() =>
+                            setVisibleColumnIds(
+                              new Set([
+                                viewMode === 'all_contract'
+                                  ? OIL_LOSS_ALL_CONTRACT_DEFAULT_VISIBLE_COLUMN_IDS[0]
+                                  : viewMode === 'by_transporter'
+                                    ? OIL_LOSS_BY_TRANSPORTER_DEFAULT_VISIBLE_COLUMN_IDS[0]
+                                    : OIL_LOSS_BY_SUPPLIER_DEFAULT_VISIBLE_COLUMN_IDS[0],
+                              ]),
+                            )
+                          }
+                        >
+                          Unselect All
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={resetActiveColumnView}
+                        >
+                          Reset
+                        </Button>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handlePageChange(currentPage + 1)}
-                        disabled={currentPage >= totalPages || dataFetching || tableLoading}
-                      >
-                        Next
-                      </Button>
+                      <div className="border-t pt-2 space-y-1 max-h-72 overflow-auto pr-1">
+                        {columnsMenuItems.map((col) => (
+                          <div
+                            key={col.id}
+                            draggable
+                            onDragStart={() => setDragColId(col.id)}
+                            onDragEnd={() => setDragColId(null)}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={() => {
+                              if (dragColId && dragColId !== col.id) reorderColumnByDrag(dragColId, col.id)
+                            }}
+                            className={`flex items-center gap-2 text-sm cursor-grab select-none rounded px-1 py-0.5 ${dragColId === col.id ? 'opacity-40' : 'hover:bg-gray-50'}`}
+                          >
+                            <GripVertical className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                            <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                              <Checkbox
+                                checked={visibleColumnIds.has(col.id)}
+                                onCheckedChange={() => toggleColumn(col.id)}
+                              />
+                              <span className="truncate">{col.label}</span>
+                            </label>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
+                {totalPages > 1 && (
+                  <div className="flex flex-wrap items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(currentPage - 1)}
+                      disabled={currentPage <= 1 || dataFetching || tableLoading}
+                    >
+                      Previous
+                    </Button>
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum: number
+                      if (totalPages <= 5) pageNum = i + 1
+                      else if (currentPage <= 3) pageNum = i + 1
+                      else if (currentPage >= totalPages - 2) pageNum = totalPages - 4 + i
+                      else pageNum = currentPage - 2 + i
+                      return (
+                        <Button
+                          key={pageNum}
+                          variant={currentPage === pageNum ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => handlePageChange(pageNum)}
+                          disabled={dataFetching || tableLoading}
+                          className="min-w-[40px]"
+                        >
+                          {pageNum}
+                        </Button>
+                      )
+                    })}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(currentPage + 1)}
+                      disabled={currentPage >= totalPages || dataFetching || tableLoading}
+                    >
+                      Next
+                    </Button>
+                    <span className="text-xs text-gray-500 ml-1 tabular-nums whitespace-nowrap">
+                      Page {currentPage} of {totalPages}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -1644,7 +2208,8 @@ export default function OilLossPage() {
                       data-oil-loss-table={viewMode}
                       className={cn(
                         COMPACT_OPERATIONAL_TABLE_CLASS,
-                        viewMode === 'by_transporter' && 'klip-compact-table--intrinsic-token-cols',
+                        (viewMode === 'by_transporter' || viewMode === 'by_supplier') &&
+                          'klip-compact-table--intrinsic-token-cols',
                       )}
                     >
                       <thead>
@@ -1733,7 +2298,7 @@ export default function OilLossPage() {
                                         {col.id === 'transporter' && viewMode === 'by_transporter' ? (
                                           (() => {
                                             const transporterRow = row as OilLossByTransporterRow
-                                            const name = transporterRow.transporter || 'Unknown'
+                                            const name = transporterRow.transporter || '-'
                                             return (
                                               <button
                                                 type="button"
@@ -1741,6 +2306,23 @@ export default function OilLossPage() {
                                                 onClick={(e) => {
                                                   e.stopPropagation()
                                                   openTransporterModal(transporterRow)
+                                                }}
+                                              >
+                                                {name}
+                                              </button>
+                                            )
+                                          })()
+                                        ) : col.id === 'supplier' && viewMode === 'by_supplier' ? (
+                                          (() => {
+                                            const supplierRow = row as OilLossBySupplierRow
+                                            const name = supplierRow.supplier || '-'
+                                            return (
+                                              <button
+                                                type="button"
+                                                className="block w-max max-w-none whitespace-nowrap text-left text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
+                                                onClick={(e) => {
+                                                  e.stopPropagation()
+                                                  openSupplierModal(supplierRow)
                                                 }}
                                               >
                                                 {name}
@@ -1812,20 +2394,22 @@ export default function OilLossPage() {
                 <p className="text-xs text-gray-500 mt-3">
                   {viewMode === 'all_contract'
                     ? 'Aggregated by contract. Qty Delivery & Qty Receive from SAP Data; SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'
-                    : 'Aggregated by transporter. Qty Delivery & Qty Receive from SAP Data; SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'}
+                    : viewMode === 'by_transporter'
+                      ? 'Aggregated by transporter. Qty Delivery & Qty Receive from SAP Data; SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'
+                      : 'Aggregated by supplier. Qty Delivery & Qty Receive from SAP Data; SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'}
                 </p>
               </div>
           </CardContent>
         </Card>
 
         <TransporterHistoryModal
-          open={transporterModalOpen}
+          open={groupModalOpen}
           onClose={() => {
-            setTransporterModalOpen(false)
-            setSelectedTransporterData(null)
+            setGroupModalOpen(false)
+            setSelectedGroupData(null)
           }}
-          selection={selectedTransporterData}
-          sourceRows={transporterHistorySourceRows}
+          selection={selectedGroupData}
+          sourceRows={groupHistorySourceRows}
         />
       </div>
     </Layout>

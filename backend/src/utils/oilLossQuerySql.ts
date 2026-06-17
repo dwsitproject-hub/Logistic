@@ -1,10 +1,12 @@
-import { OIL_LOSS_ELIGIBILITY_WHERE_SQL } from './oilLossEligibility';
+import { OIL_LOSS_ELIGIBILITY_WHERE_SQL, OIL_LOSS_TRANSPORTER_EXPR } from './oilLossEligibility';
 import {
   OIL_LOSS_SFAL_QTY_EXPR,
   OIL_LOSS_SFBD_QTY_EXPR,
   SAP_OIL_LOSS_QTY_DELIVERY_NUMERIC,
   SAP_OIL_LOSS_QTY_RECEIVE_NUMERIC,
   SAP_OIL_LOSS_QTY_WHERE_CLAUSE,
+  SAP_OIL_LOSS_TRUCK_TRANSPORTER_RAW,
+  SAP_OIL_LOSS_VESSEL_NAME_RAW,
   SAP_SFAL_NUMERIC_EXPR,
   SAP_SFBD_NUMERIC_EXPR,
 } from './oilLossSapSql';
@@ -96,6 +98,13 @@ export function buildOilLossMainSql(): string {
         spd.id,
         COALESCE(NULLIF(TRIM(spd.sto_number::text), ''), NULLIF(TRIM(spd.data->'raw'->>'STO No'), '')) AS sto_key,
         COALESCE(spd.data->'raw'->>'SEA / LAND', 'LAND')          AS transport_mode,
+        UPPER(TRIM(COALESCE(
+          spd.data->'raw'->>'STO Type',
+          spd.data->'raw'->>'STO Type ',
+          spd.data->'contract'->>'sto_type',
+          spd.data->'shipment'->>'sto_type',
+          ''
+        )))                                                       AS sto_type,
         COALESCE(spd.data->'raw'->>'Contract Ext No',
                  spd.data->'raw'->>'Contract No', '')              AS operation_id,
         COALESCE(
@@ -133,6 +142,8 @@ export function buildOilLossMainSql(): string {
         ${SAP_OIL_LOSS_QTY_RECEIVE_NUMERIC}                       AS qty_receive,
         ${SAP_SFAL_NUMERIC_EXPR}                                  AS qty_sfal_raw,
         ${SAP_SFBD_NUMERIC_EXPR}                                  AS qty_sfbd_raw,
+        ${SAP_OIL_LOSS_TRUCK_TRANSPORTER_RAW}                     AS truck_transporter_raw,
+        ${SAP_OIL_LOSS_VESSEL_NAME_RAW}                           AS vessel_name_raw,
         COALESCE(NULLIF(TRIM(spd.data->'raw'->>'Trucking Owner at Starting Location'), ''), '') AS transporter_raw,
         COALESCE(NULLIF(TRIM(spd.data->'raw'->>'Vessel Owner'), ''), '') AS vessel_owner_raw,
         COALESCE(NULLIF(TRIM(spd.data->'raw'->>'Truck Loading at Starting Location'), ''), '') AS loading_location_raw,
@@ -185,6 +196,7 @@ export function buildOilLossMainSql(): string {
     SELECT
       id,
       transport_mode,
+      sto_type,
       operation_id,
       contract_number,
       contract_ext_no,
@@ -203,11 +215,7 @@ export function buildOilLossMainSql(): string {
       COALESCE(NULLIF(contract_incoterm, ''), NULLIF(incoterm_raw, ''), '') AS incoterm,
       group_plant_resolved                        AS group_plant,
       COALESCE(contract_qty_kg, qty_contract_raw) AS quantity_contract,
-      CASE
-        WHEN transport_mode = 'SEA'
-        THEN COALESCE(NULLIF(trucking_owner_db, ''), NULLIF(vessel_owner_raw, ''), NULLIF(transporter_raw, ''), '')
-        ELSE COALESCE(NULLIF(trucking_owner_db, ''), NULLIF(transporter_raw, ''), '')
-      END                                           AS transporter,
+      ${OIL_LOSS_TRANSPORTER_EXPR}                AS transporter,
       COALESCE(NULLIF(loading_location_db, ''), NULLIF(loading_location_raw, ''), '') AS loading_location,
       COALESCE(
         NULLIF(unloading_location_db, ''),

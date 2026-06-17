@@ -64,7 +64,13 @@ export const getRoleById = async (req: AuthRequest, res: Response): Promise<void
                AND UPPER(TRIM(rp.level)) = UPPER(TRIM($2::text))
              )
            )
-           AND (rp.transport_type IS NULL OR UPPER(TRIM(rp.transport_type)) = UPPER(TRIM(COALESCE($3, rp.transport_type))))
+           AND (
+             rp.transport_type IS NULL
+             OR (
+               $3::text IS NOT NULL
+               AND UPPER(TRIM(rp.transport_type)) = UPPER(TRIM($3::text))
+             )
+           )
          ORDER BY
            CASE WHEN rp.level IS NULL THEN 0 ELSE 1 END DESC,
            CASE WHEN rp.transport_type IS NULL THEN 0 ELSE 1 END DESC
@@ -164,7 +170,13 @@ export const getUserPermissions = async (req: AuthRequest, res: Response): Promi
                AND UPPER(TRIM(rp.level)) = UPPER(TRIM($2::text))
              )
            )
-           AND (rp.transport_type IS NULL OR UPPER(TRIM(rp.transport_type)) = UPPER(TRIM(COALESCE($3, rp.transport_type))))
+           AND (
+             rp.transport_type IS NULL
+             OR (
+               $3::text IS NOT NULL
+               AND UPPER(TRIM(rp.transport_type)) = UPPER(TRIM($3::text))
+             )
+           )
          ORDER BY
            CASE WHEN rp.level IS NULL THEN 0 ELSE 1 END DESC,
            CASE WHEN rp.transport_type IS NULL THEN 0 ELSE 1 END DESC

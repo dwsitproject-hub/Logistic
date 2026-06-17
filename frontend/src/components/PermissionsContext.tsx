@@ -73,7 +73,6 @@ export function isAdminRole(role?: string) {
 }
 
 export function canViewPermission(ctx: PermissionsContextValue, key: string): boolean {
-  if (isAdminRole(ctx.userRole)) return true
   if (!ctx.loaded) return false
   return !!ctx.byKey[key]?.canView
 }
@@ -84,7 +83,6 @@ export function canViewPermission(ctx: PermissionsContextValue, key: string): bo
  * Legacy fallback: perf key absent (pre-migration) → use operational page permission.
  */
 export function canViewContractPerformancePage(ctx: PermissionsContextValue): boolean | null {
-  if (isAdminRole(ctx.userRole)) return true
   if (!ctx.loaded) return null
   const perfKey = 'page.contract_performance'
   const legacyKey = 'page.contracts'
@@ -95,7 +93,6 @@ export function canViewContractPerformancePage(ctx: PermissionsContextValue): bo
 
 /** null = permissions still loading — see canViewContractPerformancePage */
 export function canViewShippingPerformancePage(ctx: PermissionsContextValue): boolean | null {
-  if (isAdminRole(ctx.userRole)) return true
   if (!ctx.loaded) return null
   const perfKey = 'page.shipping_performance'
   const legacyKey = 'page.shipments'
@@ -105,19 +102,16 @@ export function canViewShippingPerformancePage(ctx: PermissionsContextValue): bo
 }
 
 export function canCreatePermission(ctx: PermissionsContextValue, key: string): boolean {
-  if (isAdminRole(ctx.userRole)) return true
   if (!ctx.loaded) return false
   return !!ctx.byKey[key]?.canCreate
 }
 
 export function canEditPermission(ctx: PermissionsContextValue, key: string): boolean {
-  if (isAdminRole(ctx.userRole)) return true
   if (!ctx.loaded) return false
   return !!ctx.byKey[key]?.canEdit
 }
 
 export function canDeletePermission(ctx: PermissionsContextValue, key: string): boolean {
-  if (isAdminRole(ctx.userRole)) return true
   if (!ctx.loaded) return false
   return !!ctx.byKey[key]?.canDelete
 }

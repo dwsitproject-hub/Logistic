@@ -5,6 +5,7 @@ import {
   clearClientDataCache,
   CLIENT_CACHE_GC_MS,
   CLIENT_CACHE_STALE_MS,
+  invalidateClientCacheByPathPrefix,
   isCacheFresh,
   peekCache,
   prefetchGet,
@@ -67,6 +68,16 @@ describe('cachedGet', () => {
     vi.advanceTimersByTime(CLIENT_CACHE_GC_MS + 1)
     expect(peekCache(key)).toBeNull()
   })
+
+  it('force bypasses fresh cache', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce({ v: 1 }).mockResolvedValueOnce({ v: 2 })
+    const key = buildCacheKey('GET', '/contracts?page=1')
+    await cachedGet(key, fetcher)
+    const forced = await cachedGet(key, fetcher, { force: true })
+    expect(forced.data).toEqual({ v: 2 })
+    expect(forced.fromCache).toBe(false)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('prefetchGet', () => {
@@ -87,5 +98,21 @@ describe('prefetchGet', () => {
     await vi.runAllTimersAsync()
     expect(fetcher).toHaveBeenCalledTimes(1)
     expect(isCacheFresh(key)).toBe(true)
+  })
+})
+
+describe('invalidateClientCacheByPathPrefix', () => {
+  beforeEach(() => {
+    clearClientDataCache()
+  })
+
+  it('removes all GET entries for a path prefix', async () => {
+    const contractsKey = buildCacheKey('GET', '/contracts?page=1')
+    const shipmentsKey = buildCacheKey('GET', '/shipments?page=1')
+    await cachedGet(contractsKey, async () => ({ rows: [1] }))
+    await cachedGet(shipmentsKey, async () => ({ rows: [2] }))
+    invalidateClientCacheByPathPrefix('/contracts')
+    expect(peekCache(contractsKey)).toBeNull()
+    expect(peekCache(shipmentsKey)).not.toBeNull()
   })
 })
