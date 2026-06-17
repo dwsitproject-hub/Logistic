@@ -693,6 +693,149 @@ export function ContractDetailModal({
               </div>
 
               <div>
+                <h3 className="text-lg font-semibold mb-3">Important Dates</h3>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div className="p-3 bg-gray-50 rounded">
+                    <div className="text-gray-500">Contract Date</div>
+                    <div className="font-medium mt-1">{formatDate(contract.contract_date)}</div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded">
+                    <div className="text-gray-500">Due Date Delivery Start</div>
+                    <div className="font-medium mt-1">{formatDate(contract.delivery_start_date)}</div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded">
+                    <div className="text-gray-500">Due Date Delivery End</div>
+                    <div className="font-medium mt-1">{formatDate(contract.delivery_end_date)}</div>
+                  </div>
+                  {showMonthDeliveryEnd && (
+                    <div className="p-3 bg-gray-50 rounded">
+                      <div className="text-gray-500">Month Delivery End</div>
+                      <div className="font-medium mt-1">{formatMonthDeliveryEnd(contract.delivery_end_date)}</div>
+                    </div>
+                  )}
+                  <div className="p-3 bg-gray-50 rounded">
+                    <div className="text-gray-500">Cargo Readiness Date</div>
+                    <div className="font-medium mt-1">{formatDate(contract.cargo_readiness_date)}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-lg font-semibold mb-3">Logistic Information</h3>
+                <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                  <div className="p-3 bg-gray-50 rounded">
+                    <div className="text-gray-500">Transport Mode</div>
+                    <div className="font-medium mt-1">{contract.transport_mode || '-'}</div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded">
+                    <div className="text-gray-500">Incoterm</div>
+                    <div className="font-medium mt-1">{contract.incoterm || '-'}</div>
+                  </div>
+                </div>
+                {stoInfoLoading ? (
+                  <div className="text-sm text-gray-500">Loading STO information...</div>
+                ) : stoInfo.length === 0 ? (
+                  <div className="text-sm text-gray-500">No STO information for this contract.</div>
+                ) : (
+                  <div className="overflow-x-auto border rounded">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-100 border-b">
+                          <th className="text-left p-2 font-medium">STO No</th>
+                          <th className="text-left p-2 font-medium">Operation ID</th>
+                          <th className="text-left p-2 font-medium">Type</th>
+                          <th className="text-left p-2 font-medium">Late Indicator</th>
+                          <th className="text-left p-2 font-medium">Status</th>
+                          <th className="text-left p-2 font-medium">STO Quantity (MT)</th>
+                          <th className="text-left p-2 font-medium">Quantity Delivered (MT)</th>
+                          <th className="text-left p-2 font-medium">Quantity Received (MT)</th>
+                          <th className="text-left p-2 font-medium">Vessel Name / Trucking Owner</th>
+                          <th className="text-left p-2 font-medium">
+                            ETA Vessel Arrival at Loading Port / ETA Trucking Completion Date
+                          </th>
+                          <th className="text-left p-2 font-medium">
+                            ATA Vessel Complete Discharge / Trucking Last Receive Date
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stoInfo.map((row, idx) => (
+                          <tr key={`${row.type}-${row.sto_number}-${idx}`} className="border-b last:border-0 hover:bg-gray-50">
+                            <td className="p-2">
+                              <button
+                                type="button"
+                                onClick={() => openStoDetail(row)}
+                                className="text-left text-blue-600 hover:underline font-medium cursor-pointer"
+                              >
+                                {row.sto_number || '-'}
+                              </button>
+                            </td>
+                            <td className="p-2">
+                              <button
+                                type="button"
+                                onClick={() => openStoDetail(row)}
+                                className="text-left text-blue-600 hover:underline font-medium cursor-pointer"
+                              >
+                                {row.operation_id ?? '-'}
+                              </button>
+                            </td>
+                            <td className="p-2">
+                              <Badge
+                                variant="outline"
+                                className={
+                                  row.type === 'shipment' ? 'border-blue-300 text-blue-700' : 'border-amber-300 text-amber-700'
+                                }
+                              >
+                                {row.type === 'shipment' ? 'Shipment' : 'Trucking'}
+                              </Badge>
+                            </td>
+                            <td className="p-2">
+                              <Badge
+                                className={
+                                  row.late_indicator === 'Late'
+                                    ? 'bg-red-500'
+                                    : row.late_indicator === 'On Time'
+                                      ? 'bg-green-500'
+                                      : 'bg-gray-400'
+                                }
+                              >
+                                {row.late_indicator}
+                              </Badge>
+                            </td>
+                            <td className="p-2">{row.status}</td>
+                            <td className="p-2">{formatQtyMtFromKg(row.sto_quantity)}</td>
+                            <td className="p-2">{formatQtyMtFromKg(row.quantity_delivered ?? 0)}</td>
+                            <td className="p-2">{formatQtyMtFromKg(row.quantity_receive ?? 0)}</td>
+                            <td className="p-2">
+                              {row.type === 'shipment' ? (row.vessel_name ?? '-') : (row.trucking_owner ?? '-')}
+                            </td>
+                            <td className="p-2">
+                              {row.type === 'shipment'
+                                ? row.eta_vessel_arrival_loading_port
+                                  ? formatDate(row.eta_vessel_arrival_loading_port)
+                                  : '-'
+                                : row.eta_trucking_completion_date
+                                  ? formatDate(row.eta_trucking_completion_date)
+                                  : '-'}
+                            </td>
+                            <td className="p-2">
+                              {row.type === 'shipment'
+                                ? row.ata_discharge_complete
+                                  ? formatDate(row.ata_discharge_complete)
+                                  : '-'
+                                : row.trucking_completion_date
+                                  ? formatDate(row.trucking_completion_date)
+                                  : '-'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div>
                 <h3 className="text-lg font-semibold mb-3">Parties</h3>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div className="p-3 bg-gray-50 rounded">
@@ -831,149 +974,6 @@ export function ContractDetailModal({
                       <FieldHelp text={FIELD_HELP.overUnderDelivery} />
                     </div>
                     <div className="font-semibold mt-1">{contract.over_under_delivery_status || '-'}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-lg font-semibold mb-3">Logistic Information</h3>
-                <div className="grid grid-cols-2 gap-4 text-sm mb-4">
-                  <div className="p-3 bg-gray-50 rounded">
-                    <div className="text-gray-500">Transport Mode</div>
-                    <div className="font-medium mt-1">{contract.transport_mode || '-'}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <div className="text-gray-500">Incoterm</div>
-                    <div className="font-medium mt-1">{contract.incoterm || '-'}</div>
-                  </div>
-                </div>
-                {stoInfoLoading ? (
-                  <div className="text-sm text-gray-500">Loading STO information...</div>
-                ) : stoInfo.length === 0 ? (
-                  <div className="text-sm text-gray-500">No STO information for this contract.</div>
-                ) : (
-                  <div className="overflow-x-auto border rounded">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="bg-gray-100 border-b">
-                          <th className="text-left p-2 font-medium">STO No</th>
-                          <th className="text-left p-2 font-medium">Operation ID</th>
-                          <th className="text-left p-2 font-medium">Type</th>
-                          <th className="text-left p-2 font-medium">Late Indicator</th>
-                          <th className="text-left p-2 font-medium">Status</th>
-                          <th className="text-left p-2 font-medium">STO Quantity (MT)</th>
-                          <th className="text-left p-2 font-medium">Quantity Delivered (MT)</th>
-                          <th className="text-left p-2 font-medium">Quantity Received (MT)</th>
-                          <th className="text-left p-2 font-medium">Vessel Name / Trucking Owner</th>
-                          <th className="text-left p-2 font-medium">
-                            ETA Vessel Arrival at Loading Port / ETA Trucking Completion Date
-                          </th>
-                          <th className="text-left p-2 font-medium">
-                            ATA Vessel Complete Discharge / Trucking Last Receive Date
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {stoInfo.map((row, idx) => (
-                          <tr key={`${row.type}-${row.sto_number}-${idx}`} className="border-b last:border-0 hover:bg-gray-50">
-                            <td className="p-2">
-                              <button
-                                type="button"
-                                onClick={() => openStoDetail(row)}
-                                className="text-left text-blue-600 hover:underline font-medium cursor-pointer"
-                              >
-                                {row.sto_number || '-'}
-                              </button>
-                            </td>
-                            <td className="p-2">
-                              <button
-                                type="button"
-                                onClick={() => openStoDetail(row)}
-                                className="text-left text-blue-600 hover:underline font-medium cursor-pointer"
-                              >
-                                {row.operation_id ?? '-'}
-                              </button>
-                            </td>
-                            <td className="p-2">
-                              <Badge
-                                variant="outline"
-                                className={
-                                  row.type === 'shipment' ? 'border-blue-300 text-blue-700' : 'border-amber-300 text-amber-700'
-                                }
-                              >
-                                {row.type === 'shipment' ? 'Shipment' : 'Trucking'}
-                              </Badge>
-                            </td>
-                            <td className="p-2">
-                              <Badge
-                                className={
-                                  row.late_indicator === 'Late'
-                                    ? 'bg-red-500'
-                                    : row.late_indicator === 'On Time'
-                                      ? 'bg-green-500'
-                                      : 'bg-gray-400'
-                                }
-                              >
-                                {row.late_indicator}
-                              </Badge>
-                            </td>
-                            <td className="p-2">{row.status}</td>
-                            <td className="p-2">{formatQtyMtFromKg(row.sto_quantity)}</td>
-                            <td className="p-2">{formatQtyMtFromKg(row.quantity_delivered ?? 0)}</td>
-                            <td className="p-2">{formatQtyMtFromKg(row.quantity_receive ?? 0)}</td>
-                            <td className="p-2">
-                              {row.type === 'shipment' ? (row.vessel_name ?? '-') : (row.trucking_owner ?? '-')}
-                            </td>
-                            <td className="p-2">
-                              {row.type === 'shipment'
-                                ? row.eta_vessel_arrival_loading_port
-                                  ? formatDate(row.eta_vessel_arrival_loading_port)
-                                  : '-'
-                                : row.eta_trucking_completion_date
-                                  ? formatDate(row.eta_trucking_completion_date)
-                                  : '-'}
-                            </td>
-                            <td className="p-2">
-                              {row.type === 'shipment'
-                                ? row.ata_discharge_complete
-                                  ? formatDate(row.ata_discharge_complete)
-                                  : '-'
-                                : row.trucking_completion_date
-                                  ? formatDate(row.trucking_completion_date)
-                                  : '-'}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <h3 className="text-lg font-semibold mb-3">Important Dates</h3>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div className="p-3 bg-gray-50 rounded">
-                    <div className="text-gray-500">Contract Date</div>
-                    <div className="font-medium mt-1">{formatDate(contract.contract_date)}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <div className="text-gray-500">Due Date Delivery Start</div>
-                    <div className="font-medium mt-1">{formatDate(contract.delivery_start_date)}</div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <div className="text-gray-500">Due Date Delivery End</div>
-                    <div className="font-medium mt-1">{formatDate(contract.delivery_end_date)}</div>
-                  </div>
-                  {showMonthDeliveryEnd && (
-                    <div className="p-3 bg-gray-50 rounded">
-                      <div className="text-gray-500">Month Delivery End</div>
-                      <div className="font-medium mt-1">{formatMonthDeliveryEnd(contract.delivery_end_date)}</div>
-                    </div>
-                  )}
-                  <div className="p-3 bg-gray-50 rounded">
-                    <div className="text-gray-500">Cargo Readiness Date</div>
-                    <div className="font-medium mt-1">{formatDate(contract.cargo_readiness_date)}</div>
                   </div>
                 </div>
               </div>
@@ -1283,16 +1283,32 @@ export function ContractDetailModal({
                       value={formatDate(String(stoDetailData.delivery_end_date ?? ''))}
                     />
                     <StoDetailField
+                      label="Quantity Delivery (MT)"
+                      value={formatQtyMtFromKg(
+                        Number(stoDetailData.quantity_delivered ?? stoDetailRow.quantity_delivered ?? 0),
+                      )}
+                    />
+                    <StoDetailField
+                      label="Quantity Receive (MT)"
+                      value={formatQtyMtFromKg(
+                        Number(stoDetailData.quantity_receive ?? stoDetailRow.quantity_receive ?? 0),
+                      )}
+                    />
+                    <StoDetailField
+                      label="ETA Vessel Completed Loading"
+                      value={formatDate(String(stoDetailData.eta_vessel_completed_loading ?? ''))}
+                    />
+                    <StoDetailField
+                      label="ETA Vessel Complete Discharge"
+                      value={formatDate(String(stoDetailData.eta_vessel_complete_discharge ?? ''))}
+                    />
+                    <StoDetailField
                       label="ATA Vessel Completed Loading"
                       value={formatDate(String(stoDetailData.ata_vessel_completed_loading ?? ''))}
                     />
                     <StoDetailField
                       label="ATA Vessel Complete Discharge"
                       value={formatDate(String(stoDetailData.ata_vessel_complete_discharge ?? ''))}
-                    />
-                    <StoDetailField
-                      label="ETA Vessel Complete Discharge"
-                      value={formatDate(String(stoDetailData.eta_vessel_complete_discharge ?? ''))}
                     />
                   </StoDetailSection>
                 </div>
@@ -1330,12 +1346,16 @@ export function ContractDetailModal({
                       value={formatDate(String(stoDetailData.delivery_end_date ?? ''))}
                     />
                     <StoDetailField
-                      label="Trucking Start Receive Date"
-                      value={formatDate(String(stoDetailData.trucking_start_date ?? ''))}
+                      label="Quantity Delivery (MT)"
+                      value={formatQtyMtFromKg(
+                        Number(stoDetailData.quantity_delivered ?? stoDetailRow.quantity_delivered ?? 0),
+                      )}
                     />
                     <StoDetailField
-                      label="Trucking Last Receive Date"
-                      value={formatDate(String(stoDetailData.trucking_completion_date ?? ''))}
+                      label="Quantity Receive (MT)"
+                      value={formatQtyMtFromKg(
+                        Number(stoDetailData.quantity_receive ?? stoDetailRow.quantity_receive ?? 0),
+                      )}
                     />
                     <StoDetailField
                       label="ETA Trucking Start Receive Date"
@@ -1344,6 +1364,14 @@ export function ContractDetailModal({
                     <StoDetailField
                       label="ETA Trucking Completion Date"
                       value={formatDate(String(stoDetailData.eta_trucking_completion_date ?? ''))}
+                    />
+                    <StoDetailField
+                      label="Trucking Start Receive Date"
+                      value={formatDate(String(stoDetailData.trucking_start_date ?? ''))}
+                    />
+                    <StoDetailField
+                      label="Trucking Last Receive Date"
+                      value={formatDate(String(stoDetailData.trucking_completion_date ?? ''))}
                     />
                   </StoDetailSection>
                 </div>

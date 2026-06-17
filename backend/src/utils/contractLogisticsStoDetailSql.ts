@@ -1,0 +1,257 @@
+/** Shared SQL helpers for contract logistics STO detail (SAP fallback + matching). */
+
+export const SPD_EFFECTIVE_STO_SQL = `NULLIF(TRIM(COALESCE(
+  spd.sto_number::text,
+  spd.data->'raw'->>'STO No.',
+  spd.data->'raw'->>'STO Number',
+  spd.data->'shipment'->>'sto_no',
+  spd.data->'contract'->>'sto_no'
+)), '')`;
+
+export const SPD_SEA_LAND_SQL = `UPPER(TRIM(COALESCE(
+  spd.data->'raw'->>'SEA / LAND',
+  spd.data->'contract'->>'sea_land',
+  spd.data->'contract'->>'transport_mode',
+  ''
+)))`;
+
+function sqlCoalesceSapRawFields(keys: string[]): string {
+  const parts = keys.flatMap((k) => [
+    `NULLIF(TRIM(spd.data->'raw'->>'${k.replace(/'/g, "''")}'), '')`,
+    `NULLIF(TRIM(spd.data->>'${k.replace(/'/g, "''")}'), '')`,
+  ]);
+  return `COALESCE(${parts.join(', ')})`;
+}
+
+export function sqlParseSapDateExpr(valueExpr: string): string {
+  return `(
+    CASE
+      WHEN trim(${valueExpr}) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(${valueExpr})::date
+      WHEN trim(${valueExpr}) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(${valueExpr}), 'MM/DD/YY')
+      WHEN trim(${valueExpr}) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' THEN to_date(trim(${valueExpr}), 'MM/DD/YYYY')
+      ELSE NULL
+    END
+  )`;
+}
+
+function sqlLatestSapDateField(rawKeys: string[]): string {
+  const valExpr = sqlCoalesceSapRawFields(rawKeys);
+  return `MAX(${sqlParseSapDateExpr(valExpr)})`;
+}
+
+const QTY_NUM = (fields: string[]) =>
+  `NULLIF(regexp_replace(COALESCE(${fields.map((f) => `NULLIF(TRIM(spd.data->'raw'->>'${f.replace(/'/g, "''")}'), '')`).join(', ')}, ''), '[^0-9\\.-]', '', 'g'), '')::numeric`;
+
+/** Detail payload built purely from sap_processed_data when no shipment row exists. */
+export const SHIPMENT_SAP_STO_DETAIL_SQL = `
+  SELECT
+    NULL::uuid AS id,
+    sk.effective_sto AS sto_number,
+    MAX(NULLIF(TRIM(COALESCE(
+      spd.data->'raw'->>'Operation ID',
+      spd.data->'shipment'->>'operation_id'
+    )), '')) AS operation_id,
+    MAX(COALESCE(
+      NULLIF(TRIM(spd.data->'raw'->>'Status'), ''),
+      NULLIF(TRIM(spd.data->'contract'->>'status'), ''),
+      '-'
+    )) AS status,
+    MAX(NULLIF(TRIM(COALESCE(
+      spd.data->'raw'->>'Vessel',
+      spd.data->'raw'->>'Vessel Name',
+      spd.data->'shipment'->>'vessel_name'
+    )), '')) AS vessel_name,
+    c.contract_id AS contract_numbers,
+    MAX(NULLIF(TRIM(COALESCE(
+      spd.data->'raw'->>'Vessel Loading Port 1',
+      spd.data->'raw'->>'Port of Loading',
+      spd.data->'shipment'->>'vessel_loading_port_1'
+    )), '')) AS port_of_loading,
+    MAX(NULLIF(TRIM(COALESCE(
+      spd.data->'raw'->>'Vessel Discharge Port',
+      spd.data->'raw'->>'Port of Discharge',
+      spd.data->'shipment'->>'vessel_discharge_port'
+    )), '')) AS port_of_discharge,
+    COALESCE(SUM(${QTY_NUM(['STO Quantity', 'sto quantity'])}), 0) AS sto_quantity,
+    COALESCE(SUM(${QTY_NUM(['Quantity Delivered', 'Quantity Delivery'])}), 0) AS quantity_delivered,
+    COALESCE(SUM(${QTY_NUM(['Quantity Receive', 'Qty Receive'])}), 0) AS quantity_receive,
+    c.delivery_start_date,
+    c.delivery_end_date,
+    c.product,
+    ${sqlLatestSapDateField(['ETA Vessel Completed Loading', 'ETA Loading Completed'])} AS eta_vessel_completed_loading,
+    ${sqlLatestSapDateField(['ATA Vessel Completed Loading'])} AS ata_vessel_completed_loading,
+    ${sqlLatestSapDateField(['ATA Vessel Complete Discharge'])} AS ata_vessel_complete_discharge,
+    ${sqlLatestSapDateField(['ETA Vessel Complete Discharge'])} AS eta_vessel_complete_discharge
+  FROM contracts c
+  INNER JOIN sap_processed_data spd ON spd.contract_number = c.contract_id
+  INNER JOIN LATERAL (
+    SELECT ${SPD_EFFECTIVE_STO_SQL} AS effective_sto
+  ) sk ON TRUE
+  WHERE c.id = $1
+    AND sk.effective_sto = ANY($2::text[])
+    AND (${SPD_SEA_LAND_SQL} = '' OR ${SPD_SEA_LAND_SQL} LIKE 'SEA%')
+  GROUP BY c.id, c.contract_id, c.delivery_start_date, c.delivery_end_date, c.product, sk.effective_sto
+  ORDER BY sk.effective_sto
+  LIMIT 1`;
+
+/** Detail payload from SAP when no trucking_operations row exists. */
+export const TRUCKING_SAP_STO_DETAIL_SQL = `
+  SELECT
+    NULL::uuid AS id,
+    sk.effective_sto AS sto_number,
+    MAX(NULLIF(TRIM(COALESCE(
+      spd.data->'raw'->>'Operation ID',
+      spd.data->'trucking'->0->'data'->>'operation_id'
+    )), '')) AS operation_id,
+    MAX(COALESCE(
+      NULLIF(TRIM(spd.data->'raw'->>'Status'), ''),
+      NULLIF(TRIM(spd.data->'contract'->>'status'), ''),
+      '-'
+    )) AS status,
+    MAX(NULLIF(TRIM(COALESCE(
+      spd.data->'raw'->>'Trucking Owner',
+      spd.data->'trucking'->0->'data'->>'trucking_owner'
+    )), '')) AS trucking_owner,
+    c.contract_id AS contract_number,
+    MAX(NULLIF(TRIM(COALESCE(
+      spd.data->'raw'->>'Loading Location',
+      spd.data->'trucking'->0->'data'->>'loading_location'
+    )), '')) AS loading_location,
+    MAX(NULLIF(TRIM(COALESCE(
+      spd.data->'raw'->>'Unloading Location',
+      spd.data->'trucking'->0->'data'->>'unloading_location'
+    )), '')) AS unloading_location,
+    COALESCE(MAX(c.quantity_ordered), 0) AS contract_qty,
+    COALESCE(SUM(${QTY_NUM(['Quantity Delivered', 'Quantity Delivery'])}), 0) AS quantity_delivered,
+    COALESCE(SUM(${QTY_NUM(['Quantity Receive', 'Qty Receive'])}), 0) AS quantity_receive,
+    c.delivery_start_date,
+    c.delivery_end_date,
+    c.product,
+    ${sqlLatestSapDateField(['Trucking Start Receive Date'])} AS trucking_start_date,
+    ${sqlLatestSapDateField(['Trucking Last Receive Date'])} AS trucking_completion_date,
+    ${sqlLatestSapDateField(['ETA Trucking Start Receive Date'])} AS eta_trucking_start_date,
+    ${sqlLatestSapDateField(['ETA Trucking Completion Date'])} AS eta_trucking_completion_date
+  FROM contracts c
+  INNER JOIN sap_processed_data spd ON spd.contract_number = c.contract_id
+  INNER JOIN LATERAL (
+    SELECT ${SPD_EFFECTIVE_STO_SQL} AS effective_sto
+  ) sk ON TRUE
+  WHERE c.id = $1
+    AND sk.effective_sto = ANY($2::text[])
+    AND (${SPD_SEA_LAND_SQL} = '' OR ${SPD_SEA_LAND_SQL} LIKE 'LAND%')
+  GROUP BY c.id, c.contract_id, c.delivery_start_date, c.delivery_end_date, c.product, sk.effective_sto
+  ORDER BY sk.effective_sto
+  LIMIT 1`;
+
+/** SAP STO rows for contract detail list not already covered by shipments/trucking. */
+export const CONTRACT_SAP_ONLY_STOS_SQL = `
+  WITH sap_rows AS (
+    SELECT
+      ${SPD_EFFECTIVE_STO_SQL} AS effective_sto,
+      ${SPD_SEA_LAND_SQL} AS sea_land,
+      spd.data,
+      spd.created_at,
+      spd.contract_number
+    FROM sap_processed_data spd
+    INNER JOIN contracts c ON c.contract_id = spd.contract_number
+    WHERE c.id = $1
+  ),
+  sap_stos AS (
+    SELECT DISTINCT ON (effective_sto)
+      effective_sto,
+      sea_land,
+      data,
+      created_at,
+      contract_number
+    FROM sap_rows
+    WHERE effective_sto IS NOT NULL AND effective_sto != ''
+    ORDER BY effective_sto, created_at DESC NULLS LAST
+  )
+  SELECT
+    s.effective_sto AS sto_number,
+    NULLIF(TRIM(COALESCE(
+      s.data->'raw'->>'Operation ID',
+      s.data->'shipment'->>'operation_id'
+    )), '') AS operation_id,
+    COALESCE(
+      NULLIF(TRIM(s.data->'raw'->>'Status'), ''),
+      NULLIF(TRIM(s.data->'contract'->>'status'), ''),
+      '-'
+    ) AS status,
+    COALESCE((
+      SELECT SUM(NULLIF(regexp_replace(COALESCE(
+        NULLIF(TRIM(spd2.data->'contract'->>'sto_quantity'), ''),
+        NULLIF(TRIM(spd2.data->'shipment'->>'sto_quantity'), ''),
+        NULLIF(TRIM(spd2.data->'raw'->>'STO Quantity'), ''),
+        ''
+      ), '[^0-9\\.-]', '', 'g'), '')::numeric)
+      FROM sap_processed_data spd2
+      WHERE spd2.contract_number = s.contract_number
+        AND NULLIF(TRIM(COALESCE(
+          spd2.sto_number::text,
+          spd2.data->'raw'->>'STO No.',
+          spd2.data->'raw'->>'STO Number',
+          spd2.data->'shipment'->>'sto_no',
+          spd2.data->'contract'->>'sto_no'
+        )), '') = s.effective_sto
+    ), 0) AS sto_quantity,
+    COALESCE((
+      SELECT SUM(NULLIF(regexp_replace(COALESCE(
+        NULLIF(TRIM(spd2.data->'raw'->>'Quantity Delivered'), ''),
+        NULLIF(TRIM(spd2.data->'raw'->>'Quantity Delivery'), ''),
+        ''
+      ), '[^0-9\\.-]', '', 'g'), '')::numeric)
+      FROM sap_processed_data spd2
+      WHERE spd2.contract_number = s.contract_number
+        AND NULLIF(TRIM(COALESCE(
+          spd2.sto_number::text,
+          spd2.data->'raw'->>'STO No.',
+          spd2.data->'raw'->>'STO Number',
+          spd2.data->'shipment'->>'sto_no',
+          spd2.data->'contract'->>'sto_no'
+        )), '') = s.effective_sto
+    ), 0) AS quantity_delivered,
+    COALESCE((
+      SELECT SUM(NULLIF(regexp_replace(COALESCE(
+        NULLIF(TRIM(spd2.data->'raw'->>'Quantity Receive'), ''),
+        NULLIF(TRIM(spd2.data->'raw'->>'Qty Receive'), ''),
+        ''
+      ), '[^0-9\\.-]', '', 'g'), '')::numeric)
+      FROM sap_processed_data spd2
+      WHERE spd2.contract_number = s.contract_number
+        AND NULLIF(TRIM(COALESCE(
+          spd2.sto_number::text,
+          spd2.data->'raw'->>'STO No.',
+          spd2.data->'raw'->>'STO Number',
+          spd2.data->'shipment'->>'sto_no',
+          spd2.data->'contract'->>'sto_no'
+        )), '') = s.effective_sto
+    ), 0) AS quantity_receive,
+    NULLIF(TRIM(COALESCE(
+      s.data->'raw'->>'Vessel',
+      s.data->'raw'->>'Vessel Name',
+      s.data->'shipment'->>'vessel_name'
+    )), '') AS vessel_name,
+    NULLIF(TRIM(COALESCE(
+      s.data->'raw'->>'Trucking Owner',
+      s.data->'trucking'->0->'data'->>'trucking_owner'
+    )), '') AS trucking_owner,
+    ${sqlParseSapDateExpr(`COALESCE(
+      NULLIF(TRIM(s.data->'raw'->>'ETA Vessel Arrival at Loading Port'), ''),
+      NULLIF(TRIM(s.data->'raw'->>'ETA Vessel Arrival'), '')
+    )`)} AS eta_vessel_arrival_loading_port,
+    ${sqlParseSapDateExpr(`COALESCE(
+      NULLIF(TRIM(s.data->'raw'->>'ETA Vessel Complete Discharge'), ''),
+      NULLIF(TRIM(s.data->'shipment'->>'eta_vessel_complete_discharge'), '')
+    )`)} AS eta_discharge_complete,
+    ${sqlParseSapDateExpr(`NULLIF(TRIM(s.data->'raw'->>'ATA Vessel Complete Discharge'), '')`)} AS ata_discharge_complete,
+    ${sqlParseSapDateExpr(`NULLIF(TRIM(s.data->'raw'->>'ETA Trucking Completion Date'), '')`)} AS eta_trucking_completion_date,
+    ${sqlParseSapDateExpr(`NULLIF(TRIM(s.data->'raw'->>'Trucking Last Receive Date'), '')`)} AS trucking_completion_date,
+    CASE
+      WHEN s.sea_land LIKE 'LAND%' THEN 'trucking'
+      WHEN s.sea_land LIKE 'SEA%' THEN 'shipment'
+      ELSE 'shipment'
+    END AS logistics_type
+  FROM sap_stos s
+  WHERE NOT (s.effective_sto = ANY($2::text[]))
+  ORDER BY s.effective_sto`;

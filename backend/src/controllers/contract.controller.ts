@@ -30,8 +30,24 @@ import {
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
 import { appendContractPerfProductSubstringSql } from '../utils/contractPerfProductFilterSql';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
+import {
+  CONTRACT_SAP_ONLY_STOS_SQL,
+  SHIPMENT_SAP_STO_DETAIL_SQL,
+  SPD_EFFECTIVE_STO_SQL,
+  TRUCKING_SAP_STO_DETAIL_SQL,
+} from '../utils/contractLogisticsStoDetailSql';
 
 export { B2B_CHILD_EXCLUSION_SQL };
+
+function expandLogisticsLookupKeys(...values: (string | null | undefined)[]): string[] {
+  return [
+    ...new Set(
+      values
+        .flatMap((v) => String(v ?? '').split(',').map((part) => part.trim()))
+        .filter((v) => v && v !== '-'),
+    ),
+  ];
+}
 
 export const getContracts = async (req: AuthRequest, res: Response) => {
   try {
@@ -2162,7 +2178,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         r.eta_vessel_arrival_loading_port,
       );
       return {
-        type: 'shipment',
+        type: 'shipment' as const,
         sto_number: r.sto_number || r.sto_key || '-',
         operation_id: r.operation_id || r.sto_key || null,
         late_indicator: lateIndicator,
@@ -2183,7 +2199,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         r.eta_trucking_completion_date,
       );
       return {
-        type: 'trucking',
+        type: 'trucking' as const,
         sto_number: r.sto_number || '-',
         operation_id: r.operation_id || null,
         late_indicator: lateIndicator,
@@ -2197,7 +2213,67 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       };
     });
 
-    const stos = [...shipmentStos, ...truckingStos];
+    const coveredKeys = [
+      ...new Set([
+        ...shipmentRows.rows.flatMap((r: any) =>
+          expandLogisticsLookupKeys(r.sto_key, r.sto_number, r.operation_id),
+        ),
+        ...truckingRows.rows.flatMap((r: any) => {
+          const keys = expandLogisticsLookupKeys(r.operation_id);
+          const sto = String(r.sto_number ?? '').trim();
+          if (sto && !sto.includes(',')) {
+            keys.push(...expandLogisticsLookupKeys(sto));
+          }
+          return keys;
+        }),
+      ]),
+    ];
+    const sapOnlyRows = await query(CONTRACT_SAP_ONLY_STOS_SQL, [id, coveredKeys]);
+
+    const sapOnlyStos = sapOnlyRows.rows
+      .filter((r: any) => {
+        const logisticsType = String(r.logistics_type ?? 'shipment');
+        if (logisticsType === 'shipment') return includeShipments;
+        return includeTrucking;
+      })
+      .map((r: any) => {
+        const isShipment = String(r.logistics_type ?? 'shipment') === 'shipment';
+        const lateIndicator = computeLateIndicatorText(
+          deliveryEnd,
+          isShipment ? r.ata_discharge_complete : r.trucking_completion_date,
+          isShipment ? r.eta_vessel_arrival_loading_port : r.eta_trucking_completion_date,
+        );
+        if (isShipment) {
+          return {
+            type: 'shipment' as const,
+            sto_number: r.sto_number || '-',
+            operation_id: r.operation_id || null,
+            late_indicator: lateIndicator,
+            status: r.status || '-',
+            sto_quantity: Number(r.sto_quantity) || 0,
+            quantity_delivered: Number(r.quantity_delivered) || 0,
+            quantity_receive: Number(r.quantity_receive) || 0,
+            vessel_name: r.vessel_name || '-',
+            eta_vessel_arrival_loading_port: r.eta_vessel_arrival_loading_port || null,
+            ata_discharge_complete: r.ata_discharge_complete || null,
+          };
+        }
+        return {
+          type: 'trucking' as const,
+          sto_number: r.sto_number || '-',
+          operation_id: r.operation_id || null,
+          late_indicator: lateIndicator,
+          status: r.status || '-',
+          sto_quantity: Number(r.sto_quantity) || 0,
+          quantity_receive: Number(r.quantity_receive) || 0,
+          quantity_delivered: Number(r.quantity_delivered) || 0,
+          trucking_owner: r.trucking_owner || '-',
+          eta_trucking_completion_date: r.eta_trucking_completion_date || null,
+          trucking_completion_date: r.trucking_completion_date || null,
+        };
+      });
+
+    const stos = [...shipmentStos, ...truckingStos, ...sapOnlyStos];
     return res.json({ success: true, data: { stos } });
   } catch (error) {
     logger.error('Get contract STO information error:', error);
@@ -2215,8 +2291,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
     const type = String(req.query.type ?? '').trim().toLowerCase();
     const sto = String(req.query.sto ?? '').trim();
     const operationId = String(req.query.operation_id ?? '').trim();
-    const lookupKeys = [sto, operationId].map((v) => v.trim()).filter((v) => v && v !== '-');
-    const uniqueKeys = [...new Set(lookupKeys)];
+    const uniqueKeys = expandLogisticsLookupKeys(sto, operationId);
 
     if (!['shipment', 'trucking'].includes(type) || uniqueKeys.length === 0) {
       return res.status(400).json({
@@ -2246,9 +2321,30 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
           s.port_of_discharge,
           COALESCE(s.quantity_shipped, 0) AS sto_quantity,
           COALESCE(s.quantity_delivered, 0) AS quantity_delivered,
+          COALESCE((
+            SELECT SUM(NULLIF(regexp_replace(COALESCE(
+              NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
+              NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
+              ''
+            ), '[^0-9\\.-]', '', 'g'), '')::numeric)
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = c.contract_id
+              AND (
+                NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number')), '')
+                  = ANY($2::text[])
+                OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Operation ID', '')), '') = ANY($2::text[])
+              )
+          ), 0) AS quantity_receive,
           c.delivery_start_date,
           c.delivery_end_date,
           c.product,
+          COALESCE(s.eta_loading_complete, (
+            SELECT vlp.eta_loading_completed::date
+            FROM vessel_loading_ports vlp
+            WHERE vlp.shipment_id = s.id AND vlp.is_discharge_port = false
+            ORDER BY vlp.port_sequence ASC
+            LIMIT 1
+          )) AS eta_vessel_completed_loading,
           COALESCE(s.ata_loading_complete, (
             SELECT vlp.ata_loading_completed::date
             FROM vessel_loading_ports vlp
@@ -2257,7 +2353,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
             LIMIT 1
           )) AS ata_vessel_completed_loading,
           COALESCE(s.ata_discharge_complete, (
-            SELECT COALESCE(vlp.ata_loading_completed, vlp.ata_discharge_complete)::date
+            SELECT vlp.ata_loading_completed::date
             FROM vessel_loading_ports vlp
             WHERE vlp.shipment_id = s.id AND vlp.is_discharge_port = true
             ORDER BY vlp.port_sequence ASC
@@ -2280,6 +2376,12 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
             TRIM(COALESCE(c.sto_number::text, '')) = ANY($2::text[])
             OR TRIM(COALESCE(s.operation_id::text, '')) = ANY($2::text[])
             OR TRIM(COALESCE(s.shipment_id::text, '')) = ANY($2::text[])
+            OR EXISTS (
+              SELECT 1
+              FROM sap_processed_data spd
+              WHERE spd.contract_number = c.contract_id
+                AND ${SPD_EFFECTIVE_STO_SQL} = ANY($2::text[])
+            )
           )
         ORDER BY s.created_at DESC NULLS LAST
         LIMIT 1`,
@@ -2287,6 +2389,14 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
       );
 
       if (shipmentResult.rows.length === 0) {
+        const sapShipmentResult = await query(SHIPMENT_SAP_STO_DETAIL_SQL, [id, uniqueKeys]);
+        if (sapShipmentResult.rows.length > 0) {
+          return res.json({ success: true, data: sapShipmentResult.rows[0], source: 'sap' });
+        }
+        const sapTruckingCrossResult = await query(TRUCKING_SAP_STO_DETAIL_SQL, [id, uniqueKeys]);
+        if (sapTruckingCrossResult.rows.length > 0) {
+          return res.json({ success: true, data: sapTruckingCrossResult.rows[0], source: 'sap' });
+        }
         return res.status(404).json({
           success: false,
           error: { message: 'Shipment not found for this contract STO / operation' },
@@ -2308,6 +2418,20 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
         t.unloading_location,
         COALESCE(c.quantity_ordered, 0) AS contract_qty,
         COALESCE(t.quantity_delivered, 0) AS quantity_delivered,
+        COALESCE((
+          SELECT SUM(NULLIF(regexp_replace(COALESCE(
+            NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
+            NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
+            ''
+          ), '[^0-9\\.-]', '', 'g'), '')::numeric)
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = c.contract_id
+            AND (
+              NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number')), '')
+                = ANY($2::text[])
+              OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Operation ID', '')), '') = ANY($2::text[])
+            )
+        ), COALESCE(t.quantity_delivered, 0)) AS quantity_receive,
         c.delivery_start_date,
         c.delivery_end_date,
         c.product,
@@ -2338,6 +2462,12 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
             FROM unnest(string_to_array(COALESCE(lsa.sto_numbers, ''), ',')) AS sto_part(sto)
             WHERE TRIM(sto_part.sto) = ANY($2::text[])
           )
+          OR EXISTS (
+            SELECT 1
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = c.contract_id
+              AND ${SPD_EFFECTIVE_STO_SQL} = ANY($2::text[])
+          )
         )
       ORDER BY t.created_at DESC NULLS LAST
       LIMIT 1`,
@@ -2345,6 +2475,14 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
     );
 
     if (truckingResult.rows.length === 0) {
+      const sapTruckingResult = await query(TRUCKING_SAP_STO_DETAIL_SQL, [id, uniqueKeys]);
+      if (sapTruckingResult.rows.length > 0) {
+        return res.json({ success: true, data: sapTruckingResult.rows[0], source: 'sap' });
+      }
+      const sapShipmentCrossResult = await query(SHIPMENT_SAP_STO_DETAIL_SQL, [id, uniqueKeys]);
+      if (sapShipmentCrossResult.rows.length > 0) {
+        return res.json({ success: true, data: sapShipmentCrossResult.rows[0], source: 'sap' });
+      }
       return res.status(404).json({
         success: false,
         error: { message: 'Trucking operation not found for this contract STO / operation' },
