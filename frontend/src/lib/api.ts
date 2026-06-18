@@ -46,8 +46,12 @@ api.interceptors.response.use(
     // Treat 401 or 403 (invalid/expired token) as "need to re-login"
     const status = error.response?.status;
     const message = error.response?.data?.error?.message || '';
-    const isAuthFailure = status === 401 || (status === 403 && (message.includes('token') || message.includes('expired')));
-    if (isAuthFailure && typeof window !== 'undefined') {
+    const requestUrl = String(error.config?.url || '');
+    const isLoginAttempt = requestUrl.includes('/auth/login');
+    const isAuthFailure =
+      status === 401 || (status === 403 && (message.includes('token') || message.includes('expired')));
+    // Do not hard-redirect on failed login — login page must show the error message.
+    if (isAuthFailure && !isLoginAttempt && typeof window !== 'undefined') {
       clearClientDataCache();
       localStorage.removeItem('token');
       localStorage.removeItem('user');

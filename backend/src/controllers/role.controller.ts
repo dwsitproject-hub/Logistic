@@ -2,6 +2,19 @@ import { Response } from 'express';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
+import {
+  DELETE_ROLE_PERMISSIONS_EXACT_SCOPE_SQL,
+  formatRoleScopeLabel,
+  parseAdminRoleScopeQuery,
+  ROLE_PERMISSION_LATERAL_MATCH_SQL,
+  ROLE_PERMISSION_LATERAL_ORDER_SQL,
+} from '../utils/rolePermissionScope';
+
+function buildLateralMatchSql(levelParam: string, transportParam: string): string {
+  return ROLE_PERMISSION_LATERAL_MATCH_SQL
+    .replace(/\$LEVEL/g, levelParam)
+    .replace(/\$TRANSPORT/g, transportParam);
+}
 
 // Get all roles
 export const getAllRoles = async (_req: AuthRequest, res: Response): Promise<void> => {
@@ -29,8 +42,15 @@ export const getAllRoles = async (_req: AuthRequest, res: Response): Promise<voi
 export const getRoleById = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const level = req.query.level ? String(req.query.level) : null;
-    const transportType = req.query.transportType ? String(req.query.transportType).toUpperCase() : null;
+    const { scope, error: scopeError } = parseAdminRoleScopeQuery(req.query);
+    if (scopeError) {
+      res.status(400).json({
+        success: false,
+        error: { message: scopeError },
+      });
+      return;
+    }
+    const { level, transportType } = scope;
 
     const roleResult = await query(
       `SELECT id, role_name, display_name, description, is_active, created_at, updated_at
@@ -47,6 +67,8 @@ export const getRoleById = async (req: AuthRequest, res: Response): Promise<void
       return;
     }
 
+    const lateralMatch = buildLateralMatchSql('$2', '$3');
+
     // Get role permissions
     const permissionsResult = await query(
       `SELECT p.id, p.permission_key, p.permission_name, p.description, p.category,
@@ -57,24 +79,8 @@ export const getRoleById = async (req: AuthRequest, res: Response): Promise<void
          FROM role_permissions rp
          WHERE rp.role_id = $1
            AND rp.permission_id = p.id
-           AND (
-             rp.level IS NULL
-             OR (
-               $2::text IS NOT NULL
-               AND UPPER(TRIM(rp.level)) = UPPER(TRIM($2::text))
-             )
-           )
-           AND (
-             rp.transport_type IS NULL
-             OR (
-               $3::text IS NOT NULL
-               AND UPPER(TRIM(rp.transport_type)) = UPPER(TRIM($3::text))
-             )
-           )
-         ORDER BY
-           CASE WHEN rp.level IS NULL THEN 0 ELSE 1 END DESC,
-           CASE WHEN rp.transport_type IS NULL THEN 0 ELSE 1 END DESC
-         LIMIT 1
+           ${lateralMatch}
+         ${ROLE_PERMISSION_LATERAL_ORDER_SQL}
        ) rp ON true
        ORDER BY p.category, p.permission_name`,
       [id, level, transportType]
@@ -84,6 +90,10 @@ export const getRoleById = async (req: AuthRequest, res: Response): Promise<void
       success: true,
       data: {
         ...roleResult.rows[0],
+        scope: {
+          level,
+          transportType: transportType ?? 'all',
+        },
         permissions: permissionsResult.rows,
       },
     });
@@ -149,7 +159,11 @@ export const getUserPermissions = async (req: AuthRequest, res: Response): Promi
 
     const userRole = userResult.rows[0].role;
     const userLevel = userResult.rows[0].level || null;
-    const userTransportType = userResult.rows[0].transport_type || null;
+    const userTransportType = userResult.rows[0].transport_type
+      ? String(userResult.rows[0].transport_type).toUpperCase()
+      : null;
+
+    const lateralMatch = buildLateralMatchSql('$2', '$3');
 
     // Get role permissions
     const permissionsResult = await query(
@@ -163,24 +177,8 @@ export const getUserPermissions = async (req: AuthRequest, res: Response): Promi
          FROM role_permissions rp
          WHERE rp.role_id = r.id
            AND rp.permission_id = p.id
-           AND (
-             rp.level IS NULL
-             OR (
-               $2::text IS NOT NULL
-               AND UPPER(TRIM(rp.level)) = UPPER(TRIM($2::text))
-             )
-           )
-           AND (
-             rp.transport_type IS NULL
-             OR (
-               $3::text IS NOT NULL
-               AND UPPER(TRIM(rp.transport_type)) = UPPER(TRIM($3::text))
-             )
-           )
-         ORDER BY
-           CASE WHEN rp.level IS NULL THEN 0 ELSE 1 END DESC,
-           CASE WHEN rp.transport_type IS NULL THEN 0 ELSE 1 END DESC
-         LIMIT 1
+           ${lateralMatch}
+         ${ROLE_PERMISSION_LATERAL_ORDER_SQL}
        ) scoped ON true
        WHERE r.role_name = $1 AND r.is_active = true
          AND scoped.can_view IS NOT NULL`,
@@ -221,8 +219,15 @@ export const updateRolePermissions = async (req: AuthRequest, res: Response): Pr
   try {
     const { id } = req.params;
     const { permissions } = req.body; // Array of {permission_id, can_view, can_create, can_edit, can_delete}
-    const level = req.query.level ? String(req.query.level) : null;
-    const transportType = req.query.transportType ? String(req.query.transportType).toUpperCase() : null;
+    const { scope, error: scopeError } = parseAdminRoleScopeQuery(req.query);
+    if (scopeError) {
+      res.status(400).json({
+        success: false,
+        error: { message: scopeError },
+      });
+      return;
+    }
+    const { level, transportType } = scope;
 
     // Check if role exists
     const roleCheck = await query('SELECT role_name FROM roles WHERE id = $1', [id]);
@@ -235,20 +240,8 @@ export const updateRolePermissions = async (req: AuthRequest, res: Response): Pr
       return;
     }
 
-    // Delete existing scoped permissions for this role + scope
-    await query(
-      `DELETE FROM role_permissions
-       WHERE role_id = $1
-         AND (
-           ($2::text IS NULL AND level IS NULL)
-           OR UPPER(TRIM(COALESCE(level, ''))) = UPPER(TRIM(COALESCE($2::text, '')))
-         )
-         AND (
-           ($3::text IS NULL AND transport_type IS NULL)
-           OR UPPER(TRIM(COALESCE(transport_type, ''))) = UPPER(TRIM(COALESCE($3::text, '')))
-         )`,
-      [id, level, transportType]
-    );
+    // Delete existing scoped permissions for this role + exact scope only
+    await query(DELETE_ROLE_PERMISSIONS_EXACT_SCOPE_SQL, [id, level, transportType]);
 
     // Insert new permissions.
     // When scoped (level or transport_type is set), always insert — even all-false rows act as
@@ -273,11 +266,24 @@ export const updateRolePermissions = async (req: AuthRequest, res: Response): Pr
       }
     }
 
-    logger.info(`Role permissions updated by ${req.user?.username} for role: ${roleCheck.rows[0].role_name}`);
+    const scopeParts = [
+      `role=${roleCheck.rows[0].role_name}`,
+      formatRoleScopeLabel(scope),
+    ];
+    logger.info(
+      `Role permissions updated by ${req.user?.username} (${scopeParts.join(', ')})`
+    );
 
     res.json({
       success: true,
       message: 'Role permissions updated successfully',
+      data: {
+        role: roleCheck.rows[0].role_name,
+        scope: {
+          level,
+          transportType: transportType ?? 'all',
+        },
+      },
     });
   } catch (error) {
     logger.error('Update role permissions error:', error);

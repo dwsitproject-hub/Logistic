@@ -60,27 +60,35 @@ function LoginPageContent() {
 
     try {
       const response = await api.post('/auth/login', { username, password })
-      const { user, token, requirePasswordChange } = response.data.data
+      const payload = response.data?.data
+      if (!payload?.token || !payload?.user) {
+        setError('Unexpected server response. Please contact support.')
+        return
+      }
+      const { user, token, requirePasswordChange } = payload
 
       localStorage.setItem('token', token)
       localStorage.setItem('user', JSON.stringify(user))
 
-      // Check if password change is required
       if (requirePasswordChange) {
         setIsFirstLogin(true)
         setShowPasswordModal(true)
-        setLoading(false)
       } else {
         await redirectAfterAuth(user, router, setError)
-        setLoading(false)
       }
     } catch (err: any) {
-      setError(err.response?.data?.error?.message || 'Login failed')
+      if (err.code === 'ERR_NETWORK' || !err.response) {
+        setError('Cannot reach KLIP server. Check your connection or try again later.')
+      } else {
+        setError(err.response?.data?.error?.message || 'Login failed')
+      }
+    } finally {
       setLoading(false)
     }
   }
 
   const handlePasswordChangeSuccess = async () => {
+    setShowPasswordModal(false)
     const userStr = localStorage.getItem('user')
     let user: StoredAuthUser = {}
     if (userStr) {
@@ -89,7 +97,9 @@ function LoginPageContent() {
       localStorage.setItem('user', JSON.stringify(user))
     }
 
+    setLoading(true)
     await redirectAfterAuth(user, router, setError)
+    setLoading(false)
   }
 
   return (

@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KLIP Glossary — KPN Logistics Intelligence Platform</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --accent: #1d4ed8;
+      --accent-soft: #eff6ff;
+      --code-bg: #f1f5f9;
+      --warn-bg: #fffbeb;
+      --warn-border: #fcd34d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    header {
+      background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
+      color: #fff;
+      padding: 2rem 1.5rem;
+    }
+    header h1 { margin: 0 0 0.25rem; font-size: 1.75rem; }
+    header p { margin: 0; opacity: 0.85; max-width: 52rem; }
+    .layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 1.5rem;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      nav.toc { position: static; }
+    }
+    nav.toc {
+      position: sticky;
+      top: 1rem;
+      align-self: start;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      font-size: 0.9rem;
+    }
+    nav.toc h2 {
+      margin: 0 0 0.75rem;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    nav.toc ul { list-style: none; padding: 0; margin: 0; }
+    nav.toc li { margin: 0.35rem 0; }
+    nav.toc a { color: var(--accent); text-decoration: none; }
+    nav.toc a:hover { text-decoration: underline; }
+    nav.toc .sub { padding-left: 1rem; font-size: 0.85rem; }
+    main section {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem 1.75rem;
+      margin-bottom: 1.25rem;
+    }
+    main h2 {
+      margin: 0 0 1rem;
+      font-size: 1.35rem;
+      border-bottom: 2px solid var(--accent-soft);
+      padding-bottom: 0.5rem;
+    }
+    main h3 {
+      margin: 1.5rem 0 0.75rem;
+      font-size: 1.05rem;
+      color: #1e293b;
+    }
+    main h4 { margin: 1rem 0 0.5rem; font-size: 0.95rem; }
+    p { margin: 0.5rem 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      margin: 0.75rem 0 1rem;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.65rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #f1f5f9; font-weight: 600; }
+    code, .formula {
+      font-family: Consolas, "Courier New", monospace;
+      background: var(--code-bg);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+      font-size: 0.88em;
+    }
+    .formula { display: inline-block; margin: 0.25rem 0; }
+    .note {
+      background: var(--warn-bg);
+      border: 1px solid var(--warn-border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      margin: 1rem 0;
+      font-size: 0.92rem;
+    }
+    .tag {
+      display: inline-block;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      margin-right: 0.35rem;
+    }
+    ul { margin: 0.5rem 0; padding-left: 1.25rem; }
+    li { margin: 0.35rem 0; }
+    footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.8rem;
+      padding: 2rem 1rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>KLIP Glossary</h1>
+    <p>KPN Logistics Intelligence Platform — istilah, rumus, dan aturan kalkulasi untuk tim bisnis &amp; teknis. Route: <code>/contract-performance</code>, <code>/shipping-performance</code>, <code>/oil-loss</code>, dll.</p>
+  </header>
+
+  <div class="layout">
+    <nav class="toc" aria-label="Daftar isi">
+      <h2>Contents</h2>
+      <ul>
+        <li><a href="#umum">Umum</a></li>
+        <li><a href="#contract-performance">Contract Performance</a>
+          <ul class="sub">
+            <li><a href="#cp-primitif">Hari kalender</a></li>
+            <li><a href="#cp-outstanding">Outstanding Qty</a></li>
+            <li><a href="#cp-trade">Trade Cycle</a></li>
+            <li><a href="#cp-dp-cash-log">DP / Cash / Log Cycle</a></li>
+            <li><a href="#cp-avg">Avg Trade / DP / Log</a></li>
+            <li><a href="#cp-ontime">On Time / Late</a></li>
+            <li><a href="#cp-sumber">Sumber data</a></li>
+          </ul>
+        </li>
+        <li><a href="#shipping-performance">Shipping Performance</a>
+          <ul class="sub">
+            <li><a href="#sp-scope">Scope &amp; filter</a></li>
+            <li><a href="#sp-dates">ETA / ATA</a></li>
+            <li><a href="#sp-cycles">Cycle deltas</a></li>
+            <li><a href="#sp-qty">Quantity</a></li>
+            <li><a href="#sp-cards">Section 1 cards</a></li>
+            <li><a href="#sp-ontime">On Time / Late</a></li>
+            <li><a href="#sp-section23">Section 2 &amp; 3</a></li>
+          </ul>
+        </li>
+        <li><a href="#oil-loss">Oil Loss</a>
+          <ul class="sub">
+            <li><a href="#oil-loss-eligibility">Eligibility</a></li>
+            <li><a href="#oil-loss-section1">Section 1 — R1–R4</a></li>
+            <li><a href="#oil-loss-period">Filter Period</a></li>
+            <li><a href="#oil-loss-truck">Transport: Truck</a></li>
+            <li><a href="#oil-loss-vessel">Transport: Vessel</a></li>
+            <li><a href="#oil-loss-enrich">Shipment &amp; Trucking</a></li>
+            <li><a href="#oil-loss-r4">R4 Total (MT)</a></li>
+            <li><a href="#oil-loss-section3">Section 3 tabel</a></li>
+            <li><a href="#oil-loss-sap">Rekonsiliasi SAP</a></li>
+          </ul>
+        </li>
+        <li><a href="#referensi">Referensi file</a></li>
+      </ul>
+    </nav>
+
+    <main>
+      <section id="umum">
+        <h2>Umum</h2>
+        <p><strong>Oil Loss</strong> — selisih negatif antara kuantitas yang diterima (<em>Qty Receive</em>) dan yang dikirim/delivery (<em>Qty Delivery</em>) pada kontrak/STO yang sudah <em>Close</em>.</p>
+        <p><strong>Contract Date</strong> — tanggal kontrak untuk filter periodik; prioritas dari tabel <code>contracts.contract_date</code>, fallback SAP raw <code>Contract Date</code>.</p>
+        <p><strong>MT</strong> — Metric Ton. Data qty disimpan dalam <strong>Kg</strong> di sistem; tampilan UI Oil Loss dibagi 1000 (2 desimal).</p>
+        <p><strong>Calendar days</strong> — selisih tanggal dalam hari kalender utuh (bukan jam kerja). Dipakai di Contract Performance &amp; Shipping Performance: <span class="formula">hari = tanggal akhir − tanggal awal</span>. Nilai positif = milestone kedua lebih lambat dari yang pertama.</p>
+        <p><strong>Open vs Close (kontrak)</strong> — status dari SAP <code>import_status</code> (fallback <code>contracts.status</code>). Open = kontrak belum selesai; Close = selesai. Aturan cycle berbeda untuk Open dan Close.</p>
+        <p><strong>LAND vs SEA</strong> — mode transport kontrak menentukan sumber tanggal completion: LAND → <code>trucking_operations</code>; SEA → <code>shipments</code> + <code>vessel_loading_ports</code>.</p>
+      </section>
+
+      <section id="contract-performance">
+        <h2>Contract Performance <span class="tag">/contract-performance</span></h2>
+        <p>Halaman ini memakai komponen yang sama dengan daftar kontrak (<code>/contracts</code>) dengan mode performance. <strong>Semua cycle dihitung di backend</strong> (<code>GET /api/contracts</code> + <code>GET /api/contracts/late-performance/summary</code>); frontend hanya menampilkan.</p>
+
+        <h3 id="cp-primitif">Primitif hari kalender</h3>
+        <p>Fungsi <code>diffCalendarDays(start, end)</code> = selisih hari kalender dari <em>start</em> ke <em>end</em>. Jika salah satu tanggal kosong → nilai <code>null</code> (tidak dihitung).</p>
+        <p><strong>Due Date Delivery End</strong> — anchor trade cycle. Prioritas: <code>contracts.delivery_end_date</code> → SAP <code>Due Date Delivery (End)</code>. Tanpa due end → kontrak dikecualikan dari agregasi Section 1/2.</p>
+
+        <h3 id="cp-outstanding">Outstanding Qty</h3>
+        <p>Sisa kuantitas yang belum terpenuhi menurut incoterm:</p>
+        <table>
+          <thead>
+            <tr><th>Incoterm</th><th>Qty yang dikurangi dari Contract Qty</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>FRC, CIF, CFR</strong></td><td><code>Quantity Receive</code> (SAP, agregat per kontrak)</td></tr>
+            <tr><td><strong>LCO, FOB</strong></td><td><code>Quantity Delivery</code> (SAP)</td></tr>
+            <tr><td><strong>Lainnya</strong></td><td><code>total_sto_quantity</code> — jumlah <code>sto_quantity</code> unik dari SAP</td></tr>
+          </tbody>
+        </table>
+        <p><span class="formula">Outstanding = quantity_ordered − qty_fulfilled</span> (Kg di API; UI kolom MT = ÷ 1000).</p>
+        <div class="note">
+          <strong>Section 1 (kartu Open)</strong> memakai <code>Math.max(0, outstanding)</code> — tidak negatif.<br>
+          <strong>Section 3 (tabel)</strong> boleh negatif = <em>Over Delivered</em> (sudah terkirim melebihi order).
+        </div>
+        <p><strong>Close card</strong> di Section 1 menampilkan <em>Contract Qty</em> (jumlah <code>quantity_ordered</code>), bukan outstanding.</p>
+
+        <h3 id="cp-trade">Trade Cycle (<code>trade_cycle_days</code>)</h3>
+        <p>Mengukur keterlambatan penyelesaian terhadap <strong>Due Date Delivery End</strong>. Positif = terlambat; ≤ 0 = on time (atau lebih cepat).</p>
+
+        <h4>Close — LAND</h4>
+        <p><span class="formula">Trade Cycle = diffCalendarDays(dueEnd, last_trucking_completion)</span></p>
+        <p><code>last_trucking_completion</code> = <code>MAX</code> dari: <code>trucking_completion_date</code>, SAP Trucking Last Receive, <code>eta_trucking_completion_date</code>, <code>eta_delivery_end_date</code>.</p>
+
+        <h4>Close — SEA</h4>
+        <p><span class="formula">Trade Cycle = diffCalendarDays(dueEnd, last_ata_vessel_complete_discharge)</span></p>
+        <p>Completion = <code>MAX</code> dari: <code>ata_discharge_complete</code>, <code>arrival_date</code>, <code>eta_discharge_complete</code> pada shipment kontrak.</p>
+
+        <h4>Open — Condition A (Standard ETA ada)</h4>
+        <table>
+          <thead>
+            <tr><th>Mode</th><th>Standard ETA</th><th>Completion untuk trade</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>LAND</td><td><code>MAX(eta_trucking_completion, eta_delivery_end)</code></td><td><code>last_trucking_daily_deliverable_date</code> (MAX tanggal dari JSON daily deliverables)</td></tr>
+            <tr><td>SEA</td><td>ETA vessel arrival port loading pertama</td><td><code>last_eta_vessel_complete_discharge</code></td></tr>
+          </tbody>
+        </table>
+        <p><span class="formula">Trade Cycle = diffCalendarDays(dueEnd, completion)</span></p>
+
+        <h4>Open — Condition B (Standard ETA kosong)</h4>
+        <p><span class="formula">Trade Cycle = diffCalendarDays(dueEnd, today)</span> — hari ini vs due end.</p>
+        <ul>
+          <li><strong>Late</strong> jika <code>tradeCycle ≥ 0</code> (hari ini sudah melewati atau sama dengan due end)</li>
+          <li><strong>On Time</strong> jika <code>tradeCycle &lt; 0</code> — <em>0 hari = Late</em> di Condition B</li>
+        </ul>
+        <p>Open tanpa transport valid → trade cycle dipaksa <code>-1</code> (On Time).</p>
+
+        <h3 id="cp-dp-cash-log">DP Cycle, Cash Cycle, Log Cycle</h3>
+        <p>Tanggal finansial hanya dari <strong>SAP</strong> (bukan tabel <code>payments</code>) untuk perhitungan cycle.</p>
+        <table>
+          <thead>
+            <tr><th>Cycle</th><th>Tanggal kunci</th><th>Close (LAND)</th><th>Close (SEA)</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>DP Cycle</strong></td>
+              <td>SAP <code>DP Date</code></td>
+              <td><code>diff(last_trucking_completion, dpDate)</code></td>
+              <td><code>diff(last_ata_discharge, dpDate)</code></td>
+            </tr>
+            <tr>
+              <td><strong>Cash Cycle</strong></td>
+              <td>SAP <code>Payoff Date</code></td>
+              <td><code>diff(last_trucking_completion, payoffDate)</code></td>
+              <td><code>diff(last_ata_discharge, payoffDate)</code></td>
+            </tr>
+            <tr>
+              <td><strong>Log Cycle</strong></td>
+              <td><code>cargo_readiness_date</code></td>
+              <td><code>diff(cargo_readiness, last_trucking_completion)</code></td>
+              <td><code>diff(cargo_readiness, last_ata_discharge)</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <p><strong>Open</strong> DP / Cash / Log: <span class="formula">diff(anchor_date, effectiveCompletionEnd)</span></p>
+        <ul>
+          <li>Standard ETA <strong>kosong</strong> → completion end = <strong>hari ini</strong></li>
+          <li>Standard ETA <strong>ada</strong> → LAND: daily deliverable terakhir; SEA: ETA complete discharge (wajib ada, tanpa substitusi today)</li>
+        </ul>
+        <p>Jika DP Date / Payoff / Cargo Readiness / completion tidak lengkap → cycle = <code>null</code> (UI: <em>- days</em>).</p>
+
+        <h3 id="cp-avg">Avg Trade, Avg DP, Avg Log (Section 1)</h3>
+        <p>Dari <code>GET /contracts/late-performance/summary</code>. Hanya kontrak dengan <strong>Due Date Delivery End</strong> ter-resolve. Terpisah untuk kartu <strong>Open</strong> dan <strong>Close</strong>.</p>
+        <table>
+          <thead>
+            <tr><th>Metrik</th><th>Rumus</th><th>Catatan</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Avg Trade</strong></td>
+              <td><code>ROUND( Σ|tradeCycle| / jumlah kontrak )</code></td>
+              <td>Semua kontrak dengan trade cycle terhitung</td>
+            </tr>
+            <tr>
+              <td><strong>Avg DP</strong></td>
+              <td><code>ROUND( Σ dpCycle / jumlah )</code></td>
+              <td>Hanya kontrak dengan DP cycle non-null; jika 0 kontrak → <em>- days</em></td>
+            </tr>
+            <tr>
+              <td><strong>Avg Log</strong></td>
+              <td><code>ROUND( Σ logCycle / jumlah )</code></td>
+              <td>Hanya kontrak dengan log cycle non-null</td>
+            </tr>
+          </tbody>
+        </table>
+        <p><strong>Konteks warna kartu Open:</strong> merah (late context) jika rata-rata <em>signed</em> trade cycle &gt; 0.</p>
+        <p>Interpretasi bisnis (help text UI): Open Avg Trade = ETA vs Due End; Open Avg DP = ETA completion vs DP Date; Open Avg Log = ETA completion vs Cargo Readiness. Close memakai ATA sebagai completion.</p>
+
+        <h3 id="cp-ontime">On Time / Late</h3>
+        <table>
+          <thead>
+            <tr><th>Status</th><th>On Time jika</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Close</strong></td><td><code>trade_cycle_days ≤ 0</code></td></tr>
+            <tr><td><strong>Open, Condition A</strong> (ETA ada)</td><td><code>trade_cycle_days ≤ 0</code></td></tr>
+            <tr><td><strong>Open, Condition B</strong> (ETA kosong)</td><td><code>trade_cycle_days &lt; 0</code> (0 hari = Late)</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Persentase kartu Section 1:</strong></p>
+        <p><span class="formula">On Time % = round( onTimeCount / (onTimeCount + lateCount) × 100 )</span></p>
+        <p><span class="formula">Late % = round( lateCount / (onTimeCount + lateCount) × 100 )</span></p>
+        <p><strong>Section 2 drilldown:</strong> pohon Late = kontrak dengan <code>contract_perf_on_time = false</code>; On Time = sebaliknya. <strong>Unscheduled:</strong> Close dengan trade cycle null.</p>
+        <p><strong>Section 3 filter</strong> <code>lateOnTimeFilter=LATE|ON_TIME</code> memfilter baris tabel sesuai klasifikasi di atas.</p>
+        <p><strong>Over / Under Delivery</strong> (Close): Outstanding &lt; 0 → Over Delivery; &gt; 0 → Under Delivery; = 0 → Passed. Open → "-".</p>
+        <p><strong>Contract Aging</strong> = hari dari hari ini ke Due Date Delivery End (merah jika overdue).</p>
+        <p><strong>Urgent flag</strong> (merah): due start dalam ≤ 14 hari dan baris logistik wajib masih kosong (SEA: tanpa shipment/STO; LAND: tanpa trucking; MIX: salah satu leg kosong).</p>
+
+        <h3 id="cp-sumber">Sumber data (SAP + operasional)</h3>
+        <table>
+          <thead>
+            <tr><th>Kebutuhan</th><th>Sumber utama</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Qty Receive / Delivery</td><td><code>sap_processed_data</code> (CTE qty movement)</td></tr>
+            <tr><td>Due dates, DP, Payoff, status</td><td>SAP raw / <code>latest_spd_data</code></td></tr>
+            <tr><td>Trucking completion</td><td><code>trucking_operations</code> + SAP trucking dates</td></tr>
+            <tr><td>Vessel ATA / ETA</td><td><code>shipments</code>, <code>vessel_loading_ports</code></td></tr>
+            <tr><td>Cargo readiness</td><td><code>contracts.cargo_readiness_date</code></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="shipping-performance">
+        <h2>Shipping Performance <span class="tag">/shipping-performance</span></h2>
+        <p>Fokus pada shipment <strong>SEA</strong> dan <strong>MIX</strong> (<code>contracts.transport_mode</code>). <strong>Tidak memakai</strong> tabel <code>trucking_operations</code>. Cycle dihitung per baris shipment di backend SQL; kartu &amp; drilldown di frontend.</p>
+
+        <h3 id="sp-scope">Scope &amp; filter</h3>
+        <ul>
+          <li>Transport: <code>SEA</code> atau <code>MIX</code> (default SEA jika kosong)</li>
+          <li>Status <code>UNPLANNED</code> selalu dikecualikan dari semua section</li>
+          <li>Filter global: incoterm, plant, product, vessel, status, contract date, search</li>
+          <li>Tidak ada filter STO Type = V di Shipping Performance (berbeda dari halaman Shipments operasional)</li>
+        </ul>
+
+        <h3 id="sp-dates">Resolusi tanggal ETA / ATA</h3>
+        <p><strong>ETR (anchor loading):</strong> <code>contracts.cargo_readiness_date</code></p>
+        <p>Prioritas port-level dari <code>vessel_loading_ports</code> (port loading pertama &amp; discharge pertama), fallback kolom ETA/ATA pada <code>shipments</code>.</p>
+        <table>
+          <thead>
+            <tr><th>Milestone</th><th>Loading (ETA / ATA)</th><th>Discharge (ETA / ATA)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Arrival</td><td><code>eta_vessel_arrival</code> / <code>ata_vessel_arrival</code></td><td><code>eta_vessel_arrive_at_discharge_port</code> / <code>ata_vessel_arrival</code></td></tr>
+            <tr><td>Berthed</td><td><code>eta_vessel_berthed_at_loading_port</code> / <code>ata_vessel_berthed</code></td><td><code>eta_vessel_berthed_at_discharge_port</code> / <code>ata_vessel_berthed</code></td></tr>
+            <tr><td>Completed</td><td><code>eta_loading_completed</code> / <code>ata_loading_completed</code></td><td><code>eta_vessel_complete_discharge</code> / <code>ata_loading_completed</code> (discharge leg)</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="sp-cycles">Cycle deltas (hari bertanda)</h3>
+        <p>Setiap segmen = selisih hari kalender. <strong>Positif = late / delay</strong>; <strong>≤ 0 = on time atau ahead</strong>.</p>
+        <table>
+          <thead>
+            <tr><th>Field</th><th>Rumus (ETA)</th><th>Varian ATA (kartu Close)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Loading ETA−ETR</td><td><code>loading_eta_arrival − cargo_readiness_date</code></td><td><code>ata_loading_eta_etr</code></td></tr>
+            <tr><td>Loading ETA−ETB</td><td><code>loading_eta_arrival − loading_eta_berthed</code></td><td>ATA berthed loading</td></tr>
+            <tr><td>Loading ETB−ETC</td><td><code>loading_eta_berthed − loading_eta_completed</code></td><td>ATA loading complete</td></tr>
+            <tr><td>Discharge ETA−ETB</td><td><code>discharge_eta_arrival − discharge_eta_berthed</code></td><td>ATA discharge</td></tr>
+            <tr><td>Discharge ETB−ETC</td><td><code>discharge_eta_berthed − discharge_eta_completed</code></td><td>ATA discharge complete</td></tr>
+            <tr><td><strong>Total</strong></td><td colspan="2">Jumlah 5 segmen; segmen null dihitung sebagai <strong>0</strong></td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="sp-qty">Quantity per shipment</h3>
+        <table>
+          <thead>
+            <tr><th>Metrik</th><th>Rumus</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>STO Qty</strong></td><td><code>COALESCE(sap_sto_qty, contracts.sto_quantity, 0)</code></td></tr>
+            <tr><td><strong>Received Qty</strong></td><td>Incoterm FRC/CIF/CFR → SAP Receive; LCO/FOB → SAP Delivered; else prioritas SAP; fallback <code>actual_vessel_qty_receive</code>, <code>bl_quantity</code></td></tr>
+            <tr><td><strong>Delivered Qty</strong></td><td>SAP Quantity Delivered</td></tr>
+            <tr><td><strong>Outstanding Qty</strong></td><td><code>GREATEST(sto_qty − fulfilled_qty, 0)</code> — incoterm sama seperti Contract Performance</td></tr>
+          </tbody>
+        </table>
+        <p>Join SAP: <code>sto_number</code> / raw <code>STO No.</code> / <code>STO Number</code> ↔ shipment <code>shipment_id</code> / <code>operation_id</code> / <code>contracts.sto_number</code>.</p>
+
+        <h3 id="sp-cards">Section 1 — Kartu ringkasan</h3>
+        <p>Klasifikasi per <strong>kontrak</strong> (bukan per baris shipment):</p>
+        <table>
+          <thead>
+            <tr><th>Kartu</th><th>Kontrak masuk jika</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>On Going (with ETA)</strong></td><td>Ada minimal 1 shipment dengan salah satu dari 6 ETA; tidak ada ATA pada shipment manapun</td></tr>
+            <tr><td><strong>On Going (no ETA)</strong></td><td>Tidak ada ATA dan tidak ada ETA pada shipment</td></tr>
+            <tr><td><strong>Close</strong></td><td>Ada minimal 1 ATA (6 field ATA) pada shipment kontrak</td></tr>
+          </tbody>
+        </table>
+        <p><strong>6 ETA:</strong> loading arrival/berthed/completed + discharge arrival/berthed/completed (ETA).</p>
+        <p><strong>Metrik kartu:</strong></p>
+        <ul>
+          <li><strong>Total Vessels</strong> = <code>COUNT(DISTINCT vessel_name)</code> pada baris dalam kartu</li>
+          <li><strong>Contracts</strong> = jumlah kontrak unik yang eligible untuk kartu</li>
+          <li><strong>Avg Load / Discharge / Total</strong> = rata-rata delta (1 desimal); baris null dikecualikan dari pembagi</li>
+          <li>Kartu <em>On Going (no ETA)</em> hanya vessel + contract count (tanpa rata-rata cycle)</li>
+          <li>Kartu <strong>Close</strong> memakai field delta <strong>ATA</strong>, bukan ETA</li>
+        </ul>
+
+        <h3 id="sp-ontime">On Time / Late (warna sel)</h3>
+        <p>Bukan SLA 35 hari (itu untuk log cycle di Contract Performance). Aturan Shipping Performance:</p>
+        <p><span class="formula">delta &gt; 0 → Late (merah)</span> · <span class="formula">delta ≤ 0 → On Time / Ahead (hijau)</span></p>
+        <p>Tampilan sel: magnitude absolut + warna dari nilai bertanda.</p>
+
+        <h3 id="sp-section23">Section 2 &amp; 3</h3>
+        <p><strong>Section 2 drilldown</strong> (frontend): Product → Group Plant → Incoterm → Vessel. Bar % = <code>vesselCount_node / vesselCount_kartu × 100</code>.</p>
+        <p><strong>Section 3 tabel</strong> — filter: kartu aktif + drilldown + toolbar.</p>
+        <table>
+          <thead>
+            <tr><th>View</th><th>Agregasi</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Per shipment</td><td>Satu baris per shipment; delta per baris</td></tr>
+            <tr><td>By Vessel</td><td>Qty: <code>SUM</code>; cycle deltas: <code>AVG</code> per vessel; <code>shipment_count</code> = jumlah baris</td></tr>
+          </tbody>
+        </table>
+        <p>Status filter Section 3: Open = PLANNED, IN_PROGRESS, LOADING, IN_TRANSIT, ARRIVED, UNLOADING; Closed = COMPLETED.</p>
+        <p><strong>Vessel History Modal:</strong> On Going vs History; rata-rata hanya ATA untuk shipment Close/Cancelled.</p>
+      </section>
+
+      <section id="oil-loss">
+        <h2>Oil Loss <span class="tag">/oil-loss</span></h2>
+        <p>Halaman menampilkan STO dari <strong>SAP Processed Data</strong> yang memenuhi kriteria loss + eligibility. Terdiri dari Section 1 (summary R1–R4), Section 2 (drilldown), Section 3 (tabel).</p>
+
+        <h3 id="oil-loss-eligibility">Kriteria &amp; eligibility global</h3>
+        <p>Baris masuk pipeline Oil Loss hanya jika <strong>semua</strong> kondisi berikut terpenuhi:</p>
+        <table>
+          <thead>
+            <tr><th>#</th><th>Kondisi</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td><code>Qty Receive &lt; Qty Delivery</code> (ada oil loss)</td></tr>
+            <tr><td>2</td><td>Status = <strong>Close</strong> (case-insensitive)</td></tr>
+            <tr><td>3</td><td>Qty Delivery &amp; Qty Receive valid &amp; numerik (dari SAP raw)</td></tr>
+            <tr><td>4</td><td>Memenuhi kombinasi <strong>Incoterm × Mode</strong> (Vessel atau Truck — lihat di bawah)</td></tr>
+          </tbody>
+        </table>
+        <p>Incoterm: prioritas tabel <code>contracts</code>, fallback SAP. Mode: field SAP <code>SEA / LAND</code> (kosong → default <code>LAND</code>).</p>
+
+        <h3 id="oil-loss-section1">Section 1 — Summary kartu R1–R4</h3>
+        <p>Global bar: <strong>Period</strong> (MTD / YTD / bulan), <strong>Transport</strong> (All / Vessel / Truck), <strong>Product</strong> (All / CPO / PK / POME / SHELL PALM).</p>
+        <p>Setiap kartu menampilkan:</p>
+        <ul>
+          <li><strong>Total (MT)</strong> — jumlah loss Kg semua contract dalam scope ÷ 1000</li>
+          <li><strong>Total (%)</strong> — rata-rata tertimbang % loss berdasarkan Qty Delivery per contract</li>
+        </ul>
+
+        <table>
+          <thead>
+            <tr><th>Kartu</th><th>Rumus loss (per contract, Kg)</th><th>Basis %</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>R1</strong></td><td><code>Qty SFAL − Qty Delivery</code></td><td>Qty Delivery</td></tr>
+            <tr><td><strong>R2</strong></td><td><code>Qty SFBD − Qty SFAL</code></td><td>Qty SFAL</td></tr>
+            <tr><td><strong>R3</strong></td><td><code>Qty Receive − Qty SFBD</code></td><td>Qty SFBD</td></tr>
+            <tr><td><strong>R4</strong></td><td><code>Qty Receive − Qty Delivery</code></td><td>Qty Delivery</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Agregasi per contract</h4>
+        <p>Beberapa baris STO dengan <strong>contract number sama</strong> dijumlahkan dulu (Qty Delivery, Receive, SFAL, SFBD), baru rumus R1–R4 dihitung per group. Group key: <code>contract_number</code> → fallback <code>contract_ext_no</code> → <code>row.id</code>.</p>
+
+        <h3 id="oil-loss-period">Filter Period (MTD, YTD, bulan)</h3>
+        <p>Filter period memakai <strong>Contract Date</strong> (bukan delivery date, receive date, atau due delivery).</p>
+        <table>
+          <thead>
+            <tr><th>Period</th><th>Rentang tanggal</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>MTD</strong></td><td>Tanggal 1 bulan berjalan → hari ini</td></tr>
+            <tr><td><strong>YTD</strong></td><td>1 Januari tahun berjalan → hari ini</td></tr>
+            <tr><td><strong>January … bulan berjalan</strong></td><td>Tanggal 1 bulan tersebut → akhir bulan (atau hari ini jika bulan berjalan)</td></tr>
+          </tbody>
+        </table>
+        <p>Referensi waktu: tanggal lokal browser. Field: <code>contract_date</code>, fallback <code>operation_date</code> (SAP Contract Date).</p>
+
+        <h3 id="oil-loss-truck">Transport = Truck</h3>
+        <table>
+          <thead>
+            <tr><th>Aspek</th><th>Aturan</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Incoterm</td><td><strong>FRC</strong> atau <strong>LCO</strong></td></tr>
+            <tr><td>Mode</td><td><strong>LAND</strong> (SAP <code>SEA / LAND</code>)</td></tr>
+            <tr><td>Transporter (drilldown)</td><td>Truck Transporter dari SAP</td></tr>
+            <tr><td>R4</td><td><code>Σ Qty Receive − Σ Qty Delivery</code> per contract → total semua contract Truck dalam period</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Bukan semua LAND di SAP.</strong> STO LAND dengan incoterm FOB/CIF masuk segment <em>Vessel</em> (jika memenuhi aturan vessel), bukan Truck.
+        </div>
+
+        <h3 id="oil-loss-vessel">Transport = Vessel</h3>
+        <table>
+          <thead>
+            <tr><th>Aspek</th><th>Aturan</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Incoterm</td><td><strong>FOB</strong> atau <strong>CIF</strong></td></tr>
+            <tr><td>Mode</td><td><strong>SEA</strong>, atau <strong>MIX</strong> dengan <strong>STO Type = V</strong></td></tr>
+            <tr><td>Transporter (drilldown)</td><td>Vessel Name dari SAP</td></tr>
+            <tr><td>SFAL / SFBD</td><td>SAP raw → fallback <code>shipments.sfal_qty</code> / <code>sfbd_qty</code></td></tr>
+            <tr><td>R1–R3</td><td>Membutuhkan SFAL/SFBD; contract tanpa qty tersebut di-skip untuk kartu tersebut</td></tr>
+            <tr><td>R4</td><td>Sama seperti Truck: <code>Qty Receive − Qty Delivery</code> (tidak pakai SFAL/SFBD)</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Bukan semua SEA di SAP.</strong> SEA dengan incoterm FRC/LCO tidak masuk Vessel. MIX dengan STO Type selain <code>V</code> (mis. truck leg) tidak masuk Vessel.
+        </div>
+
+        <h3 id="oil-loss-r4">R4 — Total (MT) di card</h3>
+        <p>Langkah kalkulasi (contoh: MTD + Truck + Product All):</p>
+        <ol>
+          <li>Ambil semua baris eligible dari API <code>GET /api/oil-loss</code></li>
+          <li>Filter: Truck (FRC/LCO + LAND), Contract Date dalam MTD, product &amp; staff scope user</li>
+          <li>Kelompokkan per <code>contract_number</code>; jumlahkan Qty Delivery &amp; Qty Receive (Kg)</li>
+          <li>Per group: <span class="formula">lossKg = Σ Receive − Σ Delivery</span> (hanya jika delivery &gt; 0)</li>
+          <li><span class="formula">R4 Total (MT) = Σ lossKg ÷ 1000</span></li>
+        </ol>
+        <p><strong>R4 Total (%)</strong> = rata-rata tertimbang: <code>Σ (Qty Delivery × loss%) ÷ Σ Qty Delivery</code> per contract dalam scope.</p>
+        <p><strong>Avg (MT)</strong> per kartu = <code>totalMt / sampleCount</code>. <strong>Avg (%)</strong> = rata-rata sederhana % per contract (bukan tertimbang).</p>
+
+        <h3 id="oil-loss-enrich">Kombinasi SAP + Shipment + Trucking</h3>
+        <p>Qty Delivery / Receive <strong>hanya dari SAP raw</strong> — tidak dari <code>shipments</code> atau <code>trucking_operations</code>.</p>
+        <p>Enrichment (join opsional, tidak mengubah rumus R4 dasar):</p>
+        <table>
+          <thead>
+            <tr><th>Lookup</th><th>Join key</th><th>Field dipakai</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>shipments_by_sto</code></td><td>STO No (SAP / <code>sto_number</code>)</td><td><code>sfal_qty</code>, <code>sfbd_qty</code> (fallback R1–R3)</td></tr>
+            <tr><td><code>shipments_by_contract</code></td><td><code>contract_number</code></td><td>SFAL/SFBD shipment</td></tr>
+            <tr><td><code>trucking_by_sto</code></td><td><code>operation_id</code> = STO key</td><td><code>trucking_owner</code>, loading/unloading location</td></tr>
+            <tr><td><code>trucking_by_contract</code></td><td><code>contract_id</code></td><td>trucking owner &amp; lokasi</td></tr>
+            <tr><td><code>contracts_latest</code></td><td>contract number</td><td>incoterm, product, plant, contract date</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Label transporter</strong> (drilldown): Vessel → Vessel Name / Vessel Owner; Truck → Truck Transporter / trucking owner DB.</p>
+
+        <h4>Matriks Incoterm × Mode (eligibility)</h4>
+        <table>
+          <thead>
+            <tr><th></th><th>LAND</th><th>SEA</th><th>MIX + STO V</th><th>MIX (bukan V)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>FRC / LCO</strong></td><td>Truck ✓</td><td>✗</td><td>✗</td><td>✗</td></tr>
+            <tr><td><strong>FOB / CIF</strong></td><td>✗</td><td>Vessel ✓</td><td>Vessel ✓</td><td>✗</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="oil-loss-section3">Section 3 — Tabel agregasi</h3>
+        <table>
+          <thead>
+            <tr><th>View</th><th>Grouping</th><th>Oil Loss (Kg / MT)</th><th>Oil Loss (%)</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>All Contract</strong></td>
+              <td>Per contract number (STO dijumlah dulu)</td>
+              <td><code>Σ Receive − Σ Delivery</code></td>
+              <td><code>gain_loss / Σ Delivery × 100</code></td>
+            </tr>
+            <tr>
+              <td><strong>By Transporter</strong></td>
+              <td>Transporter (normalized)</td>
+              <td><code>Σ Receive − Σ Delivery</code> per group</td>
+              <td>Jumlah % R4 per contract dalam group (bukan tertimbang Section 1)</td>
+            </tr>
+            <tr>
+              <td><strong>By Supplier</strong></td>
+              <td>Supplier</td>
+              <td>Sama seperti By Transporter</td>
+              <td>Sama</td>
+            </tr>
+          </tbody>
+        </table>
+        <p><strong>Section 2 drilldown</strong> loss per node = jumlah <em>row-level</em> <code>Receive − Delivery</code> (per baris STO, belum di-agregasi per contract dulu).</p>
+        <p>Baris tabel individual: <span class="formula">loss% = (Receive − Delivery) ÷ Delivery × 100</span> jika Delivery &gt; 0.</p>
+
+        <h3 id="oil-loss-sap">Rekonsiliasi dengan SAP</h3>
+        <p>Di SAP, jika Anda menjumlahkan <code>Qty Receive − Qty Delivery</code> manual, rumusnya <strong>sama</strong> dengan R4. Selisih angka biasanya karena <strong>set baris berbeda</strong>, bukan rumus berbeda.</p>
+        <table>
+          <thead>
+            <tr><th>Penyebab selisih umum</th><th>KLIP</th><th>Cek manual SAP</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Cakupan baris</td><td>Semua contract eligible dalam filter</td><td>Mungkin hanya 1 STO / subset</td></tr>
+            <tr><td>Tanggal</td><td>Contract Date (MTD/YTD)</td><td>Mungkin filter tanggal lain</td></tr>
+            <tr><td>Transport Truck</td><td>FRC/LCO + LAND saja</td><td>Mungkin semua LAND</td></tr>
+            <tr><td>Transport Vessel</td><td>FOB/CIF + SEA atau MIX+V</td><td>Mungkin semua SEA</td></tr>
+            <tr><td>Status</td><td>Close saja</td><td>Mungkin campur Open</td></tr>
+            <tr><td>Staff scope</td><td>Product / group plant user</td><td>Export SAP tanpa scope</td></tr>
+            <tr><td>Agregasi</td><td>Beberapa STO → 1 contract number dijumlah</td><td>Per-baris vs per-contract</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Cara cek di KLIP</strong> (filter sama): Section 2 drilldown total scope ≈ R4 Total; Section 3 view <em>By Contract</em> — jumlahkan kolom <em>Oil Loss (MT)</em>.</p>
+
+        <h3>Sumber quantity</h3>
+        <table>
+          <thead>
+            <tr><th>Field</th><th>Sumber</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Qty Delivery</td><td>SAP: <code>Quantity Delivered</code> / <code>Quantity Delivery</code> / <code>Qty Deliver</code></td></tr>
+            <tr><td>Qty Receive</td><td>SAP: <code>Quantity Receive</code> / <code>Qty Receive</code></td></tr>
+            <tr><td>Qty SFAL</td><td>SAP SFAL → fallback shipment SFAL (Kg)</td></tr>
+            <tr><td>Qty SFBD</td><td>SAP SFBD → fallback shipment SFBD (Kg)</td></tr>
+            <tr><td>Contract Date</td><td><code>contracts.contract_date</code> → SAP Contract Date</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="referensi">
+        <h2>Referensi file (implementasi)</h2>
+        <table>
+          <thead>
+            <tr><th>Halaman / topik</th><th>File utama</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Contract Performance UI</td><td><code>frontend/src/app/contract-performance/page.tsx</code>, <code>frontend/src/app/contracts/page.tsx</code></td></tr>
+            <tr><td>Contract cycles &amp; outstanding SQL</td><td><code>backend/src/controllers/contract.controller.ts</code>, <code>contractsListOuterSql.ts</code>, <code>contractsQtyMoveSql.ts</code></td></tr>
+            <tr><td>Late performance / Section 1–2</td><td><code>backend/src/services/latePerformance.service.ts</code></td></tr>
+            <tr><td>Calendar days</td><td><code>backend/src/utils/calendarDays.ts</code></td></tr>
+            <tr><td>Cycle display &amp; help text</td><td><code>frontend/src/lib/cycleDaysDisplay.ts</code>, <code>fieldHelpText.ts</code></td></tr>
+            <tr><td>Shipping Performance UI</td><td><code>frontend/src/app/shipping-performance/page.tsx</code></td></tr>
+            <tr><td>Shipping SQL &amp; rows</td><td><code>backend/src/services/shippingPerformance.service.ts</code></td></tr>
+            <tr><td>Shipping labels &amp; ports</td><td><code>frontend/src/lib/shippingPerformanceLabels.ts</code>, <code>shippingPerformancePorts.ts</code></td></tr>
+            <tr><td>Oil Loss UI</td><td><code>frontend/src/app/oil-loss/page.tsx</code></td></tr>
+            <tr><td>Oil Loss filter Period / Transport</td><td><code>frontend/src/lib/oilLossGlobalFilters.ts</code></td></tr>
+            <tr><td>Oil Loss R1–R4</td><td><code>frontend/src/lib/oilLossSummary.ts</code>, <code>backend/src/utils/oilLossSummary.ts</code></td></tr>
+            <tr><td>Oil Loss eligibility</td><td><code>frontend/src/lib/oilLossEligibility.ts</code>, <code>backend/src/utils/oilLossEligibility.ts</code></td></tr>
+            <tr><td>Oil Loss SQL &amp; enrichment</td><td><code>backend/src/utils/oilLossQuerySql.ts</code>, <code>oilLossSapSql.ts</code></td></tr>
+            <tr><td>Oil Loss drilldown &amp; tabel</td><td><code>frontend/src/lib/oilLossDrilldown.ts</code>, <code>oilLossAllContractColumns.ts</code></td></tr>
+            <tr><td>Dokumentasi teknis Oil Loss</td><td><code>docs/OIL_LOSS_PAGE.md</code></td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    KLIP Glossary — diperbarui 2026-06-03 · Contract Performance · Shipping Performance · Oil Loss · Buka: <code>docs/KLIP_Glossary.html</code>
+  </footer>
+</body>
+</html>

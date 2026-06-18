@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -41,6 +41,52 @@ interface GroupedPermissions {
   [category: string]: Permission[]
 }
 
+const LEVEL_OPTIONS = ['Dept Head', 'Section Head', 'Staff', 'Admin'] as const
+const DEFAULT_LEVEL = LEVEL_OPTIONS[2] // Staff
+const TRANSPORT_OPTIONS = ['SEA', 'LAND', 'ALL', 'MIX'] as const
+
+type PermissionField = 'can_view' | 'can_create' | 'can_edit' | 'can_delete'
+
+const PERMISSION_ACTION_FIELDS: PermissionField[] = [
+  'can_view',
+  'can_create',
+  'can_edit',
+  'can_delete',
+]
+
+function sortRolesForEditor(roles: Role[]): Role[] {
+  const weight: Record<string, number> = {
+    FINANCE: 1,
+    MANAGEMENT: 2,
+    SUPPORT: 3,
+    TRADING: 4,
+    LOGISTICS: 5,
+    ADMIN: 99,
+  }
+  return [...roles].sort((a, b) => {
+    const wa = weight[a.role_name] ?? 50
+    const wb = weight[b.role_name] ?? 50
+    return wa - wb || a.display_name.localeCompare(b.display_name)
+  })
+}
+
+function getScopeHint(roleName?: string): string {
+  switch (roleName) {
+    case 'FINANCE':
+      return 'Pick one level (e.g. Staff or Admin) per scope. Finance + Staff + All Transport is separate from Finance + Admin + All Transport.'
+    case 'MANAGEMENT':
+      return 'Management permissions are configured per level. Each level (Dept Head, Section Head, Staff, Admin) has its own permission set.'
+    case 'SUPPORT':
+      return 'Select Role + Level + Transport. One level per scope is required; transport can stay All Transport unless you need SEA/LAND/ALL/MIX.'
+    case 'TRADING':
+      return 'Example: Trading + Admin + All Transport is a separate scope from Trading + Staff + All Transport.'
+    case 'LOGISTICS':
+      return 'Logistics scopes combine one level with transport (All, SEA, LAND, ALL, or MIX). Each combination is stored independently.'
+    default:
+      return 'One level is required per scope. Transport can remain All Transport. Wait for loading to finish before editing or saving.'
+  }
+}
+
 export default function RolesPage() {
   const router = useRouter()
   const [roles, setRoles] = useState<Role[]>([])
@@ -51,8 +97,14 @@ export default function RolesPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
-  const [selectedLevel, setSelectedLevel] = useState<string>('all')
+  const [selectedLevel, setSelectedLevel] = useState<string>(DEFAULT_LEVEL)
   const [selectedTransportType, setSelectedTransportType] = useState<string>('all')
+  const [permissionsLoading, setPermissionsLoading] = useState(false)
+  const fetchRequestIdRef = useRef(0)
+
+  const sortedRoles = sortRolesForEditor(roles)
+  const selectedRoleFromList = sortedRoles.find((role) => role.id === selectedRoleId) ?? null
+  const transportAppliesMostlyToLogistics = selectedRoleFromList?.role_name === 'LOGISTICS'
 
   useEffect(() => {
     // Check if user is admin
@@ -72,19 +124,26 @@ export default function RolesPage() {
   }, [router])
 
   useEffect(() => {
-    if (selectedRoleId) {
-      fetchRolePermissions(selectedRoleId)
-    }
-  }, [selectedRoleId, selectedLevel, selectedTransportType])
+    if (!selectedRoleId) return
+
+    const requestId = ++fetchRequestIdRef.current
+    setPermissionsLoading(true)
+    setPermissions([])
+    setSelectedRole(selectedRoleFromList)
+    setError('')
+
+    void fetchRolePermissions(selectedRoleId, requestId)
+  }, [selectedRoleId, selectedLevel, selectedTransportType, selectedRoleFromList?.id])
 
   const fetchRoles = async () => {
     try {
       const response = await api.get('/roles')
-      const rolesData = response.data.data
+      const rolesData = sortRolesForEditor(response.data.data)
       setRoles(rolesData)
       
       if (rolesData.length > 0) {
-        setSelectedRoleId(rolesData[0].id)
+        const defaultRole = rolesData.find((role: Role) => role.role_name !== 'ADMIN') ?? rolesData[0]
+        setSelectedRoleId(defaultRole.id)
       }
     } catch (err) {
       console.error('Error fetching roles:', err)
@@ -94,18 +153,27 @@ export default function RolesPage() {
     }
   }
 
-  const fetchRolePermissions = async (roleId: string) => {
+  const fetchRolePermissions = async (roleId: string, requestId: number) => {
     try {
-      const params: Record<string, string> = {}
-      if (selectedLevel !== 'all') params.level = selectedLevel
+      const params: Record<string, string> = { level: selectedLevel }
       if (selectedTransportType !== 'all') params.transportType = selectedTransportType
       const response = await api.get(`/roles/${roleId}`, { params })
+
+      if (requestId !== fetchRequestIdRef.current) return
+
       const roleData = response.data.data
+      if (roleData.id !== roleId) return
+
       setSelectedRole(roleData)
       setPermissions(roleData.permissions || [])
     } catch (err) {
+      if (requestId !== fetchRequestIdRef.current) return
       console.error('Error fetching role permissions:', err)
       setError('Failed to load permissions')
+    } finally {
+      if (requestId === fetchRequestIdRef.current) {
+        setPermissionsLoading(false)
+      }
     }
   }
 
@@ -117,8 +185,39 @@ export default function RolesPage() {
     )
   }
 
+  const setAllPermissionActions = (permissionId: string, value: boolean) => {
+    if (permissionsLoading) return
+    setPermissions((prev) =>
+      prev.map((perm) => {
+        if (perm.id !== permissionId) return perm
+        return PERMISSION_ACTION_FIELDS.reduce(
+          (acc, field) => ({ ...acc, [field]: value }),
+          { ...perm }
+        )
+      })
+    )
+  }
+
+  const isAllPermissionActionsChecked = (permission: Permission): boolean =>
+    PERMISSION_ACTION_FIELDS.every((field) => Boolean(permission[field]))
+
+  const isAnyPermissionActionChecked = (permission: Permission): boolean =>
+    PERMISSION_ACTION_FIELDS.some((field) => Boolean(permission[field]))
+
   const handleSave = async () => {
-    if (!selectedRoleId) return
+    if (!selectedRoleId || permissionsLoading) return
+
+    const roleLabel = selectedRoleFromList?.display_name ?? selectedRole?.display_name ?? 'selected role'
+    const levelLabel = selectedLevel
+    const transportLabel = selectedTransportType === 'all' ? 'All Transport' : selectedTransportType
+    const confirmed = window.confirm(
+      `Save permission changes for:\n\n` +
+        `Role: ${roleLabel} (${selectedRoleFromList?.role_name ?? selectedRole?.role_name ?? '?'})\n` +
+        `Level: ${levelLabel}\n` +
+        `Transport: ${transportLabel}\n\n` +
+        `This only updates permissions for this exact scope.`
+    )
+    if (!confirmed) return
 
     setSaving(true)
     setError('')
@@ -137,15 +236,19 @@ export default function RolesPage() {
         permissions: permissionsToSave,
       }, {
         params: {
-          ...(selectedLevel !== 'all' ? { level: selectedLevel } : {}),
+          level: selectedLevel,
           ...(selectedTransportType !== 'all' ? { transportType: selectedTransportType } : {}),
         }
       })
 
-      setSuccess('Role permissions updated successfully')
-      await fetchRolePermissions(selectedRoleId)
+      setSuccess(
+        `Permissions saved for ${roleLabel} · ${levelLabel} · ${transportLabel}`
+      )
+      const requestId = ++fetchRequestIdRef.current
+      setPermissionsLoading(true)
+      await fetchRolePermissions(selectedRoleId, requestId)
       
-      setTimeout(() => setSuccess(''), 3000)
+      setTimeout(() => setSuccess(''), 5000)
     } catch (err: any) {
       setError(err.response?.data?.error?.message || 'Failed to update permissions')
     } finally {
@@ -255,7 +358,7 @@ export default function RolesPage() {
           <CardHeader>
             <CardTitle>Select Role to Configure</CardTitle>
             <CardDescription>
-              Choose a role to view and modify its permissions
+              Choose a role and level (required). Transport defaults to All unless you need a specific type.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -266,12 +369,15 @@ export default function RolesPage() {
                     <SelectValue placeholder="Select a role" />
                   </SelectTrigger>
                   <SelectContent>
-                    {roles.map((role) => (
+                    {sortedRoles.map((role) => (
                       <SelectItem key={role.id} value={role.id}>
                         <div className="flex items-center gap-2">
                           <Shield className="h-4 w-4" />
                           <span className="font-medium">{role.display_name}</span>
                           <span className="text-sm text-gray-500">({role.role_name})</span>
+                          {role.role_name === 'ADMIN' ? (
+                            <span className="text-xs text-amber-600">full access</span>
+                          ) : null}
                         </div>
                       </SelectItem>
                     ))}
@@ -281,14 +387,14 @@ export default function RolesPage() {
               <div className="w-52">
                 <Select value={selectedLevel} onValueChange={setSelectedLevel}>
                   <SelectTrigger>
-                    <SelectValue placeholder="All Levels" />
+                    <SelectValue placeholder="Select level" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Levels</SelectItem>
-                    <SelectItem value="Dept Head">Dept Head</SelectItem>
-                    <SelectItem value="Section Head">Section Head</SelectItem>
-                    <SelectItem value="Staff">Staff</SelectItem>
-                    <SelectItem value="Admin">Admin</SelectItem>
+                    {LEVEL_OPTIONS.map((level) => (
+                      <SelectItem key={level} value={level}>
+                        {level}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -298,37 +404,68 @@ export default function RolesPage() {
                     <SelectValue placeholder="All Transport" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Transport</SelectItem>
-                    <SelectItem value="SEA">SEA</SelectItem>
-                    <SelectItem value="LAND">LAND</SelectItem>
+                    <SelectItem value="all">All Transport (unscoped)</SelectItem>
+                    {TRANSPORT_OPTIONS.map((transport) => (
+                      <SelectItem key={transport} value={transport}>
+                        {transport}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
-              <Button onClick={handleSave} disabled={saving}>
+              <Button onClick={handleSave} disabled={saving || permissionsLoading || !selectedRoleId}>
                 <Save className="h-4 w-4 mr-2" />
-                {saving ? 'Saving...' : 'Save Changes'}
+                {saving ? 'Saving...' : permissionsLoading ? 'Loading...' : 'Save Changes'}
               </Button>
             </div>
 
-            {selectedRole && (
+            {(selectedRoleFromList || selectedRole) && (
               <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                <h3 className="font-semibold text-blue-900">{selectedRole.display_name}</h3>
-                <p className="text-sm text-blue-700 mt-1">{selectedRole.description}</p>
-                <p className="text-xs text-blue-700 mt-2">
-                  Scope: <span className="font-medium">Role={selectedRole.role_name}</span>
-                  {' · '}
-                  <span className="font-medium">Level={selectedLevel === 'all' ? 'All' : selectedLevel}</span>
-                  {' · '}
-                  <span className="font-medium">Transport={selectedTransportType === 'all' ? 'All' : selectedTransportType}</span>
+                <h3 className="font-semibold text-blue-900">
+                  {selectedRoleFromList?.display_name ?? selectedRole?.display_name}
+                </h3>
+                <p className="text-sm text-blue-700 mt-1">
+                  {selectedRoleFromList?.description ?? selectedRole?.description}
                 </p>
+                <p className="text-xs text-blue-700 mt-2">
+                  Editing scope:{' '}
+                  <span className="font-medium">
+                    Role={selectedRoleFromList?.role_name ?? selectedRole?.role_name}
+                  </span>
+                  {' · '}
+                  <span className="font-medium">Level={selectedLevel}</span>
+                  {' · '}
+                  <span className="font-medium">
+                    Transport={selectedTransportType === 'all' ? 'All Transport' : selectedTransportType}
+                  </span>
+                </p>
+                {permissionsLoading ? (
+                  <p className="text-xs text-blue-600 mt-2">Loading permissions for this scope…</p>
+                ) : (
+                  <p className="text-xs text-blue-600 mt-2">
+                    {getScopeHint(selectedRoleFromList?.role_name ?? selectedRole?.role_name)}
+                    {!transportAppliesMostlyToLogistics ? (
+                      <span className="block mt-1 text-blue-500">
+                        Transport filter is optional for {selectedRoleFromList?.display_name ?? 'this role'} — leave as All unless you need a transport-specific override.
+                      </span>
+                    ) : null}
+                  </p>
+                )}
               </div>
             )}
           </CardContent>
         </Card>
 
         {/* Permissions */}
-        {selectedRole && (
+        {(selectedRoleFromList || selectedRole) && (
           <div className="space-y-4">
+            {permissionsLoading ? (
+              <Card>
+                <CardContent className="py-12 text-center text-gray-500">
+                  Loading permissions…
+                </CardContent>
+              </Card>
+            ) : null}
             {Object.entries(groupedPermissions).map(([category, perms]) => (
               <Card key={category}>
                 <CardHeader>
@@ -337,7 +474,8 @@ export default function RolesPage() {
                     {getCategoryTitle(category)}
                   </CardTitle>
                   <CardDescription>
-                    Configure {category} permissions for {selectedRole.display_name}
+                    Configure {category} permissions for{' '}
+                    {selectedRoleFromList?.display_name ?? selectedRole?.display_name}
                     {category === 'page' ? (
                       <span className="block mt-1 text-gray-500">
                         Includes <strong>Commercial Documents</strong> (<code className="text-xs">page.commercial_documents</code>) for contract payment document access.
@@ -367,46 +505,78 @@ export default function RolesPage() {
                           </div>
                         </div>
 
-                        <div className="flex gap-6 ml-4">
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <Checkbox
-                              checked={permission.can_view || false}
-                              onCheckedChange={(checked) =>
-                                updatePermission(permission.id, 'can_view', checked as boolean)
-                              }
-                            />
-                            <span className="text-sm">View</span>
-                          </label>
+                        <div className="flex items-center gap-4 ml-4 shrink-0">
+                          <div className="flex gap-6">
+                            <label className={`flex items-center gap-2 ${permissionsLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                              <Checkbox
+                                checked={permission.can_view || false}
+                                disabled={permissionsLoading}
+                                onCheckedChange={(checked) =>
+                                  updatePermission(permission.id, 'can_view', checked as boolean)
+                                }
+                              />
+                              <span className="text-sm">View</span>
+                            </label>
 
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <Checkbox
-                              checked={permission.can_create || false}
-                              onCheckedChange={(checked) =>
-                                updatePermission(permission.id, 'can_create', checked as boolean)
-                              }
-                            />
-                            <span className="text-sm">Create</span>
-                          </label>
+                            <label className={`flex items-center gap-2 ${permissionsLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                              <Checkbox
+                                checked={permission.can_create || false}
+                                disabled={permissionsLoading}
+                                onCheckedChange={(checked) =>
+                                  updatePermission(permission.id, 'can_create', checked as boolean)
+                                }
+                              />
+                              <span className="text-sm">Create</span>
+                            </label>
 
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <Checkbox
-                              checked={permission.can_edit || false}
-                              onCheckedChange={(checked) =>
-                                updatePermission(permission.id, 'can_edit', checked as boolean)
-                              }
-                            />
-                            <span className="text-sm">Edit</span>
-                          </label>
+                            <label className={`flex items-center gap-2 ${permissionsLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                              <Checkbox
+                                checked={permission.can_edit || false}
+                                disabled={permissionsLoading}
+                                onCheckedChange={(checked) =>
+                                  updatePermission(permission.id, 'can_edit', checked as boolean)
+                                }
+                              />
+                              <span className="text-sm">Edit</span>
+                            </label>
 
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <Checkbox
-                              checked={permission.can_delete || false}
-                              onCheckedChange={(checked) =>
-                                updatePermission(permission.id, 'can_delete', checked as boolean)
-                              }
-                            />
-                            <span className="text-sm">Delete</span>
-                          </label>
+                            <label className={`flex items-center gap-2 ${permissionsLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                              <Checkbox
+                                checked={permission.can_delete || false}
+                                disabled={permissionsLoading}
+                                onCheckedChange={(checked) =>
+                                  updatePermission(permission.id, 'can_delete', checked as boolean)
+                                }
+                              />
+                              <span className="text-sm">Delete</span>
+                            </label>
+                          </div>
+
+                          <div className="flex flex-col items-center gap-1 border-l pl-4">
+                            <span className="text-xs text-gray-500">Row</span>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-2 text-xs"
+                                disabled={permissionsLoading || isAllPermissionActionsChecked(permission)}
+                                onClick={() => setAllPermissionActions(permission.id, true)}
+                              >
+                                All
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-2 text-xs"
+                                disabled={permissionsLoading || !isAnyPermissionActionChecked(permission)}
+                                onClick={() => setAllPermissionActions(permission.id, false)}
+                              >
+                                None
+                              </Button>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -429,6 +599,13 @@ export default function RolesPage() {
                   <li><strong>Create:</strong> User can add new records</li>
                   <li><strong>Edit:</strong> User can modify existing records</li>
                   <li><strong>Delete:</strong> User can remove records</li>
+                  <li>
+                    <strong>Row actions:</strong> Use <strong>All</strong> / <strong>None</strong> on each permission row to select or clear View, Create, Edit, and Delete for that item only.
+                  </li>
+                  <li>
+                    <strong>Scope:</strong> Each permission scope is Role + one Level + Transport.
+                    Level is required (Dept Head, Section Head, Staff, or Admin). Transport can be All Transport or a specific type (SEA, LAND, ALL, MIX).
+                  </li>
                   <li>
                     <strong>Commercial Documents:</strong> Enable <code className="text-xs">page.commercial_documents</code> (View) and{' '}
                     <code className="text-xs">data.commercial_documents</code> (View/Create/Edit for upload) under Page Access and Data Access.
