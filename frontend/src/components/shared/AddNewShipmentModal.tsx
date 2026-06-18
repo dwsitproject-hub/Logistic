@@ -149,6 +149,19 @@ function sliceIsoDate(value: string | null | undefined): string {
   return String(value).slice(0, 10)
 }
 
+const ETA_DELIVERY_START_BUFFER_DAYS = 60
+const ETA_DELIVERY_END_BUFFER_DAYS = 60
+
+function shiftIsoDate(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T12:00:00`)
+  d.setDate(d.getDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+function formatEtaAllowedRangeMessage(range: { minIso: string; maxIso: string }): string {
+  return `Date must be between ${formatDateDMY(range.minIso)} (due delivery start − ${ETA_DELIVERY_START_BUFFER_DAYS} days) and ${formatDateDMY(range.maxIso)} (due delivery end + ${ETA_DELIVERY_END_BUFFER_DAYS} days)`
+}
+
 type VesselLoadingPortRow = {
   port_name?: string
   port_sequence?: number
@@ -586,17 +599,14 @@ export function AddNewShipmentModal({
 
   const getEtaDateRangeForContract = useCallback(
     (contractId: string) => {
-      const contractDateStr = contractValidations[contractId]?.contractData?.contract_date
-      if (!contractDateStr) return null
-      const contractDate = new Date(contractDateStr)
-      const minDate = new Date(contractDate)
-      minDate.setDate(minDate.getDate() - 30)
-      const maxDate = new Date(contractDate)
-      maxDate.setFullYear(maxDate.getFullYear() + 1)
-      return {
-        minIso: minDate.toISOString().slice(0, 10),
-        maxIso: maxDate.toISOString().slice(0, 10),
-      }
+      const data = contractValidations[contractId]?.contractData
+      const deliveryStart = sliceIsoDate(data?.delivery_start_date as string | undefined)
+      const deliveryEnd = sliceIsoDate(data?.delivery_end_date as string | undefined)
+      if (!deliveryStart || !deliveryEnd) return null
+      const minIso = shiftIsoDate(deliveryStart, -ETA_DELIVERY_START_BUFFER_DAYS)
+      const maxIso = shiftIsoDate(deliveryEnd, ETA_DELIVERY_END_BUFFER_DAYS)
+      if (minIso > maxIso) return null
+      return { minIso, maxIso }
     },
     [contractValidations],
   )
@@ -1053,9 +1063,9 @@ export function AddNewShipmentModal({
         const range = getEtaDateRangeForContractIds(block.contractIds)
         if (!range) {
           errors[`${prefix}_contract`] =
-            'Selected POs have incompatible contract date ranges; split into separate shipment details.'
+            'Selected POs are missing due delivery dates or have incompatible delivery windows; split into separate shipment details.'
         } else {
-          const rangeMsg = `Date must be between ${formatDateDMY(range.minIso)} (contract date − 30 days) and ${formatDateDMY(range.maxIso)} (contract date + 1 year)`
+          const rangeMsg = formatEtaAllowedRangeMessage(range)
           const checkEta = (iso: string, key: string) => {
             if (iso && (iso < range.minIso || iso > range.maxIso)) errors[key] = rangeMsg
           }
@@ -1125,9 +1135,9 @@ export function AddNewShipmentModal({
         const range = getEtaDateRangeForContractIds(selectedIds)
         if (!range) {
           errors[`${prefix}_contract`] =
-            'Selected POs have incompatible contract date ranges; split into separate shipment details.'
+            'Selected POs are missing due delivery dates or have incompatible delivery windows; split into separate shipment details.'
         } else {
-          const rangeMsg = `Date must be between ${formatDateDMY(range.minIso)} (contract date − 30 days) and ${formatDateDMY(range.maxIso)} (contract date + 1 year)`
+          const rangeMsg = formatEtaAllowedRangeMessage(range)
           const checkEta = (iso: string, key: string) => {
             if (iso && (iso < range.minIso || iso > range.maxIso)) errors[key] = rangeMsg
           }
@@ -1891,6 +1901,11 @@ export function AddNewShipmentModal({
                   <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
                   <div className="min-w-0 space-y-1.5">
                     <p className="font-medium text-blue-900">Official contract delivery timeframe (from SAP)</p>
+                    <p className="text-blue-800/90">
+                      ETA from Arr. @ LP through Done Disch may be up to {ETA_DELIVERY_START_BUFFER_DAYS} days before
+                      Due Date Delivery (Start) and up to {ETA_DELIVERY_END_BUFFER_DAYS} days after Due Date Delivery
+                      (End).
+                    </p>
                     {contractDeliveryReferences.map((ref) => (
                       <div key={ref.contractId} className="space-y-0.5">
                         {contractDeliveryReferences.length > 1 ? (
@@ -2039,6 +2054,15 @@ export function AddNewShipmentModal({
                           </div>
 
                           <div className="overflow-x-auto">
+                            {range ? (
+                              <p className="px-2 pt-2 text-[10px] text-gray-500">
+                                Allowed: {formatDateDMY(range.minIso)} – {formatDateDMY(range.maxIso)}
+                              </p>
+                            ) : block.contractIds.length > 0 ? (
+                              <p className="px-2 pt-2 text-[10px] text-amber-700">
+                                Select POs with valid due delivery start/end dates to enable ETA range limits.
+                              </p>
+                            ) : null}
                             <table className="w-full text-xs border-collapse min-w-[52rem]">
                               <thead>
                                 <tr className="bg-gray-50 border-b">

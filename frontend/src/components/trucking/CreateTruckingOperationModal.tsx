@@ -52,6 +52,19 @@ function sliceIsoDate(value: string | null | undefined): string {
   return String(value).slice(0, 10)
 }
 
+const TRUCKING_DELIVERY_START_BUFFER_DAYS = 60
+const TRUCKING_DELIVERY_END_BUFFER_DAYS = 60
+
+function shiftIsoDate(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T12:00:00`)
+  d.setDate(d.getDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+function formatPlanningAllowedRangeMessage(range: { minIso: string; maxIso: string }): string {
+  return `Date must be between ${fmtIsoDate(range.minIso)} (due delivery start − ${TRUCKING_DELIVERY_START_BUFFER_DAYS} days) and ${fmtIsoDate(range.maxIso)} (due delivery end + ${TRUCKING_DELIVERY_END_BUFFER_DAYS} days)`
+}
+
 function parseDailyDeliverables(
   raw: unknown,
 ): Array<{ date?: string; quantity_delivered?: number }> {
@@ -291,18 +304,29 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   }
 
   const truckingDateRange = useMemo(() => {
-    const contractDateStr = contractValidation.contractData?.contract_date
-    if (!contractDateStr) return null
-    const contractDate = new Date(contractDateStr)
-    const minDate = new Date(contractDate)
-    minDate.setDate(minDate.getDate() - 30)
-    const maxDate = new Date(contractDate)
-    maxDate.setFullYear(maxDate.getFullYear() + 1)
-    return {
-      minIso: minDate.toISOString().slice(0, 10),
-      maxIso: maxDate.toISOString().slice(0, 10),
+    const deliveryStart = sliceIsoDate(contractValidation.contractData?.delivery_start_date)
+    const deliveryEnd = sliceIsoDate(contractValidation.contractData?.delivery_end_date)
+    if (!deliveryStart || !deliveryEnd) return null
+    const minIso = shiftIsoDate(deliveryStart, -TRUCKING_DELIVERY_START_BUFFER_DAYS)
+    const maxIso = shiftIsoDate(deliveryEnd, TRUCKING_DELIVERY_END_BUFFER_DAYS)
+    if (minIso > maxIso) return null
+    return { minIso, maxIso }
+  }, [
+    contractValidation.contractData?.delivery_start_date,
+    contractValidation.contractData?.delivery_end_date,
+  ])
+
+  const checkPlanningDateInRange = (
+    errors: Record<string, string>,
+    iso: string,
+    field: 'planning_start_date' | 'planning_end_date',
+  ) => {
+    if (!iso || !truckingDateRange) return
+    const { minIso, maxIso } = truckingDateRange
+    if (iso < minIso || iso > maxIso) {
+      errors[field] = formatPlanningAllowedRangeMessage(truckingDateRange)
     }
-  }, [contractValidation.contractData?.contract_date])
+  }
 
   const validateForm = (): boolean => {
     const errors: Record<string, string> = {}
@@ -313,6 +337,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       if (planning.start_date && planning.end_date && planning.end_date < planning.start_date) {
         errors.planning_end_date = 'End Date cannot be before Start Date'
       }
+      checkPlanningDateInRange(errors, planning.start_date, 'planning_start_date')
+      checkPlanningDateInRange(errors, planning.end_date, 'planning_end_date')
       setFormErrors(errors)
       return Object.keys(errors).length === 0
     }
@@ -320,10 +346,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     if (!contractValidation.exists) errors.contract_number = 'Contract Ext No is required and must be valid'
 
     if (truckingDateRange) {
-      const { minIso, maxIso } = truckingDateRange
-      const fmt = (iso: string) => iso.split('-').reverse().join('/')
-      const rangeMsg = `Date must be between ${fmt(minIso)} and ${fmt(maxIso)}`
+      const rangeMsg = formatPlanningAllowedRangeMessage(truckingDateRange)
       if (newOperation.cargo_readiness_date) {
+        const { minIso, maxIso } = truckingDateRange
         if (newOperation.cargo_readiness_date < minIso || newOperation.cargo_readiness_date > maxIso)
           errors.cargo_readiness_date = rangeMsg
       }
@@ -334,6 +359,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     if (planning.start_date && planning.end_date && planning.end_date < planning.start_date) {
       errors.planning_end_date = 'End Date cannot be before Start Date'
     }
+    checkPlanningDateInRange(errors, planning.start_date, 'planning_start_date')
+    checkPlanningDateInRange(errors, planning.end_date, 'planning_end_date')
     const totalMt = planning.total_quantity_mt
       ? parseFloat(String(planning.total_quantity_mt).replace(/,/g, '').trim())
       : NaN
@@ -846,6 +873,21 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                 {step3Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="p-4 space-y-4">
+                {cd?.delivery_start_date && cd?.delivery_end_date ? (
+                  <div className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                    <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
+                    <p>
+                      Start Date (Planning) may be up to {TRUCKING_DELIVERY_START_BUFFER_DAYS} days before Due Date
+                      Delivery (Start). End Date (Planning) may be up to {TRUCKING_DELIVERY_END_BUFFER_DAYS} days after
+                      Due Date Delivery (End).
+                      {truckingDateRange ? (
+                        <span className="block mt-1 font-medium text-blue-900">
+                          Allowed: {fmtIsoDate(truckingDateRange.minIso)} – {fmtIsoDate(truckingDateRange.maxIso)}
+                        </span>
+                      ) : null}
+                    </p>
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-3 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1.5">
@@ -911,6 +953,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                         </label>
                         <DateInputDdMmYyyy
                           valueIso={planning.start_date}
+                          minIso={truckingDateRange?.minIso}
+                          maxIso={truckingDateRange?.maxIso}
                           onChangeIso={(iso) => {
                             setPlanning((prev) => ({ ...prev, start_date: iso }))
                             clearFieldError('planning_start_date')
@@ -928,6 +972,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                         </label>
                         <DateInputDdMmYyyy
                           valueIso={planning.end_date}
+                          minIso={truckingDateRange?.minIso}
+                          maxIso={truckingDateRange?.maxIso}
                           onChangeIso={(iso) => {
                             setPlanning((prev) => ({ ...prev, end_date: iso }))
                             clearFieldError('planning_end_date')
