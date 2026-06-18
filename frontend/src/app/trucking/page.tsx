@@ -15,6 +15,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { format } from 'date-fns'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -512,10 +513,10 @@ function CalendarDeliverablesTable({
           </thead>
           <tbody className="bg-white">
             {rows.map((r) => {
-              const opLabel = r.operation_id || '-'
-              const contractLabel = (r.contract_ext_no || r.contract_number || '-') as string
-              const stoLabel = r.sto_number || '-'
-              const supplierLabel = r.supplier || '-'
+              const opLabel = formatSapDisplayValue(r.operation_id)
+              const contractLabel = formatSapDisplayValue(r.contract_ext_no || r.contract_number)
+              const stoLabel = formatSapDisplayValue(r.sto_number)
+              const supplierLabel = formatSapDisplayValue(r.supplier)
               const dueStart = r.delivery_start_date
                 ? formatDateDMY(r.delivery_start_date || '')
                 : '-'
@@ -536,7 +537,7 @@ function CalendarDeliverablesTable({
                     >
                       <div className="font-semibold text-gray-900 truncate" title={opLabel}>{opLabel}</div>
                       <div className="text-[10px] text-gray-500 truncate" title={`${r.loading_location || ''} → ${r.unloading_location || ''}`}>
-                        {(r.loading_location || '-')} → {(r.unloading_location || '-')}
+                        {formatSapDisplayValue(r.loading_location)} → {formatSapDisplayValue(r.unloading_location)}
                       </div>
                     </td>
                   ) : null}
@@ -555,21 +556,21 @@ function CalendarDeliverablesTable({
                     const val = (() => {
                       switch (id) {
                         case 'owner':
-                          return r.trucking_owner || '-'
+                          return formatSapDisplayValue(r.trucking_owner)
                         case 'due_start':
                           return dueStart
                         case 'due_end':
                           return dueEnd
                         case 'source_type':
-                          return (r as any).source_type || '—'
+                          return formatSapDisplayValue((r as any).source_type)
                         case 'lt_spot':
-                          return (r as any).lt_spot || '—'
+                          return formatSapDisplayValue((r as any).lt_spot)
                         case 'product':
-                          return r.product || '—'
+                          return formatSapDisplayValue(r.product)
                         case 'group_name':
-                          return r.group_name || '—'
+                          return formatSapDisplayValue(r.group_name)
                         case 'supplier':
-                          return r.supplier || '—'
+                          return formatSapDisplayValue(r.supplier)
                         case 'outstanding_quantity':
                           return formatTruckingQtyMt(outQty)
                         case 'qty_sent':
@@ -1825,7 +1826,7 @@ function TruckingPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.supplier || '',
-      render: (o) => <span className="text-sm break-words">{o.supplier || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.supplier)}</span>
     },
     {
       id: 'status',
@@ -1853,7 +1854,7 @@ function TruckingPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.product || '',
-      render: (o) => <span className="text-sm break-words">{o.product || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.product)}</span>
     },
     {
       id: 'incoterm',
@@ -1861,7 +1862,7 @@ function TruckingPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.incoterm || '',
-      render: (o) => <span className="text-sm break-words">{o.incoterm || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.incoterm)}</span>
     },
     {
       id: 'contract_qty',
@@ -1935,7 +1936,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.operation_id || '',
       render: (o) => (
         <span className="text-sm break-words block" title={o.operation_id || ''}>
-          {o.operation_id || '-'}
+          {formatSapDisplayValue(o.operation_id)}
         </span>
       )
     },
@@ -1945,7 +1946,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.location || '',
-      render: (o) => <span className="text-sm break-words">{o.location || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.location)}</span>
     },
     {
       id: 'loading_location',
@@ -1953,7 +1954,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.loading_location || o.location || '',
-      render: (o) => <span className="text-sm break-words">{o.loading_location || o.location || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.loading_location || o.location)}</span>
     },
     {
       id: 'unloading_location',
@@ -1961,7 +1962,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.unloading_location || '',
-      render: (o) => <span className="text-sm break-words">{o.unloading_location || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.unloading_location)}</span>
     },
     {
       id: 'trucking_owner',
@@ -1969,7 +1970,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.trucking_owner || '',
-      render: (o) => <span className="text-sm break-words">{o.trucking_owner || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.trucking_owner)}</span>
     },
     {
       id: 'quantity_sent',
@@ -2079,7 +2080,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.buyer || '',
-      render: (o) => <span className="text-sm break-words">{o.buyer || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.buyer)}</span>
     },
     {
       id: 'group_name',
@@ -2087,7 +2088,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.group_name || '',
-      render: (o) => <span className="text-sm break-words">{o.group_name || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.group_name)}</span>
     }
   ], [])
 
@@ -3453,19 +3454,19 @@ function TruckingPageContent() {
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3 pb-3 border-b">
                           <div>
                             <div className="text-gray-500">Contract Number</div>
-                            <div className="font-medium">{operation.contract_number || '-'}</div>
+                            <div className="font-medium">{formatSapDisplayValue(operation.contract_number)}</div>
                           </div>
                           <div>
                             <div className="text-gray-500">Supplier</div>
-                            <div className="font-medium">{operation.supplier || '-'}</div>
+                            <div className="font-medium">{formatSapDisplayValue(operation.supplier)}</div>
                           </div>
                           <div>
                             <div className="text-gray-500">Product</div>
-                            <div className="font-medium">{operation.product || '-'}</div>
+                            <div className="font-medium">{formatSapDisplayValue(operation.product)}</div>
                           </div>
                           <div>
                             <div className="text-gray-500">Group</div>
-                            <div className="font-medium">{operation.group_name || '-'}</div>
+                            <div className="font-medium">{formatSapDisplayValue(operation.group_name)}</div>
                           </div>
                         </div>
 
@@ -3480,7 +3481,7 @@ function TruckingPageContent() {
                                 className="h-8 text-sm"
                               />
                             ) : (
-                              <div className="font-medium">{operation.location || '-'}</div>
+                              <div className="font-medium">{formatSapDisplayValue(operation.location)}</div>
                             )}
                           </div>
                           <div>
@@ -3492,7 +3493,7 @@ function TruckingPageContent() {
                                 className="h-8 text-sm"
                               />
                             ) : (
-                              <div className="font-medium">{operation.trucking_owner || '-'}</div>
+                              <div className="font-medium">{formatSapDisplayValue(operation.trucking_owner)}</div>
                             )}
                           </div>
                           <div>

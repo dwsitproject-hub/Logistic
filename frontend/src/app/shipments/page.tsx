@@ -16,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
 import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
@@ -477,7 +478,7 @@ function shipmentModalStoDisplay(shipment: Shipment | null): string {
     (shipment.sto_key && String(shipment.sto_key).trim()) ||
     (shipment.shipment_id && String(shipment.shipment_id).trim()) ||
     ''
-  return sto || '-'
+  return formatSapDisplayValue(sto)
 }
 
 type PortsModalContractDetail = {
@@ -2520,7 +2521,7 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => s.vessel_name || '',
-      render: (s) => <span className="text-sm break-words">{s.vessel_name || '-'}</span>
+      render: (s) => <span className="text-sm break-words">{formatSapDisplayValue(s.vessel_name)}</span>
     },
     {
       id: 'status',
@@ -2541,7 +2542,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.product || s.products || '',
       render: (s) => (
-        <span className="text-sm break-words">{s.product || s.products || '-'}</span>
+        <span className="text-sm break-words">{formatSapDisplayValue(s.product || s.products)}</span>
       ),
     },
     {
@@ -2550,7 +2551,7 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => s.incoterm || '',
-      render: (s) => <span className="text-sm break-words">{s.incoterm || '-'}</span>
+      render: (s) => <span className="text-sm break-words">{formatSapDisplayValue(s.incoterm)}</span>
     },
     {
       id: 'sto_quantity',
@@ -2612,7 +2613,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => s.operation_id || '',
       render: (s) => (
         <span className="text-sm break-words block" title={s.operation_id || ''}>
-          {s.operation_id || '-'}
+          {formatSapDisplayValue(s.operation_id)}
         </span>
       )
     },
@@ -2664,7 +2665,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.b2b_flag || '',
-      render: (s) => <span className="text-sm break-words">{s.b2b_flag || '-'}</span>
+      render: (s) => <span className="text-sm break-words">{formatSapDisplayValue(s.b2b_flag)}</span>
     },
     {
       id: 'port_of_loading',
@@ -2672,7 +2673,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.port_of_loading || '',
-      render: (s) => <span className="text-sm break-words">{s.port_of_loading || '-'}</span>
+      render: (s) => <span className="text-sm break-words">{formatSapDisplayValue(s.port_of_loading)}</span>
     },
     {
       id: 'port_of_discharge',
@@ -2680,7 +2681,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.port_of_discharge || s.plant_site || '',
-      render: (s) => <span className="text-sm break-words">{s.port_of_discharge || s.plant_site || '-'}</span>
+      render: (s) => <span className="text-sm break-words">{formatSapDisplayValue(s.port_of_discharge || s.plant_site)}</span>
     },
     {
       id: 'vessel_code',
@@ -2688,7 +2689,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.vessel_code || '',
-      render: (s) => <span className="text-sm">{s.vessel_code || '-'}</span>
+      render: (s) => <span className="text-sm">{formatSapDisplayValue(s.vessel_code)}</span>
     },
     {
       id: 'estimated_nautical_miles',
@@ -2744,7 +2745,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.vessel_hull_type || '',
-      render: (s) => <span className="text-sm break-words">{s.vessel_hull_type || '-'}</span>
+      render: (s) => <span className="text-sm break-words">{formatSapDisplayValue(s.vessel_hull_type)}</span>
     },
     {
       id: 'vessel_registration_year',
@@ -2752,7 +2753,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.vessel_registration_year || 0,
-      render: (s) => <span className="text-sm">{s.vessel_registration_year || '-'}</span>
+      render: (s) => <span className="text-sm">{formatSapDisplayValue(s.vessel_registration_year)}</span>
     },
     {
       id: 'average_vessel_speed',
@@ -5015,15 +5016,15 @@ function ShipmentsPageContent() {
                                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mb-4 pb-4 border-b">
                                       <div>
                                         <div className="text-gray-500">Source</div>
-                                        <div className="font-medium">{shipment.source_type || shipment.supplier || '-'}</div>
+                                        <div className="font-medium">{formatSapDisplayValue(shipment.source_type || shipment.supplier)}</div>
                                       </div>
                                       <div>
                                         <div className="text-gray-500">Buyer</div>
-                                        <div className="font-medium">{shipment.buyer || shipment.buyers || '-'}</div>
+                                        <div className="font-medium">{formatSapDisplayValue(shipment.buyer || shipment.buyers)}</div>
                                       </div>
                                       <div>
                                         <div className="text-gray-500">Group Name</div>
-                                        <div className="font-medium">{shipment.group_name || shipment.group_names || '-'}</div>
+                                        <div className="font-medium">{formatSapDisplayValue(shipment.group_name || shipment.group_names)}</div>
                                       </div>
                                     </div>
 
@@ -5049,11 +5050,11 @@ function ShipmentsPageContent() {
                                               </div>
                                               <div>
                                                 <div className="text-gray-500">PO No</div>
-                                                <div className="font-medium">{detail.po_number || '-'}</div>
+                                                <div className="font-medium">{formatSapDisplayValue(detail.po_number)}</div>
                                               </div>
                                               <div>
                                                 <div className="text-gray-500">Contract Ext No</div>
-                                                <div className="font-medium">{detail.contract_ext_no || '-'}</div>
+                                                <div className="font-medium">{formatSapDisplayValue(detail.contract_ext_no)}</div>
                                               </div>
                                               <div>
                                                 <div className="text-gray-500">Contract Qty</div>
@@ -5206,7 +5207,7 @@ function ShipmentsPageContent() {
                               </div>
                               <div className="min-w-0">
                                 <div className="font-semibold truncate">{shipment.sto_number || shipment.operation_id || ''}</div>
-                                <div className="text-xs text-gray-600 truncate">{shipment.vessel_name || '-'} • {shipment.contract_number || '-'}</div>
+                                <div className="text-xs text-gray-600 truncate">{formatSapDisplayValue(shipment.vessel_name)} • {formatSapDisplayValue(shipment.contract_number)}</div>
                               </div>
                               <Badge className={getStatusColor(shipment.status)}>
                                 {shipment.status}
@@ -5274,15 +5275,15 @@ function ShipmentsPageContent() {
                               <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mb-4 pb-4 border-b">
                                 <div>
                                   <div className="text-gray-500">Source</div>
-                                  <div className="font-medium">{shipment.source_type || shipment.supplier || '-'}</div>
+                                  <div className="font-medium">{formatSapDisplayValue(shipment.source_type || shipment.supplier)}</div>
                                 </div>
                                 <div>
                                   <div className="text-gray-500">Buyer</div>
-                                  <div className="font-medium">{shipment.buyer || shipment.buyers || '-'}</div>
+                                  <div className="font-medium">{formatSapDisplayValue(shipment.buyer || shipment.buyers)}</div>
                                 </div>
                                 <div>
                                   <div className="text-gray-500">Group Name</div>
-                                  <div className="font-medium">{shipment.group_name || shipment.group_names || '-'}</div>
+                                  <div className="font-medium">{formatSapDisplayValue(shipment.group_name || shipment.group_names)}</div>
                                 </div>
                               </div>
 
@@ -5305,11 +5306,11 @@ function ShipmentsPageContent() {
                                           </div>
                                           <div>
                                             <div className="text-gray-500">Contract Ext No</div>
-                                            <div className="font-medium">{detail.contract_ext_no || '-'}</div>
+                                            <div className="font-medium">{formatSapDisplayValue(detail.contract_ext_no)}</div>
                                           </div>
                                           <div>
                                             <div className="text-gray-500">PO No</div>
-                                            <div className="font-medium">{detail.po_number || '-'}</div>
+                                            <div className="font-medium">{formatSapDisplayValue(detail.po_number)}</div>
                                           </div>
                                           <div>
                                             <div className="text-gray-500">Contract Qty</div>
@@ -5894,7 +5895,7 @@ function ShipmentsPageContent() {
                               />
                             </div>
                           ) : (
-                          <div className="font-medium">{shipmentInfo.vessel_loading_port_1 || '-'}</div>
+                          <div className="font-medium">{formatSapDisplayValue(shipmentInfo.vessel_loading_port_1)}</div>
                           )}
                         </div>
                         <div>
@@ -5911,7 +5912,7 @@ function ShipmentsPageContent() {
                               />
                             </div>
                           ) : (
-                            <div className="font-medium">{shipmentInfo.vessel_discharge_port_1 || '-'}</div>
+                            <div className="font-medium">{formatSapDisplayValue(shipmentInfo.vessel_discharge_port_1)}</div>
                           )}
                         </div>
                         <div>
@@ -6381,8 +6382,8 @@ function ShipmentsPageContent() {
                             <div className="flex items-center gap-2">
                               <div className="font-medium">
                                 {port.is_discharge_port
-                                  ? `Discharge Port — ${displayData.port_name || '-'}`
-                                  : `${displayData.port_sequence}. ${displayData.port_name || '-'}`}
+                                  ? `Discharge Port — ${formatSapDisplayValue(displayData.port_name)}`
+                                  : `${displayData.port_sequence}. ${formatSapDisplayValue(displayData.port_name)}`}
                               </div>
                               {port.is_discharge_port && (
                                 <Badge className="bg-amber-100 text-amber-700">Discharge</Badge>
@@ -6416,7 +6417,7 @@ function ShipmentsPageContent() {
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
-                              <div className="font-medium">{displayData.port_name || '-'}</div>
+                              <div className="font-medium">{formatSapDisplayValue(displayData.port_name)}</div>
                             )}
                           </div>
                           <div>
@@ -6430,7 +6431,7 @@ function ShipmentsPageContent() {
                                 min={1}
                               />
                             ) : (
-                              <div className="font-medium">{displayData.port_sequence || '-'}</div>
+                              <div className="font-medium">{formatSapDisplayValue(displayData.port_sequence)}</div>
                             )}
                           </div>
                           <div>
@@ -6756,8 +6757,8 @@ function ShipmentsPageContent() {
                   <div className="space-y-3">
                     {cancelledLoadingPorts.map((port) => {
                       const portLabel = port.is_discharge_port
-                        ? `Discharge Port - ${port.port_name || '-'}`
-                        : `Loading Port ${port.port_sequence || '-'} - ${port.port_name || '-'}`
+                        ? `Discharge Port - ${formatSapDisplayValue(port.port_name)}`
+                        : `Loading Port ${formatSapDisplayValue(port.port_sequence)} - ${formatSapDisplayValue(port.port_name)}`
                       return (
                         <div
                           key={`cancelled-${port.id ?? `${port.shipment_id}-${port.port_sequence}-${port.port_name}`}`}
@@ -6766,7 +6767,7 @@ function ShipmentsPageContent() {
                           <div className="font-medium text-gray-700">{portLabel}</div>
                           <div className="mt-1">
                             <span className="text-gray-500">Remark:</span>{' '}
-                            <span>{port.cancel_remark?.trim() || '-'}</span>
+                            <span>{formatSapDisplayValue(port.cancel_remark?.trim())}</span>
                           </div>
                           <div className="mt-1 text-xs text-gray-500">
                             Cancelled by: {port.cancelled_by_name?.trim() || 'Unknown User'} on {port.cancelled_at ? formatDateTimeDMY(port.cancelled_at) : '-'}
@@ -6789,7 +6790,7 @@ function ShipmentsPageContent() {
             <DialogTitle>Cancel Loading Port</DialogTitle>
             <DialogDescription>
               {cancelPortTarget
-                ? `Loading Port ${cancelPortTarget.portSequence}: ${cancelPortTarget.portName || '-'}`
+                ? `Loading Port ${cancelPortTarget.portSequence}: ${formatSapDisplayValue(cancelPortTarget.portName)}`
                 : 'Provide a reason before cancelling this loading port activity.'}
             </DialogDescription>
           </DialogHeader>

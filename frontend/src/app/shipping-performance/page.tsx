@@ -37,6 +37,7 @@ import {
   type ShippingPerfCardFilter,
   type ShippingSummaryMetricKey,
 } from '@/lib/shippingPerformanceLabels'
+import { formatSapDisplayValue, formatSapGroupDisplayLabel } from '@/lib/sapDisplayValue'
 import {
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
   COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
@@ -141,6 +142,34 @@ type PerfDashMode = 'eta' | 'ata'
 type TableStatusFilter = 'All' | 'Open' | 'Closed'
 
 type TableColumnKey = keyof ShippingPerformanceRow
+
+/** By Vessel table only — display keys mapped to row payload fields. */
+type ByVesselOnlyColumnKey =
+  | 'by_vessel_qty_contract'
+  | 'by_vessel_qty_delivery'
+  | 'by_vessel_qty_receive'
+
+type ShippingPerfColumnKey = TableColumnKey | ByVesselOnlyColumnKey
+
+const BY_VESSEL_QTY_COLUMN_DATA_KEYS: Record<ByVesselOnlyColumnKey, TableColumnKey> = {
+  by_vessel_qty_contract: 'contract_qty',
+  by_vessel_qty_delivery: 'delivered_qty',
+  by_vessel_qty_receive: 'received_qty',
+}
+
+function isByVesselOnlyColumnKey(key: ShippingPerfColumnKey): key is ByVesselOnlyColumnKey {
+  return Object.prototype.hasOwnProperty.call(BY_VESSEL_QTY_COLUMN_DATA_KEYS, key)
+}
+
+function resolveColumnDataKey(
+  colKey: ShippingPerfColumnKey,
+  mode: PerfDashMode,
+): TableColumnKey {
+  if (isByVesselOnlyColumnKey(colKey)) {
+    return BY_VESSEL_QTY_COLUMN_DATA_KEYS[colKey]
+  }
+  return resolvePerfTableDataKey(colKey, mode)
+}
 
 /** Shipment-level columns hidden in the By Vessel summary view. */
 const DETAIL_COLUMN_KEYS = new Set<string>([
@@ -254,7 +283,23 @@ function resolvePerfColumnTooltip(
   return formatShippingPerfDisplayLabel(tooltip, labelMode)
 }
 
-function aggregateByVessel(rows: ShippingPerformanceRow[], mode: PerfDashMode = 'eta'): ShippingPerformanceRow[] {
+type PerfDeltaAggregateKey =
+  | (typeof PERF_DELTA_LOGICAL_KEYS)[number]
+  | (typeof PERF_DELTA_ATA_KEY_MAP)[(typeof PERF_DELTA_LOGICAL_KEYS)[number]]
+
+function aggregateDeltaFields(
+  vesselRows: ShippingPerformanceRow[],
+): Record<PerfDeltaAggregateKey, number | null> {
+  const fields = {} as Record<PerfDeltaAggregateKey, number | null>
+  for (const logicalKey of PERF_DELTA_LOGICAL_KEYS) {
+    const ataKey = PERF_DELTA_ATA_KEY_MAP[logicalKey]
+    fields[logicalKey] = avgMetric(vesselRows, logicalKey)
+    fields[ataKey] = avgMetric(vesselRows, ataKey)
+  }
+  return fields
+}
+
+function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceRow[] {
   const groups = new Map<string, ShippingPerformanceRow[]>()
   for (const row of rows) {
     const key = normalizeVesselKey(row.vessel_name)
@@ -263,43 +308,50 @@ function aggregateByVessel(rows: ShippingPerformanceRow[], mode: PerfDashMode = 
     else groups.set(key, [row])
   }
 
-  const avgDelta = (vesselRows: ShippingPerformanceRow[], logicalKey: (typeof PERF_DELTA_LOGICAL_KEYS)[number]) =>
-    avgMetric(vesselRows, resolvePerfTableDataKey(logicalKey, mode))
-
-  return [...groups.entries()].map(([vesselKey, vesselRows]) => ({
-    id: `vessel-group:${vesselKey}`,
-    shipment_id: '',
-    contract_number: '',
-    group_name: null,
-    vessel_name: vesselKey,
-    po_number: null,
-    contract_ext_no: aggregateUniqueContractExtNos(vesselRows),
-    sto_number: null,
-    contract_date: null,
-    incoterm: null,
-    product: null,
-    supplier: null,
-    contract_qty: sumMetric(vesselRows, 'contract_qty'),
-    status: null,
-    plant_site: null,
-    shipment_count: vesselRows.length,
-    sto_qty: sumMetric(vesselRows, 'sto_qty'),
-    received_qty: sumMetric(vesselRows, 'received_qty'),
-    outstanding_qty: sumMetric(vesselRows, 'outstanding_qty'),
-    loading_delta_eta_etr_days: avgDelta(vesselRows, 'loading_delta_eta_etr_days'),
-    loading_delta_eta_etb_days: avgDelta(vesselRows, 'loading_delta_eta_etb_days'),
-    loading_delta_etb_etc_days: avgDelta(vesselRows, 'loading_delta_etb_etc_days'),
-    discharge_delta_eta_etb_days: avgDelta(vesselRows, 'discharge_delta_eta_etb_days'),
-    discharge_delta_etb_etc_days: avgDelta(vesselRows, 'discharge_delta_etb_etc_days'),
-    total_delta_days: avgDelta(vesselRows, 'total_delta_days'),
-    cargo_readiness_date: null,
-    loading_eta_arrival: null,
-    loading_eta_berthed: null,
-    loading_eta_completed: null,
-    discharge_eta_arrival: null,
-    discharge_eta_berthed: null,
-    discharge_eta_completed: null,
-  }))
+  return [...groups.entries()].map(([vesselKey, vesselRows]): ShippingPerformanceRow => {
+    const deltas = aggregateDeltaFields(vesselRows)
+    return {
+      id: `vessel-group:${vesselKey}`,
+      shipment_id: '',
+      contract_number: '',
+      group_name: null,
+      vessel_name: vesselKey,
+      po_number: null,
+      contract_ext_no: aggregateUniqueContractExtNos(vesselRows),
+      sto_number: null,
+      contract_date: null,
+      incoterm: null,
+      product: null,
+      supplier: null,
+      contract_qty: sumMetric(vesselRows, 'contract_qty'),
+      status: null,
+      plant_site: null,
+      shipment_count: vesselRows.length,
+      sto_qty: sumMetric(vesselRows, 'sto_qty'),
+      received_qty: sumMetric(vesselRows, 'received_qty'),
+      delivered_qty: sumMetric(vesselRows, 'delivered_qty'),
+      outstanding_qty: sumMetric(vesselRows, 'outstanding_qty'),
+      loading_delta_eta_etr_days: deltas.loading_delta_eta_etr_days,
+      loading_delta_eta_etb_days: deltas.loading_delta_eta_etb_days,
+      loading_delta_etb_etc_days: deltas.loading_delta_etb_etc_days,
+      discharge_delta_eta_etb_days: deltas.discharge_delta_eta_etb_days,
+      discharge_delta_etb_etc_days: deltas.discharge_delta_etb_etc_days,
+      total_delta_days: deltas.total_delta_days,
+      ata_loading_delta_eta_etr_days: deltas.ata_loading_delta_eta_etr_days,
+      ata_loading_delta_eta_etb_days: deltas.ata_loading_delta_eta_etb_days,
+      ata_loading_delta_etb_etc_days: deltas.ata_loading_delta_etb_etc_days,
+      ata_discharge_delta_eta_etb_days: deltas.ata_discharge_delta_eta_etb_days,
+      ata_discharge_delta_etb_etc_days: deltas.ata_discharge_delta_etb_etc_days,
+      ata_total_delta_days: deltas.ata_total_delta_days,
+      cargo_readiness_date: null,
+      loading_eta_arrival: null,
+      loading_eta_berthed: null,
+      loading_eta_completed: null,
+      discharge_eta_arrival: null,
+      discharge_eta_berthed: null,
+      discharge_eta_completed: null,
+    }
+  })
 }
 
 type LatePerfNode = {
@@ -449,7 +501,7 @@ function countUniqueContractsFromRows(rows: ShippingPerformanceRow[]): number {
 }
 
 function displayGroupLabel(key: string): string {
-  return key === 'Blank' ? 'Uncategorized' : key
+  return formatSapGroupDisplayLabel(key)
 }
 
 /** Drilldown card vessel label — per-node count; summing sibling cards can exceed the global unique total. */
@@ -705,13 +757,22 @@ function matchesTableStatusFilter(status: string, filter: TableStatusFilter): bo
 type ColumnType = 'text' | 'number'
 
 type ColumnDef = {
-  key: keyof ShippingPerformanceRow
+  key: ShippingPerfColumnKey
   label: string
   type: ColumnType
   defaultVisible?: boolean
   /** Default visibility when the By Vessel toggle is active. */
   byVesselDefaultVisible?: boolean
+  /** Shown only in the By Vessel table view (column manager + table). */
+  byVesselOnly?: boolean
+  /** Header label override in the By Vessel table view only. */
+  byVesselLabel?: string
   tooltip?: string
+}
+
+function resolveColumnBaseLabel(col: ColumnDef, tableViewMode: TableViewMode): string {
+  if (tableViewMode === 'by_vessel' && col.byVesselLabel) return col.byVesselLabel
+  return col.label
 }
 
 function columnDefaultVisible(col: ColumnDef, tableViewMode: TableViewMode): boolean {
@@ -746,6 +807,27 @@ const SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS: Partial<Record<keyof ShippingPerforma
 const COLUMN_DEFS: ColumnDef[] = [
   { key: 'vessel_name', label: 'Vessel', type: 'text', defaultVisible: true },
   {
+    key: 'by_vessel_qty_contract',
+    label: 'Qty Contract (MT)',
+    type: 'number',
+    byVesselOnly: true,
+    byVesselDefaultVisible: true,
+  },
+  {
+    key: 'by_vessel_qty_delivery',
+    label: 'Qty Delivery (MT)',
+    type: 'number',
+    byVesselOnly: true,
+    byVesselDefaultVisible: true,
+  },
+  {
+    key: 'by_vessel_qty_receive',
+    label: 'Qty Receive (MT)',
+    type: 'number',
+    byVesselOnly: true,
+    byVesselDefaultVisible: true,
+  },
+  {
     key: 'contract_ext_no',
     label: 'Contract Ext No',
     type: 'text',
@@ -766,7 +848,14 @@ const COLUMN_DEFS: ColumnDef[] = [
   { key: 'sto_number', label: 'STO No', type: 'text', defaultVisible: false },
   { key: 'sto_qty', label: 'STO Qty', type: 'number', defaultVisible: false },
   { key: 'received_qty', label: 'Received Qty', type: 'number', defaultVisible: false },
-  { key: 'outstanding_qty', label: 'Outstanding Qty', type: 'number', defaultVisible: true },
+  {
+    key: 'outstanding_qty',
+    label: 'Outstanding Qty',
+    byVesselLabel: 'Qty Outstanding (MT)',
+    type: 'number',
+    defaultVisible: true,
+    byVesselDefaultVisible: true,
+  },
   {
     key: 'loading_delta_eta_etr_days',
     label: 'Loading ETA - ETR',
@@ -814,6 +903,10 @@ const COLUMN_DEFS: ColumnDef[] = [
 const COLUMN_MAP = Object.fromEntries(COLUMN_DEFS.map((col) => [col.key, col])) as Record<string, ColumnDef>
 
 function isColumnEligibleForView(key: string, tableViewMode: TableViewMode): boolean {
+  const col = COLUMN_MAP[key]
+  if (col?.byVesselOnly) {
+    return tableViewMode === 'by_vessel'
+  }
   if (BY_VESSEL_ONLY_COLUMNS.has(key)) {
     return tableViewMode === 'by_vessel'
   }
@@ -828,9 +921,9 @@ function isColumnEligibleForView(key: string, tableViewMode: TableViewMode): boo
 }
 
 function resolveManageableColumnKeys(
-  columnOrder: Array<keyof ShippingPerformanceRow>,
+  columnOrder: ShippingPerfColumnKey[],
   tableViewMode: TableViewMode,
-): TableColumnKey[] {
+): ShippingPerfColumnKey[] {
   return columnOrder.filter((key) => {
     const id = String(key)
     return Boolean(COLUMN_MAP[id]) && isColumnEligibleForView(id, tableViewMode)
@@ -838,10 +931,10 @@ function resolveManageableColumnKeys(
 }
 
 function resolveVisibleTableColumnKeys(
-  columnOrder: Array<keyof ShippingPerformanceRow>,
+  columnOrder: ShippingPerfColumnKey[],
   visibleColumns: Record<string, boolean>,
   tableViewMode: TableViewMode,
-): TableColumnKey[] {
+): ShippingPerfColumnKey[] {
   return resolveManageableColumnKeys(columnOrder, tableViewMode).filter(
     (key) => visibleColumns[String(key)],
   )
@@ -849,10 +942,10 @@ function resolveVisibleTableColumnKeys(
 
 /** Column manager list — visible columns in table order, then hidden columns A→Z (shipments/trucking pattern). */
 function buildShippingPerfColumnManagerKeys(
-  columnOrder: Array<keyof ShippingPerformanceRow>,
+  columnOrder: ShippingPerfColumnKey[],
   visibleColumns: Record<string, boolean>,
   tableViewMode: TableViewMode,
-): TableColumnKey[] {
+): ShippingPerfColumnKey[] {
   const manageable = resolveManageableColumnKeys(columnOrder, tableViewMode)
   const visibleInOrder = manageable.filter((key) => visibleColumns[String(key)])
   const hiddenSorted = manageable
@@ -865,21 +958,48 @@ function buildShippingPerfColumnManagerKeys(
   return [...visibleInOrder, ...hiddenSorted]
 }
 
-/** Keep Contract Ext No immediately after Vessel in table + column modal order. */
-function ensureContractExtNoAfterVessel(
-  order: Array<keyof ShippingPerformanceRow>,
-): Array<keyof ShippingPerformanceRow> {
+const BY_VESSEL_AFTER_VESSEL_COLUMN_KEYS: ShippingPerfColumnKey[] = [
+  'by_vessel_qty_contract',
+  'by_vessel_qty_delivery',
+  'by_vessel_qty_receive',
+  'contract_ext_no',
+]
+
+/** Keep By Vessel qty columns + Contract Ext No immediately after Vessel. */
+function ensureByVesselTableColumnOrder(order: ShippingPerfColumnKey[]): ShippingPerfColumnKey[] {
   const defOrder = COLUMN_DEFS.map((c) => c.key)
   const deduped = order.filter((key) => defOrder.includes(key))
   const missing = defOrder.filter((key) => !deduped.includes(key))
-  const merged: Array<keyof ShippingPerformanceRow> = [...deduped, ...missing]
+  const merged: ShippingPerfColumnKey[] = [...deduped, ...missing]
+  const vesselIdx = merged.indexOf('vessel_name')
+  if (vesselIdx < 0) return merged
+
+  const withoutAnchors = merged.filter((key) => !BY_VESSEL_AFTER_VESSEL_COLUMN_KEYS.includes(key))
+  const anchors = BY_VESSEL_AFTER_VESSEL_COLUMN_KEYS.filter((key) => merged.includes(key))
+  withoutAnchors.splice(vesselIdx + 1, 0, ...anchors)
+  return withoutAnchors
+}
+
+/** Keep Contract Ext No immediately after Vessel in All Shipments table + column modal order. */
+function ensureContractExtNoAfterVessel(order: ShippingPerfColumnKey[]): ShippingPerfColumnKey[] {
+  const defOrder = COLUMN_DEFS.map((c) => c.key)
+  const deduped = order.filter((key) => defOrder.includes(key))
+  const missing = defOrder.filter((key) => !deduped.includes(key))
+  const merged: ShippingPerfColumnKey[] = [...deduped, ...missing]
   const vesselIdx = merged.indexOf('vessel_name')
   const extIdx = merged.indexOf('contract_ext_no')
   if (vesselIdx < 0 || extIdx < 0 || extIdx === vesselIdx + 1) return merged
-  const extKey: keyof ShippingPerformanceRow = 'contract_ext_no'
-  const withoutExt: Array<keyof ShippingPerformanceRow> = merged.filter((key) => key !== extKey)
-  withoutExt.splice(vesselIdx + 1, 0, extKey)
+  const withoutExt: ShippingPerfColumnKey[] = merged.filter((key) => key !== 'contract_ext_no')
+  withoutExt.splice(vesselIdx + 1, 0, 'contract_ext_no')
   return withoutExt
+}
+
+function ensureTableColumnOrder(
+  order: ShippingPerfColumnKey[],
+  tableViewMode: TableViewMode,
+): ShippingPerfColumnKey[] {
+  if (tableViewMode === 'by_vessel') return ensureByVesselTableColumnOrder(order)
+  return ensureContractExtNoAfterVessel(order)
 }
 
 function applyByVesselColumnDefaults(
@@ -894,10 +1014,10 @@ function applyByVesselColumnDefaults(
 }
 
 function reorderColumnsInOrder(
-  order: Array<keyof ShippingPerformanceRow>,
+  order: ShippingPerfColumnKey[],
   fromKey: string,
   toKey: string,
-): Array<keyof ShippingPerformanceRow> {
+): ShippingPerfColumnKey[] {
   if (!fromKey || !toKey || fromKey === toKey) return order
   const fromIdx = order.findIndex((key) => String(key) === fromKey)
   const toIdx = order.findIndex((key) => String(key) === toKey)
@@ -924,15 +1044,23 @@ function getStatusColor(status: string): string {
 }
 
 function asDisplayValue(value: unknown): string {
-  if (value === null || value === undefined) return ''
-  return String(value)
+  return formatSapDisplayValue(value)
 }
 
 /** Section 3 — null/empty/placeholder port values render as "-". */
 function formatPortColumnDisplay(value: unknown): string {
-  const trimmed = String(value ?? '').trim()
-  if (!trimmed || trimmed.toLowerCase() === 'blank') return '-'
-  return trimmed
+  return formatSapDisplayValue(value)
+}
+
+function isMtQtyColumn(key: string): boolean {
+  return (
+    isByVesselOnlyColumnKey(key as ShippingPerfColumnKey) ||
+    key === 'sto_qty' ||
+    key === 'received_qty' ||
+    key === 'outstanding_qty' ||
+    key === 'contract_qty' ||
+    key === 'delivered_qty'
+  )
 }
 
 function NumberCell({
@@ -987,15 +1115,15 @@ function ShippingPerformancePageContent() {
     }
   }, [canViewPage, router])
   const [showColumnManager, setShowColumnManager] = useState(false)
-  const [columnOrder, setColumnOrder] = useState<Array<keyof ShippingPerformanceRow>>(
-    () => ensureContractExtNoAfterVessel(COLUMN_DEFS.map((c) => c.key)),
+  const [columnOrder, setColumnOrder] = useState<ShippingPerfColumnKey[]>(
+    () => ensureTableColumnOrder(COLUMN_DEFS.map((c) => c.key), 'all'),
   )
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(
     Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, columnDefaultVisible(c, 'all')])),
   )
   const [dragColId, setDragColId] = useState<string | null>(null)
   const [draggingColumn, setDraggingColumn] = useState<string | null>(null)
-  const [sortBy, setSortBy] = useState<keyof ShippingPerformanceRow>('total_delta_days')
+  const [sortBy, setSortBy] = useState<ShippingPerfColumnKey>('total_delta_days')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
   const [currentPage, setCurrentPage] = useState(1)
   const pageSize = 20
@@ -1265,15 +1393,18 @@ function ShippingPerformancePageContent() {
     setColumnOrder((prev) => {
       const deduped = prev.filter((key) => allKeys.includes(key))
       const missing = allKeys.filter((key) => !deduped.includes(key))
-      const next = ensureContractExtNoAfterVessel([...deduped, ...missing])
+      const next = ensureTableColumnOrder([...deduped, ...missing], tableViewMode)
       if (prev.length === next.length && prev.every((key, index) => key === next[index])) return prev
       return next
     })
-  }, [])
+    if (tableViewMode === 'by_vessel') {
+      setVisibleColumns((prev) => applyByVesselColumnDefaults(prev))
+    }
+  }, [tableViewMode])
 
   const activateByVesselTableView = useCallback(() => {
     setTableViewMode('by_vessel')
-    setColumnOrder((prev) => ensureContractExtNoAfterVessel(prev))
+    setColumnOrder((prev) => ensureTableColumnOrder(prev, 'by_vessel'))
     setVisibleColumns((prev) => applyByVesselColumnDefaults(prev))
     setCurrentPage(1)
   }, [])
@@ -1466,6 +1597,11 @@ function ShippingPerformancePageContent() {
     [tableLabelMode],
   )
 
+  const getColumnHeaderLabel = useCallback(
+    (col: ColumnDef) => resolveTableColumnLabel(resolveColumnBaseLabel(col, tableViewMode)),
+    [resolveTableColumnLabel, tableViewMode],
+  )
+
   const tableScopeParts = useMemo(() => {
     const parts: string[] =
       perfCardFilter === 'all' ? [] : [SHIPPING_PERF_CARD_TITLES[perfCardFilter]]
@@ -1506,7 +1642,7 @@ function ShippingPerformancePageContent() {
 
   // Step D: apply Section 3 sorting
   const filteredRows = useMemo(() => {
-    const sortDataKey = resolvePerfTableDataKey(sortBy, perfDashMode)
+    const sortDataKey = resolveColumnDataKey(sortBy, perfDashMode)
     const sorted = [...section3DisplayRows].sort((a, b) => {
       const aVal = a[sortDataKey]
       const bVal = b[sortDataKey]
@@ -1527,8 +1663,8 @@ function ShippingPerformancePageContent() {
 
   const tableRows = useMemo(() => {
     if (tableViewMode === 'all') return filteredRows
-    return aggregateByVessel(filteredRows, perfDashMode)
-  }, [filteredRows, tableViewMode, perfDashMode])
+    return aggregateByVessel(filteredRows)
+  }, [filteredRows, tableViewMode])
 
   const columnManagerKeys = useMemo(
     () => buildShippingPerfColumnManagerKeys(columnOrder, visibleColumns, tableViewMode),
@@ -1539,6 +1675,8 @@ function ShippingPerformancePageContent() {
     () => resolveVisibleTableColumnKeys(columnOrder, visibleColumns, tableViewMode),
     [columnOrder, visibleColumns, tableViewMode],
   )
+  const showTableActionsColumn = tableViewMode !== 'by_vessel'
+  const tableColSpan = (tableColumnKeys.length || 0) + (showTableActionsColumn ? 1 : 0)
 
   const totalPages = Math.max(1, Math.ceil(tableRows.length / pageSize))
   const paginatedRows = useMemo(
@@ -1562,12 +1700,6 @@ function ShippingPerformancePageContent() {
   ])
 
   useEffect(() => {
-    if (tableViewMode !== 'by_vessel') return
-    setColumnOrder((prev) => ensureContractExtNoAfterVessel(prev))
-    setVisibleColumns((prev) => applyByVesselColumnDefaults(prev))
-  }, [tableViewMode])
-
-  useEffect(() => {
     if (typeof window === 'undefined') return
     const calc = () => {
       const el = bottomScrollRef.current
@@ -1585,7 +1717,7 @@ function ShippingPerformancePageContent() {
     }
   }
 
-  const onToggleColumn = (key: keyof ShippingPerformanceRow) => {
+  const onToggleColumn = (key: ShippingPerfColumnKey) => {
     setVisibleColumns((prev) => {
       const next = { ...prev, [String(key)]: !prev[String(key)] }
       const visibleCount = Object.values(next).filter(Boolean).length
@@ -1598,7 +1730,7 @@ function ShippingPerformancePageContent() {
     setColumnOrder((prev) => reorderColumnsInOrder(prev, fromId, toId))
   }
 
-  const onHeaderSort = (key: keyof ShippingPerformanceRow) => {
+  const onHeaderSort = (key: ShippingPerfColumnKey) => {
     const nextDir: 'asc' | 'desc' =
       sortBy === key ? (sortDirection === 'asc' ? 'desc' : 'asc') : 'asc'
     setSortDirection(nextDir)
@@ -2124,7 +2256,7 @@ function ShippingPerformancePageContent() {
                                 checked={Boolean(visibleColumns[String(col.key)])}
                                 onCheckedChange={() => onToggleColumn(col.key)}
                               />
-                              <span className="truncate">{resolveTableColumnLabel(col.label)}</span>
+                              <span className="truncate">{getColumnHeaderLabel(col)}</span>
                             </label>
                           </div>
                         )
@@ -2205,7 +2337,7 @@ function ShippingPerformancePageContent() {
                   <colgroup>
                     {tableColumnKeys.map((key) => {
                       const col = COLUMN_MAP[String(key)]
-                      const columnLabel = resolveTableColumnLabel(col.label)
+                      const columnLabel = getColumnHeaderLabel(col)
                       return (
                         <col
                           key={String(key)}
@@ -2217,13 +2349,15 @@ function ShippingPerformancePageContent() {
                         />
                       )
                     })}
-                    <col style={{ width: COMPACT_TABLE_ACTIONS_COL_WIDTH_PX }} />
+                    {showTableActionsColumn ? (
+                      <col style={{ width: COMPACT_TABLE_ACTIONS_COL_WIDTH_PX }} />
+                    ) : null}
                   </colgroup>
                   <thead>
                     <tr className={SHIPPING_PERF_TABLE_HEADER_ROW_CLASS}>
                       {tableColumnKeys.map((key) => {
                         const col = COLUMN_MAP[String(key)]
-                        const columnLabel = resolveTableColumnLabel(col.label)
+                        const columnLabel = getColumnHeaderLabel(col)
                         const columnTooltip = resolvePerfColumnTooltip(col.tooltip, tableLabelMode)
                         const isSorted = sortBy === key
                         const opColClass = operationalTableColumnClass(
@@ -2259,9 +2393,11 @@ function ShippingPerformancePageContent() {
                           </th>
                         )
                       })}
-                      <th scope="col" className={COMPACT_TABLE_ACTIONS_HEADER_CLASS}>
-                        Actions
-                      </th>
+                      {showTableActionsColumn ? (
+                        <th scope="col" className={COMPACT_TABLE_ACTIONS_HEADER_CLASS}>
+                          Actions
+                        </th>
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody
@@ -2271,12 +2407,12 @@ function ShippingPerformancePageContent() {
                   >
                     {(summaryLoading || summaryFetching) && rows.length === 0 ? (
                       <TableInitialLoadPlaceholder
-                        colSpan={(tableColumnKeys.length || 0) + 1}
+                        colSpan={tableColSpan}
                         icon={Package}
                       />
                     ) : !summaryFetching && tableRows.length === 0 ? (
                       <tr className="bg-white">
-                        <td colSpan={(tableColumnKeys.length || 0) + 1} className="px-4 py-10 text-center text-sm text-gray-500">
+                        <td colSpan={tableColSpan} className="px-4 py-10 text-center text-sm text-gray-500">
                           No data found
                         </td>
                       </tr>
@@ -2288,7 +2424,7 @@ function ShippingPerformancePageContent() {
                           {tableColumnKeys.map((key) => {
                             const col = COLUMN_MAP[String(key)]
                             const colKey = String(key)
-                            const dataKey = resolvePerfTableDataKey(key, perfDashMode)
+                            const dataKey = resolveColumnDataKey(key, perfDashMode)
                             const rawValue = row[dataKey]
                             const layout = getShippingPerfTableColumnLayout(colKey, tableViewMode)
                             const opColClass = operationalTableColumnClass(layout)
@@ -2303,7 +2439,7 @@ function ShippingPerformancePageContent() {
 
                             let cellContent: ReactNode
                             if (key === 'vessel_name') {
-                              const vesselName = asDisplayValue(rawValue) || 'Unknown'
+                              const vesselName = formatSapDisplayValue(rawValue)
                               if (tableViewMode === 'by_vessel') {
                                 cellContent = (
                                   <button
@@ -2312,7 +2448,7 @@ function ShippingPerformancePageContent() {
                                     onClick={(e) => {
                                       e.stopPropagation()
                                       setSelectedVesselData({
-                                        vesselName,
+                                        vesselName: normalizeVesselKey(rawValue),
                                         vesselKey: normalizeVesselKey(rawValue),
                                       })
                                       setVesselModalOpen(true)
@@ -2326,12 +2462,7 @@ function ShippingPerformancePageContent() {
                                   <span className="text-sm">{vesselName}</span>
                                 )
                               }
-                            } else if (
-                              key === 'sto_qty' ||
-                              key === 'received_qty' ||
-                              key === 'outstanding_qty' ||
-                              key === 'contract_qty'
-                            ) {
+                            } else if (isMtQtyColumn(String(key))) {
                               cellContent =
                                 rawValue === null || rawValue === undefined ? (
                                   <span className="text-gray-400">-</span>
@@ -2368,7 +2499,7 @@ function ShippingPerformancePageContent() {
                               colKey === 'contract_number' ||
                               colKey === 'sto_number'
                             ) {
-                              const text = asDisplayValue(rawValue) || '-'
+                              const text = asDisplayValue(rawValue)
                               cellContent = <span className="text-sm">{text}</span>
                             } else if (col.type === 'number') {
                               cellContent = (
@@ -2380,7 +2511,7 @@ function ShippingPerformancePageContent() {
                                   decimalPlaces={
                                     tableViewMode === 'by_vessel' &&
                                     (String(key).includes('delta') || String(dataKey).includes('delta'))
-                                      ? 1
+                                      ? 0
                                       : undefined
                                   }
                                 />
@@ -2396,7 +2527,7 @@ function ShippingPerformancePageContent() {
                                 </span>
                               )
                             } else {
-                              const text = asDisplayValue(rawValue) || '-'
+                              const text = asDisplayValue(rawValue)
                               cellContent = <span className="text-sm">{text}</span>
                             }
 
@@ -2431,22 +2562,24 @@ function ShippingPerformancePageContent() {
                               </td>
                             )
                           })}
-                          <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)}>
-                            <div className="flex items-center justify-center">
-                              {String(row.contract_number || '').trim() ? (
-                                <Button
-                                  variant="outline"
-                                  size="icon"
-                                  onClick={() => void openContractDetailFromRow(row.contract_number)}
-                                  title="View"
-                                  disabled={contractDetailLoading}
-                                  className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-                                >
-                                  <Eye className="h-4 w-4" />
-                                </Button>
-                              ) : null}
-                            </div>
-                          </td>
+                          {showTableActionsColumn ? (
+                            <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)}>
+                              <div className="flex items-center justify-center">
+                                {String(row.contract_number || '').trim() ? (
+                                  <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() => void openContractDetailFromRow(row.contract_number)}
+                                    title="View"
+                                    disabled={contractDetailLoading}
+                                    className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                ) : null}
+                              </div>
+                            </td>
+                          ) : null}
                         </tr>
                         )
                       })

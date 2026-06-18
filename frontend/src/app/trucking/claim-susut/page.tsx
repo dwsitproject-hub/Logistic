@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Upload, ArrowLeft, RefreshCw, ArrowUp, ArrowDown } from 'lucide-react'
 import api from '@/lib/api'
 import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 
 type ClaimSusutImport = {
   id: string
@@ -696,7 +697,7 @@ export default function ClaimSusutPage() {
                               case 'tax':
                                 return r.tax ?? '-'
                               default:
-                                return r[c.id] || '-'
+                                return formatSapDisplayValue(r[c.id])
                             }
                           })()
                           return (

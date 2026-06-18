@@ -10,6 +10,7 @@ import {
   formatCommercialQtyKg,
   COMMERCIAL_TOTAL_PRICE_FORMULA_HELP,
 } from '@/lib/commercialDocumentsFormat'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { Check } from 'lucide-react'
 
 const DOC_STATUS_COLUMN_IDS = new Set<CommercialDocsColumnId>([
@@ -102,7 +103,7 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       defaultVisible: true,
       sortable: true,
       getSortValue: (r) => r.contract_ext_no || '',
-      render: (r) => <span className="text-sm">{r.contract_ext_no || '-'}</span>,
+      render: (r) => <span className="text-sm">{formatSapDisplayValue(r.contract_ext_no)}</span>,
     },
     {
       id: 'po_number',
@@ -110,7 +111,7 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       defaultVisible: true,
       sortable: true,
       getSortValue: (r) => r.po_number || '',
-      render: (r) => <span className="text-sm">{r.po_number || '-'}</span>,
+      render: (r) => <span className="text-sm">{formatSapDisplayValue(r.po_number)}</span>,
     },
     {
       id: 'supplier',
@@ -118,7 +119,7 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       defaultVisible: true,
       sortable: true,
       getSortValue: (r) => r.supplier || '',
-      render: (r) => <span className="text-sm">{r.supplier || '-'}</span>,
+      render: (r) => <span className="text-sm">{formatSapDisplayValue(r.supplier)}</span>,
     },
     {
       id: 'incoterm',
@@ -126,7 +127,7 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       defaultVisible: true,
       sortable: true,
       getSortValue: (r) => r.incoterm || '',
-      render: (r) => <span className="text-sm">{r.incoterm || '-'}</span>,
+      render: (r) => <span className="text-sm">{formatSapDisplayValue(r.incoterm)}</span>,
     },
     {
       id: 'product',
@@ -134,7 +135,7 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       defaultVisible: true,
       sortable: true,
       getSortValue: (r) => r.product || '',
-      render: (r) => <span className="text-sm">{r.product || '-'}</span>,
+      render: (r) => <span className="text-sm">{formatSapDisplayValue(r.product)}</span>,
     },
     {
       id: 'payment_due_date',
@@ -185,7 +186,7 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.buyer || '',
-      render: (r) => <span className="text-sm">{r.buyer || '-'}</span>,
+      render: (r) => <span className="text-sm">{formatSapDisplayValue(r.buyer)}</span>,
     },
     {
       id: 'plant_site',
@@ -193,7 +194,7 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.plant_site || '',
-      render: (r) => <span className="text-sm">{r.plant_site || '-'}</span>,
+      render: (r) => <span className="text-sm">{formatSapDisplayValue(r.plant_site)}</span>,
     },
     {
       id: 'transport_mode',
@@ -201,7 +202,7 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.transport_mode || '',
-      render: (r) => <span className="text-sm">{r.transport_mode || '-'}</span>,
+      render: (r) => <span className="text-sm">{formatSapDisplayValue(r.transport_mode)}</span>,
     },
     {
       id: 'b2b_flag',
@@ -209,7 +210,7 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.b2b_flag || '',
-      render: (r) => <span className="text-sm">{r.b2b_flag || '-'}</span>,
+      render: (r) => <span className="text-sm">{formatSapDisplayValue(r.b2b_flag)}</span>,
     },
   ]
 

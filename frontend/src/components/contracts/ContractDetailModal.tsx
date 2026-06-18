@@ -16,6 +16,7 @@ import {
   signedCycleDaysClass,
 } from '@/lib/cycleDaysDisplay'
 import { formatDateDMY } from '@/lib/dateFormat'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { canViewPermission, usePermissions } from '@/components/PermissionsContext'
 
 const CONTRACT_PAYMENT_INFO_PERMISSION = 'data.contract_payment_info'
@@ -138,11 +139,11 @@ function getContractOverallStatus(
 ): string {
   const delivery = String(c.import_status || c.status || '').toUpperCase()
   const paid = String(c.payment_status || '').toUpperCase() === 'PAID'
-  return delivery === 'CLOSE' && paid ? 'Close' : (c.import_status || c.status || '-')
+  return delivery === 'CLOSE' && paid ? 'Close' : formatSapDisplayValue(c.import_status || c.status)
 }
 
 function ContractStatusBadge({ status }: { status: string }) {
-  return <Badge className={getStatusColor(status)}>{status}</Badge>
+  return <Badge className={getStatusColor(status)}>{formatSapDisplayValue(status)}</Badge>
 }
 
 /**
@@ -153,11 +154,9 @@ export function partiesBuyerDisplay(
 ): string {
   const isB2b = isContractB2b(c)
   if (isB2b) {
-    const company = String(c.company_name || '').trim()
-    const buyer = String(c.buyer || '').trim()
-    return company || buyer || '-'
+    return formatSapDisplayValue(c.company_name || c.buyer)
   }
-  return String(c.buyer || '').trim() || '-'
+  return formatSapDisplayValue(c.buyer)
 }
 
 function formatDate(dateStr: string | null | undefined) {
@@ -201,10 +200,12 @@ function StoDetailField({
   label: string
   value: ReactNode
 }) {
+  const displayValue =
+    typeof value === 'string' || typeof value === 'number' ? formatSapDisplayValue(value) : value
   return (
     <div className="p-3 bg-gray-50 rounded">
       <div className="text-gray-500">{label}</div>
-      <div className="font-medium mt-1">{value}</div>
+      <div className="font-medium mt-1">{displayValue}</div>
     </div>
   )
 }
@@ -557,13 +558,13 @@ export function ContractDetailModal({
                   <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
                     <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Contract</div>
                     <div className="font-semibold text-gray-900 mt-0.5 truncate" title={contract.contract_id || ''}>
-                      {contract.contract_id || '-'}
+                      {formatSapDisplayValue(contract.contract_id)}
                     </div>
                   </div>
                   <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
                     <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Contract Ext No</div>
                     <div className="font-semibold text-gray-900 mt-0.5 break-words whitespace-normal">
-                      {contract.contract_ext_no || '-'}
+                      {formatSapDisplayValue(contract.contract_ext_no)}
                     </div>
                   </div>
                   <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5 sm:col-span-2 lg:col-span-1">
@@ -571,7 +572,7 @@ export function ContractDetailModal({
                       PO Number{contract.po_count && contract.po_count > 1 ? ` (${contract.po_count})` : ''}
                     </div>
                     <div className="font-semibold text-gray-900 mt-0.5 text-xs leading-snug break-words">
-                      {contract.po_numbers || contract.po_number || '-'}
+                      {formatSapDisplayValue(contract.po_numbers || contract.po_number)}
                     </div>
                   </div>
                   <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
@@ -580,11 +581,11 @@ export function ContractDetailModal({
                   </div>
                   <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
                     <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Incoterm</div>
-                    <div className="font-semibold text-gray-900 mt-0.5">{contract.incoterm || '-'}</div>
+                    <div className="font-semibold text-gray-900 mt-0.5">{formatSapDisplayValue(contract.incoterm)}</div>
                   </div>
                   <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5 sm:col-span-2 lg:col-span-1">
                     <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Product</div>
-                    <div className="font-semibold text-gray-900 mt-0.5 break-words">{contract.product || '-'}</div>
+                    <div className="font-semibold text-gray-900 mt-0.5 break-words">{formatSapDisplayValue(contract.product)}</div>
                   </div>
                 </div>
               </div>
@@ -617,39 +618,39 @@ export function ContractDetailModal({
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">Delivery Status</div>
                     <div className="mt-1">
-                      <ContractStatusBadge status={contract.import_status || contract.status || '-'} />
+                      <ContractStatusBadge status={contract.import_status || contract.status || ''} />
                     </div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">Contract Ext No</div>
-                    <div className="font-medium mt-1 break-words whitespace-normal">{contract.contract_ext_no || '-'}</div>
+                    <div className="font-medium mt-1 break-words whitespace-normal">{formatSapDisplayValue(contract.contract_ext_no)}</div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">Source Type</div>
-                    <div className="font-medium mt-1">{contract.source_type || '-'}</div>
+                    <div className="font-medium mt-1">{formatSapDisplayValue(contract.source_type)}</div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">Contract Type</div>
-                    <div className="font-medium mt-1">{contract.contract_type || '-'}</div>
+                    <div className="font-medium mt-1">{formatSapDisplayValue(contract.contract_type)}</div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">Group Name</div>
-                    <div className="font-medium mt-1">{contract.group_name || '-'}</div>
+                    <div className="font-medium mt-1">{formatSapDisplayValue(contract.group_name)}</div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500 flex items-center gap-1">
                       Company Name
                       <FieldHelp text={FIELD_HELP.companyName} />
                     </div>
-                    <div className="font-medium mt-1">{contract.company_name || '-'}</div>
+                    <div className="font-medium mt-1">{formatSapDisplayValue(contract.company_name)}</div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">B2B Flag</div>
-                    <div className="font-medium mt-1">{contract.b2b_flag || '-'}</div>
+                    <div className="font-medium mt-1">{formatSapDisplayValue(contract.b2b_flag)}</div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">LT/SPOT</div>
-                    <div className="font-medium mt-1">{contract.lt_spot || '-'}</div>
+                    <div className="font-medium mt-1">{formatSapDisplayValue(contract.lt_spot)}</div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500 flex items-center gap-1">
@@ -719,11 +720,11 @@ export function ContractDetailModal({
                 <div className="grid grid-cols-2 gap-4 text-sm mb-4">
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">Transport Mode</div>
-                    <div className="font-medium mt-1">{contract.transport_mode || '-'}</div>
+                    <div className="font-medium mt-1">{formatSapDisplayValue(contract.transport_mode)}</div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">Incoterm</div>
-                    <div className="font-medium mt-1">{contract.incoterm || '-'}</div>
+                    <div className="font-medium mt-1">{formatSapDisplayValue(contract.incoterm)}</div>
                   </div>
                 </div>
                 {stoInfoLoading ? (
@@ -761,7 +762,7 @@ export function ContractDetailModal({
                                 onClick={() => openStoDetail(row)}
                                 className="text-left text-blue-600 hover:underline font-medium cursor-pointer"
                               >
-                                {row.sto_number || '-'}
+                                {formatSapDisplayValue(row.sto_number)}
                               </button>
                             </td>
                             <td className="p-2">
@@ -869,12 +870,12 @@ export function ContractDetailModal({
                         <tbody>
                           {b2bParties.map((r) => (
                             <tr key={r.contract_id} className="border-b last:border-0">
-                              <td className="p-2">{r.po_numbers || '-'}</td>
-                              <td className="p-2">{r.contract_ext_no || '-'}</td>
-                              <td className="p-2">{r.company_name || '-'}</td>
-                              <td className="p-2">{r.supplier || '-'}</td>
-                              <td className="p-2">{r.incoterm || '-'}</td>
-                              <td className="p-2">{r.certification || '-'}</td>
+                              <td className="p-2">{formatSapDisplayValue(r.po_numbers)}</td>
+                              <td className="p-2">{formatSapDisplayValue(r.contract_ext_no)}</td>
+                              <td className="p-2">{formatSapDisplayValue(r.company_name)}</td>
+                              <td className="p-2">{formatSapDisplayValue(r.supplier)}</td>
+                              <td className="p-2">{formatSapDisplayValue(r.incoterm)}</td>
+                              <td className="p-2">{formatSapDisplayValue(r.certification)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -967,7 +968,7 @@ export function ContractDetailModal({
                       Over/Under Delivery Status
                       <FieldHelp text={FIELD_HELP.overUnderDelivery} />
                     </div>
-                    <div className="font-semibold mt-1">{contract.over_under_delivery_status || '-'}</div>
+                    <div className="font-semibold mt-1">{formatSapDisplayValue(contract.over_under_delivery_status)}</div>
                   </div>
                 </div>
               </div>
@@ -1012,10 +1013,12 @@ export function ContractDetailModal({
                         ) : contractPayments.length === 0 ? (
                           '-'
                         ) : (
-                          contractPayments
-                            .map((p) => p.payment_status)
-                            .filter(Boolean)
-                            .join(', ') || '-'
+                          formatSapDisplayValue(
+                            contractPayments
+                              .map((p) => p.payment_status)
+                              .filter(Boolean)
+                              .join(', '),
+                          )
                         )}
                       </div>
                     </div>

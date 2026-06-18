@@ -16,6 +16,7 @@ import { FieldHelp } from '@/components/FieldHelp'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY } from '@/lib/dateFormat'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import {
   formatOilLossMtFromKg,
   formatOilLossPct,
@@ -327,7 +328,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.supplier || '',
-      render: (r) => <span className="text-sm break-words">{r.supplier || '-'}</span>,
+      render: (r) => <span className="text-sm break-words">{formatSapDisplayValue(r.supplier)}</span>,
     },
     {
       id: 'buyer',
@@ -606,7 +607,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('supplier' in r ? r.supplier : '') || '',
-      render: (r) => <span className="text-sm break-words">{('supplier' in r && r.supplier) || '-'}</span>,
+      render: (r) => <span className="text-sm break-words">{formatSapDisplayValue('supplier' in r && r.supplier)}</span>,
     },
     {
       id: 'buyer',
@@ -1548,7 +1549,7 @@ export default function OilLossPage() {
   const openTransporterModal = useCallback((row: OilLossByTransporterRow) => {
     setSelectedGroupData({
       kind: 'transporter',
-      entityName: row.transporter || '-',
+      entityName: formatSapDisplayValue(row.transporter),
       entityKey: row.id,
       loadingLocations: row.loading_location,
       unloadingLocations: row.unloading_location,
@@ -1559,7 +1560,7 @@ export default function OilLossPage() {
   const openSupplierModal = useCallback((row: OilLossBySupplierRow) => {
     setSelectedGroupData({
       kind: 'supplier',
-      entityName: row.supplier || '-',
+      entityName: formatSapDisplayValue(row.supplier),
       entityKey: row.id,
       loadingLocations: row.loading_location,
       unloadingLocations: row.unloading_location,
@@ -2298,7 +2299,7 @@ export default function OilLossPage() {
                                         {col.id === 'transporter' && viewMode === 'by_transporter' ? (
                                           (() => {
                                             const transporterRow = row as OilLossByTransporterRow
-                                            const name = transporterRow.transporter || '-'
+                                            const name = formatSapDisplayValue(transporterRow.transporter)
                                             return (
                                               <button
                                                 type="button"
@@ -2315,7 +2316,7 @@ export default function OilLossPage() {
                                         ) : col.id === 'supplier' && viewMode === 'by_supplier' ? (
                                           (() => {
                                             const supplierRow = row as OilLossBySupplierRow
-                                            const name = supplierRow.supplier || '-'
+                                            const name = formatSapDisplayValue(supplierRow.supplier)
                                             return (
                                               <button
                                                 type="button"

@@ -36,6 +36,7 @@ import {
   signedCycleDaysClass,
 } from '@/lib/cycleDaysDisplay'
 import { formatDateDMY, toSortableTimestamp } from '@/lib/dateFormat'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import {
@@ -2668,7 +2669,7 @@ function ContractsPageContent() {
       render: (c) => {
         const val = c.po_numbers || c.po_number || ''
         if (isContractPerformance) {
-          return <span className="text-sm">{val || '-'}</span>
+          return <span className="text-sm">{formatSapDisplayValue(val)}</span>
         }
         return val.includes(',') ? (
           <OperationalStackedCommaCell value={val} title={val} />
@@ -2735,7 +2736,7 @@ function ContractsPageContent() {
       getSortValue: (c) => c.contract_ext_no || '',
       render: (c) =>
         isContractPerformance ? (
-          <span className="text-sm">{c.contract_ext_no || '-'}</span>
+          <span className="text-sm">{formatSapDisplayValue(c.contract_ext_no)}</span>
         ) : (
           <OperationalStackedCommaCell value={c.contract_ext_no} title={c.contract_ext_no || ''} />
         ),
@@ -2746,7 +2747,7 @@ function ContractsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.product || '',
-      render: (c) => <span className="text-sm">{c.product || '-'}</span>
+      render: (c) => <span className="text-sm">{formatSapDisplayValue(c.product)}</span>
     },
     {
       id: 'incoterm',
@@ -2754,7 +2755,7 @@ function ContractsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.incoterm || '',
-      render: (c) => <span className="text-sm">{c.incoterm || '-'}</span>
+      render: (c) => <span className="text-sm">{formatSapDisplayValue(c.incoterm)}</span>
     },
     ...(isContractPerformance
       ? ([
@@ -2823,7 +2824,7 @@ function ContractsPageContent() {
       render: (c) => {
         const delivery = String(c.import_status || c.status || '').toUpperCase()
         const paid = String(c.payment_status || '').toUpperCase() === 'PAID'
-        const overall = delivery === 'CLOSE' && paid ? 'Close' : (c.import_status || c.status || '-')
+        const overall = delivery === 'CLOSE' && paid ? 'Close' : formatSapDisplayValue(c.import_status || c.status)
         return <span className="text-sm font-medium">{overall}</span>
       }
     },
@@ -2883,7 +2884,7 @@ function ContractsPageContent() {
       defaultVisible: !isContractPerformance,
       sortable: true,
       getSortValue: (c: Contract) => c.group_name || '',
-      render: (c: Contract) => <span className="text-sm truncate block">{c.group_name || '-'}</span>,
+      render: (c: Contract) => <span className="text-sm truncate block">{formatSapDisplayValue(c.group_name)}</span>,
     },
     {
       id: 'supplier',
@@ -2891,7 +2892,7 @@ function ContractsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.supplier || '',
-      render: (c) => <span className="text-sm">{c.supplier || '-'}</span>,
+      render: (c) => <span className="text-sm">{formatSapDisplayValue(c.supplier)}</span>,
     },
     {
       id: 'qty_delivery',
@@ -3015,7 +3016,7 @@ function ContractsPageContent() {
       getSortValue: (c) => c.over_under_delivery_status || '',
       render: (c) => (
         <span className="text-xs font-semibold">
-          {c.over_under_delivery_status || '-'}
+          {formatSapDisplayValue(c.over_under_delivery_status)}
         </span>
       ),
       className: 'whitespace-nowrap'
@@ -3027,7 +3028,7 @@ function ContractsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.company_name || '',
-      render: (c) => <span className="text-sm truncate block">{c.company_name || '-'}</span>
+      render: (c) => <span className="text-sm truncate block">{formatSapDisplayValue(c.company_name)}</span>
     },
     {
       id: 'lt_spot',
@@ -3035,7 +3036,7 @@ function ContractsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.lt_spot || '',
-      render: (c) => <span className="text-sm">{c.lt_spot || '-'}</span>
+      render: (c) => <span className="text-sm">{formatSapDisplayValue(c.lt_spot)}</span>
     },
     {
       id: 'sto_number',
@@ -3047,7 +3048,7 @@ function ContractsPageContent() {
         const val = c.sto_numbers || c.sto_number || ''
         return isContractPerformance ? (
           <span className="text-sm truncate block" title={val}>
-            {val || '-'}
+            {formatSapDisplayValue(val)}
           </span>
         ) : (
           <OperationalNowrapCell value={val} title={val} />
@@ -3117,7 +3118,7 @@ function ContractsPageContent() {
             getSortValue: (c: Contract) => c.source_type || '',
             render: (c: Contract) => (
               <span className="text-sm truncate block" title={c.source_type || ''}>
-                {c.source_type || '-'}
+                {formatSapDisplayValue(c.source_type)}
               </span>
             ),
           },
@@ -5216,9 +5217,9 @@ function ContractsPageContent() {
                               )}
                             </div>
                             <div className="text-xs text-gray-600 truncate">
-                              <span className="font-medium">{contract.supplier || '-'}</span>
+                              <span className="font-medium">{formatSapDisplayValue(contract.supplier)}</span>
                               {' • '}
-                              {contract.product || '-'}
+                              {formatSapDisplayValue(contract.product)}
                               {' • '}
                               <span className="text-gray-500">Outstanding:</span>{' '}
                               <span className={contract.outstanding_quantity < 0 ? 'text-green-600 font-medium' : contract.outstanding_quantity > 0 ? 'text-red-600 font-medium' : 'text-gray-800'}>
@@ -5320,15 +5321,15 @@ function ContractsPageContent() {
                           <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
                             <div>
                               <div className="text-gray-500">Source</div>
-                              <div className="font-medium">{contract.source_type || '-'}</div>
+                              <div className="font-medium">{formatSapDisplayValue(contract.source_type)}</div>
                             </div>
                             <div>
                               <div className="text-gray-500">Group Name</div>
-                              <div className="font-medium">{contract.group_name || '-'}</div>
+                              <div className="font-medium">{formatSapDisplayValue(contract.group_name)}</div>
                             </div>
                             <div>
                               <div className="text-gray-500">B2B Flag</div>
-                              <div className="font-medium">{contract.b2b_flag || '-'}</div>
+                              <div className="font-medium">{formatSapDisplayValue(contract.b2b_flag)}</div>
                             </div>
                             <div>
                               <div className="text-gray-500">Buyer</div>
@@ -5336,11 +5337,11 @@ function ContractsPageContent() {
                             </div>
                             <div>
                               <div className="text-gray-500">Transport Mode</div>
-                              <div className="font-medium">{contract.transport_mode || '-'}</div>
+                              <div className="font-medium">{formatSapDisplayValue(contract.transport_mode)}</div>
                             </div>
                             <div>
                               <div className="text-gray-500">Incoterm</div>
-                              <div className="font-medium">{contract.incoterm || '-'}</div>
+                              <div className="font-medium">{formatSapDisplayValue(contract.incoterm)}</div>
                             </div>
                           </div>
                         </div>

@@ -52,6 +52,9 @@ export const SHIPPING_PERF_TABLE_BODY_CLASS = 'divide-y divide-gray-200'
 /** Fixed px widths for table-fixed layout (compact, matches CP Section 3 pattern). */
 export const SHIPPING_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   vessel_name: 96,
+  by_vessel_qty_contract: 96,
+  by_vessel_qty_delivery: 96,
+  by_vessel_qty_receive: 96,
   contract_ext_no: 96,
   loading_port: 88,
   discharge_port: 88,
@@ -59,6 +62,7 @@ export const SHIPPING_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   product: 96,
   supplier: 112,
   contract_qty: 88,
+  delivered_qty: 88,
   group_name: 88,
   shipment_count: 64,
   status: 80,
@@ -107,9 +111,13 @@ export const SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS = new Set([
   'po_number',
   'sto_number',
   'contract_qty',
+  'delivered_qty',
   'sto_qty',
   'received_qty',
   'outstanding_qty',
+  'by_vessel_qty_contract',
+  'by_vessel_qty_receive',
+  'by_vessel_qty_delivery',
 ])
 
 export type ShippingPerfCellTooltipSource = {
@@ -124,6 +132,7 @@ export type ShippingPerfCellTooltipSource = {
   discharge_port?: string | null
   group_name?: string | null
   contract_qty?: number | null
+  delivered_qty?: number | null
   sto_qty?: number | null
   received_qty?: number | null
   outstanding_qty?: number | null
@@ -159,17 +168,25 @@ export function shippingPerfCellTooltipText(
     case 'group_name':
       return String(row.group_name ?? '').trim() || null
     case 'contract_qty':
+    case 'delivered_qty':
+    case 'by_vessel_qty_contract':
+    case 'by_vessel_qty_delivery':
+    case 'by_vessel_qty_receive':
     case 'sto_qty':
     case 'received_qty':
     case 'outstanding_qty': {
-      const raw =
-        colKey === 'contract_qty'
-          ? row.contract_qty
-          : colKey === 'sto_qty'
-            ? row.sto_qty
-            : colKey === 'received_qty'
-              ? row.received_qty
-              : row.outstanding_qty
+      let raw: number | null | undefined
+      if (colKey === 'contract_qty' || colKey === 'by_vessel_qty_contract') {
+        raw = row.contract_qty
+      } else if (colKey === 'delivered_qty' || colKey === 'by_vessel_qty_delivery') {
+        raw = row.delivered_qty
+      } else if (colKey === 'received_qty' || colKey === 'by_vessel_qty_receive') {
+        raw = row.received_qty
+      } else if (colKey === 'sto_qty') {
+        raw = row.sto_qty
+      } else {
+        raw = row.outstanding_qty
+      }
       if (raw === null || raw === undefined) return null
       const mt = Number(raw) / 1000
       return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`

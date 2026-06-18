@@ -5,6 +5,7 @@
 
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 import { sumR4OilLossPctByContract } from '@/lib/oilLossSummary'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 
 export const OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION = 'oil-loss-by-transporter-v2'
 export const OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION_KEY =
@@ -102,8 +103,7 @@ export function oilLossTransporterGroupKey(row: Pick<OilLossSourceRow, 'transpor
 }
 
 export function oilLossTransporterLabel(row: Pick<OilLossSourceRow, 'transporter'>): string {
-  const t = String(row.transporter ?? '').trim()
-  return t || '-'
+  return formatSapDisplayValue(row.transporter)
 }
 
 export function aggregateOilLossByTransporter(rows: OilLossSourceRow[]): OilLossByTransporterRow[] {

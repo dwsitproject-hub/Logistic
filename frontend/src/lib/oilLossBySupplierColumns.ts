@@ -10,6 +10,7 @@ import {
   OIL_LOSS_BY_TRANSPORTER_COLUMN_WIDTH_PX,
   mergeDistinctTokens,
 } from '@/lib/oilLossByTransporterColumns'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 
 export type OilLossBySupplierRow = OilLossByTransporterRow
 
@@ -42,8 +43,7 @@ export function oilLossSupplierGroupKey(row: Pick<OilLossSourceRow, 'supplier'>)
 }
 
 export function oilLossSupplierLabel(row: Pick<OilLossSourceRow, 'supplier'>): string {
-  const s = String(row.supplier ?? '').trim()
-  return s || '-'
+  return formatSapDisplayValue(row.supplier)
 }
 
 export function aggregateOilLossBySupplier(rows: OilLossSourceRow[]): OilLossBySupplierRow[] {

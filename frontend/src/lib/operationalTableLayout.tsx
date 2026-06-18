@@ -4,6 +4,7 @@ import {
   compactTableHeaderMinWidthPx,
   longestHeaderWordLength,
 } from '@/lib/compactTableUi'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 
 export type OperationalColumnLayout = 'short' | 'token' | 'stack' | 'wrap' | 'truncate'
 
@@ -154,6 +155,9 @@ const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT: Readonly<Record<string, OperationalCo
 
 const SHIPPING_PERF_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
   vessel_name: 'truncate',
+  by_vessel_qty_contract: 'short',
+  by_vessel_qty_delivery: 'short',
+  by_vessel_qty_receive: 'short',
   contract_ext_no: 'stack',
   loading_port: 'wrap',
   discharge_port: 'wrap',
@@ -161,6 +165,7 @@ const SHIPPING_PERF_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayo
   product: 'wrap',
   supplier: 'wrap',
   contract_qty: 'short',
+  delivered_qty: 'short',
   group_name: 'wrap',
   shipment_count: 'short',
   status: 'short',
@@ -358,16 +363,25 @@ export function OperationalStackedCommaCell({
   if (!raw || raw === '-') {
     return <span className={className}>-</span>
   }
-  const parts = raw.split(',').map((s) => s.trim()).filter(Boolean)
+  const parts = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((part) => formatSapDisplayValue(part))
+    .filter((part) => part !== '-')
+  if (parts.length === 0) {
+    return <span className={className}>-</span>
+  }
   if (parts.length <= 1) {
+    const display = parts[0]
     return (
-      <span className={`${className} ${COMPACT_TABLE_NOWRAP_CLASS} block`} title={title ?? raw}>
-        {parts[0] ?? raw}
+      <span className={`${className} ${COMPACT_TABLE_NOWRAP_CLASS} block`} title={title ?? display}>
+        {display}
       </span>
     )
   }
   return (
-    <span className={`${COMPACT_TABLE_STACK_CLASS} ${className}`} title={title ?? raw}>
+    <span className={`${COMPACT_TABLE_STACK_CLASS} ${className}`} title={title ?? parts.join(', ')}>
       {parts.map((part, i) => (
         <span key={`${part}-${i}`} className={`${COMPACT_TABLE_NOWRAP_CLASS} block`}>
           {part}
@@ -388,10 +402,12 @@ export function OperationalNowrapCell({
   title?: string
   fallback?: string
 }) {
-  const raw = String(value ?? '').trim()
-  const display = raw || fallback
+  const display = formatSapDisplayValue(value, fallback)
   return (
-    <span className={`${className} ${COMPACT_TABLE_NOWRAP_CLASS} block`} title={title ?? (raw || undefined)}>
+    <span
+      className={`${className} ${COMPACT_TABLE_NOWRAP_CLASS} block`}
+      title={title ?? (display === fallback ? undefined : display)}
+    >
       {display}
     </span>
   )
@@ -402,7 +418,7 @@ export function OperationalTruncatedCell({
   value,
   className = 'text-sm',
   title,
-  fallback = '—',
+  fallback = '-',
   maxWidthClass = OPERATIONAL_TRUNCATE_MAX_WIDTH_CLASS,
 }: {
   value?: string | null
@@ -411,16 +427,16 @@ export function OperationalTruncatedCell({
   fallback?: string
   maxWidthClass?: string
 }) {
-  const raw = String(value ?? '').trim()
-  if (!raw) {
+  const display = formatSapDisplayValue(value, fallback)
+  if (display === fallback) {
     return <span className={className}>{fallback}</span>
   }
   return (
     <span
       className={`${className} truncate block ${maxWidthClass}`}
-      title={title ?? raw}
+      title={title ?? display}
     >
-      {raw}
+      {display}
     </span>
   )
 }

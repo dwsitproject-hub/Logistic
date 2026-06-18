@@ -243,7 +243,7 @@ export default function DocumentsPage() {
       case 'trucking':
         return 'Trucking'
       default:
-        return 'Unknown'
+        return '-'
     }
   }
 

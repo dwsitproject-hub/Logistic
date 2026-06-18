@@ -22,6 +22,7 @@ import {
   commercialTotalPriceTooltip,
 } from '@/lib/commercialDocumentsFormat'
 import { formatDateTimeDMY } from '@/lib/dateFormat'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
@@ -206,10 +207,10 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-3 text-sm">
                     <Info label="Contract Date" value={formatCommercialDate(row.contract_date)} />
                     <Info label="Contract Ext No" value={row.contract_ext_no} />
-                    <Info label="PO" value={row.po_number || '-'} />
-                    <Info label="Incoterm" value={row.incoterm || '-'} />
-                    <Info label="Product" value={row.product || '-'} />
-                    <Info label="Group Plant" value={row.plant_site || '-'} />
+                    <Info label="PO" value={row.po_number} />
+                    <Info label="Incoterm" value={row.incoterm} />
+                    <Info label="Product" value={row.product} />
+                    <Info label="Group Plant" value={row.plant_site} />
                     <Info label="Contract Qty" value={formatCommercialQtyKg(row.quantity_ordered)} />
                     <Info label="Unit Price" value={formatCommercialIdr(row.unit_price)} />
                     <Info
@@ -227,8 +228,8 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                         </Tooltip>
                       }
                     />
-                    <Info label="Supplier" value={row.supplier || '-'} />
-                    <Info label="Buyer" value={row.buyer || '-'} />
+                    <Info label="Supplier" value={row.supplier} />
+                    <Info label="Buyer" value={row.buyer} />
                   </div>
                 </section>
 
@@ -253,12 +254,12 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                         <tbody>
                           {b2bParties.map((p, idx) => (
                             <tr key={idx} className="border-b last:border-0">
-                              <td className="px-3 py-2">{p.po_number || '-'}</td>
-                              <td className="px-3 py-2">{p.contract_ext_no || '-'}</td>
-                              <td className="px-3 py-2">{p.company_name || '-'}</td>
-                              <td className="px-3 py-2">{p.supplier || '-'}</td>
-                              <td className="px-3 py-2">{p.buyer || '-'}</td>
-                              <td className="px-3 py-2">{p.product || '-'}</td>
+                              <td className="px-3 py-2">{formatSapDisplayValue(p.po_number)}</td>
+                              <td className="px-3 py-2">{formatSapDisplayValue(p.contract_ext_no)}</td>
+                              <td className="px-3 py-2">{formatSapDisplayValue(p.company_name)}</td>
+                              <td className="px-3 py-2">{formatSapDisplayValue(p.supplier)}</td>
+                              <td className="px-3 py-2">{formatSapDisplayValue(p.buyer)}</td>
+                              <td className="px-3 py-2">{formatSapDisplayValue(p.product)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -410,7 +411,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                                 {COMMERCIAL_DOCUMENT_LABELS[h.document_type] || h.document_type}
                               </td>
                               <td className="px-3 py-2 whitespace-nowrap">{formatDateTimeDMY(h.created_at)}</td>
-                              <td className="px-3 py-2">{h.user_name || '-'}</td>
+                              <td className="px-3 py-2">{formatSapDisplayValue(h.user_name)}</td>
                             </tr>
                           ))
                         )}
@@ -487,10 +488,12 @@ function PdfPreviewPanel({
 }
 
 function Info({ label, value }: { label: string; value: ReactNode }) {
+  const display =
+    typeof value === 'string' || typeof value === 'number' ? formatSapDisplayValue(value) : value
   return (
     <div>
       <div className="text-xs text-gray-500">{label}</div>
-      <div className="font-medium text-gray-900 mt-0.5">{value}</div>
+      <div className="font-medium text-gray-900 mt-0.5">{display}</div>
     </div>
   )
 }

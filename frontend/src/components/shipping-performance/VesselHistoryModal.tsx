@@ -11,6 +11,7 @@ import {
   resolveShippingPerfLoadingPort,
   type ShippingPerformancePortSource,
 } from '@/lib/shippingPerformancePorts'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { cn } from '@/lib/utils'
 import { Anchor, Loader2, Ship, X } from 'lucide-react'
 
@@ -100,9 +101,7 @@ function normalizeVesselKey(value: unknown): string {
 }
 
 function displayLabel(value: unknown, fallback = '-'): string {
-  const text = String(value ?? '').trim()
-  if (!text || text === 'Blank') return fallback
-  return text
+  return formatSapDisplayValue(value, fallback)
 }
 
 function sortByContractDateDesc(rows: VesselHistoryShipmentRow[]): VesselHistoryShipmentRow[] {
