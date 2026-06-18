@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { Input } from '@/components/ui/input'
 import { isoDateStringToDdMmYyyy, parseDdMmYyyyToIso } from '@/lib/dateFormat'
+import { handleFastEntryKeyDown, FAST_ENTRY_FOCUSABLE_ATTR, FAST_ENTRY_GROUP_ATTR } from '@/lib/fastEntryFocus'
 import { Calendar } from 'lucide-react'
 
 type Props = {
@@ -12,10 +13,25 @@ type Props = {
   disabled?: boolean
   minIso?: string
   maxIso?: string
+  /** Enables Enter/Tab to jump to the next field in this fast-entry group. */
+  fastEntryGroup?: string
+}
+
+/** Build DD/MM/YYYY display from digit string; optional trailing slash while typing. */
+function formatDdMmYyyyDraft(digits: string, trailingSlash = false): string {
+  const d = digits.slice(0, 8)
+  if (d.length <= 2) {
+    return trailingSlash && d.length === 2 ? `${d}/` : d
+  }
+  if (d.length <= 4) {
+    const base = `${d.slice(0, 2)}/${d.slice(2)}`
+    return trailingSlash && d.length === 4 ? `${base}/` : base
+  }
+  return `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}`
 }
 
 /** Text input showing **DD/MM/YYYY**; stores **YYYY-MM-DD** via onChangeIso (same as native date value to API). */
-export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, minIso, maxIso }: Props) {
+export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, minIso, maxIso, fastEntryGroup }: Props) {
   const [draft, setDraft] = useState('')
 
   const normalizedIso = useMemo(() => {
@@ -33,21 +49,25 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
     <div className="relative">
       <Input
         type="text"
-        inputMode="numeric"
         placeholder="DD/MM/YYYY"
         disabled={disabled}
         className={`${className ?? ''} pr-9`}
         value={draft}
+        {...(fastEntryGroup
+          ? {
+              [FAST_ENTRY_FOCUSABLE_ATTR]: 'true',
+              [FAST_ENTRY_GROUP_ATTR]: fastEntryGroup,
+            }
+          : {})}
+        onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+          if (fastEntryGroup) handleFastEntryKeyDown(e)
+        }}
         onChange={(e) => {
-          const raw = e.target.value
-          const digits = raw.replace(/[^\d]/g, '').slice(0, 8)
-          // Auto-insert slashes: DD/MM/YYYY
-          const next =
-            digits.length <= 2
-              ? digits
-              : digits.length <= 4
-                ? `${digits.slice(0, 2)}/${digits.slice(2)}`
-                : `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`
+          const raw = e.target.value.replace(/[^\d/]/g, '')
+          const digits = raw.replace(/\D/g, '').slice(0, 8)
+          const trailingSlash =
+            raw.endsWith('/') && (digits.length === 2 || digits.length === 4)
+          const next = formatDdMmYyyyDraft(digits, trailingSlash)
           setDraft(next)
           if (digits.length === 8) {
             const iso = parseDdMmYyyyToIso(next)
@@ -62,6 +82,7 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
           const iso = parseDdMmYyyyToIso(text)
           if (iso) {
             e.preventDefault()
+            if ((minIso && iso < minIso) || (maxIso && iso > maxIso)) return
             onChangeIso(iso)
             setDraft(isoDateStringToDdMmYyyy(iso))
           }
@@ -96,6 +117,7 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
           min={minIso}
           max={maxIso}
           value={normalizedIso}
+          tabIndex={-1}
           onChange={(e) => {
             const v = e.target.value
             if (!v) {

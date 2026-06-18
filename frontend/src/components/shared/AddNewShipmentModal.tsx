@@ -30,6 +30,7 @@ import {
 } from 'lucide-react'
 import api from '@/lib/api'
 import { formatDateDMY, toApiDateOnly } from '@/lib/dateFormat'
+import { FAST_ENTRY_ROOT_ATTR, SHIPMENT_ETA_FAST_ENTRY_GROUP } from '@/lib/fastEntryFocus'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
   usePermissions,
@@ -1376,7 +1377,7 @@ export function AddNewShipmentModal({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4" {...{ [FAST_ENTRY_ROOT_ATTR]: 'true' }}>
         {loadingEdit && (
           <div className="mb-4 flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -2085,6 +2086,7 @@ export function AddNewShipmentModal({
                                         className={COMPACT_DATE_INPUT}
                                         minIso={range?.minIso}
                                         maxIso={range?.maxIso}
+                                        fastEntryGroup={SHIPMENT_ETA_FAST_ENTRY_GROUP}
                                         valueIso={block[key]}
                                         onChangeIso={(iso) => {
                                           updateEtaDetailBlock(block.id, { [key]: iso })

@@ -22,6 +22,11 @@ import {
 } from 'lucide-react'
 import api from '@/lib/api'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
+import {
+  FAST_ENTRY_ROOT_ATTR,
+  TRUCKING_PLANNING_FAST_ENTRY_GROUP,
+  fastEntryFieldProps,
+} from '@/lib/fastEntryFocus'
 
 const fmtIsoDate = (iso: string) => {
   const d = (iso || '').slice(0, 10)
@@ -654,7 +659,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4" {...{ [FAST_ENTRY_ROOT_ATTR]: 'true' }}>
           {loadingEdit && (
             <div className="mb-4 flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -955,6 +960,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                           valueIso={planning.start_date}
                           minIso={truckingDateRange?.minIso}
                           maxIso={truckingDateRange?.maxIso}
+                          fastEntryGroup={TRUCKING_PLANNING_FAST_ENTRY_GROUP}
                           onChangeIso={(iso) => {
                             setPlanning((prev) => ({ ...prev, start_date: iso }))
                             clearFieldError('planning_start_date')
@@ -974,6 +980,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                           valueIso={planning.end_date}
                           minIso={truckingDateRange?.minIso}
                           maxIso={truckingDateRange?.maxIso}
+                          fastEntryGroup={TRUCKING_PLANNING_FAST_ENTRY_GROUP}
                           onChangeIso={(iso) => {
                             setPlanning((prev) => ({ ...prev, end_date: iso }))
                             clearFieldError('planning_end_date')
@@ -991,6 +998,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                         <Input
                           inputMode="decimal"
                           value={planning.total_quantity_mt}
+                          {...fastEntryFieldProps(TRUCKING_PLANNING_FAST_ENTRY_GROUP)}
                           onChange={(e) => {
                             setPlanning((prev) => ({ ...prev, total_quantity_mt: e.target.value }))
                             clearFieldError('planning_total_quantity_mt')
