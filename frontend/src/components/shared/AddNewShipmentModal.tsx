@@ -307,6 +307,7 @@ export function AddNewShipmentModal({
   const [contractSearchTerm, setContractSearchTerm] = useState('')
   const [showContractSuggestions, setShowContractSuggestions] = useState(false)
   const poNumberInputRef = useRef<HTMLInputElement>(null)
+  const contractNumbersRef = useRef<string[]>([])
   const initSessionRef = useRef<string | null>(null)
   const [contractValidations, setContractValidations] = useState<{
     [contractId: string]: {
@@ -317,6 +318,10 @@ export function AddNewShipmentModal({
     }
   }>({})
   const [etaDetails, setEtaDetails] = useState<ShipmentEtaDetail[]>([])
+
+  useEffect(() => {
+    contractNumbersRef.current = newShipment.contractNumbers
+  }, [newShipment.contractNumbers])
 
   const availablePoByKey = useMemo(() => {
     const map = new Map<string, ShipmentPoOption>()
@@ -820,11 +825,14 @@ export function AddNewShipmentModal({
   }, [])
 
   const addPoSelectionKey = useCallback(
-    (selectionKey: string, contractIdForOp: string) => {
-      let added = false
+    (selectionKey: string, contractIdForOp: string): boolean => {
+      if (contractNumbersRef.current.includes(selectionKey)) {
+        showNotification('warning', 'This PO has already been added.')
+        setShowContractSuggestions(false)
+        return false
+      }
+
       setNewShipment((prev) => {
-        if (prev.contractNumbers.includes(selectionKey)) return prev
-        added = true
         const isFirstContract = prev.contractNumbers.length === 0
         return {
           ...prev,
@@ -833,28 +841,26 @@ export function AddNewShipmentModal({
         }
       })
 
-      if (added) {
-        clearFieldError('contractNumbers')
-        setContractQtyAssigned((prev) => ({ ...prev, [selectionKey]: prev[selectionKey] ?? '' }))
-        clearPoNumberField()
-      } else {
-        showNotification('warning', 'This PO has already been added.')
-      }
+      clearFieldError('contractNumbers')
+      setContractQtyAssigned((prev) => ({ ...prev, [selectionKey]: prev[selectionKey] ?? '' }))
+      clearPoNumberField()
       setShowContractSuggestions(false)
+      return true
     },
     [clearPoNumberField, showNotification],
   )
 
   const addPoFromOption = useCallback(
-    (option: ShipmentPoOption) => {
+    (option: ShipmentPoOption): boolean => {
       seedPoValidation(option)
-      addPoSelectionKey(option.key, option.contractId)
+      return addPoSelectionKey(option.key, option.contractId)
     },
     [addPoSelectionKey, seedPoValidation],
   )
 
   const resetForm = useCallback(() => {
     setNewShipment(emptyShipment())
+    contractNumbersRef.current = []
     setContractQtyAssigned({})
     setContractValidations({})
     setEtaDetails([])
@@ -1016,6 +1022,7 @@ export function AddNewShipmentModal({
       }
       setContractValidations(validations)
       setContractQtyAssigned(qtySeed)
+      contractNumbersRef.current = keys
       setNewShipment((prev) => ({
         ...prev,
         contractNumbers: keys,
@@ -1566,7 +1573,7 @@ export function AddNewShipmentModal({
                 )}
 
                 {newShipment.contractNumbers.length > 0 && (
-                  <div className={openedFromContracts ? 'mt-0' : 'mt-2'}>
+                  <div className="mt-2">
                     <div className="rounded-md border overflow-hidden">
                       <Table>
                         <TableHeader>
