@@ -29,7 +29,7 @@ import {
   X,
 } from 'lucide-react'
 import api from '@/lib/api'
-import { formatDateDMY, toApiDateOnly } from '@/lib/dateFormat'
+import { formatDateDMY, toApiDateOnly, isIsoOutsideAllowedRange, OUTSIDE_ALLOWED_DATE_RANGE_MESSAGE } from '@/lib/dateFormat'
 import { FAST_ENTRY_ROOT_ATTR, SHIPMENT_ETA_FAST_ENTRY_GROUP } from '@/lib/fastEntryFocus'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
@@ -2083,14 +2083,26 @@ export function AddNewShipmentModal({
                                   {ETA_FIELD_ROWS.map(({ key, errorSuffix }) => (
                                     <td key={key} className="px-1 py-1 align-top border-t border-gray-100">
                                       <DateInputDdMmYyyy
-                                        className={COMPACT_DATE_INPUT}
+                                        className={`${COMPACT_DATE_INPUT} ${formErrors[`${prefix}_${errorSuffix}`] ? 'border-red-500' : ''}`}
                                         minIso={range?.minIso}
                                         maxIso={range?.maxIso}
                                         fastEntryGroup={SHIPMENT_ETA_FAST_ENTRY_GROUP}
                                         valueIso={block[key]}
                                         onChangeIso={(iso) => {
                                           updateEtaDetailBlock(block.id, { [key]: iso })
-                                          clearFieldError(`${prefix}_${errorSuffix}`)
+                                          const fieldKey = `${prefix}_${errorSuffix}`
+                                          if (
+                                            range &&
+                                            iso &&
+                                            isIsoOutsideAllowedRange(iso, range.minIso, range.maxIso)
+                                          ) {
+                                            setFormErrors((prev) => ({
+                                              ...prev,
+                                              [fieldKey]: OUTSIDE_ALLOWED_DATE_RANGE_MESSAGE,
+                                            }))
+                                          } else {
+                                            clearFieldError(fieldKey)
+                                          }
                                         }}
                                       />
                                       {formErrors[`${prefix}_${errorSuffix}`] && (

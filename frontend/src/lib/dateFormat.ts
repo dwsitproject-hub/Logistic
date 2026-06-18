@@ -127,3 +127,24 @@ export function parseDdMmYyyyToIso(s: string): string | null {
   if (d.getFullYear() !== yyyy || d.getMonth() !== mm - 1 || d.getDate() !== dd) return null
   return `${yyyy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
 }
+
+/** True when `iso` falls outside optional inclusive min/max bounds (YYYY-MM-DD). */
+export function isIsoOutsideAllowedRange(
+  iso: string,
+  minIso?: string,
+  maxIso?: string,
+): boolean {
+  if (!iso) return false
+  if (minIso && iso < minIso) return true
+  if (maxIso && iso > maxIso) return true
+  return false
+}
+
+export const OUTSIDE_ALLOWED_DATE_RANGE_MESSAGE = 'Outside allowed date range'
+
+export function outsideAllowedDateRangeMessage(minIso?: string, maxIso?: string): string {
+  if (minIso && maxIso) {
+    return `Outside allowed date range (${formatDateDMY(minIso)} – ${formatDateDMY(maxIso)})`
+  }
+  return OUTSIDE_ALLOWED_DATE_RANGE_MESSAGE
+}

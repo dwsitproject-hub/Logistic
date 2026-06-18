@@ -27,6 +27,7 @@ import {
   TRUCKING_PLANNING_FAST_ENTRY_GROUP,
   fastEntryFieldProps,
 } from '@/lib/fastEntryFocus'
+import { isIsoOutsideAllowedRange, outsideAllowedDateRangeMessage } from '@/lib/dateFormat'
 
 const fmtIsoDate = (iso: string) => {
   const d = (iso || '').slice(0, 10)
@@ -963,8 +964,25 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                           fastEntryGroup={TRUCKING_PLANNING_FAST_ENTRY_GROUP}
                           onChangeIso={(iso) => {
                             setPlanning((prev) => ({ ...prev, start_date: iso }))
-                            clearFieldError('planning_start_date')
-                            clearFieldError('planning_end_date')
+                            if (
+                              truckingDateRange &&
+                              iso &&
+                              isIsoOutsideAllowedRange(
+                                iso,
+                                truckingDateRange.minIso,
+                                truckingDateRange.maxIso,
+                              )
+                            ) {
+                              setFormErrors((prev) => ({
+                                ...prev,
+                                planning_start_date: outsideAllowedDateRangeMessage(
+                                  truckingDateRange.minIso,
+                                  truckingDateRange.maxIso,
+                                ),
+                              }))
+                            } else {
+                              clearFieldError('planning_start_date')
+                            }
                           }}
                           className={`mt-1 ${formErrors.planning_start_date ? 'border-red-500' : ''}`}
                         />
@@ -983,7 +1001,25 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                           fastEntryGroup={TRUCKING_PLANNING_FAST_ENTRY_GROUP}
                           onChangeIso={(iso) => {
                             setPlanning((prev) => ({ ...prev, end_date: iso }))
-                            clearFieldError('planning_end_date')
+                            if (
+                              truckingDateRange &&
+                              iso &&
+                              isIsoOutsideAllowedRange(
+                                iso,
+                                truckingDateRange.minIso,
+                                truckingDateRange.maxIso,
+                              )
+                            ) {
+                              setFormErrors((prev) => ({
+                                ...prev,
+                                planning_end_date: outsideAllowedDateRangeMessage(
+                                  truckingDateRange.minIso,
+                                  truckingDateRange.maxIso,
+                                ),
+                              }))
+                            } else {
+                              clearFieldError('planning_end_date')
+                            }
                           }}
                           className={`mt-1 ${formErrors.planning_end_date ? 'border-red-500' : ''}`}
                         />

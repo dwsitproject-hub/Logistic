@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { Input } from '@/components/ui/input'
-import { isoDateStringToDdMmYyyy, parseDdMmYyyyToIso } from '@/lib/dateFormat'
+import { isoDateStringToDdMmYyyy, parseDdMmYyyyToIso, isIsoOutsideAllowedRange } from '@/lib/dateFormat'
 import { handleFastEntryKeyDown, FAST_ENTRY_FOCUSABLE_ATTR, FAST_ENTRY_GROUP_ATTR } from '@/lib/fastEntryFocus'
 import { Calendar } from 'lucide-react'
 
@@ -45,13 +45,17 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
     setDraft(isoDateStringToDdMmYyyy(valueIso))
   }, [valueIso])
 
+  const isOutOfRange = Boolean(
+    normalizedIso && (minIso || maxIso) && isIsoOutsideAllowedRange(normalizedIso, minIso, maxIso),
+  )
+
   return (
     <div className="relative">
       <Input
         type="text"
         placeholder="DD/MM/YYYY"
         disabled={disabled}
-        className={`${className ?? ''} pr-9`}
+        className={`${className ?? ''} pr-9 ${isOutOfRange ? 'border-red-500' : ''}`}
         value={draft}
         {...(fastEntryGroup
           ? {
@@ -71,9 +75,7 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
           setDraft(next)
           if (digits.length === 8) {
             const iso = parseDdMmYyyyToIso(next)
-            if (iso && !(minIso && iso < minIso) && !(maxIso && iso > maxIso)) {
-              onChangeIso(iso)
-            }
+            if (iso) onChangeIso(iso)
           }
         }}
         onPaste={(e) => {
@@ -82,7 +84,6 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
           const iso = parseDdMmYyyyToIso(text)
           if (iso) {
             e.preventDefault()
-            if ((minIso && iso < minIso) || (maxIso && iso > maxIso)) return
             onChangeIso(iso)
             setDraft(isoDateStringToDdMmYyyy(iso))
           }
@@ -95,11 +96,6 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
           }
           const iso = parseDdMmYyyyToIso(t)
           if (iso) {
-            if ((minIso && iso < minIso) || (maxIso && iso > maxIso)) {
-              // Out of range — revert to previous value
-              setDraft(isoDateStringToDdMmYyyy(valueIso))
-              return
-            }
             onChangeIso(iso)
             setDraft(isoDateStringToDdMmYyyy(iso))
           } else {
