@@ -7,11 +7,7 @@ import {
   appendTruckingLateIndicatorFilter,
   parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
-import {
-  sqlEffectiveTruckingCompletionDate,
-  sqlEffectiveTruckingStartDate,
-} from '../utils/truckingSapDates';
-import { deriveTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
+import { deriveTruckingEffectiveStatus, sqlTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
 import { truckingPageListScopeWhereSql } from '../utils/truckingStoTypeSql';
 import {
   buildTruckingListFromClause,
@@ -61,7 +57,7 @@ export interface TruckingListResponseData {
 const PAGE_CACHE = new Map<string, { rows: TruckingListRow[]; total: number; expiresAt: number }>();
 const COUNT_CACHE = new Map<string, { total: number; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v5';
+const CACHE_VERSION = 'trucking-list-v6';
 const MAX_CACHE_ENTRIES = 80;
 
 const SORT_FIELD_BY_KEY: Record<string, string> = {
@@ -291,7 +287,7 @@ export function buildTruckingSummaryFromSqlRow(row: Record<string, unknown>) {
 
 export function buildTruckingListQuery(
   req: AuthRequest,
-  options?: { skipSapJoin?: boolean },
+  options?: { skipSapJoin?: boolean; omitStatusFilter?: boolean },
 ): TruckingListBuiltQuery {
   const {
     status,
@@ -334,14 +330,12 @@ export function buildTruckingListQuery(
   const queryParams: unknown[] = [];
   let paramIndex = 1;
 
-  if (status) {
+  if (status && !options?.omitStatusFilter) {
     const s = String(status).toUpperCase();
-    if (s === 'COMPLETED') {
-      queryText += ` AND COALESCE(t.status, '') <> 'CANCELLED' AND ${sqlEffectiveTruckingCompletionDate('c')} IS NOT NULL`;
-    } else if (s === 'IN_PROGRESS') {
-      queryText += ` AND COALESCE(t.status, '') <> 'CANCELLED' AND ${sqlEffectiveTruckingCompletionDate('c')} IS NULL AND ${sqlEffectiveTruckingStartDate('c')} IS NOT NULL`;
-    } else if (s === 'PLANNED') {
-      queryText += ` AND COALESCE(t.status, '') <> 'CANCELLED' AND ${sqlEffectiveTruckingCompletionDate('c')} IS NULL AND ${sqlEffectiveTruckingStartDate('c')} IS NULL`;
+    if (s === 'PLANNED' || s === 'IN_PROGRESS' || s === 'COMPLETED' || s === 'CANCELLED') {
+      queryText += ` AND ${sqlTruckingEffectiveStatus('c')} = $${paramIndex}`;
+      queryParams.push(s);
+      paramIndex += 1;
     } else {
       queryText += ` AND t.status = $${paramIndex}`;
       queryParams.push(status);
@@ -568,8 +562,14 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
   const pageNum = Math.max(1, Number(page) || 1);
   const limitNum = Math.max(1, Math.min(500, Number(limit) || 20));
 
+  const includeSummary =
+    String((req.query as { includeSummary?: string }).includeSummary ?? 'true').toLowerCase() !== 'false';
+
   if (summaryOnly) {
-    const summaryBuilt = buildTruckingListQuery(req, { skipSapJoin: true });
+    const summaryBuilt = buildTruckingListQuery(req, {
+      skipSapJoin: true,
+      omitStatusFilter: true,
+    });
     const { text, params } = buildTruckingSummaryQuery(summaryBuilt);
     const summaryResult = await query(text, params);
     const summary = buildTruckingSummaryFromSqlRow((summaryResult.rows[0] || {}) as Record<string, unknown>);
@@ -587,8 +587,20 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
 
   const { rows, total } = await loadTruckingListPage(built, sortKey, sortDir, pageNum, limitNum);
 
+  let summary: TruckingListResponseData['summary'];
+  if (includeSummary) {
+    const summaryBuilt = buildTruckingListQuery(req, {
+      skipSapJoin: true,
+      omitStatusFilter: true,
+    });
+    const { text, params } = buildTruckingSummaryQuery(summaryBuilt);
+    const summaryResult = await query(text, params);
+    summary = buildTruckingSummaryFromSqlRow((summaryResult.rows[0] || {}) as Record<string, unknown>);
+  }
+
   return {
     truckingOperations: rows,
+    summary,
     pagination: {
       total,
       page: pageNum,

@@ -1513,13 +1513,24 @@ function TruckingPageContent() {
         selectedGroupPlants.forEach((p) => params.append('plant', p))
       }
       
-      // List path: skip heavy summary SQL on the same round-trip; load Section 1 summary after (debounced).
-      params.append('includeSummary', 'false')
+      // List + Section 1 summary in one API round-trip (same toolbar scope, no status on summary).
+      params.append('includeSummary', 'true')
 
       const listUrl = `/trucking?${params.toString()}`
       const listCacheKey = buildCacheKey('GET', listUrl)
       const applyListEnvelope = (envelope: {
-        data?: { truckingOperations?: TruckingOperation[]; pagination?: { total?: number; totalPages?: number } }
+        data?: {
+          truckingOperations?: TruckingOperation[]
+          pagination?: { total?: number; totalPages?: number }
+          summary?: {
+            status?: {
+              planned?: number
+              inProgress?: number
+              completed?: number
+              cancelled?: number
+            }
+          }
+        }
       }) => {
         const items = envelope?.data?.truckingOperations || []
         setTruckingOperations(items)
@@ -1528,6 +1539,10 @@ function TruckingPageContent() {
         setTotalCount(total)
         setTotalPages(pages)
         setHasMore(effectivePage < pages)
+        if (envelope?.data?.summary) {
+          setTruckingSection1Summary(envelope.data.summary)
+          setSummaryFetching(false)
+        }
       }
 
       const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
@@ -1570,38 +1585,6 @@ function TruckingPageContent() {
         .catch((err) => {
           console.warn('Trucking SAP hydrate failed (table shows shell data):', err)
         })
-
-      if (truckingSummaryTimerRef.current) clearTimeout(truckingSummaryTimerRef.current)
-      const section1SummaryParams = new URLSearchParams(params.toString())
-      section1SummaryParams.delete('status')
-      section1SummaryParams.delete('includeSummary')
-      section1SummaryParams.delete('skipSapJoin')
-      section1SummaryParams.set('summaryOnly', 'true')
-      section1SummaryParams.set('page', '1')
-      section1SummaryParams.set('limit', '1')
-      const summaryUrl = `/trucking?${section1SummaryParams.toString()}`
-      const summaryCacheKey = buildCacheKey('GET', summaryUrl)
-      const summaryGen = ++summaryFetchGenRef.current
-      truckingSummaryTimerRef.current = setTimeout(() => {
-        const forceSummaryFetch = section1SummaryForceNextFetchRef.current || !!options?.force
-        section1SummaryForceNextFetchRef.current = false
-        void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
-          force: options?.force || forceSummaryFetch,
-          onRevalidate: (fresh) => {
-            if (summaryGen !== summaryFetchGenRef.current) return
-            if (fresh?.data?.summary) setTruckingSection1Summary(fresh.data.summary)
-            setSummaryFetching(false)
-          },
-        })
-          .then(({ data, revalidating }) => {
-            if (summaryGen !== summaryFetchGenRef.current) return
-            if (data?.data?.summary) setTruckingSection1Summary(data.data.summary)
-            if (!revalidating) setSummaryFetching(false)
-          })
-          .catch(() => {
-            if (summaryGen === summaryFetchGenRef.current) setSummaryFetching(false)
-          })
-      }, 150)
     } catch (error) {
       if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch trucking operations:', error)
@@ -2666,8 +2649,9 @@ function TruckingPageContent() {
                   help: FIELD_HELP.truckingStatusCancelled,
                 },
               ].map((statusInfo, index, array) => {
+                const isStatusActive = statusFilter === statusInfo.status
                 const s = truckingSection1Summary?.status
-                const count =
+                const summaryCount =
                   statusInfo.status === 'PLANNED'
                     ? Number(s?.planned ?? 0)
                     : statusInfo.status === 'IN_PROGRESS'
@@ -2677,7 +2661,8 @@ function TruckingPageContent() {
                         : statusInfo.status === 'CANCELLED'
                           ? Number(s?.cancelled ?? 0)
                           : 0
-                const isStatusActive = statusFilter === statusInfo.status
+                const count =
+                  isStatusActive && statusFilter !== 'ALL' ? totalCount : summaryCount
                 return (
                   <div key={statusInfo.status} className="flex items-center flex-shrink-0">
                     <div className="relative">
