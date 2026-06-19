@@ -1310,7 +1310,7 @@ function ContractsPageContent() {
 
   const displayTotalContracts = totalContracts
 
-  /** Section 1 unassigned cards — always show dedicated API totals (stable when switching filters). */
+  /** Section 1 unassigned cards — same toolbar filters as contracts table (status, transport, etc.). */
   const displayUnassignedSeaCount = unassignedSeaContracts
   const displayUnassignedLandCount = unassignedLandContracts
   const displayUnassignedMixCount = unassignedMixContracts
@@ -2126,7 +2126,7 @@ function ContractsPageContent() {
     }
   }, [authReady])
 
-  // Summary alert cards — always Open contracts; other global filters still apply.
+  // Summary alert cards — respect toolbar status/transport (sync with contracts table).
   const fetchUnassignedCounts = useCallback(async () => {
     if (!authReady || !userScopeReady) return
     setUnassignedCountsFetching(true)
@@ -2134,6 +2134,7 @@ function ContractsPageContent() {
       const params = new URLSearchParams()
       if (searchTerm.trim().length >= 2) params.append('search', searchTerm.trim())
       if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
+      if (statusFilter && statusFilter !== 'All Status') params.append('status', statusFilter)
       const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
         selectedProducts,
         selectedIncoterms,
@@ -2167,6 +2168,7 @@ function ContractsPageContent() {
     userScopeReady,
     searchTerm,
     b2bFlagFilter,
+    statusFilter,
     selectedProducts,
     selectedGroupPlants,
     selectedIncoterms,
