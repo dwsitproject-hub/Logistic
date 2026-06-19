@@ -1,17 +1,19 @@
-import type { PoolClient } from 'pg';
+import type { PoolClient, QueryResultRow } from 'pg';
 import { query } from '../database/connection';
 
 type Queryable = Pick<PoolClient, 'query'> | typeof query;
 
-async function runQuery<T = unknown>(
+async function runQuery<T extends QueryResultRow = QueryResultRow>(
   db: Queryable,
   text: string,
   params?: unknown[],
 ): Promise<{ rows: T[] }> {
   if (typeof (db as PoolClient).query === 'function' && 'release' in (db as object)) {
-    return (db as PoolClient).query(text, params);
+    const result = await (db as PoolClient).query<T>(text, params);
+    return { rows: result.rows };
   }
-  return query(text, params) as Promise<{ rows: T[] }>;
+  const result = await query(text, params);
+  return { rows: result.rows as T[] };
 }
 
 /** SAP STO / delivery id — numeric string (not KLIP manual ids). */
