@@ -30,8 +30,13 @@ export function sanitizePoForFilename(poNumber: string): string {
     .slice(0, 80) || 'UNKNOWN';
 }
 
-export function buildCommercialDocumentStoredName(poNumber: string): string {
-  return `EU-CTR-${sanitizePoForFilename(poNumber)}.pdf`;
+export function buildCommercialDocumentStoredName(poNumber: string, originalName?: string): string {
+  const base = `EU-CTR-${sanitizePoForFilename(poNumber)}`;
+  const ext = originalName?.includes('.')
+    ? originalName.split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '') || 'pdf'
+    : 'pdf';
+  const safeExt = ['pdf', 'png', 'jpg', 'jpeg', 'webp'].includes(ext) ? ext : 'pdf';
+  return `${base}.${safeExt}`;
 }
 
 /** Folder under uploads root: commercial-documents/YYYY-MM */

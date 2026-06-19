@@ -11,10 +11,7 @@ import {
   sqlEffectiveTruckingCompletionDate,
   sqlEffectiveTruckingStartDate,
 } from '../utils/truckingSapDates';
-import {
-  truckingPageListScopeWhereSql,
-  truckingSapStoTypeTSapCteClause,
-} from '../utils/truckingStoTypeSql';
+import { truckingPageListScopeWhereSql } from '../utils/truckingStoTypeSql';
 import {
   buildTruckingListFromClause,
   buildTruckingListSelectClause,
@@ -324,7 +321,6 @@ export function buildTruckingListQuery(
   const lateIndicatorParam = (req.query as { lateIndicator?: string }).lateIndicator;
 
   let queryText = `
-      WITH ${truckingSapStoTypeTSapCteClause}
       SELECT 
         ${buildTruckingListSelectClause(skipSapJoin)}
       ${buildTruckingListFromClause(skipSapJoin)}

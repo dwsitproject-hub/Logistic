@@ -33,10 +33,6 @@ import {
   formatDDMMYYYY,
 } from '../utils/operationId';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
-import {
-  buildSapStoTypeVExistsForStoParamSql,
-  shipmentsPageSapStoTypeVWhereSql,
-} from '../utils/shipmentStoTypeSql';
 
 /** Normalize date-like fields for shipments / loading ports (YYYY-MM-DD or null). */
 function toShipmentDateOrNull(v: unknown): string | null {
@@ -564,7 +560,6 @@ ${contractMetaSelect}
             AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
             AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
           )
-          ${shipmentsPageSapStoTypeVWhereSql}
     `;
     const queryParams: any[] = [...coreParams];
     let paramIndex = coreParams.length + 1;
@@ -653,7 +648,6 @@ ${contractMetaSelect}
             AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
             AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
           )
-          ${shipmentsPageSapStoTypeVWhereSql}
         GROUP BY 1
       ),`;
 
@@ -2496,7 +2490,6 @@ export const getShipmentDailyDeliverablesCalendar = async (req: AuthRequest, res
       LEFT JOIN vlp_disc_first vd ON vd.shipment_id = s.id
       WHERE
         UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
-        ${shipmentsPageSapStoTypeVWhereSql}
         AND COALESCE(c.delivery_start_date, s.shipment_date, c.delivery_end_date, s.arrival_date) <= $2::date
         AND COALESCE(c.delivery_end_date, s.arrival_date, c.delivery_start_date, s.shipment_date) >= $1::date
       ORDER BY COALESCE(s.ata_discharge_complete::date, vd.ata_vessel_complete_discharge) ASC NULLS LAST, COALESCE(c.delivery_start_date, s.shipment_date) ASC NULLS LAST, s.shipment_id ASC
@@ -3229,17 +3222,6 @@ export const getContractDetailsForSto = async (req: AuthRequest, res: Response) 
 
     await ensureUserStoContractAssignmentsTable();
 
-    const stoTypeGuard = await query(
-      `SELECT ${buildSapStoTypeVExistsForStoParamSql('$1')} AS is_vessel_sto`,
-      [stoTrim],
-    );
-    if (!stoTypeGuard.rows[0]?.is_vessel_sto) {
-      return res.json({
-        success: true,
-        data: [],
-      });
-    }
-
     // Get ALL contract numbers linked to this STO: column sto_number OR STO in raw/shipment/contract JSON
     const sapResult = await query(
       `SELECT DISTINCT contract_number FROM sap_processed_data
@@ -3247,14 +3229,7 @@ export const getContractDetailsForSto = async (req: AuthRequest, res: Response) 
          AND (
            TRIM(COALESCE(sto_number::text, '')) = TRIM($1::text)
            OR NULLIF(TRIM(COALESCE(data->'raw'->>'STO No.', data->'raw'->>'STO Number', data->'shipment'->>'sto_no', data->'contract'->>'sto_no', data->>'STO No.', data->>'STO Number')), '') = TRIM($1::text)
-         )
-         AND UPPER(TRIM(COALESCE(
-           data->'raw'->>'STO Type',
-           data->'raw'->>'STO Type ',
-           data->'contract'->>'sto_type',
-           data->'shipment'->>'sto_type',
-           ''
-         ))) = 'V'`,
+         )`,
       [stoTrim],
     );
     const sapContractNumbers = (sapResult.rows || []).map((r: { contract_number: string }) => r.contract_number);

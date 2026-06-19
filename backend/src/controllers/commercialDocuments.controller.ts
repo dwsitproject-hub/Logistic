@@ -188,20 +188,27 @@ const storage = multer.diskStorage({
     const dir = ensureUploadDir(path.join('commercial-documents', monthFolder));
     cb(null, dir);
   },
-  filename: (_req, _file, cb) => {
-    const po = String((_req as AuthRequest).body?.po_number || 'UNKNOWN');
-    cb(null, buildCommercialDocumentStoredName(po));
+  filename: (req, file, cb) => {
+    const po = String((req as AuthRequest).body?.po_number || 'UNKNOWN');
+    cb(null, buildCommercialDocumentStoredName(po, file.originalname));
   },
 });
 
 export const commercialDocumentUpload = multer({
   storage,
   limits: { fileSize: 15 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    if (file.mimetype === 'application/pdf' || file.originalname.toLowerCase().endsWith('.pdf')) {
+  fileFilter: (req, file, cb) => {
+    const docType = String((req as AuthRequest).body?.document_type || '').trim();
+    const name = file.originalname.toLowerCase();
+    const mime = file.mimetype || '';
+    const isPdf = mime === 'application/pdf' || name.endsWith('.pdf');
+    const isImage =
+      docType === 'invoice_pelunasan' &&
+      (/^image\/(png|jpe?g|webp)$/i.test(mime) || /\.(png|jpe?g|webp)$/i.test(name));
+    if (isPdf || isImage) {
       cb(null, true);
     } else {
-      cb(new Error('Only PDF files are allowed'));
+      cb(new Error('Only PDF files are allowed (images allowed for Invoice Pelunasan only)'));
     }
   },
 });
@@ -246,7 +253,7 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
     }
 
     const relativePath = toRelativeUploadPath(file.path);
-    const storedName = buildCommercialDocumentStoredName(poNumber);
+    const storedName = buildCommercialDocumentStoredName(poNumber, file.originalname);
     const userId = req.user?.id ?? null;
     const userName = req.user?.username || req.user?.email || 'Unknown';
 
@@ -264,7 +271,7 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
       } catch {
         /* ignore */
       }
-      await query(
+      const updateResult = await query(
         `UPDATE commercial_document_files
          SET file_path = $1, file_name = $2, file_size = $3, mime_type = $4, checked = true,
              uploaded_by = $5, updated_at = CURRENT_TIMESTAMP
@@ -272,15 +279,28 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
          RETURNING *`,
         [relativePath, storedName, file.size, file.mimetype, userId, contractExtNo, documentType],
       );
-    } else {
+      const savedFile = updateResult.rows[0];
       await query(
-        `INSERT INTO commercial_document_files
-          (contract_ext_no, document_type, file_path, file_name, file_size, mime_type, checked, uploaded_by)
-         VALUES ($1,$2,$3,$4,$5,$6,true,$7)
-         RETURNING *`,
-        [contractExtNo, documentType, relativePath, storedName, file.size, file.mimetype, userId],
+        `INSERT INTO commercial_document_history
+          (contract_ext_no, document_type, action_type, file_path, file_name, user_id, user_name)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [contractExtNo, documentType, actionType, relativePath, storedName, userId, userName],
       );
+      return res.json({
+        success: true,
+        message: actionType === 'ADD' ? 'Document uploaded' : 'Document replaced',
+        data: { actionType, file_name: storedName, file_id: savedFile.id },
+      });
     }
+
+    const insertResult = await query(
+      `INSERT INTO commercial_document_files
+        (contract_ext_no, document_type, file_path, file_name, file_size, mime_type, checked, uploaded_by)
+       VALUES ($1,$2,$3,$4,$5,$6,true,$7)
+       RETURNING *`,
+      [contractExtNo, documentType, relativePath, storedName, file.size, file.mimetype, userId],
+    );
+    const savedFile = insertResult.rows[0];
 
     await query(
       `INSERT INTO commercial_document_history
@@ -292,7 +312,7 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
     return res.json({
       success: true,
       message: actionType === 'ADD' ? 'Document uploaded' : 'Document replaced',
-      data: { actionType, file_name: storedName },
+      data: { actionType, file_name: storedName, file_id: savedFile.id },
     });
   } catch (err) {
     logger.error('uploadCommercialDocument error:', err);

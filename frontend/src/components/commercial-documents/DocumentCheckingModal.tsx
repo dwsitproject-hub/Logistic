@@ -25,6 +25,7 @@ import { formatDateTimeDMY } from '@/lib/dateFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { SettlementInvoiceUploadModal } from '@/components/commercial-documents/SettlementInvoiceUploadModal'
 
 type B2bParty = {
   po_number?: string | null
@@ -62,6 +63,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
   const [uploadingType, setUploadingType] = useState<CommercialDocumentType | null>(null)
   const [pdfPreview, setPdfPreview] = useState<PdfPreviewState | null>(null)
   const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false)
+  const [settlementUploadOpen, setSettlementUploadOpen] = useState(false)
 
   const closePdfPreview = useCallback(() => {
     setPdfPreview((prev) => {
@@ -275,6 +277,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                       const existing = fileByType(type)
                       const inputId = `commercial-doc-upload-${type}`
                       const isPreviewActive = pdfPreview?.fileId === existing?.id
+                      const isSettlementInvoice = type === 'invoice_pelunasan'
                       return (
                         <div
                           key={type}
@@ -290,7 +293,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                             </div>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
-                            {canModifyDocuments ? (
+                            {canModifyDocuments && !isSettlementInvoice ? (
                               <input
                                 id={inputId}
                                 type="file"
@@ -308,7 +311,13 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                                 variant="outline"
                                 size="sm"
                                 disabled={uploadingType === type}
-                                onClick={() => document.getElementById(inputId)?.click()}
+                                onClick={() => {
+                                  if (isSettlementInvoice) {
+                                    setSettlementUploadOpen(true)
+                                    return
+                                  }
+                                  document.getElementById(inputId)?.click()
+                                }}
                                 className={
                                   existing
                                     ? 'border-blue-200 text-blue-700 hover:bg-blue-50'
@@ -442,6 +451,18 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
           )}
         </div>
       </div>
+
+      {settlementUploadOpen ? (
+        <SettlementInvoiceUploadModal
+          row={row}
+          existingFileName={fileByType('invoice_pelunasan')?.file_name}
+          onClose={() => setSettlementUploadOpen(false)}
+          onSaved={async () => {
+            await loadModalData()
+            onSaved()
+          }}
+        />
+      ) : null}
     </div>
   )
 }

@@ -2053,7 +2053,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           ), '[^0-9\\.-]', '', 'g'), '')::numeric)
           FROM sap_processed_data spd
           WHERE (
-            (TRIM(sb.sto_key::text) ~ '^OP-SEA-' AND spd.contract_number = (SELECT contract_id FROM contracts WHERE id = $1))
+            (TRIM(sb.sto_key::text) ~ '^OP-' AND spd.contract_number = (SELECT contract_id FROM contracts WHERE id = $1))
             OR (NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number')), '') = TRIM(sb.sto_key::text))
           )
         ), sb.quantity_delivered_db, 0) AS quantity_delivered,
@@ -2065,7 +2065,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           ), '[^0-9\\.-]', '', 'g'), '')::numeric)
           FROM sap_processed_data spd
           WHERE (
-            (TRIM(sb.sto_key::text) ~ '^OP-SEA-' AND spd.contract_number = (SELECT contract_id FROM contracts WHERE id = $1))
+            (TRIM(sb.sto_key::text) ~ '^OP-' AND spd.contract_number = (SELECT contract_id FROM contracts WHERE id = $1))
             OR (NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number')), '') = TRIM(sb.sto_key::text))
           )
         ), 0) AS quantity_receive,

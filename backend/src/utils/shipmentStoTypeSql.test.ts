@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  SHIPMENTS_PAGE_SAP_STO_TYPE_V,
-  buildSapStoTypeVExistsForStoParamSql,
-  buildSapStoTypeVExistsSql,
+  isSyntheticShipmentOperationKeySql,
+  sapStoNumberKeyExpr,
   sapStoTypeNormalizedExpr,
+  shipmentSapStoKeyExpr,
 } from './shipmentStoTypeSql';
 
 describe('shipmentStoTypeSql', () => {
@@ -12,17 +12,22 @@ describe('shipmentStoTypeSql', () => {
     expect(sapStoTypeNormalizedExpr('spd')).toContain("spd.data->'shipment'->>'sto_type'");
   });
 
-  it('builds EXISTS filter for vessel STO type only', () => {
-    const sql = buildSapStoTypeVExistsSql();
-    expect(sql).toContain('EXISTS');
-    expect(sql).toContain(`= '${SHIPMENTS_PAGE_SAP_STO_TYPE_V}'`);
-    expect(sql).toContain('s.shipment_id');
-    expect(sql).toContain('c.contract_id');
+  it('extracts STO number from SAP JSON paths', () => {
+    expect(sapStoNumberKeyExpr('spd')).toContain("spd.data->'raw'->>'STO No.'");
+    expect(sapStoNumberKeyExpr('spd')).toContain('spd.sto_number');
   });
 
-  it('builds parameterized STO guard for modal endpoints', () => {
-    const sql = buildSapStoTypeVExistsForStoParamSql('$1');
-    expect(sql).toContain('$1');
-    expect(sql).toContain(`= '${SHIPMENTS_PAGE_SAP_STO_TYPE_V}'`);
+  it('prefers contract/SAP STO before synthetic shipment keys', () => {
+    expect(shipmentSapStoKeyExpr).toContain('c.sto_number');
+    expect(shipmentSapStoKeyExpr).toContain('l.effective_sto');
+    expect(shipmentSapStoKeyExpr.indexOf('c.sto_number')).toBeLessThan(
+      shipmentSapStoKeyExpr.indexOf('s.operation_id'),
+    );
+  });
+
+  it('detects synthetic OP-* operation keys', () => {
+    const sql = isSyntheticShipmentOperationKeySql('sb.sto_key');
+    expect(sql).toContain("^OP-");
+    expect(sql).toContain('sb.sto_key');
   });
 });

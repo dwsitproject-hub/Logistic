@@ -19,9 +19,8 @@ import {
   sqlTruckingQuantitySentCoalesce,
 } from '../utils/truckingQuantitySql';
 import {
+  truckingPageLandTransportForContractWhereSql,
   truckingPageListScopeWhereSql,
-  truckingPageSapStoTypeTForContractWhereSql,
-  truckingSapStoTypeTSapCteClause,
 } from '../utils/truckingStoTypeSql';
 import {
   invalidateTruckingListCache,
@@ -107,7 +106,7 @@ export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Resp
         UPPER(TRIM(COALESCE(l.b2b_flag, c.contract_type::text, ''))) = 'B2B'
         AND NULLIF(TRIM(COALESCE(l.contract_reference_po, '')), '') IS NOT NULL
       )
-      ${truckingPageSapStoTypeTForContractWhereSql}
+      ${truckingPageLandTransportForContractWhereSql}
       ORDER BY
         CASE
           WHEN COALESCE(c.po_number, '') = $2 THEN 0
@@ -196,8 +195,7 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
     const { id } = req.params;
 
     const result = await query(
-      `WITH ${truckingSapStoTypeTSapCteClause}
-       SELECT 
+      `SELECT 
         t.*,
         c.contract_id as contract_number,
         c.supplier,
@@ -759,8 +757,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
 
     const result = await query(
       `
-      WITH ${truckingSapStoTypeTSapCteClause},
-      latest_spd AS (
+      WITH latest_spd AS (
         SELECT DISTINCT ON (spd.contract_number)
           spd.contract_number,
           COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no,
