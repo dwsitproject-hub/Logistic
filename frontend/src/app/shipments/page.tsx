@@ -19,6 +19,21 @@ import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateForma
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
+import {
+  buildVesselPortsQuantityRows,
+  sumVesselPortsQuantityEdits,
+  VesselPortsQuantitiesTable,
+  type VesselPortsQuantityEdits,
+} from '@/components/shipments/VesselPortsQuantitiesTable'
+import {
+  VESSEL_MODAL_BODY_CLASS,
+  VESSEL_MODAL_HEADER_CLASS,
+  VESSEL_MODAL_OVERLAY_CLASS,
+  VESSEL_MODAL_PANEL_CLASS,
+  VESSEL_MODAL_SECTION_CLASS,
+  VESSEL_MODAL_SECTION_HEADER_CLASS,
+  VESSEL_MODAL_SUBSECTION_LABEL_CLASS,
+} from '@/lib/vesselModalUi'
 import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
 import { fetchContractPurchaseOrderOptions } from '@/components/shared/addNewShipmentTypes'
 import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
@@ -390,8 +405,56 @@ function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipmen
       incoterm: match.incoterm ?? row.incoterm,
       b2b_flag: match.b2b_flag ?? row.b2b_flag,
       source_type: match.source_type ?? row.source_type,
+      vessel_name: match.vessel_name?.trim() ? match.vessel_name : row.vessel_name,
+      vessel_code: match.vessel_code?.trim() ? match.vessel_code : row.vessel_code,
+      vessel_owner: match.vessel_owner?.trim() ? match.vessel_owner : row.vessel_owner,
     }
-  })
+  }  )
+}
+
+/** Legacy inline table edit (pencil row edit). Hidden — use Edit Shipment modal instead. */
+const SHIPMENTS_TABLE_LEGACY_INLINE_EDIT_ENABLED = false
+
+function resolveShipmentEditContractId(shipment: Shipment): string {
+  const fromList = (shipment.contract_numbers || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)[0]
+  return (
+    fromList ||
+    (shipment as { contract_number?: string }).contract_number?.trim() ||
+    ''
+  )
+}
+
+function ShipmentTableEditShipmentButton({
+  visible,
+  onEdit,
+}: {
+  visible: boolean
+  onEdit: () => void
+}) {
+  if (!visible) return null
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={onEdit}
+          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+          aria-label="Edit Shipment"
+        >
+          <span className="relative inline-flex h-4 w-4 items-center justify-center">
+            <Ship className="h-4 w-4" />
+            <Pencil className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
+          </span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">Edit Shipment</TooltipContent>
+    </Tooltip>
+  )
 }
 
 function ShipmentRowEditButton({
@@ -938,6 +1001,10 @@ function ShipmentsPageContent() {
   const [showDocs, setShowDocs] = useState(false)
 
   const [showAddShipment, setShowAddShipment] = useState(false)
+  const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
+    shipmentId: string
+    editContractId: string
+  } | null>(null)
 
   // Master Vessel / Master Loading Port suggestions (inline edit row + AddShipmentModal has its own)
   const [vesselSuggestions, setVesselSuggestions] = useState<Array<{ vessel_code: string; vessel_name: string; vessel_capacity_mt: number | null; vessel_owner: string | null; hull_type: string | null }>>([])
@@ -967,6 +1034,8 @@ function ShipmentsPageContent() {
   const [loadingContractDetails, setLoadingContractDetails] = useState<{ [shipmentId: string]: boolean }>({})
   const [savingStoQty, setSavingStoQty] = useState<{ [key: string]: boolean }>({})
   const [editedContractDetails, setEditedContractDetails] = useState<{ [key: string]: number }>({})
+  const [editingPortsQtyRowKey, setEditingPortsQtyRowKey] = useState<string | null>(null)
+  const [editedPortsContractQty, setEditedPortsContractQty] = useState<VesselPortsQuantityEdits>({})
   
   // Loading ports modal state for shrink/expand
   const [portsListExpanded, setPortsListExpanded] = useState(true)
@@ -1388,6 +1457,24 @@ function ShipmentsPageContent() {
       })
       setEditedContractDetails(initialValues)
     }
+  }
+
+  const handleOpenEditShipmentModal = (shipment: Shipment) => {
+    if (perms.loaded && !canEditShipment) {
+      alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
+      return
+    }
+    const editContractId = resolveShipmentEditContractId(shipment)
+    if (!editContractId) {
+      alert('Contract ID is required to edit this shipment.')
+      return
+    }
+    setEditShipmentFromTable({ shipmentId: shipment.id, editContractId })
+  }
+
+  const handleCloseShipmentModal = () => {
+    setShowAddShipment(false)
+    setEditShipmentFromTable(null)
   }
 
   const handleCancelEdit = () => {
@@ -3200,10 +3287,80 @@ function ShipmentsPageContent() {
     }
   }
 
+  const resetPortsQuantityRowEdit = () => {
+    setEditingPortsQtyRowKey(null)
+    setEditedPortsContractQty({})
+  }
+
+  const syncEditedShipmentInfoFromPortsQtyRows = useCallback(
+    (edits: VesselPortsQuantityEdits) => {
+      if (!selectedShipment) return
+      const details = contractDetailsMap[selectedShipment.id]
+      const rows = buildVesselPortsQuantityRows(
+        selectedShipment.id,
+        details,
+        details?.length
+          ? null
+          : {
+              contract_ext_no: shipmentModalContractExtNoDisplay(
+                shipmentInfo,
+                selectedShipment,
+                details,
+              ),
+              po_number: shipmentModalPoDisplay(shipmentInfo, selectedShipment, details),
+              contract_qty: parseApiNumber(shipmentInfo?.contract_qty),
+              sto_qty: parseApiNumber(
+                shipmentInfo?.sto_quantity ?? selectedShipment.sto_quantity ?? selectedShipment.total_quantity_shipped,
+              ),
+              quantity_delivered: resolvePortsModalQuantityDeliveredKg(
+                shipmentInfo,
+                selectedShipment,
+                details,
+              ),
+              quantity_receive: resolvePortsModalQuantityReceiveKg(
+                shipmentInfo,
+                selectedShipment,
+                details,
+              ),
+            },
+      )
+      if (rows.length === 0) return
+      const sums = sumVesselPortsQuantityEdits(rows, edits)
+      setEditedShipmentInfo((prev: Record<string, unknown> | null) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          ...(sums.quantity_delivered !== null ? { quantity_delivered: sums.quantity_delivered } : {}),
+          ...(sums.quantity_receive !== null
+            ? { actual_vessel_qty_receive: sums.quantity_receive }
+            : {}),
+        }
+      })
+    },
+    [contractDetailsMap, selectedShipment, shipmentInfo],
+  )
+
+  const handleChangePortsQtyRow = (
+    rowKey: string,
+    field: 'quantity_delivered' | 'quantity_receive',
+    kg: number | null,
+  ) => {
+    setEditedPortsContractQty((prev) => ({
+      ...prev,
+      [rowKey]: { ...prev[rowKey], [field]: kg },
+    }))
+  }
+
+  const handleConfirmPortsQtyRowEdit = () => {
+    setEditingPortsQtyRowKey(null)
+    syncEditedShipmentInfoFromPortsQtyRows(editedPortsContractQty)
+  }
+
   const handleCancelEditAll = () => {
     handleCancelEditShipmentInfo()
     handleCancelEditPort()
     resetQuantityUnlockState()
+    resetPortsQuantityRowEdit()
   }
 
   const closeLoadingPortsModal = () => {
@@ -3265,6 +3422,7 @@ function ShipmentsPageContent() {
     setEditingShipmentInfo(false)
     setEditedShipmentInfo(null)
     resetQuantityUnlockState()
+    resetPortsQuantityRowEdit()
   }
 
   const handleShipmentQuantityDocChange = async (
@@ -3336,7 +3494,45 @@ function ShipmentsPageContent() {
       }
 
       const identifier = selectedShipment.id
-      const info = editedShipmentInfoRef.current
+      let info = { ...editedShipmentInfoRef.current }
+
+      const portsQtyRows = buildVesselPortsQuantityRows(
+        selectedShipment.id,
+        contractDetailsMap[selectedShipment.id],
+        contractDetailsMap[selectedShipment.id]?.length
+          ? null
+          : {
+              contract_ext_no: shipmentModalContractExtNoDisplay(
+                shipmentInfo,
+                selectedShipment,
+                contractDetailsMap[selectedShipment.id],
+              ),
+              po_number: shipmentModalPoDisplay(
+                shipmentInfo,
+                selectedShipment,
+                contractDetailsMap[selectedShipment.id],
+              ),
+              contract_qty: parseApiNumber(shipmentInfo?.contract_qty),
+              sto_qty: parseApiNumber(
+                shipmentInfo?.sto_quantity ?? selectedShipment.sto_quantity ?? selectedShipment.total_quantity_shipped,
+              ),
+              quantity_delivered: resolvePortsModalQuantityDeliveredKg(
+                shipmentInfo,
+                selectedShipment,
+                contractDetailsMap[selectedShipment.id],
+              ),
+              quantity_receive: resolvePortsModalQuantityReceiveKg(
+                shipmentInfo,
+                selectedShipment,
+                contractDetailsMap[selectedShipment.id],
+              ),
+            },
+      )
+      if (portsQtyRows.length > 0) {
+        const sums = sumVesselPortsQuantityEdits(portsQtyRows, editedPortsContractQty)
+        if (sums.quantity_delivered !== null) info.quantity_delivered = sums.quantity_delivered
+        if (sums.quantity_receive !== null) info.actual_vessel_qty_receive = sums.quantity_receive
+      }
 
       const deliveryChanged = !shipmentQuantityValuesEqual(
         info.quantity_delivered,
@@ -3523,6 +3719,7 @@ function ShipmentsPageContent() {
       setEditedShipmentInfo(null)
       await fetchShipments(page, undefined, { force: true })
       resetQuantityUnlockState()
+      resetPortsQuantityRowEdit()
       alert('Shipment information updated successfully!')
     } catch (error) {
       console.error('Error saving shipment info:', error)
@@ -4759,6 +4956,8 @@ function ShipmentsPageContent() {
 
                             for (const shipment of group.rows) {
                               const isEditing = editingId === shipment.id
+                              const tableInlineEditActive =
+                                isEditing && SHIPMENTS_TABLE_LEGACY_INLINE_EDIT_ENABLED
                               const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
                               const rowBg = stripeIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                               stripeIdx += 1
@@ -4794,7 +4993,7 @@ function ShipmentsPageContent() {
                                     return (
                                     <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
                                       <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
-                                      {col.id === 'vessel_name' && isEditing ? (
+                                      {col.id === 'vessel_name' && tableInlineEditActive ? (
                                         <div className="relative">
                                           <Input
                                             value={editedData.vessel_name ?? shipment.vessel_name ?? ''}
@@ -4821,21 +5020,21 @@ function ShipmentsPageContent() {
                                             </div>
                                           )}
                                         </div>
-                                      ) : col.id === 'vessel_code' && isEditing ? (
+                                      ) : col.id === 'vessel_code' && tableInlineEditActive ? (
                                         <Input
                                           value={editedData.vessel_code ?? shipment.vessel_code ?? ''}
                                           disabled
                                           className="h-8 text-sm bg-gray-100 cursor-not-allowed"
                                           placeholder="Filled from Master Vessel"
                                         />
-                                      ) : col.id === 'vessel_owner' && isEditing ? (
+                                      ) : col.id === 'vessel_owner' && tableInlineEditActive ? (
                                         <Input
                                           value={editedData.vessel_owner ?? shipment.vessel_owner ?? ''}
                                           disabled
                                           className="h-8 text-sm bg-gray-100 cursor-not-allowed"
                                           placeholder="Filled from Master Vessel"
                                         />
-                                      ) : col.id === 'vessel_capacity' && isEditing ? (
+                                      ) : col.id === 'vessel_capacity' && tableInlineEditActive ? (
                                         <Input
                                           type="number"
                                           value={
@@ -4849,14 +5048,14 @@ function ShipmentsPageContent() {
                                           className="h-8 text-sm bg-gray-100 cursor-not-allowed"
                                           placeholder="Filled from Master Vessel"
                                         />
-                                      ) : col.id === 'vessel_hull_type' && isEditing ? (
+                                      ) : col.id === 'vessel_hull_type' && tableInlineEditActive ? (
                                         <Input
                                           value={editedData.vessel_hull_type ?? shipment.vessel_hull_type ?? ''}
                                           disabled
                                           className="h-8 text-sm bg-gray-100 cursor-not-allowed"
                                           placeholder="Filled from Master Vessel"
                                         />
-                                      ) : col.id === 'port_of_loading' && isEditing ? (
+                                      ) : col.id === 'port_of_loading' && tableInlineEditActive ? (
                                         <div className="relative">
                                           <Input
                                             value={editedData.port_of_loading ?? shipment.port_of_loading ?? ''}
@@ -4883,7 +5082,7 @@ function ShipmentsPageContent() {
                                             </div>
                                           )}
                                         </div>
-                                      ) : col.id === 'status' && isEditing ? (
+                                      ) : col.id === 'status' && tableInlineEditActive ? (
                                         (() => {
                                           const currentStatus = String(shipment.status || '').toUpperCase()
                                           if (currentStatus === 'CANCELLED') {
@@ -4928,6 +5127,7 @@ function ShipmentsPageContent() {
                                   <td className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
                                   <div className="flex items-center justify-end gap-2 min-h-[40px]">
                                     {isEditing ? (
+                                      <div className="hidden">
                                       <>
                                         <Button
                                           variant="outline"
@@ -4952,8 +5152,10 @@ function ShipmentsPageContent() {
                                           )}
                                         </Button>
                                       </>
+                                      </div>
                                     ) : (
                                       <>
+                                      <div className="hidden">
                                       <ShipmentRowEditButton
                                         visible={canShowEditShipmentButton}
                                         hasShipmentEditData={hasShipmentEditData}
@@ -4974,6 +5176,11 @@ function ShipmentsPageContent() {
                                         >
                                           <Ship className="h-4 w-4" />
                                         </Button>
+                                      </div>
+                                      <ShipmentTableEditShipmentButton
+                                        visible={canShowEditShipmentButton}
+                                        onEdit={() => handleOpenEditShipmentModal(shipment)}
+                                      />
                                         <Button
                                           variant="outline"
                                           size="icon"
@@ -5183,11 +5390,13 @@ function ShipmentsPageContent() {
 
                     for (const shipment of group.rows) {
                     const isEditing = editingId === shipment.id
+                    const tableInlineEditActive =
+                      isEditing && SHIPMENTS_TABLE_LEGACY_INLINE_EDIT_ENABLED
                     const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
                     nodes.push(
                       <div
                         key={shipment.id}
-                        className={`border rounded-lg transition-colors ${isMultiStoGroup ? 'ml-3 border-l-2 border-slate-200' : ''} ${isEditing ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
+                        className={`border rounded-lg transition-colors ${isMultiStoGroup ? 'ml-3 border-l-2 border-slate-200' : ''} ${tableInlineEditActive ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
                       >
                         <div className="p-4">
                           <div className="flex items-center justify-between gap-3 mb-3">
@@ -5216,6 +5425,7 @@ function ShipmentsPageContent() {
                             </div>
                             <div className="flex gap-2">
                               {isEditing ? (
+                                <div className="hidden">
                                 <>
                                   <Button variant="outline" size="icon" onClick={handleCancelEdit} disabled={saving} title="Cancel">
                                     <X className="h-4 w-4" />
@@ -5224,8 +5434,10 @@ function ShipmentsPageContent() {
                                     {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                                   </Button>
                                 </>
+                                </div>
                               ) : (
                                 <>
+                                  <div className="hidden">
                                   <ShipmentRowEditButton
                                     visible={canShowEditShipmentButton}
                                     hasShipmentEditData={hasShipmentEditData}
@@ -5240,6 +5452,11 @@ function ShipmentsPageContent() {
                                   <Button variant="outline" size="icon" onClick={() => handleViewLoadingPorts(shipment)} title="Ports" className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
                                     <Ship className="h-4 w-4" />
                                   </Button>
+                                  </div>
+                                  <ShipmentTableEditShipmentButton
+                                    visible={canShowEditShipmentButton}
+                                    onEdit={() => handleOpenEditShipmentModal(shipment)}
+                                  />
                                   <Button variant="outline" size="icon" onClick={() => handleViewDocuments(shipment)} title="Docs" className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100">
                                     <FileText className="h-4 w-4" />
                                   </Button>
@@ -5471,20 +5688,20 @@ function ShipmentsPageContent() {
 
       {/* Loading Ports Modal */}
       {showLoadingPorts && selectedShipment && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4">
-          <div className="bg-white w-full max-w-6xl rounded-xl shadow-xl my-4 max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
+        <div className={VESSEL_MODAL_OVERLAY_CLASS}>
+          <div className={VESSEL_MODAL_PANEL_CLASS}>
             {/* Header */}
-            <div className="shrink-0 border-b border-gray-200">
+            <div className={VESSEL_MODAL_HEADER_CLASS}>
               <div className="flex items-center justify-between px-6 py-4">
                 <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-cyan-600 text-white shrink-0">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-600 text-white shrink-0">
                     <Anchor className="h-4 w-4" />
                   </div>
                   <div>
                     <h3 className="text-lg font-semibold text-gray-900">
                       {selectedShipment.vessel_name || selectedShipment.shipment_id}
                     </h3>
-                    <p className="text-xs text-gray-500">Vessel Loading Ports &amp; Shipment Information</p>
+                    <p className="text-xs text-gray-500">Vessel loading ports &amp; shipment information</p>
                   </div>
                 </div>
                 <Button variant="ghost" size="icon" className="shrink-0 text-gray-400 hover:text-gray-600" aria-label="Close" onClick={closeLoadingPortsModal}>
@@ -5493,10 +5710,10 @@ function ShipmentsPageContent() {
               </div>
             </div>
 
-            <div className="flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto px-6 py-4">
-              {/* Combined Shipment Information and Loading Ports */}
-              <div className="rounded-xl border border-gray-200 shadow-sm">
-                <div className="flex items-center gap-2.5 px-4 py-2.5 bg-gray-50 rounded-t-xl border-b border-gray-200">
+            <div className={`${VESSEL_MODAL_BODY_CLASS} flex flex-col gap-4`}>
+              {/* Shipment Information */}
+              <div className={VESSEL_MODAL_SECTION_CLASS}>
+                <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
                   <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100 shrink-0">
                     <FileText className="h-3.5 w-3.5 text-blue-600" />
                   </div>
@@ -5588,154 +5805,67 @@ function ShipmentsPageContent() {
                       </div>
 
                       <div className="p-4 space-y-4">
-                      {/* Quantities & Port Fields */}
+                      {/* Quantities & Ports */}
                       <div>
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quantities &amp; Ports</p>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
-                        <ShipmentDetailReadOnlyField
-                          label="STO No"
-                          value={shipmentModalStoDisplay(selectedShipment)}
-                          locked
-                        />
-                        <ShipmentDetailReadOnlyField
-                          label="PO Number"
-                          value={shipmentModalPoDisplay(
-                            shipmentInfo,
-                            selectedShipment,
+                        <p className={VESSEL_MODAL_SUBSECTION_LABEL_CLASS}>Quantities &amp; Ports</p>
+                        <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3 text-sm">
+                          <ShipmentDetailReadOnlyField
+                            label="STO No"
+                            value={shipmentModalStoDisplay(selectedShipment)}
+                            locked
+                          />
+                        </div>
+                        <VesselPortsQuantitiesTable
+                          stoNumber={shipmentModalStoDisplay(selectedShipment)}
+                          rows={buildVesselPortsQuantityRows(
+                            selectedShipment.id,
                             contractDetailsMap[selectedShipment.id],
+                            contractDetailsMap[selectedShipment.id]?.length
+                              ? null
+                              : {
+                                  contract_ext_no: shipmentModalContractExtNoDisplay(
+                                    shipmentInfo,
+                                    selectedShipment,
+                                    contractDetailsMap[selectedShipment.id],
+                                  ),
+                                  po_number: shipmentModalPoDisplay(
+                                    shipmentInfo,
+                                    selectedShipment,
+                                    contractDetailsMap[selectedShipment.id],
+                                  ),
+                                  contract_qty: parseApiNumber(shipmentInfo?.contract_qty),
+                                  sto_qty: parseApiNumber(
+                                    shipmentInfo?.sto_quantity ??
+                                      selectedShipment.sto_quantity ??
+                                      selectedShipment.total_quantity_shipped,
+                                  ),
+                                  quantity_delivered: resolvePortsModalQuantityDeliveredKg(
+                                    shipmentInfo,
+                                    selectedShipment,
+                                    contractDetailsMap[selectedShipment.id],
+                                  ),
+                                  quantity_receive: resolvePortsModalQuantityReceiveKg(
+                                    shipmentInfo,
+                                    selectedShipment,
+                                    contractDetailsMap[selectedShipment.id],
+                                  ),
+                                },
                           )}
-                          locked={editingShipmentInfo}
-                        />
-                        <ShipmentDetailReadOnlyField
-                          label="Contract Ext No"
-                          value={shipmentModalContractExtNoDisplay(
-                            shipmentInfo,
-                            selectedShipment,
-                            contractDetailsMap[selectedShipment.id],
-                          )}
-                          locked={editingShipmentInfo}
+                          loading={Boolean(loadingContractDetails[selectedShipment.id])}
+                          editingRowKey={editingPortsQtyRowKey}
+                          edits={editedPortsContractQty}
+                          quantityEditUnlocked={editingShipmentInfo && isQuantityUnlocked}
+                          onStartEditRow={(rowKey) => {
+                            if (!editingShipmentInfo) {
+                              handleEditShipmentInfo()
+                            }
+                            setEditingPortsQtyRowKey(rowKey)
+                          }}
+                          onCancelEditRow={() => setEditingPortsQtyRowKey(null)}
+                          onConfirmEditRow={handleConfirmPortsQtyRowEdit}
+                          onChangeRowQty={handleChangePortsQtyRow}
                         />
                       </div>
-                      {(loadingContractDetails[selectedShipment.id] ||
-                        (contractDetailsMap[selectedShipment.id]?.length ?? 0) > 0) && (
-                        <div className="mt-3 space-y-2">
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-                            Associated Contracts
-                          </p>
-                          {loadingContractDetails[selectedShipment.id] ? (
-                            <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500">
-                              <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-                              Loading contract details...
-                            </div>
-                          ) : (
-                            <div className="space-y-2">
-                              {contractDetailsMap[selectedShipment.id]?.map((detail, idx) => (
-                                <div
-                                  key={`${detail.contract_number}-${idx}`}
-                                  className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm"
-                                >
-                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2">
-                                    <div>
-                                      <div className="text-[10px] uppercase tracking-wide text-gray-400">Contract Ext No</div>
-                                      <div className="font-medium">{detail.contract_ext_no || '—'}</div>
-                                    </div>
-                                    <div>
-                                      <div className="text-[10px] uppercase tracking-wide text-gray-400">PO Number</div>
-                                      <div className="font-medium">{detail.po_number || '—'}</div>
-                                    </div>
-                                    <div>
-                                      <div className="text-[10px] uppercase tracking-wide text-gray-400">Contract Qty</div>
-                                      <div className="font-medium">
-                                        {parseApiNumber(detail.contract_qty) !== null
-                                          ? `${formatNumber(detail.contract_qty)} Kg`
-                                          : '—'}
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <div className="text-[10px] uppercase tracking-wide text-gray-400">STO Qty Assigned</div>
-                                      <div className="font-medium">
-                                        {parseApiNumber(detail.sto_qty_assigned) !== null
-                                          ? `${formatNumber(detail.sto_qty_assigned)} Kg`
-                                          : '—'}
-                                        {detail.locked_from_sap ? (
-                                          <span className="ml-1 text-xs text-gray-500">(SAP)</span>
-                                        ) : null}
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <div className="text-[10px] uppercase tracking-wide text-gray-400">Qty Delivered</div>
-                                      <div className="font-medium">
-                                        {parseApiNumber(detail.quantity_delivered) !== null
-                                          ? `${formatNumber(detail.quantity_delivered!)} Kg`
-                                          : '—'}
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <div className="text-[10px] uppercase tracking-wide text-gray-400">Qty Receive</div>
-                                      <div className="font-medium">
-                                        {parseApiNumber(detail.quantity_receive) !== null
-                                          ? `${formatNumber(detail.quantity_receive!)} Kg`
-                                          : '—'}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                              {(contractDetailsMap[selectedShipment.id]?.length ?? 0) > 1 ? (
-                                <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
-                                  <div className="text-[10px] font-semibold uppercase tracking-wide text-blue-700 mb-1">
-                                    Total ({contractDetailsMap[selectedShipment.id]?.length} contracts)
-                                  </div>
-                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2">
-                                    <div>
-                                      <div className="text-[10px] uppercase tracking-wide text-blue-600">Contract Qty</div>
-                                      <div className="font-semibold text-blue-900">
-                                        {formatQuantityKgDisplay(
-                                          sumContractDetailQuantities(
-                                            contractDetailsMap[selectedShipment.id],
-                                            'contract_qty',
-                                          ),
-                                        )}
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <div className="text-[10px] uppercase tracking-wide text-blue-600">STO Qty Assigned</div>
-                                      <div className="font-semibold text-blue-900">
-                                        {formatQuantityKgDisplay(
-                                          sumContractDetailQuantities(
-                                            contractDetailsMap[selectedShipment.id],
-                                            'sto_qty_assigned',
-                                          ),
-                                        )}
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <div className="text-[10px] uppercase tracking-wide text-blue-600">Qty Delivered</div>
-                                      <div className="font-semibold text-blue-900">
-                                        {resolvePortsModalQuantityDelivered(
-                                          shipmentInfo,
-                                          selectedShipment,
-                                          contractDetailsMap[selectedShipment.id],
-                                        )}
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <div className="text-[10px] uppercase tracking-wide text-blue-600">Qty Receive</div>
-                                      <div className="font-semibold text-blue-900">
-                                        {resolvePortsModalQuantityReceive(
-                                          shipmentInfo,
-                                          selectedShipment,
-                                          contractDetailsMap[selectedShipment.id],
-                                        )}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              ) : null}
-                            </div>
-                          )}
-                        </div>
-                      )}
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                         {editingShipmentInfo && (
                           <div className="md:col-span-2 lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -5835,41 +5965,11 @@ function ShipmentsPageContent() {
                             </div>
                             {!isQuantityUnlocked && (
                               <p className="sm:col-span-2 text-[11px] text-amber-800/80">
-                                Quantity Delivery and Quantity Receive stay locked until at least one of SLD or SDD is uploaded.
+                                Delivered / Received quantities stay locked until at least one of SLD or SDD is uploaded.
                               </p>
                             )}
                           </div>
                         )}
-                        <ShipmentMtQuantityField
-                          label="Quantity Delivery"
-                          value={
-                            editingShipmentInfo
-                              ? editedShipmentInfo?.quantity_delivered
-                              : resolvePortsModalQuantityDeliveredKg(
-                                  shipmentInfo,
-                                  selectedShipment,
-                                  contractDetailsMap[selectedShipment.id],
-                                ) ?? shipmentInfo.quantity_delivered
-                          }
-                          editing={editingShipmentInfo}
-                          disabled={!isQuantityUnlocked}
-                          onChange={(next) => setEditedShipmentInfo({ ...editedShipmentInfo, quantity_delivered: next })}
-                        />
-                        <ShipmentMtQuantityField
-                          label="Quantity Receive"
-                          value={
-                            editingShipmentInfo
-                              ? editedShipmentInfo?.actual_vessel_qty_receive
-                              : resolvePortsModalQuantityReceiveKg(
-                                  shipmentInfo,
-                                  selectedShipment,
-                                  contractDetailsMap[selectedShipment.id],
-                                ) ?? shipmentInfo.actual_vessel_qty_receive
-                          }
-                          editing={editingShipmentInfo}
-                          disabled={!isQuantityUnlocked}
-                          onChange={(next) => setEditedShipmentInfo({ ...editedShipmentInfo, actual_vessel_qty_receive: next })}
-                        />
                         <ShipmentMtQuantityField
                           label="Quantity SFAL"
                           value={editingShipmentInfo ? editedShipmentInfo?.sfal_qty : shipmentInfo.sfal_qty}
@@ -5968,10 +6068,9 @@ function ShipmentsPageContent() {
                           {(shipmentInfo.loading_rate_kg_per_day ?? shipmentInfo.loading_rate_mt_per_hour) && (
                             <div className="text-xs text-gray-500 mt-1">
                               Qty Receive &divide; (Completed &minus; Start Loading) days
-                    </div>
-                  )}
+                            </div>
+                          )}
                         </div>
-                      </div>
                       </div>
                       </div>
 
@@ -6599,8 +6698,8 @@ function ShipmentsPageContent() {
               </div>
 
               {/* Add / Edit Loading Port */}
-              <div className="rounded-xl border border-gray-200 shadow-sm">
-                <div className="flex items-center gap-2.5 px-4 py-2.5 bg-gray-50 rounded-t-xl border-b border-gray-200">
+              <div className={VESSEL_MODAL_SECTION_CLASS}>
+                <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
                   <div className="flex h-7 w-7 items-center justify-center rounded-full bg-green-100 shrink-0">
                     <Plus className="h-3.5 w-3.5 text-green-600" />
                   </div>
@@ -6746,8 +6845,8 @@ function ShipmentsPageContent() {
               </div>
 
               {/* Cancellation History */}
-            <div className="rounded-xl border border-gray-200 shadow-sm">
-              <div className="border-b border-gray-200 px-4 py-3">
+            <div className={VESSEL_MODAL_SECTION_CLASS}>
+              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
                 <h4 className="font-semibold text-sm text-gray-800">Cancellation History</h4>
               </div>
               <div className="p-4">
@@ -6867,10 +6966,14 @@ function ShipmentsPageContent() {
       )}
 
       <AddNewShipmentModal
-        open={showAddShipment}
-        onClose={() => setShowAddShipment(false)}
+        open={showAddShipment || editShipmentFromTable != null}
+        mode={editShipmentFromTable ? 'edit' : 'add'}
+        editContractId={editShipmentFromTable?.editContractId ?? null}
+        editShipmentId={editShipmentFromTable?.shipmentId ?? null}
+        onClose={handleCloseShipmentModal}
         onSubmit={async (payload) => {
           await submitAddNewShipmentPayload(payload)
+          handleCloseShipmentModal()
           invalidateLogisticsListCaches()
           section1SummaryForceNextFetchRef.current = true
           void fetchShipments(1, undefined, { force: true })

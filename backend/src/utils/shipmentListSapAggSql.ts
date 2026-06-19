@@ -1,5 +1,11 @@
 /** SAP aggregation CTEs for shipments list (page-scoped spd_keyed join). */
 
+import {
+  SAP_VESSEL_CODE_FROM_SK_SQL,
+  SAP_VESSEL_NAME_FROM_SK_SQL,
+  SAP_VESSEL_OWNER_FROM_SK_SQL,
+} from './sapVesselFields';
+
 export const SHIPMENT_LIST_SPD_AGG_CTES_STUB = `
       spd_keyed AS (
         SELECT NULL::text AS sto_key, NULL::timestamptz AS created_at, NULL::jsonb AS data
@@ -22,7 +28,10 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_STUB = `
         SELECT NULL::text AS sto_key,
           NULL::text AS incoterm,
           NULL::text AS b2b_flag,
-          NULL::text AS source_type
+          NULL::text AS source_type,
+          NULL::text AS vessel_name_sap,
+          NULL::text AS vessel_code_sap,
+          NULL::text AS vessel_owner_sap
         WHERE false
       )`;
 
@@ -129,7 +138,10 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
           sk.sto_key,
           COALESCE(sk.data->'contract'->>'incoterm', sk.data->>'Incoterm') AS incoterm,
           COALESCE(sk.data->'contract'->>'contract_type', sk.data->>'B2B Flag', sk.data->>'Contract Type') AS b2b_flag,
-          COALESCE(sk.data->'contract'->>'source_type', sk.data->>'Source') AS source_type
+          COALESCE(sk.data->'contract'->>'source_type', sk.data->>'Source') AS source_type,
+          ${SAP_VESSEL_NAME_FROM_SK_SQL} AS vessel_name_sap,
+          ${SAP_VESSEL_CODE_FROM_SK_SQL} AS vessel_code_sap,
+          ${SAP_VESSEL_OWNER_FROM_SK_SQL} AS vessel_owner_sap
         FROM spd_keyed sk
         WHERE sk.sto_key IS NOT NULL
         ORDER BY sk.sto_key, sk.created_at DESC NULLS LAST

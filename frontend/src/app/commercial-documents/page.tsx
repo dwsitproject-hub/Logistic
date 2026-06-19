@@ -45,6 +45,7 @@ import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
   COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
   COMPACT_TABLE_HEADER_LABEL_CLASS,
 } from '@/lib/compactTableUi'
@@ -668,7 +669,7 @@ function CommercialDocumentsPageContent() {
                 requestAnimationFrame(() => { isSyncingScroll.current = false })
               }}
             >
-              <table className={COMPACT_OPERATIONAL_TABLE_CLASS}>
+              <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS}`}>
                 <thead>
                   <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
                     {visibleColumns.map((col) => {

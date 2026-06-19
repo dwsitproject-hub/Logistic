@@ -481,6 +481,21 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         c.plant_code,
         mp.plant_name,
         mp.company_name AS plant_company_name,
+        NULLIF(TRIM(mp.group_plant), '') AS group_plant_suggestion,
+        sap_loc.sap_loading_location,
+        (
+          SELECT s.mills
+          FROM suppliers s
+          WHERE c.supplier IS NOT NULL AND TRIM(c.supplier) != ''
+            AND NULLIF(TRIM(s.mills), '') IS NOT NULL
+            AND (
+              TRIM(LOWER(COALESCE(s.parent_company, ''))) = TRIM(LOWER(c.supplier))
+              OR TRIM(LOWER(COALESCE(s.mills, ''))) = TRIM(LOWER(c.supplier))
+              OR TRIM(LOWER(COALESCE(s.group_holding, ''))) = TRIM(LOWER(c.supplier))
+            )
+          ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC NULLS LAST
+          LIMIT 1
+        ) AS supplier_mills_suggestion,
         GREATEST(
           COALESCE(c.quantity_ordered, 0)
           - COALESCE((
@@ -503,6 +518,18 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       FROM matched c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       LEFT JOIN master_plants mp ON mp.plant_code = c.plant_code
+      LEFT JOIN LATERAL (
+        SELECT
+          NULLIF(TRIM(COALESCE(
+            spd.data->'raw'->>'Truck Loading at Starting Location',
+            spd.data->'trucking'->0->'data'->>'truck_loading_at_starting_location',
+            spd.data->'raw'->>'Loading Location'
+          )), '') AS sap_loading_location
+        FROM sap_processed_data spd
+        WHERE spd.contract_number = c.contract_id
+        ORDER BY spd.created_at DESC NULLS LAST
+        LIMIT 1
+      ) sap_loc ON TRUE
       LIMIT 1
       `,
       [raw]
@@ -1800,5 +1827,44 @@ export const bulkUpdateCargoReadiness = async (req: AuthRequest, res: Response) 
   } catch (error) {
     logger.error('Bulk update cargo readiness error:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to update cargo readiness dates' } });
+  }
+};
+
+/** Activity / audit trail for a single trucking operation (modal history section). */
+export const getTruckingActivityLog = async (req: AuthRequest, res: Response) => {
+  try {
+    const truckingId = String(req.params.truckingId || '').trim();
+    if (!truckingId) {
+      return res.status(400).json({ success: false, error: { message: 'Trucking operation ID is required' } });
+    }
+
+    const exists = await query(`SELECT id FROM trucking_operations WHERE id = $1 LIMIT 1`, [truckingId]);
+    if (exists.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { message: 'Trucking operation not found' } });
+    }
+
+    const result = await query(
+      `SELECT
+         a.id,
+         a.action,
+         a.entity_type,
+         a.entity_id,
+         a.before_data,
+         a.after_data,
+         a.timestamp,
+         COALESCE(u.username, '') AS username,
+         COALESCE(u.full_name, '') AS full_name
+       FROM audit_logs a
+       LEFT JOIN users u ON a.user_id = u.id
+       WHERE a.entity_type = 'TRUCKING_OPERATION' AND a.entity_id = $1
+       ORDER BY a.timestamp DESC
+       LIMIT 200`,
+      [truckingId],
+    );
+
+    return res.json({ success: true, data: result.rows });
+  } catch (error) {
+    logger.error('Get trucking activity log error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load trucking activity log' } });
   }
 };

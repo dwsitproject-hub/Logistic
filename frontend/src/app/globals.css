@@ -168,8 +168,9 @@
   }
 
   /*
-   * Shipments + Trucking list tables — center single-line cells vertically when a row
-   * is taller due to stacked Contract Ext / PO values under one STO.
+   * Operational list tables (Shipments, Trucking, Contracts, Contract Performance,
+   * Shipping Performance, Oil Loss, Commercial Documents) — center single-line cells
+   * vertically when a row is taller due to stacked multi-value columns.
    */
   .klip-compact-table--row-vcenter td.klip-compact-table-cell {
     vertical-align: middle;

@@ -1,7 +1,7 @@
 /**
  * SAP STO Type / STO number helpers — shared JSON field expressions.
  *
- * Shipments & Shipping Performance: contract transport mode SEA/MIX only (no STO Type filter).
+ * Shipments page: contract transport mode SEA/MIX, excluding STO Type T (trucking leg on sea/mix STO).
  * Trucking page: transport mode LAND only — see truckingStoTypeSql.ts.
  * Oil Loss vessel segment: MIX + STO Type 'V' — see oilLossEligibility.ts.
  */
@@ -46,3 +46,59 @@ export const shipmentSapStoKeyExpr = `
 /** Manual / synthetic operation ids created from UI (OP-SEA-*, OP-{contract}-*). */
 export const isSyntheticShipmentOperationKeySql = (stoKeySql: string): string =>
   `(TRIM((${stoKeySql})::text) ~ '^OP-')`;
+
+/** Shipments page transport scope: contract Sea/Land = SEA or MIX. */
+export function buildShipmentSeaMixTransportSql(contractAlias = 'c'): string {
+  return `UPPER(COALESCE(NULLIF(TRIM(${contractAlias}.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')`;
+}
+
+/** Resolved STO Type for a shipment row (contract_stos, then SAP JSON). Requires `l` = latest_spd_contract. */
+export function shipmentResolvedStoTypeExpr(
+  contractAlias = 'c',
+  spdAlias = 'l',
+  shipmentAlias = 's',
+): string {
+  const stoKey = `COALESCE(
+    NULLIF(TRIM(${contractAlias}.sto_number::text), ''),
+    NULLIF(TRIM(${spdAlias}.effective_sto), ''),
+    NULLIF(TRIM(${shipmentAlias}.shipment_id), ''),
+    NULLIF(TRIM(${shipmentAlias}.operation_id), ''),
+    ''
+  )`;
+  return `UPPER(TRIM(COALESCE(
+    (
+      SELECT cs.sto_type
+      FROM contract_stos cs
+      WHERE cs.contract_id = ${contractAlias}.id
+        AND NULLIF(TRIM(cs.sto_number::text), '') IS NOT NULL
+        AND TRIM(cs.sto_number::text) = TRIM((${stoKey})::text)
+      ORDER BY cs.updated_at DESC NULLS LAST
+      LIMIT 1
+    ),
+    (
+      SELECT ${sapStoTypeNormalizedExpr('spd_sto_type')}
+      FROM sap_processed_data spd_sto_type
+      WHERE NULLIF(TRIM((${stoKey})::text), '') IS NOT NULL
+        AND TRIM(${sapStoNumberKeyExpr('spd_sto_type')}) = TRIM((${stoKey})::text)
+        AND (
+          NULLIF(TRIM(spd_sto_type.contract_number), '') IS NULL
+          OR TRIM(spd_sto_type.contract_number) = TRIM(${contractAlias}.contract_id::text)
+        )
+      ORDER BY spd_sto_type.created_at DESC NULLS LAST
+      LIMIT 1
+    ),
+    ''
+  )))`;
+}
+
+/**
+ * Exclude trucking-type STO rows from the shipments list (SEA/MIX + STO Type T).
+ * Apply where `latest_spd_contract l` is joined on the contract.
+ */
+export function buildShipmentExcludeStoTypeTSql(
+  contractAlias = 'c',
+  spdAlias = 'l',
+  shipmentAlias = 's',
+): string {
+  return `NOT (${shipmentResolvedStoTypeExpr(contractAlias, spdAlias, shipmentAlias)} = 'T')`;
+}

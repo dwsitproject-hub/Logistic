@@ -23,7 +23,8 @@ import {
   getShippingPerformance,
   getShippingPerformanceSummary,
   getShippingPerformanceTree,
-  updateStoQtyAssigned
+  updateStoQtyAssigned,
+  getShipmentActivityLog,
 } from '../controllers/shipment.controller';
 
 const router = express.Router();
@@ -83,6 +84,7 @@ router.get('/:id', getShipmentById);
 router.put('/:id', auditLog('UPDATE', 'SHIPMENT'), updateShipment);
 
 // Vessel loading ports routes
+router.get('/:shipmentId/activity-log', getShipmentActivityLog);
 router.get('/:shipmentId/loading-ports', getVesselLoadingPorts);
 router.post('/:shipmentId/loading-ports', auditLog('CREATE', 'LOADING_PORT'), upsertVesselLoadingPort);
 router.put('/:shipmentId/loading-ports/:portId', auditLog('UPDATE', 'LOADING_PORT'), upsertVesselLoadingPort);

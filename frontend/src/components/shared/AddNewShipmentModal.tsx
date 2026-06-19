@@ -41,6 +41,7 @@ import type {
   AddNewShipmentSubmitPayload,
   ShipmentPoOption,
 } from '@/components/shared/addNewShipmentTypes'
+import { EditShipmentModal } from '@/components/shared/EditShipmentModal'
 
 type EtaDetailFields = {
   loadingPort: string
@@ -262,6 +263,8 @@ export type AddNewShipmentModalProps = {
   prefilledPOs?: ShipmentPoOption[] | null
   availablePOs?: ShipmentPoOption[] | null
   editContractId?: string | null
+  /** When set (Shipments table edit), load this shipment directly instead of first match by contract. */
+  editShipmentId?: string | null
   mode?: 'add' | 'edit'
 }
 
@@ -272,6 +275,7 @@ export function AddNewShipmentModal({
   prefilledPOs = null,
   availablePOs = null,
   editContractId = null,
+  editShipmentId: editShipmentIdProp = null,
   mode = 'add',
 }: AddNewShipmentModalProps) {
   const perms = usePermissions()
@@ -875,6 +879,97 @@ export function AddNewShipmentModal({
     setLoadingEdit(false)
   }, [])
 
+  const hydrateShipmentEditForm = useCallback(
+    async (
+      shipmentId: string,
+      row: Record<string, unknown>,
+      contractIdFallback: string,
+    ) => {
+      setEditShipmentId(shipmentId)
+
+      const detailRes = await api.get(`/shipments/${shipmentId}`)
+      const shipment = (detailRes.data?.data ?? row) as Record<string, unknown>
+
+      const contractNumbersRaw = String(
+        row.contract_numbers ?? shipment.contract_number ?? contractIdFallback,
+      )
+        const contractNumbers = contractNumbersRaw
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      const uniqueContractIds = contractNumbers.length > 0 ? contractNumbers : [contractIdFallback]
+
+      for (const cid of uniqueContractIds) {
+        await validateContractNumber(cid)
+      }
+
+      const qtyAssigned: Record<string, string> = {}
+      for (const cid of uniqueContractIds) {
+        qtyAssigned[cid] = ''
+      }
+
+      const assignmentKey =
+        String(shipment.sto_number ?? row.sto_number ?? '').trim() ||
+        String(shipment.operation_id ?? row.operation_id ?? '').trim()
+      if (assignmentKey) {
+        try {
+          const detailsRes = await api.get('/shipments/contracts/details', {
+            params: {
+              sto: assignmentKey,
+              contractNumbers: uniqueContractIds.join(','),
+            },
+          })
+          if (detailsRes.data?.success && Array.isArray(detailsRes.data.data)) {
+            for (const detail of detailsRes.data.data as Array<{
+              contract_number?: string
+              sto_qty_assigned?: number | string
+            }>) {
+              const cn = String(detail.contract_number ?? '').trim()
+              if (cn && detail.sto_qty_assigned != null && detail.sto_qty_assigned !== '') {
+                qtyAssigned[cn] = String(detail.sto_qty_assigned)
+              }
+            }
+          }
+        } catch {
+          // Read-only display fallback: keep empty if assignment lookup fails
+        }
+      }
+
+      let loadingPortRow: VesselLoadingPortRow | null = null
+      try {
+        const portsRes = await api.get(`/shipments/${shipmentId}/loading-ports`)
+        const ports: VesselLoadingPortRow[] = portsRes.data?.data?.ports ?? []
+        loadingPortRow =
+          ports.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
+          ports.find((p) => !p.is_discharge_port) ||
+          null
+      } catch {
+        // Shipment-level ETA fields are used when loading ports are unavailable
+      }
+
+      setNewShipment({
+        operationId: String(shipment.operation_id ?? row.operation_id ?? ''),
+        stoNumber: String(shipment.sto_number ?? row.sto_number ?? ''),
+        contractNumbers: uniqueContractIds,
+        vesselName: String(shipment.vessel_name ?? row.vessel_name ?? ''),
+        vesselCode: String(shipment.vessel_code ?? row.vessel_code ?? ''),
+        vesselOwner: String(shipment.vessel_owner ?? row.vessel_owner ?? ''),
+        vesselDraft: String(shipment.vessel_draft ?? row.vessel_draft ?? ''),
+        vesselCapacity: String(shipment.vessel_capacity ?? row.vessel_capacity ?? ''),
+        vesselHullType: String(shipment.vessel_hull_type ?? row.vessel_hull_type ?? ''),
+        charterType: String(shipment.charter_type ?? row.charter_type ?? ''),
+        portOfLoading: String(shipment.port_of_loading ?? row.port_of_loading ?? ''),
+        portOfDischarge: String(shipment.port_of_discharge ?? row.port_of_discharge ?? ''),
+      })
+      setContractQtyAssigned(qtyAssigned)
+
+      const etaBlock = createShipmentEtaDetail([...uniqueContractIds])
+      applyShipmentEtaToBlock(etaBlock, shipment, row, loadingPortRow)
+      setEtaDetails([etaBlock])
+    },
+    [validateContractNumber],
+  )
+
   const loadShipmentForEdit = useCallback(
     async (contractId: string) => {
       setLoadingEdit(true)
@@ -889,88 +984,7 @@ export function AddNewShipmentModal({
           showNotification('error', 'No shipment found for this contract')
           return
         }
-        const shipmentId = String(row.id)
-        setEditShipmentId(shipmentId)
-
-        const detailRes = await api.get(`/shipments/${shipmentId}`)
-        const shipment = (detailRes.data?.data ?? row) as Record<string, unknown>
-
-        const contractNumbersRaw = String(
-          row.contract_numbers ?? shipment.contract_number ?? contractId,
-        )
-        const contractNumbers = contractNumbersRaw
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean)
-        const uniqueContractIds = contractNumbers.length > 0 ? contractNumbers : [contractId]
-
-        for (const cid of uniqueContractIds) {
-          await validateContractNumber(cid)
-        }
-
-        const qtyAssigned: Record<string, string> = {}
-        for (const cid of uniqueContractIds) {
-          qtyAssigned[cid] = ''
-        }
-
-        const assignmentKey =
-          String(shipment.sto_number ?? row.sto_number ?? '').trim() ||
-          String(shipment.operation_id ?? row.operation_id ?? '').trim()
-        if (assignmentKey) {
-          try {
-            const detailsRes = await api.get('/shipments/contracts/details', {
-              params: {
-                sto: assignmentKey,
-                contractNumbers: uniqueContractIds.join(','),
-              },
-            })
-            if (detailsRes.data?.success && Array.isArray(detailsRes.data.data)) {
-              for (const detail of detailsRes.data.data as Array<{
-                contract_number?: string
-                sto_qty_assigned?: number | string
-              }>) {
-                const cn = String(detail.contract_number ?? '').trim()
-                if (cn && detail.sto_qty_assigned != null && detail.sto_qty_assigned !== '') {
-                  qtyAssigned[cn] = String(detail.sto_qty_assigned)
-                }
-              }
-            }
-          } catch {
-            // Read-only display fallback: keep empty if assignment lookup fails
-          }
-        }
-
-        let loadingPortRow: VesselLoadingPortRow | null = null
-        try {
-          const portsRes = await api.get(`/shipments/${shipmentId}/loading-ports`)
-          const ports: VesselLoadingPortRow[] = portsRes.data?.data?.ports ?? []
-          loadingPortRow =
-            ports.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
-            ports.find((p) => !p.is_discharge_port) ||
-            null
-        } catch {
-          // Shipment-level ETA fields are used when loading ports are unavailable
-        }
-
-        setNewShipment({
-          operationId: String(shipment.operation_id ?? row.operation_id ?? ''),
-          stoNumber: String(shipment.sto_number ?? row.sto_number ?? ''),
-          contractNumbers: uniqueContractIds,
-          vesselName: String(shipment.vessel_name ?? row.vessel_name ?? ''),
-          vesselCode: String(shipment.vessel_code ?? row.vessel_code ?? ''),
-          vesselOwner: String(shipment.vessel_owner ?? row.vessel_owner ?? ''),
-          vesselDraft: String(shipment.vessel_draft ?? row.vessel_draft ?? ''),
-          vesselCapacity: String(shipment.vessel_capacity ?? row.vessel_capacity ?? ''),
-          vesselHullType: String(shipment.vessel_hull_type ?? row.vessel_hull_type ?? ''),
-          charterType: String(shipment.charter_type ?? row.charter_type ?? ''),
-          portOfLoading: String(shipment.port_of_loading ?? row.port_of_loading ?? ''),
-          portOfDischarge: String(shipment.port_of_discharge ?? row.port_of_discharge ?? ''),
-        })
-        setContractQtyAssigned(qtyAssigned)
-
-        const etaBlock = createShipmentEtaDetail([...uniqueContractIds])
-        applyShipmentEtaToBlock(etaBlock, shipment, row, loadingPortRow)
-        setEtaDetails([etaBlock])
+        await hydrateShipmentEditForm(String(row.id), row, contractId)
       } catch (error) {
         console.error('Failed to load shipment for edit:', error)
         showNotification('error', 'Failed to load shipment details')
@@ -978,7 +992,30 @@ export function AddNewShipmentModal({
         setLoadingEdit(false)
       }
     },
-    [showNotification, validateContractNumber],
+    [hydrateShipmentEditForm, showNotification],
+  )
+
+  const loadShipmentForEditById = useCallback(
+    async (shipmentId: string, contractIdFallback: string) => {
+      setLoadingEdit(true)
+      setEditShipmentId(null)
+      try {
+        const detailRes = await api.get(`/shipments/${shipmentId}`)
+        const shipment = (detailRes.data?.data ?? {}) as Record<string, unknown>
+        if (!shipment?.id && !detailRes.data?.success) {
+          showNotification('error', 'Shipment not found')
+          return
+        }
+        const row = { ...shipment, id: shipmentId }
+        await hydrateShipmentEditForm(shipmentId, row, contractIdFallback)
+      } catch (error) {
+        console.error('Failed to load shipment for edit:', error)
+        showNotification('error', 'Failed to load shipment details')
+      } finally {
+        setLoadingEdit(false)
+      }
+    },
+    [hydrateShipmentEditForm, showNotification],
   )
 
   useEffect(() => {
@@ -990,6 +1027,7 @@ export function AddNewShipmentModal({
     const sessionKey = [
       isEditMode ? 'edit' : 'add',
       editContractId ?? '',
+      editShipmentIdProp ?? '',
       prefilledPOs?.map((p) => p.key).join('|') ?? '',
     ].join(':')
     if (initSessionRef.current === sessionKey) return
@@ -997,7 +1035,12 @@ export function AddNewShipmentModal({
 
     resetForm()
 
+    const directShipmentId = editShipmentIdProp?.trim()
     const editId = editContractId?.trim()
+    if (isEditMode && directShipmentId) {
+      void loadShipmentForEditById(directShipmentId, editId || directShipmentId)
+      return
+    }
     if (isEditMode && editId) {
       void loadShipmentForEdit(editId)
       return
@@ -1030,7 +1073,16 @@ export function AddNewShipmentModal({
       }))
       setEtaDetails([createShipmentEtaDetail([...keys])])
     }
-  }, [open, editContractId, isEditMode, prefilledPOs, resetForm, loadShipmentForEdit])
+  }, [
+    open,
+    editContractId,
+    editShipmentIdProp,
+    isEditMode,
+    prefilledPOs,
+    resetForm,
+    loadShipmentForEdit,
+    loadShipmentForEditById,
+  ])
 
   /** Auto-show one ETA row when ≥1 PO is on the shipment (sea / mixed). */
   useEffect(() => {
@@ -1321,6 +1373,21 @@ export function AddNewShipmentModal({
   )
 
   if (!open) return null
+
+  if (isEditMode) {
+    return (
+      <EditShipmentModal
+        open={open}
+        onClose={() => {
+          resetForm()
+          onClose()
+        }}
+        onSubmit={onSubmit}
+        editContractId={editContractId}
+        editShipmentId={editShipmentIdProp}
+      />
+    )
+  }
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">

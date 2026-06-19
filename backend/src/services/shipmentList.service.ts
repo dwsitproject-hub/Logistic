@@ -2,6 +2,10 @@ import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
+import {
+  mergeShipmentVesselFromSapRow,
+  queueShipmentVesselSapBackfill,
+} from './shipmentVesselFromSap.service';
 
 /**
  * Shipments compact list API:
@@ -154,6 +158,10 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
       delete (row as { po_numbers_merged?: unknown }).po_numbers_merged;
     }
 
+    if (mergeShipmentVesselFromSapRow(row)) {
+      queueShipmentVesselSapBackfill(row);
+    }
+
     if (String(row.status ?? '').trim().toUpperCase() === 'CANCELLED') {
       row.status = 'CANCELLED';
       continue;
@@ -236,7 +244,10 @@ function buildPaginatedListQuery(
         sl.b2b_flag AS b2b_flag,
         sl.source_type AS source_type,
         COALESCE(cex.contract_ext_no, sp.contract_ext_no) AS contract_ext_no_merged,
-        COALESCE(NULLIF(TRIM(pna.po_numbers), ''), sp.po_numbers) AS po_numbers_merged
+        COALESCE(NULLIF(TRIM(pna.po_numbers), ''), sp.po_numbers) AS po_numbers_merged,
+        sl.vessel_name_sap,
+        sl.vessel_code_sap,
+        sl.vessel_owner_sap
       FROM shipment_page sp
       LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)

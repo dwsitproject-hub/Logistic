@@ -36,6 +36,10 @@ import {
   SPD_EFFECTIVE_STO_SQL,
   TRUCKING_SAP_STO_DETAIL_SQL,
 } from '../utils/contractLogisticsStoDetailSql';
+import {
+  resolveContractLogisticsOperationId,
+  resolveContractLogisticsStoNumber,
+} from '../utils/contractLogisticsStoDisplay';
 
 export { B2B_CHILD_EXCLUSION_SQL };
 
@@ -2112,9 +2116,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       SELECT
         COALESCE(
           NULLIF(TRIM(split_part(lsa.sto_numbers, ',', 1)), ''),
-          NULLIF(TRIM(c.sto_number::text), ''),
-          NULLIF(TRIM(t.operation_id::text), ''),
-          t.id::text
+          NULLIF(TRIM(c.sto_number::text), '')
         ) AS sto_number,
         NULLIF(TRIM(lsa.sto_numbers), '') AS sap_sto_numbers,
         t.operation_id,
@@ -2176,8 +2178,8 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       );
       return {
         type: 'shipment' as const,
-        sto_number: r.sto_number || r.sto_key || '-',
-        operation_id: r.operation_id || r.sto_key || null,
+        sto_number: resolveContractLogisticsStoNumber(r.sto_number),
+        operation_id: resolveContractLogisticsOperationId(r.operation_id, r.sto_key),
         late_indicator: lateIndicator,
         status: r.status || '-',
         sto_quantity: Number(r.sto_quantity) || 0,
@@ -2197,8 +2199,8 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       );
       return {
         type: 'trucking' as const,
-        sto_number: r.sto_number || '-',
-        operation_id: r.operation_id || null,
+        sto_number: resolveContractLogisticsStoNumber(r.sto_number),
+        operation_id: resolveContractLogisticsOperationId(r.operation_id),
         late_indicator: lateIndicator,
         status: r.status || '-',
         sto_quantity: Number(r.sto_quantity) || 0,
@@ -2238,8 +2240,8 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         if (isShipment) {
           return {
             type: 'shipment' as const,
-            sto_number: r.sto_number || '-',
-            operation_id: r.operation_id || null,
+            sto_number: resolveContractLogisticsStoNumber(r.sto_number),
+            operation_id: resolveContractLogisticsOperationId(r.operation_id),
             late_indicator: lateIndicator,
             status: r.status || '-',
             sto_quantity: Number(r.sto_quantity) || 0,
@@ -2252,8 +2254,8 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         }
         return {
           type: 'trucking' as const,
-          sto_number: r.sto_number || '-',
-          operation_id: r.operation_id || null,
+          sto_number: resolveContractLogisticsStoNumber(r.sto_number),
+          operation_id: resolveContractLogisticsOperationId(r.operation_id),
           late_indicator: lateIndicator,
           status: r.status || '-',
           sto_quantity: Number(r.sto_quantity) || 0,

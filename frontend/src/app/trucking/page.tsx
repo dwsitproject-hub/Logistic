@@ -19,6 +19,7 @@ import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { format } from 'date-fns'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
@@ -118,6 +119,28 @@ function formatTruckingQtyPlain(n: number): string {
   if (!Number.isFinite(n)) return '—'
   if (n === 0) return '0'
   return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: true })
+}
+
+function TruckTableEditTruckingButton({ onEdit }: { onEdit: () => void }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={onEdit}
+          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+          aria-label="Edit Trucking"
+        >
+          <span className="relative inline-flex h-4 w-4 items-center justify-center">
+            <Truck className="h-4 w-4" />
+            <Pencil className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
+          </span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">Edit Trucking</TooltipContent>
+    </Tooltip>
+  )
 }
 
 interface TruckingOperation {
@@ -1133,6 +1156,12 @@ function TruckingPageContent() {
 
   // Create new trucking operation modal
   const [showCreateForm, setShowCreateForm] = useState(false)
+  const [editTruckingFromTable, setEditTruckingFromTable] = useState<{
+    operationId: string
+    contractId: string
+    contractExtNo?: string
+    poNumber?: string
+  } | null>(null)
 
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [sortKey, setSortKey] = useState<string>('created_at')
@@ -1464,8 +1493,27 @@ function TruckingPageContent() {
     setEditedData(prev => ({ ...prev, [field]: value }))
   }
 
-  const handleCreated = () => {
+  const handleOpenEditTruckingModal = (operation: TruckingOperation) => {
+    const contractId = operation.contract_id?.trim()
+    if (!contractId) {
+      alert('Contract ID is required to edit this trucking operation.')
+      return
+    }
+    setEditTruckingFromTable({
+      operationId: operation.id,
+      contractId,
+      contractExtNo: operation.contract_ext_no || operation.contract_number,
+      poNumber: operation.po_number,
+    })
+  }
+
+  const handleCloseTruckingModal = () => {
     setShowCreateForm(false)
+    setEditTruckingFromTable(null)
+  }
+
+  const handleCreated = () => {
+    handleCloseTruckingModal()
     setPage(1)
     setHasMore(true)
     invalidateLogisticsListCaches()
@@ -3289,15 +3337,20 @@ function TruckingPageContent() {
                                       </>
                                     ) : (
                                       <>
-                                        <Button
-                                          variant="outline"
-                                          size="icon"
-                                          onClick={() => handleEdit(operation)}
-                                          title="Edit"
-                                          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                                        >
-                                          <Pencil className="h-4 w-4" />
-                                        </Button>
+                                        <div className="hidden">
+                                          <Button
+                                            variant="outline"
+                                            size="icon"
+                                            onClick={() => handleEdit(operation)}
+                                            title="Edit"
+                                            className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                                          >
+                                            <Pencil className="h-4 w-4" />
+                                          </Button>
+                                        </div>
+                                        <TruckTableEditTruckingButton
+                                          onEdit={() => handleOpenEditTruckingModal(operation)}
+                                        />
                                         <Button
                                           variant="outline"
                                           size="icon"
@@ -3407,15 +3460,20 @@ function TruckingPageContent() {
                               </>
                             ) : (
                               <>
-                                <Button
-                                  variant="outline"
-                                  size="icon"
-                                  onClick={() => handleEdit(operation)}
-                                  title="Edit"
-                                  className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                                >
-                                  <Pencil className="h-4 w-4" />
-                                </Button>
+                                <div className="hidden">
+                                  <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() => handleEdit(operation)}
+                                    title="Edit"
+                                    className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                                  >
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                                <TruckTableEditTruckingButton
+                                  onEdit={() => handleOpenEditTruckingModal(operation)}
+                                />
                                 <Button
                                   variant="outline"
                                   size="icon"
@@ -3730,7 +3788,16 @@ function TruckingPageContent() {
         </div>
       )}
 
-      <CreateTruckingOperationModal open={showCreateForm} onClose={() => setShowCreateForm(false)} onCreated={handleCreated} />
+      <CreateTruckingOperationModal
+        open={showCreateForm || editTruckingFromTable != null}
+        mode={editTruckingFromTable ? 'edit' : 'add'}
+        editTruckingOperationId={editTruckingFromTable?.operationId ?? null}
+        initialContractId={editTruckingFromTable?.contractId ?? null}
+        initialContractExtNo={editTruckingFromTable?.contractExtNo ?? null}
+        initialPoNumber={editTruckingFromTable?.poNumber ?? null}
+        onClose={handleCloseTruckingModal}
+        onCreated={handleCreated}
+      />
     </Layout>
   )
 }

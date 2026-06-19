@@ -110,6 +110,7 @@ import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
   COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
   COMPACT_TABLE_HEADER_LABEL_CLASS,
   compactTableColWidthCss,
@@ -4607,6 +4608,7 @@ function ContractsPageContent() {
                       <table
                         className={cn(
                           COMPACT_OPERATIONAL_TABLE_CLASS,
+                          COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
                           isContractPerformance && 'klip-compact-table--perf-narrow-cols',
                         )}
                       >

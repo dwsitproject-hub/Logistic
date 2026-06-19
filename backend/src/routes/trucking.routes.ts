@@ -17,6 +17,7 @@ import {
   bulkCreateTruckingOperations,
   downloadCargoReadinessTemplate,
   bulkUpdateCargoReadiness,
+  getTruckingActivityLog,
 } from '../controllers/trucking.controller';
 
 const router = express.Router();
@@ -82,6 +83,10 @@ router.post(
   bulkUploadDailyPlanningDeliverables,
 );
 router.get('/daily-planning-deliverables', getTruckingDailyDeliverablesCalendar);
+
+// Activity log (before generic :id route)
+router.get('/:truckingId/activity-log', getTruckingActivityLog);
+
 router.put('/:id/daily-planning-deliverables', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyDeliverables);
 
 // Get trucking operation by ID

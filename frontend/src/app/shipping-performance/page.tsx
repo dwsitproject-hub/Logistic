@@ -55,6 +55,7 @@ import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
   COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
   compactTableColWidthCss,
 } from '@/lib/compactTableUi'
@@ -2331,6 +2332,7 @@ function ShippingPerformancePageContent() {
                 <table
                   className={cn(
                     COMPACT_OPERATIONAL_TABLE_CLASS,
+                    COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
                     'klip-compact-table--perf-narrow-cols',
                   )}
                 >

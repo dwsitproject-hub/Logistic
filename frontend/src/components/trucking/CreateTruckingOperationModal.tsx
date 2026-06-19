@@ -4,8 +4,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
-// import { BuyerCombobox } from '@/components/BuyerCombobox' // restore when master unloading locations are ready
-// PlantSiteCombobox for loading_location — restore when master loading locations are ready
+import { SupplierMillsCombobox } from '@/components/SupplierMillsCombobox'
+import { GroupPlantCombobox } from '@/components/GroupPlantCombobox'
 import {
   AlertCircle,
   AlertTriangle,
@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Clock,
   FileText,
+  History,
   Info,
   Loader2,
   Plus,
@@ -27,7 +28,7 @@ import {
   TRUCKING_PLANNING_FAST_ENTRY_GROUP,
   fastEntryFieldProps,
 } from '@/lib/fastEntryFocus'
-import { isIsoOutsideAllowedRange, outsideAllowedDateRangeMessage } from '@/lib/dateFormat'
+import { isIsoOutsideAllowedRange, outsideAllowedDateRangeMessage, formatDateTimeDMY } from '@/lib/dateFormat'
 
 const fmtIsoDate = (iso: string) => {
   const d = (iso || '').slice(0, 10)
@@ -132,6 +133,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   initialContractExtNo,
   initialContractId,
   initialPoNumber,
+  editTruckingOperationId,
   mode = 'add',
 }: {
   open: boolean
@@ -143,6 +145,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   initialContractId?: string | null
   /** PO from Contracts page — shown in Section 1 before / alongside validation */
   initialPoNumber?: string | null
+  /** When set (Trucking table edit), load this operation directly instead of first match by contract. */
+  editTruckingOperationId?: string | null
   /** `edit` locks all fields except Start/End Date (Planning) */
   mode?: 'add' | 'edit'
 }) {
@@ -150,6 +154,18 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   const [creating, setCreating] = useState(false)
   const [loadingEdit, setLoadingEdit] = useState(false)
   const [editOperationId, setEditOperationId] = useState<string | null>(null)
+  const [activityLog, setActivityLog] = useState<
+    Array<{
+      id: string
+      action: string
+      entity_type: string
+      timestamp: string
+      username?: string
+      full_name?: string
+    }>
+  >([])
+  const [activityLoading, setActivityLoading] = useState(false)
+  const initSessionRef = useRef<string | null>(null)
 
   const [notification, setNotification] = useState<{
     type: 'success' | 'error' | 'warning'
@@ -232,13 +248,16 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
             message: 'Contract found',
           })
           const plantLabel = cd.plant_name || ''
-          if (plantLabel) {
-            setNewOperation((prev) => ({ ...prev, location: plantLabel }))
-          }
-          const buyerLabel = (cd.buyer || '').trim()
-          if (buyerLabel) {
-            setNewOperation((prev) => ({ ...prev, unloading_location: buyerLabel }))
-          }
+          const sapLoading = String(cd.sap_loading_location ?? '').trim()
+          const supplierMills = String(cd.supplier_mills_suggestion ?? '').trim()
+          const buyerLabel = String(cd.buyer ?? '').trim()
+          const groupPlant = String(cd.group_plant_suggestion ?? '').trim()
+          setNewOperation((prev) => ({
+            ...prev,
+            location: plantLabel || prev.location,
+            loading_location: sapLoading || supplierMills || '',
+            unloading_location: buyerLabel || groupPlant || '',
+          }))
           const cargoReady = cd.cargo_readiness_date ? String(cd.cargo_readiness_date).slice(0, 10) : ''
           if (cargoReady) {
             setNewOperation((prev) => ({ ...prev, cargo_readiness_date: cargoReady }))
@@ -404,7 +423,90 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     setFormErrors({})
     setEditOperationId(null)
     setLoadingEdit(false)
+    setActivityLog([])
   }
+
+  const formatActivityLabel = (log: {
+    action: string
+    entity_type: string
+    full_name?: string
+    username?: string
+  }): string => {
+    const user = log.full_name?.trim() || log.username?.trim() || 'Unknown User'
+    const action = log.action?.toUpperCase() ?? 'UPDATE'
+    if (action === 'UPDATE') return `Updated Trucking Operation — ${user}`
+    if (action === 'CREATE') return `Created Trucking Operation — ${user}`
+    return `${action} ${log.entity_type?.replace(/_/g, ' ') ?? 'Record'} — ${user}`
+  }
+
+  const loadActivityLog = useCallback(async (operationId: string) => {
+    setActivityLoading(true)
+    try {
+      const res = await api.get(`/trucking/${operationId}/activity-log`)
+      setActivityLog(res.data?.data ?? [])
+    } catch {
+      setActivityLog([])
+    } finally {
+      setActivityLoading(false)
+    }
+  }, [])
+
+  const hydrateTruckingEditForm = useCallback(
+    async (operationId: string, op: Record<string, unknown>, listRow: Record<string, unknown>, contractId: string) => {
+      setEditOperationId(operationId)
+
+      const validateKey = initialContractId?.trim() || contractId
+      const display = String(
+        op.contract_ext_no || op.contract_number || listRow.contract_ext_no || listRow.contract_number || initialContractExtNo || '',
+      ).trim()
+      if (display) {
+        setNewOperation((prev) => ({ ...prev, contract_number: display }))
+        setContractSearchTerm(display)
+      }
+      await validateContractNumber(validateKey)
+
+      setNewOperation((prev) => ({
+        ...prev,
+        operation_id: String(op.operation_id ?? ''),
+        location: String(op.location ?? ''),
+        loading_location: String(op.loading_location ?? ''),
+        unloading_location: String(op.unloading_location ?? ''),
+        trucking_owner: String(op.trucking_owner ?? ''),
+        cargo_readiness_date: sliceIsoDate(op.cargo_readiness_date as string | undefined),
+        quantity_sent: op.quantity_sent != null ? String(op.quantity_sent) : '',
+        quantity_delivered: op.quantity_delivered != null ? String(op.quantity_delivered) : '',
+        status: String(op.status ?? 'PLANNED'),
+      }))
+
+      const dailyRows = parseDailyDeliverables(op.daily_deliverables)
+      const sortedDates = dailyRows
+        .map((r) => sliceIsoDate(r.date))
+        .filter(Boolean)
+        .sort()
+      const totalKg =
+        dailyRows.reduce((sum, r) => sum + (Number(r.quantity_delivered) || 0), 0) ||
+        Number(op.quantity_delivered) ||
+        Number(listRow.quantity_delivered) ||
+        0
+      const startDate =
+        sliceIsoDate(op.trucking_start_date as string | undefined) || sortedDates[0] || ''
+      const endDate =
+        sliceIsoDate(op.trucking_completion_date as string | undefined) ||
+        sortedDates[sortedDates.length - 1] ||
+        startDate
+
+      setPlanning({
+        start_date: startDate,
+        end_date: endDate,
+        total_quantity_mt: fmtQtyMt(totalKg / 1000),
+      })
+
+      if (isEditMode) {
+        void loadActivityLog(operationId)
+      }
+    },
+    [initialContractExtNo, initialContractId, isEditMode, loadActivityLog, validateContractNumber],
+  )
 
   const loadTruckingForEdit = useCallback(
     async (contractId: string) => {
@@ -421,58 +523,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
           return
         }
         const operationId = String(listRow.id)
-        setEditOperationId(operationId)
-
         const detailRes = await api.get(`/trucking/${operationId}`)
         const op = (detailRes.data?.data ?? listRow) as Record<string, unknown>
-
-        const validateKey = initialContractId?.trim() || contractId
-        const display = String(
-          op.contract_ext_no || op.contract_number || listRow.contract_ext_no || listRow.contract_number || initialContractExtNo || '',
-        ).trim()
-        if (display) {
-          setNewOperation((prev) => ({ ...prev, contract_number: display }))
-          setContractSearchTerm(display)
-        }
-        await validateContractNumber(validateKey)
-
-        setNewOperation((prev) => ({
-          ...prev,
-          operation_id: String(op.operation_id ?? ''),
-          location: String(op.location ?? ''),
-          loading_location: String(op.loading_location ?? ''),
-          unloading_location: String(op.unloading_location ?? ''),
-          trucking_owner: String(op.trucking_owner ?? ''),
-          cargo_readiness_date: sliceIsoDate(op.cargo_readiness_date as string | undefined),
-          quantity_sent: op.quantity_sent != null ? String(op.quantity_sent) : '',
-          quantity_delivered: op.quantity_delivered != null ? String(op.quantity_delivered) : '',
-          status: String(op.status ?? 'PLANNED'),
-        }))
-
-        const dailyRows = parseDailyDeliverables(op.daily_deliverables)
-        const sortedDates = dailyRows
-          .map((r) => sliceIsoDate(r.date))
-          .filter(Boolean)
-          .sort()
-        const totalKg =
-          dailyRows.reduce((sum, r) => sum + (Number(r.quantity_delivered) || 0), 0) ||
-          Number(op.quantity_delivered) ||
-          Number(listRow.quantity_delivered) ||
-          0
-        const startDate =
-          sliceIsoDate(op.trucking_start_date as string | undefined) ||
-          sortedDates[0] ||
-          ''
-        const endDate =
-          sliceIsoDate(op.trucking_completion_date as string | undefined) ||
-          sortedDates[sortedDates.length - 1] ||
-          startDate
-
-        setPlanning({
-          start_date: startDate,
-          end_date: endDate,
-          total_quantity_mt: fmtQtyMt(totalKg / 1000),
-        })
+        await hydrateTruckingEditForm(operationId, op, listRow, contractId)
       } catch (error) {
         console.error('Failed to load trucking operation for edit:', error)
         showNotification('error', 'Failed to load trucking operation details')
@@ -480,14 +533,54 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         setLoadingEdit(false)
       }
     },
-    [initialContractExtNo, initialContractId, showNotification, validateContractNumber],
+    [hydrateTruckingEditForm, showNotification],
+  )
+
+  const loadTruckingForEditById = useCallback(
+    async (operationId: string, contractIdFallback: string) => {
+      setLoadingEdit(true)
+      setEditOperationId(null)
+      try {
+        const detailRes = await api.get(`/trucking/${operationId}`)
+        const op = (detailRes.data?.data ?? {}) as Record<string, unknown>
+        if (!op?.id && !detailRes.data?.success) {
+          showNotification('error', 'Trucking operation not found')
+          return
+        }
+        const listRow = { ...op, id: operationId }
+        await hydrateTruckingEditForm(operationId, op, listRow, contractIdFallback)
+      } catch (error) {
+        console.error('Failed to load trucking operation for edit:', error)
+        showNotification('error', 'Failed to load trucking operation details')
+      } finally {
+        setLoadingEdit(false)
+      }
+    },
+    [hydrateTruckingEditForm, showNotification],
   )
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      initSessionRef.current = null
+      return
+    }
+    const sessionKey = [
+      isEditMode ? 'edit' : 'add',
+      initialContractExtNo ?? '',
+      initialContractId ?? '',
+      editTruckingOperationId ?? '',
+    ].join(':')
+    if (initSessionRef.current === sessionKey) return
+    initSessionRef.current = sessionKey
+
     resetForm()
     const display = initialContractExtNo?.trim()
     const validateKey = initialContractId?.trim() || display
+    const directOpId = editTruckingOperationId?.trim()
+    if (isEditMode && directOpId) {
+      void loadTruckingForEditById(directOpId, validateKey || directOpId)
+      return
+    }
     if (!display && !validateKey) return
     if (isEditMode && validateKey) {
       void loadTruckingForEdit(validateKey)
@@ -498,7 +591,16 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       setContractSearchTerm(display)
     }
     if (validateKey) void validateContractNumber(validateKey)
-  }, [open, initialContractExtNo, initialContractId, isEditMode, validateContractNumber, loadTruckingForEdit])
+  }, [
+    open,
+    initialContractExtNo,
+    initialContractId,
+    editTruckingOperationId,
+    isEditMode,
+    validateContractNumber,
+    loadTruckingForEdit,
+    loadTruckingForEditById,
+  ])
 
   const handleCreateOperation = async () => {
     if (isEditMode && !editOperationId) {
@@ -837,32 +939,38 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1.5">Loading Location</label>
-                    <Input
+                    <SupplierMillsCombobox
                       value={newOperation.loading_location}
-                      onChange={(e) => {
-                        setNewOperation((prev) => ({ ...prev, loading_location: e.target.value }))
+                      supplierName={cd?.supplier}
+                      onChange={(val) => {
+                        setNewOperation((prev) => ({ ...prev, loading_location: val }))
                         clearFieldError('loading_location')
                       }}
-                      readOnly={isEditMode}
                       disabled={isEditMode}
                       className={`h-9 ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.loading_location ? 'border-red-500' : ''}`}
-                      placeholder="Enter loading location..."
+                      placeholder="SAP supplier location or search mills..."
                     />
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      Prefill dari SAP (truck loading); jika kosong dari master supplier (mills). Dapat diedit.
+                    </p>
                     {formErrors.loading_location && <p className="text-xs mt-1 text-red-600">{formErrors.loading_location}</p>}
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1.5">Unloading Location</label>
-                    <Input
+                    <GroupPlantCombobox
                       value={newOperation.unloading_location}
-                      onChange={(e) => {
-                        setNewOperation((prev) => ({ ...prev, unloading_location: e.target.value }))
+                      hint={cd?.buyer || cd?.plant_code}
+                      onChange={(val) => {
+                        setNewOperation((prev) => ({ ...prev, unloading_location: val }))
                         clearFieldError('unloading_location')
                       }}
-                      readOnly={isEditMode}
                       disabled={isEditMode}
                       className={`h-9 ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.unloading_location ? 'border-red-500' : ''}`}
-                      placeholder="Enter unloading location..."
+                      placeholder="Buyer atau search group plant..."
                     />
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      Prefill dari Buyer (SAP); jika kosong dari master plant (group plant). Dapat diedit.
+                    </p>
                     {formErrors.unloading_location && <p className="text-xs mt-1 text-red-600">{formErrors.unloading_location}</p>}
                   </div>
                 </div>
@@ -1216,6 +1324,41 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                 )}
               </div>
             </div>
+
+            {isEditMode && (
+              <div className="rounded-xl border border-gray-200 shadow-sm">
+                <div className="flex items-center gap-2.5 border-b border-gray-200 bg-gradient-to-r from-slate-50 to-white px-4 py-2.5 rounded-t-xl">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 shrink-0">
+                    <History className="h-3.5 w-3.5 text-slate-600" />
+                  </div>
+                  <h4 className="text-sm font-semibold text-gray-800">Log Activity</h4>
+                </div>
+                <div className="p-4">
+                  {activityLoading ? (
+                    <div className="flex items-center gap-2 text-sm text-gray-500">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading activity…
+                    </div>
+                  ) : activityLog.length === 0 ? (
+                    <p className="text-sm text-gray-500">No edit history recorded for this trucking operation yet.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {activityLog.map((log) => (
+                        <li
+                          key={log.id}
+                          className="flex flex-col gap-0.5 rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-sm sm:flex-row sm:items-center sm:justify-between"
+                        >
+                          <span className="font-medium text-gray-800">{formatActivityLabel(log)}</span>
+                          <span className="text-xs text-gray-500 tabular-nums">
+                            {formatDateTimeDMY(log.timestamp)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Footer action bar */}
             <div className="rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3">

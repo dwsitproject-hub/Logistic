@@ -9,6 +9,7 @@ import {
   buildShipmentListCacheKey,
   buildShipmentListFilterCacheKey,
   invalidateShipmentsListCache,
+  normalizeShipmentListRows,
   resolveShipmentsListForRequest,
 } from '../services/shipmentList.service';
 import { normalizeAndValidateShipmentDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/shipmentDailyDeliverables';
@@ -33,6 +34,10 @@ import {
   formatDDMMYYYY,
 } from '../utils/operationId';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+import {
+  buildShipmentExcludeStoTypeTSql,
+  buildShipmentSeaMixTransportSql,
+} from '../utils/shipmentStoTypeSql';
 
 /** Normalize date-like fields for shipments / loading ports (YYYY-MM-DD or null). */
 function toShipmentDateOrNull(v: unknown): string | null {
@@ -363,7 +368,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
            ORDER BY spd.created_at DESC NULLS LAST
            LIMIT 1)) AS contract_ext_no`;
 
-    const seaMixTransportCond = `UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')`;
+    const seaMixTransportCond = buildShipmentSeaMixTransportSql('c');
+    const excludeStoTypeTCond = buildShipmentExcludeStoTypeTSql('c', 'l', 's');
     const stoIsSet = Boolean(sto && String(sto).trim() !== '');
     /** STO filter may depend on SAP effective_sto — keep full latest_spd scan in that case. */
     const scopeLatestSpdToContracts = !stoIsSet;
@@ -480,8 +486,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(COALESCE(c.sto_number::text, l.effective_sto)) as sto_number,
           MAX(s.shipment_id) as shipment_id,
           MAX(s.operation_id) as operation_id,
-          MAX(s.vessel_name) as vessel_name,
-          MAX(s.vessel_code) as vessel_code,
+          MAX(NULLIF(TRIM(s.vessel_name), '')) as vessel_name,
+          MAX(NULLIF(TRIM(s.vessel_code), '')) as vessel_code,
           MAX(s.voyage_no) as voyage_no,
           MAX(s.vessel_owner) as vessel_owner,
           MAX(s.vessel_draft) as vessel_draft,
@@ -553,6 +559,7 @@ ${contractMetaSelect}
         LEFT JOIN vlp_disc_first vlp_d ON vlp_d.shipment_id = s.id
         WHERE 1=1
           AND (${coreWhereSql})
+          AND (${excludeStoTypeTCond})
           -- Match dashboard baseline: exclude B2B "child" contracts
           -- (latest SAP row indicates B2B AND Contract Reference PO is not blank).
           AND NOT (
@@ -643,6 +650,7 @@ ${contractMetaSelect}
         LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
         WHERE 1=1
           AND (${coreWhereSql})
+          AND (${excludeStoTypeTCond})
           AND NOT (
             l.contract_number IS NOT NULL
             AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
@@ -957,7 +965,10 @@ ${contractMetaSelect}
         sl.b2b_flag AS b2b_flag,
         sl.source_type AS source_type,
         COALESCE(cex.contract_ext_no, sp.contract_ext_no) AS contract_ext_no_merged,
-        COALESCE(NULLIF(TRIM(pna.po_numbers), ''), sp.po_numbers) AS po_numbers_merged
+        COALESCE(NULLIF(TRIM(pna.po_numbers), ''), sp.po_numbers) AS po_numbers_merged,
+        sl.vessel_name_sap,
+        sl.vessel_code_sap,
+        sl.vessel_owner_sap
       FROM shipment_page sp
       LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)
@@ -998,55 +1009,7 @@ ${contractMetaSelect}
 
     // When grouping by STO, display STO No from sto_key when contracts.sto_number is empty,
     // but only if sto_key looks like a real STO number (numeric), not an operation ID or manual code.
-    for (const row of result.rows) {
-      delete (row as { __filter_total?: unknown }).__filter_total;
-      if (Object.prototype.hasOwnProperty.call(row, 'contract_ext_no_merged')) {
-        row.contract_ext_no = row.contract_ext_no_merged as string | null;
-        delete (row as { contract_ext_no_merged?: unknown }).contract_ext_no_merged;
-      }
-      if (Object.prototype.hasOwnProperty.call(row, 'po_numbers_merged')) {
-        row.po_numbers = row.po_numbers_merged as string | null;
-        delete (row as { po_numbers_merged?: unknown }).po_numbers_merged;
-      }
-
-      // Preserve explicit cancellations.
-      if (String(row.status ?? '').trim().toUpperCase() === 'CANCELLED') {
-        row.status = 'CANCELLED';
-        continue;
-      }
-
-      const currentStoNumber = row.sto_number;
-      const stoKeyStr = row.sto_key != null ? String(row.sto_key).trim() : '';
-
-      if (
-        (currentStoNumber == null || String(currentStoNumber).trim() === '') &&
-        stoKeyStr &&
-        /^\d+$/.test(stoKeyStr) // treat only purely numeric values as valid STO numbers
-      ) {
-        row.sto_number = stoKeyStr;
-      }
-
-      row.status = deriveShipmentStatus({
-        eta_arrival_at_loading_port: row.eta_vessel_arrival_at_loading_port ?? row.eta_arrival,
-        eta_berthed_at_loading_port: row.eta_vessel_berthed_at_loading_port ?? row.eta_berthed,
-        eta_start_loading: row.eta_vessel_start_loading ?? row.eta_loading_start,
-        eta_completed_loading: row.eta_vessel_completed_loading ?? row.eta_loading_complete,
-        eta_sailed_from_loading_port: row.eta_vessel_sailed_from_loading_port ?? row.eta_sailed,
-        eta_arrive_at_discharge_port: row.eta_vessel_arrive_at_discharge_port ?? row.eta_discharge_arrival,
-        eta_berthed_at_discharge_port: row.eta_vessel_berthed_at_discharge_port ?? row.eta_discharge_berthed,
-        eta_start_discharging: row.eta_vessel_start_discharging ?? row.eta_discharge_start,
-        eta_complete_discharge: row.eta_vessel_complete_discharge ?? row.eta_discharge_complete,
-        ata_arrival_at_loading_port: row.ata_vessel_arrival_at_loading_port,
-        ata_berthed_at_loading_port: row.ata_vessel_berthed_at_loading_port,
-        ata_start_loading: row.ata_vessel_start_loading,
-        ata_completed_loading: row.ata_vessel_completed_loading,
-        ata_sailed_from_loading_port: row.ata_vessel_sailed_from_loading_port,
-        ata_arrive_at_discharge_port: row.ata_vessel_arrive_at_discharge_port,
-        ata_berthed_at_discharge_port: row.ata_vessel_berthed_at_discharge_port,
-        ata_start_discharging: row.ata_vessel_start_discharging,
-        ata_complete_discharge: row.ata_vessel_complete_discharge,
-      });
-    }
+    normalizeShipmentListRows(result.rows);
 
     let summaryRow: Record<string, unknown> = {};
     if (includeSummary) {
@@ -3758,5 +3721,50 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
         details: error.detail || error.toString()
       },
     });
+  }
+};
+
+/** Activity / audit trail for a single shipment (modal history section). */
+export const getShipmentActivityLog = async (req: AuthRequest, res: Response) => {
+  try {
+    const shipmentId = String(req.params.shipmentId || '').trim();
+    if (!shipmentId) {
+      return res.status(400).json({ success: false, error: { message: 'Shipment ID is required' } });
+    }
+
+    const exists = await query(`SELECT id FROM shipments WHERE id = $1 LIMIT 1`, [shipmentId]);
+    if (exists.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { message: 'Shipment not found' } });
+    }
+
+    const result = await query(
+      `SELECT
+         a.id,
+         a.action,
+         a.entity_type,
+         a.entity_id,
+         a.before_data,
+         a.after_data,
+         a.timestamp,
+         COALESCE(u.username, '') AS username,
+         COALESCE(u.full_name, '') AS full_name
+       FROM audit_logs a
+       LEFT JOIN users u ON a.user_id = u.id
+       WHERE (
+         (a.entity_type = 'SHIPMENT' AND a.entity_id = $1)
+         OR (a.entity_type = 'LOADING_PORT' AND a.entity_id IN (
+           SELECT vlp.id FROM vessel_loading_ports vlp WHERE vlp.shipment_id = $1
+         ))
+         OR (a.entity_type = 'STO_QTY_ASSIGNED' AND a.entity_id::text = $1)
+       )
+       ORDER BY a.timestamp DESC
+       LIMIT 200`,
+      [shipmentId],
+    );
+
+    return res.json({ success: true, data: result.rows });
+  } catch (error) {
+    logger.error('Get shipment activity log error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load shipment activity log' } });
   }
 };

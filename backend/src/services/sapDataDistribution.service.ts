@@ -3,6 +3,19 @@ import logger from '../utils/logger';
 import { isLandSapRowEligibleForTruckingCreation } from '../utils/landTruckingEligibility';
 import { isSeaSapRowEligibleForShipmentCreation } from '../utils/seaShipmentEligibility';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
+import { resolveSapVesselIdentity } from '../utils/sapVesselFields';
+import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
+import {
+  finalizeSapShipmentAfterUpsert,
+  findSapShipmentSupersedeCandidate,
+  hasKlipShipmentActivity,
+  hasKlipTruckingActivity,
+  reconcileSupersededSapTrucking,
+} from '../utils/klipLogisticsActivity';
+import {
+  buildShipmentKlipProtectedSetSql,
+  buildTruckingKlipProtectedSetSql,
+} from '../utils/klipSapFieldMerge';
 
 export interface DistributionResult {
   contractId?: string;
@@ -223,17 +236,23 @@ export class SapDataDistributionService {
       if (seaLike && hasShipment && seaEligible) {
         try {
           // Extract vessel data from shipment object (where it's actually stored)
+          const vesselIdentity = resolveSapVesselIdentity(
+            parsedData.shipment,
+            parsedData.vessel,
+            parsedData.raw,
+          );
           const vesselData = {
-            vessel_name: parsedData.shipment?.vessel_name,
-            vessel_code: parsedData.shipment?.vessel_code,
+            vessel_name: vesselIdentity.vessel_name,
+            vessel_code: vesselIdentity.vessel_code,
+            vessel_owner: vesselIdentity.vessel_owner,
             voyage_no: parsedData.shipment?.voyage_no,
-            vessel_owner: parsedData.shipment?.vessel_owner,
             vessel_draft: parsedData.shipment?.vessel_draft,
             vessel_loa: parsedData.shipment?.vessel_loa,
             vessel_capacity: parsedData.shipment?.vessel_capacity,
             vessel_hull_type: parsedData.shipment?.vessel_hull_type,
-            vessel_registration_year: parsedData.shipment?.vessel_registration_year || parsedData.vessel?.registration_year,
-            charter_type: parsedData.shipment?.charter_type || parsedData.vessel?.charter_type
+            vessel_registration_year:
+              parsedData.shipment?.vessel_registration_year || parsedData.vessel?.registration_year,
+            charter_type: parsedData.shipment?.charter_type || parsedData.vessel?.charter_type,
           };
           
           logger.info('Attempting to upsert shipment with data (SEA):', {
@@ -595,10 +614,15 @@ export class SapDataDistributionService {
     const contractUuid = this.toUuid(contractId);
     const shipmentIdFromSap = shipmentData.shipment_id || shipmentData.sto_no;
 
+    const resolvedVessel = resolveSapVesselIdentity(
+      shipmentData,
+      vesselData,
+      (shipmentData as { raw?: Record<string, unknown> })?.raw,
+    );
     const voyageNo = vesselData.voyage_no || shipmentData.voyage_no;
-    const vesselCode = vesselData.vessel_code || shipmentData.vessel_code;
-    const vesselName = vesselData.vessel_name || shipmentData.vessel_name;
-    const vesselOwner = vesselData.vessel_owner || shipmentData.vessel_owner;
+    const vesselCode = resolvedVessel.vessel_code || vesselData.vessel_code || shipmentData.vessel_code;
+    const vesselName = resolvedVessel.vessel_name || vesselData.vessel_name || shipmentData.vessel_name;
+    const vesselOwner = resolvedVessel.vessel_owner || vesselData.vessel_owner || shipmentData.vessel_owner;
 
     const vesselDraft = this.parseNumber(shipmentData.vessel_draft ?? vesselData.vessel_draft);
     const vesselLoa = this.parseNumber(shipmentData.vessel_loa ?? vesselData.vessel_loa);
@@ -704,6 +728,22 @@ export class SapDataDistributionService {
       }
     }
 
+    if (!targetShipmentId && contractUuid && shipmentIdFromSap) {
+      const supersedeId = await findSapShipmentSupersedeCandidate(
+        client,
+        contractUuid,
+        String(shipmentIdFromSap).trim(),
+      );
+      if (supersedeId) {
+        targetShipmentId = supersedeId;
+        logger.info('upsertShipment: reusing SAP-only shipment row for new STO from latest upload', {
+          contractId,
+          supersededShipmentUuid: supersedeId,
+          sapShipmentId: shipmentIdFromSap,
+        });
+      }
+    }
+
     if (!targetShipmentId && contractUuid && vesselName) {
       const existingForContract = await client.query(
         `SELECT id, vessel_name FROM shipments WHERE contract_id = $1`,
@@ -749,57 +789,62 @@ export class SapDataDistributionService {
 
     if (targetShipmentId) {
       const id = targetShipmentId;
+      const klipProtectShipmentFields = await hasKlipShipmentActivity(
+        client,
+        id,
+        contractUuid ?? undefined,
+      );
+      const shipmentProtectedSql = buildShipmentKlipProtectedSetSql(
+        klipProtectShipmentFields,
+        'param',
+      );
       await client.query(
         `UPDATE shipments SET
           contract_id = COALESCE($1::uuid, contract_id),
           voyage_no = COALESCE($2, voyage_no),
-          vessel_code = COALESCE($3, vessel_code),
-          vessel_owner = COALESCE($4, vessel_owner),
-          vessel_draft = COALESCE($5::numeric, vessel_draft),
-          vessel_loa = COALESCE($6::numeric, vessel_loa),
-          vessel_capacity = COALESCE($7::numeric, vessel_capacity),
-          vessel_hull_type = COALESCE($8, vessel_hull_type),
-          vessel_registration_year = COALESCE($9::int, vessel_registration_year),
-          charter_type = COALESCE($10, charter_type),
-          loading_method = COALESCE($11, loading_method),
-          discharge_method = COALESCE($12, discharge_method),
-          port_of_loading = COALESCE(port_of_loading, NULLIF(NULLIF(TRIM(COALESCE($13::text, '')), ''), '0.00')),
-          port_of_discharge = COALESCE(port_of_discharge, NULLIF(NULLIF(TRIM(COALESCE($14::text, '')), ''), '0.00')),
-          shipment_date = COALESCE($15::date, shipment_date),
-          arrival_date = COALESCE($16::date, arrival_date),
-          quantity_shipped = COALESCE($17::numeric, quantity_shipped),
-          quantity_delivered = COALESCE($18::numeric, quantity_delivered),
-          bl_quantity = COALESCE($19::numeric, bl_quantity),
-          actual_vessel_qty_receive = COALESCE($20::numeric, actual_vessel_qty_receive),
-          difference_final_qty_vs_bl_qty = COALESCE($21::numeric, difference_final_qty_vs_bl_qty),
-          estimated_km = COALESCE($22::numeric, estimated_km),
-          estimated_nautical_miles = COALESCE($23::numeric, estimated_nautical_miles),
-          vessel_oa_budget = COALESCE($24::numeric, vessel_oa_budget),
-          vessel_oa_actual = COALESCE($25::numeric, vessel_oa_actual),
-          average_vessel_speed = COALESCE($26::numeric, average_vessel_speed),
-          loading_rate = COALESCE($27::numeric, loading_rate),
-          discharge_rate = COALESCE($28::numeric, discharge_rate),
-          loading_duration_days = COALESCE($29::int, loading_duration_days),
-          discharge_duration_days = COALESCE($30::int, discharge_duration_days),
-          total_lead_time_days = COALESCE($31::int, total_lead_time_days),
-          eta_arrival = COALESCE($32::date, eta_arrival),
-          ata_arrival = COALESCE($33::date, ata_arrival),
-          eta_sailed = COALESCE($34::date, eta_sailed),
-          ata_sailed = COALESCE($35::date, ata_sailed),
-          eta_loading_start = COALESCE($36::date, eta_loading_start),
-          ata_loading_start = COALESCE($37::date, ata_loading_start),
-          eta_loading_complete = COALESCE($38::date, eta_loading_complete),
-          ata_loading_complete = COALESCE($39::date, ata_loading_complete),
-          eta_discharge_arrival = COALESCE($40::date, eta_discharge_arrival),
-          ata_discharge_arrival = COALESCE($41::date, ata_discharge_arrival),
-          eta_discharge_start = COALESCE($42::date, eta_discharge_start),
-          ata_discharge_start = COALESCE($43::date, ata_discharge_start),
-          eta_discharge_complete = COALESCE($44::date, eta_discharge_complete),
-          ata_discharge_complete = COALESCE($45::date, ata_discharge_complete),
-          sfal_qty = COALESCE($46::numeric, sfal_qty),
-          sfbd_qty = COALESCE($47::numeric, sfbd_qty),
+          ${shipmentProtectedSql},
+          vessel_owner = COALESCE($5, vessel_owner),
+          vessel_draft = COALESCE($6::numeric, vessel_draft),
+          vessel_loa = COALESCE($7::numeric, vessel_loa),
+          vessel_capacity = COALESCE($8::numeric, vessel_capacity),
+          vessel_hull_type = COALESCE($9, vessel_hull_type),
+          vessel_registration_year = COALESCE($10::int, vessel_registration_year),
+          charter_type = COALESCE($11, charter_type),
+          loading_method = COALESCE($12, loading_method),
+          discharge_method = COALESCE($13, discharge_method),
+          shipment_date = COALESCE($16::date, shipment_date),
+          arrival_date = COALESCE($17::date, arrival_date),
+          quantity_shipped = COALESCE($18::numeric, quantity_shipped),
+          bl_quantity = COALESCE($20::numeric, bl_quantity),
+          difference_final_qty_vs_bl_qty = COALESCE($22::numeric, difference_final_qty_vs_bl_qty),
+          estimated_km = COALESCE($23::numeric, estimated_km),
+          estimated_nautical_miles = COALESCE($24::numeric, estimated_nautical_miles),
+          vessel_oa_budget = COALESCE($25::numeric, vessel_oa_budget),
+          vessel_oa_actual = COALESCE($26::numeric, vessel_oa_actual),
+          average_vessel_speed = COALESCE($27::numeric, average_vessel_speed),
+          loading_rate = COALESCE($28::numeric, loading_rate),
+          discharge_rate = COALESCE($29::numeric, discharge_rate),
+          loading_duration_days = COALESCE($30::int, loading_duration_days),
+          discharge_duration_days = COALESCE($31::int, discharge_duration_days),
+          total_lead_time_days = COALESCE($32::int, total_lead_time_days),
+          eta_arrival = COALESCE($33::date, eta_arrival),
+          ata_arrival = COALESCE($34::date, ata_arrival),
+          eta_sailed = COALESCE($35::date, eta_sailed),
+          ata_sailed = COALESCE($36::date, ata_sailed),
+          eta_loading_start = COALESCE($37::date, eta_loading_start),
+          ata_loading_start = COALESCE($38::date, ata_loading_start),
+          eta_loading_complete = COALESCE($39::date, eta_loading_complete),
+          ata_loading_complete = COALESCE($40::date, ata_loading_complete),
+          eta_discharge_arrival = COALESCE($41::date, eta_discharge_arrival),
+          ata_discharge_arrival = COALESCE($42::date, ata_discharge_arrival),
+          eta_discharge_start = COALESCE($43::date, eta_discharge_start),
+          ata_discharge_start = COALESCE($44::date, ata_discharge_start),
+          eta_discharge_complete = COALESCE($45::date, eta_discharge_complete),
+          ata_discharge_complete = COALESCE($46::date, ata_discharge_complete),
+          sfal_qty = COALESCE($47::numeric, sfal_qty),
+          sfbd_qty = COALESCE($48::numeric, sfbd_qty),
           status = CASE
-            WHEN (CASE $48::text
+            WHEN (CASE $49::text
               WHEN 'UNPLANNED' THEN 0 WHEN 'PLANNED' THEN 1 WHEN 'IN_PROGRESS' THEN 2
               WHEN 'LOADING' THEN 3 WHEN 'IN_TRANSIT' THEN 4 WHEN 'ARRIVED' THEN 5
               WHEN 'UNLOADING' THEN 6 WHEN 'COMPLETED' THEN 7 ELSE 0 END)
@@ -807,15 +852,16 @@ export class SapDataDistributionService {
               WHEN 'UNPLANNED' THEN 0 WHEN 'PLANNED' THEN 1 WHEN 'IN_PROGRESS' THEN 2
               WHEN 'LOADING' THEN 3 WHEN 'IN_TRANSIT' THEN 4 WHEN 'ARRIVED' THEN 5
               WHEN 'UNLOADING' THEN 6 WHEN 'COMPLETED' THEN 7 ELSE 0 END)
-            THEN $48
+            THEN $49
             ELSE status
           END,
           updated_at = CURRENT_TIMESTAMP
-         WHERE id = $49`,
+         WHERE id = $50`,
         [
           contractUuid,
           voyageNo,
           vesselCode,
+          vesselName,
           vesselOwner,
           vesselDraft,
           vesselLoa,
@@ -864,8 +910,43 @@ export class SapDataDistributionService {
           id
         ]
       );
+      await ensureMasterVesselFromSap(
+        { vessel_code: vesselCode, vessel_name: vesselName, vessel_owner: vesselOwner },
+        client,
+      );
+      if (contractUuid) {
+        const reconcile = await finalizeSapShipmentAfterUpsert(
+          client,
+          contractUuid,
+          id,
+          shipmentIdFromSap ? String(shipmentIdFromSap).trim() : null,
+        );
+        if (reconcile.cancelledShipmentIds.length > 0) {
+          logger.info('upsertShipment: cancelled superseded SAP shipment rows', {
+            contractId,
+            keeperShipmentId: id,
+            cancelled: reconcile.cancelledShipmentIds,
+          });
+        }
+      }
       return id;
     } else if (shipmentIdFromSap) {
+      let klipProtectShipmentFields = false;
+      const existingForConflict = await client.query(
+        `SELECT id FROM shipments WHERE shipment_id = $1 LIMIT 1`,
+        [shipmentIdFromSap],
+      );
+      if (existingForConflict.rows.length > 0) {
+        klipProtectShipmentFields = await hasKlipShipmentActivity(
+          client,
+          existingForConflict.rows[0].id,
+          contractUuid ?? undefined,
+        );
+      }
+      const shipmentConflictProtectedSql = buildShipmentKlipProtectedSetSql(
+        klipProtectShipmentFields,
+        'excluded',
+      );
       const result = await client.query(
         `INSERT INTO shipments (
           shipment_id, contract_id, status, voyage_no, vessel_code, vessel_name, vessel_owner,
@@ -890,8 +971,7 @@ export class SapDataDistributionService {
         ON CONFLICT (shipment_id) DO UPDATE SET
           contract_id   = COALESCE(EXCLUDED.contract_id, shipments.contract_id),
           voyage_no     = COALESCE(EXCLUDED.voyage_no, shipments.voyage_no),
-          vessel_code   = COALESCE(EXCLUDED.vessel_code, shipments.vessel_code),
-          vessel_name   = COALESCE(EXCLUDED.vessel_name, shipments.vessel_name),
+          ${shipmentConflictProtectedSql},
           vessel_owner  = COALESCE(EXCLUDED.vessel_owner, shipments.vessel_owner),
           vessel_draft  = COALESCE(EXCLUDED.vessel_draft, shipments.vessel_draft),
           vessel_loa    = COALESCE(EXCLUDED.vessel_loa, shipments.vessel_loa),
@@ -901,8 +981,6 @@ export class SapDataDistributionService {
           charter_type  = COALESCE(EXCLUDED.charter_type, shipments.charter_type),
           loading_method  = COALESCE(EXCLUDED.loading_method, shipments.loading_method),
           discharge_method = COALESCE(EXCLUDED.discharge_method, shipments.discharge_method),
-          port_of_loading = COALESCE(shipments.port_of_loading, NULLIF(NULLIF(TRIM(COALESCE(EXCLUDED.port_of_loading, '')), ''), '0.00')),
-          port_of_discharge = COALESCE(shipments.port_of_discharge, NULLIF(NULLIF(TRIM(COALESCE(EXCLUDED.port_of_discharge, '')), ''), '0.00')),
           eta_arrival   = COALESCE(EXCLUDED.eta_arrival, shipments.eta_arrival),
           ata_arrival   = COALESCE(EXCLUDED.ata_arrival, shipments.ata_arrival),
           eta_sailed    = COALESCE(EXCLUDED.eta_sailed, shipments.eta_sailed),
@@ -910,9 +988,7 @@ export class SapDataDistributionService {
           shipment_date = COALESCE(EXCLUDED.shipment_date, shipments.shipment_date),
           arrival_date  = COALESCE(EXCLUDED.arrival_date, shipments.arrival_date),
           quantity_shipped = COALESCE(EXCLUDED.quantity_shipped, shipments.quantity_shipped),
-          quantity_delivered = COALESCE(EXCLUDED.quantity_delivered, shipments.quantity_delivered),
           bl_quantity   = COALESCE(EXCLUDED.bl_quantity, shipments.bl_quantity),
-          actual_vessel_qty_receive = COALESCE(EXCLUDED.actual_vessel_qty_receive, shipments.actual_vessel_qty_receive),
           difference_final_qty_vs_bl_qty = COALESCE(EXCLUDED.difference_final_qty_vs_bl_qty, shipments.difference_final_qty_vs_bl_qty),
           estimated_km  = COALESCE(EXCLUDED.estimated_km, shipments.estimated_km),
           estimated_nautical_miles = COALESCE(EXCLUDED.estimated_nautical_miles, shipments.estimated_nautical_miles),
@@ -1003,7 +1079,27 @@ export class SapDataDistributionService {
           sfbdQty
         ]
       );
-      return result.rows[0].id;
+      await ensureMasterVesselFromSap(
+        { vessel_code: vesselCode, vessel_name: vesselName, vessel_owner: vesselOwner },
+        client,
+      );
+      const newId = result.rows[0].id as string;
+      if (contractUuid) {
+        const reconcile = await finalizeSapShipmentAfterUpsert(
+          client,
+          contractUuid,
+          newId,
+          shipmentIdFromSap ? String(shipmentIdFromSap).trim() : null,
+        );
+        if (reconcile.cancelledShipmentIds.length > 0) {
+          logger.info('upsertShipment: cancelled superseded SAP shipment rows after insert', {
+            contractId,
+            keeperShipmentId: newId,
+            cancelled: reconcile.cancelledShipmentIds,
+          });
+        }
+      }
+      return newId;
     }
 
     // If we reach here, we had neither a direct shipment_id nor a good vessel-name match.
@@ -1452,23 +1548,24 @@ export class SapDataDistributionService {
     }
 
     if (targetTruckingId) {
+      const klipProtectTruckingFields = await hasKlipTruckingActivity(client, targetTruckingId);
+      const truckingProtectedSql = buildTruckingKlipProtectedSetSql(klipProtectTruckingFields);
       // Update existing trucking operation, but do NOT override:
       // - eta_delivery_start_date, eta_delivery_end_date
       // - eta_trucking_start_date, eta_trucking_completion_date
+      // KLIP-protected when row has user activity: loading/unloading location, qty delivered.
       // Status is re-derived from SAP start/last receive when not CANCELLED.
       await client.query(
         `UPDATE trucking_operations SET
           shipment_id = COALESCE($1::uuid, shipment_id),
           location_sequence = COALESCE($2, location_sequence),
           cargo_readiness_date = COALESCE($3::date, cargo_readiness_date),
-          loading_location = COALESCE($4, loading_location),
-          unloading_location = COALESCE($5, unloading_location),
+          ${truckingProtectedSql},
           location = COALESCE($6, location),
           trucking_owner = COALESCE($7, trucking_owner),
           oa_budget = COALESCE($8::numeric, oa_budget),
           oa_actual = COALESCE($9::numeric, oa_actual),
           quantity_sent = COALESCE($10::numeric, quantity_sent),
-          quantity_delivered = COALESCE($11::numeric, quantity_delivered),
           gain_loss = COALESCE($12::numeric, gain_loss),
           trucking_start_date = COALESCE($13::date, trucking_start_date),
           trucking_completion_date = COALESCE($14::date, trucking_completion_date),
@@ -1498,6 +1595,20 @@ export class SapDataDistributionService {
           targetTruckingId
         ]
       );
+      if (contractUuid) {
+        const truckingReconcile = await reconcileSupersededSapTrucking(
+          client,
+          contractUuid,
+          targetTruckingId,
+        );
+        if (truckingReconcile.cancelledTruckingIds.length > 0) {
+          logger.info('createTruckingOperation: cancelled superseded SAP trucking rows', {
+            contractUuid,
+            keeperTruckingId: targetTruckingId,
+            cancelled: truckingReconcile.cancelledTruckingIds,
+          });
+        }
+      }
       return targetTruckingId;
     }
 
@@ -1531,8 +1642,23 @@ export class SapDataDistributionService {
         status
       ]
     );
-    
-    return result.rows[0].id;
+
+    const newTruckingId = result.rows[0].id as string;
+    if (contractUuid) {
+      const truckingReconcile = await reconcileSupersededSapTrucking(
+        client,
+        contractUuid,
+        newTruckingId,
+      );
+      if (truckingReconcile.cancelledTruckingIds.length > 0) {
+        logger.info('createTruckingOperation: cancelled superseded SAP trucking rows after insert', {
+          contractUuid,
+          keeperTruckingId: newTruckingId,
+          cancelled: truckingReconcile.cancelledTruckingIds,
+        });
+      }
+    }
+    return newTruckingId;
   }
   
   /**

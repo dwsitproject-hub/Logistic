@@ -146,6 +146,15 @@
       <h2>Contents</h2>
       <ul>
         <li><a href="#umum">Umum</a></li>
+        <li><a href="#logistics-ids">Operation ID &amp; Shipment ID</a>
+          <ul class="sub">
+            <li><a href="#logistics-sto-no">STO No</a></li>
+            <li><a href="#logistics-shipment-id">Shipment ID</a></li>
+            <li><a href="#logistics-operation-id">Operation ID</a></li>
+            <li><a href="#logistics-grouping">Prioritas grouping</a></li>
+            <li><a href="#logistics-contoh">Contoh skenario</a></li>
+          </ul>
+        </li>
         <li><a href="#contract-performance">Contract Performance</a>
           <ul class="sub">
             <li><a href="#cp-primitif">Hari kalender</a></li>
@@ -181,6 +190,17 @@
             <li><a href="#oil-loss-sap">Rekonsiliasi SAP</a></li>
           </ul>
         </li>
+        <li><a href="#sap-klip-input">SAP Upload &amp; Input KLIP</a>
+          <ul class="sub">
+            <li><a href="#sap-klip-prinsip">Prinsip umum</a></li>
+            <li><a href="#sap-klip-aktivitas">Aktivitas KLIP</a></li>
+            <li><a href="#sap-klip-shipment">Field Shipment dilindungi</a></li>
+            <li><a href="#sap-klip-trucking">Field Trucking dilindungi</a></li>
+            <li><a href="#sap-klip-merge">Aturan merge</a></li>
+            <li><a href="#sap-klip-contoh">Contoh perilaku</a></li>
+            <li><a href="#sap-klip-lain">Di luar cakupan</a></li>
+          </ul>
+        </li>
         <li><a href="#referensi">Referensi file</a></li>
       </ul>
     </nav>
@@ -194,6 +214,108 @@
         <p><strong>Calendar days</strong> — selisih tanggal dalam hari kalender utuh (bukan jam kerja). Dipakai di Contract Performance &amp; Shipping Performance: <span class="formula">hari = tanggal akhir − tanggal awal</span>. Nilai positif = milestone kedua lebih lambat dari yang pertama.</p>
         <p><strong>Open vs Close (kontrak)</strong> — status dari SAP <code>import_status</code> (fallback <code>contracts.status</code>). Open = kontrak belum selesai; Close = selesai. Aturan cycle berbeda untuk Open dan Close.</p>
         <p><strong>LAND vs SEA</strong> — mode transport kontrak menentukan sumber tanggal completion: LAND → <code>trucking_operations</code>; SEA → <code>shipments</code> + <code>vessel_loading_ports</code>.</p>
+      </section>
+
+      <section id="logistics-ids">
+        <h2>Operation ID, Shipment ID &amp; STO No <span class="tag">Shipments · Contracts</span></h2>
+        <p>Tiga identifier ini sering muncul bersama di halaman <strong>Shipments</strong>, <strong>Trucking</strong>, dan modal <strong>Contract Detail → Logistics Information</strong>. Masing-masing punya peran berbeda; jangan disamakan.</p>
+
+        <h3 id="logistics-sto-no">STO No</h3>
+        <p><strong>Nomor dokumen STO resmi dari SAP.</strong> Disimpan di <code>contracts.sto_number</code> dan ditampilkan sebagai kolom <em>STO No</em> di UI.</p>
+        <ul>
+          <li>Muncul setelah SAP upload atau ketika SAP sudah menetapkan STO ke kontrak/shipment.</li>
+          <li>Merupakan referensi bisnis ke dokumen SAP (bukan ID internal KLIP).</li>
+          <li>Pada shipment manual yang belum dapat STO dari SAP, kolom <em>STO No</em> seharusnya <strong>kosong</strong> (<code>—</code>) — bukan diisi Operation ID.</li>
+        </ul>
+
+        <h3 id="logistics-shipment-id">Shipment ID</h3>
+        <p><strong>Identitas unik per baris shipment</strong> di tabel <code>shipments.shipment_id</code> (constraint unik di database). Satu contract dalam satu operasi biasanya punya satu baris → satu Shipment ID.</p>
+        <table>
+          <thead>
+            <tr><th>Sumber</th><th>Format contoh</th><th>Arti</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>SAP upload</td><td><code>1586004692</code></td><td>Nomor STO/delivery dari SAP — sering sama dengan STO No</td></tr>
+            <tr><td>Add New Shipment (tanpa STO)</td><td><code>MNL-12345678-1004030411</code></td><td>ID internal per contract; prefix <code>MNL-</code> / <code>MSEA-</code></td></tr>
+            <tr><td>Add New Shipment (dengan STO)</td><td><code>1586004692-1004030411</code></td><td><code>{STO}-{contract_id}</code></td></tr>
+          </tbody>
+        </table>
+        <p>Setelah SAP import, <code>shipment_id</code> dapat diselaraskan ke nomor STO numerik SAP. Shipment ID tidak selalu ditampilkan sebagai kolom terpisah di Contract Detail, tetapi dipakai internal untuk join dan upsert.</p>
+
+        <h3 id="logistics-operation-id">Operation ID</h3>
+        <p><strong>Identitas transaksi / operasi perencanaan KLIP</strong> — mengelompokkan beberapa contract yang direncanakan dalam <em>satu aksi</em> (satu vessel, satu rencana trucking). Kolom: <code>shipments.operation_id</code> dan <code>trucking_operations.operation_id</code>.</p>
+        <table>
+          <thead>
+            <tr><th>Sumber</th><th>Format contoh</th><th>Arti</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Add New Shipment (modal UI)</td><td><code>OP-1004030411-87654321</code></td><td><code>OP-{contractId}-{timestamp}</code> — dibagi ke semua contract dalam operasi yang sama</td></tr>
+            <tr><td>Add New Shipment (API backend)</td><td><code>OP-SEA-030620260001</code></td><td><code>OP-SEA-{DDMMYYYY}{urutan}</code> jika belum ada STO</td></tr>
+            <tr><td>Add New Trucking</td><td><code>OP-LAND-030620260001</code></td><td><code>OP-LAND-{DDMMYYYY}{urutan}</code></td></tr>
+          </tbody>
+        </table>
+        <ul>
+          <li><strong>Satu Operation ID</strong> → bisa beberapa baris shipment (multi-contract, satu vessel).</li>
+          <li>Dipakai sebagai <strong>kunci grup</strong> di daftar Shipments/Trucking ketika <strong>belum ada STO</strong> dari SAP.</li>
+          <li>Menandakan data direncanakan user lewat KLIP, bukan nomor dokumen SAP.</li>
+        </ul>
+
+        <h3 id="logistics-grouping">Prioritas grouping (<code>sto_key</code>)</h3>
+        <p>Halaman Shipments (dan banyak query agregasi) memilih kunci grup dengan urutan:</p>
+        <p class="formula">sto_key = COALESCE(contracts.sto_number, SAP effective_sto, operation_id, shipment_id)</p>
+        <table>
+          <thead>
+            <tr><th>Urutan</th><th>Kondisi</th><th>Kunci grup</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>STO sudah ada di contract / SAP</td><td><strong>STO No</strong></td></tr>
+            <tr><td>2</td><td>Belum ada STO (manual / planned)</td><td><strong>Operation ID</strong></td></tr>
+            <tr><td>3</td><td>Fallback</td><td><strong>Shipment ID</strong></td></tr>
+          </tbody>
+        </table>
+
+        <h4>Perbandingan singkat</h4>
+        <table>
+          <thead>
+            <tr><th></th><th>Operation ID</th><th>Shipment ID</th><th>STO No</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Asal</strong></td><td>KLIP (user planning)</td><td>KLIP atau SAP</td><td>SAP</td></tr>
+            <tr><td><strong>Cakupan</strong></td><td>Satu transaksi (multi-contract)</td><td>Satu baris shipment</td><td>Satu dokumen STO SAP</td></tr>
+            <tr><td><strong>Kapan terisi</strong></td><td>Saat Add New / Edit</td><td>Saat create shipment / SAP import</td><td>Saat SAP assign STO</td></tr>
+            <tr><td><strong>Contract Detail</strong></td><td>Kolom Operation ID</td><td>Tidak selalu kolom terpisah</td><td>Kolom STO No</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="logistics-contoh">Contoh skenario</h3>
+        <table>
+          <thead>
+            <tr><th>Skenario</th><th>STO No</th><th>Operation ID</th><th>Shipment ID</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Plan dulu via Add New Shipment (2 contract, vessel sama), SAP belum ada</td>
+              <td>Kosong</td>
+              <td>Sama, mis. <code>OP-SEA-030620260001</code></td>
+              <td>Bedah per contract: <code>MNL-…-1004030411</code>, <code>MNL-…-1004030412</code></td>
+            </tr>
+            <tr>
+              <td>SAP upload mengirim STO <code>1586004692</code></td>
+              <td><code>1586004692</code></td>
+              <td>Bisa masih ada dari planning awal</td>
+              <td><code>1586004692</code> (atau diselaraskan ke angka STO)</td>
+            </tr>
+            <tr>
+              <td>Contract <code>1004030411</code> hanya di-plan, belum ada STO SAP</td>
+              <td><code>—</code> (null)</td>
+              <td>Terisi (mis. <code>OP-SEA-…</code>)</td>
+              <td><code>MNL-…-1004030411</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Contract Detail → Logistics Information:</strong> jika belum ada STO SAP, tabel STO hanya menampilkan <em>Operation ID</em> pada kolom Operation ID; kolom <em>STO No</em> tetap kosong (<code>—</code>). Operation ID <strong>bukan</strong> pengganti STO No di kolom yang sama. API <code>GET /contracts/:id/sto-information</code> memetakan STO No hanya dari <code>contracts.sto_number</code> / SAP effective STO — tidak fallback ke <code>sto_key</code> / Operation ID.
+        </div>
       </section>
 
       <section id="contract-performance">
@@ -641,6 +763,142 @@
         </table>
       </section>
 
+      <section id="sap-klip-input">
+        <h2>SAP Upload &amp; Input KLIP <span class="tag">sapDataDistribution</span></h2>
+        <p>Saat <strong>SAP data upload</strong> (re-import), KLIP menggabungkan data SAP ke baris operasional yang sudah ada. Ada <strong>dua lapisan</strong> perlindungan yang berbeda: perlindungan <em>baris</em> (row) dan perlindungan <em>field</em> (kolom).</p>
+
+        <h3 id="sap-klip-prinsip">Prinsip umum</h3>
+        <table>
+          <thead>
+            <tr><th>Lapisan</th><th>Pertanyaan</th><th>Kebijakan</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Baris (row)</strong></td>
+              <td>Apakah baris shipment/trucking di-cancel atau diganti baris SAP baru?</td>
+              <td>Baris dengan <strong>aktivitas KLIP</strong> tidak di-<code>CANCELLED</code> dan tidak dihapus oleh reconcile duplikat SAP. Upload SAP terbaru tetap menjadi sumber kebenaran untuk baris <em>SAP-only</em> (tanpa aktivitas KLIP).</td>
+            </tr>
+            <tr>
+              <td><strong>Field (kolom)</strong></td>
+              <td>Jika baris yang sama di-update, field mana yang boleh ditiban nilai SAP?</td>
+              <td>Field operasional tertentu yang sudah diinput lewat KLIP <strong>tidak ditiban</strong> SAP selama nilainya sudah terisi. SAP hanya mengisi field kosong pada baris tersebut.</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Upload SAP terbaru = source of truth</strong> untuk kontrak, STO, dan baris operasional yang belum disentuh user. Input manual lewat <em>Add New Shipment</em>, <em>Add New Trucking</em>, atau <em>Edit</em> dilindungi pada field yang tercantum di bawah.
+        </div>
+
+        <h3 id="sap-klip-aktivitas">Apa yang dianggap aktivitas KLIP?</h3>
+        <p>Sistem memeriksa aktivitas KLIP sebelum menerapkan perlindungan field. Jika tidak ada aktivitas KLIP, field mengikuti aturan merge SAP biasa (<code>COALESCE(SAP, existing)</code>).</p>
+
+        <h4>Shipment — <code>hasKlipShipmentActivity</code></h4>
+        <ul>
+          <li><code>shipment_id</code> manual (<code>MNL-*</code> / <code>MSEA-*</code>) dari Add New Shipment</li>
+          <li><code>operation_id</code> terisi (setiap Add New Shipment memiliki ini)</li>
+          <li><code>daily_deliverables</code> tidak kosong</li>
+          <li>Audit log <code>UPDATE</code> pada entity <code>SHIPMENT</code> (mis. Edit Shipment)</li>
+          <li>Ada dokumen terlampir (<code>documents.shipment_id</code>)</li>
+          <li>Ada assignment qty user (<code>user_sto_contract_assignments</code> untuk STO + contract)</li>
+        </ul>
+
+        <h4>Trucking — <code>hasKlipTruckingActivity</code></h4>
+        <ul>
+          <li><code>operation_id</code> terisi (setiap Add New Trucking memiliki ini)</li>
+          <li><code>daily_deliverables</code> tidak kosong</li>
+          <li>Salah satu ETA terisi: <code>eta_trucking_start_date</code>, <code>eta_trucking_completion_date</code>, <code>eta_delivery_start_date</code>, <code>eta_delivery_end_date</code></li>
+          <li>Audit log <code>UPDATE</code> pada entity <code>TRUCKING_OPERATION</code></li>
+        </ul>
+
+        <h3 id="sap-klip-shipment">Field Shipment yang dilindungi dari SAP</h3>
+        <p>Berlaku pada baris dengan aktivitas KLIP. Field di UI Shipments / Add New Shipment / Edit Shipment:</p>
+        <table>
+          <thead>
+            <tr><th>Label UI / bisnis</th><th>Kolom database</th><th>Ditiban SAP?</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Vessel Code</td><td><code>vessel_code</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Vessel Name</td><td><code>vessel_name</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Quantity Delivery</td><td><code>quantity_delivered</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Quantity Receive</td><td><code>actual_vessel_qty_receive</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Loading Port</td><td><code>port_of_loading</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Discharge Port</td><td><code>port_of_discharge</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+          </tbody>
+        </table>
+        <p>Jika field masih kosong/null pada baris aktivitas KLIP, SAP <strong>boleh mengisi</strong> nilai pertama kali.</p>
+
+        <h3 id="sap-klip-trucking">Field Trucking yang dilindungi dari SAP</h3>
+        <p>Berlaku pada baris dengan aktivitas KLIP. Field di UI Trucking / Add New Trucking / Edit Trucking:</p>
+        <table>
+          <thead>
+            <tr><th>Label UI / bisnis</th><th>Kolom database</th><th>Ditiban SAP?</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Loading Location</td><td><code>loading_location</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Unloading Location</td><td><code>unloading_location</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Qty Delivery</td><td><code>quantity_delivered</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+          </tbody>
+        </table>
+        <p>Field ETA trucking/delivery (<code>eta_trucking_*</code>, <code>eta_delivery_*</code>) dan <code>daily_deliverables</code> <strong>tidak pernah</strong> di-update oleh SAP upload (terlepas dari aktivitas KLIP).</p>
+
+        <h3 id="sap-klip-merge">Aturan merge SQL</h3>
+        <p>Implementasi di <code>klipSapFieldMerge.ts</code> — dipakai pada <code>upsertShipment</code> dan <code>createTruckingOperation</code> saat SAP distribution:</p>
+        <table>
+          <thead>
+            <tr><th>Kondisi</th><th>Pola merge</th><th>Artinya</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Aktivitas KLIP + field sudah ada nilai</td>
+              <td><span class="formula">COALESCE(existing, SAP)</span></td>
+              <td>Nilai KLIP dipertahankan; SAP tidak menimpa</td>
+            </tr>
+            <tr>
+              <td>Aktivitas KLIP + field masih kosong</td>
+              <td><span class="formula">COALESCE(existing, SAP)</span></td>
+              <td>SAP mengisi field kosong</td>
+            </tr>
+            <tr>
+              <td>Tidak ada aktivitas KLIP (baris SAP-only)</td>
+              <td><span class="formula">COALESCE(SAP, existing)</span></td>
+              <td>SAP menang jika mengirim nilai; re-import SAP memperbarui data operasional</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Port/lokasi: nilai kosong, string kosong, dan placeholder <code>0.00</code> dianggap belum terisi.</p>
+
+        <h3 id="sap-klip-contoh">Contoh perilaku</h3>
+        <table>
+          <thead>
+            <tr><th>Skenario</th><th>Hasil</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Add New Shipment isi vessel <em>MV ABC</em>; SAP upload kirim <em>TK.BERLIAN UTAMA</em></td><td>Vessel tetap <em>MV ABC</em></td></tr>
+            <tr><td>Add New Shipment tanpa vessel; SAP upload kirim vessel lengkap (code + name)</td><td>Vessel diisi dari SAP</td></tr>
+            <tr><td>Edit Shipment mengisi Qty Receive; SAP upload kirim qty berbeda</td><td>Qty Receive KLIP tetap</td></tr>
+            <tr><td>Baris murni dari SAP (belum ada aktivitas KLIP); re-import SAP mengubah qty</td><td>Qty mengikuti SAP terbaru</td></tr>
+            <tr><td>Add New Trucking isi Loading Location; SAP upload kirim lokasi lain</td><td>Loading Location KLIP tetap</td></tr>
+            <tr><td>Dua baris shipment SAP-only pada contract yang sama; upload SAP baru</td><td>Baris lama SAP-only di-<code>CANCELLED</code>; baris dengan aktivitas KLIP tetap aktif</td></tr>
+            <tr><td>Add New Shipment manual (<code>MNL-*</code>) + SAP STO baru tanpa match vessel</td><td>Baris manual tidak di-cancel; SAP dapat membuat baris STO terpisah</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="sap-klip-lain">Di luar cakupan perlindungan field</h3>
+        <p>Field berikut <strong>masih dapat</strong> di-merge / ditiban SAP (atau mengikuti aturan lain), meskipun baris punya aktivitas KLIP:</p>
+        <ul>
+          <li>ETA/ATA milestone shipment (<code>eta_arrival</code>, <code>ata_*</code>, dll.)</li>
+          <li><code>status</code> shipment — hanya naik level milestone, tidak turun</li>
+          <li><code>voyage_no</code>, <code>vessel_owner</code>, OA budget/actual, loading rate, SFAL/SFBD, dll.</li>
+          <li>Tanggal actual trucking (<code>trucking_start_date</code>, <code>trucking_completion_date</code>) dari kolom SAP AV/AW</li>
+          <li><code>trucking_owner</code>, <code>quantity_sent</code>, <code>oa_budget</code>, <code>oa_actual</code></li>
+          <li>Detail port per sequence di <code>vessel_loading_ports</code> (ETA/ATA per port, quality) — update SAP langsung pada baris port yang cocok</li>
+          <li>Master kontrak (<code>contracts.*</code>) — umumnya <code>COALESCE(SAP, existing)</code>; <code>sto_number</code> diselaraskan ke STO SAP terbaru pada keeper shipment</li>
+        </ul>
+        <div class="note">
+          <strong>Reconcile duplikat:</strong> setelah upsert SAP, <code>finalizeSapShipmentAfterUpsert</code> menyamakan <code>shipment_id</code> keeper ke STO SAP dan membatalkan sibling SAP-only. Baris aktivitas KLIP di-skip dari cancel tetapi field non-dilindungi pada keeper tetap dapat di-merge SAP.
+        </div>
+      </section>
+
       <section id="referensi">
         <h2>Referensi file (implementasi)</h2>
         <table>
@@ -663,6 +921,16 @@
             <tr><td>Oil Loss SQL &amp; enrichment</td><td><code>backend/src/utils/oilLossQuerySql.ts</code>, <code>oilLossSapSql.ts</code></td></tr>
             <tr><td>Oil Loss drilldown &amp; tabel</td><td><code>frontend/src/lib/oilLossDrilldown.ts</code>, <code>oilLossAllContractColumns.ts</code></td></tr>
             <tr><td>Dokumentasi teknis Oil Loss</td><td><code>docs/OIL_LOSS_PAGE.md</code></td></tr>
+            <tr><td>SAP distribution &amp; upsert</td><td><code>backend/src/services/sapDataDistribution.service.ts</code></td></tr>
+            <tr><td>Aktivitas KLIP (row protect)</td><td><code>backend/src/utils/klipLogisticsActivity.ts</code></td></tr>
+            <tr><td>Merge field KLIP vs SAP</td><td><code>backend/src/utils/klipSapFieldMerge.ts</code></td></tr>
+            <tr><td>Operation ID (synthetic)</td><td><code>backend/src/utils/operationId.ts</code></td></tr>
+            <tr><td>Shipment STO key / grouping</td><td><code>backend/src/utils/shipmentStoTypeSql.ts</code>, <code>shipment.controller.ts</code></td></tr>
+            <tr><td>Contract STO information API</td><td><code>backend/src/controllers/contract.controller.ts</code> (<code>getContractStoInformation</code>)</td></tr>
+            <tr><td>Contract logistics STO display rules</td><td><code>backend/src/utils/contractLogisticsStoDisplay.ts</code></td></tr>
+            <tr><td>Contract Detail modal (Logistics table)</td><td><code>frontend/src/components/contracts/ContractDetailModal.tsx</code></td></tr>
+            <tr><td>Add New Shipment API</td><td><code>backend/src/controllers/shipment.controller.ts</code> (<code>createShipment</code>)</td></tr>
+            <tr><td>Add New Trucking API</td><td><code>backend/src/controllers/trucking.controller.ts</code> (<code>createTruckingOperation</code>)</td></tr>
           </tbody>
         </table>
       </section>
@@ -670,7 +938,7 @@
   </div>
 
   <footer>
-    KLIP Glossary — diperbarui 2026-06-03 · Contract Performance · Shipping Performance · Oil Loss · Buka: <code>docs/KLIP_Glossary.html</code>
+    KLIP Glossary — diperbarui 2026-06-03 · Contract Performance · Shipping Performance · Oil Loss · Operation ID &amp; Shipment ID · SAP Upload &amp; Input KLIP · Buka: <code>docs/KLIP_Glossary.html</code>
   </footer>
 </body>
 </html>

@@ -43,6 +43,11 @@ export type CreateShipmentFormPayload = {
 export type UpdateShipmentFormPayload = {
   kind: 'update'
   shipmentId: string
+  vessel_name?: string | null
+  quantity_delivered?: number | null
+  actual_vessel_qty_receive?: number | null
+  sfal_qty?: number | null
+  sfbd_qty?: number | null
   eta_arrival: string | null
   eta_berthed: string | null
   eta_loading_start: string | null

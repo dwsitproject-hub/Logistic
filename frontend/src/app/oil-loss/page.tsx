@@ -64,6 +64,7 @@ import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
   COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
 } from '@/lib/compactTableUi'
 import {
@@ -2209,6 +2210,7 @@ export default function OilLossPage() {
                       data-oil-loss-table={viewMode}
                       className={cn(
                         COMPACT_OPERATIONAL_TABLE_CLASS,
+                        COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
                         (viewMode === 'by_transporter' || viewMode === 'by_supplier') &&
                           'klip-compact-table--intrinsic-token-cols',
                       )}
