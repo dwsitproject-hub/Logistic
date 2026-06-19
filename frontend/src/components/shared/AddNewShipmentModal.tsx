@@ -265,6 +265,8 @@ export type AddNewShipmentModalProps = {
   editContractId?: string | null
   /** When set (Shipments table edit), load this shipment directly instead of first match by contract. */
   editShipmentId?: string | null
+  /** STO No shown on the Shipments table row — keeps modal aligned with grouped list display. */
+  editStoNumber?: string | null
   mode?: 'add' | 'edit'
 }
 
@@ -276,6 +278,7 @@ export function AddNewShipmentModal({
   availablePOs = null,
   editContractId = null,
   editShipmentId: editShipmentIdProp = null,
+  editStoNumber = null,
   mode = 'add',
 }: AddNewShipmentModalProps) {
   const perms = usePermissions()
@@ -1385,6 +1388,7 @@ export function AddNewShipmentModal({
         onSubmit={onSubmit}
         editContractId={editContractId}
         editShipmentId={editShipmentIdProp}
+        editStoNumber={editStoNumber}
       />
     )
   }

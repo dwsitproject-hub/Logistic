@@ -5498,11 +5498,6 @@ function ContractsPageContent() {
             void fetchContracts(currentPage, undefined, undefined, undefined, { force: true })
             void fetchUnassignedCounts()
           }}
-          initialContractExtNo={
-            contractLogisticsUi?.kind === 'truck-create' || contractLogisticsUi?.kind === 'truck-edit'
-              ? contractLogisticsUi.contract.contract_ext_no || contractLogisticsUi.contract.contract_id
-              : null
-          }
           initialContractId={
             contractLogisticsUi?.kind === 'truck-create' || contractLogisticsUi?.kind === 'truck-edit'
               ? contractLogisticsUi.contract.contract_id
@@ -5510,7 +5505,11 @@ function ContractsPageContent() {
           }
           initialPoNumber={
             contractLogisticsUi?.kind === 'truck-create' || contractLogisticsUi?.kind === 'truck-edit'
-              ? contractLogisticsUi.contract.po_numbers || contractLogisticsUi.contract.po_number
+              ? (() => {
+                  const raw =
+                    contractLogisticsUi.contract.po_numbers || contractLogisticsUi.contract.po_number
+                  return String(raw ?? '').split(',')[0]?.trim() || null
+                })()
               : null
           }
         />

@@ -15,5 +15,6 @@ describe('shipmentListSapAggSql', () => {
     expect(shipmentListSpdAggCtes(false)).toContain('contract_ext_agg');
     expect(shipmentListSpdAggCtes(false)).toContain('quantity_delivered_sap');
     expect(shipmentListSpdAggCtes(false)).toContain('vessel_name_sap');
+    expect(shipmentListSpdAggCtes(false)).toContain('sap_vessel_pick');
   });
 });

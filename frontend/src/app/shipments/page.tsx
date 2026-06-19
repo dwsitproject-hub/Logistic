@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 
 import { Fragment, useEffect, useMemo, useRef, useState, Suspense, useCallback, type ReactNode } from 'react'
 import { useSearchParams } from 'next/navigation'
@@ -536,13 +536,17 @@ function resolveShipmentContractNumbers(shipment: Shipment | null): string[] {
 }
 
 function shipmentModalStoDisplay(shipment: Shipment | null): string {
-  if (!shipment) return '-'
-  const sto =
+  return formatSapDisplayValue(resolveShipmentStoKey(shipment))
+}
+
+function resolveShipmentStoKey(shipment: Shipment | null): string {
+  if (!shipment) return ''
+  return (
     (shipment.sto_number && String(shipment.sto_number).trim()) ||
     (shipment.sto_key && String(shipment.sto_key).trim()) ||
     (shipment.shipment_id && String(shipment.shipment_id).trim()) ||
     ''
-  return formatSapDisplayValue(sto)
+  )
 }
 
 type PortsModalContractDetail = {
@@ -1004,6 +1008,7 @@ function ShipmentsPageContent() {
   const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
     shipmentId: string
     editContractId: string
+    editStoNumber: string
   } | null>(null)
 
   // Master Vessel / Master Loading Port suggestions (inline edit row + AddShipmentModal has its own)
@@ -1469,7 +1474,11 @@ function ShipmentsPageContent() {
       alert('Contract ID is required to edit this shipment.')
       return
     }
-    setEditShipmentFromTable({ shipmentId: shipment.id, editContractId })
+    setEditShipmentFromTable({
+      shipmentId: shipment.id,
+      editContractId,
+      editStoNumber: resolveShipmentStoKey(shipment),
+    })
   }
 
   const handleCloseShipmentModal = () => {
@@ -6970,6 +6979,7 @@ function ShipmentsPageContent() {
         mode={editShipmentFromTable ? 'edit' : 'add'}
         editContractId={editShipmentFromTable?.editContractId ?? null}
         editShipmentId={editShipmentFromTable?.shipmentId ?? null}
+        editStoNumber={editShipmentFromTable?.editStoNumber ?? null}
         onClose={handleCloseShipmentModal}
         onSubmit={async (payload) => {
           await submitAddNewShipmentPayload(payload)

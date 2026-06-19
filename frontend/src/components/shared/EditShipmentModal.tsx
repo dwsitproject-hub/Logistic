@@ -226,6 +226,8 @@ export type EditShipmentModalProps = {
   onSubmit: (payload: AddNewShipmentSubmitPayload) => Promise<void>
   editContractId?: string | null
   editShipmentId?: string | null
+  /** STO from Shipments list row (sto_key / displayed sto_number). */
+  editStoNumber?: string | null
 }
 
 export function EditShipmentModal({
@@ -234,6 +236,7 @@ export function EditShipmentModal({
   onSubmit,
   editContractId = null,
   editShipmentId: editShipmentIdProp = null,
+  editStoNumber = null,
 }: EditShipmentModalProps) {
   const perms = usePermissions()
   const canEditShipment = canEditPermission(perms, 'data.shipments')
@@ -354,7 +357,11 @@ export function EditShipmentModal({
   }, [])
 
   const loadShipment = useCallback(
-    async (contractId: string, directShipmentId?: string | null) => {
+    async (
+      contractId: string,
+      directShipmentId?: string | null,
+      preferredStoNumber?: string | null,
+    ) => {
       setLoading(true)
       setShipmentId(null)
       try {
@@ -389,6 +396,7 @@ export function EditShipmentModal({
         const contractNumbersRaw = String(row.contract_numbers ?? row.contract_number ?? contractId)
         const contractNumbers = contractNumbersRaw.split(',').map((s) => s.trim()).filter(Boolean)
         const stoKey =
+          String(preferredStoNumber ?? '').trim() ||
           String(row.sto_number ?? '').trim() ||
           String(row.operation_id ?? '').trim() ||
           String(row.shipment_id ?? '').trim()
@@ -479,7 +487,7 @@ export function EditShipmentModal({
           port_of_discharge: String(row.port_of_discharge ?? info.vessel_discharge_port_1 ?? ''),
         })
         setOperationId(String(row.operation_id ?? ''))
-        setStoNumber(String(row.sto_number ?? stoKey))
+        setStoNumber(stoKey)
 
         const pol = String(info.vessel_loading_port_1 ?? row.port_of_loading ?? '')
         const pod = String(info.vessel_discharge_port_1 ?? row.port_of_discharge ?? '')
@@ -585,18 +593,19 @@ export function EditShipmentModal({
       initSessionRef.current = null
       return
     }
-    const sessionKey = `${editContractId ?? ''}:${editShipmentIdProp ?? ''}`
+    const sessionKey = `${editContractId ?? ''}:${editShipmentIdProp ?? ''}:${editStoNumber ?? ''}`
     if (initSessionRef.current === sessionKey) return
     initSessionRef.current = sessionKey
     resetState()
     const contractId = editContractId?.trim()
     const directId = editShipmentIdProp?.trim()
+    const sto = editStoNumber?.trim()
     if (directId) {
-      void loadShipment(contractId || directId, directId)
+      void loadShipment(contractId || directId, directId, sto)
     } else if (contractId) {
-      void loadShipment(contractId)
+      void loadShipment(contractId, null, sto)
     }
-  }, [open, editContractId, editShipmentIdProp, loadShipment, resetState])
+  }, [open, editContractId, editShipmentIdProp, editStoNumber, loadShipment, resetState])
 
   const handleVesselSearch = (value: string) => {
     setVesselName(value)

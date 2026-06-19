@@ -1131,14 +1131,34 @@ export const getShipmentById = async (req: AuthRequest, res: Response) => {
       `SELECT 
         s.*,
         c.contract_id as contract_number,
+        c.sto_number as contract_sto_number,
         c.supplier,
         c.buyer,
         c.product,
         c.group_name,
         c.quantity_ordered,
-        c.unit
+        c.unit,
+        COALESCE(
+          NULLIF(TRIM(c.sto_number::text), ''),
+          sap_sto.effective_sto,
+          NULLIF(TRIM(s.operation_id::text), ''),
+          NULLIF(TRIM(s.shipment_id::text), '')
+        ) AS sto_number
        FROM shipments s
        LEFT JOIN contracts c ON s.contract_id = c.id
+       LEFT JOIN LATERAL (
+         SELECT NULLIF(TRIM(COALESCE(
+           spd.sto_number::text,
+           spd.data->'raw'->>'STO No.',
+           spd.data->'raw'->>'STO Number',
+           spd.data->'shipment'->>'sto_no',
+           spd.data->'contract'->>'sto_no'
+         )), '') AS effective_sto
+         FROM sap_processed_data spd
+         WHERE spd.contract_number = c.contract_id
+         ORDER BY spd.created_at DESC NULLS LAST
+         LIMIT 1
+       ) sap_sto ON TRUE
        WHERE s.id = $1`,
       [id]
     );

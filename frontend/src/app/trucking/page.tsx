@@ -129,13 +129,10 @@ function TruckTableEditTruckingButton({ onEdit }: { onEdit: () => void }) {
           variant="outline"
           size="icon"
           onClick={onEdit}
-          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+          className="bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100"
           aria-label="Edit Trucking"
         >
-          <span className="relative inline-flex h-4 w-4 items-center justify-center">
-            <Truck className="h-4 w-4" />
-            <Pencil className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
-          </span>
+          <Pencil className="h-4 w-4" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="top">Edit Trucking</TooltipContent>
@@ -1494,16 +1491,17 @@ function TruckingPageContent() {
   }
 
   const handleOpenEditTruckingModal = (operation: TruckingOperation) => {
-    const contractId = operation.contract_id?.trim()
-    if (!contractId) {
-      alert('Contract ID is required to edit this trucking operation.')
+    const contractId = (operation.contract_number || operation.contract_ext_no || '').trim()
+    const poNumber = operation.po_number?.trim()
+    if (!contractId && !poNumber) {
+      alert('PO Number or Contract ID is required to edit this trucking operation.')
       return
     }
     setEditTruckingFromTable({
       operationId: operation.id,
       contractId,
       contractExtNo: operation.contract_ext_no || operation.contract_number,
-      poNumber: operation.po_number,
+      poNumber,
     })
   }
 

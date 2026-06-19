@@ -184,7 +184,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
 
   type DailyDeliverableDraft = { date: string; quantity: string }
   const [newOperation, setNewOperation] = useState({
-    contract_number: '',
     operation_id: '',
     location: '',
     loading_location: '',
@@ -224,20 +223,27 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   const clearFieldError = (field: string) =>
     setFormErrors((prev) => { const next = { ...prev }; delete next[field]; return next })
 
-  const [contractSearchTerm, setContractSearchTerm] = useState('')
-  const [contractSuggestions, setContractSuggestions] = useState<any[]>([])
-  const [showContractSuggestions, setShowContractSuggestions] = useState(false)
-  const contractSuggestTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const [poNumber, setPoNumber] = useState('')
+  const [poSuggestions, setPoSuggestions] = useState<any[]>([])
+  const [showPoSuggestions, setShowPoSuggestions] = useState(false)
+  const poSuggestTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const validationTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
-  const validateContractNumber = useCallback(async (contractNumber: string) => {
-    if (!contractNumber || contractNumber.trim() === '') {
+  type ContractLookupMode = 'po' | 'contract'
+
+  const validateContractLookup = useCallback(async (term: string, mode: ContractLookupMode = 'po') => {
+    const trimmed = term.trim()
+    if (!trimmed) {
       setContractValidation({ checking: false, exists: false, contractData: null, message: '' })
       return
     }
     setContractValidation((prev) => ({ ...prev, checking: true }))
     try {
-      const response = await api.get(`/trucking/validate/contract?contract_number=${encodeURIComponent(contractNumber)}`)
+      const param =
+        mode === 'po'
+          ? `po_number=${encodeURIComponent(trimmed)}`
+          : `contract_number=${encodeURIComponent(trimmed)}`
+      const response = await api.get(`/trucking/validate/contract?${param}`)
       if (response.data.success) {
         if (response.data.exists) {
           const cd = response.data.data
@@ -247,8 +253,11 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
             contractData: cd,
             message: 'Contract found',
           })
+          if (String(cd.po_number ?? '').trim()) {
+            setPoNumber(String(cd.po_number).trim())
+          }
           const plantLabel = cd.plant_name || ''
-          const sapLoading = String(cd.sap_loading_location ?? '').trim()
+          const sapLoading = String(cd.sap_loading_location ?? cd.supplier ?? '').trim()
           const supplierMills = String(cd.supplier_mills_suggestion ?? '').trim()
           const buyerLabel = String(cd.buyer ?? '').trim()
           const groupPlant = String(cd.group_plant_suggestion ?? '').trim()
@@ -267,65 +276,66 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
             checking: false,
             exists: false,
             contractData: null,
-            message: response.data.message || 'Contract Ext No does not exist',
+            message:
+              response.data.message ||
+              (mode === 'po' ? 'PO Number does not exist' : 'Contract does not exist'),
           })
         }
       }
     } catch (error) {
-      console.error('Error validating contract:', error)
+      console.error('Error validating contract lookup:', error)
       setContractValidation({
         checking: false,
         exists: false,
         contractData: null,
-        message: 'Error validating Contract Ext No',
+        message: mode === 'po' ? 'Error validating PO Number' : 'Error validating contract',
       })
     }
   }, [])
 
-  const fetchContractSuggestions = useCallback(async (term: string) => {
+  const fetchPoSuggestions = useCallback(async (term: string) => {
     const q = term.trim()
     if (q.length < 2) {
-      setContractSuggestions([])
-      setShowContractSuggestions(false)
+      setPoSuggestions([])
+      setShowPoSuggestions(false)
       return
     }
     try {
       const res = await api.get(`/trucking/contracts/suggestions?q=${encodeURIComponent(q)}`)
       if (res.data?.success) {
-        setContractSuggestions(res.data.data || [])
-        setShowContractSuggestions(true)
+        setPoSuggestions(res.data.data || [])
+        setShowPoSuggestions(true)
       }
     } catch (e) {
-      console.error('Failed to fetch contract suggestions:', e)
-      setContractSuggestions([])
-      setShowContractSuggestions(false)
+      console.error('Failed to fetch PO suggestions:', e)
+      setPoSuggestions([])
+      setShowPoSuggestions(false)
     }
   }, [])
 
-  const handleContractNumberChange = (value: string) => {
-    setNewOperation((prev) => ({ ...prev, contract_number: value }))
-    setContractSearchTerm(value)
+  const handlePoNumberChange = (value: string) => {
+    setPoNumber(value)
     if (validationTimeoutRef.current) clearTimeout(validationTimeoutRef.current)
-    if (contractSuggestTimeoutRef.current) clearTimeout(contractSuggestTimeoutRef.current)
-    contractSuggestTimeoutRef.current = setTimeout(() => fetchContractSuggestions(value), 200)
-    validationTimeoutRef.current = setTimeout(() => validateContractNumber(value), 500)
+    if (poSuggestTimeoutRef.current) clearTimeout(poSuggestTimeoutRef.current)
+    poSuggestTimeoutRef.current = setTimeout(() => fetchPoSuggestions(value), 200)
+    validationTimeoutRef.current = setTimeout(() => validateContractLookup(value, 'po'), 500)
   }
 
   useEffect(() => {
     return () => {
       if (validationTimeoutRef.current) clearTimeout(validationTimeoutRef.current)
-      if (contractSuggestTimeoutRef.current) clearTimeout(contractSuggestTimeoutRef.current)
+      if (poSuggestTimeoutRef.current) clearTimeout(poSuggestTimeoutRef.current)
     }
   }, [])
 
-  const handleSelectContractSuggestion = async (c: any) => {
-    const label = c.contract_ext_no || c.contract_id
-    const contractId = String(c.contract_id || '').trim()
-    setNewOperation((prev) => ({ ...prev, contract_number: String(label || '').trim() }))
-    setContractSearchTerm(String(label || '').trim())
-    setShowContractSuggestions(false)
-    setContractSuggestions([])
-    await validateContractNumber(contractId || String(label || '').trim())
+  const handleSelectPoSuggestion = async (c: any) => {
+    const po = String(c.po_number || '').trim()
+    setPoNumber(po)
+    setShowPoSuggestions(false)
+    setPoSuggestions([])
+    if (po) {
+      await validateContractLookup(po, 'po')
+    }
   }
 
   const truckingDateRange = useMemo(() => {
@@ -368,7 +378,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       return Object.keys(errors).length === 0
     }
 
-    if (!contractValidation.exists) errors.contract_number = 'Contract Ext No is required and must be valid'
+    if (!contractValidation.exists) errors.po_number = 'PO Number is required and must be valid'
 
     if (truckingDateRange) {
       const rangeMsg = formatPlanningAllowedRangeMessage(truckingDateRange)
@@ -399,7 +409,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
 
   const resetForm = () => {
     setNewOperation({
-      contract_number: '',
       operation_id: '',
       location: '',
       loading_location: '',
@@ -417,9 +426,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     })
     setPlanning({ start_date: '', end_date: '', total_quantity_mt: '' })
     setContractValidation({ checking: false, exists: false, contractData: null, message: '' })
-    setContractSearchTerm('')
-    setContractSuggestions([])
-    setShowContractSuggestions(false)
+    setPoNumber('')
+    setPoSuggestions([])
+    setShowPoSuggestions(false)
     setFormErrors({})
     setEditOperationId(null)
     setLoadingEdit(false)
@@ -451,19 +460,33 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     }
   }, [])
 
+  const resolveEditContractLookup = useCallback(
+    async (op: Record<string, unknown>, listRow: Record<string, unknown>) => {
+      const po = String(op.po_number ?? listRow.po_number ?? initialPoNumber ?? '').trim()
+      if (po) {
+        setPoNumber(po)
+        await validateContractLookup(po, 'po')
+        return
+      }
+      const contractKey = String(
+        op.contract_number
+          ?? listRow.contract_number
+          ?? initialContractId
+          ?? initialContractExtNo
+          ?? '',
+      ).trim()
+      if (contractKey) {
+        await validateContractLookup(contractKey, 'contract')
+      }
+    },
+    [initialContractExtNo, initialContractId, initialPoNumber, validateContractLookup],
+  )
+
   const hydrateTruckingEditForm = useCallback(
     async (operationId: string, op: Record<string, unknown>, listRow: Record<string, unknown>, contractId: string) => {
       setEditOperationId(operationId)
 
-      const validateKey = initialContractId?.trim() || contractId
-      const display = String(
-        op.contract_ext_no || op.contract_number || listRow.contract_ext_no || listRow.contract_number || initialContractExtNo || '',
-      ).trim()
-      if (display) {
-        setNewOperation((prev) => ({ ...prev, contract_number: display }))
-        setContractSearchTerm(display)
-      }
-      await validateContractNumber(validateKey)
+      await resolveEditContractLookup(op, listRow)
 
       setNewOperation((prev) => ({
         ...prev,
@@ -505,7 +528,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         void loadActivityLog(operationId)
       }
     },
-    [initialContractExtNo, initialContractId, isEditMode, loadActivityLog, validateContractNumber],
+    [isEditMode, loadActivityLog, resolveEditContractLookup],
   )
 
   const loadTruckingForEdit = useCallback(
@@ -566,7 +589,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     }
     const sessionKey = [
       isEditMode ? 'edit' : 'add',
-      initialContractExtNo ?? '',
+      initialPoNumber ?? '',
       initialContractId ?? '',
       editTruckingOperationId ?? '',
     ].join(':')
@@ -574,30 +597,31 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     initSessionRef.current = sessionKey
 
     resetForm()
-    const display = initialContractExtNo?.trim()
-    const validateKey = initialContractId?.trim() || display
+    const displayPo = initialPoNumber?.trim()
+    const validateKey = initialContractId?.trim()
     const directOpId = editTruckingOperationId?.trim()
     if (isEditMode && directOpId) {
       void loadTruckingForEditById(directOpId, validateKey || directOpId)
       return
     }
-    if (!display && !validateKey) return
+    if (!displayPo && !validateKey) return
     if (isEditMode && validateKey) {
       void loadTruckingForEdit(validateKey)
       return
     }
-    if (display) {
-      setNewOperation((prev) => ({ ...prev, contract_number: display }))
-      setContractSearchTerm(display)
+    if (displayPo) {
+      setPoNumber(displayPo)
+      void validateContractLookup(displayPo, 'po')
+    } else if (validateKey) {
+      void validateContractLookup(validateKey, 'contract')
     }
-    if (validateKey) void validateContractNumber(validateKey)
   }, [
     open,
-    initialContractExtNo,
+    initialPoNumber,
     initialContractId,
     editTruckingOperationId,
     isEditMode,
-    validateContractNumber,
+    validateContractLookup,
     loadTruckingForEdit,
     loadTruckingForEditById,
   ])
@@ -657,10 +681,17 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
 
     const totalKg = totalMt * 1000
 
+    const contractIdForSubmit = String(contractValidation.contractData?.contract_id ?? '').trim()
+    if (!contractIdForSubmit) {
+      showNotification('error', 'Valid PO Number with contract data is required')
+      return
+    }
+
     setCreating(true)
     try {
       const payload = {
         ...newOperation,
+        contract_number: contractIdForSubmit,
         trucking_start_date: planning.start_date || null,
         trucking_completion_date: planning.end_date || null,
         quantity_sent: newOperation.quantity_sent ? parseFloat(newOperation.quantity_sent) : null,
@@ -806,55 +837,73 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
               <div className="p-4 space-y-3">
                 <div className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
                   <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
-                  <span><strong>Required:</strong> Contract Ext No &nbsp;•&nbsp; Location, Loading, and Unloading will be filled automatically from the contract</span>
+                  <span><strong>Required:</strong> PO Number &nbsp;•&nbsp; Location, Loading, and Unloading will be filled automatically from the contract</span>
                 </div>
 
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="text-xs font-semibold text-gray-700">
-                      Contract Ext No <span className="text-red-500">*</span>
+                      PO Number <span className="text-red-500">*</span>
                     </label>
-                    {!initialContractExtNo && !isEditMode && (
-                      <span className="text-[10px] text-gray-400">Type to search contract</span>
+                    {!initialPoNumber && !isEditMode && (
+                      <span className="text-[10px] text-gray-400">Type to search PO</span>
                     )}
                   </div>
                   <div className="relative">
                     <div className="flex gap-2 items-center">
                       <Input
-                        value={newOperation.contract_number}
-                        onChange={(e) => handleContractNumberChange(e.target.value)}
-                        onBlur={() => validateContractNumber(newOperation.contract_number)}
-                        onFocus={() => {
-                          if (!isEditMode && contractSuggestions.length > 0) setShowContractSuggestions(true)
-                          if (!isEditMode && contractSearchTerm.trim().length >= 2) fetchContractSuggestions(contractSearchTerm)
+                        value={poNumber}
+                        onChange={(e) => handlePoNumberChange(e.target.value)}
+                        onBlur={() => {
+                          if (isEditMode) {
+                            const po = poNumber.trim()
+                            if (po) {
+                              void validateContractLookup(po, 'po')
+                              return
+                            }
+                            const key = String(
+                              contractValidation.contractData?.contract_id
+                                || initialContractId
+                                || initialContractExtNo
+                                || '',
+                            ).trim()
+                            if (key) void validateContractLookup(key, 'contract')
+                            return
+                          }
+                          void validateContractLookup(poNumber, 'po')
                         }}
-                        readOnly={!!initialContractExtNo || isEditMode}
+                        onFocus={() => {
+                          if (!isEditMode && poSuggestions.length > 0) setShowPoSuggestions(true)
+                          if (!isEditMode && poNumber.trim().length >= 2) fetchPoSuggestions(poNumber)
+                        }}
+                        readOnly={!!initialPoNumber || isEditMode}
                         disabled={isEditMode}
-                        className={`flex-1 h-9 ${initialContractExtNo || isEditMode ? READONLY_FIELD_CLASS : ''} ${
+                        className={`flex-1 h-9 ${initialPoNumber || isEditMode ? READONLY_FIELD_CLASS : ''} ${
                           contractValidation.exists ? 'border-green-500 focus-visible:ring-green-400'
                           : contractValidation.message && !contractValidation.checking ? 'border-red-500 focus-visible:ring-red-400'
                           : ''
                         }`}
-                        placeholder="Enter Contract Ext No..."
+                        placeholder="Enter PO Number..."
                       />
                       {contractValidation.checking && <Loader2 className="h-4 w-4 animate-spin text-gray-400 shrink-0" />}
                       {!contractValidation.checking && contractValidation.exists && <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />}
                       {!contractValidation.checking && contractValidation.message && !contractValidation.exists && <AlertCircle className="h-4 w-4 text-red-500 shrink-0" />}
                     </div>
 
-                    {!isEditMode && showContractSuggestions && contractSuggestions.length > 0 && (
+                    {!isEditMode && showPoSuggestions && poSuggestions.length > 0 && (
                       <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
-                        {contractSuggestions.map((c) => (
+                        {poSuggestions.map((c) => (
                           <button
                             key={c.contract_id}
                             type="button"
                             className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b last:border-b-0 transition-colors"
                             onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => handleSelectContractSuggestion(c)}
+                            onClick={() => handleSelectPoSuggestion(c)}
                           >
-                            <div className="font-semibold text-sm text-gray-900">{c.contract_ext_no || c.contract_id}</div>
+                            <div className="font-semibold text-sm text-gray-900">{c.po_number || '—'}</div>
                             <div className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
-                              {c.contract_ext_no && <><span className="font-mono text-gray-400">{c.contract_id}</span><span className="text-gray-300">•</span></>}
+                              <span className="font-mono text-gray-400">{c.contract_ext_no || c.contract_id}</span>
+                              <span className="text-gray-300">•</span>
                               <span>{c.supplier}</span>
                               <span className="text-gray-300">•</span>
                               <span>{c.product}</span>
@@ -873,9 +922,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       {contractValidation.message}
                     </p>
                   )}
-                  {formErrors.contract_number && !contractValidation.message && (
+                  {formErrors.po_number && !contractValidation.message && (
                     <p className="text-xs mt-1 text-red-600 flex items-center gap-1">
-                      <AlertCircle className="h-3 w-3" />{formErrors.contract_number}
+                      <AlertCircle className="h-3 w-3" />{formErrors.po_number}
                     </p>
                   )}
                 </div>
@@ -950,9 +999,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       className={`h-9 ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.loading_location ? 'border-red-500' : ''}`}
                       placeholder="SAP supplier location or search mills..."
                     />
-                    <p className="text-[10px] text-gray-500 mt-1">
-                      Prefill dari SAP (truck loading); jika kosong dari master supplier (mills). Dapat diedit.
-                    </p>
                     {formErrors.loading_location && <p className="text-xs mt-1 text-red-600">{formErrors.loading_location}</p>}
                   </div>
                   <div>
@@ -968,9 +1014,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       className={`h-9 ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.unloading_location ? 'border-red-500' : ''}`}
                       placeholder="Buyer atau search group plant..."
                     />
-                    <p className="text-[10px] text-gray-500 mt-1">
-                      Prefill dari Buyer (SAP); jika kosong dari master plant (group plant). Dapat diedit.
-                    </p>
                     {formErrors.unloading_location && <p className="text-xs mt-1 text-red-600">{formErrors.unloading_location}</p>}
                   </div>
                 </div>
@@ -1367,7 +1410,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   {contractValidation.exists && (
                     <span className="flex items-center gap-1 rounded-full bg-blue-100 px-2.5 py-1 text-blue-700 font-medium">
                       <FileText className="h-3 w-3" />
-                      {cd?.contract_ext_no || newOperation.contract_number}
+                      {cd?.po_number || poNumber}
                     </span>
                   )}
                   {newOperation.location && (
@@ -1382,7 +1425,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                     </span>
                   )}
                   {!contractValidation.exists && (
-                    <span className="italic text-gray-400">Enter Contract Ext No to continue</span>
+                    <span className="italic text-gray-400">Enter PO Number to continue</span>
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">

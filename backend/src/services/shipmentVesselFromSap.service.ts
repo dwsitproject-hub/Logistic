@@ -63,14 +63,29 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
       const stoKey = trimOrNull(row.sto_key);
       if (stoKey) {
         await query(
-          `UPDATE shipments s SET
+          `WITH latest_spd_contract AS (
+             SELECT DISTINCT ON (spd.contract_number)
+               spd.contract_number,
+               NULLIF(TRIM(COALESCE(
+                 spd.sto_number::text,
+                 spd.data->'raw'->>'STO No.',
+                 spd.data->'raw'->>'STO Number',
+                 spd.data->'shipment'->>'sto_no',
+                 spd.data->'contract'->>'sto_no'
+               )), '') AS effective_sto
+             FROM sap_processed_data spd
+             WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+             ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+           )
+           UPDATE shipments s SET
             vessel_code = COALESCE(NULLIF(TRIM(s.vessel_code), ''), $2),
             vessel_name = COALESCE(NULLIF(TRIM(s.vessel_name), ''), $3),
             vessel_owner = COALESCE(NULLIF(TRIM(s.vessel_owner), ''), $4),
             updated_at = CURRENT_TIMESTAMP
           FROM contracts c
+          LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
           WHERE s.contract_id = c.id
-            AND TRIM(COALESCE(c.sto_number::text, '')) = $1
+            AND TRIM(COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id::text)) = TRIM($1::text)
             AND (
               s.vessel_code IS NULL OR TRIM(s.vessel_code) = ''
               OR s.vessel_name IS NULL OR TRIM(s.vessel_name) = ''

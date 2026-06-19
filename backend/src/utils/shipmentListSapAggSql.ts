@@ -133,16 +133,33 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
         WHERE sk.sto_key IS NOT NULL
         GROUP BY sk.sto_key
       ),
+      sap_vessel_pick AS (
+        SELECT DISTINCT ON (sk.sto_key)
+          sk.sto_key,
+          ${SAP_VESSEL_NAME_FROM_SK_SQL} AS vessel_name_sap,
+          ${SAP_VESSEL_CODE_FROM_SK_SQL} AS vessel_code_sap,
+          ${SAP_VESSEL_OWNER_FROM_SK_SQL} AS vessel_owner_sap
+        FROM spd_keyed sk
+        WHERE sk.sto_key IS NOT NULL
+        ORDER BY
+          sk.sto_key,
+          (CASE
+            WHEN ${SAP_VESSEL_NAME_FROM_SK_SQL} IS NOT NULL
+             AND ${SAP_VESSEL_CODE_FROM_SK_SQL} IS NOT NULL
+            THEN 0 ELSE 1 END),
+          sk.created_at DESC NULLS LAST
+      ),
       sap_latest AS (
         SELECT DISTINCT ON (sk.sto_key)
           sk.sto_key,
           COALESCE(sk.data->'contract'->>'incoterm', sk.data->>'Incoterm') AS incoterm,
           COALESCE(sk.data->'contract'->>'contract_type', sk.data->>'B2B Flag', sk.data->>'Contract Type') AS b2b_flag,
           COALESCE(sk.data->'contract'->>'source_type', sk.data->>'Source') AS source_type,
-          ${SAP_VESSEL_NAME_FROM_SK_SQL} AS vessel_name_sap,
-          ${SAP_VESSEL_CODE_FROM_SK_SQL} AS vessel_code_sap,
-          ${SAP_VESSEL_OWNER_FROM_SK_SQL} AS vessel_owner_sap
+          vp.vessel_name_sap,
+          vp.vessel_code_sap,
+          vp.vessel_owner_sap
         FROM spd_keyed sk
+        LEFT JOIN sap_vessel_pick vp ON vp.sto_key = sk.sto_key
         WHERE sk.sto_key IS NOT NULL
         ORDER BY sk.sto_key, sk.created_at DESC NULLS LAST
       )`;

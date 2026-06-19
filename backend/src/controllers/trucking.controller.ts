@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import { query } from '../database/connection';
+import { sapTruckingLoadingLocationSql } from '../utils/sapTruckingLoadingLocationSql';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import { normalizeAndValidateDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/truckingDailyDeliverables';
@@ -198,6 +199,7 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
       `SELECT 
         t.*,
         c.contract_id as contract_number,
+        c.po_number,
         c.supplier,
         c.buyer,
         c.product,
@@ -267,7 +269,7 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
     }
 
     const raw = String(contract_number).trim();
-    // Resolve contract by Contract ID OR Contract Ext No (latest SAP)
+    // Resolve contract by PO, Contract ID, or Contract Ext No (latest SAP)
     const contractResult = await query(
       `
       WITH latest_spd AS (
@@ -281,8 +283,13 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
       SELECT c.id, UPPER(TRIM(COALESCE(c.transport_mode, ''))) AS transport_mode
       FROM contracts c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-      WHERE c.contract_id = $1 OR COALESCE(l.contract_ext_no, '') = $1
-      ORDER BY (c.contract_id = $1) DESC
+      WHERE COALESCE(c.po_number, '') = $1
+         OR c.contract_id = $1
+         OR COALESCE(l.contract_ext_no, '') = $1
+      ORDER BY
+        (COALESCE(c.po_number, '') = $1) DESC,
+        (c.contract_id = $1) DESC,
+        (COALESCE(l.contract_ext_no, '') = $1) DESC
       LIMIT 1
       `,
       [raw]
@@ -426,16 +433,27 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
 
 export const validateContractNumber = async (req: AuthRequest, res: Response) => {
   try {
-    const { contract_number } = req.query;
+    const po_number = req.query.po_number;
+    const contract_number = req.query.contract_number;
+    const lookupTerm = String(po_number ?? contract_number ?? '').trim();
+    const lookupByPo = po_number != null && String(po_number).trim() !== '';
 
-    if (!contract_number) {
+    if (!lookupTerm) {
       return res.status(400).json({
         success: false,
-        error: { message: 'Contract number is required' },
+        error: { message: lookupByPo ? 'PO Number is required' : 'Contract number is required' },
       });
     }
 
-    const raw = String(contract_number).trim();
+    const raw = lookupTerm;
+    const matchWhereSql = lookupByPo
+      ? `COALESCE(c.po_number, '') = $1`
+      : `(
+          COALESCE(c.po_number, '') = $1
+           OR c.contract_id = $1
+           OR COALESCE(l.contract_ext_no, '') = $1
+           OR c.id::text = $1
+        )`;
     const result = await query(
       `
       WITH latest_spd AS (
@@ -450,11 +468,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         SELECT c.*
         FROM contracts c
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-        WHERE (
-          COALESCE(c.po_number, '') = $1
-           OR c.contract_id = $1
-           OR COALESCE(l.contract_ext_no, '') = $1
-        )
+        WHERE ${matchWhereSql}
         ORDER BY
           (COALESCE(c.po_number, '') = $1) DESC,
           (c.contract_id = $1) DESC,
@@ -482,7 +496,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         mp.plant_name,
         mp.company_name AS plant_company_name,
         NULLIF(TRIM(mp.group_plant), '') AS group_plant_suggestion,
-        sap_loc.sap_loading_location,
+        COALESCE(sap_loc.sap_loading_location, NULLIF(TRIM(c.supplier), '')) AS sap_loading_location,
         (
           SELECT s.mills
           FROM suppliers s
@@ -520,11 +534,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       LEFT JOIN master_plants mp ON mp.plant_code = c.plant_code
       LEFT JOIN LATERAL (
         SELECT
-          NULLIF(TRIM(COALESCE(
-            spd.data->'raw'->>'Truck Loading at Starting Location',
-            spd.data->'trucking'->0->'data'->>'truck_loading_at_starting_location',
-            spd.data->'raw'->>'Loading Location'
-          )), '') AS sap_loading_location
+          ${sapTruckingLoadingLocationSql} AS sap_loading_location
         FROM sap_processed_data spd
         WHERE spd.contract_number = c.contract_id
         ORDER BY spd.created_at DESC NULLS LAST
@@ -539,7 +549,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       return res.json({
         success: true,
         exists: false,
-        message: 'Contract Ext No does not exist',
+        message: lookupByPo ? 'PO Number does not exist' : 'Contract does not exist',
       });
     }
 
@@ -562,7 +572,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
     logger.error('Validate contract number error:', error);
     return res.status(500).json({
       success: false,
-      error: { message: 'Failed to validate Contract Ext No' },
+      error: { message: 'Failed to validate contract lookup' },
     });
   }
 };
