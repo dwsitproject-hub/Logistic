@@ -1,6 +1,5 @@
 import fs from 'fs';
 import Tesseract from 'tesseract.js';
-import pdfParse from 'pdf-parse';
 import {
   countExtractedFields,
   parseSettlementInvoiceText,
@@ -28,8 +27,14 @@ function isPdfMime(mime: string, fileName: string): boolean {
 }
 
 async function extractTextFromPdfBuffer(buffer: Buffer): Promise<string> {
-  const parsed = await pdfParse(buffer);
-  return String(parsed.text || '').trim();
+  const { PDFParse } = await import('pdf-parse');
+  const parser = new PDFParse({ data: buffer });
+  try {
+    const result = await parser.getText();
+    return String(result.text || '').trim();
+  } finally {
+    await parser.destroy?.();
+  }
 }
 
 async function ocrImageBuffer(buffer: Buffer): Promise<string> {
