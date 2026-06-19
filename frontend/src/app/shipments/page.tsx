@@ -47,6 +47,7 @@ import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
   COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
 } from '@/lib/compactTableUi'
 import { formatQtyMtFromKg, formatNumber } from '@/lib/utils'
@@ -4617,7 +4618,7 @@ function ShipmentsPageContent() {
                       })
                     }}
                   >
-                      <table className={COMPACT_OPERATIONAL_TABLE_CLASS}>
+                      <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS}`}>
                         <thead>
                         <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
                           <th

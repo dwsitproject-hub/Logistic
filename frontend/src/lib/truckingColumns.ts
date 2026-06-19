@@ -9,15 +9,15 @@ import {
   type CompactTableColumnWidthInput,
 } from '@/lib/compactTableUi'
 
-/** Default visible columns in left-to-right table order. */
+/** Default visible columns in left-to-right table order (STO-first after late indicator). */
 export const TRUCKING_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
   'late_indicator',
+  'sto_number',
   'contract_date',
   'contract_ext_no',
   'po_number',
   'supplier',
   'status',
-  'sto_number',
   'product',
   'incoterm',
   'contract_qty',
@@ -29,7 +29,7 @@ export const TRUCKING_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
 ] as const
 
 /** Bump when default column order/visibility changes — resets users without matching saved layout. */
-export const TRUCKING_COLUMN_LAYOUT_VERSION = 'trucking-columns-v1'
+export const TRUCKING_COLUMN_LAYOUT_VERSION = 'trucking-columns-v2'
 
 export const TRUCKING_COLUMN_LAYOUT_VERSION_KEY = 'trucking.compact.columnLayoutVersion'
 

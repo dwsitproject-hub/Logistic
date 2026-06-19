@@ -167,6 +167,33 @@
     white-space: normal;
   }
 
+  /*
+   * Shipments + Trucking list tables — center single-line cells vertically when a row
+   * is taller due to stacked Contract Ext / PO values under one STO.
+   */
+  .klip-compact-table--row-vcenter td.klip-compact-table-cell {
+    vertical-align: middle;
+  }
+
+  .klip-compact-table--row-vcenter td.klip-op-col--stack:not(:has(.klip-compact-table-stack)) {
+    vertical-align: middle;
+  }
+
+  .klip-compact-table--row-vcenter td.klip-op-col--stack:has(.klip-compact-table-stack) {
+    vertical-align: top;
+  }
+
+  .klip-compact-table--row-vcenter .klip-compact-table-cell-inner {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+  }
+
+  .klip-compact-table--row-vcenter .klip-compact-table-cell-inner:has(.klip-compact-table-stack) {
+    justify-content: flex-start;
+  }
+
   .klip-compact-table-nowrap {
     white-space: nowrap;
     word-break: normal;

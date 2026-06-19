@@ -39,6 +39,7 @@ import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
   COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
 } from '@/lib/compactTableUi'
 import { formatQtyMtFromKg } from '@/lib/utils'
@@ -1792,6 +1793,14 @@ function TruckingPageContent() {
       }
     },
     {
+      id: 'sto_number',
+      label: 'STO',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.sto_number || '',
+      render: (o) => <OperationalNowrapCell value={o.sto_number} title={o.sto_number || ''} />
+    },
+    {
       id: 'contract_date',
       label: 'Contract Date',
       defaultVisible: true,
@@ -1839,14 +1848,6 @@ function TruckingPageContent() {
           {o.status}
         </Badge>
       )
-    },
-    {
-      id: 'sto_number',
-      label: 'STO',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.sto_number || '',
-      render: (o) => <OperationalNowrapCell value={o.sto_number} title={o.sto_number || ''} />
     },
     {
       id: 'product',
@@ -3151,7 +3152,7 @@ function TruckingPageContent() {
                   >
                     <table
                       data-trucking-list-table
-                      className={COMPACT_OPERATIONAL_TABLE_CLASS}
+                      className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS}`}
                     >
                       <thead>
                       <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>

@@ -2111,15 +2111,12 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       )
       SELECT
         COALESCE(
+          NULLIF(TRIM(split_part(lsa.sto_numbers, ',', 1)), ''),
+          NULLIF(TRIM(c.sto_number::text), ''),
           NULLIF(TRIM(t.operation_id::text), ''),
-          NULLIF(TRIM(lsa.sto_numbers), ''),
-          CASE
-            WHEN UPPER(TRIM(COALESCE(c.transport_mode, ''))) IN ('LAND', 'MIX')
-            THEN NULLIF(TRIM(c.sto_number::text), '')
-            ELSE NULL
-          END,
           t.id::text
         ) AS sto_number,
+        NULLIF(TRIM(lsa.sto_numbers), '') AS sap_sto_numbers,
         t.operation_id,
         t.status,
         c.quantity_ordered AS sto_quantity,
@@ -2218,14 +2215,9 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         ...shipmentRows.rows.flatMap((r: any) =>
           expandLogisticsLookupKeys(r.sto_key, r.sto_number, r.operation_id),
         ),
-        ...truckingRows.rows.flatMap((r: any) => {
-          const keys = expandLogisticsLookupKeys(r.operation_id);
-          const sto = String(r.sto_number ?? '').trim();
-          if (sto && !sto.includes(',')) {
-            keys.push(...expandLogisticsLookupKeys(sto));
-          }
-          return keys;
-        }),
+        ...truckingRows.rows.flatMap((r: any) =>
+          expandLogisticsLookupKeys(r.operation_id, r.sap_sto_numbers, r.sto_number),
+        ),
       ]),
     ];
     const sapOnlyRows = await query(CONTRACT_SAP_ONLY_STOS_SQL, [id, coveredKeys]);

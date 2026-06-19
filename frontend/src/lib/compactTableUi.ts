@@ -36,6 +36,9 @@ export const COMPACT_TABLE_CLASS = 'w-full table-fixed border-collapse klip-comp
 export const COMPACT_OPERATIONAL_TABLE_CLASS =
   'border-collapse klip-compact-table klip-compact-table--operational'
 
+/** Shipments + Trucking — vertically center single-line cells when row height grows (multi contract/PO). */
+export const COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS = 'klip-compact-table--row-vcenter'
+
 /** Horizontal scroll wrapper for Shipments / Trucking list tables */
 export const COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS = 'w-full min-w-0 overflow-x-auto'
 
