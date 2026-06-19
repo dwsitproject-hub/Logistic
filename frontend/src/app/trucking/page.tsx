@@ -121,21 +121,47 @@ function formatTruckingQtyPlain(n: number): string {
   return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: true })
 }
 
-function TruckTableEditTruckingButton({ onEdit }: { onEdit: () => void }) {
+function isTruckingPlanningEditLocked(status: string | undefined | null): boolean {
+  return String(status ?? '').trim().toUpperCase() === 'CANCELLED'
+}
+
+function TruckTableEditTruckingButton({
+  onEdit,
+  disabled = false,
+}: {
+  onEdit: () => void
+  disabled?: boolean
+}) {
+  const button = (
+    <Button
+      variant="outline"
+      size="icon"
+      onClick={onEdit}
+      disabled={disabled}
+      className={
+        disabled
+          ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed hover:bg-gray-50'
+          : 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
+      }
+      aria-label="Edit Trucking"
+    >
+      <span className="relative inline-flex h-4 w-4 items-center justify-center">
+        <Truck className="h-4 w-4" />
+        <Pencil className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
+      </span>
+    </Button>
+  )
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={onEdit}
-          className="bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100"
-          aria-label="Edit Trucking"
-        >
-          <Pencil className="h-4 w-4" />
-        </Button>
+        {disabled ? <span className="inline-flex">{button}</span> : button}
       </TooltipTrigger>
-      <TooltipContent side="top">Edit Trucking</TooltipContent>
+      <TooltipContent side="top">
+        {disabled
+          ? 'Edit trucking is not available for cancelled operations'
+          : 'Edit Trucking'}
+      </TooltipContent>
     </Tooltip>
   )
 }
@@ -333,6 +359,93 @@ function calendarDraftsHaveChanges(
   return false
 }
 
+function calendarRowPlannedQtyKg(r: TruckingCalendarRow): number {
+  return (r.daily_deliverables || []).reduce((s, x) => s + Number(x?.quantity_delivered || 0), 0)
+}
+
+const CALENDAR_META_COL_LABELS: Record<string, string> = {
+  owner: 'Owner',
+  due_start: 'Due Start',
+  due_end: 'Due End',
+  source_type: 'Source Type',
+  lt_spot: 'LT/SPOT',
+  product: 'Product',
+  group_name: 'Group Name',
+  supplier: 'Supplier',
+  outstanding_quantity: 'Outstanding Qty (MT)',
+  qty_sent: 'Qty Sent (MT)',
+  qty_sent_planning: 'Qty Sent planning (MT)',
+  qty_delivered: 'Delivery Qty (MT)',
+  qty_received: 'Received Qty (MT)',
+}
+
+const CALENDAR_NUMERIC_SORT_COLS = new Set([
+  'outstanding_quantity',
+  'qty_sent',
+  'qty_sent_planning',
+  'qty_delivered',
+  'qty_received',
+])
+
+function getTruckingCalendarSortValue(
+  row: TruckingCalendarRow,
+  sortKey: string,
+  cellDrafts: Record<string, string>,
+): string | number {
+  if (sortKey.startsWith('day:')) {
+    const date = sortKey.slice(4)
+    const qtyMt = parseDailyPlanningMtDraft(cellDrafts[`${row.id}:${date}`] ?? '')
+    return qtyMt === 'invalid' ? 0 : qtyMt
+  }
+
+  switch (sortKey) {
+    case 'operation_id':
+      return row.operation_id || ''
+    case 'contract_block':
+      return row.contract_ext_no || row.contract_number || row.supplier || ''
+    case 'owner':
+      return row.trucking_owner || ''
+    case 'due_start':
+      return row.delivery_start_date || ''
+    case 'due_end':
+      return row.delivery_end_date || ''
+    case 'source_type':
+      return row.source_type || ''
+    case 'lt_spot':
+      return row.lt_spot || ''
+    case 'product':
+      return row.product || ''
+    case 'group_name':
+      return row.group_name || ''
+    case 'supplier':
+      return row.supplier || ''
+    case 'outstanding_quantity':
+      return Number(row.outstanding_quantity ?? 0)
+    case 'qty_sent':
+      return Number(row.quantity_sent || 0)
+    case 'qty_sent_planning':
+      return calendarRowPlannedQtyKg(row)
+    case 'qty_delivered':
+      return Number(row.quantity_delivered || 0)
+    case 'qty_received':
+      return Number(row.quantity_receive ?? 0)
+    default:
+      return ''
+  }
+}
+
+function compareCalendarSortValues(
+  a: string | number,
+  b: string | number,
+  dir: 'asc' | 'desc',
+): number {
+  const dirMul = dir === 'asc' ? 1 : -1
+  if (typeof a === 'number' && typeof b === 'number') {
+    return (a - b) * dirMul
+  }
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }) * dirMul
+}
+
 function CalendarDeliverablesTable({
   month,
   rows,
@@ -379,8 +492,26 @@ function CalendarDeliverablesTable({
     const d = String(day).padStart(2, '0')
     return `${yyyy}-${m}-${d}`
   }
-  const sumPlannedQty = (r: TruckingCalendarRow) =>
-    (r.daily_deliverables || []).reduce((s, x) => s + Number(x?.quantity_delivered || 0), 0)
+  const sumPlannedQty = (r: TruckingCalendarRow) => calendarRowPlannedQtyKg(r)
+
+  const [sortKey, setSortKey] = useState<string>('operation_id')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+
+  const onSortHeaderClick = useCallback((key: string) => {
+    setSortDir((prevDir) => (sortKey === key ? (prevDir === 'asc' ? 'desc' : 'asc') : 'asc'))
+    setSortKey(key)
+  }, [sortKey])
+
+  const sortedRows = useMemo(() => {
+    if (!rows.length) return rows
+    return [...rows].sort((a, b) =>
+      compareCalendarSortValues(
+        getTruckingCalendarSortValue(a, sortKey, cellDrafts),
+        getTruckingCalendarSortValue(b, sortKey, cellDrafts),
+        sortDir,
+      ),
+    )
+  }, [rows, sortKey, sortDir, cellDrafts])
 
   useEffect(() => {
     if (editingQtyCellKey) {
@@ -471,7 +602,13 @@ function CalendarDeliverablesTable({
                   className="sticky z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200"
                   style={{ left: 0, minWidth: operationColW, maxWidth: operationColW }}
                 >
-                  Operation ID
+                  <ContractPerfTableSortHeader
+                    label="Operation ID"
+                    sortable
+                    activeSort={sortKey === 'operation_id'}
+                    sortDir={sortDir}
+                    onSortClick={() => onSortHeaderClick('operation_id')}
+                  />
                 </th>
               ) : null}
               {contractShown ? (
@@ -479,25 +616,18 @@ function CalendarDeliverablesTable({
                   className="sticky z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200"
                   style={{ left: contractLeft, minWidth: contractColW }}
                 >
-                  Contract Ext No / STO / Supplier
+                  <ContractPerfTableSortHeader
+                    label="Contract Ext No / STO / Supplier"
+                    sortable
+                    activeSort={sortKey === 'contract_block'}
+                    sortDir={sortDir}
+                    onSortClick={() => onSortHeaderClick('contract_block')}
+                  />
                 </th>
               ) : null}
               {orderedMetaCols.map((id) => {
-                const label =
-                  id === 'owner' ? 'Owner'
-                    : id === 'due_start' ? 'Due Start'
-                      : id === 'due_end' ? 'Due End'
-                        : id === 'source_type' ? 'Source Type'
-                          : id === 'lt_spot' ? 'LT/SPOT'
-                            : id === 'product' ? 'Product'
-                              : id === 'group_name' ? 'Group Name'
-                                : id === 'supplier' ? 'Supplier'
-                                  : id === 'outstanding_quantity' ? 'Outstanding Qty (MT)'
-                                    : id === 'qty_sent' ? 'Qty Sent (MT)'
-                                      : id === 'qty_sent_planning' ? 'Qty Sent planning (MT)'
-                                        : id === 'qty_delivered' ? 'Delivery Qty (MT)'
-                                          : 'Received Qty (MT)'
-                const alignRight = new Set(['outstanding_quantity', 'qty_sent', 'qty_sent_planning', 'qty_delivered', 'qty_received']).has(id)
+                const label = CALENDAR_META_COL_LABELS[id] ?? id
+                const alignRight = CALENDAR_NUMERIC_SORT_COLS.has(id)
                 return (
                   <th
                     key={id}
@@ -521,19 +651,38 @@ function CalendarDeliverablesTable({
                     }}
                     title="Drag to reorder"
                   >
-                    {label}
+                    <div className={alignRight ? 'flex justify-end' : ''}>
+                      <ContractPerfTableSortHeader
+                        label={label}
+                        sortable
+                        activeSort={sortKey === id}
+                        sortDir={sortDir}
+                        onSortClick={() => onSortHeaderClick(id)}
+                      />
+                    </div>
                   </th>
                 )
               })}
-              {days.map((d) => (
-                <th key={d} className="px-2 py-2 text-right font-semibold text-gray-700 border-b border-gray-200 tabular-nums">
-                  {d}
-                </th>
-              ))}
+              {days.map((d) => {
+                const date = dayIso(d)
+                return (
+                  <th key={d} className="px-2 py-2 text-right font-semibold text-gray-700 border-b border-gray-200 tabular-nums">
+                    <div className="flex justify-end">
+                      <ContractPerfTableSortHeader
+                        label={d}
+                        sortable
+                        activeSort={sortKey === `day:${date}`}
+                        sortDir={sortDir}
+                        onSortClick={() => onSortHeaderClick(`day:${date}`)}
+                      />
+                    </div>
+                  </th>
+                )
+              })}
             </tr>
           </thead>
           <tbody className="bg-white">
-            {rows.map((r) => {
+            {sortedRows.map((r) => {
               const opLabel = formatSapDisplayValue(r.operation_id)
               const contractLabel = formatSapDisplayValue(r.contract_ext_no || r.contract_number)
               const stoLabel = formatSapDisplayValue(r.sto_number)
@@ -1491,6 +1640,9 @@ function TruckingPageContent() {
   }
 
   const handleOpenEditTruckingModal = (operation: TruckingOperation) => {
+    if (isTruckingPlanningEditLocked(operation.status)) {
+      return
+    }
     const contractId = (operation.contract_number || operation.contract_ext_no || '').trim()
     const poNumber = operation.po_number?.trim()
     if (!contractId && !poNumber) {
@@ -3348,6 +3500,7 @@ function TruckingPageContent() {
                                         </div>
                                         <TruckTableEditTruckingButton
                                           onEdit={() => handleOpenEditTruckingModal(operation)}
+                                          disabled={isTruckingPlanningEditLocked(operation.status)}
                                         />
                                         <Button
                                           variant="outline"
@@ -3471,6 +3624,7 @@ function TruckingPageContent() {
                                 </div>
                                 <TruckTableEditTruckingButton
                                   onEdit={() => handleOpenEditTruckingModal(operation)}
+                                  disabled={isTruckingPlanningEditLocked(operation.status)}
                                 />
                                 <Button
                                   variant="outline"
