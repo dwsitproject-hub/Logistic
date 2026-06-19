@@ -9,22 +9,23 @@ import {
 describe('truckingList.service', () => {
   it('buildTruckingListSummaryFromRows mirrors SQL status partition counts', () => {
     const rows: TruckingListRow[] = [
-      { status: 'PLANNED', trucking_start_date: null, trucking_completion_date: null },
+      { status: 'PLANNED', status_db: 'PLANNED', trucking_start_date: null, trucking_completion_date: null },
       {
-        status: 'PLANNED',
+        status: 'COMPLETED',
+        status_db: 'PLANNED',
         trucking_start_date: '2026-06-01',
         trucking_completion_date: '2026-06-30',
       },
-      { status: 'IN_TRANSIT', trucking_start_date: '2025-01-01', trucking_completion_date: null },
-      { status: 'LOADING', trucking_start_date: '2025-01-02', trucking_completion_date: null },
-      { status: 'COMPLETED', trucking_start_date: '2025-01-01', trucking_completion_date: '2025-01-10' },
-      { status: 'CANCELLED', trucking_start_date: null, trucking_completion_date: null },
+      { status: 'IN_PROGRESS', status_db: 'IN_TRANSIT', trucking_start_date: '2025-01-01', trucking_completion_date: null },
+      { status: 'PLANNED', status_db: 'LOADING', trucking_start_date: null, trucking_completion_date: null },
+      { status: 'COMPLETED', status_db: 'COMPLETED', trucking_start_date: '2025-01-01', trucking_completion_date: '2025-01-10' },
+      { status: 'CANCELLED', status_db: 'CANCELLED', trucking_start_date: null, trucking_completion_date: null },
     ];
 
     const summary = buildTruckingListSummaryFromRows(rows);
     expect(summary.total).toBe(6);
-    expect(summary.status.planned).toBe(1);
-    expect(summary.status.inProgress).toBe(2);
+    expect(summary.status.planned).toBe(2);
+    expect(summary.status.inProgress).toBe(1);
     expect(summary.status.loading).toBe(1);
     expect(summary.status.inTransit).toBe(1);
     expect(summary.status.completed).toBe(2);

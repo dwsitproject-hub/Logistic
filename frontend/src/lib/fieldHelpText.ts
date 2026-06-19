@@ -77,6 +77,43 @@ export const FIELD_HELP = {
   vesselOaBudget: `Vessel OA Budget is the planned operational allowance (budget) for the vessel/shipment leg.`,
   vesselOaActual: `Vessel OA Actual is the realized operational allowance (actual cost) for the vessel/shipment leg.`,
 
+  /** Shipments page — ETA Loading / Discharge status cards (grouped by STO). */
+  shipmentEtaLoadingScope: `Counts grouped STOs in loading phase only (Unplanned, Planned, In Progress, Loading). Completed and Cancelled are excluded. One count per STO group.`,
+  shipmentEtaDischargeScope: `Counts grouped STOs in discharge phase only (In Transit, Arrived, Unloading). Completed and Cancelled are excluded. One count per STO group.`,
+  shipmentEtaDayDiff: `Day diff = ETA calendar date − today (midnight to midnight). When several ETA milestones exist, bucket priority is: Delay → D → D-2 → >7D (gaps of 3–7 days are not shown on any card).`,
+
+  shipmentEtaLoadingMoreThan7D: `ETA Loading > 7D — no Delay/D/D-2 milestone; at least one loading ETA has day diff > 7.
+
+Loading ETAs: Arrival at Loading Port, Berthed at Loading Port, Start Loading, Completed Loading, Sailed from Loading Port.`,
+  shipmentEtaLoadingDMinus2: `ETA Loading D-2 — no Delay or D milestone; at least one loading ETA has day diff of 1 or 2 (tomorrow or the day after).
+
+Loading ETAs: Arrival at Loading Port, Berthed at Loading Port, Start Loading, Completed Loading, Sailed from Loading Port.`,
+  shipmentEtaLoadingD: `ETA Loading D — no Delay milestone; at least one loading ETA is today (day diff = 0).
+
+Loading ETAs: Arrival at Loading Port, Berthed at Loading Port, Start Loading, Completed Loading, Sailed from Loading Port.`,
+  shipmentEtaLoadingDelay: `ETA Loading Delay — at least one loading ETA date is before today (day diff < 0).
+
+Loading ETAs: Arrival at Loading Port, Berthed at Loading Port, Start Loading, Completed Loading, Sailed from Loading Port.`,
+  shipmentEtaLoadingNoEta: `No ETA (Loading) — all loading ETA milestones are empty for this STO group.
+
+Loading ETAs checked: Arrival at Loading Port, Berthed at Loading Port, Start Loading, Completed Loading, Sailed from Loading Port.`,
+
+  shipmentEtaDischargeMoreThan7D: `ETA Discharge > 7D — no Delay/D/D-2 milestone; at least one discharge ETA has day diff > 7.
+
+Discharge ETAs: Arrival at Discharge Port, Berthed at Discharge Port, Start Discharging, Complete Discharge.`,
+  shipmentEtaDischargeDMinus2: `ETA Discharge D-2 — no Delay or D milestone; at least one discharge ETA has day diff of 1 or 2 (tomorrow or the day after).
+
+Discharge ETAs: Arrival at Discharge Port, Berthed at Discharge Port, Start Discharging, Complete Discharge.`,
+  shipmentEtaDischargeD: `ETA Discharge D — no Delay milestone; at least one discharge ETA is today (day diff = 0).
+
+Discharge ETAs: Arrival at Discharge Port, Berthed at Discharge Port, Start Discharging, Complete Discharge.`,
+  shipmentEtaDischargeDelay: `ETA Discharge Delay — at least one discharge ETA date is before today (day diff < 0).
+
+Discharge ETAs: Arrival at Discharge Port, Berthed at Discharge Port, Start Discharging, Complete Discharge.`,
+  shipmentEtaDischargeNoEta: `No ETA (Discharge) — all discharge ETA milestones are empty for this STO group.
+
+Discharge ETAs checked: Arrival at Discharge Port, Berthed at Discharge Port, Start Discharging, Complete Discharge.`,
+
   // Finance
   financeTotalAmount: `Total Amount is the sum of payment_amount across the current finance dataset (subject to any page filters).`,
   financePendingAmount: `Pending Amount includes payments that are not marked paid yet (awaiting confirmation).`,

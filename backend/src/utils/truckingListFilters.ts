@@ -3,6 +3,7 @@
  */
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
+import { sqlTruckingEffectiveStatus } from './truckingEffectiveStatus'
 
 export { parseColumnFiltersQuery }
 
@@ -32,7 +33,7 @@ const TRUCK_COL: Record<string, string> = {
   contract_number: 'c.contract_id',
   po_number: 'c.po_number',
   sto_number: 'c.sto_number',
-  status: 't.status',
+  status: sqlTruckingEffectiveStatus('c'),
   location: 't.location',
   loading_location: 't.loading_location',
   unloading_location: 't.unloading_location',

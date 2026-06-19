@@ -1725,7 +1725,7 @@ export const getLatePerformanceData = async (req: AuthRequest, res: Response) =>
 /** Get counts of SEA/LAND/MIX contracts missing required logistics (for dashboard cards) */
 export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
   try {
-    const { search, b2bFlag, dateFrom, dateTo, product, transportMode, plant, columnFilters, status } =
+    const { search, b2bFlag, dateFrom, dateTo, product, transportMode, plant, columnFilters } =
       req.query as Record<string, string | string[]>;
 
     const params: any[] = [];
@@ -1747,25 +1747,11 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
       rowConditions.push(`c.contract_date <= $${paramIndex++}`);
     }
 
-    const statusNorm = typeof status === 'string' ? status.trim() : '';
-    if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {
-      if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
-        aggConditions.push(`(
-          (base.latest_spd_data->'contract'->>'status' = 'Open' OR UPPER(base.latest_spd_data->'contract'->>'status') = 'ACTIVE')
-          OR (base.latest_spd_data IS NULL AND UPPER(base.raw_status) IN ('OPEN', 'ACTIVE'))
-        )`);
-      } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
-        aggConditions.push(`(
-          (base.latest_spd_data->'contract'->>'status' = 'Close' OR UPPER(base.latest_spd_data->'contract'->>'status') IN ('CLOSE', 'COMPLETED', 'CLOSED'))
-          OR (base.latest_spd_data IS NULL AND UPPER(base.raw_status) IN ('CLOSE', 'COMPLETED', 'CLOSED'))
-        )`);
-      } else {
-        params.push(statusNorm);
-        aggConditions.push(
-          `(base.status = $${paramIndex} OR base.latest_spd_data->'contract'->>'status' = $${paramIndex++})`,
-        );
-      }
-    }
+    // Section 1 alert cards always count Open contracts only (toolbar status does not apply).
+    aggConditions.push(`(
+      (base.latest_spd_data->'contract'->>'status' = 'Open' OR UPPER(base.latest_spd_data->'contract'->>'status') = 'ACTIVE')
+      OR (base.latest_spd_data IS NULL AND UPPER(base.raw_status) IN ('OPEN', 'ACTIVE'))
+    )`);
 
     // B2B flag — use JSONB contract_type (same as getContracts)
     if (b2bFlag && b2bFlag !== 'ALL') {

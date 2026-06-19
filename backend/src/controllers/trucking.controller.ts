@@ -27,6 +27,7 @@ import {
   invalidateTruckingListCache,
   resolveTruckingListForRequest,
 } from '../services/truckingList.service';
+import { SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP } from '../utils/truckingEffectiveStatus';
 import {
   findActiveTruckingOpsByContractId,
   formatDuplicateTruckingMessage,
@@ -34,6 +35,24 @@ import {
 } from '../utils/truckingOperationUniqueness';
 
 let truckingOpIdBackfillChecked = false;
+let truckingStatusReconcileLastRun = 0;
+const TRUCKING_STATUS_RECONCILE_INTERVAL_MS = 10 * 60 * 1000;
+
+async function reconcileTruckingStatusesFromSapIfDue(): Promise<void> {
+  const now = Date.now();
+  if (now - truckingStatusReconcileLastRun < TRUCKING_STATUS_RECONCILE_INTERVAL_MS) return;
+  truckingStatusReconcileLastRun = now;
+  try {
+    const result = await query(SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP);
+    const count = result.rowCount ?? 0;
+    if (count > 0) {
+      invalidateTruckingListCache();
+      logger.info(`Reconciled trucking status from SAP for ${count} operation(s)`);
+    }
+  } catch (err) {
+    logger.warn('Trucking status reconcile from SAP failed (list continues)', err);
+  }
+}
 
 async function ensureMissingTruckingOperationIdsIfNeeded(): Promise<void> {
   if (truckingOpIdBackfillChecked) return;
@@ -173,6 +192,7 @@ async function ensureMissingTruckingOperationIds(): Promise<void> {
 export const getTruckingOperations = async (req: AuthRequest, res: Response) => {
   try {
     await ensureMissingTruckingOperationIdsIfNeeded();
+    void reconcileTruckingStatusesFromSapIfDue();
     const data = await resolveTruckingListForRequest(req);
     return res.json({
       success: true,

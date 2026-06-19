@@ -119,6 +119,14 @@ const EMPTY_ETA_BUCKET_COUNTS = {
   noEta: 0,
 } as const
 
+function etaLoadingCardHelp(specific: string): string {
+  return `${FIELD_HELP.shipmentEtaLoadingScope}\n\n${FIELD_HELP.shipmentEtaDayDiff}\n\n${specific}`
+}
+
+function etaDischargeCardHelp(specific: string): string {
+  return `${FIELD_HELP.shipmentEtaDischargeScope}\n\n${FIELD_HELP.shipmentEtaDayDiff}\n\n${specific}`
+}
+
 const SHIPMENT_STATUS_LABELS: Record<string, string> = {
   PLANNED: 'Planned',
   IN_PROGRESS: 'In Progress',
@@ -4061,50 +4069,71 @@ function ShipmentsPageContent() {
                   label: 'ETA Loading > 7D',
                   count: section2EtaLoadingCounts.moreThan7D,
                   color: 'bg-sky-50',
+                  help: etaLoadingCardHelp(FIELD_HELP.shipmentEtaLoadingMoreThan7D),
                 },
                 {
                   key: 'D_MINUS_2' as const,
                   label: 'ETA Loading D-2',
                   count: section2EtaLoadingCounts.dMinus2,
                   color: 'bg-amber-50',
+                  help: etaLoadingCardHelp(FIELD_HELP.shipmentEtaLoadingDMinus2),
                 },
                 {
                   key: 'D' as const,
                   label: 'ETA Loading D',
                   count: section2EtaLoadingCounts.d,
                   color: 'bg-emerald-50',
+                  help: etaLoadingCardHelp(FIELD_HELP.shipmentEtaLoadingD),
                 },
                 {
                   key: 'DELAY' as const,
                   label: 'ETA Loading Delay',
                   count: section2EtaLoadingCounts.delay,
                   color: 'bg-rose-50',
+                  help: etaLoadingCardHelp(FIELD_HELP.shipmentEtaLoadingDelay),
                 },
                 {
                   key: 'NO_ETA' as const,
                   label: 'No ETA',
                   count: section2EtaLoadingCounts.noEta,
                   color: 'bg-gray-50',
+                  help: etaLoadingCardHelp(FIELD_HELP.shipmentEtaLoadingNoEta),
                 },
               ].map((bucket) => {
                 const isActive = etaLoadingFilter === bucket.key
                 return (
-                  <button
+                  <div
                     key={bucket.key}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => handleEtaLoadingCardClick(bucket.key)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        handleEtaLoadingCardClick(bucket.key)
+                      }
+                    }}
                     className={`flex flex-col items-start justify-between rounded-xl border px-3 py-3 text-left shadow-sm transition-colors cursor-pointer hover:bg-gray-50 hover:shadow-md ${bucket.color} ${
                       isActive ? 'border-blue-500 bg-blue-50/60 ring-2 ring-blue-100' : 'border-gray-200'
                     }`}
                   >
-                    <div className="text-xs text-gray-600 mb-1">{bucket.label}</div>
+                    <div className="flex w-full items-start justify-between gap-1 mb-1">
+                      <div className="text-xs text-gray-600">{bucket.label}</div>
+                      <span
+                        className="inline-flex shrink-0"
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        <FieldHelp text={bucket.help} side="top" />
+                      </span>
+                    </div>
                     <div className="text-2xl font-semibold text-gray-900">{bucket.count}</div>
                     {isActive && (
                       <div className="mt-1 text-[11px] text-blue-700">
                         Click again to clear filter
                       </div>
                     )}
-                  </button>
+                  </div>
                 )
               })}
             </div>
@@ -4132,50 +4161,71 @@ function ShipmentsPageContent() {
                   label: 'ETA Discharge > 7D',
                   count: section2EtaDischargeCounts.moreThan7D,
                   color: 'bg-sky-50',
+                  help: etaDischargeCardHelp(FIELD_HELP.shipmentEtaDischargeMoreThan7D),
                 },
                 {
                   key: 'D_MINUS_2' as const,
                   label: 'ETA Discharge D-2',
                   count: section2EtaDischargeCounts.dMinus2,
                   color: 'bg-amber-50',
+                  help: etaDischargeCardHelp(FIELD_HELP.shipmentEtaDischargeDMinus2),
                 },
                 {
                   key: 'D' as const,
                   label: 'ETA Discharge D',
                   count: section2EtaDischargeCounts.d,
                   color: 'bg-emerald-50',
+                  help: etaDischargeCardHelp(FIELD_HELP.shipmentEtaDischargeD),
                 },
                 {
                   key: 'DELAY' as const,
                   label: 'ETA Discharge Delay',
                   count: section2EtaDischargeCounts.delay,
                   color: 'bg-rose-50',
+                  help: etaDischargeCardHelp(FIELD_HELP.shipmentEtaDischargeDelay),
                 },
                 {
                   key: 'NO_ETA' as const,
                   label: 'No ETA',
                   count: section2EtaDischargeCounts.noEta,
                   color: 'bg-gray-50',
+                  help: etaDischargeCardHelp(FIELD_HELP.shipmentEtaDischargeNoEta),
                 },
               ].map((bucket) => {
                 const isActive = etaDischargeFilter === bucket.key
                 return (
-                  <button
+                  <div
                     key={bucket.key}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => handleEtaDischargeCardClick(bucket.key)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        handleEtaDischargeCardClick(bucket.key)
+                      }
+                    }}
                     className={`flex flex-col items-start justify-between rounded-xl border px-3 py-3 text-left shadow-sm transition-colors cursor-pointer hover:bg-gray-50 hover:shadow-md ${bucket.color} ${
                       isActive ? 'border-blue-500 bg-blue-50/60 ring-2 ring-blue-100' : 'border-gray-200'
                     }`}
                   >
-                    <div className="text-xs text-gray-600 mb-1">{bucket.label}</div>
+                    <div className="flex w-full items-start justify-between gap-1 mb-1">
+                      <div className="text-xs text-gray-600">{bucket.label}</div>
+                      <span
+                        className="inline-flex shrink-0"
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        <FieldHelp text={bucket.help} side="top" />
+                      </span>
+                    </div>
                     <div className="text-2xl font-semibold text-gray-900">{bucket.count}</div>
                     {isActive && (
                       <div className="mt-1 text-[11px] text-blue-700">
                         Click again to clear filter
                       </div>
                     )}
-                  </button>
+                  </div>
                 )
               })}
             </div>

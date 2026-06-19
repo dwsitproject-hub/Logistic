@@ -121,6 +121,15 @@ function formatTruckingQtyPlain(n: number): string {
   return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: true })
 }
 
+function truckingDbStatus(operation: Pick<TruckingOperation, 'status' | 'status_db'>): string {
+  return String(operation.status_db ?? operation.status ?? '').trim().toUpperCase()
+}
+
+function truckingStatusLabel(status: string | undefined | null): string {
+  const key = String(status ?? '').trim().toUpperCase()
+  return TRUCKING_STATUS_LABELS[key] ?? key
+}
+
 function isTruckingPlanningEditLocked(status: string | undefined | null): boolean {
   return String(status ?? '').trim().toUpperCase() === 'CANCELLED'
 }
@@ -195,6 +204,8 @@ interface TruckingOperation {
   oa_actual: number
   estimated_km?: number
   status: string
+  /** Raw DB status — use for edit lock (CANCELLED) when effective status differs. */
+  status_db?: string
   // ETA dates removed from UI (kept in DB/backend)
   created_at: string
   supplier: string
@@ -1640,7 +1651,7 @@ function TruckingPageContent() {
   }
 
   const handleOpenEditTruckingModal = (operation: TruckingOperation) => {
-    if (isTruckingPlanningEditLocked(operation.status)) {
+    if (isTruckingPlanningEditLocked(truckingDbStatus(operation))) {
       return
     }
     const contractId = (operation.contract_number || operation.contract_ext_no || '').trim()
@@ -2043,7 +2054,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.status || '',
       render: (o) => (
         <Badge className={getStatusColor(o.status)}>
-          {o.status}
+          {truckingStatusLabel(o.status)}
         </Badge>
       )
     },
@@ -3437,7 +3448,7 @@ function TruckingPageContent() {
                                   <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}>
                                     <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
                                       {col.id === 'status' && isEditing ? (
-                                        operation.status === 'CANCELLED' ? (
+                                        truckingDbStatus(operation) === 'CANCELLED' ? (
                                           <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
                                         ) : (
                                           <select
@@ -3500,7 +3511,7 @@ function TruckingPageContent() {
                                         </div>
                                         <TruckTableEditTruckingButton
                                           onEdit={() => handleOpenEditTruckingModal(operation)}
-                                          disabled={isTruckingPlanningEditLocked(operation.status)}
+                                          disabled={isTruckingPlanningEditLocked(truckingDbStatus(operation))}
                                         />
                                         <Button
                                           variant="outline"
@@ -3575,7 +3586,7 @@ function TruckingPageContent() {
                           <div className="flex items-center gap-3">
                             <h3 className="font-semibold text-lg">{operation.operation_id}</h3>
                             {isEditing ? (
-                              operation.status === 'CANCELLED' ? (
+                              truckingDbStatus(operation) === 'CANCELLED' ? (
                                 <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
                               ) : (
                                 <select
@@ -3589,7 +3600,7 @@ function TruckingPageContent() {
                               )
                             ) : (
                               <Badge className={getStatusColor(operation.status)}>
-                                {operation.status}
+                                {truckingStatusLabel(operation.status)}
                               </Badge>
                             )}
                           </div>
@@ -3624,7 +3635,7 @@ function TruckingPageContent() {
                                 </div>
                                 <TruckTableEditTruckingButton
                                   onEdit={() => handleOpenEditTruckingModal(operation)}
-                                  disabled={isTruckingPlanningEditLocked(operation.status)}
+                                  disabled={isTruckingPlanningEditLocked(truckingDbStatus(operation))}
                                 />
                                 <Button
                                   variant="outline"

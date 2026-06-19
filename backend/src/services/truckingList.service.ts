@@ -11,6 +11,7 @@ import {
   sqlEffectiveTruckingCompletionDate,
   sqlEffectiveTruckingStartDate,
 } from '../utils/truckingSapDates';
+import { deriveTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
 import { truckingPageListScopeWhereSql } from '../utils/truckingStoTypeSql';
 import {
   buildTruckingListFromClause,
@@ -60,7 +61,7 @@ export interface TruckingListResponseData {
 const PAGE_CACHE = new Map<string, { rows: TruckingListRow[]; total: number; expiresAt: number }>();
 const COUNT_CACHE = new Map<string, { total: number; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v4';
+const CACHE_VERSION = 'trucking-list-v5';
 const MAX_CACHE_ENTRIES = 80;
 
 const SORT_FIELD_BY_KEY: Record<string, string> = {
@@ -221,11 +222,6 @@ export function sortTruckingListRows(
   });
 }
 
-function hasDateValue(v: unknown): boolean {
-  return v != null && String(v).trim() !== '';
-}
-
-/** Mirrors SQL COUNT(*) FILTER (...) aggregates on the list subquery. */
 export function buildTruckingListSummaryFromRows(rows: TruckingListRow[]) {
   let planned = 0;
   let inProgress = 0;
@@ -236,29 +232,31 @@ export function buildTruckingListSummaryFromRows(rows: TruckingListRow[]) {
   let cancelled = 0;
 
   for (const row of rows) {
-    const status = String(row.status ?? '');
-    const isCancelled = status === 'CANCELLED';
-    const truckingStart = row.trucking_start_date;
-    const truckingCompletion = row.trucking_completion_date;
+    const effective =
+      row.status != null && String(row.status).trim() !== ''
+        ? String(row.status).trim().toUpperCase()
+        : deriveTruckingEffectiveStatus(
+            row.status_db,
+            row.trucking_start_date,
+            row.trucking_completion_date,
+          );
 
-    if (isCancelled) {
+    if (effective === 'CANCELLED') {
       cancelled += 1;
       continue;
     }
-
-    // Match list SQL filters (sqlEffectiveTruckingStartDate / sqlEffectiveTruckingCompletionDate):
-    // PLANNED = no start & no completion; IN_PROGRESS = start only; COMPLETED = completion set.
-    if (hasDateValue(truckingCompletion)) {
+    if (effective === 'COMPLETED') {
       completed += 1;
-    } else if (hasDateValue(truckingStart)) {
+    } else if (effective === 'IN_PROGRESS') {
       inProgress += 1;
     } else {
       planned += 1;
     }
 
-    if (status === 'LOADING') loading += 1;
-    if (status === 'IN_TRANSIT') inTransit += 1;
-    if (status === 'UNLOADING') unloading += 1;
+    const dbStatus = String(row.status_db ?? row.status ?? '').toUpperCase();
+    if (dbStatus === 'LOADING') loading += 1;
+    if (dbStatus === 'IN_TRANSIT') inTransit += 1;
+    if (dbStatus === 'UNLOADING') unloading += 1;
   }
 
   return {
@@ -470,6 +468,7 @@ export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text
       WITH filtered AS (
         SELECT
           status,
+          status_db,
           trucking_start_date,
           trucking_completion_date
         FROM (
@@ -479,23 +478,12 @@ export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text
       SELECT
         COUNT(*)::bigint AS total_count,
         COUNT(*) FILTER (WHERE status = 'CANCELLED')::bigint AS cancelled_count,
-        COUNT(*) FILTER (
-          WHERE COALESCE(status, '') <> 'CANCELLED'
-            AND trucking_completion_date IS NOT NULL
-        )::bigint AS completed_count,
-        COUNT(*) FILTER (
-          WHERE COALESCE(status, '') <> 'CANCELLED'
-            AND trucking_completion_date IS NULL
-            AND trucking_start_date IS NOT NULL
-        )::bigint AS in_progress_count,
-        COUNT(*) FILTER (
-          WHERE COALESCE(status, '') <> 'CANCELLED'
-            AND trucking_completion_date IS NULL
-            AND trucking_start_date IS NULL
-        )::bigint AS planned_count,
-        COUNT(*) FILTER (WHERE status = 'LOADING')::bigint AS loading_count,
-        COUNT(*) FILTER (WHERE status = 'IN_TRANSIT')::bigint AS in_transit_count,
-        COUNT(*) FILTER (WHERE status = 'UNLOADING')::bigint AS unloading_count
+        COUNT(*) FILTER (WHERE status = 'COMPLETED')::bigint AS completed_count,
+        COUNT(*) FILTER (WHERE status = 'IN_PROGRESS')::bigint AS in_progress_count,
+        COUNT(*) FILTER (WHERE status = 'PLANNED')::bigint AS planned_count,
+        COUNT(*) FILTER (WHERE status_db = 'LOADING')::bigint AS loading_count,
+        COUNT(*) FILTER (WHERE status_db = 'IN_TRANSIT')::bigint AS in_transit_count,
+        COUNT(*) FILTER (WHERE status_db = 'UNLOADING')::bigint AS unloading_count
       FROM filtered`;
   return { text, params: [...built.innerParams, ...built.outerParams] };
 }

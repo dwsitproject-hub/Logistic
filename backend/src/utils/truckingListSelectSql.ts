@@ -2,6 +2,7 @@ import {
   sqlEffectiveTruckingCompletionDate,
   sqlEffectiveTruckingStartDate,
 } from './truckingSapDates';
+import { sqlTruckingEffectiveStatus } from './truckingEffectiveStatus';
 import {
   sqlTruckingQuantityDeliveredCoalesce,
   sqlTruckingQuantityReceiveCoalesce,
@@ -136,7 +137,8 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.gain_loss_amount,
         t.oa_budget,
         t.oa_actual,
-        t.status,
+        t.status AS status_db,
+        ${sqlTruckingEffectiveStatus('c')} AS status,
         t.created_at,
         t.updated_at,
         ${TRUCKING_LIST_CONTRACT_NUMBER_CASE} AS contract_number,
@@ -179,7 +181,8 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.gain_loss_amount,
         t.oa_budget,
         t.oa_actual,
-        t.status,
+        t.status AS status_db,
+        ${sqlTruckingEffectiveStatus('c')} AS status,
         t.created_at,
         t.updated_at,
         ${TRUCKING_LIST_CONTRACT_NUMBER_CASE} AS contract_number,
