@@ -8,10 +8,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
+import { AI_KLIP_AGENT_ACTIVITY_PAGE_PERMISSION } from '@/lib/aiKlipAgentActivity'
 import { formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { ScrollText } from 'lucide-react'
-
-export const AI_KLIP_AGENT_ACTIVITY_PAGE_PERMISSION = 'page.ai_klip_agent_activity'
 
 type ActivityLogRow = {
   id: string
@@ -150,11 +149,11 @@ function AiKlipAgentActivityPageContent() {
           <div className="flex flex-col gap-4 lg:flex-row lg:flex-wrap lg:items-end">
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-gray-700">Date from</label>
-              <DateInputDdMmYyyy value={dateFrom} onChange={setDateFrom} className="w-[160px]" />
+              <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={setDateFrom} className="w-[160px]" />
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-gray-700">Date to</label>
-              <DateInputDdMmYyyy value={dateTo} onChange={setDateTo} className="w-[160px]" />
+              <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={setDateTo} className="w-[160px]" />
             </div>
             <div className="space-y-1.5 min-w-[240px]">
               <label className="text-sm font-medium text-gray-700">AI Agent</label>
