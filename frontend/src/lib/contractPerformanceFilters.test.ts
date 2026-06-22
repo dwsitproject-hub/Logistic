@@ -31,12 +31,14 @@ import {
   normalizePerfGroupKey,
   normalizePerfProductGroupKey,
   buildContractPerfToolbarGlobal,
+  buildContractPerfTableListParams,
   buildLatePerformanceCardSummaryApiParams,
   buildLatePerformanceTreeApiParams,
   buildLatePerformanceApiParams,
   stableContractPerfApiParamsKey,
   resolveContractPerformanceScope,
   resolveContractPerformanceCardSummaryScope,
+  resolveEffectiveLateOnTimeFilter,
   resolveSection3Scope,
   sumHotspotQtyKg,
   type ContractPerfDrilldownFilters,
@@ -398,6 +400,46 @@ describe('AC2 — Global Filter Propagation', () => {
     const p2 = buildLatePerformanceCardSummaryApiParams(toolbar)
     expect(stableContractPerfApiParamsKey(p1)).toBe(stableContractPerfApiParamsKey(p2))
     expect(p1.get('status')).toBeNull()
+  })
+
+  it('resolveEffectiveLateOnTimeFilter follows perfDashMode when filter is ALL', () => {
+    expect(resolveEffectiveLateOnTimeFilter('ALL', 'late')).toBe('LATE')
+    expect(resolveEffectiveLateOnTimeFilter('ALL', 'ontrack')).toBe('ON_TIME')
+    expect(resolveEffectiveLateOnTimeFilter('LATE', 'ontrack')).toBe('LATE')
+  })
+
+  it('buildContractPerfTableListParams sends Section 1 status and Section 2 late branch', () => {
+    const global: ContractPerformanceGlobalFilters = {
+      ...BASE_GLOBAL,
+      summaryCardStatus: 'Open',
+      productTabQuery: 'CPO',
+      sourceFilter: '3rd Party',
+      dateFrom: '2026-01-01',
+      dateTo: '2026-06-22',
+    }
+    const drilldown: ContractPerfDrilldownFilters = {
+      product: 'CPO',
+      plant: 'PLANT-A',
+      incoterm: 'CIF',
+      supplier: 'SUPP-1',
+    }
+    const { mode, scope } = resolveSection3Scope(global, drilldown)
+    const params = buildContractPerfTableListParams({
+      scope,
+      section3Mode: mode,
+      columnFilters: {},
+      lateOnTimeFilter: 'ALL',
+      perfDashMode: 'late',
+    })
+    expect(params.get('status')).toBe('Open')
+    expect(params.get('lateOnTimeFilter')).toBe('LATE')
+    expect(params.get('excludeUnscheduled')).toBe('true')
+    expect(params.get('sourceType')).toBe('3rd Party')
+    expect(params.get('product')).toBe('CPO')
+    expect(params.get('supplier')).toBe('SUPP-1')
+    expect(params.getAll('plant')).toEqual(['PLANT-A'])
+    const cf = JSON.parse(params.get('columnFilters') || '{}')
+    expect(cf.incoterm).toEqual({ type: 'multi', values: ['CIF'], includeBlank: false })
   })
 })
 

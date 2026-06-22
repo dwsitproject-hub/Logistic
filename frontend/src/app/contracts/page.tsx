@@ -66,6 +66,7 @@ import {
   buildContractPerfTableFetchScope,
   buildContractPerfToolbarGlobal,
   buildLatePerformanceCardSummaryApiParams,
+  buildContractPerfTableListParams,
   contractPerfDrilldownSelectionsEqual,
   contractPerfDrilldownToTableColumnFilters,
   contractPerfProductQueryValue,
@@ -1290,6 +1291,7 @@ function ContractsPageContent() {
   )
 
   const contractPerfTableFetchScope = contractPerfPipeline.tableFetchScope
+  const contractPerfSection3Scope = contractPerfPipeline.section3Scope
   const contractPerfTableColumnFilters = contractPerfTableFetchScope.columnFilters
   const contractPerfTablePlants = contractPerfTableFetchScope.plants
   const contractPerfTableProduct = contractPerfTableFetchScope.product
@@ -1795,10 +1797,25 @@ function ContractsPageContent() {
       if (contracts.length === 0) setLoading(true)
       setListFetching(true)
       const params = new URLSearchParams()
-      params.append('page', page.toString())
-      params.append('limit', contractsPerPage.toString())
+      if (isContractPerformance) {
+        const perfParams = buildContractPerfTableListParams({
+          scope: contractPerfSection3Scope,
+          section3Mode: section3FilterMode,
+          columnFilters,
+          lateOnTimeFilter,
+          perfDashMode,
+        })
+        perfParams.forEach((value, key) => {
+          params.append(key, value)
+        })
+        params.set('page', page.toString())
+        params.set('limit', contractsPerPage.toString())
+      } else {
+        params.append('page', page.toString())
+        params.append('limit', contractsPerPage.toString())
+      }
       const searchTrim = (searchOverride ?? searchTerm).trim()
-      if (searchTrim.length >= 2) {
+      if (!isContractPerformance && searchTrim.length >= 2) {
         params.append('search', searchTrim)
       }
       const mergedColumnFilters: Record<string, any> = isContractPerformance
@@ -1807,9 +1824,11 @@ function ContractsPageContent() {
             selectedIncoterms,
             selectedProducts,
           })
-      const cfKeys = Object.keys(mergedColumnFilters)
-      if (cfKeys.length > 0) {
-        params.append('columnFilters', JSON.stringify(mergedColumnFilters))
+      if (!isContractPerformance) {
+        const cfKeys = Object.keys(mergedColumnFilters)
+        if (cfKeys.length > 0) {
+          params.append('columnFilters', JSON.stringify(mergedColumnFilters))
+        }
       }
 
       // Status: summary-card drilldown always Open; contracts list respects toolbar status only.
@@ -1828,15 +1847,11 @@ function ContractsPageContent() {
         if (selectedGroupPlants.length > 0) {
           selectedGroupPlants.forEach((p) => params.append('plant', p))
         }
-      } else {
-        if (perfTransportMode !== 'ALL') {
-          params.append('transportMode', perfTransportMode)
-        }
       }
-      if (dateFrom) {
+      if (!isContractPerformance && dateFrom) {
         params.append('dateFrom', dateFrom)
       }
-      if (dateTo) {
+      if (!isContractPerformance && dateTo) {
         params.append('dateTo', dateTo)
       }
 
@@ -1846,29 +1861,6 @@ function ContractsPageContent() {
       }
       if (activeUnassignedFilter) {
         params.append('unassigned', activeUnassignedFilter)
-      }
-      if (isContractPerformance && contractPerfTablePlants.length > 0) {
-        contractPerfTablePlants.forEach((p) => params.append('plant', p))
-      }
-      if (isContractPerformance) {
-        if (section3FilterMode === 'linked') {
-          params.append('excludeUnscheduled', 'true')
-          const linkedLateFilter =
-            lateOnTimeFilter !== 'ALL'
-              ? lateOnTimeFilter
-              : perfDashMode === 'ontrack'
-                ? 'ON_TIME'
-                : 'LATE'
-          params.append('lateOnTimeFilter', linkedLateFilter)
-        } else if (lateOnTimeFilter !== 'ALL') {
-          params.append('lateOnTimeFilter', lateOnTimeFilter)
-        }
-      }
-      if (isContractPerformance && contractPerfTableProduct) {
-        params.append('product', contractPerfTableProduct)
-      }
-      if (isContractPerformance && sourceFilter !== 'All') {
-        params.append('sourceType', sourceFilter)
       }
       const activeSortCol = sortKeyOverride || sortKey
       const activeSortDir = sortDirOverride || sortDir
@@ -2585,7 +2577,7 @@ function ContractsPageContent() {
   // Search + most column filters run on the server. Summary-card unassigned filter is server-side only (GET ?unassigned=).
   const filteredContracts = useMemo(() => {
     let rows = contracts.filter((contract) => passesColumnFilters(contract, clientOnlyColumnFilters))
-    if (isContractPerformance && section3FilterMode === 'linked') {
+    if (isContractPerformance) {
       const alignedIds = new Set(contractPerfPipeline.alignedTableContracts.map((c) => c.contract_id))
       rows = rows.filter((c) => alignedIds.has(c.contract_id))
     }
@@ -2594,7 +2586,6 @@ function ContractsPageContent() {
     contracts,
     clientOnlyColumnFilters,
     isContractPerformance,
-    section3FilterMode,
     contractPerfPipeline.alignedTableContracts,
   ])
 

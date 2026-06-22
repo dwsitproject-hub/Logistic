@@ -15,6 +15,7 @@ import {
   filterPerformanceHotspots,
   flattenLatePerfApiTreeToHotspots,
   resolveContractPerformanceScope,
+  resolveEffectiveLateOnTimeFilter,
   resolveSection3Scope,
   selectPerformanceTreeBranch,
   sumHotspotQtyKg,
@@ -191,10 +192,16 @@ export function useContractPerformanceFilters(
     ],
   )
 
-  const alignedTableContracts = useMemo(() => {
-    if (section3Mode !== 'linked') return tableContracts
-    return filterContractsForPerformanceTable(tableContracts, section3Scope, global.lateOnTimeFilter)
-  }, [tableContracts, section3Scope, global.lateOnTimeFilter, section3Mode])
+  const effectiveLateOnTimeFilter = useMemo(
+    () => resolveEffectiveLateOnTimeFilter(global.lateOnTimeFilter, global.perfDashMode),
+    [global.lateOnTimeFilter, global.perfDashMode],
+  )
+
+  const alignedTableContracts = useMemo(
+    () =>
+      filterContractsForPerformanceTable(tableContracts, section3Scope, effectiveLateOnTimeFilter),
+    [tableContracts, section3Scope, effectiveLateOnTimeFilter],
+  )
 
   const alignedTableTotal = useMemo(() => {
     // Linked mode: backend aligns schedulable + on-time/late with Section 2 tree.

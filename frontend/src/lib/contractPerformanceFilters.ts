@@ -605,6 +605,47 @@ export function buildContractPerfTableFetchScope(input: {
   }
 }
 
+/** Late/On Time branch for Section 3 — mirrors Section 2 active tab when filter is ALL. */
+export function resolveEffectiveLateOnTimeFilter(
+  lateOnTimeFilter: 'ALL' | 'LATE' | 'ON_TIME',
+  perfDashMode: 'late' | 'ontrack',
+): 'LATE' | 'ON_TIME' {
+  if (lateOnTimeFilter === 'LATE' || lateOnTimeFilter === 'ON_TIME') return lateOnTimeFilter
+  return perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE'
+}
+
+/**
+ * GET /contracts query for Contract Performance Section 3.
+ * Aligns with Section 1 globals + Section 2 drilldown (when linked) + active Late/On Time branch.
+ */
+export function buildContractPerfTableListParams(input: {
+  scope: ContractPerformanceScope
+  section3Mode: Section3FilterMode
+  columnFilters: Record<string, unknown>
+  lateOnTimeFilter: 'ALL' | 'LATE' | 'ON_TIME'
+  perfDashMode: 'late' | 'ontrack'
+}): URLSearchParams {
+  const params = new URLSearchParams()
+  appendContractPerformanceApiParams(params, input.scope, {
+    includeDrilldown: input.section3Mode === 'linked',
+  })
+
+  const { columnFilters } = buildContractPerfTableFetchScope({
+    columnFilters: input.columnFilters,
+    scope: input.scope,
+  })
+  if (Object.keys(columnFilters).length > 0) {
+    params.append('columnFilters', JSON.stringify(columnFilters))
+  }
+
+  params.append(
+    'lateOnTimeFilter',
+    resolveEffectiveLateOnTimeFilter(input.lateOnTimeFilter, input.perfDashMode),
+  )
+  params.append('excludeUnscheduled', 'true')
+  return params
+}
+
 export type ContractPerformanceApiParamOptions = {
   includeDrilldown: boolean
   /**
