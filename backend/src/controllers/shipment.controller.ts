@@ -3759,11 +3759,11 @@ export const getShipmentActivityLog = async (req: AuthRequest, res: Response) =>
        FROM audit_logs a
        LEFT JOIN users u ON a.user_id = u.id
        WHERE (
-         (a.entity_type = 'SHIPMENT' AND a.entity_id = $1)
+         (a.entity_type = 'SHIPMENT' AND a.entity_id = $1::uuid)
          OR (a.entity_type = 'LOADING_PORT' AND a.entity_id IN (
-           SELECT vlp.id FROM vessel_loading_ports vlp WHERE vlp.shipment_id = $1
+           SELECT vlp.id FROM vessel_loading_ports vlp WHERE vlp.shipment_id = $1::uuid
          ))
-         OR (a.entity_type = 'STO_QTY_ASSIGNED' AND a.entity_id::text = $1)
+         OR (a.entity_type = 'STO_QTY_ASSIGNED' AND a.entity_id = $1::uuid)
        )
        ORDER BY a.timestamp DESC
        LIMIT 200`,
