@@ -26,6 +26,10 @@ import {
   updateStoQtyAssigned,
   getShipmentActivityLog,
 } from '../controllers/shipment.controller';
+import {
+  suggestShipmentEta,
+  suggestShipmentVessel,
+} from '../controllers/shipmentAiPlanner.controller';
 
 const router = express.Router();
 
@@ -55,6 +59,8 @@ router.get('/contracts/:contractId/purchase-orders', getContractPurchaseOrders);
 router.get('/contracts/details', getContractDetailsForSto);
 router.put('/contracts/sto-qty', auditLog('UPDATE', 'STO_QTY_ASSIGNED'), updateStoQtyAssigned);
 router.get('/check-sto/:stoNumber', checkStoExists);
+router.post('/suggest-vessel', suggestShipmentVessel);
+router.post('/suggest-eta', suggestShipmentEta);
 router.post('/', auditLog('CREATE', 'SHIPMENT'), createShipment);
 
 // Bulk update shipments from template CSV

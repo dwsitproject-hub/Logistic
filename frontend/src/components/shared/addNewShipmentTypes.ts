@@ -90,9 +90,15 @@ export function mapPurchaseOrderToPoOption(row: Record<string, unknown>): Shipme
       delivery_start_date: row.delivery_start_date,
       delivery_end_date: row.delivery_end_date,
       supplier: row.supplier,
+      buyer: row.buyer,
       product: row.product,
+      incoterm: row.incoterm,
       transport_mode: row.transport_mode,
       plant_code: plantCode || null,
+      plant_site: row.plant_site != null ? String(row.plant_site).trim() || null : null,
+      contract_ext_no: row.contract_ext_no != null ? String(row.contract_ext_no).trim() || null : null,
+      port_of_loading: row.port_of_loading != null ? String(row.port_of_loading).trim() || null : null,
+      port_of_discharge: row.port_of_discharge != null ? String(row.port_of_discharge).trim() || null : null,
     },
   }
 }

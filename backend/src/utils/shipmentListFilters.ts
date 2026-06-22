@@ -401,14 +401,6 @@ export function appendShipmentStatusFilter(
     return { sql: '', params: [], nextIndex: startIndex }
   }
 
-  if (normalized === 'PLANNED') {
-    return {
-      sql: ` AND ${shipmentEffectiveStatusExpr('sb')} IN ('PLANNED', 'UNPLANNED')`,
-      params: [],
-      nextIndex: startIndex,
-    }
-  }
-
   return {
     sql: ` AND ${shipmentEffectiveStatusExpr('sb')} = $${startIndex}`,
     params: [normalized],
@@ -426,14 +418,6 @@ export function appendShipmentScopeStatusFilter(
     .toUpperCase()
   if (!normalized || normalized === 'ALL' || !SHIPMENT_STATUS_FILTER_VALUES.has(normalized)) {
     return { sql: '', params: [], nextIndex: startIndex }
-  }
-
-  if (normalized === 'PLANNED') {
-    return {
-      sql: ` AND ${shipmentEffectiveStatusExpr('sb')} IN ('PLANNED', 'UNPLANNED')`,
-      params: [],
-      nextIndex: startIndex,
-    }
   }
 
   return {

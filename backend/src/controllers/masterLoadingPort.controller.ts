@@ -2,34 +2,135 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
+import { NON_NUMERIC_PORT_NAME_FILTER } from '../utils/portDisplaySql';
+
+const NON_NUMERIC_PORT = NON_NUMERIC_PORT_NAME_FILTER('port');
+const NON_NUMERIC_VLP = NON_NUMERIC_PORT_NAME_FILTER('vlp.port_name');
+const NON_NUMERIC_SHIP = NON_NUMERIC_PORT_NAME_FILTER('s.port_of_loading::text');
+const NON_NUMERIC_SAP = NON_NUMERIC_PORT_NAME_FILTER('sap.port_text');
 
 export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { search, page = 1, limit = 50 } = req.query as any;
     const offset = (Number(page) - 1) * Number(limit);
+    const searchTerm = typeof search === 'string' ? search.trim() : '';
 
     const params: any[] = [];
-    let where = 'WHERE 1=1';
-
-    if (search && typeof search === 'string' && search.trim().length > 0) {
-      params.push(`%${search.trim()}%`);
-      where += ` AND (region ILIKE $${params.length} OR port ILIKE $${params.length})`;
+    let searchFilter = '';
+    if (searchTerm.length > 0) {
+      params.push(`%${searchTerm}%`);
+      searchFilter = ` AND port ILIKE $${params.length}`;
     }
 
     const listSql = `
-      SELECT id, region, port, coordinate, masuk_alur, lebar_alur, jumlah_jembatan,
-             jenis_port, pemilik_port, antri_muat_hari, jumlah_demaraga, panjang_demaraga,
-             draft, dwt, siklus_pasang, loading_method, loading_rate_mt_per_hour, shipper,
-             created_at, updated_at
-      FROM master_loading_ports
-      ${where}
-      ORDER BY region, port
+      WITH port_sources AS (
+        SELECT id::text AS id, port, region, 0 AS priority
+        FROM master_loading_ports
+        WHERE 1=1
+          ${searchTerm.length > 0 ? `AND (port ILIKE $1 OR region ILIKE $1)` : ''}
+
+        UNION ALL
+
+        SELECT
+          'vlp-' || vlp.port_name AS id,
+          vlp.port_name AS port,
+          NULL::varchar AS region,
+          1 AS priority
+        FROM vessel_loading_ports vlp
+        WHERE vlp.is_discharge_port = false
+          AND ${NON_NUMERIC_VLP}
+          ${searchTerm.length > 0 ? `AND vlp.port_name ILIKE $1` : ''}
+
+        UNION ALL
+
+        SELECT
+          'ship-' || s.port_of_loading AS id,
+          s.port_of_loading::text AS port,
+          NULL::varchar AS region,
+          2 AS priority
+        FROM shipments s
+        WHERE ${NON_NUMERIC_SHIP}
+          ${searchTerm.length > 0 ? `AND s.port_of_loading::text ILIKE $1` : ''}
+
+        UNION ALL
+
+        SELECT
+          'sap-' || sap.port_text AS id,
+          sap.port_text AS port,
+          NULL::varchar AS region,
+          3 AS priority
+        FROM (
+          SELECT DISTINCT NULLIF(TRIM(COALESCE(
+            spd.data->'raw'->>'Vessel Loading Port 1',
+            spd.data->'raw'->>'Port of Loading',
+            spd.data->'shipment'->>'vessel_loading_port_1'
+          )), '') AS port_text
+          FROM sap_processed_data spd
+        ) sap
+        WHERE ${NON_NUMERIC_SAP}
+          ${searchTerm.length > 0 ? `AND sap.port_text ILIKE $1` : ''}
+      ),
+      ranked AS (
+        SELECT DISTINCT ON (port)
+          id,
+          port,
+          region,
+          priority
+        FROM port_sources
+        ORDER BY port, priority
+      )
+      SELECT id, port, region
+      FROM ranked
+      WHERE ${NON_NUMERIC_PORT}
+        ${searchFilter}
+      ORDER BY priority, port
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
     const countSql = `
+      WITH port_sources AS (
+        SELECT port, region, 0 AS priority
+        FROM master_loading_ports
+        WHERE 1=1
+          ${searchTerm.length > 0 ? `AND (port ILIKE $1 OR region ILIKE $1)` : ''}
+
+        UNION ALL
+
+        SELECT vlp.port_name AS port, NULL::varchar AS region, 1 AS priority
+        FROM vessel_loading_ports vlp
+        WHERE vlp.is_discharge_port = false
+          AND ${NON_NUMERIC_VLP}
+          ${searchTerm.length > 0 ? `AND vlp.port_name ILIKE $1` : ''}
+
+        UNION ALL
+
+        SELECT s.port_of_loading::text AS port, NULL::varchar AS region, 2 AS priority
+        FROM shipments s
+        WHERE ${NON_NUMERIC_SHIP}
+          ${searchTerm.length > 0 ? `AND s.port_of_loading::text ILIKE $1` : ''}
+
+        UNION ALL
+
+        SELECT sap.port_text AS port, NULL::varchar AS region, 3 AS priority
+        FROM (
+          SELECT DISTINCT NULLIF(TRIM(COALESCE(
+            spd.data->'raw'->>'Vessel Loading Port 1',
+            spd.data->'raw'->>'Port of Loading',
+            spd.data->'shipment'->>'vessel_loading_port_1'
+          )), '') AS port_text
+          FROM sap_processed_data spd
+        ) sap
+        WHERE ${NON_NUMERIC_SAP}
+          ${searchTerm.length > 0 ? `AND sap.port_text ILIKE $1` : ''}
+      ),
+      ranked AS (
+        SELECT DISTINCT ON (port) port, region, priority
+        FROM port_sources
+        ORDER BY port, priority
+      )
       SELECT COUNT(*) AS count
-      FROM master_loading_ports
-      ${where}
+      FROM ranked
+      WHERE ${NON_NUMERIC_PORT}
+        ${searchFilter}
     `;
 
     const [listResult, countResult] = await Promise.all([

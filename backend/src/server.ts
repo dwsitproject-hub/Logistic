@@ -44,6 +44,7 @@ import activityRoutes from './routes/activity.routes';
 import agentAiRoutes from './routes/agentAi.routes';
 import oilLossRoutes from './routes/oilLoss.routes';
 import commercialDocumentsRoutes from './routes/commercialDocuments.routes';
+import aiKlipAgentActivityRoutes from './routes/aiKlipAgentActivity.routes';
 
 dotenv.config();
 
@@ -131,6 +132,7 @@ app.use('/api/claim-susut', claimSusutRoutes);
 app.use('/api/user-preferences', userPreferencesRoutes);
 app.use('/api/oil-loss', oilLossRoutes);
 app.use('/api/commercial-documents', commercialDocumentsRoutes);
+app.use('/api/ai-klip-agent-activity', aiKlipAgentActivityRoutes);
 
 // Error handling
 app.use(notFoundHandler);

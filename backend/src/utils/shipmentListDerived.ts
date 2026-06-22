@@ -76,10 +76,6 @@ export function normalizeEffectiveStatus(raw: string | null | undefined): Shipme
   return VALID_STATUSES.has(s) ? (s as ShipmentEffectiveStatus) : 'UNPLANNED';
 }
 
-function matchesPlannedPipelineStatus(status: ShipmentEffectiveStatus): boolean {
-  return status === 'PLANNED' || status === 'UNPLANNED';
-}
-
 export function matchesStatusFilter(
   status: ShipmentEffectiveStatus,
   statusFilter: string,
@@ -88,7 +84,6 @@ export function matchesStatusFilter(
     .trim()
     .toUpperCase();
   if (!filter || filter === 'ALL') return true;
-  if (filter === 'PLANNED') return matchesPlannedPipelineStatus(status);
   return status === filter;
 }
 
@@ -259,6 +254,7 @@ export function filterShipmentListRows<T extends ShipmentListDerivedRow>(
 export type ShipmentListSummaryPayload = {
   total: number;
   status: {
+    unplanned: number;
     planned: number;
     inProgress: number;
     loading: number;
@@ -281,6 +277,7 @@ export function buildShipmentListSummaryFromRows(
       ? filterRowsByStatusScope(rows, options.scopeStatus)
       : rows;
 
+  let unplanned = 0;
   let planned = 0;
   let inProgress = 0;
   let loading = 0;
@@ -293,6 +290,8 @@ export function buildShipmentListSummaryFromRows(
   for (const row of rows) {
     switch (normalizeEffectiveStatus(row.status)) {
       case 'UNPLANNED':
+        unplanned += 1;
+        break;
       case 'PLANNED':
         planned += 1;
         break;
@@ -318,7 +317,7 @@ export function buildShipmentListSummaryFromRows(
         cancelled += 1;
         break;
       default:
-        planned += 1;
+        unplanned += 1;
         break;
     }
   }
@@ -329,6 +328,7 @@ export function buildShipmentListSummaryFromRows(
   return {
     total: rows.length,
     status: {
+      unplanned,
       planned,
       inProgress,
       loading,

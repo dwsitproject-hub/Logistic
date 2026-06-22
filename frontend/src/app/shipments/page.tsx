@@ -128,6 +128,7 @@ function etaDischargeCardHelp(specific: string): string {
 }
 
 const SHIPMENT_STATUS_LABELS: Record<string, string> = {
+  UNPLANNED: 'Unplanned',
   PLANNED: 'Planned',
   IN_PROGRESS: 'In Progress',
   LOADING: 'Loading',
@@ -2002,8 +2003,11 @@ function ShipmentsPageContent() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
+      case 'UNPLANNED': return 'bg-slate-100 text-slate-800'
       case 'PLANNED': return 'bg-blue-100 text-blue-800'
-      case 'IN_TRANSIT': return 'bg-yellow-100 text-yellow-800'
+      case 'IN_PROGRESS': return 'bg-yellow-100 text-yellow-800'
+      case 'LOADING': return 'bg-orange-100 text-orange-800'
+      case 'IN_TRANSIT': return 'bg-purple-100 text-purple-800'
       case 'ARRIVED': return 'bg-purple-100 text-purple-800'
       case 'UNLOADING': return 'bg-orange-100 text-orange-800'
       case 'COMPLETED': return 'bg-green-100 text-green-800'
@@ -2109,6 +2113,7 @@ function ShipmentsPageContent() {
   const section1StatusCounts = useMemo(() => {
     const s = shipmentsSection1Summary?.status
     return {
+      unplanned: Number(s?.unplanned ?? 0),
       planned: Number(s?.planned ?? 0),
       inProgress: Number(s?.inProgress ?? 0),
       loading: Number(s?.loading ?? 0),
@@ -3992,6 +3997,7 @@ function ShipmentsPageContent() {
             >
               <div className="flex flex-nowrap items-center shrink-0">
               {[
+                { status: 'UNPLANNED', label: 'Unplanned', color: 'bg-slate-100', textColor: 'text-slate-800', badgeColor: 'bg-slate-600', tooltip: 'Shipment has no ETA milestones entered yet.' },
                 { status: 'PLANNED',     label: 'Planned',     color: 'bg-blue-100',   textColor: 'text-blue-800',   badgeColor: 'bg-blue-600',   tooltip: 'Shipment has an ETA — at least one ETA milestone has been entered.' },
                 { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600', tooltip: 'Shipment in progress — vessel en route to the loading port (ATA arrival at loading port).' },
                 { status: 'LOADING',     label: 'Loading',     color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600', tooltip: 'Vessel is loading cargo at the origin port.' },
@@ -4001,17 +4007,20 @@ function ShipmentsPageContent() {
                 { status: 'COMPLETED',   label: 'Completed',   color: 'bg-green-100',  textColor: 'text-green-800',  badgeColor: 'bg-green-600',  tooltip: 'Shipment complete — cargo has been received at destination.' },
                 { status: 'CANCELLED',   label: 'Cancelled',   color: 'bg-red-100',    textColor: 'text-red-800',    badgeColor: 'bg-red-600',    tooltip: 'Shipment cancelled and will not continue.' },
               ].map((statusInfo, index, array) => {
-                const count =
-                  statusInfo.status === 'PLANNED' ? section1StatusCounts.planned
-                    : statusInfo.status === 'IN_PROGRESS' ? section1StatusCounts.inProgress
-                      : statusInfo.status === 'LOADING' ? section1StatusCounts.loading
-                        : statusInfo.status === 'IN_TRANSIT' ? section1StatusCounts.inTransit
-                          : statusInfo.status === 'ARRIVED' ? section1StatusCounts.arrived
-                            : statusInfo.status === 'UNLOADING' ? section1StatusCounts.unloading
-                              : statusInfo.status === 'COMPLETED' ? section1StatusCounts.completed
-                                : statusInfo.status === 'CANCELLED' ? section1StatusCounts.cancelled
-                                  : 0
                 const isStatusActive = statusFilter === statusInfo.status
+                const summaryCount =
+                  statusInfo.status === 'UNPLANNED' ? section1StatusCounts.unplanned
+                    : statusInfo.status === 'PLANNED' ? section1StatusCounts.planned
+                      : statusInfo.status === 'IN_PROGRESS' ? section1StatusCounts.inProgress
+                        : statusInfo.status === 'LOADING' ? section1StatusCounts.loading
+                          : statusInfo.status === 'IN_TRANSIT' ? section1StatusCounts.inTransit
+                            : statusInfo.status === 'ARRIVED' ? section1StatusCounts.arrived
+                              : statusInfo.status === 'UNLOADING' ? section1StatusCounts.unloading
+                                : statusInfo.status === 'COMPLETED' ? section1StatusCounts.completed
+                                  : statusInfo.status === 'CANCELLED' ? section1StatusCounts.cancelled
+                                    : 0
+                const count =
+                  isStatusActive && statusFilter !== 'ALL' ? totalCount : summaryCount
                 return (
                   <div key={statusInfo.status} className="flex items-center flex-shrink-0">
                     <div className="relative">
@@ -4257,6 +4266,7 @@ function ShipmentsPageContent() {
                   value={statusFilter}
                   onChange={(e) => {
                     setPage(1)
+                    setSection2EtaSummary(null)
                     setStatusFilter(e.target.value)
                     setEtaLoadingFilter('ALL')
                     setEtaDischargeFilter('ALL')
@@ -4264,6 +4274,7 @@ function ShipmentsPageContent() {
                   className="rounded-lg border px-4 py-2"
                 >
                 <option value="ALL">All Status</option>
+                <option value="UNPLANNED">Unplanned</option>
                 <option value="PLANNED">Planned</option>
                 <option value="IN_PROGRESS">In Progress</option>
                 <option value="LOADING">Loading</option>

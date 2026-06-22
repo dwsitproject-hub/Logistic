@@ -374,7 +374,18 @@ function calendarRowPlannedQtyKg(r: TruckingCalendarRow): number {
   return (r.daily_deliverables || []).reduce((s, x) => s + Number(x?.quantity_delivered || 0), 0)
 }
 
+const CALENDAR_STICKY_CONTRACT_COL_IDS = ['contract_ext_no', 'sto_number', 'supplier'] as const
+
+const CALENDAR_STICKY_CONTRACT_COL_WIDTHS: Record<string, number> = {
+  contract_ext_no: 140,
+  sto_number: 96,
+  supplier: 120,
+}
+
 const CALENDAR_META_COL_LABELS: Record<string, string> = {
+  contract_ext_no: 'Contract Ext No',
+  sto_number: 'STO',
+  supplier: 'Supplier',
   owner: 'Owner',
   due_start: 'Due Start',
   due_end: 'Due End',
@@ -382,7 +393,6 @@ const CALENDAR_META_COL_LABELS: Record<string, string> = {
   lt_spot: 'LT/SPOT',
   product: 'Product',
   group_name: 'Group Name',
-  supplier: 'Supplier',
   outstanding_quantity: 'Outstanding Qty (MT)',
   qty_sent: 'Qty Sent (MT)',
   qty_sent_planning: 'Qty Sent planning (MT)',
@@ -412,8 +422,12 @@ function getTruckingCalendarSortValue(
   switch (sortKey) {
     case 'operation_id':
       return row.operation_id || ''
-    case 'contract_block':
-      return row.contract_ext_no || row.contract_number || row.supplier || ''
+    case 'contract_ext_no':
+      return row.contract_ext_no || row.contract_number || ''
+    case 'sto_number':
+      return row.sto_number || ''
+    case 'supplier':
+      return row.supplier || ''
     case 'owner':
       return row.trucking_owner || ''
     case 'due_start':
@@ -428,8 +442,6 @@ function getTruckingCalendarSortValue(
       return row.product || ''
     case 'group_name':
       return row.group_name || ''
-    case 'supplier':
-      return row.supplier || ''
     case 'outstanding_quantity':
       return Number(row.outstanding_quantity ?? 0)
     case 'qty_sent':
@@ -455,6 +467,31 @@ function compareCalendarSortValues(
     return (a - b) * dirMul
   }
   return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }) * dirMul
+}
+
+function migrateCalendarVisibleMetaCols(cols: string[]): string[] {
+  const next = new Set(cols.map(String))
+  if (next.has('contract_block')) {
+    next.delete('contract_block')
+    next.add('contract_ext_no')
+    next.add('sto_number')
+    next.add('supplier')
+  }
+  return Array.from(next)
+}
+
+function migrateCalendarMetaOrderIds(order: string[]): string[] {
+  const expanded = order.flatMap((id) =>
+    id === 'contract_block' ? ['contract_ext_no', 'sto_number', 'supplier'] : [id],
+  )
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const id of expanded) {
+    if (id === 'contract_block' || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
 }
 
 function CalendarDeliverablesTable({
@@ -487,10 +524,21 @@ function CalendarDeliverablesTable({
   const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1)
   const operationColW = 220
-  const contractColW = 300
   const opShown = visibleMetaCols.has('operation_id')
-  const contractShown = visibleMetaCols.has('contract_block')
-  const contractLeft = opShown ? operationColW : 0
+  const stickyContractCols = CALENDAR_STICKY_CONTRACT_COL_IDS.filter((id) => visibleMetaCols.has(id))
+  const stickyLeftByCol = useMemo(() => {
+    const positions: Record<string, number> = {}
+    let left = 0
+    if (opShown) {
+      positions.operation_id = 0
+      left += operationColW
+    }
+    for (const id of stickyContractCols) {
+      positions[id] = left
+      left += CALENDAR_STICKY_CONTRACT_COL_WIDTHS[id] ?? 120
+    }
+    return positions
+  }, [opShown, stickyContractCols])
   const [dragMetaColId, setDragMetaColId] = useState<string | null>(null)
   const scrollTopRef = useRef<HTMLDivElement | null>(null)
   const scrollBottomRef = useRef<HTMLDivElement | null>(null)
@@ -555,7 +603,6 @@ function CalendarDeliverablesTable({
       'lt_spot',
       'product',
       'group_name',
-      'supplier',
       'outstanding_quantity',
       'qty_sent',
       'qty_sent_planning',
@@ -590,7 +637,7 @@ function CalendarDeliverablesTable({
       top.removeEventListener('scroll', onTop)
       bottom.removeEventListener('scroll', onBottom)
     }
-  }, [rows.length, daysInMonth, opShown, contractShown, visibleMetaCols])
+  }, [rows.length, daysInMonth, opShown, stickyContractCols, visibleMetaCols])
 
   return (
     <div>
@@ -622,20 +669,26 @@ function CalendarDeliverablesTable({
                   />
                 </th>
               ) : null}
-              {contractShown ? (
-                <th
-                  className="sticky z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200"
-                  style={{ left: contractLeft, minWidth: contractColW }}
-                >
-                  <ContractPerfTableSortHeader
-                    label="Contract Ext No / STO / Supplier"
-                    sortable
-                    activeSort={sortKey === 'contract_block'}
-                    sortDir={sortDir}
-                    onSortClick={() => onSortHeaderClick('contract_block')}
-                  />
-                </th>
-              ) : null}
+              {stickyContractCols.map((id) => {
+                const colW = CALENDAR_STICKY_CONTRACT_COL_WIDTHS[id] ?? 120
+                const left = stickyLeftByCol[id] ?? 0
+                const label = CALENDAR_META_COL_LABELS[id] ?? id
+                return (
+                  <th
+                    key={id}
+                    className="sticky z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200"
+                    style={{ left, minWidth: colW, maxWidth: colW }}
+                  >
+                    <ContractPerfTableSortHeader
+                      label={label}
+                      sortable
+                      activeSort={sortKey === id}
+                      sortDir={sortDir}
+                      onSortClick={() => onSortHeaderClick(id)}
+                    />
+                  </th>
+                )
+              })}
               {orderedMetaCols.map((id) => {
                 const label = CALENDAR_META_COL_LABELS[id] ?? id
                 const alignRight = CALENDAR_NUMERIC_SORT_COLS.has(id)
@@ -695,7 +748,7 @@ function CalendarDeliverablesTable({
           <tbody className="bg-white">
             {sortedRows.map((r) => {
               const opLabel = formatSapDisplayValue(r.operation_id)
-              const contractLabel = formatSapDisplayValue(r.contract_ext_no || r.contract_number)
+              const contractExtLabel = formatSapDisplayValue(r.contract_ext_no || r.contract_number)
               const stoLabel = formatSapDisplayValue(r.sto_number)
               const supplierLabel = formatSapDisplayValue(r.supplier)
               const dueStart = r.delivery_start_date
@@ -722,16 +775,30 @@ function CalendarDeliverablesTable({
                       </div>
                     </td>
                   ) : null}
-                  {contractShown ? (
-                    <td
-                      className="sticky z-10 bg-white px-3 py-2 border-b border-gray-100 align-top"
-                      style={{ left: contractLeft, minWidth: contractColW, maxWidth: 'min(360px,40vw)' }}
-                    >
-                      <div className="font-medium text-gray-900 whitespace-normal break-words leading-snug" title={contractLabel}>{contractLabel}</div>
-                      <div className="text-[10px] text-gray-500 whitespace-normal break-words mt-0.5" title={`STO: ${stoLabel}`}>STO: {stoLabel}</div>
-                      <div className="text-[10px] text-gray-500 whitespace-normal break-words" title={supplierLabel}>{supplierLabel}</div>
-                    </td>
-                  ) : null}
+                  {stickyContractCols.map((id) => {
+                    const colW = CALENDAR_STICKY_CONTRACT_COL_WIDTHS[id] ?? 120
+                    const left = stickyLeftByCol[id] ?? 0
+                    const label =
+                      id === 'contract_ext_no'
+                        ? contractExtLabel
+                        : id === 'sto_number'
+                          ? stoLabel
+                          : supplierLabel
+                    return (
+                      <td
+                        key={id}
+                        className="sticky z-10 bg-white px-3 py-2 border-b border-gray-100 align-top"
+                        style={{ left, minWidth: colW, maxWidth: colW }}
+                      >
+                        <div
+                          className="font-medium text-gray-900 whitespace-normal break-words leading-snug"
+                          title={label}
+                        >
+                          {label}
+                        </div>
+                      </td>
+                    )
+                  })}
                   {orderedMetaCols.map((id) => {
                     const alignRight = new Set(['outstanding_quantity', 'qty_sent', 'qty_sent_planning', 'qty_delivered', 'qty_received']).has(id)
                     const val = (() => {
@@ -750,8 +817,6 @@ function CalendarDeliverablesTable({
                           return formatSapDisplayValue(r.product)
                         case 'group_name':
                           return formatSapDisplayValue(r.group_name)
-                        case 'supplier':
-                          return formatSapDisplayValue(r.supplier)
                         case 'outstanding_quantity':
                           return formatTruckingQtyMt(outQty)
                         case 'qty_sent':
@@ -946,7 +1011,9 @@ function TruckingPageContent() {
     () =>
       new Set([
         'operation_id',
-        'contract_block',
+        'contract_ext_no',
+        'sto_number',
+        'supplier',
         'owner',
         'due_start',
         'due_end',
@@ -958,7 +1025,6 @@ function TruckingPageContent() {
         'lt_spot',
         'product',
         'group_name',
-        'supplier',
         'outstanding_quantity',
       ]),
   )
@@ -984,8 +1050,12 @@ function TruckingPageContent() {
         if (cancelled) return
         const cols = Array.isArray(value?.visibleMetaCols) ? value.visibleMetaCols : Array.isArray(value?.visible) ? value.visible : null
         const order = Array.isArray(value?.metaOrderIds) ? value.metaOrderIds : Array.isArray(value?.metaOrder) ? value.metaOrder : null
-        if (Array.isArray(cols) && cols.length > 0) setCalendarVisibleMetaCols(new Set(cols.map((x: any) => String(x))))
-        if (Array.isArray(order) && order.length > 0) setCalendarMetaOrderIds(order.map((x: any) => String(x)))
+        if (Array.isArray(cols) && cols.length > 0) {
+          setCalendarVisibleMetaCols(new Set(migrateCalendarVisibleMetaCols(cols.map((x: any) => String(x)))))
+        }
+        if (Array.isArray(order) && order.length > 0) {
+          setCalendarMetaOrderIds(migrateCalendarMetaOrderIds(order.map((x: any) => String(x))))
+        }
       } catch {
         // ignore
       }
@@ -2846,7 +2916,9 @@ function TruckingPageContent() {
                         <div className="space-y-2 max-h-72 overflow-auto pr-1">
                           {[
                             { id: 'operation_id', label: 'Operation ID' },
-                            { id: 'contract_block', label: 'Contract Ext No / STO / Supplier' },
+                            { id: 'contract_ext_no', label: 'Contract Ext No' },
+                            { id: 'sto_number', label: 'STO' },
+                            { id: 'supplier', label: 'Supplier' },
                             { id: 'owner', label: 'Owner' },
                             { id: 'due_start', label: 'Due Start' },
                             { id: 'due_end', label: 'Due End' },
@@ -2858,7 +2930,6 @@ function TruckingPageContent() {
                             { id: 'lt_spot', label: 'LT/SPOT' },
                             { id: 'product', label: 'Product' },
                             { id: 'group_name', label: 'Group Name' },
-                            { id: 'supplier', label: 'Supplier' },
                             { id: 'outstanding_quantity', label: 'Outstanding Quantity' },
                           ].map((c) => (
                             <label key={c.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">

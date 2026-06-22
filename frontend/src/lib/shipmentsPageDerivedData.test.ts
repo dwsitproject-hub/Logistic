@@ -19,7 +19,7 @@ const baseRow = (overrides: Partial<ShipmentsPageRow> = {}): ShipmentsPageRow =>
 })
 
 describe('computeSection1StatusCounts', () => {
-  it('partitions all rows and folds UNPLANNED into planned badge', () => {
+  it('partitions all rows with separate unplanned and planned badges', () => {
     const rows = [
       baseRow({ id: '1', status: 'PLANNED' }),
       baseRow({ id: '2', status: 'UNPLANNED', sto_number: 'STO-2' }),
@@ -27,7 +27,8 @@ describe('computeSection1StatusCounts', () => {
     ]
     const counts = computeSection1StatusCounts(rows)
     expect(counts.total).toBe(3)
-    expect(counts.planned).toBe(2)
+    expect(counts.unplanned).toBe(1)
+    expect(counts.planned).toBe(1)
     expect(counts.inTransit).toBe(1)
     expect(section1BadgeSum(counts)).toBe(counts.total)
   })

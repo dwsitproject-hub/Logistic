@@ -30,12 +30,14 @@ export function MasterLoadingPortCombobox({
   const [options, setOptions] = useState<LoadingPortOption[]>([])
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [searched, setSearched] = useState(false)
   const [mounted, setMounted] = useState(false)
   const [dropdownRect, setDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const requestIdRef = useRef(0)
 
   useEffect(() => {
     setMounted(true)
@@ -66,7 +68,7 @@ export function MasterLoadingPortCombobox({
       window.removeEventListener('resize', onReposition)
       window.removeEventListener('scroll', onReposition, true)
     }
-  }, [open, options.length, loading, updateDropdownPosition])
+  }, [open, options.length, loading, searched, updateDropdownPosition])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -79,32 +81,50 @@ export function MasterLoadingPortCombobox({
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const search = (q: string) => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(async () => {
-      setLoading(true)
-      try {
-        const res = await api.get('/master-loading-ports', { params: { search: q, limit: 20 } })
-        setOptions(res.data?.data?.items || [])
-      } catch {
-        setOptions([])
-      } finally {
-        setLoading(false)
+  const fetchOptions = useCallback(async (q: string) => {
+    const requestId = ++requestIdRef.current
+    setLoading(true)
+    try {
+      const res = await api.get('/master-loading-ports', { params: { search: q, limit: 20 } })
+      if (requestId !== requestIdRef.current) return
+      setOptions(res.data?.data?.items || [])
+    } catch {
+      if (requestId !== requestIdRef.current) return
+      setOptions([])
+    } finally {
+      if (requestId !== requestIdRef.current) return
+      setLoading(false)
+      setSearched(true)
+    }
+  }, [])
+
+  const search = useCallback(
+    (q: string, immediate = false) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+      if (immediate) {
+        void fetchOptions(q)
+        return
       }
-    }, 250)
-  }
+      debounceRef.current = setTimeout(() => {
+        void fetchOptions(q)
+      }, 250)
+    },
+    [fetchOptions],
+  )
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const q = e.target.value
     setQuery(q)
     onChange(q)
     setOpen(true)
+    setSearched(false)
     search(q)
   }
 
   const handleFocus = () => {
     setOpen(true)
-    search(query)
+    setSearched(false)
+    search(query, true)
   }
 
   const handleSelect = (opt: LoadingPortOption) => {
@@ -112,9 +132,10 @@ export function MasterLoadingPortCombobox({
     setQuery(label)
     onChange(label)
     setOpen(false)
+    setSearched(false)
   }
 
-  const showDropdown = open && (options.length > 0 || loading)
+  const showDropdown = open && (loading || searched)
 
   const dropdown =
     showDropdown && dropdownRect && mounted ? (
@@ -127,10 +148,13 @@ export function MasterLoadingPortCombobox({
           top: dropdownRect.top,
           left: dropdownRect.left,
           width: dropdownRect.width,
-          zIndex: 10000,
+          zIndex: 99999,
         }}
       >
         {loading && <div className="px-3 py-2 text-sm text-gray-400">Loading...</div>}
+        {!loading && options.length === 0 && (
+          <div className="px-3 py-2 text-sm text-gray-500">No ports found</div>
+        )}
         {!loading &&
           options.map((opt) => (
             <button

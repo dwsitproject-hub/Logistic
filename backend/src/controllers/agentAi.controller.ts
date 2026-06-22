@@ -3,6 +3,12 @@ import * as XLSX from 'xlsx'
 import { query } from '../database/connection'
 import { AuthRequest } from '../middleware/auth'
 import logger from '../utils/logger'
+import {
+  AI_KLIP_AGENT,
+  resolveGeminiApiKeyName,
+  truncateActivityText,
+} from '../constants/aiKlipAgent'
+import { logAiKlipAgentActivity } from '../services/aiKlipAgentActivityLog.service'
 
 type AgentAiResult = {
   answer: string
@@ -83,6 +89,22 @@ const extractJsonBlock = (raw: string): string => {
     }
   }
   return ''
+}
+
+const logChatAgentActivity = (
+  req: AuthRequest,
+  activity: string,
+  status: 'success' | 'error',
+  metadata?: Record<string, unknown>,
+) => {
+  void logAiKlipAgentActivity({
+    agentName: AI_KLIP_AGENT.CHAT,
+    apiKeyName: resolveGeminiApiKeyName(),
+    userId: req.user?.id,
+    status,
+    activity: truncateActivityText(activity, 2000),
+    metadata: metadata ?? null,
+  })
 }
 
 const parseAgentAiResponse = (text: string): AgentAiResult => {
@@ -921,6 +943,12 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
         result: direct.result,
         directUsed: true,
       })
+      logChatAgentActivity(
+        req,
+        `Answered question: ${question}`,
+        'success',
+        { mode: 'deterministic', memoryId, source: direct.sourceLabel || null },
+      )
       return res.json({
         success: true,
         data: direct.result,
@@ -963,6 +991,12 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
     if (!response.ok) {
       const text = await response.text()
       logger.error('Agent AI Gemini API error', { status: response.status, body: text })
+      logChatAgentActivity(
+        req,
+        `Chat request failed (Gemini API ${response.status}): ${truncateActivityText(question, 200)}`,
+        'error',
+        { question, status: response.status },
+      )
       return res.status(500).json({
         success: false,
         error: { message: 'Failed to generate AI response' },
@@ -984,6 +1018,23 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
         }
       : parsed
 
+    const memoryId = await saveMemory({
+      userId: req.user?.id,
+      question,
+      result: finalData,
+      directUsed: !!direct.matched,
+    })
+    logChatAgentActivity(
+      req,
+      `Answered question: ${question}`,
+      'success',
+      {
+        mode: direct.matched ? 'deterministic' : 'llm_with_context',
+        memoryId,
+        hasUpload: !!file,
+      },
+    )
+
     return res.json({
       success: true,
       data: finalData,
@@ -1002,16 +1053,18 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
               label: 'gemini-2.5-flash',
               detail: 'Generated from app data context, similar-memory retrieval, and optional uploaded file/image.',
             },
-        memoryId: await saveMemory({
-          userId: req.user?.id,
-          question,
-          result: finalData,
-          directUsed: !!direct.matched,
-        }),
+        memoryId,
       },
     })
   } catch (error) {
     logger.error('Agent AI ask error:', error)
+    const message = error instanceof Error ? error.message : 'Failed to process Agent AI request'
+    logChatAgentActivity(
+      req,
+      `Chat request failed: ${message}`,
+      'error',
+      { question: String(req.body?.question || '').trim() || null },
+    )
     return res.status(500).json({
       success: false,
       error: { message: 'Failed to process Agent AI request' },

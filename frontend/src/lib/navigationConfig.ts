@@ -15,6 +15,7 @@ import {
   Bot,
   Droplets,
   FileCheck,
+  ScrollText,
 } from 'lucide-react'
 
 export type NavItem = {
@@ -94,6 +95,13 @@ export const NAV_ITEMS: NavItem[] = [
     permissionKey: 'page.finance',
   },
   { name: 'KLIP Agent AI', href: '/klip-agent-ai', icon: Bot, roles: ['ALL'], permissionKey: 'page.klip_agent_ai' },
+  {
+    name: 'AI Agent Activity Log',
+    href: '/ai-klip-agent-activity',
+    icon: ScrollText,
+    roles: ['ADMIN', 'SUPPORT', 'MANAGEMENT', 'LOGISTICS'],
+    permissionKey: 'page.ai_klip_agent_activity',
+  },
   { name: 'Documents', href: '/documents', icon: FolderOpen, roles: ['ALL'], permissionKey: 'page.documents' },
   { name: 'SAP Data', href: '/sap-imports', icon: Database, roles: ['ALL'], permissionKey: 'page.sap' },
   { name: 'Users', href: '/users', icon: Users, roles: ['ALL'], permissionKey: 'page.users' },

@@ -3874,9 +3874,9 @@ function ContractsPageContent() {
                                 >
                                   <div className="flex items-start justify-between gap-1">
                                     <div className="text-sm font-semibold text-gray-900 truncate">{node.label}</div>
-                                    <div className="shrink-0 text-right leading-tight">
+                                    <div className="shrink-0 text-right leading-tight max-w-[4.75rem]">
                                       <div className={`text-[11px] font-bold tabular-nums ${perfDashMode === 'late' ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS}`}>{node.count > 0 ? (node.totalDays / node.count).toFixed(1) : '—'}</div>
-                                      <div className={`text-xs ${perfDashMode === 'late' ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS}`}>{perfDashMode === 'late' ? 'avg late' : 'avg ahead'}</div>
+                                      <div className={`text-[9px] leading-tight whitespace-nowrap ${perfDashMode === 'late' ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS}`}>{perfDashMode === 'late' ? 'avg trade late' : 'avg trade ahead'}</div>
                                     </div>
                                   </div>
                                   <div className="mt-1 h-1.5 rounded bg-gray-100 overflow-hidden">

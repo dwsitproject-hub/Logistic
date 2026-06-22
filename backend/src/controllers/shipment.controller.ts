@@ -35,6 +35,12 @@ import {
 } from '../utils/operationId';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
 import {
+  contractExtNoSubquery,
+  resolvedDischargePortNameSql,
+  resolvedLoadingPortNameSql,
+  resolvedPlantCodeSql,
+} from '../utils/portDisplaySql';
+import {
   buildShipmentExcludeStoTypeTSql,
   buildShipmentSeaMixTransportSql,
 } from '../utils/shipmentStoTypeSql';
@@ -114,8 +120,15 @@ const PURCHASE_ORDER_LINES_SQL = `
     c.delivery_start_date,
     c.delivery_end_date,
     c.supplier,
+    c.buyer,
     c.product,
+    c.incoterm,
     c.transport_mode,
+    ${resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code')} AS plant_code,
+    ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), 'c.company_name')} AS plant_site,
+    ${contractExtNoSubquery('c.contract_id', 'c.po_number')} AS contract_ext_no,
+    ${resolvedLoadingPortNameSql('c.contract_id')} AS port_of_loading,
+    ${resolvedDischargePortNameSql('c.contract_id')} AS port_of_discharge,
     GREATEST(
       0,
       COALESCE(c.quantity_ordered, 0)::numeric
@@ -168,6 +181,7 @@ function shipmentListSummaryPayload(totalCount: number, summaryRow: Record<strin
   return {
     total: totalCount,
     status: {
+      unplanned: Number(summaryRow.unplanned_count || 0),
       planned: Number(summaryRow.planned_count || 0),
       inProgress: Number(summaryRow.in_progress_count || 0),
       loading: Number(summaryRow.loading_count || 0),
@@ -786,7 +800,8 @@ ${contractMetaSelect}
       )
       SELECT
         COUNT(*)::bigint AS total_count,
-        COUNT(*) FILTER (WHERE effective_status IN ('PLANNED', 'UNPLANNED'))::bigint AS planned_count,
+        COUNT(*) FILTER (WHERE effective_status = 'UNPLANNED')::bigint AS unplanned_count,
+        COUNT(*) FILTER (WHERE effective_status = 'PLANNED')::bigint AS planned_count,
         COUNT(*) FILTER (WHERE effective_status = 'IN_PROGRESS')::bigint AS in_progress_count,
         COUNT(*) FILTER (WHERE effective_status = 'LOADING')::bigint AS loading_count,
         COUNT(*) FILTER (WHERE effective_status = 'IN_TRANSIT')::bigint AS in_transit_count,
@@ -3051,6 +3066,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         c.supplier,
         c.buyer,
         c.product,
+        c.incoterm,
         c.group_name,
         c.quantity_ordered,
         COALESCE(
@@ -3085,39 +3101,11 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         c.delivery_start_date,
         c.delivery_end_date,
         c.transport_mode,
-        COALESCE(
-          NULLIF(TRIM(c.plant_code), ''),
-          (
-            SELECT NULLIF(TRIM(COALESCE(
-              spd.data->'contract'->>'plant_code',
-              spd.data->'raw'->>'Plant Code',
-              spd.data->'raw'->>'plant code'
-            )), '')
-            FROM sap_processed_data spd
-            WHERE spd.contract_number = c.contract_id
-            ORDER BY spd.created_at DESC NULLS LAST
-            LIMIT 1
-          )
-        ) AS plant_code,
-        -- Ports are not stored on contracts; derive from latest SAP processed data if available
-        NULLIF(NULLIF((
-          SELECT spd.data->'shipment'->>'vessel_loading_port_1'
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-            AND spd.data->'shipment'->>'vessel_loading_port_1' IS NOT NULL
-            AND TRIM(spd.data->'shipment'->>'vessel_loading_port_1') <> ''
-          ORDER BY spd.created_at DESC NULLS LAST
-          LIMIT 1
-        ), ''), '0.00') as port_of_loading,
-        NULLIF(NULLIF((
-          SELECT spd.data->'shipment'->>'vessel_discharge_port'
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-            AND spd.data->'shipment'->>'vessel_discharge_port' IS NOT NULL
-            AND TRIM(spd.data->'shipment'->>'vessel_discharge_port') <> ''
-          ORDER BY spd.created_at DESC NULLS LAST
-          LIMIT 1
-        ), ''), '0.00') as port_of_discharge
+        ${resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code')} AS plant_code,
+        ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), 'c.company_name')} AS plant_site,
+        ${contractExtNoSubquery('c.contract_id', 'c.po_number')} AS contract_ext_no,
+        ${resolvedLoadingPortNameSql('c.contract_id')} AS port_of_loading,
+        ${resolvedDischargePortNameSql('c.contract_id')} AS port_of_discharge
       FROM matched c
       LIMIT 1
       `,

@@ -138,7 +138,7 @@
 <body>
   <header>
     <h1>KLIP Glossary</h1>
-    <p>KPN Logistics Intelligence Platform — istilah, rumus, dan aturan kalkulasi untuk tim bisnis &amp; teknis. Route: <code>/contract-performance</code>, <code>/shipping-performance</code>, <code>/oil-loss</code>, dll.</p>
+    <p>KPN Logistics Intelligence Platform — istilah, rumus, dan aturan kalkulasi untuk tim bisnis &amp; teknis. Route: <code>/contract-performance</code>, <code>/shipping-performance</code>, <code>/oil-loss</code>, <code>/ai-klip-agent-activity</code>, dll.</p>
   </header>
 
   <div class="layout">
@@ -199,6 +199,18 @@
             <li><a href="#sap-klip-merge">Aturan merge</a></li>
             <li><a href="#sap-klip-contoh">Contoh perilaku</a></li>
             <li><a href="#sap-klip-lain">Di luar cakupan</a></li>
+          </ul>
+        </li>
+        <li><a href="#ai-klip-agent">AI Klip Agent</a>
+          <ul class="sub">
+            <li><a href="#ai-klip-overview">Ringkasan &amp; menu</a></li>
+            <li><a href="#ai-klip-shipment-planner">Shipment Planner (Add Shipment)</a></li>
+            <li><a href="#ai-klip-vessel-suggest">Saran vessel &amp; port</a></li>
+            <li><a href="#ai-klip-eta-suggest">Saran semua ETA</a></li>
+            <li><a href="#ai-klip-charter">Charter type</a></li>
+            <li><a href="#ai-klip-chat">KLIP Agent AI (Chat)</a></li>
+            <li><a href="#ai-klip-activity-log">Activity Log</a></li>
+            <li><a href="#ai-klip-cache">Pattern cache</a></li>
           </ul>
         </li>
         <li><a href="#referensi">Referensi file</a></li>
@@ -899,6 +911,280 @@
         </div>
       </section>
 
+      <section id="ai-klip-agent">
+        <h2>AI Klip Agent</h2>
+        <p>
+          Fitur AI di KLIP membantu mengisi rencana shipment dan menjawab pertanyaan operasional.
+          Ada <strong>dua agent</strong> terpisah dengan API key dan sumber data berbeda. Semua field hasil saran
+          <strong>tetap dapat diedit manual</strong> setelah di-apply.
+        </p>
+
+        <h3 id="ai-klip-overview">Ringkasan &amp; menu</h3>
+        <table>
+          <thead>
+            <tr><th>Agent</th><th>Menu / lokasi UI</th><th>API key (server)</th><th>Fungsi utama</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>AI Klip Agent — Shipment Planner</strong></td>
+              <td>Add New Shipment → Section 2 <em>Vessel Detail</em> (tombol di atas field Vessel Name)</td>
+              <td><code>ANTHROPIC_API_KEY</code> · model <code>ANTHROPIC_MODEL</code> (default <code>claude-sonnet-4-6</code>)</td>
+              <td>Satu klik mengisi vessel, charter type, discharge port, loading port, dan <strong>seluruh milestone ETA</strong></td>
+            </tr>
+            <tr>
+              <td><strong>AI Klip Agent — Chat</strong></td>
+              <td>Sidebar → <em>KLIP Agent AI</em> (<code>/klip-agent-ai</code>)</td>
+              <td><code>GEMINI_API_KEY</code> · <code>gemini-2.5-flash</code></td>
+              <td>Tanya jawab analitik logistics/commercial berdasarkan data live KLIP (+ upload file opsional)</td>
+            </tr>
+            <tr>
+              <td><strong>AI Agent Activity Log</strong></td>
+              <td>Sidebar → <em>AI Agent Activity Log</em> (<code>/ai-klip-agent-activity</code>)</td>
+              <td>—</td>
+              <td>Audit trail: API key name, tanggal, dan deskripsi aktivitas kedua agent di atas</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="ai-klip-shipment-planner">Shipment Planner — Add New Shipment</h3>
+        <p>
+          Tombol <span class="tag">AI Klip Agent</span> di Section 2 membutuhkan minimal <strong>satu PO</strong> di Section 1.
+          Sistem membaca dimensi kontrak dari PO terpilih:
+        </p>
+        <p class="formula">Supplier · Buyer · Product · Incoterm</p>
+        <p>
+          Setelah klik, alur backend: <strong>suggest vessel</strong> → terapkan ke form → <strong>suggest ETA</strong> untuk setiap blok
+          ETA Schedule di Section 3. UI menampilkan penjelasan pola (sebelum apply) dan konfirmasi pola yang dipakai (setelah apply).
+        </p>
+        <div class="note">
+          <strong>PO belum ter-planning di SAP</strong> (vessel/port kosong pada baris SAP PO itu) masih bisa di-suggest
+          jika ada riwayat vessel di <code>sap_processed_data</code> atau <code>shipments</code> untuk kombinasi yang lebih luas
+          (mis. Buyer + Product sama, supplier berbeda).
+        </div>
+
+        <h3 id="ai-klip-vessel-suggest">Saran vessel, discharge port &amp; loading port</h3>
+        <p>Endpoint: <code>POST /api/shipments/suggest-vessel</code>. Input: <code>supplier_id</code>, <code>buyer_id</code>, <code>product_id</code>, <code>incoterm</code>.</p>
+        <p>Prioritas resolusi (berhenti pada tier pertama yang menghasilkan vessel name):</p>
+        <table>
+          <thead>
+            <tr><th>Urutan</th><th>Sumber</th><th>Label <code>source</code></th><th>Data yang dibaca</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>Pattern cache</td>
+              <td><code>SAP_HISTORICAL</code> atau <code>CLAUDE_AI</code> (cached)</td>
+              <td>Tabel <code>vessel_patterns</code> — key: supplier + buyer + product + incoterm</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>Shipment KLIP</td>
+              <td><code>SAP_HISTORICAL</code></td>
+              <td><code>shipments</code> ⋈ <code>contracts</code> — kombinasi exact supplier/buyer/product/incoterm; mode vessel + port paling sering</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>Riwayat SAP import</td>
+              <td><code>SAP_HISTORICAL</code></td>
+              <td><code>sap_processed_data</code> — tier match diperlebar (lihat tabel di bawah)</td>
+            </tr>
+            <tr>
+              <td>4</td>
+              <td>Claude AI</td>
+              <td><code>CLAUDE_AI</code></td>
+              <td>Segment historis SAP/KLIP dikirim ke model; output JSON vessel + port</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>Tier match <code>sap_processed_data</code> (vessel / port)</h4>
+        <table>
+          <thead>
+            <tr><th>Tier</th><th>Kombinasi dimensi</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>Supplier + Buyer + Product + Incoterm</td></tr>
+            <tr><td>2</td><td>Supplier + Buyer + Product</td></tr>
+            <tr><td>3</td><td>Supplier + Buyer</td></tr>
+            <tr><td>4</td><td>Buyer + Product + Incoterm</td></tr>
+            <tr><td>5</td><td>Buyer + Product</td></tr>
+            <tr><td>6</td><td>Buyer saja</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Vessel diambil dari <code>raw → Vessel Name</code> atau <code>shipment → vessel_name</code>.
+          Discharge port: <code>Vessel Discharge Port</code> / <code>vessel_discharge_port</code>.
+          Loading port: <code>Vessel Loading Port 1</code> / <code>vessel_loading_port_1</code> / <code>Port of Loading</code>.
+          Kode port numerik SAP (mis. <code>22.03</code>) difilter — yang dipakai adalah nama teks port.
+        </p>
+        <p>
+          Jika AI tidak mengembalikan loading port, fallback ke <code>port_of_loading</code> dari data kontrak/PO (SAP text).
+        </p>
+
+        <h3 id="ai-klip-eta-suggest">Saran semua milestone ETA</h3>
+        <p>
+          Endpoint: <code>POST /api/shipments/suggest-eta</code>.
+          Dipanggil otomatis setelah vessel/port ter-resolve (satu panggilan per blok ETA di Section 3).
+        </p>
+
+        <h4>Input yang dipakai</h4>
+        <table>
+          <thead>
+            <tr><th>Parameter</th><th>Asal di UI</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>vessel_name</code></td><td>Hasil suggest vessel (atau vessel yang sudah diisi user)</td></tr>
+            <tr><td><code>loading_port</code></td><td>Loading port hasil suggest / kontrak / field Section 3</td></tr>
+            <tr><td><code>discharge_port</code></td><td>Discharge port Section 2</td></tr>
+            <tr><td><code>loading_date</code></td><td>Tanggal jangkar — lihat tabel prioritas di bawah</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Prioritas <code>loading_date</code> (hari ke-0 untuk seluruh milestone)</h4>
+        <table>
+          <thead>
+            <tr><th>Urutan</th><th>Sumber</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td><code>etaVesselArrivalAtLoadingPort</code> yang sudah ada di blok ETA (jika terisi)</td></tr>
+            <tr><td>2</td><td><code>delivery_start_date</code> dari kontrak / PO</td></tr>
+            <tr><td>3</td><td>Tanggal hari ini (server)</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Prioritas <code>avg_transit_days</code> (hari loading arrival → discharge arrival)</h4>
+        <table>
+          <thead>
+            <tr><th>Urutan</th><th>Sumber</th><th>Label <code>source</code></th><th>Perhitungan</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>Pattern cache</td>
+              <td>cached</td>
+              <td>Tabel <code>eta_patterns</code> — key: vessel + loading_port + discharge_port</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>Shipment KLIP historis</td>
+              <td><code>SAP_HISTORICAL</code></td>
+              <td>
+                Rata-rata <span class="formula">(eta_discharge_arrival atau ata_discharge_arrival) − (eta_arrival atau ata_arrival)</span>
+                pada <code>shipments</code> dengan vessel + loading + discharge port yang sama (case-insensitive)
+              </td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>Claude AI</td>
+              <td><code>CLAUDE_AI</code></td>
+              <td>Segment rute historis (<code>eta_arrival</code>, <code>eta_sailed</code>, <code>eta_discharge_arrival</code>, ATA) dikirim ke model</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>Rumus milestone ETA (semua field Section 3 diisi sekaligus)</h4>
+        <p>
+          Misalkan <code>L</code> = <code>loading_date</code> dan <code>T</code> = <code>max(1, round(avg_transit_days))</code>.
+          Offset dalam hari kalender dari <code>L</code>:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Field UI (Add New Shipment)</th><th>Offset dari L</th><th>Keterangan</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>ETA Vessel Arrival at Loading Port</td><td><code>+0</code></td><td>= <code>loading_date</code></td></tr>
+            <tr><td>ETA Vessel Berthed at Loading Port</td><td><code>+0</code></td><td>Hari yang sama dengan arrival</td></tr>
+            <tr><td>ETA Vessel Start Loading</td><td><code>+1</code></td><td></td></tr>
+            <tr><td>ETA Vessel Completed Loading</td><td><code>+2</code></td><td></td></tr>
+            <tr><td>ETA Vessel Sailed from Loading Port</td><td><code>+3</code></td><td></td></tr>
+            <tr><td>ETA Vessel Arrive at Discharge Port</td><td><code>+T</code></td><td>Transit utama (dari rata-rata historis / AI)</td></tr>
+            <tr><td>ETA Vessel Berthed at Discharge Port</td><td><code>+T + 1</code></td><td></td></tr>
+            <tr><td>ETA Vessel Start Discharging</td><td><code>+T + 2</code></td><td></td></tr>
+            <tr><td>ETA Vessel Complete Discharge</td><td><code>+T + 4</code></td><td></td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Catatan:</strong> Milestone loading (hari +0 s.d. +3) memakai offset tetap operasional.
+          Bagian discharge (hari <code>T</code> ke atas) memakai <code>avg_transit_days</code> dari riwayat shipment KLIP
+          atau estimasi Claude untuk rute <em>vessel + loading port + discharge port</em> yang sama.
+          Bukan membaca langsung 9 kolom ETA per milestone dari SAP untuk PO tersebut.
+        </div>
+
+        <h3 id="ai-klip-charter">Saran charter type</h3>
+        <p>
+          <strong>Charter type tidak ada di SAP Data.</strong> Saran diambil dari pola KLIP setelah vessel ter-resolve:
+        </p>
+        <ol>
+          <li>Charter type dari hasil vessel suggest (jika ada di shipment/SAP segment)</li>
+          <li>Mode <code>charter_type</code> pada <code>shipments</code> ⋈ <code>contracts</code> — tier match diperlebar (supplier/buyer/product/incoterm)</li>
+          <li>Fallback: jika Incoterm = <code>CIF</code> → suggest <code>CIF</code></li>
+        </ol>
+        <p>Nilai dinormalisasi ke opsi UI: <code>CIF</code>, <code>V/C</code>, <code>T/C</code>.</p>
+
+        <h3 id="ai-klip-chat">KLIP Agent AI (Chat)</h3>
+        <p>
+          Endpoint: <code>POST /api/agent-ai/ask</code>. Memakai <strong>Google Gemini</strong>, bukan Anthropic.
+          Alur singkat:
+        </p>
+        <ol>
+          <li>Pertanyaan user (+ konteks chat sebelumnya, file upload opsional)</li>
+          <li>Query agregat live dari <code>contracts</code>, <code>shipments</code>, <code>trucking_operations</code>, <code>payments</code>, dll.</li>
+          <li>Jika pertanyaan cocok metrik deterministik → jawaban langsung tanpa LLM</li>
+          <li>Jika tidak → Gemini dengan konteks JSON + memori Q&amp;A serupa (<code>agent_ai_memory</code>)</li>
+        </ol>
+        <p>Setiap jawaban disimpan ke <code>agent_ai_memory</code> dan dicatat di Activity Log.</p>
+
+        <h3 id="ai-klip-activity-log">AI Agent Activity Log</h3>
+        <p>
+          Halaman <code>/ai-klip-agent-activity</code> menampilkan tabel audit dengan kolom:
+          <strong>API Key Name</strong>, <strong>Date</strong>, <strong>Activity</strong>.
+          Filter: rentang tanggal dan nama agent.
+        </p>
+        <table>
+          <thead>
+            <tr><th>API Key Name (tampilan)</th><th>Agent</th><th>Contoh activity</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Anthropic (claude-sonnet-4-6)</code></td>
+              <td>Shipment Planner</td>
+              <td>Suggested vessel "…" (SAP_HISTORICAL) for Supplier / Buyer / Product / Incoterm</td>
+            </tr>
+            <tr>
+              <td><code>Anthropic (…)</code></td>
+              <td>Shipment Planner</td>
+              <td>Suggested ETA schedule (~N days, …) for "Vessel" Port A → Port B</td>
+            </tr>
+            <tr>
+              <td><code>Google Gemini (gemini-2.5-flash)</code></td>
+              <td>Chat</td>
+              <td>Answered question: …</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Data disimpan di <code>ai_klip_agent_activity_logs</code>. Riwayat chat lama di-backfill dari <code>agent_ai_memory</code> saat migrasi pertama.</p>
+
+        <h3 id="ai-klip-cache">Pattern cache (percepat suggest berikutnya)</h3>
+        <table>
+          <thead>
+            <tr><th>Tabel</th><th>Unique key</th><th>Isi cache</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>vessel_patterns</code></td>
+              <td>supplier + buyer + product + incoterm</td>
+              <td>vessel name, charter type, discharge port, loading port, source</td>
+            </tr>
+            <tr>
+              <td><code>eta_patterns</code></td>
+              <td>vessel + loading_port + discharge_port</td>
+              <td><code>avg_transit_days</code>, source</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Cache di-update setiap suggest sukses agar klik berikutnya untuk kombinasi sama lebih cepat.</p>
+      </section>
+
       <section id="referensi">
         <h2>Referensi file (implementasi)</h2>
         <table>
@@ -931,6 +1217,11 @@
             <tr><td>Contract Detail modal (Logistics table)</td><td><code>frontend/src/components/contracts/ContractDetailModal.tsx</code></td></tr>
             <tr><td>Add New Shipment API</td><td><code>backend/src/controllers/shipment.controller.ts</code> (<code>createShipment</code>)</td></tr>
             <tr><td>Add New Trucking API</td><td><code>backend/src/controllers/trucking.controller.ts</code> (<code>createTruckingOperation</code>)</td></tr>
+            <tr><td>AI Shipment Planner (vessel + ETA)</td><td><code>backend/src/services/shipmentAiPlanner.service.ts</code>, <code>shipmentAiPlanner.controller.ts</code></td></tr>
+            <tr><td>AI Klip Agent Activity Log</td><td><code>backend/src/services/aiKlipAgentActivityLog.service.ts</code>, <code>frontend/src/app/ai-klip-agent-activity/page.tsx</code></td></tr>
+            <tr><td>KLIP Agent AI (Chat)</td><td><code>backend/src/controllers/agentAi.controller.ts</code>, <code>frontend/src/app/klip-agent-ai/page.tsx</code></td></tr>
+            <tr><td>Anthropic client (Shipment Planner)</td><td><code>backend/src/utils/anthropicClient.ts</code></td></tr>
+            <tr><td>Add New Shipment — tombol AI</td><td><code>frontend/src/components/shared/AddNewShipmentModal.tsx</code></td></tr>
           </tbody>
         </table>
       </section>
@@ -938,7 +1229,7 @@
   </div>
 
   <footer>
-    KLIP Glossary — diperbarui 2026-06-03 · Contract Performance · Shipping Performance · Oil Loss · Operation ID &amp; Shipment ID · SAP Upload &amp; Input KLIP · Buka: <code>docs/KLIP_Glossary.html</code>
+    KLIP Glossary — diperbarui 2026-06-03 · Contract Performance · Shipping Performance · Oil Loss · AI Klip Agent · Operation ID &amp; Shipment ID · SAP Upload &amp; Input KLIP · Buka: <code>docs/KLIP_Glossary.html</code>
   </footer>
 </body>
 </html>

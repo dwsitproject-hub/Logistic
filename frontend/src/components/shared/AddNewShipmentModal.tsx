@@ -42,6 +42,11 @@ import type {
   ShipmentPoOption,
 } from '@/components/shared/addNewShipmentTypes'
 import { EditShipmentModal } from '@/components/shared/EditShipmentModal'
+import { AiKlipAgentButton } from '@/components/shared/AiKlipAgentButton'
+import {
+  suggestShipmentEta,
+  suggestShipmentVessel,
+} from '@/lib/shipmentAiPlanner'
 
 type EtaDetailFields = {
   loadingPort: string
@@ -295,10 +300,14 @@ export function AddNewShipmentModal({
     detail?: string
   } | null>(null)
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const notificationBannerRef = useRef<HTMLDivElement | null>(null)
   const showNotification = useCallback(
     (type: 'success' | 'error' | 'warning', message: string, detail?: string) => {
       if (notifTimerRef.current) clearTimeout(notifTimerRef.current)
       setNotification({ type, message, detail })
+      requestAnimationFrame(() => {
+        notificationBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      })
       notifTimerRef.current = setTimeout(() => setNotification(null), 6000)
     },
     [],
@@ -325,6 +334,13 @@ export function AddNewShipmentModal({
     }
   }>({})
   const [etaDetails, setEtaDetails] = useState<ShipmentEtaDetail[]>([])
+  const [aiVesselLoading, setAiVesselLoading] = useState(false)
+  const [aiAppliedPatternContext, setAiAppliedPatternContext] = useState<{
+    supplier: string
+    buyer: string
+    product: string
+    incoterm: string
+  } | null>(null)
 
   useEffect(() => {
     contractNumbersRef.current = newShipment.contractNumbers
@@ -385,7 +401,12 @@ export function AddNewShipmentModal({
     }))
   }, [])
 
-  const validateContractNumber = useCallback(async (term: string): Promise<string | null> => {
+  type ContractValidationResult = {
+    selectionKey: string
+    contractData: Record<string, unknown>
+  }
+
+  const validateContractNumber = useCallback(async (term: string): Promise<ContractValidationResult | null> => {
     if (!term || term.trim() === '') {
       setContractValidations((prev) => {
         const next = { ...prev }
@@ -466,7 +487,7 @@ export function AddNewShipmentModal({
             portOfLoading: prev.portOfLoading || data.port_of_loading || '',
             portOfDischarge: prev.portOfDischarge || data.port_of_discharge || '',
           }))
-          return selectionKey
+          return { selectionKey, contractData: data as Record<string, unknown> }
         } else {
           setContractValidations((prev) => ({
             ...prev,
@@ -550,7 +571,7 @@ export function AddNewShipmentModal({
       const poKey = String(contract._poKey ?? '').trim()
       const option = poKey ? availablePoByKey.get(poKey) : undefined
       if (option) {
-        addPoFromOption(option)
+        void addPoFromOption(option)
         return
       }
     }
@@ -558,20 +579,26 @@ export function AddNewShipmentModal({
     const contractId = String(contract.contract_id || contract).trim()
     if (!contractId) return
 
-    const resolvedKey = await validateContractNumber(contractId)
-    if (!resolvedKey) return
+    const validated = await validateContractNumber(contractId)
+    if (!validated) return
 
-    addPoSelectionKey(resolvedKey, availablePoByKey.get(resolvedKey)?.contractId ?? resolvedKey)
+    addPoSelectionKey(
+      validated.selectionKey,
+      availablePoByKey.get(validated.selectionKey)?.contractId ?? validated.selectionKey,
+    )
   }
 
   const handleAddContractManually = async () => {
     const term = contractSearchTerm.trim()
     if (!term) return
 
-    const resolvedKey = await validateContractNumber(term)
-    if (!resolvedKey) return
+    const validated = await validateContractNumber(term)
+    if (!validated) return
 
-    addPoSelectionKey(resolvedKey, availablePoByKey.get(resolvedKey)?.contractId ?? resolvedKey)
+    addPoSelectionKey(
+      validated.selectionKey,
+      availablePoByKey.get(validated.selectionKey)?.contractId ?? validated.selectionKey,
+    )
   }
 
   const handleRemoveContract = (contractId: string) => {
@@ -788,14 +815,62 @@ export function AddNewShipmentModal({
     return 'mixed'
   }, [newShipment.contractNumbers, contractValidations])
 
+  const resolveContractDataForSelectionKey = useCallback(
+    (selectionKey: string) => {
+      const direct = contractValidations[selectionKey]?.contractData
+      if (direct) return direct
+
+      const scoped = availablePoByKey.get(selectionKey)?.contractData
+      if (scoped) return scoped
+
+      const keyTrim = String(selectionKey).trim()
+      for (const validation of Object.values(contractValidations)) {
+        const data = validation?.contractData
+        if (!data) continue
+        const contractId = String(data.contract_id ?? '').trim()
+        const poNumber = String(data.po_number ?? '').trim()
+        if (contractId === keyTrim || poNumber === keyTrim) return data
+      }
+
+      return null
+    },
+    [availablePoByKey, contractValidations],
+  )
+
+  const getPoContractExtNo = useCallback(
+    (selectionKey: string) => {
+      const data = resolveContractDataForSelectionKey(selectionKey)
+      return String(data?.contract_ext_no ?? '').trim()
+    },
+    [resolveContractDataForSelectionKey],
+  )
+
   const resolvedPlantCode = useMemo(() => {
-    const firstContractId = newShipment.contractNumbers[0]
-    if (!firstContractId) return ''
-    const data = contractValidations[firstContractId]?.contractData
-    return String(data?.plant_code ?? '').trim()
-  }, [newShipment.contractNumbers, contractValidations])
+    for (const selectionKey of newShipment.contractNumbers) {
+      const data = resolveContractDataForSelectionKey(selectionKey)
+      const plantCode = String(data?.plant_code ?? '').trim()
+      if (plantCode) return plantCode
+
+      const scopedPlant = String(availablePoByKey.get(selectionKey)?.plantCode ?? '').trim()
+      if (scopedPlant) return scopedPlant
+    }
+    return ''
+  }, [availablePoByKey, newShipment.contractNumbers, resolveContractDataForSelectionKey])
+
+  const resolvedPlantSiteLabel = useMemo(() => {
+    for (const selectionKey of newShipment.contractNumbers) {
+      const data = resolveContractDataForSelectionKey(selectionKey)
+      const site = String(data?.plant_site ?? '').trim()
+      if (site && site !== 'Blank') return site
+    }
+    return ''
+  }, [newShipment.contractNumbers, resolveContractDataForSelectionKey])
 
   useEffect(() => {
+    if (resolvedPlantSiteLabel) {
+      setMappedPlantSiteName(resolvedPlantSiteLabel)
+      return
+    }
     if (!resolvedPlantCode) {
       setMappedPlantSiteName('')
       return
@@ -804,23 +879,287 @@ export function AddNewShipmentModal({
     void (async () => {
       try {
         const res = await api.get('/master-plants', { params: { search: resolvedPlantCode, limit: 50 } })
-        const items: Array<{ plant_code?: string; plant_name?: string }> = res.data?.data?.items ?? []
+        const items: Array<{ plant_code?: string; group_plant?: string | null }> =
+          res.data?.data?.items ?? []
         const codeUpper = resolvedPlantCode.toUpperCase()
         const match = items.find((p) => String(p.plant_code ?? '').trim().toUpperCase() === codeUpper)
+        const groupPlant = String(match?.group_plant ?? '').trim()
         if (!cancelled) {
-          setMappedPlantSiteName(match?.plant_name?.trim() || resolvedPlantCode)
+          setMappedPlantSiteName(groupPlant && groupPlant !== 'Blank' ? groupPlant : '')
         }
       } catch {
-        if (!cancelled) setMappedPlantSiteName(resolvedPlantCode)
+        if (!cancelled) setMappedPlantSiteName('')
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [resolvedPlantCode])
+  }, [resolvedPlantCode, resolvedPlantSiteLabel])
 
   const clearFieldError = (field: string) =>
     setFormErrors((prev) => { const next = { ...prev }; delete next[field]; return next })
+
+  const fetchContractDetailsByTerm = useCallback(async (term: string) => {
+    const trimmed = String(term ?? '').trim()
+    if (!trimmed) return null
+    try {
+      const response = await api.get(
+        `/shipments/contracts/validate?contract_number=${encodeURIComponent(trimmed)}`,
+      )
+      if (response.data?.success && response.data?.exists) {
+        return response.data.data as Record<string, unknown>
+      }
+    } catch (error) {
+      console.error('Error fetching contract details for AI planner:', error)
+    }
+    return null
+  }, [])
+
+  const resolvePrimaryContractData = useCallback(() => {
+    for (const key of newShipment.contractNumbers) {
+      const data = resolveContractDataForSelectionKey(key)
+      if (data?.supplier && data?.buyer && data?.product) return data
+    }
+    const firstKey = newShipment.contractNumbers[0]
+    return firstKey ? resolveContractDataForSelectionKey(firstKey) : null
+  }, [newShipment.contractNumbers, resolveContractDataForSelectionKey])
+
+  const aiPlannerContextLabel = useMemo(() => {
+    const data = resolvePrimaryContractData()
+    if (!data) return null
+    const supplier = String(data.supplier ?? '').trim()
+    const buyer = String(data.buyer ?? '').trim()
+    const product = String(data.product ?? '').trim()
+    const incoterm = String(data.incoterm ?? '').trim()
+    if (!supplier && !buyer && !product) return null
+    return { supplier, buyer, product, incoterm }
+  }, [newShipment.contractNumbers, resolvePrimaryContractData, contractValidations, availablePoByKey])
+
+  const renderAiPatternDimensionList = (
+    ctx: { supplier: string; buyer: string; product: string; incoterm: string },
+  ) => {
+    const items: Array<{ label: string; value: string }> = [
+      { label: 'Buyer', value: ctx.buyer },
+      { label: 'Product', value: ctx.product },
+      { label: 'Supplier', value: ctx.supplier },
+      { label: 'Incoterm', value: ctx.incoterm },
+    ].filter((item) => item.value)
+
+    if (items.length === 0) return null
+
+    return (
+      <>
+        {items.map((item, index) => (
+          <span key={item.label}>
+            {index > 0 && (index === items.length - 1 ? ', and ' : ', ')}
+            {item.label}{' '}
+            <span className="font-medium text-gray-800">{item.value}</span>
+          </span>
+        ))}
+      </>
+    )
+  }
+
+  const resolveAiPlannerDimensions = useCallback(
+    async (contractData: Record<string, unknown> | null, selectionKey?: string) => {
+      const pick = (...keys: string[]) => {
+        for (const key of keys) {
+          const value = contractData?.[key]
+          if (value != null && String(value).trim() !== '') return String(value).trim()
+        }
+        return ''
+      }
+
+      let supplier = pick('supplier')
+      let buyer = pick('buyer')
+      let product = pick('product')
+      let incoterm = pick('incoterm')
+
+      if (!supplier || !buyer || !product) {
+        const scopedPo = selectionKey ? availablePoByKey.get(selectionKey) : undefined
+        const lookupTerm =
+          pick('po_number', 'contract_id') ||
+          String(scopedPo?.poNumber ?? '').trim() ||
+          String(scopedPo?.contractId ?? '').trim() ||
+          (selectionKey ? String(selectionKey).trim() : '') ||
+          newShipment.contractNumbers[0] ||
+          ''
+        const enriched = lookupTerm ? await fetchContractDetailsByTerm(lookupTerm) : null
+        if (enriched) {
+          supplier = supplier || String(enriched.supplier ?? '').trim()
+          buyer = buyer || String(enriched.buyer ?? '').trim()
+          product = product || String(enriched.product ?? '').trim()
+          incoterm = incoterm || String(enriched.incoterm ?? '').trim()
+        }
+      }
+
+      return { supplier, buyer, product, incoterm }
+    },
+    [availablePoByKey, fetchContractDetailsByTerm, newShipment.contractNumbers],
+  )
+
+  const handleAiSuggestVessel = useCallback(async () => {
+    const firstKey = newShipment.contractNumbers[0]
+    if (!firstKey) {
+      showNotification('warning', 'Add a contract first', 'Add at least one PO in Section 1.')
+      return
+    }
+
+    const contractData = resolvePrimaryContractData()
+    const { supplier, buyer, product, incoterm } = await resolveAiPlannerDimensions(
+      contractData as Record<string, unknown> | null,
+      firstKey,
+    )
+
+    if (!supplier || !buyer || !product) {
+      showNotification(
+        'warning',
+        'Contract details incomplete',
+        'Could not resolve supplier, buyer, and product for the selected PO. Try removing and re-adding the PO.',
+      )
+      return
+    }
+
+    setAiVesselLoading(true)
+    try {
+      const vesselResult = await suggestShipmentVessel({
+        supplier_id: supplier,
+        buyer_id: buyer,
+        product_id: product,
+        incoterm,
+      })
+
+      const loadingPort = (
+        vesselResult.suggested_loading_port?.trim() ||
+        String(contractData?.port_of_loading ?? '').trim() ||
+        newShipment.portOfLoading.trim()
+      )
+      const dischargePort = (
+        vesselResult.suggested_discharge_port?.trim() || newShipment.portOfDischarge.trim()
+      )
+      const vesselName = (vesselResult.suggested_vessel_name || '').trim()
+
+      setNewShipment((prev) => ({
+        ...prev,
+        vesselName: vesselName || prev.vesselName,
+        charterType: vesselResult.suggested_charter_type || prev.charterType,
+        portOfDischarge: dischargePort || prev.portOfDischarge,
+        portOfLoading: loadingPort || prev.portOfLoading,
+      }))
+      clearFieldError('vesselName')
+      clearFieldError('charterType')
+      clearFieldError('portOfDischarge')
+
+      const appliedPattern = { supplier, buyer, product, incoterm }
+      setAiAppliedPatternContext(appliedPattern)
+
+      const vesselSourceLabel =
+        vesselResult.source === 'SAP_HISTORICAL' ? 'SAP history' : 'Claude AI'
+      const vesselCached = vesselResult.cached ? ' (cached)' : ''
+      const charterPart = vesselResult.suggested_charter_type
+        ? ` Charter type: ${vesselResult.suggested_charter_type}.`
+        : ''
+
+      const blocksToUpdate =
+        etaDetails.length > 0
+          ? etaDetails
+          : [createShipmentEtaDetail([...newShipment.contractNumbers])]
+
+      if (etaDetails.length === 0) {
+        setEtaDetails(blocksToUpdate)
+      }
+
+      const finalVesselName = vesselName || newShipment.vesselName.trim()
+      const finalLoadingPort = loadingPort
+      const finalDischargePort = dischargePort || newShipment.portOfDischarge.trim()
+
+      if (!finalVesselName || !finalLoadingPort || !finalDischargePort) {
+        showNotification(
+          'success',
+          'Partial AI suggestion applied',
+          `${vesselSourceLabel}${vesselCached}.${charterPart} Vessel and ports updated where available; complete missing ports to calculate ETA.`,
+        )
+        return
+      }
+
+      let etaApplied = 0
+      let etaSourceLabel: string | null = null
+      let transitDays: number | null = null
+      let etaErrorMessage: string | null = null
+
+      for (const block of blocksToUpdate) {
+        const loadingDate =
+          toApiDateOnly(block.etaVesselArrivalAtLoadingPort) ||
+          sliceIsoDate(contractData?.delivery_start_date as string | undefined) ||
+          new Date().toISOString().slice(0, 10)
+
+        try {
+          const etaResult = await suggestShipmentEta({
+            vessel_name: finalVesselName,
+            loading_port: finalLoadingPort,
+            discharge_port: finalDischargePort,
+            loading_date: loadingDate,
+          })
+          updateEtaDetailBlock(block.id, {
+            loadingPort: finalLoadingPort,
+            ...etaResult.milestones,
+          })
+          const prefix = `eta_${block.id}`
+          clearFieldError(`${prefix}_loadingPort`)
+          clearFieldError(`${prefix}_arrival`)
+          clearFieldError(`${prefix}_berthed`)
+          clearFieldError(`${prefix}_startLoading`)
+          clearFieldError(`${prefix}_completedLoading`)
+          clearFieldError(`${prefix}_sailed`)
+          clearFieldError(`${prefix}_arriveDischarge`)
+          clearFieldError(`${prefix}_berthedDischarge`)
+          clearFieldError(`${prefix}_startDischarging`)
+          clearFieldError(`${prefix}_completeDischarge`)
+          etaApplied += 1
+          etaSourceLabel = etaResult.source === 'SAP_HISTORICAL' ? 'SAP history' : 'Claude AI'
+          transitDays = etaResult.avg_transit_days
+        } catch (error) {
+          updateEtaDetailBlock(block.id, { loadingPort: finalLoadingPort })
+          clearFieldError(`eta_${block.id}_loadingPort`)
+          etaErrorMessage =
+            error instanceof Error ? error.message : 'AI ETA suggestion failed'
+        }
+      }
+
+      if (etaApplied > 0) {
+        const etaPart =
+          transitDays != null
+            ? ` ETA from ${etaSourceLabel} (~${transitDays} days transit) applied to ${etaApplied} schedule(s).`
+            : ` ETA applied to ${etaApplied} schedule(s).`
+        showNotification(
+          'success',
+          'AI shipment plan applied',
+          `Vessel from ${vesselSourceLabel}${vesselCached};${charterPart} loading & discharge ports set.${etaPart} All fields remain editable.`,
+        )
+      } else if (etaErrorMessage) {
+        showNotification(
+          'warning',
+          'Vessel applied; ETA unavailable',
+          `${vesselSourceLabel}${vesselCached}. Loading port set but ETA could not be calculated: ${etaErrorMessage}`,
+        )
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'AI suggestion failed'
+      showNotification('warning', 'AI suggestion unavailable', `${message}. Please fill fields manually.`)
+    } finally {
+      setAiVesselLoading(false)
+    }
+  }, [
+    etaDetails,
+    newShipment.contractNumbers,
+    newShipment.portOfDischarge,
+    newShipment.portOfLoading,
+    newShipment.vesselName,
+    resolveAiPlannerDimensions,
+    resolvePrimaryContractData,
+    showNotification,
+    updateEtaDetailBlock,
+  ])
 
   const clearPoNumberField = useCallback(() => {
     setContractSearchTerm('')
@@ -858,11 +1197,32 @@ export function AddNewShipmentModal({
   )
 
   const addPoFromOption = useCallback(
-    (option: ShipmentPoOption): boolean => {
-      seedPoValidation(option)
+    async (option: ShipmentPoOption): Promise<boolean> => {
+      const term = String(option.poNumber || option.contractId || '').trim()
+      if (term) {
+        const validated = await validateContractNumber(term)
+        if (validated) {
+          setContractValidations((prev) => ({
+            ...prev,
+            [option.key]: {
+              checking: false,
+              exists: true,
+              contractData: {
+                ...validated.contractData,
+                plant_code: validated.contractData.plant_code ?? option.plantCode,
+              },
+              message: 'Contract found',
+            },
+          }))
+        } else {
+          seedPoValidation(option)
+        }
+      } else {
+        seedPoValidation(option)
+      }
       return addPoSelectionKey(option.key, option.contractId)
     },
-    [addPoSelectionKey, seedPoValidation],
+    [addPoSelectionKey, seedPoValidation, validateContractNumber],
   )
 
   const resetForm = useCallback(() => {
@@ -877,6 +1237,7 @@ export function AddNewShipmentModal({
     setVesselSuggestions([])
     setShowVesselSuggestions(false)
     setMappedPlantSiteName('')
+    setAiAppliedPatternContext(null)
     setFormErrors({})
     setEditShipmentId(null)
     setLoadingEdit(false)
@@ -1022,6 +1383,10 @@ export function AddNewShipmentModal({
   )
 
   useEffect(() => {
+    setAiAppliedPatternContext(null)
+  }, [newShipment.contractNumbers])
+
+  useEffect(() => {
     if (!open) {
       initSessionRef.current = null
       return
@@ -1114,6 +1479,32 @@ export function AddNewShipmentModal({
       })
     })
   }, [open, isEditMode, loadingEdit, newShipment.contractNumbers, selectedTransportMode])
+
+  /** Pre-fill Section 3 loading port from contract/SAP port name when available. */
+  useEffect(() => {
+    if (!open || isEditMode || loadingEdit) return
+    let portOfLoading = newShipment.portOfLoading.trim()
+    if (!portOfLoading) {
+      for (const selectionKey of newShipment.contractNumbers) {
+        const data = resolveContractDataForSelectionKey(selectionKey)
+        portOfLoading = String(data?.port_of_loading ?? '').trim()
+        if (portOfLoading) break
+      }
+    }
+    if (!portOfLoading) return
+    setEtaDetails((prev) =>
+      prev.map((block) =>
+        block.loadingPort.trim() ? block : { ...block, loadingPort: portOfLoading },
+      ),
+    )
+  }, [
+    open,
+    isEditMode,
+    loadingEdit,
+    newShipment.portOfLoading,
+    newShipment.contractNumbers,
+    resolveContractDataForSelectionKey,
+  ])
 
   const validateShipmentForm = (transportMode: string | null): boolean => {
     const errors: Record<string, string> = {}
@@ -1465,6 +1856,7 @@ export function AddNewShipmentModal({
         {/* Notification banner */}
         {notification && (
           <div
+            ref={notificationBannerRef}
             className={`mb-4 flex items-start gap-3 rounded-lg border px-4 py-3 text-sm shadow-sm ${
               notification.type === 'success'
                 ? 'border-green-200 bg-green-50 text-green-800'
@@ -1618,7 +2010,7 @@ export function AddNewShipmentModal({
                             key={po.key}
                             type="button"
                             className="inline-flex items-center rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:border-blue-300 hover:bg-blue-50"
-                            onClick={() => addPoFromOption(po)}
+                            onClick={() => void addPoFromOption(po)}
                           >
                             <Plus className="h-3 w-3 mr-0.5" />
                             {po.label}
@@ -1664,6 +2056,7 @@ export function AddNewShipmentModal({
                             const validation = contractValidations[contractId]
                             const data = validation?.contractData
                             const label = getPoLabel(contractId)
+                            const contractExtNo = getPoContractExtNo(contractId)
                             const exceed = contractQtyAssignedExceedsOutstanding[contractId]
                             const rowError =
                               Boolean(exceed) || Boolean(formErrors.contractQty && validation?.exists)
@@ -1685,9 +2078,9 @@ export function AddNewShipmentModal({
                                       <X className="h-3 w-3 text-red-600 shrink-0" />
                                     )}
                                   </div>
-                                  {data?.po_number && (
-                                    <div className="text-[10px] text-gray-400 truncate" title={contractId}>
-                                      {contractId}
+                                  {contractExtNo && (
+                                    <div className="text-[10px] text-gray-400 truncate" title={contractExtNo}>
+                                      {contractExtNo}
                                     </div>
                                   )}
                                   {validation?.message && !validation.exists && (
@@ -1851,6 +2244,58 @@ export function AddNewShipmentModal({
               {step2Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
             </div>
             <div className="p-4 space-y-3 overflow-visible">
+              {!isEditMode && (selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') && (
+                <div className="flex flex-col gap-3 rounded-lg border border-violet-100 bg-violet-50/60 px-3 py-3 sm:flex-row sm:items-start">
+                  <AiKlipAgentButton
+                    onClick={() => void handleAiSuggestVessel()}
+                    loading={aiVesselLoading}
+                    disabled={newShipment.contractNumbers.length === 0}
+                    label="AI Klip Agent"
+                    className="h-10 shrink-0 self-start"
+                    title="Suggest vessel, charter type, ports, loading port, and all ETA milestones"
+                  />
+                  <div className="min-w-0 flex-1 space-y-1.5 text-xs leading-relaxed text-gray-600">
+                    {aiAppliedPatternContext ? (
+                      <>
+                        <p className="text-sm font-medium text-violet-900">AI suggestion applied</p>
+                        <p>
+                          The values below were suggested because KLIP found similar past shipments
+                          in the database for{' '}
+                          {renderAiPatternDimensionList(aiAppliedPatternContext)}. You can still edit
+                          any field manually.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm font-medium text-violet-900">How does the AI suggestion work?</p>
+                        <p>
+                          The AI reviews historical KLIP shipments that match the{' '}
+                          <span className="font-medium text-gray-800">
+                            Supplier, Buyer, Product, and Incoterm
+                          </span>{' '}
+                          from the PO(s) you selected in Section 1. It then fills in the vessel,
+                          charter type, discharge port, loading port, and full ETA schedule. All
+                          fields remain editable.
+                        </p>
+                        {newShipment.contractNumbers.length === 0 ? (
+                          <p className="text-[11px] font-medium text-amber-700">
+                            Add at least one PO in Section 1 to enable AI suggestions.
+                          </p>
+                        ) : aiPlannerContextLabel ? (
+                          <p className="text-[11px] text-gray-500">
+                            <span className="font-medium text-gray-700">Selected PO pattern:</span>{' '}
+                            {renderAiPatternDimensionList(aiPlannerContextLabel)}
+                          </p>
+                        ) : (
+                          <p className="text-[11px] text-gray-500">
+                            Loading PO details… if this persists, try removing and re-adding the PO.
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 overflow-visible">
                 <div
                   className={`relative overflow-visible ${vesselDropdownOpen ? 'z-[100]' : 'z-0'}`}
@@ -1907,6 +2352,8 @@ export function AddNewShipmentModal({
                     className="bg-gray-100 cursor-not-allowed"
                   />
                 </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 overflow-visible">
                 <div className="relative z-0">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Charter Type
@@ -1957,7 +2404,7 @@ export function AddNewShipmentModal({
                     value={mappedPlantSiteName}
                     readOnly
                     disabled
-                    placeholder={resolvedPlantCode ? 'Resolving plant name...' : 'Add a contract in Section 1'}
+                    placeholder={resolvedPlantCode ? 'Resolving group plant...' : 'Add a contract in Section 1'}
                     className="bg-gray-50 cursor-not-allowed"
                   />
                 </div>
@@ -2068,7 +2515,7 @@ export function AddNewShipmentModal({
                                 }}
                                 placeholder="Search port name..."
                                 disabled={isEditMode}
-                                className={`h-8 text-xs ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors[`${prefix}_loadingPort`] ? 'border-red-500' : ''}`}
+                                className={`h-8 text-xs w-full ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors[`${prefix}_loadingPort`] ? 'border-red-500' : ''}`}
                               />
                               {formErrors[`${prefix}_loadingPort`] && (
                                 <p className="text-[11px] mt-1 text-red-600">{formErrors[`${prefix}_loadingPort`]}</p>

@@ -39,6 +39,7 @@ services:
       JWT_SECRET: dev-secret-change-in-production
       JWT_EXPIRES_IN: 7d
       # GEMINI_API_KEY is loaded from env_file (backend/.env); do not hardcode keys here
+      # ANTHROPIC_API_KEY: optional — AI Shipment Planner (Claude) on Add New Shipment
     ports:
       - "5001:5001"
     depends_on:

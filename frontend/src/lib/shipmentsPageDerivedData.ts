@@ -81,7 +81,7 @@ export function normalizeEffectiveStatus(raw: string | null | undefined): Shipme
   return VALID_STATUSES.has(s) ? (s as ShipmentEffectiveStatus) : 'UNPLANNED'
 }
 
-/** Planned pipeline card includes UNPLANNED so badge totals match row count. */
+/** @deprecated UNPLANNED and PLANNED are separate status filters on the Shipments page. */
 export function matchesPlannedPipelineStatus(status: ShipmentEffectiveStatus): boolean {
   return status === 'PLANNED' || status === 'UNPLANNED'
 }
@@ -94,11 +94,11 @@ export function matchesStatusFilter(
     .trim()
     .toUpperCase()
   if (!filter || filter === 'ALL') return true
-  if (filter === 'PLANNED') return matchesPlannedPipelineStatus(status)
   return status === filter
 }
 
 export type Section1StatusCounts = {
+  unplanned: number
   planned: number
   inProgress: number
   loading: number
@@ -156,9 +156,10 @@ export function computeSection1StatusCounts(rows: readonly ShipmentsPageRow[]): 
     }
   }
 
-  const plannedDisplay = planned + unplanned
+  const plannedDisplay = planned
 
   return {
+    unplanned,
     planned: plannedDisplay,
     inProgress,
     loading,
@@ -173,6 +174,7 @@ export function computeSection1StatusCounts(rows: readonly ShipmentsPageRow[]): 
 
 export function section1BadgeSum(counts: Section1StatusCounts): number {
   return (
+    counts.unplanned +
     counts.planned +
     counts.inProgress +
     counts.loading +
