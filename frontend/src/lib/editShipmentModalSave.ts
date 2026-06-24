@@ -1,5 +1,7 @@
 import api from '@/lib/api'
 import { toApiDateOnly } from '@/lib/dateFormat'
+import type { ShipmentAtaFields } from '@/lib/shipmentAtaFields'
+import { buildAtaOverridePayload } from '@/lib/shipmentAtaFields'
 import type { VesselPortsQuantityEdits, VesselPortsQuantityRow } from '@/components/shipments/VesselPortsQuantitiesTable'
 import { sumVesselPortsQuantityEdits } from '@/components/shipments/VesselPortsQuantitiesTable'
 
@@ -99,6 +101,8 @@ export type SaveEditShipmentInput = {
   quantityUnlocked: boolean
   hasSldOrSddDoc: boolean
   loadingPorts: LoadingPortRef[]
+  ataFields?: ShipmentAtaFields
+  originalAtaFields?: ShipmentAtaFields
 }
 
 function quantityValuesEqual(a: unknown, b: unknown): boolean {
@@ -242,5 +246,15 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
       dischargePort.id,
     )
     await api.put(`/shipments/${input.shipmentId}/loading-ports/${dischargePort.id}`, dischargePayload)
+  }
+
+  if (input.ataFields && input.originalAtaFields) {
+    const ataPayload = buildAtaOverridePayload(input.ataFields, input.originalAtaFields)
+    if (ataPayload) {
+      const ataRes = await api.put(`/shipments/${input.shipmentId}/ata-override`, ataPayload)
+      if (!ataRes.data?.success) {
+        throw new Error(ataRes.data?.error?.message || 'Failed to save ATA override')
+      }
+    }
   }
 }

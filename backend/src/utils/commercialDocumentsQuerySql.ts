@@ -1,4 +1,5 @@
 import { groupPlantExpr } from './groupPlantSql';
+import { documentTypesForCategory } from './commercialDocumentsConstants';
 
 /** Open contract status for summary card counts. */
 export const COMMERCIAL_DOCS_OPEN_STATUS_SQL = `(
@@ -33,6 +34,11 @@ function parseSapPaymentDateFromTrimmedExpr(trimmedExpr: string): string {
 
 function sapPaymentRawExpr(jsonPaths: string[]): string {
   return `trim(COALESCE(${jsonPaths.join(', ')}))`;
+}
+
+function sqlDocFlag(columnTypes: string[]): string {
+  const list = columnTypes.map((t) => `'${t}'`).join(', ');
+  return `BOOL_OR(document_type IN (${list}))`;
 }
 
 export function buildCommercialDocumentsBaseCte(): string {
@@ -118,12 +124,11 @@ export function buildCommercialDocumentsBaseCte(): string {
     doc_flags AS (
       SELECT
         contract_ext_no,
-        BOOL_OR(document_type = 'contract') AS doc_contract,
-        BOOL_OR(document_type = 'faktur_pajak') AS doc_faktur_pajak,
-        BOOL_OR(document_type = 'dp') AS doc_dp,
-        BOOL_OR(document_type = 'invoice_dp') AS doc_invoice_dp,
-        BOOL_OR(document_type = 'ep_pelunasan') AS doc_ep_pelunasan,
-        BOOL_OR(document_type = 'invoice_pelunasan') AS doc_invoice_pelunasan,
+        ${sqlDocFlag(documentTypesForCategory('contract'))} AS doc_contract,
+        ${sqlDocFlag(documentTypesForCategory('addendum_contract'))} AS doc_addendum_contract,
+        ${sqlDocFlag(documentTypesForCategory('invoice_fp_dp'))} AS doc_invoice_fp_dp,
+        ${sqlDocFlag(documentTypesForCategory('invoice_fp_payoff'))} AS doc_invoice_fp_payoff,
+        ${sqlDocFlag(documentTypesForCategory('invoice_fp_full'))} AS doc_invoice_fp_full,
         COUNT(*)::int AS uploaded_count
       FROM commercial_document_files
       GROUP BY contract_ext_no
@@ -132,11 +137,10 @@ export function buildCommercialDocumentsBaseCte(): string {
       SELECT
         cr.*,
         COALESCE(df.doc_contract, false) AS doc_contract,
-        COALESCE(df.doc_faktur_pajak, false) AS doc_faktur_pajak,
-        COALESCE(df.doc_dp, false) AS doc_dp,
-        COALESCE(df.doc_invoice_dp, false) AS doc_invoice_dp,
-        COALESCE(df.doc_ep_pelunasan, false) AS doc_ep_pelunasan,
-        COALESCE(df.doc_invoice_pelunasan, false) AS doc_invoice_pelunasan,
+        COALESCE(df.doc_addendum_contract, false) AS doc_addendum_contract,
+        COALESCE(df.doc_invoice_fp_dp, false) AS doc_invoice_fp_dp,
+        COALESCE(df.doc_invoice_fp_payoff, false) AS doc_invoice_fp_payoff,
+        COALESCE(df.doc_invoice_fp_full, false) AS doc_invoice_fp_full,
         COALESCE(df.uploaded_count, 0) AS uploaded_count
       FROM contract_rows cr
       LEFT JOIN doc_flags df ON df.contract_ext_no = cr.contract_ext_no
@@ -147,11 +151,10 @@ export function buildCommercialDocumentsBaseCte(): string {
 function docTypeCheckedColumn(documentType: string): string | null {
   const map: Record<string, string> = {
     contract: 'doc_contract',
-    faktur_pajak: 'doc_faktur_pajak',
-    dp: 'doc_dp',
-    invoice_dp: 'doc_invoice_dp',
-    ep_pelunasan: 'doc_ep_pelunasan',
-    invoice_pelunasan: 'doc_invoice_pelunasan',
+    addendum_contract: 'doc_addendum_contract',
+    invoice_fp_dp: 'doc_invoice_fp_dp',
+    invoice_fp_payoff: 'doc_invoice_fp_payoff',
+    invoice_fp_full: 'doc_invoice_fp_full',
   };
   return map[documentType] ?? null;
 }
@@ -200,7 +203,6 @@ export function buildCommercialDocumentsListQuery(params: CommercialDocumentsLis
     values.push(params.plant.trim());
   }
   if (params.documentType && params.documentStatus) {
-    // Section 1 summary cards only count open contracts — keep table total aligned.
     where.push('e.is_open = true');
     const col = docTypeCheckedColumn(params.documentType);
     if (col) {
@@ -249,11 +251,10 @@ export function buildCommercialDocumentsSummaryQuery(params: {
     SELECT
       COUNT(*) FILTER (WHERE e.is_open)::int AS open_contract_count,
       COUNT(*) FILTER (WHERE e.is_open AND e.doc_contract)::int AS checked_contract,
-      COUNT(*) FILTER (WHERE e.is_open AND e.doc_faktur_pajak)::int AS checked_faktur_pajak,
-      COUNT(*) FILTER (WHERE e.is_open AND e.doc_dp)::int AS checked_dp,
-      COUNT(*) FILTER (WHERE e.is_open AND e.doc_invoice_dp)::int AS checked_invoice_dp,
-      COUNT(*) FILTER (WHERE e.is_open AND e.doc_ep_pelunasan)::int AS checked_ep_pelunasan,
-      COUNT(*) FILTER (WHERE e.is_open AND e.doc_invoice_pelunasan)::int AS checked_invoice_pelunasan
+      COUNT(*) FILTER (WHERE e.is_open AND e.doc_addendum_contract)::int AS checked_addendum_contract,
+      COUNT(*) FILTER (WHERE e.is_open AND e.doc_invoice_fp_dp)::int AS checked_invoice_fp_dp,
+      COUNT(*) FILTER (WHERE e.is_open AND e.doc_invoice_fp_payoff)::int AS checked_invoice_fp_payoff,
+      COUNT(*) FILTER (WHERE e.is_open AND e.doc_invoice_fp_full)::int AS checked_invoice_fp_full
     FROM enriched e
     WHERE ${where.join(' AND ')}
   `;

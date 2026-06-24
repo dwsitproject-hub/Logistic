@@ -262,6 +262,8 @@ export function PerformanceScopeFilters({
 
               emptyMessage={productEmptyMessage}
 
+              pinSelectedToTop
+
             />
 
           )}
@@ -281,6 +283,8 @@ export function PerformanceScopeFilters({
               placeholder={groupPlantPlaceholder}
 
               emptyMessage={groupPlantEmptyMessage}
+
+              pinSelectedToTop
 
             />
 

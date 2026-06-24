@@ -15,11 +15,10 @@ import { Check } from 'lucide-react'
 
 const DOC_STATUS_COLUMN_IDS = new Set<CommercialDocsColumnId>([
   'doc_contract',
-  'doc_faktur_pajak',
-  'doc_dp',
-  'doc_invoice_dp',
-  'doc_ep_pelunasan',
-  'doc_invoice_pelunasan',
+  'doc_addendum_contract',
+  'doc_invoice_fp_dp',
+  'doc_invoice_fp_payoff',
+  'doc_invoice_fp_full',
 ])
 
 export const COMMERCIAL_DOCS_DEFAULT_VISIBLE_COLUMNS = [
@@ -35,11 +34,10 @@ export const COMMERCIAL_DOCS_DEFAULT_VISIBLE_COLUMNS = [
   'unit_price',
   'total_price',
   'doc_contract',
-  'doc_faktur_pajak',
-  'doc_dp',
-  'doc_invoice_dp',
-  'doc_ep_pelunasan',
-  'doc_invoice_pelunasan',
+  'doc_addendum_contract',
+  'doc_invoice_fp_dp',
+  'doc_invoice_fp_payoff',
+  'doc_invoice_fp_full',
 ] as const
 
 export const COMMERCIAL_DOCS_HIDDEN_BY_DEFAULT_COLUMNS = [
@@ -80,11 +78,10 @@ const DOC_COL_MAP: Record<
   { id: CommercialDocsColumnId; field: keyof CommercialDocumentRow }
 > = {
   contract: { id: 'doc_contract', field: 'doc_contract' },
-  faktur_pajak: { id: 'doc_faktur_pajak', field: 'doc_faktur_pajak' },
-  dp: { id: 'doc_dp', field: 'doc_dp' },
-  invoice_dp: { id: 'doc_invoice_dp', field: 'doc_invoice_dp' },
-  ep_pelunasan: { id: 'doc_ep_pelunasan', field: 'doc_ep_pelunasan' },
-  invoice_pelunasan: { id: 'doc_invoice_pelunasan', field: 'doc_invoice_pelunasan' },
+  addendum_contract: { id: 'doc_addendum_contract', field: 'doc_addendum_contract' },
+  invoice_fp_dp: { id: 'doc_invoice_fp_dp', field: 'doc_invoice_fp_dp' },
+  invoice_fp_payoff: { id: 'doc_invoice_fp_payoff', field: 'doc_invoice_fp_payoff' },
+  invoice_fp_full: { id: 'doc_invoice_fp_full', field: 'doc_invoice_fp_full' },
 }
 
 export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {

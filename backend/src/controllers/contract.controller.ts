@@ -39,7 +39,9 @@ import {
 import {
   resolveContractLogisticsOperationId,
   resolveContractLogisticsStoNumber,
+  resolveContractLogisticsStoStatus,
 } from '../utils/contractLogisticsStoDisplay';
+import { sqlContractImportStatusExpr } from '../utils/contractDeliveryStatus';
 
 export { B2B_CHILD_EXCLUSION_SQL };
 
@@ -1985,11 +1987,17 @@ export const getContract = async (req: AuthRequest, res: Response) => {
 export const getContractStoInformation = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const contractResult = await query('SELECT id, contract_id, delivery_end_date, transport_mode FROM contracts WHERE id = $1', [id]);
+    const contractResult = await query(
+      `SELECT id, contract_id, delivery_end_date, transport_mode,
+              ${sqlContractImportStatusExpr('c')} AS import_status
+       FROM contracts c WHERE c.id = $1`,
+      [id],
+    );
     if (contractResult.rows.length === 0) {
       return res.status(404).json({ success: false, error: { message: 'Contract not found' } });
     }
     const contract = contractResult.rows[0];
+    const contractImportStatus = contract.import_status ?? null;
     const deliveryEnd = contract.delivery_end_date ?? null;
     const transportMode = String(contract.transport_mode ?? '').trim().toUpperCase();
     const includeShipments =
@@ -2181,7 +2189,16 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         sto_number: resolveContractLogisticsStoNumber(r.sto_number),
         operation_id: resolveContractLogisticsOperationId(r.operation_id, r.sto_key),
         late_indicator: lateIndicator,
-        status: r.status || '-',
+        status: resolveContractLogisticsStoStatus({
+          contractImportStatus,
+          dbStatus: r.status,
+          logisticsType: 'shipment',
+          shipmentMilestones: {
+            eta_arrival_at_loading_port: r.eta_vessel_arrival_loading_port,
+            eta_complete_discharge: r.eta_discharge_complete,
+            ata_complete_discharge: r.ata_discharge_complete,
+          },
+        }),
         sto_quantity: Number(r.sto_quantity) || 0,
         quantity_delivered: Number(r.quantity_delivered) || 0,
         quantity_receive: Number(r.quantity_receive) || 0,
@@ -2202,7 +2219,16 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         sto_number: resolveContractLogisticsStoNumber(r.sto_number),
         operation_id: resolveContractLogisticsOperationId(r.operation_id),
         late_indicator: lateIndicator,
-        status: r.status || '-',
+        status: resolveContractLogisticsStoStatus({
+          contractImportStatus,
+          dbStatus: r.status,
+          logisticsType: 'trucking',
+          truckingOptions: {
+            realizationEndDate: r.trucking_completion_date,
+            realizationStartDate: r.trucking_start_date,
+            stoNumber: r.sto_number,
+          },
+        }),
         sto_quantity: Number(r.sto_quantity) || 0,
         quantity_receive: Number(r.quantity_receive_sap ?? r.quantity_receive_db) || 0,
         quantity_delivered: Number(r.quantity_delivered_sap ?? r.quantity_delivered_db) || 0,
@@ -2243,7 +2269,16 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
             sto_number: resolveContractLogisticsStoNumber(r.sto_number),
             operation_id: resolveContractLogisticsOperationId(r.operation_id),
             late_indicator: lateIndicator,
-            status: r.status || '-',
+            status: resolveContractLogisticsStoStatus({
+              contractImportStatus,
+              dbStatus: r.status,
+              logisticsType: 'shipment',
+              shipmentMilestones: {
+                eta_arrival_at_loading_port: r.eta_vessel_arrival_loading_port,
+                eta_complete_discharge: r.eta_discharge_complete,
+                ata_complete_discharge: r.ata_discharge_complete,
+              },
+            }),
             sto_quantity: Number(r.sto_quantity) || 0,
             quantity_delivered: Number(r.quantity_delivered) || 0,
             quantity_receive: Number(r.quantity_receive) || 0,
@@ -2257,7 +2292,15 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           sto_number: resolveContractLogisticsStoNumber(r.sto_number),
           operation_id: resolveContractLogisticsOperationId(r.operation_id),
           late_indicator: lateIndicator,
-          status: r.status || '-',
+          status: resolveContractLogisticsStoStatus({
+            contractImportStatus,
+            dbStatus: r.status,
+            logisticsType: 'trucking',
+            truckingOptions: {
+              realizationEndDate: r.trucking_completion_date,
+              stoNumber: r.sto_number,
+            },
+          }),
           sto_quantity: Number(r.sto_quantity) || 0,
           quantity_receive: Number(r.quantity_receive) || 0,
           quantity_delivered: Number(r.quantity_delivered) || 0,
@@ -2295,12 +2338,16 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
     }
 
     const contractResult = await query(
-      'SELECT id, contract_id, delivery_start_date, delivery_end_date, product FROM contracts WHERE id = $1',
+      `SELECT id, contract_id, delivery_start_date, delivery_end_date, product,
+              ${sqlContractImportStatusExpr('c')} AS import_status
+       FROM contracts c WHERE c.id = $1`,
       [id],
     );
     if (contractResult.rows.length === 0) {
       return res.status(404).json({ success: false, error: { message: 'Contract not found' } });
     }
+
+    const contractImportStatus = contractResult.rows[0].import_status ?? null;
 
     if (type === 'shipment') {
       const shipmentResult = await query(
@@ -2385,11 +2432,34 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
       if (shipmentResult.rows.length === 0) {
         const sapShipmentResult = await query(SHIPMENT_SAP_STO_DETAIL_SQL, [id, uniqueKeys]);
         if (sapShipmentResult.rows.length > 0) {
-          return res.json({ success: true, data: sapShipmentResult.rows[0], source: 'sap' });
+          const row = sapShipmentResult.rows[0] as Record<string, unknown>;
+          row.status = resolveContractLogisticsStoStatus({
+            contractImportStatus,
+            dbStatus: row.status,
+            logisticsType: 'shipment',
+            shipmentMilestones: {
+              eta_completed_loading: row.eta_vessel_completed_loading,
+              ata_completed_loading: row.ata_vessel_completed_loading,
+              ata_complete_discharge: row.ata_vessel_complete_discharge,
+              eta_complete_discharge: row.eta_vessel_complete_discharge,
+            },
+          });
+          return res.json({ success: true, data: row, source: 'sap' });
         }
         const sapTruckingCrossResult = await query(TRUCKING_SAP_STO_DETAIL_SQL, [id, uniqueKeys]);
         if (sapTruckingCrossResult.rows.length > 0) {
-          return res.json({ success: true, data: sapTruckingCrossResult.rows[0], source: 'sap' });
+          const row = sapTruckingCrossResult.rows[0] as Record<string, unknown>;
+          row.status = resolveContractLogisticsStoStatus({
+            contractImportStatus,
+            dbStatus: row.status,
+            logisticsType: 'trucking',
+            truckingOptions: {
+              realizationEndDate: row.trucking_completion_date,
+              realizationStartDate: row.trucking_start_date,
+              stoNumber: row.sto_number,
+            },
+          });
+          return res.json({ success: true, data: row, source: 'sap' });
         }
         return res.status(404).json({
           success: false,
@@ -2397,7 +2467,19 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
         });
       }
 
-      return res.json({ success: true, data: shipmentResult.rows[0] });
+      const shipmentRow = shipmentResult.rows[0] as Record<string, unknown>;
+      shipmentRow.status = resolveContractLogisticsStoStatus({
+        contractImportStatus,
+        dbStatus: shipmentRow.status,
+        logisticsType: 'shipment',
+        shipmentMilestones: {
+          eta_completed_loading: shipmentRow.eta_vessel_completed_loading,
+          ata_completed_loading: shipmentRow.ata_vessel_completed_loading,
+          ata_complete_discharge: shipmentRow.ata_vessel_complete_discharge,
+          eta_complete_discharge: shipmentRow.eta_vessel_complete_discharge,
+        },
+      });
+      return res.json({ success: true, data: shipmentRow });
     }
 
     const truckingResult = await query(
@@ -2471,11 +2553,34 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
     if (truckingResult.rows.length === 0) {
       const sapTruckingResult = await query(TRUCKING_SAP_STO_DETAIL_SQL, [id, uniqueKeys]);
       if (sapTruckingResult.rows.length > 0) {
-        return res.json({ success: true, data: sapTruckingResult.rows[0], source: 'sap' });
+        const row = sapTruckingResult.rows[0] as Record<string, unknown>;
+        row.status = resolveContractLogisticsStoStatus({
+          contractImportStatus,
+          dbStatus: row.status,
+          logisticsType: 'trucking',
+          truckingOptions: {
+            realizationEndDate: row.trucking_completion_date,
+            realizationStartDate: row.trucking_start_date,
+            stoNumber: row.sto_number,
+          },
+        });
+        return res.json({ success: true, data: row, source: 'sap' });
       }
       const sapShipmentCrossResult = await query(SHIPMENT_SAP_STO_DETAIL_SQL, [id, uniqueKeys]);
       if (sapShipmentCrossResult.rows.length > 0) {
-        return res.json({ success: true, data: sapShipmentCrossResult.rows[0], source: 'sap' });
+        const row = sapShipmentCrossResult.rows[0] as Record<string, unknown>;
+        row.status = resolveContractLogisticsStoStatus({
+          contractImportStatus,
+          dbStatus: row.status,
+          logisticsType: 'shipment',
+          shipmentMilestones: {
+            eta_completed_loading: row.eta_vessel_completed_loading,
+            ata_completed_loading: row.ata_vessel_completed_loading,
+            ata_complete_discharge: row.ata_vessel_complete_discharge,
+            eta_complete_discharge: row.eta_vessel_complete_discharge,
+          },
+        });
+        return res.json({ success: true, data: row, source: 'sap' });
       }
       return res.status(404).json({
         success: false,
@@ -2483,7 +2588,18 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
       });
     }
 
-    return res.json({ success: true, data: truckingResult.rows[0] });
+    const truckingRow = truckingResult.rows[0] as Record<string, unknown>;
+    truckingRow.status = resolveContractLogisticsStoStatus({
+      contractImportStatus,
+      dbStatus: truckingRow.status,
+      logisticsType: 'trucking',
+      truckingOptions: {
+        realizationEndDate: truckingRow.trucking_completion_date,
+        realizationStartDate: truckingRow.trucking_start_date,
+        stoNumber: truckingRow.sto_number,
+      },
+    });
+    return res.json({ success: true, data: truckingRow });
   } catch (error) {
     logger.error('Get contract logistics STO detail error:', error);
     return res.status(500).json({

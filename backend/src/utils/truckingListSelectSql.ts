@@ -1,9 +1,12 @@
 import {
-  sqlEffectiveTruckingCompletionDate,
-  sqlEffectiveTruckingStartDate,
-} from './truckingSapDates';
+  TRUCKING_REALIZATIONS_JOIN,
+  sqlRealizationEndDate,
+  sqlRealizationStartDate,
+} from './truckingRealizationSql';
+import { SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
 import { sqlTruckingEffectiveStatus } from './truckingEffectiveStatus';
 import {
+  sqlTruckingOutstandingQtyByIncoterm,
   sqlTruckingQuantityDeliveredCoalesce,
   sqlTruckingQuantityReceiveCoalesce,
   sqlTruckingQuantitySentCoalesce,
@@ -124,8 +127,13 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.unloading_location,
         t.trucking_owner,
         t.cargo_readiness_date,
-        ${sqlEffectiveTruckingStartDate('c')} AS trucking_start_date,
-        ${sqlEffectiveTruckingCompletionDate('c')} AS trucking_completion_date,
+        t.daily_deliverables,
+        t.trucking_start_date AS planning_start_date,
+        t.trucking_completion_date AS planning_end_date,
+        ${sqlRealizationStartDate('c')} AS realization_start_date,
+        ${sqlRealizationEndDate('c')} AS realization_end_date,
+        ${sqlRealizationStartDate('c')} AS trucking_start_date,
+        ${sqlRealizationEndDate('c')} AS trucking_completion_date,
         t.eta_trucking_start_date,
         t.eta_trucking_completion_date,
         t.eta_delivery_start_date,
@@ -138,7 +146,10 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.oa_budget,
         t.oa_actual,
         t.status AS status_db,
-        ${sqlTruckingEffectiveStatus('c')} AS status,
+        ${sqlTruckingEffectiveStatus(
+          'c',
+          `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), '')), '')`,
+        )} AS status,
         t.created_at,
         t.updated_at,
         ${TRUCKING_LIST_CONTRACT_NUMBER_CASE} AS contract_number,
@@ -155,8 +166,13 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         c.product,
         c.incoterm,
         c.group_name,
+        ${sqlTruckingOutstandingQtyByIncoterm(
+          'COALESCE(t.quantity_delivered, 0)',
+          'COALESCE(t.quantity_delivered, 0)',
+        )} AS outstanding_quantity,
         s.estimated_km,
-        NULL::text AS contract_ext_no`;
+        NULL::text AS contract_ext_no,
+        ${SQL_CONTRACT_IMPORT_STATUS} AS contract_import_status`;
   }
 
   return `
@@ -168,8 +184,13 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.unloading_location,
         t.trucking_owner,
         t.cargo_readiness_date,
-        ${sqlEffectiveTruckingStartDate('c')} AS trucking_start_date,
-        ${sqlEffectiveTruckingCompletionDate('c')} AS trucking_completion_date,
+        t.daily_deliverables,
+        t.trucking_start_date AS planning_start_date,
+        t.trucking_completion_date AS planning_end_date,
+        ${sqlRealizationStartDate('c')} AS realization_start_date,
+        ${sqlRealizationEndDate('c')} AS realization_end_date,
+        ${sqlRealizationStartDate('c')} AS trucking_start_date,
+        ${sqlRealizationEndDate('c')} AS trucking_completion_date,
         t.eta_trucking_start_date,
         t.eta_trucking_completion_date,
         t.eta_delivery_start_date,
@@ -182,7 +203,10 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.oa_budget,
         t.oa_actual,
         t.status AS status_db,
-        ${sqlTruckingEffectiveStatus('c')} AS status,
+        ${sqlTruckingEffectiveStatus(
+          'c',
+          `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers)), '')`,
+        )} AS status,
         t.created_at,
         t.updated_at,
         ${TRUCKING_LIST_CONTRACT_NUMBER_CASE} AS contract_number,
@@ -199,8 +223,13 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         c.product,
         c.incoterm,
         c.group_name,
+        ${sqlTruckingOutstandingQtyByIncoterm(
+          sqlTruckingQuantityDeliveredCoalesce(),
+          sqlTruckingQuantityReceiveCoalesce(),
+        )} AS outstanding_quantity,
         s.estimated_km,
-        ${TRUCKING_LIST_CONTRACT_EXT_NO_FULL} AS contract_ext_no`;
+        ${TRUCKING_LIST_CONTRACT_EXT_NO_FULL} AS contract_ext_no,
+        ${SQL_CONTRACT_IMPORT_STATUS} AS contract_import_status`;
 }
 
 export function buildTruckingListFromClause(skipSapJoin: boolean): string {
@@ -209,6 +238,7 @@ export function buildTruckingListFromClause(skipSapJoin: boolean): string {
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
       LEFT JOIN shipments s ON t.shipment_id = s.id
+      ${TRUCKING_REALIZATIONS_JOIN}
       ${TRUCKING_LIST_B2B_LATERAL}
       ${stoJoin}`;
 }

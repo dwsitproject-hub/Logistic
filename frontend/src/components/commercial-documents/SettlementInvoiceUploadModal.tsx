@@ -104,8 +104,9 @@ export function SettlementInvoiceUploadModal({
     try {
       const form = new FormData()
       form.append('contract_ext_no', row.contract_ext_no)
-      form.append('document_type', 'invoice_pelunasan')
+      form.append('document_type', 'invoice_fp_full')
       form.append('po_number', row.po_number || row.contract_id || 'UNKNOWN')
+      form.append('supplier_name', row.supplier || '')
       form.append('contract_date', row.contract_date || '')
       form.append('file', selectedFile)
 
@@ -141,7 +142,7 @@ export function SettlementInvoiceUploadModal({
       <div className="bg-white w-full max-w-2xl max-h-[92vh] rounded-lg shadow-xl flex flex-col overflow-hidden">
         <div className="flex items-center justify-between border-b px-6 py-4 shrink-0">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Invoice Pelunasan</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Invoice + FP (Full Receive)</h2>
             <p className="text-xs text-gray-500 mt-0.5 truncate">{row.contract_ext_no}</p>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose} disabled={submitting} title="Close">
@@ -152,8 +153,8 @@ export function SettlementInvoiceUploadModal({
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
           {existingFileName ? (
             <p className="text-xs text-gray-500">
-              Current file: <span className="font-medium text-gray-700">{existingFileName}</span>
-              {' — '}upload a new file to replace it.
+              Current latest file: <span className="font-medium text-gray-700">{existingFileName}</span>
+              {' — '}uploading adds a new version; previous files are kept.
             </p>
           ) : null}
 

@@ -3,8 +3,15 @@ import logger from '../utils/logger';
 import { isLandSapRowEligibleForTruckingCreation } from '../utils/landTruckingEligibility';
 import { isSeaSapRowEligibleForShipmentCreation } from '../utils/seaShipmentEligibility';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
+import {
+  SQL_CONTRACT_IMPORT_STATUS,
+  isContractDeliveryClosed,
+} from '../utils/contractDeliveryStatus';
 import { resolveSapVesselIdentity } from '../utils/sapVesselFields';
 import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
+import {
+  upsertTruckingRealization,
+} from './truckingRealization.service';
 import {
   finalizeSapShipmentAfterUpsert,
   findSapShipmentSupersedeCandidate,
@@ -709,6 +716,9 @@ export class SapDataDistributionService {
       ata_berthed_at_discharge_port: ataDischargeBerthed,
       ata_start_discharging: ataDischargeStart,
       ata_complete_discharge: ataDischargeComplete,
+      contract_import_status: (await this.isContractSapClosedForUuid(client, contractUuid))
+        ? 'Close'
+        : null,
     });
 
     // Strategy:
@@ -1439,11 +1449,24 @@ export class SapDataDistributionService {
 
   private static deriveTruckingStatusForSap(
     startDate: string | null,
-    completionDate: string | null
+    completionDate: string | null,
+    contractClosed = false,
   ): 'PLANNED' | 'IN_PROGRESS' | 'COMPLETED' {
-    if (completionDate) return 'COMPLETED';
+    if (completionDate || contractClosed) return 'COMPLETED';
     if (startDate) return 'IN_PROGRESS';
     return 'PLANNED';
+  }
+
+  private static async isContractSapClosedForUuid(
+    client: PoolClient,
+    contractUuid: string | null,
+  ): Promise<boolean> {
+    if (!contractUuid) return false;
+    const result = await client.query(
+      `SELECT ${SQL_CONTRACT_IMPORT_STATUS} AS import_status FROM contracts c WHERE c.id = $1 LIMIT 1`,
+      [contractUuid],
+    );
+    return isContractDeliveryClosed(result.rows[0]?.import_status);
   }
 
   /** Copy SAP raw AV/AW columns into trucking leg when normalized trucking[] dates are missing. */
@@ -1516,7 +1539,8 @@ export class SapDataDistributionService {
     
     const startDate = this.resolveTruckingStartDate(data);
     const completionDate = this.resolveTruckingCompletionDate(data);
-    const status = this.deriveTruckingStatusForSap(startDate, completionDate);
+    const contractSapClosed = await this.isContractSapClosedForUuid(client, contractUuid);
+    const status = this.deriveTruckingStatusForSap(startDate, completionDate, contractSapClosed);
 
     const truckingOwner = data.trucking_owner_at_starting_location;
 
@@ -1567,12 +1591,10 @@ export class SapDataDistributionService {
           oa_actual = COALESCE($9::numeric, oa_actual),
           quantity_sent = COALESCE($10::numeric, quantity_sent),
           gain_loss = COALESCE($12::numeric, gain_loss),
-          trucking_start_date = COALESCE($13::date, trucking_start_date),
-          trucking_completion_date = COALESCE($14::date, trucking_completion_date),
           status = CASE
             WHEN status = 'CANCELLED' THEN status
-            WHEN COALESCE($14::date, trucking_completion_date) IS NOT NULL THEN 'COMPLETED'
-            WHEN COALESCE($13::date, trucking_start_date) IS NOT NULL THEN 'IN_PROGRESS'
+            WHEN $14::date IS NOT NULL THEN 'COMPLETED'
+            WHEN $13::date IS NOT NULL THEN 'IN_PROGRESS'
             ELSE COALESCE(status, 'PLANNED')
           END,
           updated_at = CURRENT_TIMESTAMP
@@ -1595,6 +1617,14 @@ export class SapDataDistributionService {
           targetTruckingId
         ]
       );
+      if (startDate || completionDate) {
+        await upsertTruckingRealization(client, targetTruckingId, {
+          realizationStartDate: startDate,
+          realizationEndDate: completionDate,
+          source: 'sap',
+          markSapSynced: true,
+        });
+      }
       if (contractUuid) {
         const truckingReconcile = await reconcileSupersededSapTrucking(
           client,
@@ -1621,7 +1651,7 @@ export class SapDataDistributionService {
       ) VALUES (
         $1::uuid, $2::uuid, $3, $4::date, $5, $6, $7, $8,
         $9::numeric, $10::numeric, $11::numeric, $12::numeric, $13::numeric,
-        $14::date, $15::date, $16
+        NULL, NULL, $14
       ) RETURNING id`,
       [
         shipmentUuid,
@@ -1637,13 +1667,19 @@ export class SapDataDistributionService {
         this.parseNumber(data.quantity_sent_via_trucking_based_on_surat_jalan),
         this.parseNumber(data.quantity_delivered_via_trucking),
         this.parseNumber(data.trucking_gain_loss_at_starting_location),
-        startDate,
-        completionDate,
         status
       ]
     );
-
     const newTruckingId = result.rows[0].id as string;
+    if (startDate || completionDate) {
+      await upsertTruckingRealization(client, newTruckingId, {
+        realizationStartDate: startDate,
+        realizationEndDate: completionDate,
+        source: 'sap',
+        markSapSynced: true,
+      });
+    }
+
     if (contractUuid) {
       const truckingReconcile = await reconcileSupersededSapTrucking(
         client,

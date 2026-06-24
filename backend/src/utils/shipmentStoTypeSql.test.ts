@@ -5,6 +5,7 @@ import {
   isSyntheticShipmentOperationKeySql,
   sapStoNumberKeyExpr,
   sapStoTypeNormalizedExpr,
+  shipmentListStoKeyExpr,
   shipmentResolvedStoTypeExpr,
   shipmentSapStoKeyExpr,
 } from './shipmentStoTypeSql';
@@ -20,7 +21,14 @@ describe('shipmentStoTypeSql', () => {
     expect(sapStoNumberKeyExpr('spd')).toContain('spd.sto_number');
   });
 
-  it('prefers contract/SAP STO before synthetic shipment keys', () => {
+  it('prefers distinct numeric shipment_id before contract sto_number for list key', () => {
+    const sql = shipmentListStoKeyExpr('c', 'l', 's');
+    expect(sql).toContain('s.shipment_id::text');
+    expect(sql).toContain('c.sto_number::text');
+    expect(sql.indexOf('s.shipment_id::text')).toBeLessThan(sql.indexOf('c.sto_number::text'));
+  });
+
+  it('keeps legacy shipmentSapStoKeyExpr for contract sto first', () => {
     expect(shipmentSapStoKeyExpr).toContain('c.sto_number');
     expect(shipmentSapStoKeyExpr).toContain('l.effective_sto');
     expect(shipmentSapStoKeyExpr.indexOf('c.sto_number')).toBeLessThan(

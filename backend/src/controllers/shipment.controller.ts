@@ -28,6 +28,8 @@ import {
   shipmentEffectiveStatusExpr,
 } from '../utils/shipmentListFilters';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
+import { shipmentListOutstandingQtySql } from '../utils/shipmentOutstandingQtySql';
+import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
 import {
   allocateNextSyntheticSequenceDefault,
   buildSyntheticOperationId,
@@ -43,7 +45,33 @@ import {
 import {
   buildShipmentExcludeStoTypeTSql,
   buildShipmentSeaMixTransportSql,
+  shipmentListStoKeyExpr,
 } from '../utils/shipmentStoTypeSql';
+import {
+  buildShipmentListAtaSelectSql,
+  SHIPMENT_ATA_OVERRIDES_JOIN,
+  sqlEffectiveAtaArrivalDischarge,
+  sqlEffectiveAtaArrivalLoading,
+  sqlEffectiveAtaBerthedDischarge,
+  sqlEffectiveAtaBerthedLoading,
+  sqlEffectiveAtaCompleteDischarge,
+  sqlEffectiveAtaCompletedLoading,
+  sqlEffectiveAtaSailedLoading,
+  sqlEffectiveAtaStartDischarge,
+  sqlEffectiveAtaStartLoading,
+  sqlSapAtaArrivalDischarge,
+  sqlSapAtaArrivalLoading,
+  sqlSapAtaBerthedDischarge,
+  sqlSapAtaBerthedLoading,
+  sqlSapAtaCompleteDischarge,
+  sqlSapAtaCompletedLoading,
+  sqlSapAtaSailedLoading,
+  sqlSapAtaStartDischarge,
+  sqlSapAtaStartLoading,
+} from '../utils/shipmentAtaOverrideSql';
+import { hydrateShipmentInfoAtaGaps } from '../utils/shipmentAtaHydration';
+import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
+import { SQL_CONTRACT_IMPORT_STATUS, assertShipmentContractOpen, getContractImportStatusForShipment, sqlIsContractSapClosedExpr } from '../utils/contractDeliveryStatus';
 
 /** Normalize date-like fields for shipments / loading ports (YYYY-MM-DD or null). */
 function toShipmentDateOrNull(v: unknown): string | null {
@@ -297,16 +325,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         ORDER BY shipment_id, port_sequence NULLS LAST, id
       ),`;
 
-    const ataSelect = `
-          MAX(COALESCE(s.ata_arrival, vlp_l.vlp_load_ata_va)) as ata_vessel_arrival_at_loading_port,
-          MAX(COALESCE(s.ata_berthed, vlp_l.vlp_load_ata_vb)) as ata_vessel_berthed_at_loading_port,
-          MAX(COALESCE(s.ata_loading_start, vlp_l.vlp_load_ata_ls)) as ata_vessel_start_loading,
-          MAX(COALESCE(s.ata_loading_complete, vlp_l.vlp_load_ata_lc)) as ata_vessel_completed_loading,
-          MAX(COALESCE(s.ata_sailed, vlp_l.vlp_load_ata_vs)) as ata_vessel_sailed_from_loading_port,
-          MAX(COALESCE(s.ata_discharge_arrival, vlp_d.vlp_disc_ata_va)) as ata_vessel_arrive_at_discharge_port,
-          MAX(COALESCE(s.ata_discharge_berthed, vlp_d.vlp_disc_ata_vb)) as ata_vessel_berthed_at_discharge_port,
-          MAX(COALESCE(s.ata_discharge_start, vlp_d.vlp_disc_ata_ls)) as ata_vessel_start_discharging,
-          MAX(COALESCE(s.ata_discharge_complete, vlp_d.vlp_disc_ata_lc)) as ata_vessel_complete_discharge,`;
+    const ataSelect = buildShipmentListAtaSelectSql();
 
     const etaExtraSelect = compact
       ? `
@@ -315,6 +334,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       : `
           -- Get ETA dates from shipments or vessel_loading_ports
           MAX(COALESCE(s.eta_discharge_complete, (SELECT vlpd.eta_vessel_complete_discharge::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) as eta_vessel_complete_discharge,`;
+
+    const listStoKeySql = shipmentListStoKeyExpr('c', 'l', 's');
 
     /** STO on grouped row — used to pull all contracts/POs sharing the same STO (multi-contract per vessel). */
     const groupedStoTrimExpr = `TRIM(COALESCE(MAX(c.sto_number::text), MAX(l.effective_sto), ''))`;
@@ -369,7 +390,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
                   spd.data->>'CONTRACT REFF PO'
                 )
            FROM sap_processed_data spd
-           WHERE TRIM(spd.sto_number::text) = TRIM(COALESCE(c.sto_number::text, l.effective_sto, s.shipment_id))
+           WHERE TRIM(spd.sto_number::text) = TRIM(${listStoKeySql})
            ORDER BY spd.created_at DESC NULLS LAST
            LIMIT 1)) AS contract_reference_po,
           -- Get Contract Ext No from sap_processed_data
@@ -378,7 +399,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
                   spd.data->>'Contract Ext No'
                 )
            FROM sap_processed_data spd
-           WHERE TRIM(spd.sto_number::text) = TRIM(COALESCE(c.sto_number::text, l.effective_sto, s.shipment_id))
+           WHERE TRIM(spd.sto_number::text) = TRIM(${listStoKeySql})
            ORDER BY spd.created_at DESC NULLS LAST
            LIMIT 1)) AS contract_ext_no`;
 
@@ -495,9 +516,9 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
 `;
 
     let queryText = `${prelude}
-          COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id) as sto_key,
-          (array_agg(s.id ORDER BY s.created_at DESC) FILTER (WHERE s.id IS NOT NULL))[1] as id,
-          MAX(COALESCE(c.sto_number::text, l.effective_sto)) as sto_number,
+          ${listStoKeySql} as sto_key,
+          ${sqlShipmentListPrimaryIdAgg(listStoKeySql)} as id,
+          MAX(${listStoKeySql}) as sto_number,
           MAX(s.shipment_id) as shipment_id,
           MAX(s.operation_id) as operation_id,
           MAX(NULLIF(TRIM(s.vessel_name), '')) as vessel_name,
@@ -563,6 +584,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(c.contract_date) as contract_date,
           MAX(c.delivery_start_date) as delivery_start_date,
           MAX(c.delivery_end_date) as delivery_end_date,
+          BOOL_OR(${sqlIsContractSapClosedExpr('c')}) AS is_contract_sap_closed,
 ${ataSelect}
 ${etaExtraSelect}
 ${contractMetaSelect}
@@ -571,6 +593,7 @@ ${contractMetaSelect}
         LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
         LEFT JOIN vlp_load_first vlp_l ON vlp_l.shipment_id = s.id
         LEFT JOIN vlp_disc_first vlp_d ON vlp_d.shipment_id = s.id
+        ${SHIPMENT_ATA_OVERRIDES_JOIN}
         WHERE 1=1
           AND (${coreWhereSql})
           AND (${excludeStoTypeTCond})
@@ -587,7 +610,7 @@ ${contractMetaSelect}
 
     if (stoIsSet) {
       queryText += ` AND (
-        TRIM(COALESCE(c.sto_number::text, l.effective_sto, '')) = TRIM($${paramIndex}::text)
+        TRIM(${listStoKeySql}) = TRIM($${paramIndex}::text)
         OR s.shipment_id = $${paramIndex}
         OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM($${paramIndex}::text)
       )`;
@@ -602,14 +625,13 @@ ${contractMetaSelect}
     // Those are extremely slow when sap_processed_data is large, causing the shipments page to hang.
 
     queryText += `
-        GROUP BY COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id)
+        GROUP BY ${listStoKeySql}
       )`;
 
     /** Full grouped dataset (expensive on large YTD). Used for summary aggregates. */
     const shipmentBaseCteSqlFull = queryText;
 
-    const stoKeyExpr =
-      'COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id)';
+    const stoKeyExpr = listStoKeySql;
 
     let fp = outerFilterStartIndex;
     const gSearch = appendShipmentGlobalSearch(globalSearch, fp);
@@ -694,9 +716,9 @@ ${contractMetaSelect}
         );
       }
       shipmentBaseCteSqlList = shipmentBaseCteSqlList.replace(
-        '        GROUP BY COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id)',
+        `        GROUP BY ${listStoKeySql}`,
         `          AND (${stoKeyExpr}) IN (SELECT sto_key FROM paged_sto)
-        GROUP BY COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id)`,
+        GROUP BY ${listStoKeySql}`,
       );
     }
 
@@ -976,6 +998,7 @@ ${contractMetaSelect}
         COALESCE(sa.sto_quantity, 0) AS sto_quantity,
         COALESCE(sa.quantity_receive, 0) AS quantity_receive,
         COALESCE(sa.quantity_delivered_sap, 0) AS quantity_delivered_sap,
+        ${shipmentListOutstandingQtySql()} AS outstanding_quantity,
         COALESCE(sl.incoterm, sp.incoterm) AS incoterm,
         sl.b2b_flag AS b2b_flag,
         sl.source_type AS source_type,
@@ -1232,6 +1255,11 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       }
       
       shipmentId = shipmentResult.rows[0].id;
+    }
+
+    const contractOpen = await assertShipmentContractOpen(shipmentId);
+    if (!contractOpen.ok) {
+      return res.status(400).json({ success: false, error: { message: contractOpen.message } });
     }
 
     // Build the update query with explicit field handling
@@ -1491,6 +1519,7 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
 
     // Auto-derive status after milestone updates.
     const updated = result.rows[0] as any;
+    const contractImportStatus = await getContractImportStatusForShipment(shipmentId);
     const autoStatus = deriveShipmentStatus({
       eta_arrival_at_loading_port: updated.eta_arrival,
       eta_berthed_at_loading_port: updated.eta_berthed,
@@ -1510,6 +1539,7 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       ata_berthed_at_discharge_port: updated.ata_discharge_berthed,
       ata_start_discharging: updated.ata_discharge_start,
       ata_complete_discharge: updated.ata_discharge_complete,
+      contract_import_status: contractImportStatus,
     });
 
     const VALID_AUTO_STATUSES = ['PLANNED', 'IN_TRANSIT', 'ARRIVED', 'UNLOADING', 'COMPLETED'];
@@ -1734,15 +1764,33 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           s.port_of_loading as vessel_loading_port_1,
           s.port_of_discharge as vessel_discharge_port_1,
           c.contract_id as contract_number,
-          COALESCE(s.ata_arrival, vlp1.ata_vessel_arrival::date) as ata_vessel_arrival_at_loading_port,
-          COALESCE(s.ata_berthed, vlp1.ata_vessel_berthed::date) as ata_vessel_berthed_at_loading_port,
-          COALESCE(s.ata_loading_start, vlp1.ata_loading_start::date) as ata_vessel_start_loading,
-          COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed::date) as ata_vessel_completed_loading,
-          COALESCE(s.ata_sailed, vlp1.ata_vessel_sailed::date) as ata_vessel_sailed_from_loading_port,
-          COALESCE(s.ata_discharge_arrival, vlpd.ata_vessel_arrival::date) as ata_vessel_arrive_at_discharge_port,
-          COALESCE(s.ata_discharge_berthed, vlpd.ata_vessel_berthed::date) as ata_vessel_berthed_at_discharge_port,
-          COALESCE(s.ata_discharge_start, vlpd.ata_loading_start::date) as ata_vessel_start_discharging,
-          COALESCE(s.ata_discharge_complete, vlpd.ata_loading_completed::date) as ata_vessel_complete_discharge,
+          ${sqlEffectiveAtaArrivalLoading()} as ata_vessel_arrival_at_loading_port,
+          ${sqlEffectiveAtaBerthedLoading()} as ata_vessel_berthed_at_loading_port,
+          ${sqlEffectiveAtaStartLoading()} as ata_vessel_start_loading,
+          ${sqlEffectiveAtaCompletedLoading()} as ata_vessel_completed_loading,
+          ${sqlEffectiveAtaSailedLoading()} as ata_vessel_sailed_from_loading_port,
+          ${sqlEffectiveAtaArrivalDischarge()} as ata_vessel_arrive_at_discharge_port,
+          ${sqlEffectiveAtaBerthedDischarge()} as ata_vessel_berthed_at_discharge_port,
+          ${sqlEffectiveAtaStartDischarge()} as ata_vessel_start_discharging,
+          ${sqlEffectiveAtaCompleteDischarge()} as ata_vessel_complete_discharge,
+          ${sqlSapAtaArrivalLoading()} as sap_ata_vessel_arrival_at_loading_port,
+          ${sqlSapAtaBerthedLoading()} as sap_ata_vessel_berthed_at_loading_port,
+          ${sqlSapAtaStartLoading()} as sap_ata_vessel_start_loading,
+          ${sqlSapAtaCompletedLoading()} as sap_ata_vessel_completed_loading,
+          ${sqlSapAtaSailedLoading()} as sap_ata_vessel_sailed_from_loading_port,
+          ${sqlSapAtaArrivalDischarge()} as sap_ata_vessel_arrive_at_discharge_port,
+          ${sqlSapAtaBerthedDischarge()} as sap_ata_vessel_berthed_at_discharge_port,
+          ${sqlSapAtaStartDischarge()} as sap_ata_vessel_start_discharging,
+          ${sqlSapAtaCompleteDischarge()} as sap_ata_vessel_complete_discharge,
+          sao.ata_arrival::text as ata_override_arrival_at_loading_port,
+          sao.ata_berthed::text as ata_override_berthed_at_loading_port,
+          sao.ata_loading_start::text as ata_override_start_loading,
+          sao.ata_loading_complete::text as ata_override_completed_loading,
+          sao.ata_sailed::text as ata_override_sailed_from_loading_port,
+          sao.ata_discharge_arrival::text as ata_override_arrive_at_discharge_port,
+          sao.ata_discharge_berthed::text as ata_override_berthed_at_discharge_port,
+          sao.ata_discharge_start::text as ata_override_start_discharging,
+          sao.ata_discharge_complete::text as ata_override_complete_discharge,
           -- ETA fields: prefer vessel_loading_ports, fallback to shipments so UI shows data from either table
           COALESCE(vlp1.eta_vessel_arrival::date, s.eta_arrival) as eta_vessel_arrival_at_loading_port,
           COALESCE(vlp1.eta_vessel_berthed_at_loading_port::date, s.eta_berthed) as eta_vessel_berthed_at_loading_port,
@@ -1756,10 +1804,10 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           -- Loading rate (kg/day): Quantity Receive / (ATA Completed Loading − ATA Start Loading) in days
           CASE 
             WHEN s.actual_vessel_qty_receive > 0 
-              AND COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed) IS NOT NULL
-              AND COALESCE(s.ata_loading_start, vlp1.ata_loading_start) IS NOT NULL
+              AND ${sqlEffectiveAtaCompletedLoading()} IS NOT NULL
+              AND ${sqlEffectiveAtaStartLoading()} IS NOT NULL
             THEN s.actual_vessel_qty_receive / NULLIF(
-              EXTRACT(EPOCH FROM (COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed) - COALESCE(s.ata_loading_start, vlp1.ata_loading_start))) / 86400.0,
+              (${sqlEffectiveAtaCompletedLoading()}::date - ${sqlEffectiveAtaStartLoading()}::date)::numeric,
               0
             )
             ELSE NULL
@@ -1782,6 +1830,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
          LEFT JOIN contracts c ON s.contract_id = c.id
          LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false${activeLoadingJoinFilter}
          LEFT JOIN vessel_loading_ports vlpd ON vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true${activeDischargeJoinFilter}
+         ${SHIPMENT_ATA_OVERRIDES_JOIN}
          WHERE s.id = $1
          LIMIT 1`,
         [shipmentId]
@@ -1868,15 +1917,15 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           MAX(s.port_of_loading) as vessel_loading_port_1,
           MAX(s.port_of_discharge) as vessel_discharge_port_1,
           MAX(c.contract_id) as contract_number,
-          MAX(COALESCE(s.ata_arrival, vlp1.ata_vessel_arrival::date)) as ata_vessel_arrival_at_loading_port,
-          MAX(COALESCE(s.ata_berthed, vlp1.ata_vessel_berthed::date)) as ata_vessel_berthed_at_loading_port,
-          MAX(COALESCE(s.ata_loading_start, vlp1.ata_loading_start::date)) as ata_vessel_start_loading,
-          MAX(COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed::date)) as ata_vessel_completed_loading,
-          MAX(COALESCE(s.ata_sailed, vlp1.ata_vessel_sailed::date)) as ata_vessel_sailed_from_loading_port,
-          MAX(COALESCE(s.ata_discharge_arrival, vlpd.ata_vessel_arrival::date)) as ata_vessel_arrive_at_discharge_port,
-          MAX(COALESCE(s.ata_discharge_berthed, vlpd.ata_vessel_berthed::date)) as ata_vessel_berthed_at_discharge_port,
-          MAX(COALESCE(s.ata_discharge_start, vlpd.ata_loading_start::date)) as ata_vessel_start_discharging,
-          MAX(COALESCE(s.ata_discharge_complete, vlpd.ata_loading_completed::date)) as ata_vessel_complete_discharge,
+          MAX(COALESCE(sao.ata_arrival, s.ata_arrival, vlp1.ata_vessel_arrival::date)) as ata_vessel_arrival_at_loading_port,
+          MAX(COALESCE(sao.ata_berthed, s.ata_berthed, vlp1.ata_vessel_berthed::date)) as ata_vessel_berthed_at_loading_port,
+          MAX(COALESCE(sao.ata_loading_start, s.ata_loading_start, vlp1.ata_loading_start::date)) as ata_vessel_start_loading,
+          MAX(COALESCE(sao.ata_loading_complete, s.ata_loading_complete, vlp1.ata_loading_completed::date)) as ata_vessel_completed_loading,
+          MAX(COALESCE(sao.ata_sailed, s.ata_sailed, vlp1.ata_vessel_sailed::date)) as ata_vessel_sailed_from_loading_port,
+          MAX(COALESCE(sao.ata_discharge_arrival, s.ata_discharge_arrival, vlpd.ata_vessel_arrival::date)) as ata_vessel_arrive_at_discharge_port,
+          MAX(COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed, vlpd.ata_vessel_berthed::date)) as ata_vessel_berthed_at_discharge_port,
+          MAX(COALESCE(sao.ata_discharge_start, s.ata_discharge_start, vlpd.ata_loading_start::date)) as ata_vessel_start_discharging,
+          MAX(COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete, vlpd.ata_loading_completed::date)) as ata_vessel_complete_discharge,
           -- ETA fields from loading ports
           MAX(vlp1.eta_vessel_arrival::date) as eta_vessel_arrival_at_loading_port,
           MAX(vlp1.eta_vessel_berthed_at_loading_port::date) as eta_vessel_berthed_at_loading_port,
@@ -1893,7 +1942,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
               AND MAX(COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed)) IS NOT NULL
               AND MAX(COALESCE(s.ata_loading_start, vlp1.ata_loading_start)) IS NOT NULL
             THEN MAX(s.actual_vessel_qty_receive) / NULLIF(
-              EXTRACT(EPOCH FROM (MAX(COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed)) - MAX(COALESCE(s.ata_loading_start, vlp1.ata_loading_start)))) / 86400.0,
+              (MAX(COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed))::date - MAX(COALESCE(s.ata_loading_start, vlp1.ata_loading_start)))::numeric,
               0
             )
             ELSE NULL
@@ -1916,6 +1965,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
          LEFT JOIN contracts c ON s.contract_id = c.id
          LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false${activeLoadingJoinFilter}
          LEFT JOIN vessel_loading_ports vlpd ON vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true${activeDischargeJoinFilter}
+         ${SHIPMENT_ATA_OVERRIDES_JOIN}
          WHERE c.sto_number = $1 OR s.shipment_id = $1
          GROUP BY COALESCE(c.sto_number, s.shipment_id)`,
         [shipmentId]
@@ -1924,84 +1974,10 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
 
     let shipmentInfo = shipmentInfoResult.rows[0] || null;
 
-    // Fallback: if all ATA fields are null but SAP processed data has values,
-    // hydrate shipmentInfo ATA dates directly from sap_processed_data.shipment.
-    if (shipmentInfo && shipmentInfo.contract_number) {
-      const ataKeys = [
-        'ata_vessel_arrival_at_loading_port',
-        'ata_vessel_berthed_at_loading_port',
-        'ata_vessel_start_loading',
-        'ata_vessel_completed_loading',
-        'ata_vessel_sailed_from_loading_port',
-        'ata_vessel_arrive_at_discharge_port',
-        'ata_vessel_berthed_at_discharge_port',
-        'ata_vessel_start_discharging',
-        'ata_vessel_complete_discharge'
-      ] as const;
-
-      const allAtaNull = ataKeys.every(
-        (k) => shipmentInfo[k as keyof typeof shipmentInfo] == null
-      );
-
-      if (allAtaNull) {
-        const sapResult = await query(
-          `SELECT data
-             FROM sap_processed_data
-            WHERE contract_number = $1
-            ORDER BY created_at DESC NULLS LAST
-            LIMIT 1`,
-          [shipmentInfo.contract_number]
-        );
-
-        if (sapResult.rows.length > 0) {
-          const data: any = sapResult.rows[0].data || {};
-          const shp: any = data.shipment || {};
-
-          const normalizeDate = (value: any): string | null => {
-            if (value === null || value === undefined || value === '') return null;
-            if (value instanceof Date && !isNaN(value.getTime())) {
-              return value.toISOString().split('T')[0];
-            }
-            if (typeof value === 'number') {
-              // Interpret as Excel serial date (days since 1899-12-30)
-              const excelEpoch = Date.UTC(1899, 11, 30);
-              const ms = excelEpoch + value * 86400000;
-              const d = new Date(ms);
-              if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
-              return null;
-            }
-            if (typeof value === 'string') {
-              const d = new Date(value);
-              if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
-            }
-            return null;
-          };
-
-          const mapping: Record<string, string> = {
-            ata_vessel_arrival_at_loading_port: 'ata_vessel_arrival_at_loading_port_1',
-            ata_vessel_berthed_at_loading_port: 'ata_vessel_berthed_at_loading_port_1',
-            ata_vessel_start_loading: 'ata_vessel_start_loading',
-            ata_vessel_completed_loading: 'ata_vessel_completed_loading',
-            ata_vessel_sailed_from_loading_port: 'ata_vessel_sailed_from_loading_port',
-            ata_vessel_arrive_at_discharge_port: 'ata_vessel_arrival_at_discharge_port',
-            ata_vessel_berthed_at_discharge_port: 'ata_vessel_berthed_at_discharge_port',
-            ata_vessel_start_discharging: 'ata_vessel_start_discharging',
-            ata_vessel_complete_discharge: 'ata_vessel_completed_discharge'
-          };
-
-          for (const [uiKey, sapKey] of Object.entries(mapping)) {
-            const current = (shipmentInfo as any)[uiKey];
-            if (current == null && shp && sapKey in shp) {
-              const normalized = normalizeDate(shp[sapKey]);
-              if (normalized) {
-                (shipmentInfo as any)[uiKey] = normalized;
-              }
-            }
-          }
-        }
-      }
+    if (shipmentInfo) {
+      await hydrateShipmentInfoAtaGaps(shipmentId, shipmentInfo);
     }
-    logger.info('ShipmentInfo result:', { 
+    logger.info('ShipmentInfo result:', {
       hasData: !!shipmentInfo,
       rowCount: shipmentInfoResult.rows.length,
       sample: shipmentInfo ? {
@@ -2056,6 +2032,11 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
       }
       
       actualShipmentId = shipmentResult.rows[0].id;
+    }
+
+    const contractOpen = await assertShipmentContractOpen(actualShipmentId);
+    if (!contractOpen.ok) {
+      return res.status(400).json({ success: false, error: { message: contractOpen.message } });
     }
     
     const {
@@ -3105,7 +3086,8 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), 'c.company_name')} AS plant_site,
         ${contractExtNoSubquery('c.contract_id', 'c.po_number')} AS contract_ext_no,
         ${resolvedLoadingPortNameSql('c.contract_id')} AS port_of_loading,
-        ${resolvedDischargePortNameSql('c.contract_id')} AS port_of_discharge
+        ${resolvedDischargePortNameSql('c.contract_id')} AS port_of_discharge,
+        ${SQL_CONTRACT_IMPORT_STATUS} AS import_status
       FROM matched c
       LIMIT 1
       `,
@@ -3193,97 +3175,8 @@ export const getContractDetailsForSto = async (req: AuthRequest, res: Response) 
 
     await ensureUserStoContractAssignmentsTable();
 
-    // Get ALL contract numbers linked to this STO: column sto_number OR STO in raw/shipment/contract JSON
-    const sapResult = await query(
-      `SELECT DISTINCT contract_number FROM sap_processed_data
-       WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
-         AND (
-           TRIM(COALESCE(sto_number::text, '')) = TRIM($1::text)
-           OR NULLIF(TRIM(COALESCE(data->'raw'->>'STO No.', data->'raw'->>'STO Number', data->'shipment'->>'sto_no', data->'contract'->>'sto_no', data->>'STO No.', data->>'STO Number')), '') = TRIM($1::text)
-         )`,
-      [stoTrim],
-    );
-    const sapContractNumbers = (sapResult.rows || []).map((r: { contract_number: string }) => r.contract_number);
-    const allContractNumbers = [...new Set([...contractList, ...sapContractNumbers])].filter(Boolean);
-
-    if (allContractNumbers.length === 0) {
-      return res.json({
-        success: true,
-        data: [],
-      });
-    }
-
-    // Build one row per contract: use unnest so we include contracts that exist only in sap_processed_data (not in contracts table)
-    const queryText = `
-      WITH ac AS (SELECT unnest($2::text[]) AS contract_number)
-      SELECT 
-        ac.contract_number as contract_number,
-        COALESCE(MAX(c.quantity_ordered), 0) as contract_qty,
-        COALESCE(MAX(c.quantity_ordered), 0) - COALESCE((
-          SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = ac.contract_number
-          AND spd.sto_number IS NOT NULL
-          AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-        ), 0) as outstanding_qty,
-        COALESCE(
-          (SELECT sto_qty_assigned FROM user_sto_contract_assignments 
-           WHERE sto_number = $1 AND contract_number = ac.contract_number 
-           LIMIT 1),
-          (SELECT CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC)
-           FROM sap_processed_data spd
-           WHERE spd.contract_number = ac.contract_number
-           AND spd.sto_number = $1
-           AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-           ORDER BY spd.created_at DESC
-           LIMIT 1),
-          0
-        ) as sto_qty_assigned,
-        (SELECT STRING_AGG(DISTINCT c2.po_number, ', ' ORDER BY c2.po_number) FILTER (WHERE c2.po_number IS NOT NULL AND c2.po_number != '')
-         FROM contracts c2 WHERE c2.contract_id = ac.contract_number) as po_number,
-        (SELECT MAX(c2.delivery_start_date) FROM contracts c2 WHERE c2.contract_id = ac.contract_number) as delivery_start_date,
-        (SELECT MAX(c2.delivery_end_date) FROM contracts c2 WHERE c2.contract_id = ac.contract_number) as delivery_end_date,
-        COALESCE(
-          (SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC))
-           FROM sap_processed_data spd
-           WHERE spd.contract_number = ac.contract_number
-           AND spd.sto_number = $1
-           AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL),
-          0
-        ) as quantity_delivered,
-        COALESCE(
-          (SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC))
-           FROM sap_processed_data spd
-           WHERE spd.contract_number = ac.contract_number
-           AND spd.sto_number = $1
-           AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL),
-          0
-        ) as quantity_receive,
-        -- Contract Ext No from latest sap_processed_data for this contract
-        (SELECT COALESCE(
-                  spd.data->'raw'->>'Contract Ext No',
-                  spd.data->>'Contract Ext No'
-                )
-         FROM sap_processed_data spd
-         WHERE spd.contract_number = ac.contract_number
-         ORDER BY spd.created_at DESC NULLS LAST
-         LIMIT 1) AS contract_ext_no,
-        -- Lock flag: if STO quantity is present in sap_processed_data for this STO+contract, treat as non-editable
-        EXISTS (
-          SELECT 1
-          FROM sap_processed_data spd_lock
-          WHERE spd_lock.contract_number = ac.contract_number
-            AND spd_lock.sto_number = $1
-            AND spd_lock.data->'contract'->>'sto_quantity' IS NOT NULL
-        ) AS locked_from_sap
-      FROM ac
-      LEFT JOIN contracts c ON c.contract_id = ac.contract_number
-      -- Shipments contract details must be SEA-only
-      WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) = 'SEA'
-      GROUP BY ac.contract_number
-    `;
-
-    const result = await query(queryText, [sto, allContractNumbers]);
+    const queryText = buildContractDetailsForStoSql();
+    const result = await query(queryText, [stoTrim, contractList]);
 
     return res.json({
       success: true,

@@ -32,6 +32,7 @@ export const FIELD_HELP = {
   receivedQty: `Actual quantity received based on contract data (quantity_receive). For sea shipments: received at destination. For land shipments: quantity delivered to plant/site.`,
 
   outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery; others use total STO quantity. Not reduced by manual STO assignment on Shipments. Green = Over Delivered; Red = Still Outstanding.`,
+  shipmentOutstandingQtyMt: `STO Qty minus fulfilled SAP quantity by incoterm (same rules as Contract page): CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery; others use receive or delivery. Green = Over Delivered; Red = Still Outstanding.`,
 
   companyName: `From Buyer in latest SAP data. For B2B "origin" contracts (empty Contract Reff PO), Company Name may follow linked B2B child contracts per business rules.`,
 
@@ -55,10 +56,12 @@ export const FIELD_HELP = {
   truckingOaBudget: `OA Budget is the planned operational allowance (budget) for the trucking leg.`,
   truckingOaActual: `OA Actual is the realized operational allowance (actual cost) for the trucking leg.`,
   etaVsDueDelivery: `ETA fields are planned dates; Due Date Delivery Start/End come from the contract delivery window. Use these to assess schedule risk and lateness.`,
-  truckingStatusPlanned: `No Trucking Start Receive Date yet (from SAP or manual entry). The operation is open and waiting to begin the land leg.`,
+  truckingStatusUnplanned: `STO exists from SAP Data but daily planning is not plotted yet (no Start/End Date planning and quantity per day from Add New Trucking).`,
+  truckingStatusPlanned: `Start/End Date planning and quantity per day have been entered via Add New Trucking. Trucking has not started in SAP yet (no Trucking Start Receive Date).`,
   truckingStatusInProgress: `Trucking Start Receive Date is set and Trucking Last Receive Date is still empty. SAP column AV maps to trucking start; status IN_PROGRESS.`,
   truckingStatusCompleted: `Trucking Last Receive Date is set (SAP column AW, stored as trucking completion date). The land delivery leg is finished for this operation.`,
   truckingStatusCancelled: `Operation was set to Cancelled manually and is excluded from active execution. Use the Status filter below to view cancelled operations only.`,
+  truckingOutstandingQtyMt: `Outstanding Qty by incoterm: FRC = Contract Qty − Received Qty; LCO = Contract Qty − Delivered Qty. Displayed in MT. Green = over delivered; red = still outstanding. Other incoterms show —.`,
 
   // Oil Loss
   oilLossAmount: `Formula: Qty Receive − Qty Delivery (displayed in MT). Negative values indicate oil loss.`,
@@ -127,3 +130,15 @@ Discharge ETAs checked: Arrival at Discharge Port, Berthed at Discharge Port, St
 } as const
 
 export type FieldHelpKey = keyof typeof FIELD_HELP
+
+/** Row-level tooltip for Outstanding Qty (MT) on the Trucking page. */
+export function truckingOutstandingQtyFormulaTooltip(incoterm?: string | null): string {
+  const ic = String(incoterm ?? '').trim().toUpperCase()
+  if (ic === 'FRC') {
+    return 'Formula: Contract Qty − Received Qty (displayed in MT). Green = over delivered; red = still outstanding.'
+  }
+  if (ic === 'LCO') {
+    return 'Formula: Contract Qty − Delivered Qty (displayed in MT). Green = over delivered; red = still outstanding.'
+  }
+  return FIELD_HELP.truckingOutstandingQtyMt
+}

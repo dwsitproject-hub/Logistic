@@ -37,6 +37,7 @@ export interface TruckingListResponseData {
   summary?: {
     total: number;
     status: {
+      unplanned: number;
       planned: number;
       inProgress: number;
       loading: number;
@@ -57,7 +58,7 @@ export interface TruckingListResponseData {
 const PAGE_CACHE = new Map<string, { rows: TruckingListRow[]; total: number; expiresAt: number }>();
 const COUNT_CACHE = new Map<string, { total: number; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v6';
+const CACHE_VERSION = 'trucking-list-v9';
 const MAX_CACHE_ENTRIES = 80;
 
 const SORT_FIELD_BY_KEY: Record<string, string> = {
@@ -75,7 +76,12 @@ const SORT_FIELD_BY_KEY: Record<string, string> = {
   delivery_start_date: 'delivery_start_date',
   delivery_end_date: 'delivery_end_date',
   quantity_delivered: 'quantity_delivered',
+  quantity_receive: 'quantity_receive',
+  outstanding_quantity: 'outstanding_quantity',
+  outstanding_qty_mt: 'outstanding_quantity',
   quantity_sent: 'quantity_sent',
+  contract_qty: 'contract_qty',
+  incoterm: 'incoterm',
   oa_budget: 'oa_budget',
   oa_actual: 'oa_actual',
   gain_loss_percentage: 'gain_loss_percentage',
@@ -219,6 +225,7 @@ export function sortTruckingListRows(
 }
 
 export function buildTruckingListSummaryFromRows(rows: TruckingListRow[]) {
+  let unplanned = 0;
   let planned = 0;
   let inProgress = 0;
   let loading = 0;
@@ -235,6 +242,11 @@ export function buildTruckingListSummaryFromRows(rows: TruckingListRow[]) {
             row.status_db,
             row.trucking_start_date,
             row.trucking_completion_date,
+            {
+              dailyDeliverables: row.daily_deliverables,
+              stoNumber: row.sto_number ?? row.sto_numbers,
+              contractImportStatus: row.contract_import_status,
+            },
           );
 
     if (effective === 'CANCELLED') {
@@ -245,6 +257,10 @@ export function buildTruckingListSummaryFromRows(rows: TruckingListRow[]) {
       completed += 1;
     } else if (effective === 'IN_PROGRESS') {
       inProgress += 1;
+    } else if (effective === 'PLANNED') {
+      planned += 1;
+    } else if (effective === 'UNPLANNED') {
+      unplanned += 1;
     } else {
       planned += 1;
     }
@@ -258,6 +274,7 @@ export function buildTruckingListSummaryFromRows(rows: TruckingListRow[]) {
   return {
     total: rows.length,
     status: {
+      unplanned,
       planned,
       inProgress,
       loading,
@@ -274,6 +291,7 @@ export function buildTruckingSummaryFromSqlRow(row: Record<string, unknown>) {
   return {
     total,
     status: {
+      unplanned: Number(row.unplanned_count || 0),
       planned: Number(row.planned_count || 0),
       inProgress: Number(row.in_progress_count || 0),
       loading: Number(row.loading_count || 0),
@@ -330,10 +348,14 @@ export function buildTruckingListQuery(
   const queryParams: unknown[] = [];
   let paramIndex = 1;
 
+  const truckingStoExprForStatus = skipSapJoin
+    ? `NULLIF(TRIM(c.sto_number::text), '')`
+    : `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers)), '')`;
+
   if (status && !options?.omitStatusFilter) {
     const s = String(status).toUpperCase();
-    if (s === 'PLANNED' || s === 'IN_PROGRESS' || s === 'COMPLETED' || s === 'CANCELLED') {
-      queryText += ` AND ${sqlTruckingEffectiveStatus('c')} = $${paramIndex}`;
+    if (s === 'UNPLANNED' || s === 'PLANNED' || s === 'IN_PROGRESS' || s === 'COMPLETED' || s === 'CANCELLED') {
+      queryText += ` AND ${sqlTruckingEffectiveStatus('c', truckingStoExprForStatus)} = $${paramIndex}`;
       queryParams.push(s);
       paramIndex += 1;
     } else {
@@ -474,6 +496,7 @@ export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text
         COUNT(*) FILTER (WHERE status = 'CANCELLED')::bigint AS cancelled_count,
         COUNT(*) FILTER (WHERE status = 'COMPLETED')::bigint AS completed_count,
         COUNT(*) FILTER (WHERE status = 'IN_PROGRESS')::bigint AS in_progress_count,
+        COUNT(*) FILTER (WHERE status = 'UNPLANNED')::bigint AS unplanned_count,
         COUNT(*) FILTER (WHERE status = 'PLANNED')::bigint AS planned_count,
         COUNT(*) FILTER (WHERE status_db = 'LOADING')::bigint AS loading_count,
         COUNT(*) FILTER (WHERE status_db = 'IN_TRANSIT')::bigint AS in_transit_count,

@@ -1,5 +1,8 @@
 /** Display rules for Contract Detail → Logistics Information (STO table). */
 
+import { deriveShipmentStatus, type ShipmentMilestones } from './shipmentStatus';
+import { deriveTruckingEffectiveStatus } from './truckingEffectiveStatus';
+
 function trimOrNull(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   const text = String(value).trim();
@@ -35,4 +38,39 @@ export function resolveContractLogisticsOperationId(
   const key = trimOrNull(stoKey);
   if (!key || !isKlipSyntheticLogisticsKey(key)) return null;
   return key;
+}
+
+/**
+ * Contract Detail STO status: logistics workflow only (UNPLANNED … COMPLETED).
+ * Contract SAP Close is separate — when contract is Close without ATA, shipment status is still COMPLETED.
+ */
+export function resolveContractLogisticsStoStatus(input: {
+  contractImportStatus?: unknown;
+  dbStatus?: unknown;
+  logisticsType: 'shipment' | 'trucking';
+  shipmentMilestones?: Partial<ShipmentMilestones>;
+  truckingOptions?: {
+    realizationStartDate?: unknown;
+    realizationEndDate?: unknown;
+    dailyDeliverables?: unknown;
+    stoNumber?: unknown;
+  };
+}): string {
+  if (input.logisticsType === 'trucking') {
+    return deriveTruckingEffectiveStatus(
+      input.dbStatus,
+      input.truckingOptions?.realizationStartDate,
+      input.truckingOptions?.realizationEndDate,
+      {
+        dailyDeliverables: input.truckingOptions?.dailyDeliverables,
+        stoNumber: input.truckingOptions?.stoNumber,
+        contractImportStatus: input.contractImportStatus,
+      },
+    );
+  }
+
+  return deriveShipmentStatus({
+    contract_import_status: input.contractImportStatus,
+    ...input.shipmentMilestones,
+  });
 }

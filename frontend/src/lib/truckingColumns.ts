@@ -24,12 +24,13 @@ export const TRUCKING_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
   'sto_quantity',
   'quantity_delivered',
   'quantity_receive',
+  'outstanding_qty_mt',
   'trucking_start_date',
   'trucking_completion_date',
 ] as const
 
 /** Bump when default column order/visibility changes — resets users without matching saved layout. */
-export const TRUCKING_COLUMN_LAYOUT_VERSION = 'trucking-columns-v2'
+export const TRUCKING_COLUMN_LAYOUT_VERSION = 'trucking-columns-v3'
 
 export const TRUCKING_COLUMN_LAYOUT_VERSION_KEY = 'trucking.compact.columnLayoutVersion'
 
@@ -48,6 +49,7 @@ export const TRUCKING_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   sto_quantity: 96,
   quantity_delivered: 96,
   quantity_receive: 96,
+  outstanding_qty_mt: 108,
   trucking_start_date: 88,
   trucking_completion_date: 88,
   operation_id: 120,

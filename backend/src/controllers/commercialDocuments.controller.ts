@@ -8,6 +8,8 @@ import { AuthRequest } from '../middleware/auth';
 import {
   buildCommercialDocumentStoredName,
   commercialDocumentMonthFolder,
+  commercialDocumentTypeLabel,
+  documentTypesForCategory,
   isCommercialDocumentType,
 } from '../utils/commercialDocumentsConstants';
 import {
@@ -58,11 +60,10 @@ function mapRow(row: Record<string, unknown>) {
     is_open: row.is_open,
     uploaded_count: row.uploaded_count,
     doc_contract: row.doc_contract,
-    doc_faktur_pajak: row.doc_faktur_pajak,
-    doc_dp: row.doc_dp,
-    doc_invoice_dp: row.doc_invoice_dp,
-    doc_ep_pelunasan: row.doc_ep_pelunasan,
-    doc_invoice_pelunasan: row.doc_invoice_pelunasan,
+    doc_addendum_contract: row.doc_addendum_contract,
+    doc_invoice_fp_dp: row.doc_invoice_fp_dp,
+    doc_invoice_fp_payoff: row.doc_invoice_fp_payoff,
+    doc_invoice_fp_full: row.doc_invoice_fp_full,
   };
 }
 
@@ -125,11 +126,10 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
         },
         summary: {
           contract: buildCard('checked_contract'),
-          faktur_pajak: buildCard('checked_faktur_pajak'),
-          dp: buildCard('checked_dp'),
-          invoice_dp: buildCard('checked_invoice_dp'),
-          ep_pelunasan: buildCard('checked_ep_pelunasan'),
-          invoice_pelunasan: buildCard('checked_invoice_pelunasan'),
+          addendum_contract: buildCard('checked_addendum_contract'),
+          invoice_fp_dp: buildCard('checked_invoice_fp_dp'),
+          invoice_fp_payoff: buildCard('checked_invoice_fp_payoff'),
+          invoice_fp_full: buildCard('checked_invoice_fp_full'),
         },
         filters: { dateFrom, dateTo },
       },
@@ -154,7 +154,13 @@ export const getCommercialDocumentHistory = async (req: AuthRequest, res: Respon
        LIMIT 200`,
       [contractExtNo],
     );
-    return res.json({ success: true, data: result.rows });
+    return res.json({
+      success: true,
+      data: result.rows.map((row) => ({
+        ...row,
+        document_type_label: commercialDocumentTypeLabel(String(row.document_type || '')),
+      })),
+    });
   } catch (err) {
     logger.error('getCommercialDocumentHistory error:', err);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch history' } });
@@ -171,10 +177,16 @@ export const getCommercialDocumentFiles = async (req: AuthRequest, res: Response
       `SELECT id, contract_ext_no, document_type, file_name, file_path, checked, created_at, updated_at
        FROM commercial_document_files
        WHERE contract_ext_no = $1
-       ORDER BY document_type`,
+       ORDER BY document_type ASC, created_at ASC`,
       [contractExtNo],
     );
-    return res.json({ success: true, data: result.rows });
+    return res.json({
+      success: true,
+      data: result.rows.map((row) => ({
+        ...row,
+        document_type_label: commercialDocumentTypeLabel(String(row.document_type || '')),
+      })),
+    });
   } catch (err) {
     logger.error('getCommercialDocumentFiles error:', err);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch files' } });
@@ -188,9 +200,10 @@ const storage = multer.diskStorage({
     const dir = ensureUploadDir(path.join('commercial-documents', monthFolder));
     cb(null, dir);
   },
-  filename: (req, file, cb) => {
-    const po = String((req as AuthRequest).body?.po_number || 'UNKNOWN');
-    cb(null, buildCommercialDocumentStoredName(po, file.originalname));
+  filename: (_req, file, cb) => {
+    // Final name is set after versioning lookup in uploadCommercialDocument; use temp unique name here.
+    const ext = path.extname(file.originalname) || '.pdf';
+    cb(null, `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
   },
 });
 
@@ -203,15 +216,30 @@ export const commercialDocumentUpload = multer({
     const mime = file.mimetype || '';
     const isPdf = mime === 'application/pdf' || name.endsWith('.pdf');
     const isImage =
-      docType === 'invoice_pelunasan' &&
+      docType === 'invoice_fp_full' &&
       (/^image\/(png|jpe?g|webp)$/i.test(mime) || /\.(png|jpe?g|webp)$/i.test(name));
     if (isPdf || isImage) {
       cb(null, true);
     } else {
-      cb(new Error('Only PDF files are allowed (images allowed for Invoice Pelunasan only)'));
+      cb(new Error('Only PDF files are allowed (images allowed for Invoice + FP Full Receive only)'));
     }
   },
 });
+
+async function loadExistingFileNames(
+  contractExtNo: string,
+  documentType: string,
+): Promise<string[]> {
+  const types = isCommercialDocumentType(documentType)
+    ? documentTypesForCategory(documentType)
+    : [documentType];
+  const result = await query(
+    `SELECT file_name FROM commercial_document_files
+     WHERE contract_ext_no = $1 AND document_type = ANY($2::text[])`,
+    [contractExtNo, types],
+  );
+  return result.rows.map((r) => String(r.file_name || ''));
+}
 
 export const uploadCommercialDocument = async (req: AuthRequest, res: Response) => {
   try {
@@ -219,6 +247,7 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
     const contractExtNo = String(req.body?.contract_ext_no || '').trim();
     const documentType = String(req.body?.document_type || '').trim();
     const poNumber = String(req.body?.po_number || '').trim();
+    const supplierName = String(req.body?.supplier_name || '').trim();
 
     if (!file) {
       return res.status(400).json({ success: false, error: { message: 'File is required' } });
@@ -252,46 +281,33 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
       return res.status(503).json({ success: false, error: { message: 'Virus scanner unavailable' } });
     }
 
-    const relativePath = toRelativeUploadPath(file.path);
-    const storedName = buildCommercialDocumentStoredName(poNumber, file.originalname);
+    const existingFileNames = await loadExistingFileNames(contractExtNo, documentType);
+    const storedName = buildCommercialDocumentStoredName({
+      supplierName,
+      documentType,
+      poNumber,
+      originalName: file.originalname,
+      existingFileNames,
+    });
+
+    const uploadDir = path.dirname(file.path);
+    const finalAbsPath = path.join(uploadDir, storedName);
+    if (finalAbsPath !== file.path) {
+      if (fs.existsSync(finalAbsPath)) {
+        try {
+          fs.unlinkSync(file.path);
+        } catch {
+          /* ignore */
+        }
+        return res.status(409).json({ success: false, error: { message: 'File name collision; please retry' } });
+      }
+      fs.renameSync(file.path, finalAbsPath);
+    }
+
+    const relativePath = toRelativeUploadPath(finalAbsPath);
     const userId = req.user?.id ?? null;
     const userName = req.user?.username || req.user?.email || 'Unknown';
-
-    const existing = await query(
-      `SELECT id, file_path FROM commercial_document_files WHERE contract_ext_no = $1 AND document_type = $2`,
-      [contractExtNo, documentType],
-    );
-    const actionType = existing.rows.length > 0 ? 'EDIT' : 'ADD';
-
-    if (existing.rows.length > 0) {
-      const oldPath = existing.rows[0].file_path as string;
-      try {
-        const abs = resolveUploadAbsolutePath(oldPath);
-        if (fs.existsSync(abs)) fs.unlinkSync(abs);
-      } catch {
-        /* ignore */
-      }
-      const updateResult = await query(
-        `UPDATE commercial_document_files
-         SET file_path = $1, file_name = $2, file_size = $3, mime_type = $4, checked = true,
-             uploaded_by = $5, updated_at = CURRENT_TIMESTAMP
-         WHERE contract_ext_no = $6 AND document_type = $7
-         RETURNING *`,
-        [relativePath, storedName, file.size, file.mimetype, userId, contractExtNo, documentType],
-      );
-      const savedFile = updateResult.rows[0];
-      await query(
-        `INSERT INTO commercial_document_history
-          (contract_ext_no, document_type, action_type, file_path, file_name, user_id, user_name)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [contractExtNo, documentType, actionType, relativePath, storedName, userId, userName],
-      );
-      return res.json({
-        success: true,
-        message: actionType === 'ADD' ? 'Document uploaded' : 'Document replaced',
-        data: { actionType, file_name: storedName, file_id: savedFile.id },
-      });
-    }
+    const actionType = existingFileNames.length > 0 ? 'EDIT' : 'ADD';
 
     const insertResult = await query(
       `INSERT INTO commercial_document_files
@@ -311,7 +327,7 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
 
     return res.json({
       success: true,
-      message: actionType === 'ADD' ? 'Document uploaded' : 'Document replaced',
+      message: actionType === 'ADD' ? 'Document uploaded' : 'New document version uploaded',
       data: { actionType, file_name: storedName, file_id: savedFile.id },
     });
   } catch (err) {

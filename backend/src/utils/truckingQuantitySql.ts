@@ -69,3 +69,24 @@ export function sqlTruckingQuantityReceiveCoalesce(): string {
     `)}
   )`;
 }
+
+/**
+ * Outstanding qty (kg) for trucking list — FRC: contract − receive; LCO: contract − delivered.
+ * Other incoterms return NULL.
+ */
+export function sqlTruckingOutstandingQtyByIncoterm(
+  qtyDeliveredExpr: string,
+  qtyReceiveExpr: string,
+  contractQtyExpr = 'COALESCE(c.quantity_ordered, 0)',
+  incotermExpr = 'c.incoterm',
+): string {
+  return `(
+    CASE
+      WHEN UPPER(TRIM(COALESCE(${incotermExpr}, ''))) = 'FRC' THEN
+        (${contractQtyExpr}) - COALESCE(${qtyReceiveExpr}, 0)
+      WHEN UPPER(TRIM(COALESCE(${incotermExpr}, ''))) = 'LCO' THEN
+        (${contractQtyExpr}) - COALESCE(${qtyDeliveredExpr}, 0)
+      ELSE NULL
+    END
+  )`;
+}

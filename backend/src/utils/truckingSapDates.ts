@@ -47,6 +47,24 @@ function sqlLatestSapTruckingDateField(
   )`;
 }
 
+/** Latest SAP Trucking Start Receive Date only (column AV) — not merged with DB planning dates. */
+export function sqlSapTruckingStartReceiveDate(contractAlias = 'c'): string {
+  return sqlLatestSapTruckingDateField(
+    contractAlias,
+    ['Trucking Start Receive Date'],
+    'trucking_start_receive_date',
+  );
+}
+
+/** Latest SAP Trucking Last Receive Date only (column AW) — not merged with DB planning dates. */
+export function sqlSapTruckingLastReceiveDate(contractAlias = 'c'): string {
+  return sqlLatestSapTruckingDateField(
+    contractAlias,
+    ['Trucking Last Receive Date'],
+    'trucking_last_receive_date',
+  );
+}
+
 /** COALESCE(t.trucking_start_date, SAP Trucking Start Receive Date) */
 export function sqlEffectiveTruckingStartDate(contractAlias = 'c'): string {
   return `COALESCE(

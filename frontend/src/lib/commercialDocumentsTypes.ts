@@ -1,18 +1,16 @@
 export type CommercialDocumentType =
   | 'contract'
-  | 'faktur_pajak'
-  | 'dp'
-  | 'invoice_dp'
-  | 'ep_pelunasan'
-  | 'invoice_pelunasan'
+  | 'addendum_contract'
+  | 'invoice_fp_dp'
+  | 'invoice_fp_payoff'
+  | 'invoice_fp_full'
 
 export const COMMERCIAL_DOCUMENT_TYPES: CommercialDocumentType[] = [
   'contract',
-  'faktur_pajak',
-  'dp',
-  'invoice_dp',
-  'ep_pelunasan',
-  'invoice_pelunasan',
+  'addendum_contract',
+  'invoice_fp_dp',
+  'invoice_fp_payoff',
+  'invoice_fp_full',
 ]
 
 export const COMMERCIAL_DOCUMENTS_PAGE_PERMISSION = 'page.commercial_documents'
@@ -20,11 +18,47 @@ export const COMMERCIAL_DOCUMENTS_DATA_PERMISSION = 'data.commercial_documents'
 
 export const COMMERCIAL_DOCUMENT_LABELS: Record<CommercialDocumentType, string> = {
   contract: 'Contract',
-  faktur_pajak: 'Faktur Pajak',
-  dp: 'DP',
-  invoice_dp: 'Invoice DP',
-  ep_pelunasan: 'EP Pelunasan',
-  invoice_pelunasan: 'Invoice Pelunasan',
+  addendum_contract: 'Addendum Contract',
+  invoice_fp_dp: 'Invoice + FP Down Payment (DP)',
+  invoice_fp_payoff: 'Invoice + FP Payoff (PO)',
+  invoice_fp_full: 'Invoice + FP (Full Receive)',
+}
+
+/** Legacy DB document_type values mapped to current checklist categories. */
+const LEGACY_TYPE_TO_CANONICAL: Record<string, CommercialDocumentType> = {
+  dp: 'invoice_fp_dp',
+  invoice_dp: 'invoice_fp_dp',
+  ep_pelunasan: 'invoice_fp_payoff',
+  invoice_pelunasan: 'invoice_fp_full',
+}
+
+export function documentTypesForCategory(type: CommercialDocumentType): string[] {
+  switch (type) {
+    case 'invoice_fp_dp':
+      return ['invoice_fp_dp', 'dp', 'invoice_dp']
+    case 'invoice_fp_payoff':
+      return ['invoice_fp_payoff', 'ep_pelunasan']
+    case 'invoice_fp_full':
+      return ['invoice_fp_full', 'invoice_pelunasan']
+    default:
+      return [type]
+  }
+}
+
+export function canonicalCommercialDocumentType(value: string): CommercialDocumentType | null {
+  if ((COMMERCIAL_DOCUMENT_TYPES as readonly string[]).includes(value)) {
+    return value as CommercialDocumentType
+  }
+  return LEGACY_TYPE_TO_CANONICAL[value] ?? null
+}
+
+export function commercialDocumentTypeLabel(value: string): string {
+  if ((COMMERCIAL_DOCUMENT_TYPES as readonly string[]).includes(value)) {
+    return COMMERCIAL_DOCUMENT_LABELS[value as CommercialDocumentType]
+  }
+  const canonical = LEGACY_TYPE_TO_CANONICAL[value]
+  if (canonical) return COMMERCIAL_DOCUMENT_LABELS[canonical]
+  return value
 }
 
 export type CommercialDocumentRow = {
@@ -53,11 +87,10 @@ export type CommercialDocumentRow = {
   is_open: boolean
   uploaded_count: number
   doc_contract: boolean
-  doc_faktur_pajak: boolean
-  doc_dp: boolean
-  doc_invoice_dp: boolean
-  doc_ep_pelunasan: boolean
-  doc_invoice_pelunasan: boolean
+  doc_addendum_contract: boolean
+  doc_invoice_fp_dp: boolean
+  doc_invoice_fp_payoff: boolean
+  doc_invoice_fp_full: boolean
 }
 
 export type CommercialDocSummaryCard = {
@@ -72,7 +105,8 @@ export type CommercialDocumentsSummary = Record<CommercialDocumentType, Commerci
 export type CommercialDocumentHistoryEntry = {
   id: string
   contract_ext_no: string
-  document_type: CommercialDocumentType
+  document_type: string
+  document_type_label?: string
   action_type: 'ADD' | 'EDIT'
   file_name: string | null
   user_name: string | null
@@ -82,7 +116,8 @@ export type CommercialDocumentHistoryEntry = {
 export type CommercialDocumentFileRecord = {
   id: string
   contract_ext_no: string
-  document_type: CommercialDocumentType
+  document_type: string
+  document_type_label?: string
   file_name: string
   file_path: string
   checked: boolean
@@ -93,11 +128,10 @@ export type CommercialDocumentFileRecord = {
 export function docCheckedField(type: CommercialDocumentType): keyof CommercialDocumentRow {
   const map: Record<CommercialDocumentType, keyof CommercialDocumentRow> = {
     contract: 'doc_contract',
-    faktur_pajak: 'doc_faktur_pajak',
-    dp: 'doc_dp',
-    invoice_dp: 'doc_invoice_dp',
-    ep_pelunasan: 'doc_ep_pelunasan',
-    invoice_pelunasan: 'doc_invoice_pelunasan',
+    addendum_contract: 'doc_addendum_contract',
+    invoice_fp_dp: 'doc_invoice_fp_dp',
+    invoice_fp_payoff: 'doc_invoice_fp_payoff',
+    invoice_fp_full: 'doc_invoice_fp_full',
   }
   return map[type]
 }
@@ -114,4 +148,19 @@ export function isContractB2bOrigin(row: Pick<CommercialDocumentRow, 'b2b_flag' 
   const flag = String(row.b2b_flag || '').trim().toUpperCase()
   const isB2b = flag === 'B2B' || flag === 'YES' || flag === 'Y'
   return isB2b && !String(row.contract_reference_po || '').trim()
+}
+
+export function filesForDocumentCategory(
+  files: CommercialDocumentFileRecord[],
+  type: CommercialDocumentType,
+): CommercialDocumentFileRecord[] {
+  const allowed = new Set(documentTypesForCategory(type))
+  return files
+    .filter((f) => allowed.has(f.document_type))
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+}
+
+export function documentVersionLabel(type: CommercialDocumentType, versionIndex: number): string {
+  const base = COMMERCIAL_DOCUMENT_LABELS[type]
+  return versionIndex > 0 ? `${base} (${versionIndex + 1})` : base
 }

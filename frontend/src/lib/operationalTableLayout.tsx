@@ -227,11 +227,10 @@ const COMMERCIAL_DOCS_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLa
   transport_mode: 'short',
   b2b_flag: 'short',
   doc_contract: 'short',
-  doc_faktur_pajak: 'short',
-  doc_dp: 'short',
-  doc_invoice_dp: 'short',
-  doc_ep_pelunasan: 'short',
-  doc_invoice_pelunasan: 'short',
+  doc_addendum_contract: 'short',
+  doc_invoice_fp_dp: 'short',
+  doc_invoice_fp_payoff: 'short',
+  doc_invoice_fp_full: 'short',
 }
 
 export function getOperationalColumnLayout(

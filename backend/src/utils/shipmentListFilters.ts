@@ -348,13 +348,15 @@ export function shipmentHasAnyEtaExpr(alias: string): string {
 
 /**
  * Effective SEA shipment status on grouped list rows (`shipment_base` / `filtered_shipments`).
- * PLANNED from ETA; IN_PROGRESS–COMPLETED from ATA (see deriveShipmentStatus in shipmentStatus.ts).
+ * SAP contract Close/Completed → always COMPLETED (excluded from pre-completed buckets).
+ * Otherwise PLANNED from ETA; IN_PROGRESS–COMPLETED from ATA.
  */
 export function shipmentEffectiveStatusExpr(alias: string): string {
   const f = alias
   return `(
     CASE
       WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
+      WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS TRUE THEN 'COMPLETED'
       WHEN ${f}.ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'
       WHEN ${f}.ata_vessel_start_discharging IS NOT NULL THEN 'UNLOADING'
       WHEN ${f}.ata_vessel_arrive_at_discharge_port IS NOT NULL THEN 'ARRIVED'

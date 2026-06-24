@@ -80,3 +80,28 @@ export function hasToolbarMultiSelection(filters: Partial<ToolbarMultiFilterStat
     (filters.selectedGroupPlants?.length ?? 0) > 0
   )
 }
+
+/**
+ * Puts selected values first (in selection order), then the rest in their original order.
+ * Used in global Product / Group Plant filters so user-plotted values from User Management
+ * stay visible at the top of the dropdown.
+ */
+export function sortFilterOptionsWithSelectedFirst(
+  options: string[],
+  selected: string[],
+): string[] {
+  if (selected.length === 0 || options.length === 0) return options
+
+  const optionSet = new Set(options)
+  const selectedFirst: string[] = []
+  for (const value of selected) {
+    if (optionSet.has(value) && !selectedFirst.includes(value)) {
+      selectedFirst.push(value)
+    }
+  }
+  if (selectedFirst.length === 0) return options
+
+  const selectedSet = new Set(selectedFirst)
+  const rest = options.filter((option) => !selectedSet.has(option))
+  return [...selectedFirst, ...rest]
+}

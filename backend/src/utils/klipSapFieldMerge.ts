@@ -8,11 +8,14 @@ export function mergeSapTextColumnSql(
   column: string,
   sapExpr: string,
   protectKlip: boolean,
+  /** Qualify existing-row column (e.g. `shipments` in INSERT … ON CONFLICT DO UPDATE). */
+  existingTable?: string,
 ): string {
+  const existing = existingTable ? `${existingTable}.${column}` : column;
   if (protectKlip) {
-    return `${column} = COALESCE(NULLIF(TRIM(${column}), ''), ${sapExpr})`;
+    return `${column} = COALESCE(NULLIF(TRIM(${existing}), ''), ${sapExpr})`;
   }
-  return `${column} = COALESCE(${sapExpr}, ${column})`;
+  return `${column} = COALESCE(${sapExpr}, ${existing})`;
 }
 
 /** Numeric field: keep existing when protectKlip and value is not null. */
@@ -20,11 +23,13 @@ export function mergeSapNumericColumnSql(
   column: string,
   sapExpr: string,
   protectKlip: boolean,
+  existingTable?: string,
 ): string {
+  const existing = existingTable ? `${existingTable}.${column}` : column;
   if (protectKlip) {
-    return `${column} = COALESCE(${column}, ${sapExpr})`;
+    return `${column} = COALESCE(${existing}, ${sapExpr})`;
   }
-  return `${column} = COALESCE(${sapExpr}, ${column})`;
+  return `${column} = COALESCE(${sapExpr}, ${existing})`;
 }
 
 /** Port / location text: ignore blank and literal 0.00 placeholders. */
@@ -32,8 +37,10 @@ export function mergeSapPortColumnSql(
   column: string,
   sapExpr: string,
   protectKlip: boolean,
+  existingTable?: string,
 ): string {
-  const existingClean = `NULLIF(NULLIF(TRIM(${column}), ''), '0.00')`;
+  const existing = existingTable ? `${existingTable}.${column}` : column;
+  const existingClean = `NULLIF(NULLIF(TRIM(${existing}), ''), '0.00')`;
   const sapClean =
     sapExpr.includes('EXCLUDED.')
       ? `NULLIF(NULLIF(TRIM(COALESCE(${sapExpr}, '')), ''), '0.00')`
@@ -55,14 +62,15 @@ export function buildShipmentKlipProtectedSetSql(
   const portDischarge = mode === 'param' ? '$15' : 'EXCLUDED.port_of_discharge';
   const qtyDelivered = mode === 'param' ? '$19::numeric' : 'EXCLUDED.quantity_delivered';
   const qtyReceive = mode === 'param' ? '$21::numeric' : 'EXCLUDED.actual_vessel_qty_receive';
+  const existingTable = mode === 'excluded' ? 'shipments' : undefined;
 
   return [
-    mergeSapTextColumnSql('vessel_code', vesselCode, protectKlip),
-    mergeSapTextColumnSql('vessel_name', vesselName, protectKlip),
-    mergeSapPortColumnSql('port_of_loading', portLoading, protectKlip),
-    mergeSapPortColumnSql('port_of_discharge', portDischarge, protectKlip),
-    mergeSapNumericColumnSql('quantity_delivered', qtyDelivered, protectKlip),
-    mergeSapNumericColumnSql('actual_vessel_qty_receive', qtyReceive, protectKlip),
+    mergeSapTextColumnSql('vessel_code', vesselCode, protectKlip, existingTable),
+    mergeSapTextColumnSql('vessel_name', vesselName, protectKlip, existingTable),
+    mergeSapPortColumnSql('port_of_loading', portLoading, protectKlip, existingTable),
+    mergeSapPortColumnSql('port_of_discharge', portDischarge, protectKlip, existingTable),
+    mergeSapNumericColumnSql('quantity_delivered', qtyDelivered, protectKlip, existingTable),
+    mergeSapNumericColumnSql('actual_vessel_qty_receive', qtyReceive, protectKlip, existingTable),
   ].join(',\n          ');
 }
 

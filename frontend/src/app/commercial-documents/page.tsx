@@ -68,7 +68,7 @@ import {
   type CommercialDocumentsSummary,
 } from '@/lib/commercialDocumentsTypes'
 
-const VISIBLE_COLUMNS_KEY = 'commercial-documents.visibleColumns.v1'
+const VISIBLE_COLUMNS_KEY = 'commercial-documents.visibleColumns.v2'
 const PAGE_SIZE = 50
 
 type DocumentStatusFilter = '' | 'checked' | 'unchecked'
@@ -465,6 +465,7 @@ function CommercialDocumentsPageContent() {
               options={availableProducts}
               selected={selectedProducts}
               onChange={handleProductsChange}
+              pinSelectedToTop
             />
             <SearchableMultiSelect
               label="Group Plant"
@@ -472,6 +473,7 @@ function CommercialDocumentsPageContent() {
               options={availablePlants}
               selected={selectedPlants}
               onChange={handleGroupPlantsChange}
+              pinSelectedToTop
             />
           </div>
           <div className="flex flex-wrap items-center gap-4">

@@ -27,6 +27,10 @@ import {
   getShipmentActivityLog,
 } from '../controllers/shipment.controller';
 import {
+  getShipmentAtaOverride,
+  updateShipmentAtaOverride,
+} from '../controllers/shipmentAtaOverride.controller';
+import {
   suggestShipmentEta,
   suggestShipmentVessel,
 } from '../controllers/shipmentAiPlanner.controller';
@@ -88,6 +92,8 @@ router.get('/:id', getShipmentById);
 
 // Update shipment
 router.put('/:id', auditLog('UPDATE', 'SHIPMENT'), updateShipment);
+router.get('/:id/ata-override', getShipmentAtaOverride);
+router.put('/:id/ata-override', auditLog('UPDATE', 'SHIPMENT'), updateShipmentAtaOverride);
 
 // Vessel loading ports routes
 router.get('/:shipmentId/activity-log', getShipmentActivityLog);

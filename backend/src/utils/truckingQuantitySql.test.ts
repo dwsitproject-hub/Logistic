@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   sqlNormalizeSapTruckingQtyToKg,
+  sqlTruckingOutstandingQtyByIncoterm,
   sqlTruckingQuantityDeliveredCoalesce,
 } from './truckingQuantitySql';
 
@@ -15,5 +16,13 @@ describe('truckingQuantitySql', () => {
     const sql = sqlTruckingQuantityDeliveredCoalesce();
     expect(sql).toContain('t.quantity_delivered');
     expect(sql).toContain('Quantity Delivered via Trucking');
+  });
+
+  it('sqlTruckingOutstandingQtyByIncoterm uses receive for FRC and delivered for LCO', () => {
+    const sql = sqlTruckingOutstandingQtyByIncoterm('qty_del', 'qty_recv');
+    expect(sql).toContain("= 'FRC'");
+    expect(sql).toContain('qty_recv');
+    expect(sql).toContain("= 'LCO'");
+    expect(sql).toContain('qty_del');
   });
 });

@@ -138,7 +138,7 @@
 <body>
   <header>
     <h1>KLIP Glossary</h1>
-    <p>KPN Logistics Intelligence Platform — istilah, rumus, dan aturan kalkulasi untuk tim bisnis &amp; teknis. Route: <code>/contract-performance</code>, <code>/shipping-performance</code>, <code>/oil-loss</code>, <code>/ai-klip-agent-activity</code>, dll.</p>
+    <p>KPN Logistics Intelligence Platform — istilah, rumus, dan aturan kalkulasi untuk tim bisnis &amp; teknis. Route: <code>/contract-performance</code>, <code>/shipping-performance</code>, <code>/trucking</code>, <code>/oil-loss</code>, <code>/commercial-documents</code>, <code>/ai-klip-agent-activity</code>, dll.</p>
   </header>
 
   <div class="layout">
@@ -188,6 +188,17 @@
             <li><a href="#oil-loss-r4">R4 Total (MT)</a></li>
             <li><a href="#oil-loss-section3">Section 3 tabel</a></li>
             <li><a href="#oil-loss-sap">Rekonsiliasi SAP</a></li>
+          </ul>
+        </li>
+        <li><a href="#operation-trucking">Operation Trucking</a>
+          <ul class="sub">
+            <li><a href="#trucking-planning-vs-actual">Planning vs Realisasi</a></li>
+            <li><a href="#trucking-schema">Skema &amp; extension tables</a></li>
+            <li><a href="#trucking-status">Status efektif</a></li>
+            <li><a href="#trucking-outstanding">Outstanding Qty (MT)</a></li>
+            <li><a href="#trucking-modals">Add / Edit Trucking</a></li>
+            <li><a href="#trucking-calendar">Calendar &amp; CSV</a></li>
+            <li><a href="#trucking-api">API realization</a></li>
           </ul>
         </li>
         <li><a href="#sap-klip-input">SAP Upload &amp; Input KLIP</a>
@@ -477,7 +488,7 @@
           <tbody>
             <tr><td>Qty Receive / Delivery</td><td><code>sap_processed_data</code> (CTE qty movement)</td></tr>
             <tr><td>Due dates, DP, Payoff, status</td><td>SAP raw / <code>latest_spd_data</code></td></tr>
-            <tr><td>Trucking completion</td><td><code>trucking_operations</code> + SAP trucking dates</td></tr>
+            <tr><td>Trucking completion</td><td><code>trucking_operations</code> (planning) + <code>trucking_realizations</code> / SAP AV/AW (realisasi) — lihat <a href="#operation-trucking">Operation Trucking</a></td></tr>
             <tr><td>Vessel ATA / ETA</td><td><code>shipments</code>, <code>vessel_loading_ports</code></td></tr>
             <tr><td>Cargo readiness</td><td><code>contracts.cargo_readiness_date</code></td></tr>
           </tbody>
@@ -775,6 +786,159 @@
         </table>
       </section>
 
+      <section id="operation-trucking">
+        <h2>Operation Trucking <span class="tag">/trucking · Contract LAND/MIX</span></h2>
+        <p>
+          Halaman <strong>Trucking</strong> dan modal <strong>Add / Edit Trucking</strong> (dari Contract Page kartu LAND/MIX atau dari tabel Trucking)
+          memisahkan secara ketat data <strong>Planning (ETA / target)</strong> dan <strong>Realisasi (ATA / actual)</strong>.
+          Skema utama <code>trucking_operations</code> <strong>tidak diubah</strong> — realisasi disimpan di tabel extension agar modul lain yang membaca tabel utama tetap aman.
+        </p>
+
+        <h3 id="trucking-planning-vs-actual">Planning vs Realisasi</h3>
+        <table>
+          <thead>
+            <tr><th>Lapisan</th><th>Arti bisnis</th><th>Penyimpanan</th><th>Diisi lewat</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Planning (ETA)</strong></td>
+              <td>Rencana window trucking &amp; qty per hari</td>
+              <td>
+                <code>trucking_operations.trucking_start_date</code>,
+                <code>trucking_completion_date</code>,
+                <code>daily_deliverables</code> (JSONB, qty dalam <strong>Kg</strong>)
+              </td>
+              <td>Add New Trucking, Edit Trucking (bagian planning), tab Calendar mode <em>Planning (ETA)</em>, bulk CSV planning</td>
+            </tr>
+            <tr>
+              <td><strong>Realisasi (ATA)</strong></td>
+              <td>Tanggal mulai/selesai receive aktual &amp; qty harian aktual</td>
+              <td>
+                <code>trucking_realizations</code> (1 baris per operation),
+                <code>trucking_daily_actuals</code> (per tanggal)
+              </td>
+              <td>SAP sync (kolom AV/AW), Edit Trucking (realization dates), tab Calendar mode <em>Actual (ATA)</em>, bulk CSV actuals</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Penting:</strong> Kolom <code>trucking_start_date</code> / <code>trucking_completion_date</code> pada tabel utama sekarang semantiknya = <em>planning window</em>.
+          Tanggal receive di tabel Trucking (kolom <em>Start Receive Date</em> / <em>Last Receive Date</em>) diambil dari lapisan realisasi:
+          <span class="formula">COALESCE(trucking_realizations.*, SAP AV/AW)</span> — bukan dari tanggal planning.
+        </div>
+
+        <h3 id="trucking-schema">Skema &amp; extension tables</h3>
+        <table>
+          <thead>
+            <tr><th>Tabel</th><th>Kolom utama</th><th>Relasi</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>trucking_operations</code></td>
+              <td>Planning dates, <code>daily_deliverables</code>, qty, status DB, <code>operation_id</code>, dll.</td>
+              <td>Tabel utama (tidak di-drop / di-rename)</td>
+            </tr>
+            <tr>
+              <td><code>trucking_realizations</code></td>
+              <td><code>realization_start_date</code>, <code>realization_end_date</code>, <code>source</code> (<code>sap</code> / <code>manual</code>), <code>sap_synced_at</code></td>
+              <td><code>UNIQUE(trucking_operation_id)</code> → FK ke <code>trucking_operations.id</code></td>
+            </tr>
+            <tr>
+              <td><code>trucking_daily_actuals</code></td>
+              <td><code>progress_date</code>, <code>quantity_kg</code>, <code>source</code></td>
+              <td><code>UNIQUE(trucking_operation_id, progress_date)</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Migration: <code>090_trucking_realization_extension_tables.sql</code> — backfill SAP AV/AW ke <code>trucking_realizations</code> tanpa mengubah kolom planning.</p>
+
+        <h3 id="trucking-status">Status efektif (kartu Section 1 &amp; filter tabel)</h3>
+        <p>UI Trucking memakai <strong>effective status</strong> (bukan hanya kolom <code>status</code> DB). Urutan evaluasi:</p>
+        <table>
+          <thead>
+            <tr><th>Status UI</th><th>Kondisi</th><th>Sumber data</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>CANCELLED</strong></td><td><code>t.status = 'CANCELLED'</code></td><td>Kolom status DB</td></tr>
+            <tr><td><strong>Completed</strong></td><td>Realization end date terisi</td><td><code>trucking_realizations</code> → fallback SAP AW</td></tr>
+            <tr><td><strong>In Progress</strong></td><td>Realization start terisi, end masih kosong</td><td><code>trucking_realizations</code> → fallback SAP AV</td></tr>
+            <tr><td><strong>Planned</strong></td><td>Ada <code>daily_deliverables</code> dengan tanggal + qty &gt; 0</td><td>JSON planning di tabel utama</td></tr>
+            <tr><td><strong>Unplanned</strong></td><td>STO dari SAP ada, belum ada planning KLIP</td><td><code>contracts.sto_number</code> / agregasi STO</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          Status <strong>In Progress</strong> dan <strong>Completed</strong> <strong>tidak</strong> diturunkan dari tanggal planning (<code>trucking_start_date</code> / <code>trucking_completion_date</code>).
+          Add New Trucking yang hanya mengisi planning tidak otomatis menjadi In Progress.
+        </div>
+        <p>Baris <strong>Unplanned</strong> dari SAP: tombol <em>Add</em> (bukan Edit) membuka Add New Trucking dalam mode <em>plot</em> — menyimpan planning ke baris STO yang sudah ada via <code>PUT</code>, bukan <code>POST</code> baru.</p>
+
+        <h3 id="trucking-outstanding">Outstanding Qty (MT) — kolom tabel</h3>
+        <p>Outstanding dihitung per incoterm (qty disimpan Kg, tampilan MT):</p>
+        <table>
+          <thead>
+            <tr><th>Incoterm</th><th>Rumus (Kg)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>FRC</strong></td><td><span class="formula">Contract Qty − Received Qty</span></td></tr>
+            <tr><td><strong>LCO</strong></td><td><span class="formula">Contract Qty − Delivered Qty</span></td></tr>
+            <tr><td>Lainnya</td><td>— (tidak ditampilkan)</td></tr>
+          </tbody>
+        </table>
+        <p>Over-delivery (nilai negatif) ditampilkan hijau sebagai <code>+X MT</code>; masih outstanding merah. Tooltip kolom menjelaskan formula per baris (FRC vs LCO).</p>
+
+        <h3 id="trucking-modals">Add New Trucking &amp; Edit Trucking</h3>
+        <h4>Add New Trucking / Plot (Unplanned)</h4>
+        <ul>
+          <li>Wajib: <em>Start Date (Planning)</em>, <em>End Date (Planning)</em>, <em>Quantity per day</em> (MT).</li>
+          <li>Qty per hari didistribusi ke <code>daily_deliverables</code>; hari terakhir mendapat sisa jika total melebihi outstanding.</li>
+          <li>Hanya menulis field <strong>planning</strong> pada <code>trucking_operations</code> — tidak menulis realisasi.</li>
+          <li><strong>Plot mode</strong>: untuk baris Unplanned — <code>PUT /trucking/:id</code> dengan planning saja.</li>
+        </ul>
+        <h4>Edit Trucking</h4>
+        <ul>
+          <li><strong>Planning</strong> (start/end planning, qty/day → <code>daily_deliverables</code>): sama seperti Add, via <code>PUT /trucking/:id</code>.</li>
+          <li><strong>Realisasi</strong>: SAP AV/AW read-only; <em>Realization Start/Last Receive Date</em> dapat di-override manual → <code>PUT /trucking/:id/realization</code>.</li>
+          <li>Section SAP receive dates di modal = referensi SAP; field editable = lapisan realisasi KLIP.</li>
+        </ul>
+
+        <h3 id="trucking-calendar">Daily Planning Deliverables — Calendar</h3>
+        <p>Tab <strong>Daily Planning Deliverables</strong> pada halaman Trucking punya toggle:</p>
+        <table>
+          <thead>
+            <tr><th>Mode UI</th><th>Isi sel grid</th><th>Penyimpanan</th><th>API save / CSV</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Planning (ETA)</strong></td>
+              <td>Qty rencana per hari (input MT, simpan Kg)</td>
+              <td><code>daily_deliverables</code></td>
+              <td><code>PUT …/daily-planning-deliverables</code>, bulk <code>POST …/daily-planning-deliverables/bulk-upload</code></td>
+            </tr>
+            <tr>
+              <td><strong>Actual (ATA)</strong></td>
+              <td>Qty aktual per hari</td>
+              <td><code>trucking_daily_actuals</code></td>
+              <td><code>PUT …/daily-actuals</code>, bulk <code>POST …/daily-actuals/bulk-upload</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Format CSV kedua mode: <code>contract_ext_no, date, quantity_delivered</code> (qty dalam Kg di backend). Validasi due window kontrak tetap berlaku pada mode planning.</p>
+
+        <h3 id="trucking-api">API realization (ringkas)</h3>
+        <table>
+          <thead>
+            <tr><th>Method</th><th>Path</th><th>Fungsi</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>GET</td><td><code>/api/trucking/:id/realization</code></td><td>Planning + realization + <code>daily_actuals</code></td></tr>
+            <tr><td>PUT</td><td><code>/api/trucking/:id/realization</code></td><td>Manual override tanggal realisasi</td></tr>
+            <tr><td>PUT</td><td><code>/api/trucking/:id/daily-actuals</code></td><td>Update qty harian aktual</td></tr>
+            <tr><td>GET</td><td><code>/api/trucking</code></td><td>List — kolom receive date = realisasi; <code>planning_start_date</code> / <code>planning_end_date</code> terpisah</td></tr>
+          </tbody>
+        </table>
+        <p>Reconcile SAP periodik (<code>SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP</code>) menulis ke <code>trucking_realizations</code>, bukan menimpa tanggal planning.</p>
+      </section>
+
       <section id="sap-klip-input">
         <h2>SAP Upload &amp; Input KLIP <span class="tag">sapDataDistribution</span></h2>
         <p>Saat <strong>SAP data upload</strong> (re-import), KLIP menggabungkan data SAP ke baris operasional yang sudah ada. Ada <strong>dua lapisan</strong> perlindungan yang berbeda: perlindungan <em>baris</em> (row) dan perlindungan <em>field</em> (kolom).</p>
@@ -851,7 +1015,7 @@
             <tr><td>Qty Delivery</td><td><code>quantity_delivered</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
           </tbody>
         </table>
-        <p>Field ETA trucking/delivery (<code>eta_trucking_*</code>, <code>eta_delivery_*</code>) dan <code>daily_deliverables</code> <strong>tidak pernah</strong> di-update oleh SAP upload (terlepas dari aktivitas KLIP).</p>
+        <p>Field ETA trucking/delivery (<code>eta_trucking_*</code>, <code>eta_delivery_*</code>), tanggal planning (<code>trucking_start_date</code>, <code>trucking_completion_date</code>), dan <code>daily_deliverables</code> <strong>tidak pernah</strong> di-update oleh SAP upload (terlepas dari aktivitas KLIP). Tanggal receive SAP (AV/AW) ditulis ke <code>trucking_realizations</code> — lihat <a href="#operation-trucking">Operation Trucking</a>.</p>
 
         <h3 id="sap-klip-merge">Aturan merge SQL</h3>
         <p>Implementasi di <code>klipSapFieldMerge.ts</code> — dipakai pada <code>upsertShipment</code> dan <code>createTruckingOperation</code> saat SAP distribution:</p>
@@ -901,7 +1065,7 @@
           <li>ETA/ATA milestone shipment (<code>eta_arrival</code>, <code>ata_*</code>, dll.)</li>
           <li><code>status</code> shipment — hanya naik level milestone, tidak turun</li>
           <li><code>voyage_no</code>, <code>vessel_owner</code>, OA budget/actual, loading rate, SFAL/SFBD, dll.</li>
-          <li>Tanggal actual trucking (<code>trucking_start_date</code>, <code>trucking_completion_date</code>) dari kolom SAP AV/AW</li>
+          <li>Tanggal realisasi trucking (SAP AV/AW) → <code>trucking_realizations</code> (<code>realization_start_date</code>, <code>realization_end_date</code>) — <strong>bukan</strong> menimpa <code>trucking_start_date</code> / <code>trucking_completion_date</code> planning</li>
           <li><code>trucking_owner</code>, <code>quantity_sent</code>, <code>oa_budget</code>, <code>oa_actual</code></li>
           <li>Detail port per sequence di <code>vessel_loading_ports</code> (ETA/ATA per port, quality) — update SAP langsung pada baris port yang cocok</li>
           <li>Master kontrak (<code>contracts.*</code>) — umumnya <code>COALESCE(SAP, existing)</code>; <code>sto_number</code> diselaraskan ke STO SAP terbaru pada keeper shipment</li>
@@ -1216,6 +1380,15 @@
             <tr><td>Contract logistics STO display rules</td><td><code>backend/src/utils/contractLogisticsStoDisplay.ts</code></td></tr>
             <tr><td>Contract Detail modal (Logistics table)</td><td><code>frontend/src/components/contracts/ContractDetailModal.tsx</code></td></tr>
             <tr><td>Add New Shipment API</td><td><code>backend/src/controllers/shipment.controller.ts</code> (<code>createShipment</code>)</td></tr>
+            <tr><td>Trucking UI &amp; calendar</td><td><code>frontend/src/app/trucking/page.tsx</code>, <code>frontend/src/lib/truckingColumns.ts</code></td></tr>
+            <tr><td>Add / Edit Trucking modal</td><td><code>frontend/src/components/trucking/CreateTruckingOperationModal.tsx</code></td></tr>
+            <tr><td>Planning deliverables (frontend)</td><td><code>frontend/src/lib/truckingPlanningDeliverables.ts</code></td></tr>
+            <tr><td>Effective status &amp; reconcile SAP</td><td><code>backend/src/utils/truckingEffectiveStatus.ts</code></td></tr>
+            <tr><td>Realization SQL join</td><td><code>backend/src/utils/truckingRealizationSql.ts</code></td></tr>
+            <tr><td>Realization service &amp; API</td><td><code>backend/src/services/truckingRealization.service.ts</code>, <code>truckingRealization.controller.ts</code></td></tr>
+            <tr><td>Extension tables migration</td><td><code>backend/src/database/migrations/090_trucking_realization_extension_tables.sql</code></td></tr>
+            <tr><td>Outstanding qty SQL</td><td><code>backend/src/utils/truckingQuantitySql.ts</code></td></tr>
+            <tr><td>Trucking list SELECT</td><td><code>backend/src/utils/truckingListSelectSql.ts</code>, <code>truckingList.service.ts</code></td></tr>
             <tr><td>Add New Trucking API</td><td><code>backend/src/controllers/trucking.controller.ts</code> (<code>createTruckingOperation</code>)</td></tr>
             <tr><td>AI Shipment Planner (vessel + ETA)</td><td><code>backend/src/services/shipmentAiPlanner.service.ts</code>, <code>shipmentAiPlanner.controller.ts</code></td></tr>
             <tr><td>AI Klip Agent Activity Log</td><td><code>backend/src/services/aiKlipAgentActivityLog.service.ts</code>, <code>frontend/src/app/ai-klip-agent-activity/page.tsx</code></td></tr>
@@ -1229,7 +1402,7 @@
   </div>
 
   <footer>
-    KLIP Glossary — diperbarui 2026-06-03 · Contract Performance · Shipping Performance · Oil Loss · AI Klip Agent · Operation ID &amp; Shipment ID · SAP Upload &amp; Input KLIP · Buka: <code>docs/KLIP_Glossary.html</code>
+    KLIP Glossary — diperbarui 2026-06-03 · Operation Trucking (Planning vs Realisasi) · Contract Performance · Shipping Performance · Oil Loss · Commercial Documents · AI Klip Agent · Operation ID &amp; Shipment ID · SAP Upload &amp; Input KLIP · Buka: <code>docs/KLIP_Glossary.html</code>
   </footer>
 </body>
 </html>

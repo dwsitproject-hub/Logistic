@@ -65,7 +65,7 @@ import {
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
 } from '@/lib/compactTableUi'
-import { formatQtyMtFromKg, formatNumber } from '@/lib/utils'
+import { formatQtyMtFromKg, formatNumber, formatOutstandingQtyMtFromKg } from '@/lib/utils'
 import {
   SHIPMENT_COLUMN_LAYOUT_VERSION,
   SHIPMENT_COLUMN_LAYOUT_VERSION_KEY,
@@ -212,6 +212,7 @@ interface Shipment {
   ata_vessel_complete_discharge?: string
   eta_vessel_complete_discharge?: string
   quantity_receive?: number
+  outstanding_quantity?: number
   quantity_delivered_sap?: number
   // Basic ETA loading dates at shipment level
   eta_arrival?: string
@@ -411,6 +412,7 @@ function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipmen
       sto_quantity: match.sto_quantity ?? row.sto_quantity,
       quantity_receive: match.quantity_receive ?? row.quantity_receive,
       quantity_delivered_sap: match.quantity_delivered_sap ?? row.quantity_delivered_sap,
+      outstanding_quantity: match.outstanding_quantity ?? row.outstanding_quantity,
       incoterm: match.incoterm ?? row.incoterm,
       b2b_flag: match.b2b_flag ?? row.b2b_flag,
       source_type: match.source_type ?? row.source_type,
@@ -2698,6 +2700,28 @@ function ShipmentsPageContent() {
           {formatQtyMtFromKg(s.quantity_receive)}
         </span>
       )
+    },
+    {
+      id: 'outstanding_quantity',
+      label: 'Outstanding Qty (MT)',
+      formulaHelp: FIELD_HELP.shipmentOutstandingQtyMt,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.outstanding_quantity ?? 0,
+      render: (s) => {
+        const kg = Number(s.outstanding_quantity) || 0
+        const isOver = kg < 0
+        const isUnder = kg > 0
+        return (
+          <span
+            className={`text-sm break-words tabular-nums font-medium ${
+              isOver ? 'text-green-600' : isUnder ? 'text-red-600' : 'text-gray-500'
+            }`}
+          >
+            {formatOutstandingQtyMtFromKg(s.outstanding_quantity)}
+          </span>
+        )
+      }
     },
     {
       id: 'ata_vessel_completed_loading',

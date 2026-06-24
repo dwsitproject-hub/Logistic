@@ -197,6 +197,9 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
       ata_berthed_at_discharge_port: row.ata_vessel_berthed_at_discharge_port,
       ata_start_discharging: row.ata_vessel_start_discharging,
       ata_complete_discharge: row.ata_vessel_complete_discharge,
+      contract_import_status: row.is_contract_sap_closed
+        ? 'Close'
+        : row.contract_import_status,
     });
   }
   return rows;

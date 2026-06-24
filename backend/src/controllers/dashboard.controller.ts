@@ -5,6 +5,7 @@ import logger from '../utils/logger';
 import { CONTRACTS_QTY_MOVE_CTE } from './contractsQtyMoveSql';
 import { diffCalendarDays } from '../utils/calendarDays';
 import { shipmentIsLateSql } from '../utils/shipmentListFilters';
+import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
 
 // Normalize query param to string[] (Express sends array for ?key=a&key=b)
 const toFilterArray = (v: unknown): string[] => {
@@ -1697,7 +1698,7 @@ export const getShipmentsByStatus = async (req: AuthRequest, res: Response) => {
       WITH ship_base AS (
         SELECT
           COALESCE(NULLIF(TRIM(c.sto_number::text), ''), NULLIF(TRIM(s.operation_id), ''), NULLIF(TRIM(s.shipment_id), ''), s.id::text) AS ship_key,
-          (array_agg(s.id ORDER BY s.created_at DESC) FILTER (WHERE s.id IS NOT NULL))[1] AS id,
+          ${sqlShipmentListPrimaryIdAgg(`COALESCE(NULLIF(TRIM(c.sto_number::text), ''), NULLIF(TRIM(s.operation_id), ''), NULLIF(TRIM(s.shipment_id), ''), s.id::text)`)} AS id,
           MAX(NULLIF(TRIM(c.sto_number::text), '')) AS sto_number,
           MAX(NULLIF(TRIM(s.operation_id), '')) AS operation_id,
           MAX(NULLIF(TRIM(s.shipment_id), '')) AS shipment_id,

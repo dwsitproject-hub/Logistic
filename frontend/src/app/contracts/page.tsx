@@ -12,6 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
+import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
 import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
 import { fetchContractPurchaseOrderOptions } from '@/components/shared/addNewShipmentTypes'
@@ -2234,6 +2235,10 @@ function ContractsPageContent() {
         return
       }
       setContractLogisticsUi({ kind: 'truck-create', contract })
+      return
+    }
+    if (isContractRecordClosed(contract)) {
+      alert('Cannot edit trucking: contract status is Close.')
       return
     }
     setContractLogisticsUi({ kind: 'truck-edit', contract })

@@ -91,7 +91,7 @@ export function CommercialDocumentsSummaryCards({
         ) : null}
       </div>
       <div className="overflow-x-auto pb-0.5 -mx-1 px-1">
-      <div className="grid grid-cols-6 gap-3 min-w-[920px] xl:min-w-0">
+      <div className="grid grid-cols-5 gap-3 min-w-[760px] xl:min-w-0">
         {COMMERCIAL_DOCUMENT_TYPES.map((type) => {
           const card = summary?.[type]
           const openCount = card?.openCount ?? 0

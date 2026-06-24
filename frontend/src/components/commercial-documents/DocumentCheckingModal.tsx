@@ -9,6 +9,9 @@ import { FIELD_HELP } from '@/lib/fieldHelpText'
 import {
   COMMERCIAL_DOCUMENT_LABELS,
   COMMERCIAL_DOCUMENT_TYPES,
+  commercialDocumentTypeLabel,
+  documentVersionLabel,
+  filesForDocumentCategory,
   isContractB2bOrigin,
   type CommercialDocumentFileRecord,
   type CommercialDocumentHistoryEntry,
@@ -112,8 +115,12 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
     closePdfPreview()
   }, [row?.contract_ext_no, closePdfPreview])
 
-  const fileByType = (type: CommercialDocumentType) =>
-    files.find((f) => f.document_type === type) ?? null
+  const versionsForType = (type: CommercialDocumentType) => filesForDocumentCategory(files, type)
+
+  const latestFileForType = (type: CommercialDocumentType) => {
+    const versions = versionsForType(type)
+    return versions.length > 0 ? versions[versions.length - 1] : null
+  }
 
   const handleUpload = async (type: CommercialDocumentType, file: File) => {
     if (!row) return
@@ -123,6 +130,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
       form.append('contract_ext_no', row.contract_ext_no)
       form.append('document_type', type)
       form.append('po_number', row.po_number || row.contract_id || 'UNKNOWN')
+      form.append('supplier_name', row.supplier || '')
       form.append('contract_date', row.contract_date || '')
       form.append('file', file)
       await api.post('/commercial-documents/upload', form, {
@@ -272,103 +280,112 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
 
                 <section>
                   <h3 className="text-sm font-semibold text-gray-800 mb-3">Documents</h3>
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     {COMMERCIAL_DOCUMENT_TYPES.map((type) => {
-                      const existing = fileByType(type)
+                      const versions = versionsForType(type)
+                      const latest = versions.length > 0 ? versions[versions.length - 1] : null
                       const inputId = `commercial-doc-upload-${type}`
-                      const isPreviewActive = pdfPreview?.fileId === existing?.id
-                      const isSettlementInvoice = type === 'invoice_pelunasan'
+                      const isPreviewActive = pdfPreview?.fileId === latest?.id
+                      const isFullReceive = type === 'invoice_fp_full'
                       return (
                         <div
                           key={type}
                           className={cn(
-                            'flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 transition-colors',
+                            'rounded-lg border px-4 py-3 transition-colors',
                             isPreviewActive && 'border-blue-300 bg-blue-50/40 ring-1 ring-blue-200',
                           )}
                         >
-                          <div className="min-w-0">
-                            <div className="font-medium text-sm">{COMMERCIAL_DOCUMENT_LABELS[type]}</div>
-                            <div className="text-xs text-gray-500 truncate">
-                              {existing ? `Uploaded: ${existing.file_name}` : 'Not uploaded'}
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="font-medium text-sm">{COMMERCIAL_DOCUMENT_LABELS[type]}</div>
+                              {versions.length === 0 ? (
+                                <div className="text-xs text-gray-500 mt-1">Not uploaded</div>
+                              ) : (
+                                <ul className="mt-2 space-y-1.5">
+                                  {versions.map((file, idx) => (
+                                    <li
+                                      key={file.id}
+                                      className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-600"
+                                    >
+                                      <span className="min-w-0 truncate" title={file.file_name}>
+                                        {documentVersionLabel(type, idx)} &gt; {file.file_name}
+                                      </span>
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-7 px-2"
+                                          disabled={pdfPreviewLoading && pdfPreview?.fileId !== file.id}
+                                          onClick={() => void togglePdfPreview(file, type)}
+                                          title={pdfPreview?.fileId === file.id ? 'Hide preview' : 'View'}
+                                        >
+                                          {pdfPreviewLoading && pdfPreview?.fileId !== file.id ? (
+                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                          ) : (
+                                            <Eye className="h-3.5 w-3.5" />
+                                          )}
+                                        </Button>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-7 px-2"
+                                          onClick={() => void downloadPdf(file.id, file.file_name)}
+                                          title="Download"
+                                        >
+                                          <Download className="h-3.5 w-3.5" />
+                                        </Button>
+                                      </div>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
                             </div>
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            {canModifyDocuments && !isSettlementInvoice ? (
-                              <input
-                                id={inputId}
-                                type="file"
-                                accept="application/pdf,.pdf"
-                                className="hidden"
-                                onChange={(e) => {
-                                  const f = e.target.files?.[0]
-                                  if (f) void handleUpload(type, f)
-                                  e.target.value = ''
-                                }}
-                              />
-                            ) : null}
-                            {canModifyDocuments ? (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                disabled={uploadingType === type}
-                                onClick={() => {
-                                  if (isSettlementInvoice) {
-                                    setSettlementUploadOpen(true)
-                                    return
-                                  }
-                                  document.getElementById(inputId)?.click()
-                                }}
-                                className={
-                                  existing
-                                    ? 'border-blue-200 text-blue-700 hover:bg-blue-50'
-                                    : 'border-green-200 text-green-700 hover:bg-green-50'
-                                }
-                              >
-                                {uploadingType === type ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : existing ? (
-                                  <>
-                                    <Pencil className="h-4 w-4 mr-1" /> Edit
-                                  </>
-                                ) : (
-                                  <>
-                                    <Upload className="h-4 w-4 mr-1" /> Add
-                                  </>
-                                )}
-                              </Button>
-                            ) : null}
-                            {existing ? (
-                              <>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {canModifyDocuments && !isFullReceive ? (
+                                <input
+                                  id={inputId}
+                                  type="file"
+                                  accept="application/pdf,.pdf"
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const f = e.target.files?.[0]
+                                    if (f) void handleUpload(type, f)
+                                    e.target.value = ''
+                                  }}
+                                />
+                              ) : null}
+                              {canModifyDocuments ? (
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  disabled={pdfPreviewLoading && !isPreviewActive}
-                                  onClick={() => void togglePdfPreview(existing, type)}
-                                  title={isPreviewActive ? 'Hide preview' : 'View PDF in modal'}
-                                  className={cn(
-                                    isPreviewActive &&
-                                      'bg-blue-100 border-blue-300 text-blue-800 hover:bg-blue-100',
-                                  )}
+                                  disabled={uploadingType === type}
+                                  onClick={() => {
+                                    if (isFullReceive) {
+                                      setSettlementUploadOpen(true)
+                                      return
+                                    }
+                                    document.getElementById(inputId)?.click()
+                                  }}
+                                  className={
+                                    versions.length > 0
+                                      ? 'border-blue-200 text-blue-700 hover:bg-blue-50'
+                                      : 'border-green-200 text-green-700 hover:bg-green-50'
+                                  }
                                 >
-                                  {pdfPreviewLoading && !isPreviewActive ? (
+                                  {uploadingType === type ? (
                                     <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : versions.length > 0 ? (
+                                    <>
+                                      <Pencil className="h-4 w-4 mr-1" /> Add Version
+                                    </>
                                   ) : (
                                     <>
-                                      <Eye className="h-4 w-4 mr-1" />
-                                      {isPreviewActive ? 'Hide' : 'View'}
+                                      <Upload className="h-4 w-4 mr-1" /> Add
                                     </>
                                   )}
                                 </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => void downloadPdf(existing.id, existing.file_name)}
-                                  title="Download PDF"
-                                >
-                                  <Download className="h-4 w-4 mr-1" /> Download
-                                </Button>
-                              </>
-                            ) : null}
+                              ) : null}
+                            </div>
                           </div>
                         </div>
                       )
@@ -417,7 +434,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                             <tr key={h.id} className="border-b last:border-0">
                               <td className="px-3 py-2">{h.action_type === 'ADD' ? 'Add' : 'Edit'}</td>
                               <td className="px-3 py-2">
-                                {COMMERCIAL_DOCUMENT_LABELS[h.document_type] || h.document_type}
+                                {commercialDocumentTypeLabel(h.document_type)}
                               </td>
                               <td className="px-3 py-2 whitespace-nowrap">{formatDateTimeDMY(h.created_at)}</td>
                               <td className="px-3 py-2">{formatSapDisplayValue(h.user_name)}</td>
@@ -455,7 +472,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
       {settlementUploadOpen ? (
         <SettlementInvoiceUploadModal
           row={row}
-          existingFileName={fileByType('invoice_pelunasan')?.file_name}
+          existingFileName={latestFileForType('invoice_fp_full')?.file_name}
           onClose={() => setSettlementUploadOpen(false)}
           onSaved={async () => {
             await loadModalData()

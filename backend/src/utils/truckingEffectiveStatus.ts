@@ -1,37 +1,85 @@
-import {
-  sqlEffectiveTruckingCompletionDate,
-  sqlEffectiveTruckingStartDate,
-} from './truckingSapDates';
+import { sqlRealizationEndDate, sqlRealizationStartDate } from './truckingRealizationSql';
+import { isContractDeliveryClosed, sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+
+export type TruckingEffectiveStatus =
+  | 'UNPLANNED'
+  | 'PLANNED'
+  | 'IN_PROGRESS'
+  | 'COMPLETED'
+  | 'CANCELLED';
+
+/** KLIP user planning from Add New Trucking (daily deliverables with date + qty). */
+export function sqlHasTruckingKlipPlanning(truckingAlias = 't'): string {
+  return `EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(COALESCE(${truckingAlias}.daily_deliverables, '[]'::jsonb)) AS dd(elem)
+    WHERE NULLIF(TRIM(dd.elem->>'date'), '') IS NOT NULL
+      AND COALESCE(NULLIF(TRIM(dd.elem->>'quantity_delivered'), '')::numeric, 0) > 0
+  )`;
+}
+
+export function hasTruckingKlipPlanning(dailyDeliverables: unknown): boolean {
+  if (!Array.isArray(dailyDeliverables) || dailyDeliverables.length === 0) return false;
+  return dailyDeliverables.some((row) => {
+    if (!row || typeof row !== 'object') return false;
+    const r = row as Record<string, unknown>;
+    const date = String(r.date ?? '').trim();
+    const qty = Number(r.quantity_delivered ?? 0);
+    return date.length > 0 && Number.isFinite(qty) && qty > 0;
+  });
+}
+
+export function hasTruckingSto(stoNumber: unknown): boolean {
+  return String(stoNumber ?? '').trim().length > 0;
+}
 
 /**
- * Status derived from effective SAP/DB trucking dates — matches list filters and distribution.
+ * Effective status: IN_PROGRESS / COMPLETED from realization layer only (extension + SAP).
+ * PLANNED / UNPLANNED from KLIP planning + STO presence.
  */
-export function sqlTruckingEffectiveStatus(contractAlias = 'c'): string {
+export function sqlTruckingEffectiveStatus(
+  contractAlias = 'c',
+  stoExpr?: string,
+): string {
+  const stoCheck =
+    stoExpr ??
+    `NULLIF(TRIM(${contractAlias}.sto_number::text), '')`;
   return `CASE
     WHEN COALESCE(t.status, '') = 'CANCELLED' THEN 'CANCELLED'
-    WHEN ${sqlEffectiveTruckingCompletionDate(contractAlias)} IS NOT NULL THEN 'COMPLETED'
-    WHEN ${sqlEffectiveTruckingStartDate(contractAlias)} IS NOT NULL THEN 'IN_PROGRESS'
-    ELSE 'PLANNED'
+    WHEN ${sqlIsContractSapClosedExpr(contractAlias)} THEN 'COMPLETED'
+    WHEN ${sqlRealizationEndDate(contractAlias)} IS NOT NULL THEN 'COMPLETED'
+    WHEN ${sqlRealizationStartDate(contractAlias)} IS NOT NULL THEN 'IN_PROGRESS'
+    WHEN ${sqlHasTruckingKlipPlanning('t')} THEN 'PLANNED'
+    WHEN ${stoCheck} IS NOT NULL THEN 'UNPLANNED'
+    ELSE 'UNPLANNED'
   END`;
 }
 
 export function deriveTruckingEffectiveStatus(
   dbStatus: unknown,
-  truckingStartDate: unknown,
-  truckingCompletionDate: unknown,
-): 'PLANNED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' {
+  realizationStartDate: unknown,
+  realizationEndDate: unknown,
+  options?: {
+    dailyDeliverables?: unknown;
+    stoNumber?: unknown;
+    contractImportStatus?: unknown;
+  },
+): TruckingEffectiveStatus {
   const status = String(dbStatus ?? '').trim().toUpperCase();
   if (status === 'CANCELLED') return 'CANCELLED';
-  if (hasDateValue(truckingCompletionDate)) return 'COMPLETED';
-  if (hasDateValue(truckingStartDate)) return 'IN_PROGRESS';
-  return 'PLANNED';
+  if (isContractDeliveryClosed(options?.contractImportStatus)) return 'COMPLETED';
+  if (hasDateValue(realizationEndDate)) return 'COMPLETED';
+  if (hasDateValue(realizationStartDate)) return 'IN_PROGRESS';
+  if (hasTruckingKlipPlanning(options?.dailyDeliverables)) return 'PLANNED';
+  if (hasTruckingSto(options?.stoNumber)) return 'UNPLANNED';
+  return 'UNPLANNED';
 }
 
 function hasDateValue(v: unknown): boolean {
   return v != null && String(v).trim() !== '';
 }
 
-/** Backfill trucking_operations.status + dates from SAP receive columns (idempotent). */
+/** Sync realization extension from SAP receive columns; does not modify planning dates on trucking_operations. */
 export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
   WITH latest_sap AS (
     SELECT DISTINCT ON (COALESCE(NULLIF(TRIM(spd.contract_number), ''), NULLIF(TRIM(spd.sto_number), '')))
@@ -71,30 +119,56 @@ export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
         ELSE NULL
       END AS start_receive_date
     FROM latest_sap
+  ),
+  upserted AS (
+    INSERT INTO trucking_realizations (
+      trucking_operation_id,
+      realization_start_date,
+      realization_end_date,
+      source,
+      sap_synced_at
+    )
+    SELECT
+      t.id,
+      p.start_receive_date,
+      p.last_receive_date,
+      'sap',
+      CURRENT_TIMESTAMP
+    FROM trucking_operations t
+    INNER JOIN contracts c ON t.contract_id = c.id
+    INNER JOIN parsed p ON (
+      p.contract_number = c.contract_id
+      OR (
+        NULLIF(TRIM(c.sto_number::text), '') IS NOT NULL
+        AND p.sto_number = NULLIF(TRIM(c.sto_number::text), '')
+      )
+    )
+    WHERE (p.start_receive_date IS NOT NULL OR p.last_receive_date IS NOT NULL)
+    ON CONFLICT (trucking_operation_id) DO UPDATE SET
+      realization_start_date = COALESCE(trucking_realizations.realization_start_date, EXCLUDED.realization_start_date),
+      realization_end_date = COALESCE(trucking_realizations.realization_end_date, EXCLUDED.realization_end_date),
+      source = CASE
+        WHEN trucking_realizations.realization_start_date IS NULL
+          AND trucking_realizations.realization_end_date IS NULL
+        THEN EXCLUDED.source
+        ELSE trucking_realizations.source
+      END,
+      sap_synced_at = COALESCE(trucking_realizations.sap_synced_at, EXCLUDED.sap_synced_at),
+      updated_at = CURRENT_TIMESTAMP
+    RETURNING trucking_operation_id, realization_start_date, realization_end_date
   )
   UPDATE trucking_operations t
   SET
-    trucking_completion_date = COALESCE(t.trucking_completion_date, p.last_receive_date),
-    trucking_start_date = COALESCE(t.trucking_start_date, p.start_receive_date),
     status = CASE
       WHEN t.status = 'CANCELLED' THEN t.status
-      WHEN COALESCE(t.trucking_completion_date, p.last_receive_date) IS NOT NULL THEN 'COMPLETED'
-      WHEN COALESCE(t.trucking_start_date, p.start_receive_date) IS NOT NULL THEN 'IN_PROGRESS'
+      WHEN ${sqlIsContractSapClosedExpr('c')} THEN 'COMPLETED'
+      WHEN u.realization_end_date IS NOT NULL THEN 'COMPLETED'
+      WHEN u.realization_start_date IS NOT NULL THEN 'IN_PROGRESS'
       ELSE COALESCE(t.status, 'PLANNED')
     END,
     updated_at = CURRENT_TIMESTAMP
-  FROM contracts c
-  INNER JOIN parsed p ON (
-    p.contract_number = c.contract_id
-    OR (
-      NULLIF(TRIM(c.sto_number::text), '') IS NOT NULL
-      AND p.sto_number = NULLIF(TRIM(c.sto_number::text), '')
-    )
-  )
-  WHERE t.contract_id = c.id
-    AND (
-      (t.trucking_completion_date IS NULL AND p.last_receive_date IS NOT NULL)
-      OR (t.trucking_start_date IS NULL AND p.start_receive_date IS NOT NULL)
-      OR (t.status NOT IN ('COMPLETED', 'CANCELLED') AND p.last_receive_date IS NOT NULL)
-    )
+  FROM upserted u
+  INNER JOIN contracts c ON c.id = t.contract_id
+  WHERE t.id = u.trucking_operation_id
+    AND t.status <> 'CANCELLED'
 `;

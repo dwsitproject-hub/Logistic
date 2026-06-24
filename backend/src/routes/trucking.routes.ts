@@ -3,6 +3,14 @@ import multer from 'multer';
 import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import {
+  getTruckingRealization,
+  updateTruckingRealization,
+  updateTruckingDailyActuals,
+  downloadDailyActualsTemplate,
+  bulkUploadDailyActuals,
+  getTruckingDailyActualsCalendar,
+} from '../controllers/truckingRealization.controller';
+import {
   getTruckingOperations,
   getTruckingOperationById,
   createTruckingOperation,
@@ -84,10 +92,23 @@ router.post(
 );
 router.get('/daily-planning-deliverables', getTruckingDailyDeliverablesCalendar);
 
+// Daily actual progress (realization quantities)
+router.get('/daily-actuals/template', downloadDailyActualsTemplate);
+router.post(
+  '/daily-actuals/bulk-upload',
+  planningUpload.single('file'),
+  auditLog('UPDATE', 'TRUCKING_OPERATION'),
+  bulkUploadDailyActuals,
+);
+router.get('/daily-actuals/calendar', getTruckingDailyActualsCalendar);
+
 // Activity log (before generic :id route)
 router.get('/:truckingId/activity-log', getTruckingActivityLog);
 
 router.put('/:id/daily-planning-deliverables', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyDeliverables);
+router.put('/:id/daily-actuals', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyActuals);
+router.get('/:id/realization', getTruckingRealization);
+router.put('/:id/realization', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingRealization);
 
 // Get trucking operation by ID
 router.get('/:id', getTruckingOperationById);

@@ -1,13 +1,18 @@
 import { Response } from 'express';
 import { query } from '../database/connection';
+import { assertTruckingOperationContractOpen } from '../utils/contractDeliveryStatus';
 import { sapTruckingLoadingLocationSql } from '../utils/sapTruckingLoadingLocationSql';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import { normalizeAndValidateDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/truckingDailyDeliverables';
 import {
+  appendTruckingColumnFilters,
   appendTruckingGlobalSearch,
   appendTruckingLateIndicatorFilter,
+  parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
+import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+import { sqlTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import {
   allocateNextSyntheticSequenceDefault,
@@ -15,6 +20,7 @@ import {
   formatDDMMYYYY,
 } from '../utils/operationId';
 import {
+  sqlTruckingOutstandingQtyByIncoterm,
   sqlTruckingQuantityDeliveredCoalesce,
   sqlTruckingQuantityReceiveCoalesce,
   sqlTruckingQuantitySentCoalesce,
@@ -23,6 +29,16 @@ import {
   truckingPageLandTransportForContractWhereSql,
   truckingPageListScopeWhereSql,
 } from '../utils/truckingStoTypeSql';
+import {
+  sqlSapTruckingLastReceiveDate,
+  sqlSapTruckingStartReceiveDate,
+} from '../utils/truckingSapDates';
+import {
+  TRUCKING_REALIZATIONS_JOIN,
+  sqlRealizationEndDate,
+  sqlRealizationStartDate,
+} from '../utils/truckingRealizationSql';
+import { hasTruckingKlipPlanning } from '../utils/truckingEffectiveStatus';
 import {
   invalidateTruckingListCache,
   resolveTruckingListForRequest,
@@ -218,6 +234,13 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
     const result = await query(
       `SELECT 
         t.*,
+        t.trucking_start_date AS planning_start_date,
+        t.trucking_completion_date AS planning_end_date,
+        tr.realization_start_date,
+        tr.realization_end_date,
+        tr.source AS realization_source,
+        ${sqlRealizationStartDate('c')} AS effective_realization_start_date,
+        ${sqlRealizationEndDate('c')} AS effective_realization_end_date,
         c.contract_id as contract_number,
         c.po_number,
         c.supplier,
@@ -225,10 +248,13 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
         c.product,
         c.group_name,
         c.quantity_ordered,
-        c.unit
+        c.unit,
+        ${sqlSapTruckingStartReceiveDate('c')} AS sap_trucking_start_receive_date,
+        ${sqlSapTruckingLastReceiveDate('c')} AS sap_trucking_last_receive_date
        FROM trucking_operations t
        LEFT JOIN contracts c ON t.contract_id = c.id
        LEFT JOIN shipments s ON t.shipment_id = s.id
+       ${TRUCKING_REALIZATIONS_JOIN}
        WHERE t.id = $1
          ${truckingPageListScopeWhereSql}`,
       [id]
@@ -381,7 +407,9 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
     const normalizedStatus = String(statusInput ?? '').trim().toUpperCase();
     const status = allowedCreateStatuses.has(normalizedStatus)
       ? normalizedStatus
-      : deriveTruckingStatus(trucking_start_date, trucking_completion_date, cargo_readiness_date);
+      : hasTruckingKlipPlanning(dd.rows)
+        ? 'PLANNED'
+        : deriveTruckingStatus(null, null, cargo_readiness_date);
 
     const lastDdDate =
       dd.rows.length > 0
@@ -512,6 +540,24 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         c.delivery_end_date,
         c.cargo_readiness_date,
         c.transport_mode,
+        c.status AS contract_status,
+        (
+          SELECT COALESCE(spd.data->'contract'->>'status', spd.data->>'status')
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = c.contract_id
+          ORDER BY spd.created_at DESC NULLS LAST
+          LIMIT 1
+        ) AS sap_import_status,
+        COALESCE(
+          (
+            SELECT COALESCE(spd.data->'contract'->>'status', spd.data->>'status')
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = c.contract_id
+            ORDER BY spd.created_at DESC NULLS LAST
+            LIMIT 1
+          ),
+          c.status
+        ) AS import_status,
         c.plant_code,
         mp.plant_name,
         mp.company_name AS plant_company_name,
@@ -625,6 +671,14 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
       });
     }
     const cur = currentRes.rows[0];
+
+    const contractOpen = await assertTruckingOperationContractOpen(id);
+    if (!contractOpen.ok) {
+      return res.status(403).json({
+        success: false,
+        error: { message: contractOpen.message },
+      });
+    }
 
     // Build dynamic update query
     const updateFields = [];
@@ -746,15 +800,27 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
     const unloadingLocation = (req.query as any).unloadingLocation as string | undefined;
     const dateFrom = (req.query as any).dateFrom as string | undefined;
     const dateTo = (req.query as any).dateTo as string | undefined;
+    const sto = (req.query as any).sto as string | undefined;
+    const contract = (req.query as any).contract as string | undefined;
+    const plant = (req.query as any).plant;
+    const colFilters = parseColumnFiltersQuery((req.query as any).columnFilters);
 
     const params: any[] = [from, to];
     let idx = 3;
     let extraWhere = '';
+    const truckingStoExprForStatus = `NULLIF(TRIM(c.sto_number::text), '')`;
 
     if (status && String(status).toUpperCase() !== 'ALL') {
-      extraWhere += ` AND t.status = $${idx}`;
-      params.push(status);
-      idx += 1;
+      const s = String(status).toUpperCase();
+      if (s === 'UNPLANNED' || s === 'PLANNED' || s === 'IN_PROGRESS' || s === 'COMPLETED' || s === 'CANCELLED') {
+        extraWhere += ` AND ${sqlTruckingEffectiveStatus('c', truckingStoExprForStatus)} = $${idx}`;
+        params.push(s);
+        idx += 1;
+      } else {
+        extraWhere += ` AND t.status = $${idx}`;
+        params.push(status);
+        idx += 1;
+      }
     }
     if (loadingLocation && String(loadingLocation).trim() !== '') {
       extraWhere += ` AND t.loading_location ILIKE $${idx}`;
@@ -778,11 +844,38 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
       params.push(String(dateTo).trim());
       idx += 1;
     }
+    if (sto && String(sto).trim() !== '') {
+      extraWhere += ` AND c.sto_number = $${idx}`;
+      params.push(String(sto).trim());
+      idx += 1;
+    }
+    if (contract && String(contract).trim() !== '') {
+      extraWhere += ` AND c.contract_id = $${idx}`;
+      params.push(String(contract).trim());
+      idx += 1;
+    }
+
+    const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+    const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+    const groupPlantFilter = appendGroupPlantFilter(
+      plants,
+      idx,
+      groupPlantExpr('c.plant_code', 'c.company_name'),
+      'c.plant_code',
+    );
+    extraWhere += groupPlantFilter.sql;
+    params.push(...groupPlantFilter.params);
+    idx = groupPlantFilter.nextIndex;
 
     const gSearch = appendTruckingGlobalSearch(globalSearch, idx);
     extraWhere += gSearch.sql;
     params.push(...gSearch.params);
     idx = gSearch.nextIndex;
+
+    const cCol = appendTruckingColumnFilters(colFilters, idx);
+    extraWhere += cCol.sql;
+    params.push(...cCol.params);
+    idx = cCol.nextIndex;
 
     const li = appendTruckingLateIndicatorFilter(lateIndicatorParam, idx);
     extraWhere += li.sql;
@@ -806,11 +899,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
            LIMIT 1),
           c.contract_type::text
         )`;
-    const outstandingQtySql = `GREATEST(
-          COALESCE(c.quantity_ordered, 0)
-          - COALESCE(${qtyRecvSql}, 0),
-          0
-        )`;
+    const outstandingQtySql = sqlTruckingOutstandingQtyByIncoterm(qtyDelSql, qtyRecvSql);
 
     const result = await query(
       `
@@ -845,6 +934,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
         c.supplier,
         c.product,
         c.group_name,
+        c.incoterm,
         c.source_type,
         ${ltSpotSql} AS lt_spot,
         t.loading_location,
@@ -863,10 +953,22 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
         ${qtyRecvSql} AS quantity_receive,
         ${outstandingQtySql} AS outstanding_quantity,
         t.daily_deliverables,
+        COALESCE(
+          (
+            SELECT jsonb_agg(
+              jsonb_build_object('date', da.progress_date::text, 'quantity_delivered', da.quantity_kg)
+              ORDER BY da.progress_date
+            )
+            FROM trucking_daily_actuals da
+            WHERE da.trucking_operation_id = t.id
+          ),
+          '[]'::jsonb
+        ) AS daily_actuals,
         t.updated_at
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
       LEFT JOIN shipments s ON t.shipment_id = s.id
+      ${TRUCKING_REALIZATIONS_JOIN}
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       WHERE
         NOT (
@@ -937,6 +1039,14 @@ export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Res
       trucking_completion_date?: string | null;
       quantity_delivered?: unknown;
     };
+
+    const contractOpen = await assertTruckingOperationContractOpen(id);
+    if (!contractOpen.ok) {
+      return res.status(403).json({
+        success: false,
+        error: { message: contractOpen.message },
+      });
+    }
 
     const startRaw =
       cur.delivery_start_date ??

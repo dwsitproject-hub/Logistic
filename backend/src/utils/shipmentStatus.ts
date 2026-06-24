@@ -1,3 +1,5 @@
+import { isContractDeliveryClosed } from './contractDeliveryStatus';
+
 export type ShipmentAutoStatus =
   | 'UNPLANNED'
   | 'PLANNED'
@@ -27,6 +29,8 @@ export type ShipmentMilestones = {
   ata_berthed_at_discharge_port?: unknown;
   ata_start_discharging?: unknown;
   ata_complete_discharge?: unknown;
+  /** SAP import status or contracts.status — Close/Completed without ATA still resolves COMPLETED. */
+  contract_import_status?: unknown;
 };
 
 const hasDate = (v: unknown): boolean => {
@@ -79,10 +83,12 @@ export function hasAnyEtaMilestone(m: Pick<ShipmentMilestones, keyof ShipmentMil
 
 /**
  * Derive SEA shipment status:
- * - PLANNED / UNPLANNED from ETA
- * - IN_PROGRESS … COMPLETED from ATA milestones (latest ATA stage wins)
+ * - SAP contract Close/Completed → always COMPLETED (never PLANNED / IN_PROGRESS / etc.)
+ * - Otherwise IN_PROGRESS … COMPLETED from ATA milestones (latest ATA stage wins)
+ * - PLANNED / UNPLANNED from ETA when contract is still open
  */
 export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus {
+  if (isContractDeliveryClosed(m.contract_import_status)) return 'COMPLETED';
   if (hasDate(m.ata_complete_discharge)) return 'COMPLETED';
   if (hasDate(m.ata_start_discharging)) return 'UNLOADING';
   if (hasDate(m.ata_arrive_at_discharge_port)) return 'ARRIVED';

@@ -16,6 +16,7 @@ import {
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
   AlertCircle,
+  AlertTriangle,
   Anchor,
   Check,
   CheckCircle2,
@@ -58,9 +59,17 @@ import {
   type LoadingPortRef,
 } from '@/lib/editShipmentModalSave'
 import {
+  ataFieldsFromShipmentInfo,
+  ataSapReferenceFromShipmentInfo,
+  emptyAtaFields,
+  type ShipmentAtaApiField,
+  type ShipmentAtaFields,
+} from '@/lib/shipmentAtaFields'
+import {
   usePermissions,
   canEditPermission,
 } from '@/components/PermissionsContext'
+import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
 
 const SHIPMENT_SLD_DOC_TYPE = 'SLD'
 const SHIPMENT_SDD_DOC_TYPE = 'SDD'
@@ -78,7 +87,7 @@ const ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
   { key: 'etaVesselCompleteDischarge', label: 'ETA Vessel Complete Discharge' },
 ]
 
-const ATA_FIELDS: { key: string; label: string }[] = [
+const ATA_FIELD_ROWS: { key: ShipmentAtaApiField; label: string }[] = [
   { key: 'ata_vessel_arrival_at_loading_port', label: 'Arrival at Loading Port' },
   { key: 'ata_vessel_berthed_at_loading_port', label: 'Berthed at Loading Port' },
   { key: 'ata_vessel_start_loading', label: 'Start Loading' },
@@ -139,6 +148,16 @@ function parseApiNumber(value: unknown): number | null {
 function formatNumber(n: number | null | undefined): string {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return '—'
   return Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 })
+}
+
+function contractValidateDataIsClosed(cd: Record<string, unknown> | null | undefined): boolean {
+  if (!cd) return false
+  return isContractRecordClosed({
+    import_status: cd.import_status as string | null | undefined,
+    contract_import_status: cd.sap_import_status as string | null | undefined,
+    contract_status: cd.contract_status as string | null | undefined,
+    status: cd.status as string | null | undefined,
+  })
 }
 
 function MtQtyInput({
@@ -273,8 +292,13 @@ export function EditShipmentModal({
   const [loadingPorts, setLoadingPorts] = useState<LoadingPortRef[]>([])
   const [etaBlocks, setEtaBlocks] = useState<EtaBlock[]>([])
   const [shipmentInfo, setShipmentInfo] = useState<Record<string, unknown>>({})
+  const [ataFields, setAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
+  const [originalAtaFields, setOriginalAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
+  const [ataSapReference, setAtaSapReference] = useState<ShipmentAtaFields>(emptyAtaFields)
+  const [ataIsEditing, setAtaIsEditing] = useState(false)
   const [activityLog, setActivityLog] = useState<ActivityLogRow[]>([])
   const [activityLoading, setActivityLoading] = useState(false)
+  const [isContractClosedViewOnly, setIsContractClosedViewOnly] = useState(false)
 
   const [vesselSuggestions, setVesselSuggestions] = useState<
     Array<{ vessel_code: string; vessel_name: string; vessel_owner: string | null }>
@@ -284,6 +308,7 @@ export function EditShipmentModal({
   const initSessionRef = useRef<string | null>(null)
 
   const isQuantityUnlocked = hasUploadedSld || hasUploadedSdd
+  const canModifyShipment = canEditShipment && !isContractClosedViewOnly
 
   const qtyTableRows: VesselPortsQuantityRow[] = useMemo(
     () =>
@@ -300,10 +325,11 @@ export function EditShipmentModal({
   )
 
   const vesselCapacityMt = parseApiNumber(vesselMeta.vessel_capacity)
+  // sto_qty_assigned is stored in MT (SAP sto_quantity / user assignment), same unit as vessel_capacity.
   const totalAssignedMt = useMemo(() => {
     let sum = 0
     for (const row of detailRows) {
-      sum += (row.sto_qty_assigned ?? 0) / 1000
+      sum += row.sto_qty_assigned ?? 0
     }
     return sum
   }, [detailRows])
@@ -326,8 +352,13 @@ export function EditShipmentModal({
     setEtaBlocks([])
     setActivityLog([])
     setShipmentInfo({})
+    setAtaFields(emptyAtaFields())
+    setOriginalAtaFields(emptyAtaFields())
+    setAtaSapReference(emptyAtaFields())
+    setAtaIsEditing(false)
     setHasUploadedSld(false)
     setHasUploadedSdd(false)
+    setIsContractClosedViewOnly(false)
     initSessionRef.current = null
   }, [])
 
@@ -364,9 +395,11 @@ export function EditShipmentModal({
     ) => {
       setLoading(true)
       setShipmentId(null)
+      setIsContractClosedViewOnly(false)
       try {
         let row: Record<string, unknown>
         let sid: string
+        let contractClosedViewOnly = false
 
         if (directShipmentId?.trim()) {
           sid = directShipmentId.trim()
@@ -389,9 +422,15 @@ export function EditShipmentModal({
 
         const portsRes = await api.get(`/shipments/${sid}/loading-ports`)
         const ports: LoadingPortRef[] = portsRes.data?.data?.ports ?? []
-        const info: Record<string, unknown> = portsRes.data?.data?.shipment_info ?? {}
+        const info: Record<string, unknown> =
+          portsRes.data?.data?.shipmentInfo ?? portsRes.data?.data?.shipment_info ?? {}
         setLoadingPorts(ports)
         setShipmentInfo(info)
+        const loadedAta = ataFieldsFromShipmentInfo(info)
+        setAtaFields(loadedAta)
+        setOriginalAtaFields(loadedAta)
+        setAtaSapReference(ataSapReferenceFromShipmentInfo(info))
+        setAtaIsEditing(false)
 
         const contractNumbersRaw = String(row.contract_numbers ?? row.contract_number ?? contractId)
         const contractNumbers = contractNumbersRaw.split(',').map((s) => s.trim()).filter(Boolean)
@@ -402,29 +441,36 @@ export function EditShipmentModal({
           String(row.shipment_id ?? '').trim()
 
         let contractDetails: ShipmentDetailRow[] = []
-        if (stoKey && contractNumbers.length > 0) {
+        if (stoKey) {
           const detailsRes = await api.get('/shipments/contracts/details', {
-            params: { sto: stoKey, contractNumbers: contractNumbers.join(',') },
+            params: {
+              sto: stoKey,
+              ...(contractNumbers.length > 0 ? { contractNumbers: contractNumbers.join(',') } : {}),
+            },
           })
           if (detailsRes.data?.success && Array.isArray(detailsRes.data.data)) {
             for (const d of detailsRes.data.data as Array<Record<string, unknown>>) {
               const cn = String(d.contract_number ?? '').trim()
+              const po = String(d.po_number ?? '').trim()
               let supplier = ''
               let product = ''
               try {
                 const valRes = await api.get(
                   `/shipments/contracts/validate?contract_number=${encodeURIComponent(cn)}`,
                 )
-                const cd = valRes.data?.data
+                const cd = valRes.data?.data as Record<string, unknown> | undefined
                 supplier = String(cd?.supplier ?? '')
                 product = String(cd?.product ?? '')
+                if (contractValidateDataIsClosed(cd)) {
+                  contractClosedViewOnly = true
+                }
               } catch {
                 // optional enrichment
               }
               contractDetails.push({
-                rowKey: `${sid}-${cn}`,
+                rowKey: `${sid}-${cn}-${po || 'po'}`,
                 contract_number: cn,
-                po_number: String(d.po_number ?? ''),
+                po_number: po,
                 supplier,
                 product,
                 contract_qty: parseApiNumber(d.contract_qty) ?? 0,
@@ -448,12 +494,15 @@ export function EditShipmentModal({
               const valRes = await api.get(
                 `/shipments/contracts/validate?contract_number=${encodeURIComponent(cn)}`,
               )
-              const cd = valRes.data?.data
+              const cd = valRes.data?.data as Record<string, unknown> | undefined
               supplier = String(cd?.supplier ?? '')
               product = String(cd?.product ?? '')
               po = String(cd?.po_number ?? '')
               contractQty = parseApiNumber(cd?.quantity_ordered) ?? 0
               outstanding = parseApiNumber(cd?.outstanding_quantity) ?? 0
+              if (contractValidateDataIsClosed(cd)) {
+                contractClosedViewOnly = true
+              }
             } catch {
               // fallback row
             }
@@ -576,6 +625,24 @@ export function EditShipmentModal({
           }
         }
 
+        if (!contractClosedViewOnly && contractNumbers.length > 0) {
+          for (const cn of contractNumbers) {
+            try {
+              const valRes = await api.get(
+                `/shipments/contracts/validate?contract_number=${encodeURIComponent(cn)}`,
+              )
+              const cd = valRes.data?.data as Record<string, unknown> | undefined
+              if (contractValidateDataIsClosed(cd)) {
+                contractClosedViewOnly = true
+                break
+              }
+            } catch {
+              // optional status lookup
+            }
+          }
+        }
+        setIsContractClosedViewOnly(contractClosedViewOnly)
+
         await hydrateQuantityDocs(sid)
         await loadActivityLog(sid)
       } catch (error: unknown) {
@@ -673,6 +740,13 @@ export function EditShipmentModal({
 
   const handleSave = async () => {
     if (!shipmentId) return
+    if (isContractClosedViewOnly) {
+      setNotification({
+        type: 'error',
+        message: 'Cannot edit shipment: contract status is Close.',
+      })
+      return
+    }
     if (perms.loaded && !canEditShipment) {
       setNotification({ type: 'error', message: 'You need Edit permission on Shipments.' })
       return
@@ -704,6 +778,8 @@ export function EditShipmentModal({
         quantityUnlocked: isQuantityUnlocked,
         hasSldOrSddDoc: hasUploadedSld || hasUploadedSdd,
         loadingPorts,
+        ataFields,
+        originalAtaFields,
       })
 
       await onSubmit({
@@ -779,9 +855,15 @@ export function EditShipmentModal({
                 <Ship className="h-4 w-4" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-gray-900">Edit Shipment</h3>
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {isContractClosedViewOnly ? 'View Shipment' : 'Edit Shipment'}
+                </h3>
                 <p className="text-xs text-gray-500">
-                  {stoNumber ? `STO ${stoNumber}` : 'Update vessel, quantities, and ETA schedule'}
+                  {isContractClosedViewOnly
+                    ? 'Contract is Close — read-only view'
+                    : stoNumber
+                    ? `STO ${stoNumber} — edit ETA schedule and manual ATA (SAP reference preserved)`
+                    : 'Update vessel, quantities, ETA schedule, and manual ATA'}
                 </p>
               </div>
             </div>
@@ -816,6 +898,18 @@ export function EditShipmentModal({
             </div>
           )}
 
+          {isContractClosedViewOnly && (
+            <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <div>
+                <p className="font-medium">Contract status is Close</p>
+                <p className="mt-0.5 text-xs text-amber-800">
+                  This shipment is read-only. You can review the details but cannot save changes.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-5">
             {/* Section 1: Vessel Detail */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
@@ -830,13 +924,21 @@ export function EditShipmentModal({
                   <label className="mb-1 block text-xs font-medium text-gray-600">Vessel Name</label>
                   <Input
                     value={vesselName}
-                    onChange={(e) => handleVesselSearch(e.target.value)}
-                    onFocus={() => vesselName.trim().length >= 2 && setShowVesselSuggestions(true)}
+                    onChange={(e) => {
+                      if (!canModifyShipment) return
+                      handleVesselSearch(e.target.value)
+                    }}
+                    onFocus={() => {
+                      if (!canModifyShipment) return
+                      vesselName.trim().length >= 2 && setShowVesselSuggestions(true)
+                    }}
                     onBlur={() => setTimeout(() => setShowVesselSuggestions(false), 200)}
-                    className="h-9 text-sm"
+                    readOnly={!canModifyShipment}
+                    disabled={!canModifyShipment}
+                    className={`h-9 text-sm ${!canModifyShipment ? READONLY_FIELD_CLASS : ''}`}
                     placeholder="Search Master Vessel..."
                   />
-                  {showVesselSuggestions && vesselSuggestions.length > 0 && (
+                  {canModifyShipment && showVesselSuggestions && vesselSuggestions.length > 0 && (
                     <div className="absolute z-20 mt-1 max-h-52 w-full overflow-y-auto rounded-md border bg-white shadow-lg">
                       {vesselSuggestions.map((v) => (
                         <button
@@ -899,14 +1001,14 @@ export function EditShipmentModal({
                       accept=".pdf,application/pdf"
                       className="hidden"
                       onChange={(e) => handleQtyDocUpload(SHIPMENT_SLD_DOC_TYPE, e)}
-                      disabled={sldDocUploading || hasUploadedSld}
+                      disabled={!canModifyShipment || sldDocUploading || hasUploadedSld}
                     />
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
                       className="mt-2 h-8 text-xs border-amber-300"
-                      disabled={sldDocUploading || hasUploadedSld}
+                      disabled={!canModifyShipment || sldDocUploading || hasUploadedSld}
                       onClick={() => document.getElementById('edit-shipment-sld')?.click()}
                     >
                       {sldDocUploading ? (
@@ -931,14 +1033,14 @@ export function EditShipmentModal({
                       accept=".pdf,application/pdf"
                       className="hidden"
                       onChange={(e) => handleQtyDocUpload(SHIPMENT_SDD_DOC_TYPE, e)}
-                      disabled={sddDocUploading || hasUploadedSdd}
+                      disabled={!canModifyShipment || sddDocUploading || hasUploadedSdd}
                     />
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
                       className="mt-2 h-8 text-xs border-amber-300"
-                      disabled={sddDocUploading || hasUploadedSdd}
+                      disabled={!canModifyShipment || sddDocUploading || hasUploadedSdd}
                       onClick={() => document.getElementById('edit-shipment-sdd')?.click()}
                     >
                       {sddDocUploading ? (
@@ -968,6 +1070,7 @@ export function EditShipmentModal({
                         <TableHead className={VESSEL_MODAL_COMPACT_TH}>PO</TableHead>
                         <TableHead className={VESSEL_MODAL_COMPACT_TH}>Supplier / Product</TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Contract Qty</TableHead>
+                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>STO Qty</TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Outstanding Qty</TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Delivered Qty</TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Receive Qty</TableHead>
@@ -994,13 +1097,18 @@ export function EditShipmentModal({
                               {formatQtyMtFromKg(row.contract_qty)}
                             </TableCell>
                             <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right tabular-nums`}>
+                              {row.sto_qty_assigned > 0
+                                ? `${formatNumber(row.sto_qty_assigned)} MT`
+                                : '—'}
+                            </TableCell>
+                            <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right tabular-nums`}>
                               {formatQtyMtFromKg(row.outstanding_qty)}
                             </TableCell>
                             <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
                               {isEditing ? (
                                 <MtQtyInput
                                   valueKg={deliveredKg}
-                                  disabled={!isQuantityUnlocked}
+                                  disabled={!canModifyShipment || !isQuantityUnlocked}
                                   onChange={(kg) =>
                                     setQtyEdits((p) => ({
                                       ...p,
@@ -1016,7 +1124,7 @@ export function EditShipmentModal({
                               {isEditing ? (
                                 <MtQtyInput
                                   valueKg={receiveKg}
-                                  disabled={!isQuantityUnlocked}
+                                  disabled={!canModifyShipment || !isQuantityUnlocked}
                                   onChange={(kg) =>
                                     setQtyEdits((p) => ({
                                       ...p,
@@ -1044,13 +1152,13 @@ export function EditShipmentModal({
                                     type="button"
                                     size="icon"
                                     className="h-7 w-7 bg-green-600 hover:bg-green-700 text-white"
-                                    disabled={!isQuantityUnlocked}
+                                    disabled={!canModifyShipment || !isQuantityUnlocked}
                                     onClick={() => setEditingQtyRowKey(null)}
                                   >
                                     <Check className="h-3.5 w-3.5" />
                                   </Button>
                                 </div>
-                              ) : (
+                              ) : canModifyShipment ? (
                                 <Button
                                   type="button"
                                   variant="outline"
@@ -1061,6 +1169,8 @@ export function EditShipmentModal({
                                 >
                                   <Edit2 className="h-3.5 w-3.5" />
                                 </Button>
+                              ) : (
+                                <span className="text-[10px] text-gray-400">—</span>
                               )}
                             </TableCell>
                           </TableRow>
@@ -1069,7 +1179,7 @@ export function EditShipmentModal({
                     </TableBody>
                     <TableFooter>
                       <TableRow className={VESSEL_MODAL_TABLE_FOOTER_CLASS}>
-                        <TableCell colSpan={4} className={VESSEL_MODAL_COMPACT_TD}>
+                        <TableCell colSpan={5} className={VESSEL_MODAL_COMPACT_TD}>
                           Grand Total
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right tabular-nums`}>
@@ -1104,11 +1214,11 @@ export function EditShipmentModal({
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className="mb-1 block text-xs font-medium text-gray-600">SFAL Qty</label>
-                    <MtQtyInput valueKg={sfalQty} onChange={setSfalQty} />
+                    <MtQtyInput valueKg={sfalQty} disabled={!canModifyShipment} onChange={setSfalQty} />
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-medium text-gray-600">SFBD Qty</label>
-                    <MtQtyInput valueKg={sfbdQty} onChange={setSfbdQty} />
+                    <MtQtyInput valueKg={sfbdQty} disabled={!canModifyShipment} onChange={setSfbdQty} />
                   </div>
                 </div>
               </div>
@@ -1146,6 +1256,7 @@ export function EditShipmentModal({
                   <div className="rounded-lg border border-blue-100 bg-white p-3">
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                       <Badge className="bg-blue-600 text-white text-[10px]">Active ETA</Badge>
+                      {canModifyShipment && (
                       <div className="flex gap-2">
                         <Button
                           type="button"
@@ -1174,6 +1285,7 @@ export function EditShipmentModal({
                           Add
                         </Button>
                       </div>
+                      )}
                     </div>
                     <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                       <div>
@@ -1199,7 +1311,7 @@ export function EditShipmentModal({
                       {ETA_FIELD_ROWS.map(({ key, label }) => (
                         <div key={key}>
                           <label className="mb-1 block text-[10px] font-medium text-gray-600">{label}</label>
-                          {activeEtaBlock.isEditing ? (
+                          {activeEtaBlock.isEditing && canModifyShipment ? (
                             <DateInputDdMmYyyy
                               valueIso={activeEtaBlock.fields[key]}
                               onChangeIso={(iso) => updateActiveEtaField(key, iso)}
@@ -1223,23 +1335,59 @@ export function EditShipmentModal({
 
             {/* Section 4: ATA */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100">
-                  <MapPin className="h-3.5 w-3.5 text-emerald-600" />
+              <div className={`${VESSEL_MODAL_SECTION_HEADER_CLASS} justify-between gap-2`}>
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100">
+                    <MapPin className="h-3.5 w-3.5 text-emerald-600" />
+                  </div>
+                  <h4 className="text-sm font-semibold text-gray-800">4. ATA Vessel Information</h4>
                 </div>
-                <h4 className="text-sm font-semibold text-gray-800">4. ATA Vessel Information</h4>
+                {canModifyShipment && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                    onClick={() => setAtaIsEditing((prev) => !prev)}
+                  >
+                    <Edit2 className="mr-1.5 h-3.5 w-3.5" />
+                    {ataIsEditing ? 'Done' : 'Edit ATA'}
+                  </Button>
+                )}
               </div>
               <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 lg:grid-cols-3">
-                {ATA_FIELDS.map(({ key, label }) => (
-                  <div key={key}>
-                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">
-                      ATA {label}
+                {ATA_FIELD_ROWS.map(({ key, label }) => {
+                  const sapRef = ataSapReference[key]
+                  const hasOverride = Boolean(ataFields[key] && sapRef && ataFields[key] !== sapRef)
+                  return (
+                    <div key={key}>
+                      <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">
+                        ATA {label}
+                      </div>
+                      {ataIsEditing && canModifyShipment ? (
+                        <DateInputDdMmYyyy
+                          valueIso={ataFields[key]}
+                          onChangeIso={(iso) =>
+                            setAtaFields((prev) => ({ ...prev, [key]: iso }))
+                          }
+                          className="mt-1 h-8 text-xs"
+                        />
+                      ) : (
+                        <div className="mt-0.5 text-sm font-medium text-gray-800">
+                          {formatDateDMY(ataFields[key]) || '—'}
+                        </div>
+                      )}
+                      {sapRef ? (
+                        <div className="mt-1 text-[10px] text-gray-400">
+                          SAP: {formatDateDMY(sapRef)}
+                          {hasOverride ? (
+                            <span className="ml-1 font-medium text-emerald-600">(manual)</span>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
-                    <div className="mt-0.5 text-sm font-medium text-gray-800">
-                      {formatDateDMY(String(shipmentInfo[key] ?? '')) || '—'}
-                    </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
 
@@ -1323,22 +1471,24 @@ export function EditShipmentModal({
 
         <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4 flex justify-end gap-2 rounded-b-lg">
           <Button variant="outline" onClick={onClose} disabled={saving}>
-            Cancel
+            {isContractClosedViewOnly ? 'Close' : 'Cancel'}
           </Button>
-          <Button
-            className="bg-blue-600 hover:bg-blue-700 text-white"
-            onClick={() => void handleSave()}
-            disabled={saving || loading || !shipmentId}
-          >
-            {saving ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Saving…
-              </>
-            ) : (
-              'Save Changes'
-            )}
-          </Button>
+          {!isContractClosedViewOnly && (
+            <Button
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              onClick={() => void handleSave()}
+              disabled={saving || loading || !shipmentId || !canModifyShipment}
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Saving…
+                </>
+              ) : (
+                'Save Changes'
+              )}
+            </Button>
+          )}
         </div>
       </div>
     </div>

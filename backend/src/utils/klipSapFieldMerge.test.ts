@@ -26,6 +26,7 @@ describe('klipSapFieldMerge', () => {
   it('builds shipment protected block for ON CONFLICT', () => {
     const sql = buildShipmentKlipProtectedSetSql(true, 'excluded');
     expect(sql).toContain('EXCLUDED.vessel_name');
+    expect(sql).toContain('shipments.vessel_code');
     expect(sql).toContain('actual_vessel_qty_receive');
     expect(sql).toContain('port_of_loading');
   });
