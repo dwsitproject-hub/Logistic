@@ -135,7 +135,7 @@ sudo apt-get install -y nginx
    ```bash
    cd /opt
    sudo mkdir -p klip && sudo chown $USER:$USER klip
-   git clone https://github.com/jerrypra0906/Logistic.git klip
+   git clone https://github.com/dwsitproject-hub/Logistic.git klip
    cd klip
    ```
 
@@ -195,7 +195,7 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
    ```bash
    cd /opt
    sudo mkdir -p klip && sudo chown $USER:$USER klip
-   git clone https://github.com/jerrypra0906/Logistic.git klip
+   git clone https://github.com/dwsitproject-hub/Logistic.git klip
    cd klip
    ```
 

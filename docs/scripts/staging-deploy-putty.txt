@@ -1,7 +1,7 @@
 ================================================================================
 KLIP — Deploy ke SIT (Staging)
 ================================================================================
-GitHub:         https://github.com/jerrypra0906/Logistic/tree/SIT
+GitHub:         https://github.com/dwsitproject-hub/Logistic/tree/SIT
 Public URL:     http://8.215.6.189
 Repo di server: /opt/klip
 Branch:         SIT

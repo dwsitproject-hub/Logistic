@@ -68,5 +68,5 @@ Tanggal: 2026-05-08 | Branch: `SIT` | Status: Siap Push (menunggu akses repo)
 | Total file berubah | 24 file |
 | Baris ditambahkan | +4.339 |
 | Baris dihapus | -1.054 |
-| Remote target | `https://github.com/jerrypra0906/Logistic.git` |
+| Remote target | `https://github.com/dwsitproject-hub/Logistic.git` |
 | Branch | `SIT` |

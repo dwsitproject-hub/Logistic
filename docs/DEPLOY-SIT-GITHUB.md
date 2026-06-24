@@ -2,7 +2,7 @@
 
 | Item | Nilai |
 |------|--------|
-| Repository | [https://github.com/jerrypra0906/Logistic](https://github.com/jerrypra0906/Logistic) |
+| Repository | [https://github.com/dwsitproject-hub/Logistic](https://github.com/dwsitproject-hub/Logistic) |
 | Branch | `SIT` |
 | URL aplikasi SIT | http://8.215.6.189 |
 | Repo di server | `/opt/klip` |
@@ -22,7 +22,7 @@
 
 ```powershell
 cd D:\Project
-git clone https://github.com/jerrypra0906/Logistic.git Klip
+git clone https://github.com/dwsitproject-hub/Logistic.git Klip
 cd Klip
 git checkout SIT
 ```
@@ -58,7 +58,7 @@ Atau: `gh auth login` lalu `gh auth setup-git`
 
 ### Cek push berhasil
 
-Buka: [https://github.com/jerrypra0906/Logistic/tree/SIT](https://github.com/jerrypra0906/Logistic/tree/SIT) — commit terbaru harus muncul.
+Buka: [https://github.com/dwsitproject-hub/Logistic/tree/SIT](https://github.com/dwsitproject-hub/Logistic/tree/SIT) — commit terbaru harus muncul.
 
 ---
 

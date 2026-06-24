@@ -2,9 +2,9 @@
 
 | Item | Nilai |
 |------|--------|
-| Repository | [github.com/jerrypra0906/Logistic](https://github.com/jerrypra0906/Logistic) |
-| Branch SIT | [github.com/jerrypra0906/Logistic/tree/SIT](https://github.com/jerrypra0906/Logistic/tree/SIT) |
-| Remote HTTPS | `https://github.com/jerrypra0906/Logistic.git` |
+| Repository | [github.com/dwsitproject-hub/Logistic](https://github.com/dwsitproject-hub/Logistic) |
+| Branch SIT | [github.com/dwsitproject-hub/Logistic/tree/SIT](https://github.com/dwsitproject-hub/Logistic/tree/SIT) |
+| Remote HTTPS | `https://github.com/dwsitproject-hub/Logistic.git` |
 | Deploy SIT | Lihat **`docs/DEPLOY-SIT-GITHUB.md`** |
 
 ## 1. Install Git
@@ -21,7 +21,7 @@ git config --global user.email "email@github.com"
 
 ```powershell
 cd D:\Project
-git clone https://github.com/jerrypra0906/Logistic.git Klip
+git clone https://github.com/dwsitproject-hub/Logistic.git Klip
 cd Klip
 git checkout SIT
 git pull origin SIT
@@ -61,4 +61,22 @@ git remote -v
 git branch -a
 ```
 
-Harus menampilkan `origin` → `github.com/jerrypra0906/Logistic.git` dan branch `SIT`.
+Harus menampilkan `origin` → `github.com/dwsitproject-hub/Logistic.git` dan branch `SIT`.
+
+## 6. Update remote (jika masih pakai URL lama)
+
+Repo dipindah ke organisasi `dwsitproject-hub`. URL lama (`jerrypra0906/Logistic`) masih redirect, tapi disarankan update:
+
+```powershell
+cd D:\Project\Klip
+git remote set-url origin https://github.com/dwsitproject-hub/Logistic.git
+git remote -v
+```
+
+Di server SIT (`/opt/klip`):
+
+```bash
+cd /opt/klip
+git remote set-url origin https://github.com/dwsitproject-hub/Logistic.git
+git remote -v
+```
