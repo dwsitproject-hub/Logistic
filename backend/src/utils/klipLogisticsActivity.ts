@@ -92,6 +92,25 @@ export async function hasKlipShipmentActivity(
   return false;
 }
 
+/** Pure guard: only KLIP placeholders / unassigned rows may be auto-cancelled during SAP STO reconcile. */
+export function isPlaceholderShipmentEligibleForSapConsolidate(
+  status: unknown,
+  shipmentId: unknown,
+): boolean {
+  const statusUpper = String(status ?? '').trim().toUpperCase();
+  if (statusUpper === 'CANCELLED') return false;
+
+  const sid = String(shipmentId ?? '').trim();
+  if (isSapSourcedShipmentId(sid)) return false;
+  if (
+    ['COMPLETED', 'IN_TRANSIT', 'ARRIVED', 'UNLOADING', 'LOADING', 'IN_PROGRESS'].includes(statusUpper)
+  ) {
+    return false;
+  }
+  if (sid !== '' && !isKlipManualShipmentId(sid)) return false;
+  return true;
+}
+
 /**
  * True when a shipment row may be cancelled/merged as SAP assigns the official STO on the same contract.
  * Unlike hasKlipShipmentActivity, an initial manual plan (operation_id / MNL shipment_id) does not block.
@@ -113,7 +132,7 @@ export async function canAutoConsolidateShipmentForSap(
   );
   const row = rowRes.rows[0];
   if (!row) return false;
-  if (String(row.status ?? '').trim().toUpperCase() === 'CANCELLED') return false;
+  if (!isPlaceholderShipmentEligibleForSapConsolidate(row.status, row.shipment_id)) return false;
 
   const daily = row.daily_deliverables;
   if (Array.isArray(daily) && daily.length > 0) return false;
@@ -337,7 +356,7 @@ export type SapReconcileResult = {
   skippedTruckingIds: string[];
 };
 
-/** Cancel older SAP-only shipment siblings after latest SAP row is applied. */
+/** Cancel KLIP placeholder shipment siblings (MNL-/MSEA-) after SAP STO is applied — not live SAP rows. */
 export async function reconcileSupersededSapShipments(
   db: Queryable,
   contractUuid: string,
@@ -355,7 +374,12 @@ export async function reconcileSupersededSapShipments(
     `SELECT id, shipment_id FROM shipments
      WHERE contract_id = $1::uuid
        AND id <> $2::uuid
-       AND COALESCE(status, '') <> 'CANCELLED'`,
+       AND COALESCE(status, '') <> 'CANCELLED'
+       AND (
+         shipment_id LIKE 'MNL-%'
+         OR shipment_id LIKE 'MSEA-%'
+         OR NULLIF(TRIM(COALESCE(shipment_id, '')), '') IS NULL
+       )`,
     [contractUuid, keeperShipmentUuid],
   );
 

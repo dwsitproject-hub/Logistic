@@ -1,6 +1,10 @@
 import { PoolClient } from 'pg';
 import logger from '../utils/logger';
 import { isLandSapRowEligibleForTruckingCreation } from '../utils/landTruckingEligibility';
+import {
+  isTruckingPageIncoterm,
+  resolveTruckingIncotermFromParsedData,
+} from '../utils/truckingIncotermScope';
 import { isSeaSapRowEligibleForShipmentCreation } from '../utils/seaShipmentEligibility';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import {
@@ -207,6 +211,8 @@ export class SapDataDistributionService {
       const modeLabel = this.parseTransportModeLabel(seaLandRaw);
       const isLand = modeLabel === 'LAND';
       const isSea = modeLabel === 'SEA';
+      const incotermLabel = resolveTruckingIncotermFromParsedData(parsedData);
+      const isTruckIncoterm = isTruckingPageIncoterm(incotermLabel);
       const hasShipment = this.hasShipmentData(parsedData.shipment);
       const seaEligible = isSeaSapRowEligibleForShipmentCreation(parsedData);
       const hasVesselLike =
@@ -234,6 +240,8 @@ export class SapDataDistributionService {
       logger.info('Routing decision based on SEA / LAND:', {
         sea_land_raw: seaLandRaw,
         modeLabel,
+        incotermLabel,
+        isTruckIncoterm,
         isLand,
         isSea: seaLike,
         hasShipmentData: hasShipment,
@@ -242,7 +250,8 @@ export class SapDataDistributionService {
       
       // 2a. SEA: create/update shipment only when SAP row has at least one shipping anchor field
       // (STO No, ports, vessel, STO qty, qty delivery/receive, ATA milestones — see seaShipmentEligibility).
-      if (seaLike && hasShipment && seaEligible) {
+      // FRC/LCO incoterms route to trucking even when SAP Sea/Land is inconsistent.
+      if (seaLike && hasShipment && seaEligible && !isTruckIncoterm) {
         try {
           // Extract vessel data from shipment object (where it's actually stored)
           const vesselIdentity = resolveSapVesselIdentity(
@@ -294,10 +303,10 @@ export class SapDataDistributionService {
           contractId: result.contractId,
           sto_no: parsedData.shipment?.sto_no,
         });
-      } else if (isLand && isLandSapRowEligibleForTruckingCreation(parsedData)) {
-        // 2b. LAND: use parsedData.trucking[] (columns AV/AW Last/Start Receive) — NOT vessel shipment dates.
+      } else if (isTruckIncoterm && isLandSapRowEligibleForTruckingCreation(parsedData)) {
+        // 2b. FRC/LCO: use parsedData.trucking[] (columns AV/AW Last/Start Receive) — NOT vessel shipment dates.
         try {
-          logger.info('Creating trucking operation(s) from SAP trucking data (LAND):', {
+          logger.info('Creating trucking operation(s) from SAP trucking data (FRC/LCO):', {
             sto_no: parsedData.shipment?.sto_no,
             contractId: result.contractId,
             truckingLegs: parsedData.trucking?.length ?? 0,
@@ -333,10 +342,10 @@ export class SapDataDistributionService {
               enriched
             );
             if (truckingId) result.truckingOperationIds.push(truckingId);
-            logger.info('Trucking operation upserted from SAP (LAND):', truckingId);
+            logger.info('Trucking operation upserted from SAP (FRC/LCO):', truckingId);
           }
         } catch (truckingError) {
-          logger.error('Failed to create trucking operation from SAP (LAND):', truckingError);
+          logger.error('Failed to create trucking operation from SAP (FRC/LCO):', truckingError);
           logger.error('Parsed trucking:', JSON.stringify(parsedData.trucking, null, 2));
           throw truckingError;
         }
@@ -816,6 +825,25 @@ export class SapDataDistributionService {
       if (existingPlanned.rows.length > 0) {
         targetShipmentId = existingPlanned.rows[0].id;
         logger.info('upsertShipment: matched planned MNL/MSEA shipment for SAP STO', {
+          contractId,
+          existingShipmentId: targetShipmentId,
+          sapShipmentId: shipmentIdFromSap,
+        });
+      }
+    }
+
+    // SAP re-import: when contract has exactly one active shipment, update it instead of inserting a duplicate.
+    if (!targetShipmentId && contractUuid) {
+      const soleActive = await client.query<{ id: string }>(
+        `SELECT id FROM shipments
+         WHERE contract_id = $1::uuid
+           AND COALESCE(status, '') <> 'CANCELLED'
+         ORDER BY created_at DESC`,
+        [contractUuid],
+      );
+      if (soleActive.rows.length === 1) {
+        targetShipmentId = soleActive.rows[0].id;
+        logger.info('upsertShipment: reusing sole active shipment on contract for SAP update', {
           contractId,
           existingShipmentId: targetShipmentId,
           sapShipmentId: shipmentIdFromSap,
@@ -1535,13 +1563,34 @@ export class SapDataDistributionService {
     if (!shipmentUuid && !contractUuid) return null;
 
     if (contractUuid) {
-      const modeRes = await client.query(
-        `SELECT UPPER(TRIM(COALESCE(transport_mode, ''))) AS transport_mode
-         FROM contracts WHERE id = $1 LIMIT 1`,
+      const incRes = await client.query(
+        `SELECT
+           c.incoterm,
+           (
+             SELECT COALESCE(
+               spd.data->'contract'->>'incoterm',
+               spd.data->'raw'->>'Incoterm',
+               spd.data->>'Incoterm'
+             )
+             FROM sap_processed_data spd
+             WHERE TRIM(spd.contract_number) = TRIM(c.contract_id::text)
+             ORDER BY spd.created_at DESC NULLS LAST
+             LIMIT 1
+           ) AS sap_incoterm
+         FROM contracts c
+         WHERE c.id = $1
+         LIMIT 1`,
         [contractUuid]
       );
-      if (modeRes.rows[0]?.transport_mode === 'SEA') {
-        logger.warn('Skipping trucking upsert: contract is SEA-only', { contractUuid });
+      const incoterm = resolveTruckingIncotermFromParsedData(
+        null,
+        incRes.rows[0]?.incoterm ?? incRes.rows[0]?.sap_incoterm,
+      );
+      if (!isTruckingPageIncoterm(incoterm)) {
+        logger.warn('Skipping trucking upsert: contract incoterm is not FRC/LCO', {
+          contractUuid,
+          incoterm,
+        });
         return null;
       }
     }

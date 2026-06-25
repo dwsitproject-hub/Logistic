@@ -334,6 +334,7 @@ const SHIPPING_PERFORMANCE_SQL = `
         LIMIT 1
       ) pna ON TRUE
       WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
+        AND COALESCE(s.status, '') <> 'CANCELLED'
       ORDER BY s.created_at DESC`;
 
 function parseStringArray(value: unknown): string[] {

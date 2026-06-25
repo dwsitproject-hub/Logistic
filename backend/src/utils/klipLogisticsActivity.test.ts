@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { isKlipManualShipmentId, isSapSourcedShipmentId } from './klipLogisticsActivity';
+import {
+  isKlipManualShipmentId,
+  isPlaceholderShipmentEligibleForSapConsolidate,
+  isSapSourcedShipmentId,
+} from './klipLogisticsActivity';
 
 describe('klipLogisticsActivity ids', () => {
   it('detects SAP numeric shipment ids', () => {
@@ -11,5 +15,23 @@ describe('klipLogisticsActivity ids', () => {
   it('detects KLIP manual shipment ids', () => {
     expect(isKlipManualShipmentId('MNL-123')).toBe(true);
     expect(isKlipManualShipmentId('1006018592')).toBe(false);
+  });
+});
+
+describe('isPlaceholderShipmentEligibleForSapConsolidate', () => {
+  it('allows MNL placeholders in planned status', () => {
+    expect(isPlaceholderShipmentEligibleForSapConsolidate('PLANNED', 'MNL-abc')).toBe(true);
+  });
+
+  it('blocks COMPLETED SAP shipments from auto-cancel', () => {
+    expect(isPlaceholderShipmentEligibleForSapConsolidate('COMPLETED', '1006018592')).toBe(false);
+  });
+
+  it('blocks in-progress SAP numeric STO rows', () => {
+    expect(isPlaceholderShipmentEligibleForSapConsolidate('IN_TRANSIT', '1006018592')).toBe(false);
+  });
+
+  it('blocks already cancelled rows', () => {
+    expect(isPlaceholderShipmentEligibleForSapConsolidate('CANCELLED', 'MNL-x')).toBe(false);
   });
 });
