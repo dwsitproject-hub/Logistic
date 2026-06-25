@@ -33,6 +33,10 @@ import {
   X,
 } from 'lucide-react'
 import api from '@/lib/api'
+import {
+  resolveShipmentApiLookupKey,
+  resolveShipmentDisplayStoNumber,
+} from '@/lib/shipmentStoDisplay'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatQtyMtFromKg } from '@/lib/utils'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
@@ -434,17 +438,24 @@ export function EditShipmentModal({
 
         const contractNumbersRaw = String(row.contract_numbers ?? row.contract_number ?? contractId)
         const contractNumbers = contractNumbersRaw.split(',').map((s) => s.trim()).filter(Boolean)
-        const stoKey =
+        const apiLookupKey =
           String(preferredStoNumber ?? '').trim() ||
-          String(row.sto_number ?? '').trim() ||
-          String(row.operation_id ?? '').trim() ||
-          String(row.shipment_id ?? '').trim()
+          resolveShipmentApiLookupKey({
+            sto_key: row.sto_key as string | undefined,
+            sto_number: row.sto_number as string | undefined,
+            operation_id: row.operation_id as string | undefined,
+            shipment_id: row.shipment_id as string | undefined,
+            id: sid,
+          })
+        const displaySto = resolveShipmentDisplayStoNumber(
+          row.contract_sto_number ?? row.sto_number,
+        )
 
         let contractDetails: ShipmentDetailRow[] = []
-        if (stoKey) {
+        if (apiLookupKey) {
           const detailsRes = await api.get('/shipments/contracts/details', {
             params: {
-              sto: stoKey,
+              sto: apiLookupKey,
               ...(contractNumbers.length > 0 ? { contractNumbers: contractNumbers.join(',') } : {}),
             },
           })
@@ -536,7 +547,7 @@ export function EditShipmentModal({
           port_of_discharge: String(row.port_of_discharge ?? info.vessel_discharge_port_1 ?? ''),
         })
         setOperationId(String(row.operation_id ?? ''))
-        setStoNumber(stoKey)
+        setStoNumber(displaySto === '-' ? '' : displaySto)
 
         const pol = String(info.vessel_loading_port_1 ?? row.port_of_loading ?? '')
         const pod = String(info.vessel_discharge_port_1 ?? row.port_of_discharge ?? '')
@@ -972,7 +983,6 @@ export function EditShipmentModal({
                   ['Discharge Port', vesselMeta.port_of_discharge],
                   ['Plant / Site', plantSiteName],
                   ['Operation ID', operationId],
-                  ['STO Number', stoNumber],
                 ].map(([label, value]) => (
                   <div key={String(label)}>
                     <label className="mb-1 block text-xs font-medium text-gray-600">{label}</label>
@@ -1062,6 +1072,11 @@ export function EditShipmentModal({
                     Delivered / Received quantities stay locked until at least one of SLD or SDD is uploaded.
                   </p>
                 )}
+
+                <div className="max-w-xs">
+                  <label className="mb-1 block text-xs font-medium text-gray-600">STO Number</label>
+                  <Input value={stoNumber || '—'} readOnly disabled className={`h-9 text-sm ${READONLY_FIELD_CLASS}`} />
+                </div>
 
                 <div className="overflow-x-auto rounded-lg border border-gray-200">
                   <Table>

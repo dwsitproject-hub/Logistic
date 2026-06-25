@@ -5,14 +5,20 @@
 export function resolveShipmentStoKey(row: {
   id: string
   sto_number?: string | null
+  sto_key?: string | null
   shipment_id?: string | null
 }): string {
-  const sto = String(row.sto_number || row.shipment_id || '').trim()
-  return sto || `__no_sto__${row.id}`
+  const displaySto = String(row.sto_number ?? '').trim()
+  if (displaySto) return displaySto
+  const stoKey = String(row.sto_key ?? row.shipment_id ?? '').trim()
+  return stoKey || `__no_sto__${row.id}`
 }
 
+import { resolveShipmentDisplayStoNumber } from '@/lib/shipmentStoDisplay'
+
 export function resolveShipmentStoDisplay(stoKey: string): string {
-  return stoKey.startsWith('__no_sto__') ? '—' : stoKey
+  if (stoKey.startsWith('__no_sto__')) return '—'
+  return resolveShipmentDisplayStoNumber(stoKey)
 }
 
 export type ShipmentStoGroup<T> = {
@@ -23,7 +29,12 @@ export type ShipmentStoGroup<T> = {
 
 /** Preserve first-seen order from the sorted list. */
 export function groupShipmentsBySto<
-  T extends { id: string; sto_number?: string | null; shipment_id?: string | null },
+  T extends {
+    id: string
+    sto_number?: string | null
+    sto_key?: string | null
+    shipment_id?: string | null
+  },
 >(rows: readonly T[]): ShipmentStoGroup<T>[] {
   const groups: ShipmentStoGroup<T>[] = []
   const indexByKey = new Map<string, number>()

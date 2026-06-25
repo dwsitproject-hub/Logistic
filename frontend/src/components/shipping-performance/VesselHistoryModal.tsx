@@ -4,13 +4,24 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { formatAvgDays, signedCycleDaysClass } from '@/lib/cycleDaysDisplay'
-import { partitionVesselHistoryByStatus } from '@/lib/vesselHistoryPartition'
+import { formatAvgDays, formatSignedDeltaDays, signedCycleDaysClass } from '@/lib/cycleDaysDisplay'
 import {
-  resolveShippingPerfDischargePort,
-  resolveShippingPerfLoadingPort,
-  type ShippingPerformancePortSource,
-} from '@/lib/shippingPerformancePorts'
+  aggregateShippingPerfVesselModalBySto,
+  formatShippingPerfVesselModalDate,
+  formatShippingPerfVesselModalQtyMt,
+  isVesselModalHistoryDeltaColumn,
+  isVesselModalOpenDeltaColumn,
+  partitionShippingPerfVesselModalRows,
+  resolveVesselModalHistoryDeltaDays,
+  resolveVesselModalOpenDeltaDays,
+  sortShippingPerfVesselModalRows,
+  VESSEL_MODAL_HISTORY_COLUMNS,
+  VESSEL_MODAL_OPEN_COLUMNS,
+  type ShippingPerfVesselModalAggregatedRow,
+  type ShippingPerfVesselModalSourceRow,
+  type VesselModalHistoryColumnKey,
+  type VesselModalOpenColumnKey,
+} from '@/lib/shippingPerformanceVesselModal'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { cn } from '@/lib/utils'
 import { Anchor, Loader2, Ship, X } from 'lucide-react'
@@ -20,35 +31,11 @@ export type VesselHistoryModalSelection = {
   vesselKey: string
 }
 
-export type VesselHistoryShipmentRow = ShippingPerformancePortSource & {
-  id: string
-  contract_date?: string | null
-  contract_ext_no?: string | null
-  po_number?: string | null
-  product?: string | null
-  incoterm?: string | null
-  supplier?: string | null
-  loading_port?: string | null
-  discharge_port?: string | null
-  delivered_qty?: number | null
-  received_qty?: number | null
-  status?: string | null
-  vessel_name?: string | null
-  loading_ata_arrival?: string | null
-  loading_ata_berthed?: string | null
-  loading_ata_completed?: string | null
-  discharge_ata_arrival?: string | null
-  discharge_ata_berthed?: string | null
-  discharge_ata_completed?: string | null
-  ata_loading_delta_eta_etr_days?: number | null
-  ata_loading_delta_eta_etb_days?: number | null
-  ata_loading_delta_etb_etc_days?: number | null
-  ata_discharge_delta_eta_etb_days?: number | null
-  ata_discharge_delta_etb_etc_days?: number | null
-  ata_total_delta_days?: number | null
-}
+/** Row shape passed from Shipping Performance page only. */
+export type VesselHistoryShipmentRow = ShippingPerfVesselModalSourceRow
 
 type MasterVesselProfile = {
+  vessel_code: string | null
   vessel_owner_group: string | null
   vessel_owner: string | null
   vessel_capacity_mt: number | null
@@ -77,39 +64,45 @@ const VESSEL_ATA_AVG_METRICS = [
   spanFull?: boolean
 }>
 
-const HISTORY_COLUMNS: Array<{
-  key: keyof VesselHistoryShipmentRow
-  label: string
-  align?: 'left' | 'right'
-}> = [
-  { key: 'contract_date', label: 'Contract Date' },
-  { key: 'contract_ext_no', label: 'Contract Ext No' },
-  { key: 'po_number', label: 'PO' },
-  { key: 'product', label: 'Product' },
-  { key: 'incoterm', label: 'Incoterm' },
-  { key: 'supplier', label: 'Supplier' },
-  { key: 'loading_port', label: 'Loading Port' },
-  { key: 'discharge_port', label: 'Discharge Port' },
-  { key: 'delivered_qty', label: 'Qty Delivery', align: 'right' },
-  { key: 'received_qty', label: 'Qty Receive', align: 'right' },
-  { key: 'status', label: 'Status' },
-]
-
 function normalizeVesselKey(value: unknown): string {
   const trimmed = String(value ?? '').trim()
   return trimmed || 'Unknown'
 }
 
-function displayLabel(value: unknown, fallback = '-'): string {
-  return formatSapDisplayValue(value, fallback)
+function normalizeVesselNameForMatch(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
 }
 
-function sortByContractDateDesc(rows: VesselHistoryShipmentRow[]): VesselHistoryShipmentRow[] {
-  return [...rows].sort((a, b) => {
-    const aDate = String(a.contract_date ?? '').slice(0, 10)
-    const bDate = String(b.contract_date ?? '').slice(0, 10)
-    return bDate.localeCompare(aDate)
-  })
+function parseMasterVesselCapacityMt(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const n = typeof value === 'number' ? value : Number(String(value).replace(/,/g, '').trim())
+  return Number.isFinite(n) ? n : null
+}
+
+function findMasterVesselByName<T extends { vessel_name?: string | null }>(
+  items: T[],
+  vesselName: string,
+): T | undefined {
+  const target = normalizeVesselNameForMatch(vesselName)
+  if (!target) return undefined
+  return items.find((v) => normalizeVesselNameForMatch(v.vessel_name) === target)
+}
+
+function formatVesselModalTitle(
+  vesselCode: string | null | undefined,
+  vesselName: string,
+): string {
+  const code = String(vesselCode ?? '').trim()
+  const name = String(vesselName ?? '').trim()
+  if (code && name) return `${code} - ${name}`
+  return name || code || 'Unknown'
+}
+
+function displayLabel(value: unknown, fallback = '-'): string {
+  return formatSapDisplayValue(value, fallback)
 }
 
 function avgAtaDelta(
@@ -122,21 +115,6 @@ function avgAtaDelta(
   if (vals.length === 0) return null
   const avg = vals.reduce((sum, v) => sum + v, 0) / vals.length
   return Math.round(avg * 10) / 10
-}
-
-function formatContractDate(value: string | null | undefined): string {
-  if (!value) return '-'
-  const iso = String(value).slice(0, 10)
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso
-  const [, y, m, d] = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/) ?? []
-  if (!y || !m || !d) return iso
-  return `${d}/${m}/${y}`
-}
-
-function formatQtyMt(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '-'
-  const mt = Number(value) / 1000
-  return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
 }
 
 function getStatusColor(status: string): string {
@@ -163,32 +141,64 @@ function getStatusColor(status: string): string {
   }
 }
 
-function renderHistoryCell(row: VesselHistoryShipmentRow, key: keyof VesselHistoryShipmentRow) {
+function renderDeltaDaysCell(days: number | null) {
+  if (days == null || !Number.isFinite(days)) {
+    return <span className="text-gray-400">-</span>
+  }
+  return (
+    <span className={cn('font-semibold tabular-nums', signedCycleDaysClass(days))}>
+      {formatSignedDeltaDays(days)} days
+    </span>
+  )
+}
+
+function renderOpenCell(row: ShippingPerfVesselModalAggregatedRow, key: VesselModalOpenColumnKey) {
+  if (key === 'sto') {
+    return <span>{displayLabel(row.sto)}</span>
+  }
   if (key === 'contract_date') {
-    return <span>{formatContractDate(row.contract_date)}</span>
+    return <span>{formatShippingPerfVesselModalDate(row.contract_date)}</span>
   }
   if (key === 'delivered_qty' || key === 'received_qty') {
-    return <span>{formatQtyMt(row[key])}</span>
+    return <span>{formatShippingPerfVesselModalQtyMt(row[key])}</span>
   }
   if (key === 'status') {
     const status = String(row.status ?? '').trim()
     if (!status) return <span className="text-gray-400">-</span>
     return <Badge className={getStatusColor(status)}>{status}</Badge>
   }
-  if (key === 'loading_port') {
-    return <span>{displayLabel(resolveShippingPerfLoadingPort(row))}</span>
-  }
-  if (key === 'discharge_port') {
-    return <span>{displayLabel(resolveShippingPerfDischargePort(row))}</span>
+  if (isVesselModalOpenDeltaColumn(key)) {
+    return renderDeltaDaysCell(resolveVesselModalOpenDeltaDays(row, key))
   }
   return <span>{displayLabel(row[key])}</span>
 }
 
-function VesselHistoryShipmentTable({
+function renderHistoryCell(row: ShippingPerfVesselModalAggregatedRow, key: VesselModalHistoryColumnKey) {
+  if (key === 'sto') {
+    return <span>{displayLabel(row.sto)}</span>
+  }
+  if (key === 'contract_date') {
+    return <span>{formatShippingPerfVesselModalDate(row.contract_date)}</span>
+  }
+  if (key === 'delivered_qty' || key === 'received_qty') {
+    return <span>{formatShippingPerfVesselModalQtyMt(row[key])}</span>
+  }
+  if (key === 'status') {
+    const status = String(row.status ?? '').trim()
+    if (!status) return <span className="text-gray-400">-</span>
+    return <Badge className={getStatusColor(status)}>{status}</Badge>
+  }
+  if (isVesselModalHistoryDeltaColumn(key)) {
+    return renderDeltaDaysCell(resolveVesselModalHistoryDeltaDays(row, key))
+  }
+  return <span>{displayLabel(row[key])}</span>
+}
+
+function VesselModalOpenTable({
   rows,
   emptyMessage,
 }: {
-  rows: VesselHistoryShipmentRow[]
+  rows: ShippingPerfVesselModalAggregatedRow[]
   emptyMessage: string
 }) {
   if (rows.length === 0) {
@@ -202,12 +212,12 @@ function VesselHistoryShipmentTable({
   return (
     <div className="max-h-64 overflow-hidden rounded-lg border border-gray-200">
       <div className="max-h-64 overflow-x-auto overflow-y-auto">
-        <table className="w-full min-w-[960px] text-sm">
+        <table className="w-full min-w-[1200px] text-sm">
           <thead className="sticky top-0 z-[1] bg-gray-100">
             <tr>
-              {HISTORY_COLUMNS.map((col) => (
+              {VESSEL_MODAL_OPEN_COLUMNS.map((col) => (
                 <th
-                  key={String(col.key)}
+                  key={col.key}
                   className={cn(
                     'whitespace-nowrap px-3 py-2 font-medium text-gray-600',
                     col.align === 'right' ? 'text-right' : 'text-left',
@@ -221,9 +231,66 @@ function VesselHistoryShipmentTable({
           <tbody className="divide-y divide-gray-100">
             {rows.map((row) => (
               <tr key={row.id} className="hover:bg-gray-50">
-                {HISTORY_COLUMNS.map((col) => (
+                {VESSEL_MODAL_OPEN_COLUMNS.map((col) => (
                   <td
-                    key={`${row.id}-${String(col.key)}`}
+                    key={`${row.id}-${col.key}`}
+                    className={cn(
+                      'whitespace-nowrap px-3 py-2',
+                      col.align === 'right' ? 'text-right' : 'text-left',
+                    )}
+                  >
+                    {renderOpenCell(row, col.key)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function VesselModalHistoryTable({
+  rows,
+  emptyMessage,
+}: {
+  rows: ShippingPerfVesselModalAggregatedRow[]
+  emptyMessage: string
+}) {
+  if (rows.length === 0) {
+    return (
+      <div className="flex max-h-64 items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/50 px-4 py-10 text-center text-sm text-gray-500">
+        {emptyMessage}
+      </div>
+    )
+  }
+
+  return (
+    <div className="max-h-64 overflow-hidden rounded-lg border border-gray-200">
+      <div className="max-h-64 overflow-x-auto overflow-y-auto">
+        <table className="w-full min-w-[1200px] text-sm">
+          <thead className="sticky top-0 z-[1] bg-gray-100">
+            <tr>
+              {VESSEL_MODAL_HISTORY_COLUMNS.map((col) => (
+                <th
+                  key={col.key}
+                  className={cn(
+                    'whitespace-nowrap px-3 py-2 font-medium text-gray-600',
+                    col.align === 'right' ? 'text-right' : 'text-left',
+                  )}
+                >
+                  {col.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {rows.map((row) => (
+              <tr key={row.id} className="hover:bg-gray-50">
+                {VESSEL_MODAL_HISTORY_COLUMNS.map((col) => (
+                  <td
+                    key={`${row.id}-${col.key}`}
                     className={cn(
                       'whitespace-nowrap px-3 py-2',
                       col.align === 'right' ? 'text-right' : 'text-left',
@@ -296,11 +363,19 @@ export default function VesselHistoryModal({
     )
   }, [sourceRows, selection])
 
-  const { onGoingShipments, historyShipments } = useMemo(() => {
-    const partitioned = partitionVesselHistoryByStatus(vesselRows)
+  const { nextShipmentRows, onGoingRows, historyRows, historySourceRows } = useMemo(() => {
+    const partitioned = partitionShippingPerfVesselModalRows(vesselRows)
     return {
-      onGoingShipments: sortByContractDateDesc(partitioned.onGoingShipments),
-      historyShipments: sortByContractDateDesc(partitioned.historyShipments),
+      nextShipmentRows: sortShippingPerfVesselModalRows(
+        aggregateShippingPerfVesselModalBySto(partitioned.nextShipment),
+      ),
+      onGoingRows: sortShippingPerfVesselModalRows(
+        aggregateShippingPerfVesselModalBySto(partitioned.onGoing),
+      ),
+      historyRows: sortShippingPerfVesselModalRows(
+        aggregateShippingPerfVesselModalBySto(partitioned.history),
+      ),
+      historySourceRows: partitioned.history,
     }
   }, [vesselRows])
 
@@ -314,15 +389,13 @@ export default function VesselHistoryModal({
       const items = (res.data?.data?.items ?? []) as Array<
         MasterVesselProfile & { vessel_name?: string }
       >
-      const normalized = vesselName.trim().toLowerCase()
-      const exact =
-        items.find((v) => String(v.vessel_name ?? '').trim().toLowerCase() === normalized) ??
-        items[0]
+      const exact = findMasterVesselByName(items, vesselName)
       if (exact) {
         setProfile({
+          vessel_code: exact.vessel_code ?? null,
           vessel_owner_group: exact.vessel_owner_group ?? null,
           vessel_owner: exact.vessel_owner ?? null,
-          vessel_capacity_mt: exact.vessel_capacity_mt ?? null,
+          vessel_capacity_mt: parseMasterVesselCapacityMt(exact.vessel_capacity_mt),
           hull_type: exact.hull_type ?? null,
           lambung_type: exact.lambung_type ?? null,
         })
@@ -341,21 +414,23 @@ export default function VesselHistoryModal({
 
   if (!open || !selection) return null
 
+  const vesselTitle = formatVesselModalTitle(profile?.vessel_code, selection.vesselName)
+
   const profileFields: Array<{ label: string; value: string }> = [
     { label: 'Owner Group', value: displayLabel(profile?.vessel_owner_group) },
     { label: 'Owner', value: displayLabel(profile?.vessel_owner) },
     {
       label: 'Capacity (MT)',
       value:
-        profile?.vessel_capacity_mt != null && Number.isFinite(profile.vessel_capacity_mt)
-          ? Number(profile.vessel_capacity_mt).toLocaleString('en-US', { maximumFractionDigits: 2 })
+        profile?.vessel_capacity_mt != null
+          ? profile.vessel_capacity_mt.toLocaleString('en-US', { maximumFractionDigits: 2 })
           : '-',
     },
     { label: 'Hull Type', value: displayLabel(profile?.hull_type) },
     { label: 'Lambung Type', value: displayLabel(profile?.lambung_type) },
   ]
 
-  const totalRecords = onGoingShipments.length + historyShipments.length
+  const totalRecords = nextShipmentRows.length + onGoingRows.length + historyRows.length
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
@@ -367,11 +442,14 @@ export default function VesselHistoryModal({
                 <Ship className="h-4.5 w-4.5" />
               </div>
               <div className="min-w-0">
-                <h3 className="truncate text-lg font-semibold text-gray-900">{selection.vesselName}</h3>
+                <h3 className="truncate text-lg font-semibold text-gray-900" title={vesselTitle}>
+                  {vesselTitle}
+                </h3>
                 <p className="text-xs text-gray-500">
-                  {onGoingShipments.length.toLocaleString('en-US')} on going ·{' '}
-                  {historyShipments.length.toLocaleString('en-US')} history ·{' '}
-                  {totalRecords.toLocaleString('en-US')} total in scope
+                  {nextShipmentRows.length.toLocaleString('en-US')} next ·{' '}
+                  {onGoingRows.length.toLocaleString('en-US')} on going ·{' '}
+                  {historyRows.length.toLocaleString('en-US')} history ·{' '}
+                  {totalRecords.toLocaleString('en-US')} STO groups in scope
                 </p>
               </div>
             </div>
@@ -418,28 +496,37 @@ export default function VesselHistoryModal({
                 <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
                   Close performance averages (ATA)
                 </div>
-                <VesselAtaAveragesGrid historyShipments={historyShipments} />
+                <VesselAtaAveragesGrid historyShipments={historySourceRows} />
               </div>
             </div>
           </section>
 
           <section className="mb-6">
-            <h4 className="mb-3 text-sm font-semibold text-gray-800">Shipment On Going</h4>
-            <VesselHistoryShipmentTable
-              rows={onGoingShipments}
+            <h4 className="mb-3 text-sm font-semibold text-gray-800">Next Shipment</h4>
+            <VesselModalOpenTable
+              rows={nextShipmentRows}
+              emptyMessage="No planned shipments for this vessel"
+            />
+          </section>
+
+          <section className="mb-6">
+            <h4 className="mb-3 text-sm font-semibold text-gray-800">On Going Shipment</h4>
+            <VesselModalOpenTable
+              rows={onGoingRows}
               emptyMessage="No ongoing shipments for this vessel"
             />
           </section>
 
           <section>
             <h4 className="mb-3 text-sm font-semibold text-gray-800">History (Close)</h4>
-            <VesselHistoryShipmentTable
-              rows={historyShipments}
+            <VesselModalHistoryTable
+              rows={historyRows}
               emptyMessage="No completed or cancelled shipments for this vessel"
             />
             <p className="mt-2 text-xs text-gray-500">
-              On Going = Planned through Unloading; History = Completed or Cancelled only. Scope
-              respects toolbar filters, not the summary card selection.
+              Next Shipment = Planned only; On Going = In Progress through Unloading; History =
+              Completed or Cancelled. Rows are grouped by STO. Scope respects toolbar filters, not
+              the summary card selection.
             </p>
           </section>
         </div>

@@ -33,6 +33,8 @@ export const FIELD_HELP = {
 
   outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery; others use total STO quantity. Not reduced by manual STO assignment on Shipments. Green = Over Delivered; Red = Still Outstanding.`,
   shipmentOutstandingQtyMt: `STO Qty minus fulfilled SAP quantity by incoterm (same rules as Contract page): CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery; others use receive or delivery. Green = Over Delivered; Red = Still Outstanding.`,
+  shipmentSfalQtyMt: `Ship Figure After Loading (SFAL) from shipment data, displayed in MT (stored as kg in the database).`,
+  shipmentSfbdQtyMt: `Ship Figure Before Discharge (SFBD) from shipment data, displayed in MT (stored as kg in the database).`,
 
   companyName: `From Buyer in latest SAP data. For B2B "origin" contracts (empty Contract Reff PO), Company Name may follow linked B2B child contracts per business rules.`,
 

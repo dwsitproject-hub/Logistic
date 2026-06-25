@@ -82,6 +82,7 @@ interface ShippingPerformanceRow {
   contract_ext_no?: string | null
   contract_number: string
   sto_number?: string | null
+  operation_id?: string | null
   contract_date?: string | null
   incoterm?: string | null
   product?: string | null

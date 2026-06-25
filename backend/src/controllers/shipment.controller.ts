@@ -46,6 +46,7 @@ import {
   buildShipmentExcludeStoTypeTSql,
   buildShipmentSeaMixTransportSql,
   shipmentListStoKeyExpr,
+  shipmentListDisplayStoNumberExpr,
 } from '../utils/shipmentStoTypeSql';
 import {
   buildShipmentListAtaSelectSql,
@@ -336,6 +337,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(COALESCE(s.eta_discharge_complete, (SELECT vlpd.eta_vessel_complete_discharge::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) as eta_vessel_complete_discharge,`;
 
     const listStoKeySql = shipmentListStoKeyExpr('c', 'l', 's');
+    const listStoDisplaySql = shipmentListDisplayStoNumberExpr('c', 'l', 's');
 
     /** STO on grouped row — used to pull all contracts/POs sharing the same STO (multi-contract per vessel). */
     const groupedStoTrimExpr = `TRIM(COALESCE(MAX(c.sto_number::text), MAX(l.effective_sto), ''))`;
@@ -518,7 +520,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     let queryText = `${prelude}
           ${listStoKeySql} as sto_key,
           ${sqlShipmentListPrimaryIdAgg(listStoKeySql)} as id,
-          MAX(${listStoKeySql}) as sto_number,
+          MAX(${listStoDisplaySql}) as sto_number,
           MAX(s.shipment_id) as shipment_id,
           MAX(s.operation_id) as operation_id,
           MAX(NULLIF(TRIM(s.vessel_name), '')) as vessel_name,
@@ -559,6 +561,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.vessel_oa_actual) as vessel_oa_actual,
           MAX(s.bl_quantity) as bl_quantity,
           MAX(s.actual_vessel_qty_receive) as actual_vessel_qty_receive,
+          MAX(s.sfal_qty) as sfal_qty,
+          MAX(s.sfbd_qty) as sfbd_qty,
           MAX(s.difference_final_qty_vs_bl_qty) as difference_final_qty_vs_bl_qty,
           MAX(s.average_vessel_speed) as average_vessel_speed,
           MAX(s.status) as status,
@@ -1179,8 +1183,11 @@ export const getShipmentById = async (req: AuthRequest, res: Response) => {
         COALESCE(
           NULLIF(TRIM(c.sto_number::text), ''),
           sap_sto.effective_sto,
-          NULLIF(TRIM(s.operation_id::text), ''),
-          NULLIF(TRIM(s.shipment_id::text), '')
+          CASE
+            WHEN NULLIF(TRIM(s.shipment_id::text), '') ~ '^[0-9]+$'
+            THEN NULLIF(TRIM(s.shipment_id::text), '')
+            ELSE NULL
+          END
         ) AS sto_number
        FROM shipments s
        LEFT JOIN contracts c ON s.contract_id = c.id

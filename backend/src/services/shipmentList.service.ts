@@ -1,6 +1,7 @@
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
+import { resolveContractLogisticsStoNumber } from '../utils/contractLogisticsStoDisplay';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
 import {
   mergeShipmentVesselFromSapRow,
@@ -167,16 +168,8 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
       continue;
     }
 
-    const currentStoNumber = row.sto_number;
-    const stoKeyStr = row.sto_key != null ? String(row.sto_key).trim() : '';
-
-    if (
-      (currentStoNumber == null || String(currentStoNumber).trim() === '') &&
-      stoKeyStr &&
-      /^\d+$/.test(stoKeyStr)
-    ) {
-      row.sto_number = stoKeyStr;
-    }
+    const displayedSto = resolveContractLogisticsStoNumber(row.sto_number);
+    row.sto_number = displayedSto === '-' ? null : displayedSto;
 
     row.status = deriveShipmentStatus({
       eta_arrival_at_loading_port: row.eta_vessel_arrival_at_loading_port ?? row.eta_arrival,

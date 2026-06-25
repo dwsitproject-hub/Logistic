@@ -73,6 +73,26 @@ export const shipmentSapStoKeyExpr = `
 export const isSyntheticShipmentOperationKeySql = (stoKeySql: string): string =>
   `(TRIM((${stoKeySql})::text) ~ '^OP-')`;
 
+/**
+ * Display-only STO number for list/detail UI — contract SAP STO or numeric shipment_id only.
+ * Never operation_id or synthetic OP-* keys (those belong in operation_id column).
+ */
+export function shipmentListDisplayStoNumberExpr(
+  contractAlias = 'c',
+  spdAlias = 'l',
+  shipmentAlias = 's',
+): string {
+  return `NULLIF(TRIM(COALESCE(
+    NULLIF(TRIM(${contractAlias}.sto_number::text), ''),
+    NULLIF(TRIM(${spdAlias}.effective_sto), ''),
+    CASE
+      WHEN NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '') ~ '^[0-9]+$'
+      THEN NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '')
+      ELSE NULL
+    END
+  )), '')`;
+}
+
 /** Shipments page transport scope: contract Sea/Land = SEA or MIX. */
 export function buildShipmentSeaMixTransportSql(contractAlias = 'c'): string {
   return `UPPER(COALESCE(NULLIF(TRIM(${contractAlias}.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')`;

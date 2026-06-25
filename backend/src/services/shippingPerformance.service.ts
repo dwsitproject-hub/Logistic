@@ -52,7 +52,7 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const ROW_CACHE_KEY = 'shipping-performance-rows-v9';
+const ROW_CACHE_KEY = 'shipping-performance-rows-v10';
 
 const SHIPPING_PERFORMANCE_SQL = `
       WITH latest_spd_contract AS (
@@ -169,6 +169,7 @@ const SHIPPING_PERFORMANCE_SQL = `
       SELECT
         s.id,
         s.shipment_id,
+        NULLIF(TRIM(s.operation_id), '') AS operation_id,
         c.contract_id AS contract_number,
         c.po_number,
         c.sto_number,

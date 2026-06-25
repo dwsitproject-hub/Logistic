@@ -76,6 +76,10 @@ import {
 } from '@/lib/shipmentColumns'
 import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
 import {
+  resolveShipmentApiLookupKey,
+  resolveShipmentDisplayStoNumber,
+} from '@/lib/shipmentStoDisplay'
+import {
   type EtaBucketFilterKey,
 } from '@/lib/shipmentsPageDerivedData'
 import {
@@ -214,6 +218,8 @@ interface Shipment {
   quantity_receive?: number
   outstanding_quantity?: number
   quantity_delivered_sap?: number
+  sfal_qty?: number | null
+  sfbd_qty?: number | null
   // Basic ETA loading dates at shipment level
   eta_arrival?: string
   eta_berthed?: string
@@ -547,17 +553,8 @@ function resolveShipmentContractNumbers(shipment: Shipment | null): string[] {
 }
 
 function shipmentModalStoDisplay(shipment: Shipment | null): string {
-  return formatSapDisplayValue(resolveShipmentStoKey(shipment))
-}
-
-function resolveShipmentStoKey(shipment: Shipment | null): string {
-  if (!shipment) return ''
-  return (
-    (shipment.sto_number && String(shipment.sto_number).trim()) ||
-    (shipment.sto_key && String(shipment.sto_key).trim()) ||
-    (shipment.shipment_id && String(shipment.shipment_id).trim()) ||
-    ''
-  )
+  if (!shipment) return '-'
+  return resolveShipmentDisplayStoNumber(shipment.sto_number)
 }
 
 type PortsModalContractDetail = {
@@ -1488,7 +1485,7 @@ function ShipmentsPageContent() {
     setEditShipmentFromTable({
       shipmentId: shipment.id,
       editContractId,
-      editStoNumber: resolveShipmentStoKey(shipment),
+      editStoNumber: resolveShipmentApiLookupKey(shipment),
     })
   }
 
@@ -2295,10 +2292,7 @@ function ShipmentsPageContent() {
   // Fetch contract details for a shipment
   const fetchContractDetails = async (shipment: Shipment) => {
     const contractNumbers = resolveShipmentContractNumbers(shipment)
-    const stoForDetails =
-      (shipment.sto_number && String(shipment.sto_number).trim()) ||
-      shipment.sto_key ||
-      shipment.shipment_id
+    const stoForDetails = resolveShipmentApiLookupKey(shipment)
     const hasSto = Boolean(stoForDetails && String(stoForDetails).trim() !== '')
 
     if (!hasSto && contractNumbers.length === 0) return
@@ -2596,8 +2590,10 @@ function ShipmentsPageContent() {
       label: 'STO',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => s.sto_number || '',
-      render: (s) => <OperationalNowrapCell value={s.sto_number} fallback="" />
+      getSortValue: (s) => resolveShipmentDisplayStoNumber(s.sto_number),
+      render: (s) => (
+        <OperationalNowrapCell value={resolveShipmentDisplayStoNumber(s.sto_number)} />
+      ),
     },
     {
       id: 'contract_date',
@@ -2722,6 +2718,32 @@ function ShipmentsPageContent() {
           </span>
         )
       }
+    },
+    {
+      id: 'sfal_qty',
+      label: 'SFAL Qty (MT)',
+      formulaHelp: FIELD_HELP.shipmentSfalQtyMt,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.sfal_qty ?? 0,
+      render: (s) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatQtyMtFromKg(s.sfal_qty)}
+        </span>
+      )
+    },
+    {
+      id: 'sfbd_qty',
+      label: 'SFBD Qty (MT)',
+      formulaHelp: FIELD_HELP.shipmentSfbdQtyMt,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.sfbd_qty ?? 0,
+      render: (s) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatQtyMtFromKg(s.sfbd_qty)}
+        </span>
+      )
     },
     {
       id: 'ata_vessel_completed_loading',
@@ -4564,7 +4586,9 @@ function ShipmentsPageContent() {
                           <tr key={r.id} className="hover:bg-gray-50">
                             <td className="sticky left-0 z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[220px] align-top">
                               <div className="font-semibold text-gray-900 truncate" title={r.shipment_id}>{r.shipment_id}</div>
-                              <div className="text-[10px] text-gray-500 truncate" title={r.sto_number || ''}>STO: {r.sto_number || '—'}</div>
+                              <div className="text-[10px] text-gray-500 truncate" title={r.sto_number || ''}>
+                                STO: {resolveShipmentDisplayStoNumber(r.sto_number)}
+                              </div>
                               <div className="text-[10px] text-gray-500 truncate" title={r.vessel_name || ''}>Vessel: {r.vessel_name || '—'}</div>
                             </td>
                             <td className="sticky left-[220px] z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[260px] align-top">
@@ -5510,7 +5534,14 @@ function ShipmentsPageContent() {
                                 </button>
                               </div>
                               <div className="min-w-0">
-                                <div className="font-semibold truncate">{shipment.sto_number || shipment.operation_id || ''}</div>
+                                <div className="font-semibold truncate">
+                                  {resolveShipmentDisplayStoNumber(shipment.sto_number)}
+                                </div>
+                                {shipment.operation_id ? (
+                                  <div className="text-[10px] text-gray-500 truncate">
+                                    Op: {formatSapDisplayValue(shipment.operation_id)}
+                                  </div>
+                                ) : null}
                                 <div className="text-xs text-gray-600 truncate">{formatSapDisplayValue(shipment.vessel_name)} • {formatSapDisplayValue(shipment.contract_number)}</div>
                               </div>
                               <Badge className={getStatusColor(shipment.status)}>

@@ -17,6 +17,8 @@
     "cleanup:false-sea-shipments": "ts-node src/scripts/removeFalseSeaShipments.ts",
     "cleanup:master-plants": "ts-node src/scripts/clearMasterPlants.ts",
     "cleanup:master-plants:confirm": "ts-node src/scripts/clearMasterPlants.ts --confirm",
+    "cleanup:master-plant-group": "ts-node src/scripts/clearMasterPlantGroupPlant.ts",
+    "cleanup:master-plant-group:confirm": "ts-node src/scripts/clearMasterPlantGroupPlant.ts --confirm",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",

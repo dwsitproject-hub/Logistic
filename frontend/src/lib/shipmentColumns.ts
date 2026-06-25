@@ -24,12 +24,14 @@ export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
   'quantity_delivered',
   'quantity_receive',
   'outstanding_quantity',
+  'sfal_qty',
+  'sfbd_qty',
   'ata_vessel_completed_loading',
   'ata_vessel_complete_discharge',
 ] as const
 
 /** Bump when default column order/visibility changes — resets users without matching saved layout. */
-export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v3'
+export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v4'
 
 export const SHIPMENT_COLUMN_LAYOUT_VERSION_KEY = 'shipments.compact.columnLayoutVersion'
 
@@ -48,6 +50,8 @@ export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   quantity_delivered: 96,
   quantity_receive: 96,
   outstanding_quantity: 104,
+  sfal_qty: 96,
+  sfbd_qty: 96,
   ata_vessel_completed_loading: 88,
   ata_vessel_complete_discharge: 88,
   operation_id: 120,

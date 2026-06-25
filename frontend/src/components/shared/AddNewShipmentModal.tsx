@@ -146,6 +146,26 @@ function etaDetailHasAnyDate(d: EtaDetailFields): boolean {
   return ETA_FIELD_ROWS.some(({ key }) => Boolean(String(d[key] ?? '').trim()))
 }
 
+function etaDetailHasAllRequiredDates(d: EtaDetailFields): boolean {
+  return ETA_FIELD_ROWS.every(({ key }) => Boolean(String(d[key] ?? '').trim()))
+}
+
+function isEtaScheduleCompleteForCreate(
+  contractIds: string[],
+  etaBlocks: ShipmentEtaDetail[],
+): boolean {
+  if (contractIds.length === 0) return false
+  const covered = new Set<string>()
+  for (const block of etaBlocks) {
+    const selectedIds = block.contractIds.filter(Boolean)
+    if (selectedIds.length === 0) continue
+    if (!block.loadingPort.trim()) return false
+    if (!etaDetailHasAllRequiredDates(block)) return false
+    for (const cid of selectedIds) covered.add(cid)
+  }
+  return contractIds.every((cid) => covered.has(cid))
+}
+
 const COMPACT_TH = 'h-8 px-2 py-1 text-[11px] font-semibold text-gray-600 whitespace-nowrap'
 const COMPACT_TD = 'px-2 py-1.5 text-xs align-middle'
 const COMPACT_DATE_INPUT = 'h-8 text-xs min-w-[7.25rem]'
@@ -1554,7 +1574,11 @@ export function AddNewShipmentModal({
       if (!newShipment.portOfDischarge.trim()) errors.portOfDischarge = 'Discharge Port is required for Sea contracts'
     }
 
+    const requiresCompleteEta =
+      (transportMode === 'sea' || transportMode === 'mixed') && newShipment.contractNumbers.length > 0
+
     const usedContractIds = new Set<string>()
+    const coveredContractIds = new Set<string>()
     for (const block of etaDetails) {
       const prefix = `eta_${block.id}`
       const hasDates = etaDetailHasAnyDate(block)
@@ -1566,7 +1590,15 @@ export function AddNewShipmentModal({
         }
       }
 
-      if (hasDates && selectedIds.length === 0) {
+      if (requiresCompleteEta && selectedIds.length > 0) {
+        for (const { key, errorSuffix, shortLabel } of ETA_FIELD_ROWS) {
+          if (!String(block[key] ?? '').trim()) {
+            errors[`${prefix}_${errorSuffix}`] = `${shortLabel} is required`
+          }
+        }
+      }
+
+      if (!requiresCompleteEta && hasDates && selectedIds.length === 0) {
         errors[`${prefix}_contract`] = 'Select at least one PO for this shipment detail'
       }
 
@@ -1575,17 +1607,21 @@ export function AddNewShipmentModal({
           errors[`${prefix}_contract`] = 'One or more selected POs are not in the contract list above'
           break
         }
-        if (hasDates) {
+        const shouldTrackDuplicate = requiresCompleteEta || hasDates
+        if (shouldTrackDuplicate) {
           if (usedContractIds.has(cid)) {
             errors[`${prefix}_contract`] =
               'A PO cannot appear in more than one shipment detail block. Adjust selections.'
             break
           }
           usedContractIds.add(cid)
+          coveredContractIds.add(cid)
         }
       }
 
-      if (hasDates && selectedIds.length > 0) {
+      const shouldValidateRange =
+        selectedIds.length > 0 && (requiresCompleteEta || hasDates)
+      if (shouldValidateRange) {
         const range = getEtaDateRangeForContractIds(selectedIds)
         if (!range) {
           errors[`${prefix}_contract`] =
@@ -1604,6 +1640,19 @@ export function AddNewShipmentModal({
           checkEta(block.etaVesselBerthedAtDischargePort, `${prefix}_berthedDischarge`)
           checkEta(block.etaVesselStartDischarging, `${prefix}_startDischarging`)
           checkEta(block.etaVesselCompleteDischarge, `${prefix}_completeDischarge`)
+        }
+      }
+    }
+
+    if (requiresCompleteEta) {
+      for (const cid of newShipment.contractNumbers) {
+        if (!coveredContractIds.has(cid)) {
+          const firstBlock = etaDetails[0]
+          const contractErrorKey = firstBlock ? `eta_${firstBlock.id}_contract` : 'contractNumbers'
+          if (!errors[contractErrorKey]) {
+            errors[contractErrorKey] =
+              'Assign all POs and complete every ETA milestone in Section 3'
+          }
         }
       }
     }
@@ -1685,7 +1734,7 @@ export function AddNewShipmentModal({
 
       const etaByContract: Record<string, ReturnType<typeof etaDetailToApiPayload>> = {}
       for (const block of etaDetails) {
-        if (!etaDetailHasAnyDate(block) || block.contractIds.length === 0) continue
+        if (block.contractIds.length === 0 || !etaDetailHasAllRequiredDates(block)) continue
         const etaPayload = etaDetailToApiPayload(block)
         for (const selectionKey of block.contractIds) {
           etaByContract[resolveContractIdForKey(selectionKey)] = etaPayload
@@ -1746,7 +1795,12 @@ export function AddNewShipmentModal({
 
   const step1Done = newShipment.contractNumbers.length > 0 && newShipment.contractNumbers.every((id) => contractValidations[id]?.exists)
   const step2Done = Boolean(newShipment.vesselName.trim() || selectedTransportMode === 'land')
-  const step3Done = etaDetails.some((b) => etaDetailHasAnyDate(b))
+  const step3RequiresEta =
+    (selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') &&
+    newShipment.contractNumbers.length > 0
+  const step3Done = step3RequiresEta
+    ? isEtaScheduleCompleteForCreate(newShipment.contractNumbers, etaDetails)
+    : true
 
   const contractDeliveryReferences = useMemo(
     () =>
@@ -2456,7 +2510,9 @@ export function AddNewShipmentModal({
               ) : null}
 
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs font-medium text-gray-500">ETA dates are optional — fill in as available</p>
+                <p className="text-xs font-medium text-gray-500">
+                  All ETA milestones are required <span className="text-red-500">*</span> to create a shipment
+                </p>
                 {!isEditMode &&
                   (selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') &&
                   newShipment.contractNumbers.length > 0 && (
@@ -2599,6 +2655,7 @@ export function AddNewShipmentModal({
                                       title={label}
                                     >
                                       {shortLabel}
+                                      <span className="text-red-500"> *</span>
                                     </th>
                                   ))}
                                 </tr>
@@ -2695,7 +2752,8 @@ export function AddNewShipmentModal({
                     loadingEdit ||
                     (!isEditMode &&
                       (contractQtyAssignedExceedsCapacity ||
-                        newShipment.contractNumbers.some((id) => !contractValidations[id]?.exists)))
+                        newShipment.contractNumbers.some((id) => !contractValidations[id]?.exists) ||
+                        !step3Done))
                   }
                   className="h-9 bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
                 >
