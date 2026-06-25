@@ -15,8 +15,10 @@ import {
 import {
   finalizeSapShipmentAfterUpsert,
   findSapShipmentSupersedeCandidate,
+  findShipmentByPoAndSto,
   hasKlipShipmentActivity,
   hasKlipTruckingActivity,
+  isSapSourcedShipmentId,
   reconcileSupersededSapTrucking,
 } from '../utils/klipLogisticsActivity';
 import {
@@ -754,6 +756,32 @@ export class SapDataDistributionService {
       }
     }
 
+    if (!targetShipmentId && contractUuid && isSapSourcedShipmentId(shipmentIdFromSap)) {
+      const poRes = await client.query<{ po_number: string | null }>(
+        `SELECT po_number FROM contracts WHERE id = $1::uuid LIMIT 1`,
+        [contractUuid],
+      );
+      const poMatch = await findShipmentByPoAndSto(
+        client,
+        poRes.rows[0]?.po_number,
+        String(shipmentIdFromSap).trim(),
+      );
+      if (poMatch) {
+        targetShipmentId = poMatch.id;
+        if (poMatch.contractUuid !== contractUuid) {
+          await client.query(
+            `UPDATE shipments SET contract_id = $1::uuid, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
+            [contractUuid, poMatch.id],
+          );
+          logger.info('upsertShipment: reusing PO+STO shipment from sibling contract', {
+            contractId,
+            shipmentUuid: poMatch.id,
+            sapShipmentId: shipmentIdFromSap,
+          });
+        }
+      }
+    }
+
     if (!targetShipmentId && contractUuid && vesselName) {
       const existingForContract = await client.query(
         `SELECT id, vessel_name FROM shipments WHERE contract_id = $1`,
@@ -775,21 +803,19 @@ export class SapDataDistributionService {
       }
     }
 
-    // 3rd fallback: SAP row has no vessel name, but a single PLANNED/MNL shipment already
-    // exists for this contract (e.g. user pre-planned before SAP delivery data arrived).
-    // Update it instead of creating a duplicate with no vessel info.
-    if (!targetShipmentId && contractUuid && !vesselName && shipmentIdFromSap) {
+    // Planned MNL/MSEA shipment on this contract — reuse when SAP assigns STO (even if SAP has vessel name).
+    if (!targetShipmentId && contractUuid && shipmentIdFromSap) {
       const existingPlanned = await client.query(
         `SELECT id FROM shipments
          WHERE contract_id = $1
-           AND status IN ('PLANNED', 'UNPLANNED')
+           AND COALESCE(status, '') <> 'CANCELLED'
            AND (shipment_id LIKE 'MNL-%' OR shipment_id LIKE 'MSEA-%')
          ORDER BY created_at DESC LIMIT 1`,
         [contractUuid]
       );
-      if (existingPlanned.rows.length === 1) {
+      if (existingPlanned.rows.length > 0) {
         targetShipmentId = existingPlanned.rows[0].id;
-        logger.info('upsertShipment: matched planned shipment (no vessel name in SAP)', {
+        logger.info('upsertShipment: matched planned MNL/MSEA shipment for SAP STO', {
           contractId,
           existingShipmentId: targetShipmentId,
           sapShipmentId: shipmentIdFromSap,

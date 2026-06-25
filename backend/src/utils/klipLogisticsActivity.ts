@@ -250,6 +250,86 @@ export async function findSapShipmentSupersedeCandidate(
   return null;
 }
 
+/** Active shipment for a SAP PO + STO pair (any contract). Used to prevent duplicate rows. */
+export async function findShipmentByPoAndSto(
+  db: Queryable,
+  poNumber: unknown,
+  stoNumber: unknown,
+): Promise<{ id: string; contractUuid: string } | null> {
+  const po = String(poNumber ?? '').trim();
+  const sto = String(stoNumber ?? '').trim();
+  if (!po || !sto) return null;
+
+  const rows = await runQuery<{ id: string; contract_uuid: string }>(
+    db,
+    `SELECT s.id, c.id::text AS contract_uuid
+     FROM shipments s
+     INNER JOIN contracts c ON c.id = s.contract_id
+     WHERE COALESCE(s.status, '') <> 'CANCELLED'
+       AND TRIM(COALESCE(c.po_number, '')) = TRIM($1::text)
+       AND (
+         TRIM(COALESCE(c.sto_number::text, '')) = TRIM($2::text)
+         OR TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text)
+       )
+     ORDER BY
+       CASE WHEN TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text) THEN 0 ELSE 1 END,
+       s.created_at ASC
+     LIMIT 1`,
+    [po, sto],
+  );
+  const row = rows.rows[0];
+  if (!row) return null;
+  return { id: row.id, contractUuid: row.contract_uuid };
+}
+
+/** Cancel duplicate shipment rows for a PO + STO (cross-contract). Returns cancelled UUIDs. */
+export async function cancelDuplicateShipmentsForPoAndSto(
+  db: Queryable,
+  poNumber: unknown,
+  stoNumber: unknown,
+  keeperShipmentUuid: string,
+  options?: { force?: boolean },
+): Promise<{ cancelled: string[]; skipped: string[] }> {
+  const po = String(poNumber ?? '').trim();
+  const sto = String(stoNumber ?? '').trim();
+  const cancelled: string[] = [];
+  const skipped: string[] = [];
+  if (!po || !sto || !keeperShipmentUuid) return { cancelled, skipped };
+
+  const rows = await runQuery<{ id: string; contract_uuid: string }>(
+    db,
+    `SELECT s.id, c.id::text AS contract_uuid
+     FROM shipments s
+     INNER JOIN contracts c ON c.id = s.contract_id
+     WHERE COALESCE(s.status, '') <> 'CANCELLED'
+       AND TRIM(COALESCE(c.po_number, '')) = TRIM($1::text)
+       AND (
+         TRIM(COALESCE(c.sto_number::text, '')) = TRIM($2::text)
+         OR TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text)
+       )
+       AND s.id <> $3::uuid`,
+    [po, sto, keeperShipmentUuid],
+  );
+
+  for (const row of rows.rows) {
+    const canCancel =
+      options?.force === true ||
+      (await canAutoConsolidateShipmentForSap(db, row.id, row.contract_uuid));
+    if (!canCancel) {
+      skipped.push(row.id);
+      continue;
+    }
+    await runQuery(
+      db,
+      `UPDATE shipments SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP WHERE id = $1::uuid`,
+      [row.id],
+    );
+    cancelled.push(row.id);
+  }
+
+  return { cancelled, skipped };
+}
+
 export type SapReconcileResult = {
   cancelledShipmentIds: string[];
   skippedShipmentIds: string[];

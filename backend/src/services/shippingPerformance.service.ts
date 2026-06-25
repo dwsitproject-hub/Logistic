@@ -52,7 +52,44 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const ROW_CACHE_KEY = 'shipping-performance-rows-v11';
+const ROW_CACHE_KEY = 'shipping-performance-rows-v12';
+
+function shippingPerfRowDedupeKey(row: Record<string, unknown>): string {
+  const sto = String(row.sto_number ?? '').trim();
+  const po = String(row.po_number ?? '').trim();
+  if (sto && po) return `sto-po:${sto}|${po}`;
+  return `id:${String(row.id ?? '')}`;
+}
+
+function shippingPerfRowPriority(row: Record<string, unknown>): number {
+  const shipmentId = String(row.shipment_id ?? '').trim();
+  if (/^\d+$/.test(shipmentId)) return 3;
+  if (shipmentId.startsWith('MNL-') || shipmentId.startsWith('MSEA-')) return 1;
+  return 2;
+}
+
+/** One row per SAP PO+STO in All Shipments (prefer numeric SAP shipment_id). */
+export function dedupeShippingPerformanceRows(
+  rows: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  const byKey = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    const key = shippingPerfRowDedupeKey(row);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, row);
+      continue;
+    }
+    if (shippingPerfRowPriority(row) >= shippingPerfRowPriority(existing)) {
+      byKey.set(key, row);
+    }
+  }
+  return [...byKey.values()];
+}
+
+export function invalidateShippingPerformanceRowCache(): void {
+  ROW_CACHE.delete(ROW_CACHE_KEY);
+}
 
 const SHIPPING_PERFORMANCE_SQL = `
       WITH latest_spd_contract AS (
@@ -478,7 +515,7 @@ async function loadShippingPerformanceRows(): Promise<Record<string, unknown>[]>
   }
 
   const result = await query(SHIPPING_PERFORMANCE_SQL);
-  const rows = result.rows as Record<string, unknown>[];
+  const rows = dedupeShippingPerformanceRows(result.rows as Record<string, unknown>[]);
   ROW_CACHE.set(ROW_CACHE_KEY, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
   return rows;
 }

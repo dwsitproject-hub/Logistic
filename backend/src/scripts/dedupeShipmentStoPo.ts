@@ -3,22 +3,26 @@
  *
  *   npx ts-node src/scripts/dedupeShipmentStoPo.ts <sto> <po>           # dry-run
  *   npx ts-node src/scripts/dedupeShipmentStoPo.ts <sto> <po> --apply   # cancel duplicate
+ *   npx ts-node src/scripts/dedupeShipmentStoPo.ts <sto> <po> --apply --force
  */
 import { getClient } from '../database/connection';
 import {
+  cancelDuplicateShipmentsForPoAndSto,
   canAutoConsolidateShipmentForSap,
   finalizeSapShipmentAfterUpsert,
   isSapSourcedShipmentId,
 } from '../utils/klipLogisticsActivity';
 import { invalidateShipmentsListCache } from '../services/shipmentList.service';
+import { invalidateShippingPerformanceRowCache } from '../services/shippingPerformance.service';
 
 const stoFilter = process.argv[2]?.trim() || '';
 const poFilter = process.argv[3]?.trim() || '';
 const apply = process.argv.includes('--apply');
+const force = process.argv.includes('--force');
 
 async function main() {
   if (!stoFilter || !poFilter) {
-    console.error('Usage: npx ts-node src/scripts/dedupeShipmentStoPo.ts <sto> <po> [--apply]');
+    console.error('Usage: npx ts-node src/scripts/dedupeShipmentStoPo.ts <sto> <po> [--apply] [--force]');
     process.exit(1);
   }
 
@@ -91,30 +95,48 @@ async function main() {
 
     const duplicates = rows.rows.filter((row) => row.shipment_uuid !== keeper.shipment_uuid);
     for (const dup of duplicates) {
-      const canCancel = await canAutoConsolidateShipmentForSap(client, dup.shipment_uuid, dup.contract_uuid);
+      const canCancel =
+        force || (await canAutoConsolidateShipmentForSap(client, dup.shipment_uuid, dup.contract_uuid));
       console.log(
-        `  ${apply ? 'will' : 'would'} ${canCancel ? 'CANCEL' : 'SKIP (KLIP activity)'}: ${dup.shipment_id ?? dup.shipment_uuid} [${dup.status}]`,
+        `  ${apply ? 'will' : 'would'} ${canCancel ? 'CANCEL' : 'SKIP (KLIP activity — use --force)'}: ${dup.shipment_id ?? dup.shipment_uuid} [${dup.status}]`,
       );
     }
 
     if (!apply) {
       console.log('\nDry-run only. Re-run with --apply to cancel consolidatable duplicates.');
+      if (!force) console.log('Add --force to cancel rows even when KLIP activity is detected.');
       return;
     }
 
-    const result = await finalizeSapShipmentAfterUpsert(
-      client,
-      keeper.contract_uuid,
-      keeper.shipment_uuid,
-      stoFilter,
-    );
+    await client.query('BEGIN');
+    try {
+      const { cancelled, skipped } = await cancelDuplicateShipmentsForPoAndSto(
+        client,
+        poFilter,
+        stoFilter,
+        keeper.shipment_uuid,
+        { force },
+      );
 
-    console.log('\nReconcile result:');
-    console.log(`  cancelled: ${result.cancelledShipmentIds.join(', ') || '—'}`);
-    console.log(`  skipped:   ${result.skippedShipmentIds.join(', ') || '—'}`);
+      const reconcile = await finalizeSapShipmentAfterUpsert(
+        client,
+        keeper.contract_uuid,
+        keeper.shipment_uuid,
+        stoFilter,
+      );
 
-    invalidateShipmentsListCache();
-    console.log('\nDone. Shipments list cache invalidated.');
+      await client.query('COMMIT');
+
+      console.log('\nCancelled:', [...cancelled, ...reconcile.cancelledShipmentIds].join(', ') || '—');
+      console.log('Skipped:  ', [...skipped, ...reconcile.skippedShipmentIds].join(', ') || '—');
+
+      invalidateShipmentsListCache();
+      invalidateShippingPerformanceRowCache();
+      console.log('\nDone. Shipments + shipping performance caches invalidated.');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
   } finally {
     client.release();
   }
