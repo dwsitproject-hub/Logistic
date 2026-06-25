@@ -3439,6 +3439,19 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
         );
         if (byVessel.rows.length > 0) existingShipmentId = byVessel.rows[0].id;
       }
+      if (!existingShipmentId) {
+        const byActiveContract = await query(
+          `SELECT id FROM shipments
+           WHERE contract_id = $1::uuid
+             AND COALESCE(status, '') <> 'CANCELLED'
+           ORDER BY created_at DESC
+           LIMIT 1`,
+          [contract.id],
+        );
+        if (byActiveContract.rows.length > 0) {
+          existingShipmentId = byActiveContract.rows[0].id;
+        }
+      }
 
       let resultId: string;
       if (existingShipmentId) {

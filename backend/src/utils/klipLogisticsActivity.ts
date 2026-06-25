@@ -92,6 +92,72 @@ export async function hasKlipShipmentActivity(
   return false;
 }
 
+/**
+ * True when a shipment row may be cancelled/merged as SAP assigns the official STO on the same contract.
+ * Unlike hasKlipShipmentActivity, an initial manual plan (operation_id / MNL shipment_id) does not block.
+ */
+export async function canAutoConsolidateShipmentForSap(
+  db: Queryable,
+  shipmentUuid: string,
+  contractUuid?: string,
+): Promise<boolean> {
+  const rowRes = await runQuery<{
+    status: string | null;
+    shipment_id: string | null;
+    daily_deliverables: unknown;
+  }>(
+    db,
+    `SELECT status, shipment_id, daily_deliverables
+     FROM shipments WHERE id = $1::uuid LIMIT 1`,
+    [shipmentUuid],
+  );
+  const row = rowRes.rows[0];
+  if (!row) return false;
+  if (String(row.status ?? '').trim().toUpperCase() === 'CANCELLED') return false;
+
+  const daily = row.daily_deliverables;
+  if (Array.isArray(daily) && daily.length > 0) return false;
+  if (
+    daily &&
+    typeof daily === 'object' &&
+    !Array.isArray(daily) &&
+    Object.keys(daily as object).length > 0
+  ) {
+    return false;
+  }
+
+  const auditRes = await runQuery(
+    db,
+    `SELECT 1 FROM audit_logs
+     WHERE entity_type = 'SHIPMENT' AND entity_id = $1::uuid AND action = 'UPDATE'
+     LIMIT 1`,
+    [shipmentUuid],
+  );
+  if (auditRes.rows.length > 0) return false;
+
+  const docRes = await runQuery(
+    db,
+    `SELECT 1 FROM documents WHERE shipment_id = $1::uuid LIMIT 1`,
+    [shipmentUuid],
+  );
+  if (docRes.rows.length > 0) return false;
+
+  if (contractUuid && row.shipment_id) {
+    const assignRes = await runQuery(
+      db,
+      `SELECT 1 FROM user_sto_contract_assignments u
+       INNER JOIN contracts c ON c.contract_id = u.contract_number
+       WHERE c.id = $1::uuid
+         AND TRIM(u.sto_number::text) = TRIM($2::text)
+       LIMIT 1`,
+      [contractUuid, row.shipment_id],
+    );
+    if (assignRes.rows.length > 0) return false;
+  }
+
+  return true;
+}
+
 /** True when users have planned/edited trucking through KLIP. */
 export async function hasKlipTruckingActivity(db: Queryable, truckingUuid: string): Promise<boolean> {
   const rowRes = await runQuery<{
@@ -152,7 +218,10 @@ export async function findSapShipmentSupersedeCandidate(
 
   const existingNew = await runQuery(
     db,
-    `SELECT id FROM shipments WHERE shipment_id = $1 LIMIT 1`,
+    `SELECT id FROM shipments
+     WHERE TRIM(shipment_id) = TRIM($1::text)
+       AND COALESCE(status, '') <> 'CANCELLED'
+     LIMIT 1`,
     [sto],
   );
   if (existingNew.rows.length > 0) return null;
@@ -162,16 +231,19 @@ export async function findSapShipmentSupersedeCandidate(
     `SELECT id FROM shipments
      WHERE contract_id = $1::uuid
        AND COALESCE(status, '') <> 'CANCELLED'
-       AND shipment_id IS NOT NULL
-       AND shipment_id NOT LIKE 'MNL-%'
-       AND shipment_id NOT LIKE 'MSEA-%'
-       AND TRIM(shipment_id) <> TRIM($2::text)
-     ORDER BY created_at DESC`,
+       AND TRIM(COALESCE(shipment_id, '')) <> TRIM($2::text)
+     ORDER BY
+       CASE
+         WHEN shipment_id LIKE 'MNL-%' OR shipment_id LIKE 'MSEA-%' THEN 0
+         WHEN TRIM(shipment_id) ~ '^[0-9]+$' THEN 1
+         ELSE 2
+       END,
+       created_at DESC`,
     [contractUuid, sto],
   );
 
   for (const candidate of candidates.rows) {
-    if (!(await hasKlipShipmentActivity(db, candidate.id, contractUuid))) {
+    if (await canAutoConsolidateShipmentForSap(db, candidate.id, contractUuid)) {
       return candidate.id;
     }
   }
@@ -208,11 +280,7 @@ export async function reconcileSupersededSapShipments(
   );
 
   for (const row of siblings.rows) {
-    if (!isSapSourcedShipmentId(row.shipment_id)) {
-      skippedShipmentIds.push(row.id);
-      continue;
-    }
-    if (await hasKlipShipmentActivity(db, row.id, contractUuid)) {
+    if (!(await canAutoConsolidateShipmentForSap(db, row.id, contractUuid))) {
       skippedShipmentIds.push(row.id);
       continue;
     }
@@ -309,7 +377,7 @@ export async function finalizeSapShipmentAfterUpsert(
       [contractUuid, sto, keeperShipmentUuid],
     );
     for (const row of dupBySto.rows) {
-      if (await hasKlipShipmentActivity(db, row.id, contractUuid)) {
+      if (!(await canAutoConsolidateShipmentForSap(db, row.id, contractUuid))) {
         result.skippedShipmentIds.push(row.id);
         continue;
       }
