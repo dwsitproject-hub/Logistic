@@ -451,8 +451,8 @@ export async function syncContractStoFromSapShipment(
 }
 
 /**
- * After SAP upsert on the keeper shipment: align shipment_id + contract STO,
- * cancel stale SAP-only duplicates (preserve KLIP-touched rows).
+ * After SAP upsert on the keeper shipment: align shipment_id + contract STO only.
+ * Does NOT auto-cancel sibling rows — SAP import must upsert in place, not mass-cancel live STOs.
  */
 export async function finalizeSapShipmentAfterUpsert(
   db: Queryable,
@@ -471,28 +471,6 @@ export async function finalizeSapShipmentAfterUpsert(
   if (!contractUuid || !keeperShipmentUuid) return result;
 
   if (sto) {
-    const dupBySto = await runQuery<{ id: string }>(
-      db,
-      `SELECT id FROM shipments
-       WHERE contract_id = $1::uuid
-         AND TRIM(shipment_id) = TRIM($2::text)
-         AND id <> $3::uuid
-         AND COALESCE(status, '') <> 'CANCELLED'`,
-      [contractUuid, sto, keeperShipmentUuid],
-    );
-    for (const row of dupBySto.rows) {
-      if (!(await canAutoConsolidateShipmentForSap(db, row.id, contractUuid))) {
-        result.skippedShipmentIds.push(row.id);
-        continue;
-      }
-      await runQuery(
-        db,
-        `UPDATE shipments SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP WHERE id = $1::uuid`,
-        [row.id],
-      );
-      result.cancelledShipmentIds.push(row.id);
-    }
-
     await runQuery(
       db,
       `UPDATE shipments SET shipment_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
@@ -501,8 +479,5 @@ export async function finalizeSapShipmentAfterUpsert(
     await syncContractStoFromSapShipment(db, contractUuid, sto);
   }
 
-  const siblingResult = await reconcileSupersededSapShipments(db, contractUuid, keeperShipmentUuid);
-  result.cancelledShipmentIds.push(...siblingResult.cancelledShipmentIds);
-  result.skippedShipmentIds.push(...siblingResult.skippedShipmentIds);
   return result;
 }

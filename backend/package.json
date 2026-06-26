@@ -21,6 +21,8 @@
     "cleanup:master-plant-group:confirm": "ts-node src/scripts/clearMasterPlantGroupPlant.ts --confirm",
     "dedupe:sto-po-shipment": "ts-node src/scripts/dedupeShipmentStoPo.ts",
     "dedupe:sto-po-shipment:prod": "node dist/scripts/dedupeShipmentStoPo.js",
+    "rollback:auto-dedupe-shipments": "ts-node src/scripts/rollbackAutoDedupeShipments.ts",
+    "rollback:auto-dedupe-shipments:prod": "node dist/scripts/rollbackAutoDedupeShipments.js",
     "reconcile:sap-shipment-duplicates": "ts-node src/scripts/reconcileExistingSapShipmentDuplicates.ts",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -35,3 +35,15 @@ describe('isPlaceholderShipmentEligibleForSapConsolidate', () => {
     expect(isPlaceholderShipmentEligibleForSapConsolidate('CANCELLED', 'MNL-x')).toBe(false);
   });
 });
+
+describe('finalizeSapShipmentAfterUpsert', () => {
+  it('is exported and returns empty cancel lists (upsert-only, no auto-cancel)', async () => {
+    const { finalizeSapShipmentAfterUpsert } = await import('./klipLogisticsActivity');
+    const fakeDb = {
+      query: async () => ({ rows: [] }),
+    };
+    const result = await finalizeSapShipmentAfterUpsert(fakeDb, '', '', null);
+    expect(result.cancelledShipmentIds).toEqual([]);
+    expect(result.skippedShipmentIds).toEqual([]);
+  });
+});
