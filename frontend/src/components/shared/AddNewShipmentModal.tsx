@@ -292,6 +292,8 @@ export type AddNewShipmentModalProps = {
   editShipmentId?: string | null
   /** STO No shown on the Shipments table row — keeps modal aligned with grouped list display. */
   editStoNumber?: string | null
+  /** Comma-separated contract numbers from grouped Shipments list row. */
+  editContractNumbers?: string | null
   mode?: 'add' | 'edit'
 }
 
@@ -304,6 +306,7 @@ export function AddNewShipmentModal({
   editContractId = null,
   editShipmentId: editShipmentIdProp = null,
   editStoNumber = null,
+  editContractNumbers = null,
   mode = 'add',
 }: AddNewShipmentModalProps) {
   const perms = usePermissions()
@@ -1834,6 +1837,7 @@ export function AddNewShipmentModal({
         editContractId={editContractId}
         editShipmentId={editShipmentIdProp}
         editStoNumber={editStoNumber}
+        editContractNumbers={editContractNumbers}
       />
     )
   }

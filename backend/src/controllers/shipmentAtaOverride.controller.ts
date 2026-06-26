@@ -1,7 +1,6 @@
 import { Response } from 'express';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
-import { assertShipmentContractOpen } from '../utils/contractDeliveryStatus';
 import { AuthRequest } from '../middleware/auth';
 import {
   getShipmentAtaOverrideByShipmentId,
@@ -89,11 +88,6 @@ export const updateShipmentAtaOverride = async (req: AuthRequest, res: Response)
     const exists = await query(`SELECT id FROM shipments WHERE id = $1::uuid LIMIT 1`, [id]);
     if (exists.rows.length === 0) {
       return res.status(404).json({ success: false, error: { message: 'Shipment not found' } });
-    }
-
-    const contractOpen = await assertShipmentContractOpen(id);
-    if (!contractOpen.ok) {
-      return res.status(400).json({ success: false, error: { message: contractOpen.message } });
     }
 
     if (Object.keys(payload).length === 0) {

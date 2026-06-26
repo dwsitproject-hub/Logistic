@@ -1017,6 +1017,7 @@ function ShipmentsPageContent() {
     shipmentId: string
     editContractId: string
     editStoNumber: string
+    editContractNumbers: string
   } | null>(null)
 
   // Master Vessel / Master Loading Port suggestions (inline edit row + AddShipmentModal has its own)
@@ -1486,6 +1487,7 @@ function ShipmentsPageContent() {
       shipmentId: shipment.id,
       editContractId,
       editStoNumber: resolveShipmentApiLookupKey(shipment),
+      editContractNumbers: shipment.contract_numbers ?? '',
     })
   }
 
@@ -7096,6 +7098,7 @@ function ShipmentsPageContent() {
         editContractId={editShipmentFromTable?.editContractId ?? null}
         editShipmentId={editShipmentFromTable?.shipmentId ?? null}
         editStoNumber={editShipmentFromTable?.editStoNumber ?? null}
+        editContractNumbers={editShipmentFromTable?.editContractNumbers ?? null}
         onClose={handleCloseShipmentModal}
         onSubmit={async (payload) => {
           await submitAddNewShipmentPayload(payload)

@@ -60,6 +60,13 @@ export function buildContractDetailsForStoSql(): string {
             AND c.contract_id IS NOT NULL
             AND TRIM(c.contract_id) != ''
           UNION
+          SELECT DISTINCT c.contract_id
+          FROM shipments s
+          INNER JOIN contracts c ON c.id = s.contract_id
+          WHERE TRIM(COALESCE(s.operation_id::text, '')) = TRIM($1::text)
+            AND c.contract_id IS NOT NULL
+            AND TRIM(c.contract_id) != ''
+          UNION
           SELECT DISTINCT spd.contract_number
           FROM sap_processed_data spd
           WHERE spd.contract_number IS NOT NULL

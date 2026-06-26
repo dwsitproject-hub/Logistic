@@ -12,6 +12,7 @@ import {
   normalizeShipmentListRows,
   resolveShipmentsListForRequest,
 } from '../services/shipmentList.service';
+import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
 import { normalizeAndValidateShipmentDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/shipmentDailyDeliverables';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
@@ -72,7 +73,7 @@ import {
 } from '../utils/shipmentAtaOverrideSql';
 import { hydrateShipmentInfoAtaGaps } from '../utils/shipmentAtaHydration';
 import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
-import { SQL_CONTRACT_IMPORT_STATUS, assertShipmentContractOpen, getContractImportStatusForShipment, sqlIsContractSapClosedExpr } from '../utils/contractDeliveryStatus';
+import { SQL_CONTRACT_IMPORT_STATUS, getContractImportStatusForShipment, sqlIsContractSapClosedExpr } from '../utils/contractDeliveryStatus';
 
 /** Normalize date-like fields for shipments / loading ports (YYYY-MM-DD or null). */
 function toShipmentDateOrNull(v: unknown): string | null {
@@ -1228,6 +1229,36 @@ export const getShipmentById = async (req: AuthRequest, res: Response) => {
   }
 };
 
+/** Lightweight PO/contract siblings for Edit Shipment modal (one query, no SAP scan). */
+export const getShipmentEditContext = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    if (!isUUID) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Shipment UUID is required' },
+      });
+    }
+
+    const context = await resolveShipmentEditContext(id);
+    if (!context) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Shipment not found' },
+      });
+    }
+
+    return res.json({ success: true, data: context });
+  } catch (error) {
+    logger.error('Get shipment edit context error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch shipment edit context' },
+    });
+  }
+};
+
 export const updateShipment = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
@@ -1262,11 +1293,6 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       }
       
       shipmentId = shipmentResult.rows[0].id;
-    }
-
-    const contractOpen = await assertShipmentContractOpen(shipmentId);
-    if (!contractOpen.ok) {
-      return res.status(400).json({ success: false, error: { message: contractOpen.message } });
     }
 
     // Build the update query with explicit field handling
@@ -2041,11 +2067,6 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
       actualShipmentId = shipmentResult.rows[0].id;
     }
 
-    const contractOpen = await assertShipmentContractOpen(actualShipmentId);
-    if (!contractOpen.ok) {
-      return res.status(400).json({ success: false, error: { message: contractOpen.message } });
-    }
-    
     const {
       id: bodyId,
       port_name,

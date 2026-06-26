@@ -16,7 +16,6 @@ import {
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
   AlertCircle,
-  AlertTriangle,
   Anchor,
   Check,
   CheckCircle2,
@@ -73,11 +72,10 @@ import {
   usePermissions,
   canEditPermission,
 } from '@/components/PermissionsContext'
-import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
-
 const SHIPMENT_SLD_DOC_TYPE = 'SLD'
 const SHIPMENT_SDD_DOC_TYPE = 'SDD'
 const READONLY_FIELD_CLASS = 'bg-gray-50 cursor-not-allowed text-gray-600'
+const ETA_INFO_VALUE_CLASS = 'text-sm font-medium text-gray-900 tabular-nums'
 
 const ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
   { key: 'etaVesselArrivalAtLoadingPort', label: 'ETA Vessel Arrival at Loading Port' },
@@ -154,14 +152,18 @@ function formatNumber(n: number | null | undefined): string {
   return Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 })
 }
 
-function contractValidateDataIsClosed(cd: Record<string, unknown> | null | undefined): boolean {
-  if (!cd) return false
-  return isContractRecordClosed({
-    import_status: cd.import_status as string | null | undefined,
-    contract_import_status: cd.sap_import_status as string | null | undefined,
-    contract_status: cd.contract_status as string | null | undefined,
-    status: cd.status as string | null | undefined,
-  })
+function mergeContractNumberLists(...sources: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const src of sources) {
+    for (const part of String(src ?? '').split(',')) {
+      const trimmed = part.trim()
+      if (!trimmed || seen.has(trimmed)) continue
+      seen.add(trimmed)
+      out.push(trimmed)
+    }
+  }
+  return out
 }
 
 function MtQtyInput({
@@ -251,6 +253,8 @@ export type EditShipmentModalProps = {
   editShipmentId?: string | null
   /** STO from Shipments list row (sto_key / displayed sto_number). */
   editStoNumber?: string | null
+  /** All contract numbers on the grouped list row (comma-separated). */
+  editContractNumbers?: string | null
 }
 
 export function EditShipmentModal({
@@ -260,6 +264,7 @@ export function EditShipmentModal({
   editContractId = null,
   editShipmentId: editShipmentIdProp = null,
   editStoNumber = null,
+  editContractNumbers = null,
 }: EditShipmentModalProps) {
   const perms = usePermissions()
   const canEditShipment = canEditPermission(perms, 'data.shipments')
@@ -302,7 +307,6 @@ export function EditShipmentModal({
   const [ataIsEditing, setAtaIsEditing] = useState(false)
   const [activityLog, setActivityLog] = useState<ActivityLogRow[]>([])
   const [activityLoading, setActivityLoading] = useState(false)
-  const [isContractClosedViewOnly, setIsContractClosedViewOnly] = useState(false)
 
   const [vesselSuggestions, setVesselSuggestions] = useState<
     Array<{ vessel_code: string; vessel_name: string; vessel_owner: string | null }>
@@ -312,7 +316,7 @@ export function EditShipmentModal({
   const initSessionRef = useRef<string | null>(null)
 
   const isQuantityUnlocked = hasUploadedSld || hasUploadedSdd
-  const canModifyShipment = canEditShipment && !isContractClosedViewOnly
+  const canModifyShipment = canEditShipment
 
   const qtyTableRows: VesselPortsQuantityRow[] = useMemo(
     () =>
@@ -362,7 +366,6 @@ export function EditShipmentModal({
     setAtaIsEditing(false)
     setHasUploadedSld(false)
     setHasUploadedSdd(false)
-    setIsContractClosedViewOnly(false)
     initSessionRef.current = null
   }, [])
 
@@ -399,17 +402,21 @@ export function EditShipmentModal({
     ) => {
       setLoading(true)
       setShipmentId(null)
-      setIsContractClosedViewOnly(false)
       try {
         let row: Record<string, unknown>
         let sid: string
-        let contractClosedViewOnly = false
+        let editContext: { lookup_key?: string; contract_numbers?: string; po_numbers?: string } | null =
+          null
 
         if (directShipmentId?.trim()) {
           sid = directShipmentId.trim()
-          const detailRes = await api.get(`/shipments/${sid}`)
+          const [detailRes, contextRes] = await Promise.all([
+            api.get(`/shipments/${sid}`),
+            api.get(`/shipments/${sid}/edit-context`).catch(() => null),
+          ])
           row = (detailRes.data?.data ?? {}) as Record<string, unknown>
           row.id = sid
+          editContext = contextRes?.data?.data ?? null
         } else {
           const listRes = await api.get('/shipments', {
             params: { contract: contractId, limit: 100, page: 1, compact: 'true' },
@@ -418,8 +425,12 @@ export function EditShipmentModal({
           row = shipments[0] ?? {}
           if (!row?.id) throw new Error('No shipment found for this contract')
           sid = String(row.id)
-          const detailRes = await api.get(`/shipments/${sid}`)
+          const [detailRes, contextRes] = await Promise.all([
+            api.get(`/shipments/${sid}`),
+            api.get(`/shipments/${sid}/edit-context`).catch(() => null),
+          ])
           row = { ...row, ...(detailRes.data?.data ?? {}) }
+          editContext = contextRes?.data?.data ?? null
         }
 
         setShipmentId(sid)
@@ -436,10 +447,16 @@ export function EditShipmentModal({
         setAtaSapReference(ataSapReferenceFromShipmentInfo(info))
         setAtaIsEditing(false)
 
-        const contractNumbersRaw = String(row.contract_numbers ?? row.contract_number ?? contractId)
-        const contractNumbers = contractNumbersRaw.split(',').map((s) => s.trim()).filter(Boolean)
+        const contractNumbers = mergeContractNumberLists(
+          editContractNumbers,
+          editContext?.contract_numbers,
+          row.contract_numbers as string | undefined,
+          row.contract_number as string | undefined,
+          contractId,
+        )
         const apiLookupKey =
           String(preferredStoNumber ?? '').trim() ||
+          String(editContext?.lookup_key ?? '').trim() ||
           resolveShipmentApiLookupKey({
             sto_key: row.sto_key as string | undefined,
             sto_number: row.sto_number as string | undefined,
@@ -472,9 +489,6 @@ export function EditShipmentModal({
                 const cd = valRes.data?.data as Record<string, unknown> | undefined
                 supplier = String(cd?.supplier ?? '')
                 product = String(cd?.product ?? '')
-                if (contractValidateDataIsClosed(cd)) {
-                  contractClosedViewOnly = true
-                }
               } catch {
                 // optional enrichment
               }
@@ -511,9 +525,6 @@ export function EditShipmentModal({
               po = String(cd?.po_number ?? '')
               contractQty = parseApiNumber(cd?.quantity_ordered) ?? 0
               outstanding = parseApiNumber(cd?.outstanding_quantity) ?? 0
-              if (contractValidateDataIsClosed(cd)) {
-                contractClosedViewOnly = true
-              }
             } catch {
               // fallback row
             }
@@ -636,24 +647,6 @@ export function EditShipmentModal({
           }
         }
 
-        if (!contractClosedViewOnly && contractNumbers.length > 0) {
-          for (const cn of contractNumbers) {
-            try {
-              const valRes = await api.get(
-                `/shipments/contracts/validate?contract_number=${encodeURIComponent(cn)}`,
-              )
-              const cd = valRes.data?.data as Record<string, unknown> | undefined
-              if (contractValidateDataIsClosed(cd)) {
-                contractClosedViewOnly = true
-                break
-              }
-            } catch {
-              // optional status lookup
-            }
-          }
-        }
-        setIsContractClosedViewOnly(contractClosedViewOnly)
-
         await hydrateQuantityDocs(sid)
         await loadActivityLog(sid)
       } catch (error: unknown) {
@@ -663,7 +656,7 @@ export function EditShipmentModal({
         setLoading(false)
       }
     },
-    [hydrateQuantityDocs, loadActivityLog],
+    [hydrateQuantityDocs, loadActivityLog, editContractNumbers],
   )
 
   useEffect(() => {
@@ -671,7 +664,7 @@ export function EditShipmentModal({
       initSessionRef.current = null
       return
     }
-    const sessionKey = `${editContractId ?? ''}:${editShipmentIdProp ?? ''}:${editStoNumber ?? ''}`
+    const sessionKey = `${editContractId ?? ''}:${editShipmentIdProp ?? ''}:${editStoNumber ?? ''}:${editContractNumbers ?? ''}`
     if (initSessionRef.current === sessionKey) return
     initSessionRef.current = sessionKey
     resetState()
@@ -683,7 +676,7 @@ export function EditShipmentModal({
     } else if (contractId) {
       void loadShipment(contractId, null, sto)
     }
-  }, [open, editContractId, editShipmentIdProp, editStoNumber, loadShipment, resetState])
+  }, [open, editContractId, editShipmentIdProp, editStoNumber, editContractNumbers, loadShipment, resetState])
 
   const handleVesselSearch = (value: string) => {
     setVesselName(value)
@@ -751,13 +744,6 @@ export function EditShipmentModal({
 
   const handleSave = async () => {
     if (!shipmentId) return
-    if (isContractClosedViewOnly) {
-      setNotification({
-        type: 'error',
-        message: 'Cannot edit shipment: contract status is Close.',
-      })
-      return
-    }
     if (perms.loaded && !canEditShipment) {
       setNotification({ type: 'error', message: 'You need Edit permission on Shipments.' })
       return
@@ -866,13 +852,9 @@ export function EditShipmentModal({
                 <Ship className="h-4 w-4" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-gray-900">
-                  {isContractClosedViewOnly ? 'View Shipment' : 'Edit Shipment'}
-                </h3>
+                <h3 className="text-lg font-semibold text-gray-900">Edit Shipment</h3>
                 <p className="text-xs text-gray-500">
-                  {isContractClosedViewOnly
-                    ? 'Contract is Close — read-only view'
-                    : stoNumber
+                  {stoNumber
                     ? `STO ${stoNumber} — edit ETA schedule and manual ATA (SAP reference preserved)`
                     : 'Update vessel, quantities, ETA schedule, and manual ATA'}
                 </p>
@@ -906,18 +888,6 @@ export function EditShipmentModal({
                 <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
               )}
               <p>{notification.message}</p>
-            </div>
-          )}
-
-          {isContractClosedViewOnly && (
-            <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-              <div>
-                <p className="font-medium">Contract status is Close</p>
-                <p className="mt-0.5 text-xs text-amber-800">
-                  This shipment is read-only. You can review the details but cannot save changes.
-                </p>
-              </div>
             </div>
           )}
 
@@ -1333,12 +1303,9 @@ export function EditShipmentModal({
                               className="h-8 text-xs"
                             />
                           ) : (
-                            <Input
-                              value={formatDateDMY(activeEtaBlock.fields[key]) || '—'}
-                              readOnly
-                              disabled
-                              className={`h-8 text-xs ${READONLY_FIELD_CLASS}`}
-                            />
+                            <div className={`flex min-h-8 items-center ${ETA_INFO_VALUE_CLASS}`}>
+                              {formatDateDMY(activeEtaBlock.fields[key]) || '—'}
+                            </div>
                           )}
                         </div>
                       ))}
@@ -1486,24 +1453,22 @@ export function EditShipmentModal({
 
         <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4 flex justify-end gap-2 rounded-b-lg">
           <Button variant="outline" onClick={onClose} disabled={saving}>
-            {isContractClosedViewOnly ? 'Close' : 'Cancel'}
+            Cancel
           </Button>
-          {!isContractClosedViewOnly && (
-            <Button
-              className="bg-blue-600 hover:bg-blue-700 text-white"
-              onClick={() => void handleSave()}
-              disabled={saving || loading || !shipmentId || !canModifyShipment}
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Saving…
-                </>
-              ) : (
-                'Save Changes'
-              )}
-            </Button>
-          )}
+          <Button
+            className="bg-blue-600 hover:bg-blue-700 text-white"
+            onClick={() => void handleSave()}
+            disabled={saving || loading || !shipmentId || !canModifyShipment}
+          >
+            {saving ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Saving…
+              </>
+            ) : (
+              'Save Changes'
+            )}
+          </Button>
         </div>
       </div>
     </div>

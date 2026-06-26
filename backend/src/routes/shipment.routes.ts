@@ -5,6 +5,7 @@ import { auditLog } from '../middleware/audit';
 import {
   getShipments,
   getShipmentById,
+  getShipmentEditContext,
   updateShipment,
   getShipmentDailyDeliverablesCalendar,
   updateShipmentDailyDeliverables,
@@ -86,6 +87,9 @@ router.get('/performance/tree', getShippingPerformanceTree);
 router.get('/performance', getShippingPerformance);
 // Get all shipments
 router.get('/', getShipments);
+
+// Edit Shipment modal — lightweight sibling PO/contract resolve (before /:id)
+router.get('/:id/edit-context', getShipmentEditContext);
 
 // Get shipment by ID
 router.get('/:id', getShipmentById);
