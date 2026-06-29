@@ -8,7 +8,8 @@ export function buildGroupedStoTrimExpr(stoKeySql: string): string {
   return `NULLIF(TRIM((${stoKeySql})::text), '')`;
 }
 
-function contractsOnStoSubquery(groupedStoExpr: string): string {
+/** Contracts linked to a grouped list row key (SAP STO or KLIP operation_id / shipment_id). */
+export function contractsOnStoSubquery(groupedStoExpr: string): string {
   return `
     SELECT DISTINCT cc.contract_id
     FROM contracts cc
@@ -32,6 +33,15 @@ function contractsOnStoSubquery(groupedStoExpr: string): string {
               spd.data->'contract'->>'sto_no'
             )) = ${groupedStoExpr}
         )
+        OR EXISTS (
+          SELECT 1 FROM shipments sh
+          WHERE sh.contract_id = cc.id
+            AND COALESCE(sh.status, '') <> 'CANCELLED'
+            AND (
+              NULLIF(TRIM(sh.operation_id::text), '') = ${groupedStoExpr}
+              OR NULLIF(TRIM(sh.shipment_id::text), '') = ${groupedStoExpr}
+            )
+        )
       )`;
 }
 
@@ -46,8 +56,11 @@ export function buildStoLinkedContractNumbersSql(
             FILTER (WHERE ${contractAlias}.contract_id IS NOT NULL)`;
   return `CASE
           WHEN ${groupedStoExpr} IS NOT NULL THEN
-            (SELECT STRING_AGG(DISTINCT cid.contract_id, ', ' ORDER BY cid.contract_id)
-             FROM (${contractsOnStoSubquery(groupedStoExpr)}) cid)
+            COALESCE(
+              (SELECT STRING_AGG(DISTINCT cid.contract_id, ', ' ORDER BY cid.contract_id)
+               FROM (${contractsOnStoSubquery(groupedStoExpr)}) cid),
+              ${elseBranch}
+            )
           ELSE ${elseBranch}
         END`;
 }
@@ -63,10 +76,13 @@ export function buildStoLinkedPoNumbersSql(
             FILTER (WHERE ${contractAlias}.po_number IS NOT NULL AND TRIM(${contractAlias}.po_number) != '')`;
   return `CASE
           WHEN ${groupedStoExpr} IS NOT NULL THEN
-            (SELECT STRING_AGG(DISTINCT cc.po_number, ', ' ORDER BY cc.po_number)
-             FROM contracts cc
-             WHERE cc.contract_id IN (${contractsOnStoSubquery(groupedStoExpr)})
-               AND cc.po_number IS NOT NULL AND TRIM(cc.po_number) != '')
+            COALESCE(
+              (SELECT STRING_AGG(DISTINCT cc.po_number, ', ' ORDER BY cc.po_number)
+               FROM contracts cc
+               WHERE cc.contract_id IN (${contractsOnStoSubquery(groupedStoExpr)})
+                 AND cc.po_number IS NOT NULL AND TRIM(cc.po_number) != ''),
+              ${elseBranch}
+            )
           ELSE ${elseBranch}
         END`;
 }
@@ -81,8 +97,11 @@ export function buildStoLinkedContractCountSql(
     `COUNT(DISTINCT ${contractAlias}.contract_id) FILTER (WHERE ${contractAlias}.contract_id IS NOT NULL)`;
   return `CASE
           WHEN ${groupedStoExpr} IS NOT NULL THEN
-            (SELECT COUNT(DISTINCT cid.contract_id)::int
-             FROM (${contractsOnStoSubquery(groupedStoExpr)}) cid)
+            COALESCE(
+              (SELECT COUNT(DISTINCT cid.contract_id)::int
+               FROM (${contractsOnStoSubquery(groupedStoExpr)}) cid),
+              ${elseBranch}
+            )
           ELSE ${elseBranch}
         END`;
 }

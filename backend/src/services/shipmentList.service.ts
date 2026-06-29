@@ -20,7 +20,8 @@ import {
 export type ShipmentListRow = Record<string, unknown>;
 
 export interface ShipmentListQueryContext {
-  shipmentBaseCteSqlFull: string;
+  /** Base CTE chain: full scan or STO-key paged (`shipmentBaseCteSqlList`). */
+  shipmentBaseCteSql: string;
   /** Toolbar + card filters (status, ETA buckets, etc.) */
   outerSql: string;
   innerParams: unknown[];
@@ -30,6 +31,8 @@ export interface ShipmentListQueryContext {
   cacheKey: string;
   /** Filter-only cache key (shared count across shell/hydrate) */
   filterCacheKey: string;
+  /** When true, `paged_sto` limits keys in base CTE; total from `ranked_sto`. */
+  usesStoKeyPaging?: boolean;
 }
 
 export interface ShipmentListResponseData {
@@ -49,7 +52,7 @@ const SUMMARY_CACHE = new Map<
   { summaryRow: Record<string, unknown>; totalCount: number; expiresAt: number }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'shipment-list-v3';
+const CACHE_VERSION = 'shipment-list-v5';
 const MAX_CACHE_ENTRIES = 80;
 
 function stableColumnFiltersKey(colFilters: Record<string, unknown>): string {
@@ -235,39 +238,7 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
   return rows;
 }
 
-function buildFilteredCountQuery(ctx: ShipmentListQueryContext): { text: string; params: unknown[] } {
-  const text = `${ctx.shipmentBaseCteSqlFull},
-      filtered_shipments AS (
-        SELECT sb.*
-        FROM shipment_base sb
-        WHERE 1=1 ${ctx.outerSql}
-      )
-      SELECT COUNT(*)::bigint AS c FROM filtered_shipments`;
-  return { text, params: [...ctx.innerParams, ...ctx.outerParams] };
-}
-
-function buildPaginatedListQuery(
-  ctx: ShipmentListQueryContext,
-  limit: number,
-  offset: number,
-): { text: string; params: unknown[] } {
-  const baseParams = [...ctx.innerParams, ...ctx.outerParams];
-  const limitIdx = baseParams.length + 1;
-  const offsetIdx = baseParams.length + 2;
-  const spdAggCtes = shipmentListSpdAggCtes(ctx.skipSapJoin);
-  const text = `${ctx.shipmentBaseCteSqlFull},
-      filtered_shipments AS (
-        SELECT sb.*
-        FROM shipment_base sb
-        WHERE 1=1 ${ctx.outerSql}
-      ),
-      shipment_page AS (
-        SELECT fs.*
-        FROM filtered_shipments fs
-        ORDER BY fs.created_at DESC
-        LIMIT $${limitIdx} OFFSET $${offsetIdx}
-      ),
-      ${spdAggCtes}
+const LIST_PAGE_SELECT = `
       SELECT
         sp.*,
         COALESCE(sa.sto_quantity, 0) AS sto_quantity,
@@ -287,23 +258,78 @@ function buildPaginatedListQuery(
       LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN contract_ext_agg cex ON TRIM(cex.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN po_numbers_agg pna ON TRIM(pna.sto_key::text) = TRIM(sp.sto_key::text)`;
+
+/** Single round-trip list query: page rows + __filter_total (C). */
+export function buildShipmentListPageQuery(
+  ctx: ShipmentListQueryContext,
+  limit: number,
+  offset: number,
+): { text: string; params: unknown[] } {
+  const baseParams = [...ctx.innerParams, ...ctx.outerParams];
+  const limitIdx = baseParams.length + 1;
+  const offsetIdx = baseParams.length + 2;
+  const spdAggCtes = shipmentListSpdAggCtes(ctx.skipSapJoin);
+
+  const shipmentPageCte = ctx.usesStoKeyPaging
+    ? `shipment_page AS (
+        SELECT
+          fs.*,
+          (SELECT COUNT(*)::bigint FROM ranked_sto) AS __filter_total
+        FROM filtered_shipments fs
+        ORDER BY fs.created_at DESC
+      )`
+    : `shipment_page AS (
+        SELECT
+          fs.*,
+          (SELECT COUNT(*)::bigint FROM filtered_shipments) AS __filter_total
+        FROM filtered_shipments fs
+        ORDER BY fs.created_at DESC
+        LIMIT $${limitIdx} OFFSET $${offsetIdx}
+      )`;
+
+  const text = `${ctx.shipmentBaseCteSql},
+      filtered_shipments AS (
+        SELECT sb.*
+        FROM shipment_base sb
+        WHERE 1=1 ${ctx.outerSql}
+      ),
+      ${shipmentPageCte},
+      ${spdAggCtes}
+      ${LIST_PAGE_SELECT}`;
+
   return { text, params: [...baseParams, limit, offset] };
 }
 
-async function loadFilteredTotal(ctx: ShipmentListQueryContext): Promise<number> {
-  const countKey = buildShipmentListCountCacheKey(ctx.filterCacheKey);
-  const cached = COUNT_CACHE.get(countKey);
-  if (cached && Date.now() < cached.expiresAt) {
-    return cached.total;
+/** When the page query returns zero rows, total still needed for pagination UI. */
+export function buildShipmentListEmptyCountQuery(
+  ctx: ShipmentListQueryContext,
+): { text: string; params: unknown[] } {
+  if (ctx.usesStoKeyPaging) {
+    const beforePaged = ctx.shipmentBaseCteSql.split(/,\s*paged_sto AS\s*\(/)[0];
+    return {
+      text: `${beforePaged}
+      SELECT COUNT(*)::bigint AS c FROM ranked_sto`,
+      params: [...ctx.innerParams],
+    };
   }
-  if (cached) COUNT_CACHE.delete(countKey);
+  return {
+    text: `${ctx.shipmentBaseCteSql},
+      filtered_shipments AS (
+        SELECT sb.*
+        FROM shipment_base sb
+        WHERE 1=1 ${ctx.outerSql}
+      )
+      SELECT COUNT(*)::bigint AS c FROM filtered_shipments`,
+    params: [...ctx.innerParams, ...ctx.outerParams],
+  };
+}
 
-  const { text, params } = buildFilteredCountQuery(ctx);
-  const result = await query(text, params);
-  const total = parseInt(String(result.rows[0]?.c ?? '0'), 10) || 0;
-  COUNT_CACHE.set(countKey, { total, expiresAt: Date.now() + CACHE_TTL_MS });
+function cacheFilteredTotal(filterCacheKey: string, total: number): void {
+  COUNT_CACHE.set(buildShipmentListCountCacheKey(filterCacheKey), {
+    total,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
   evictMapIfNeeded(COUNT_CACHE, MAX_CACHE_ENTRIES);
-  return total;
 }
 
 async function loadShipmentListPage(
@@ -318,9 +344,20 @@ async function loadShipmentListPage(
   if (cached) PAGE_CACHE.delete(ctx.cacheKey);
 
   const offset = (page - 1) * limit;
-  const total = await loadFilteredTotal(ctx);
-  const { text, params } = buildPaginatedListQuery(ctx, limit, offset);
+  const { text, params } = buildShipmentListPageQuery(ctx, limit, offset);
   const result = await query(text, params);
+
+  let total = 0;
+  if (result.rows.length > 0) {
+    const raw = (result.rows[0] as { __filter_total?: unknown }).__filter_total;
+    total = parseInt(String(raw ?? '0'), 10) || 0;
+  } else {
+    const { text: countText, params: countParams } = buildShipmentListEmptyCountQuery(ctx);
+    const countRes = await query(countText, countParams);
+    total = parseInt(String(countRes.rows[0]?.c ?? '0'), 10) || 0;
+  }
+
+  cacheFilteredTotal(ctx.filterCacheKey, total);
   const rows = normalizeShipmentListRows(result.rows as ShipmentListRow[]);
 
   PAGE_CACHE.set(ctx.cacheKey, { rows, total, expiresAt: Date.now() + CACHE_TTL_MS });

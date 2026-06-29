@@ -80,6 +80,7 @@ import {
   buildStoLinkedContractCountSql,
   buildStoLinkedContractNumbersSql,
   buildStoLinkedPoNumbersSql,
+  contractsOnStoSubquery,
 } from '../utils/stoLinkedContractSql';
 
 /** Normalize date-like fields for shipments / loading ports (YYYY-MM-DD or null). */
@@ -380,21 +381,17 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     const contractExtNoEnrichedSql = compact
       ? `CASE
             WHEN ${groupedStoFromRow} IS NOT NULL THEN
-              (SELECT STRING_AGG(DISTINCT v, ', ' ORDER BY v)
-               FROM (
-                 SELECT NULLIF(TRIM(COALESCE(l2.contract_ext_no_raw, '')), '') AS v
-                 FROM contracts cc
-                 LEFT JOIN latest_spd_contract l2 ON l2.contract_number = cc.contract_id
-                 WHERE cc.contract_id IN (
-                   SELECT DISTINCT cxs.contract_id FROM contract_stos cs
-                   INNER JOIN contracts cxs ON cxs.id = cs.contract_id
-                   WHERE TRIM(cs.sto_number::text) = ${groupedStoFromRow}
-                   UNION
-                   SELECT cc2.contract_id FROM contracts cc2
-                   WHERE TRIM(COALESCE(cc2.sto_number::text, '')) = ${groupedStoFromRow}
-                 )
-               ) ext
-               WHERE v IS NOT NULL AND v != '')
+              COALESCE(
+                (SELECT STRING_AGG(DISTINCT v, ', ' ORDER BY v)
+                 FROM (
+                   SELECT NULLIF(TRIM(COALESCE(l2.contract_ext_no_raw, '')), '') AS v
+                   FROM contracts cc
+                   LEFT JOIN latest_spd_contract l2 ON l2.contract_number = cc.contract_id
+                   WHERE cc.contract_id IN (${contractsOnStoSubquery(groupedStoFromRow)})
+                 ) ext
+                 WHERE v IS NOT NULL AND v != ''),
+                g.contract_ext_no_from_join
+              )
             ELSE g.contract_ext_no_from_join
           END AS contract_ext_no`
       : `(SELECT COALESCE(
@@ -938,19 +935,27 @@ ${contractMetaSelectCore}
         etaDischarge: etaDischargeBucket ?? 'ALL',
       });
       const data = await resolveShipmentsListForRequest(req, {
-        shipmentBaseCteSqlFull,
+        shipmentBaseCteSql: effectiveListStoPaging ? shipmentBaseCteSqlList : shipmentBaseCteSqlFull,
         outerSql,
         innerParams,
         outerParams,
         skipSapJoin,
         cacheKey,
         filterCacheKey,
+        usesStoKeyPaging: effectiveListStoPaging,
       });
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
-        path: skipSapJoin ? 'list-page-shell' : 'list-page-sap',
+        path: skipSapJoin
+          ? effectiveListStoPaging
+            ? 'list-page-shell-sto-paging'
+            : 'list-page-shell'
+          : effectiveListStoPaging
+            ? 'list-page-sap-sto-paging'
+            : 'list-page-sap',
         compact,
         skipSapJoin,
+        effectiveListStoPaging,
         page: Number(page),
         limit: Number(limit),
         rowCount: data.shipments.length,

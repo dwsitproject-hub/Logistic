@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildShipmentListCacheKey,
+  buildShipmentListEmptyCountQuery,
+  buildShipmentListPageQuery,
   invalidateShipmentsListCache,
 } from './shipmentList.service';
+
+const baseCtx = {
+  shipmentBaseCteSql: 'WITH shipment_base_core AS (SELECT 1)',
+  outerSql: '',
+  innerParams: ['2026-01-01', '2026-06-29'],
+  outerParams: [] as unknown[],
+  skipSapJoin: true,
+  cacheKey: 'test',
+  filterCacheKey: 'test-filter',
+};
 
 describe('shipmentList.service', () => {
   it('buildShipmentListCacheKey is stable for plant order', () => {
@@ -44,5 +56,33 @@ describe('shipmentList.service', () => {
 
   it('invalidateShipmentsListCache clears cached rows without throwing', () => {
     expect(() => invalidateShipmentsListCache()).not.toThrow();
+  });
+
+  it('buildShipmentListPageQuery embeds __filter_total in one query (C)', () => {
+    const { text } = buildShipmentListPageQuery(baseCtx, 20, 0);
+    expect(text).toContain('__filter_total');
+    expect(text).toContain('FROM filtered_shipments');
+    expect(text).toContain('LIMIT $3 OFFSET $4');
+  });
+
+  it('buildShipmentListPageQuery uses ranked_sto total when STO paging (A)', () => {
+    const { text, params } = buildShipmentListPageQuery(
+      { ...baseCtx, usesStoKeyPaging: true, shipmentBaseCteSql: 'WITH ranked_sto AS (SELECT 1), paged_sto AS (SELECT 1)' },
+      20,
+      0,
+    );
+    expect(text).toContain('FROM ranked_sto) AS __filter_total');
+    expect(text).not.toMatch(/shipment_page AS[\s\S]*LIMIT \$/);
+    expect(params).toEqual([...baseCtx.innerParams, 20, 0]);
+  });
+
+  it('buildShipmentListEmptyCountQuery counts ranked_sto when STO paging', () => {
+    const { text } = buildShipmentListEmptyCountQuery({
+      ...baseCtx,
+      usesStoKeyPaging: true,
+      shipmentBaseCteSql: 'WITH ranked_sto AS (SELECT 1), paged_sto AS (SELECT 1)',
+    });
+    expect(text).toContain('FROM ranked_sto');
+    expect(text).not.toContain('paged_sto');
   });
 });

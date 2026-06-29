@@ -415,6 +415,7 @@ function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipmen
     if (!match) return row
     return {
       ...row,
+      contract_numbers: match.contract_numbers ?? row.contract_numbers,
       contract_ext_no: match.contract_ext_no ?? row.contract_ext_no,
       po_numbers: match.po_numbers ?? row.po_numbers,
       sto_quantity: match.sto_quantity ?? row.sto_quantity,
@@ -1017,7 +1018,7 @@ function ShipmentsPageContent() {
   const [showAddShipment, setShowAddShipment] = useState(false)
   const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
     shipmentId: string
-    editContractId: string
+    editContractId: string | null
     editStoNumber: string
     editContractNumbers: string
   } | null>(null)
@@ -1480,13 +1481,13 @@ function ShipmentsPageContent() {
       return
     }
     const editContractId = resolveShipmentEditContractId(shipment)
-    if (!editContractId) {
+    if (!editContractId && !shipment.id) {
       alert('Contract ID is required to edit this shipment.')
       return
     }
     setEditShipmentFromTable({
       shipmentId: shipment.id,
-      editContractId,
+      editContractId: editContractId || null,
       editStoNumber: resolveShipmentApiLookupKey(shipment),
       editContractNumbers: shipment.contract_numbers ?? '',
     })

@@ -52,6 +52,12 @@ export async function resolveShipmentEditContext(
       UNION
       SELECT DISTINCT c.contract_id, c.po_number
       FROM anchor a
+      INNER JOIN shipments s ON TRIM(COALESCE(s.operation_id::text, '')) = a.lookup_key
+      INNER JOIN contracts c ON c.id = s.contract_id
+      WHERE COALESCE(s.status, '') <> 'CANCELLED'
+      UNION
+      SELECT DISTINCT c.contract_id, c.po_number
+      FROM anchor a
       INNER JOIN shipments s ON s.id = a.id
       INNER JOIN contracts c ON c.id = s.contract_id
     )
@@ -61,7 +67,7 @@ export async function resolveShipmentEditContext(
       STRING_AGG(DISTINCT lc.po_number, ', ' ORDER BY lc.po_number)
         FILTER (WHERE lc.po_number IS NOT NULL AND TRIM(lc.po_number) != '') AS po_numbers
     FROM anchor a
-    CROSS JOIN linked_contracts lc
+    LEFT JOIN linked_contracts lc ON TRUE
     GROUP BY a.lookup_key
     `,
     [shipmentUuid],
