@@ -52,7 +52,7 @@ const SUMMARY_CACHE = new Map<
   { summaryRow: Record<string, unknown>; totalCount: number; expiresAt: number }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'shipment-list-v5';
+const CACHE_VERSION = 'shipment-list-v6';
 const MAX_CACHE_ENTRIES = 80;
 
 function stableColumnFiltersKey(colFilters: Record<string, unknown>): string {
@@ -297,7 +297,7 @@ export function buildShipmentListPageQuery(
       ${spdAggCtes}
       ${LIST_PAGE_SELECT}`;
 
-  return { text, params: [...baseParams, limit, offset] };
+  return { text, params: ctx.usesStoKeyPaging ? baseParams : [...baseParams, limit, offset] };
 }
 
 /** When the page query returns zero rows, total still needed for pagination UI. */

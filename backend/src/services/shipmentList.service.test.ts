@@ -73,7 +73,7 @@ describe('shipmentList.service', () => {
     );
     expect(text).toContain('FROM ranked_sto) AS __filter_total');
     expect(text).not.toMatch(/shipment_page AS[\s\S]*LIMIT \$/);
-    expect(params).toEqual([...baseCtx.innerParams, 20, 0]);
+    expect(params).toEqual([...baseCtx.innerParams]);
   });
 
   it('buildShipmentListEmptyCountQuery counts ranked_sto when STO paging', () => {

@@ -250,6 +250,13 @@ function shouldLogShipmentsTiming(): boolean {
   return process.env.LOG_SHIPMENTS_TIMING === '1' || process.env.NODE_ENV === 'development';
 }
 
+/** Safe positive integers for inline LIMIT/OFFSET (avoids $n placeholders before regex `$` in sto key SQL). */
+function shipmentListLimitOffset(limit: unknown, page: unknown): { limit: number; offset: number } {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 20));
+  const safePage = Math.max(1, Number(page) || 1);
+  return { limit: safeLimit, offset: (safePage - 1) * safeLimit };
+}
+
 function emitShipmentListTimings(
   res: Response,
   timingsMs: Record<string, number>,
@@ -696,10 +703,11 @@ ${contractMetaSelectCore}
       etaDischarge: etaDischargeBucket ?? 'ALL',
     });
 
-    /**
-     * Default list view (YTD, no toolbar filters): aggregate only the current page's STO keys.
-     * Otherwise shipment_base materializes every STO group in-range before LIMIT — O(all rows).
-     */
+    /** STO-key paging disabled — ranked_sto CTE breaks pg parse with sto key regex; re-enable after refactor. */
+    const listUsesStoPaging = false;
+    const { limit: listLimit, offset: listOffset } = shipmentListLimitOffset(limit, page);
+
+    /*
     const listUsesStoPaging =
       !summaryOnly &&
       !stoIsSet &&
@@ -709,6 +717,7 @@ ${contractMetaSelectCore}
       !vo.sql &&
       !etaBuckets.sql &&
       !statusFilter.sql;
+    */
 
     const rankedStoCte = `
       ranked_sto AS (
@@ -734,7 +743,7 @@ ${contractMetaSelectCore}
       paged_sto AS (
         SELECT sto_key FROM ranked_sto
         ORDER BY mx DESC
-        LIMIT $${outerFilterStartIndex} OFFSET $${outerFilterStartIndex + 1}
+        LIMIT ${listLimit} OFFSET ${listOffset}
       ),`;
       shipmentBaseCteSqlList = shipmentBaseCteSqlFull.replace(
         ',\n      shipment_base_core AS (',
