@@ -8,7 +8,8 @@ import {
   parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
 import { deriveTruckingEffectiveStatus, sqlTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
-import { truckingPageListScopeWhereSql } from '../utils/truckingStoTypeSql';
+import { truckingPageListScopeWhereSql } from '../utils/truckingIncotermScope';
+import { wrapTruckingListQueryWithStoExpansion } from '../utils/truckingListStoExpandSql';
 import {
   buildTruckingListFromClause,
   buildTruckingListSelectClause,
@@ -58,7 +59,7 @@ export interface TruckingListResponseData {
 const PAGE_CACHE = new Map<string, { rows: TruckingListRow[]; total: number; expiresAt: number }>();
 const COUNT_CACHE = new Map<string, { total: number; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v9';
+const CACHE_VERSION = 'trucking-list-v11';
 const MAX_CACHE_ENTRIES = 80;
 
 const SORT_FIELD_BY_KEY: Record<string, string> = {
@@ -396,7 +397,23 @@ export function buildTruckingListQuery(
   }
 
   if (sto) {
-    queryText += ` AND c.sto_number = $${paramIndex}`;
+    queryText += ` AND (
+        TRIM(COALESCE(c.sto_number::text, '')) = TRIM($${paramIndex}::text)
+        OR EXISTS (
+          SELECT 1 FROM contract_stos cs
+          WHERE cs.contract_id = c.id AND TRIM(cs.sto_number::text) = TRIM($${paramIndex}::text)
+        )
+        OR EXISTS (
+          SELECT 1 FROM sap_processed_data spd
+          WHERE spd.contract_number = c.contract_id
+            AND TRIM(COALESCE(
+              spd.sto_number::text,
+              spd.data->'raw'->>'STO No.',
+              spd.data->'raw'->>'STO Number',
+              spd.data->'shipment'->>'sto_no'
+            )) = TRIM($${paramIndex}::text)
+        )
+      )`;
     queryParams.push(sto);
     paramIndex += 1;
   }
@@ -480,6 +497,8 @@ export function buildTruckingListQuery(
 }
 
 export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text: string; params: unknown[] } {
+  const innerSql = `${built.preOuterQuery}${built.outerSql}`;
+  const expanded = wrapTruckingListQueryWithStoExpansion(innerSql, { selectOutstanding: false });
   const text = `
       WITH filtered AS (
         SELECT
@@ -488,7 +507,7 @@ export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text
           trucking_start_date,
           trucking_completion_date
         FROM (
-          ${built.preOuterQuery}${built.outerSql}
+          ${expanded}
         ) trucking_source
       )
       SELECT
@@ -516,9 +535,11 @@ function buildPaginatedListQuery(
   const baseParams = [...built.innerParams, ...built.outerParams];
   const limitIdx = baseParams.length + 1;
   const offsetIdx = baseParams.length + 2;
+  const innerSql = `${built.preOuterQuery}${built.outerSql}`;
+  const expanded = wrapTruckingListQueryWithStoExpansion(innerSql);
   const text = `
       SELECT * FROM (
-        ${built.preOuterQuery}${built.outerSql}
+        ${expanded}
       ) trucking_filtered
       ORDER BY ${field} ${sortDir} NULLS LAST, created_at DESC
       LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
@@ -526,9 +547,11 @@ function buildPaginatedListQuery(
 }
 
 function buildFilteredCountQuery(built: TruckingListBuiltQuery): { text: string; params: unknown[] } {
+  const innerSql = `${built.preOuterQuery}${built.outerSql}`;
+  const expanded = wrapTruckingListQueryWithStoExpansion(innerSql, { selectOutstanding: false });
   const text = `
       SELECT COUNT(*)::bigint AS c FROM (
-        ${built.preOuterQuery}${built.outerSql}
+        ${expanded}
       ) trucking_filtered`;
   return { text, params: [...built.innerParams, ...built.outerParams] };
 }

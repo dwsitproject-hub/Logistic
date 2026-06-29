@@ -18,7 +18,7 @@ import {
 } from '../utils/truckingRealizationSql';
 import { sqlSapTruckingLastReceiveDate, sqlSapTruckingStartReceiveDate } from '../utils/truckingSapDates';
 import { assertTruckingOperationContractOpen } from '../utils/contractDeliveryStatus';
-import { buildTruckingPageListScopeSql } from '../utils/truckingStoTypeSql';
+import { buildTruckingPageListScopeSql } from '../utils/truckingIncotermScope';
 import {
   parsePlanningSheetToMatrix,
   toIsoDate10FromCell,

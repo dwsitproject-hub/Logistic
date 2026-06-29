@@ -2,7 +2,11 @@ import api from '@/lib/api'
 import { toApiDateOnly } from '@/lib/dateFormat'
 import type { ShipmentAtaFields } from '@/lib/shipmentAtaFields'
 import { buildAtaOverridePayload } from '@/lib/shipmentAtaFields'
-import type { VesselPortsQuantityEdits, VesselPortsQuantityRow } from '@/components/shipments/VesselPortsQuantitiesTable'
+import type { VesselPortsQuantityEdits, VesselPortsQuantityRow } from '@/lib/vesselPortsQuantityEdits'
+import {
+  hasVesselPortsQuantityUserEdits,
+  quantityKgValuesEqual,
+} from '@/lib/vesselPortsQuantityEdits'
 import { sumVesselPortsQuantityEdits } from '@/components/shipments/VesselPortsQuantitiesTable'
 
 function dateInputFromUnknown(v: unknown): string | undefined {
@@ -106,22 +110,17 @@ export type SaveEditShipmentInput = {
 }
 
 function quantityValuesEqual(a: unknown, b: unknown): boolean {
-  const pa = a === null || a === undefined || a === '' ? null : Number(a)
-  const pb = b === null || b === undefined || b === '' ? null : Number(b)
-  if (pa === null && pb === null) return true
-  if (pa === null || pb === null) return false
-  return Math.abs(pa - pb) < 0.001
+  return quantityKgValuesEqual(a, b)
 }
 
 export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Promise<void> {
   const sums = sumVesselPortsQuantityEdits(input.qtyRows, input.qtyEdits)
-  const deliveryChanged = !quantityValuesEqual(sums.quantity_delivered, input.originalDeliveredKg)
-  const receiveChanged = !quantityValuesEqual(sums.quantity_receive, input.originalReceiveKg)
+  const qtyUserEdited = hasVesselPortsQuantityUserEdits(input.qtyRows, input.qtyEdits)
 
-  if ((deliveryChanged || receiveChanged) && !input.quantityUnlocked) {
+  if (qtyUserEdited && !input.quantityUnlocked) {
     throw new Error('Please upload an SLD or SDD document before editing Delivered or Receive quantities.')
   }
-  if ((deliveryChanged || receiveChanged) && !input.hasSldOrSddDoc) {
+  if (qtyUserEdited && !input.hasSldOrSddDoc) {
     throw new Error('An SLD or SDD document must be attached before saving quantity changes.')
   }
 
@@ -140,8 +139,10 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
   if (input.vesselName.trim() && input.vesselName.trim() !== input.originalVesselName.trim()) {
     updateBody.vessel_name = input.vesselName.trim()
   }
-  if (sums.quantity_delivered !== null) updateBody.quantity_delivered = sums.quantity_delivered
-  if (sums.quantity_receive !== null) updateBody.actual_vessel_qty_receive = sums.quantity_receive
+  if (qtyUserEdited) {
+    if (sums.quantity_delivered !== null) updateBody.quantity_delivered = sums.quantity_delivered
+    if (sums.quantity_receive !== null) updateBody.actual_vessel_qty_receive = sums.quantity_receive
+  }
   if (!quantityValuesEqual(input.sfalQty, input.originalSfalQty)) updateBody.sfal_qty = input.sfalQty
   if (!quantityValuesEqual(input.sfbdQty, input.originalSfbdQty)) updateBody.sfbd_qty = input.sfbdQty
 
@@ -167,7 +168,7 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
   const info = {
     vessel_loading_port_1: input.loadingPort,
     vessel_discharge_port_1: input.dischargePort,
-    actual_vessel_qty_receive: sums.quantity_receive,
+    actual_vessel_qty_receive: qtyUserEdited ? sums.quantity_receive : input.originalReceiveKg,
     eta_vessel_arrival_at_loading_port: input.activeEta.etaVesselArrivalAtLoadingPort,
     eta_vessel_berthed_at_loading_port: input.activeEta.etaVesselBerthedAtLoadingPort,
     eta_vessel_start_loading: input.activeEta.etaVesselStartLoading,

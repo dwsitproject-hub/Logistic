@@ -151,7 +151,9 @@ export const CONTRACT_SAP_ONLY_STOS_SQL = `
       ${SPD_SEA_LAND_SQL} AS sea_land,
       spd.data,
       spd.created_at,
-      spd.contract_number
+      spd.contract_number,
+      c.transport_mode,
+      c.incoterm
     FROM sap_processed_data spd
     INNER JOIN contracts c ON c.contract_id = spd.contract_number
     WHERE c.id = $1
@@ -162,7 +164,9 @@ export const CONTRACT_SAP_ONLY_STOS_SQL = `
       sea_land,
       data,
       created_at,
-      contract_number
+      contract_number,
+      transport_mode,
+      incoterm
     FROM sap_rows
     WHERE effective_sto IS NOT NULL AND effective_sto != ''
     ORDER BY effective_sto, created_at DESC NULLS LAST
@@ -250,6 +254,9 @@ export const CONTRACT_SAP_ONLY_STOS_SQL = `
     CASE
       WHEN s.sea_land LIKE 'LAND%' THEN 'trucking'
       WHEN s.sea_land LIKE 'SEA%' THEN 'shipment'
+      WHEN UPPER(TRIM(COALESCE(s.transport_mode, ''))) IN ('LAND', 'MIX') THEN 'trucking'
+      WHEN UPPER(TRIM(COALESCE(s.incoterm, ''))) IN ('FRC', 'LCO') THEN 'trucking'
+      WHEN UPPER(TRIM(COALESCE(s.transport_mode, ''))) IN ('SEA', 'MIX') THEN 'shipment'
       ELSE 'shipment'
     END AS logistics_type
   FROM sap_stos s

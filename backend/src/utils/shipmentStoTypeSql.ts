@@ -83,6 +83,16 @@ export function shipmentListDisplayStoNumberExpr(
   shipmentAlias = 's',
 ): string {
   return `NULLIF(TRIM(COALESCE(
+    CASE
+      WHEN NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '') ~ '^[0-9]+$'
+        AND (
+          NULLIF(TRIM(${contractAlias}.sto_number::text), '') IS NULL
+          OR NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '')
+             <> NULLIF(TRIM(${contractAlias}.sto_number::text), '')
+        )
+      THEN NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '')
+      ELSE NULL
+    END,
     NULLIF(TRIM(${contractAlias}.sto_number::text), ''),
     NULLIF(TRIM(${spdAlias}.effective_sto), ''),
     CASE

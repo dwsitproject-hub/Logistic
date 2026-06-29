@@ -1324,6 +1324,12 @@ export function ContractDetailModal({
                       value={formatQtyMtFromKg(Number(stoDetailData.contract_qty ?? stoDetailData.sto_quantity ?? 0))}
                     />
                     <StoDetailField
+                      label="Outstanding Qty (MT)"
+                      value={formatOutstandingQtyMtFromKg(
+                        Number(stoDetailData.outstanding_quantity ?? contract?.outstanding_quantity ?? 0),
+                      )}
+                    />
+                    <StoDetailField
                       label="Quantity Delivery (MT)"
                       value={formatQtyMtFromKg(
                         Number(stoDetailData.quantity_delivered ?? stoDetailRow.quantity_delivered ?? 0),

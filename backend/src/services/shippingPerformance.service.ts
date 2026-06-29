@@ -1,6 +1,10 @@
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import { toIsoDate10FromCell } from '../utils/planningSheetDate';
+import {
+  shippingPerfResolvedDeliveredQtySql,
+  shippingPerfResolvedFulfilledQtySql,
+} from '../utils/shipmentManualQtyResolveSql';
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
 export interface ShippingPerformanceFilters {
@@ -52,7 +56,17 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const ROW_CACHE_KEY = 'shipping-performance-rows-v12';
+const ROW_CACHE_KEY = 'shipping-performance-rows-v13';
+
+const SP_RESOLVED_DELIVERED = shippingPerfResolvedDeliveredQtySql(
+  's.quantity_delivered',
+  'sa.quantity_delivered_sap',
+);
+const SP_RESOLVED_FULFILLED = shippingPerfResolvedFulfilledQtySql(
+  'c.incoterm',
+  'sa.quantity_receive',
+  'sa.quantity_delivered_sap',
+);
 
 function shippingPerfRowDedupeKey(row: Record<string, unknown>): string {
   const sto = String(row.sto_number ?? '').trim();
@@ -286,27 +300,11 @@ const SHIPPING_PERFORMANCE_SQL = `
         )::int AS ata_total_delta_days,
         sa.remark,
         COALESCE(NULLIF(sa.sto_quantity, 0), c.sto_quantity, 0)::numeric AS sto_qty,
-        COALESCE(
-          CASE
-            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN sa.quantity_receive
-            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN sa.quantity_delivered_sap
-            ELSE COALESCE(NULLIF(sa.quantity_receive, 0), sa.quantity_delivered_sap)
-          END,
-          s.actual_vessel_qty_receive,
-          s.bl_quantity,
-          0
-        )::numeric AS received_qty,
-        COALESCE(sa.quantity_delivered_sap, 0)::numeric AS delivered_qty,
+        ${SP_RESOLVED_FULFILLED} AS received_qty,
+        ${SP_RESOLVED_DELIVERED} AS delivered_qty,
         GREATEST(
           COALESCE(NULLIF(sa.sto_quantity, 0), c.sto_quantity, 0)::numeric
-          - COALESCE(
-            CASE
-              WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN sa.quantity_receive
-              WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN sa.quantity_delivered_sap
-              ELSE COALESCE(NULLIF(sa.quantity_receive, 0), sa.quantity_delivered_sap, COALESCE(s.actual_vessel_qty_receive, s.bl_quantity, 0))
-            END,
-            0
-          ),
+          - ${SP_RESOLVED_FULFILLED},
           0
         )::numeric AS outstanding_qty
       FROM shipments s

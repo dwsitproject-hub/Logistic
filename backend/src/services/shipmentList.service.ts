@@ -3,6 +3,7 @@ import { AuthRequest } from '../middleware/auth';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import { resolveContractLogisticsStoNumber } from '../utils/contractLogisticsStoDisplay';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
+import { shipmentListOutstandingQtySql } from '../utils/shipmentOutstandingQtySql';
 import {
   mergeShipmentVesselFromSapRow,
   queueShipmentVesselSapBackfill,
@@ -43,6 +44,10 @@ export interface ShipmentListResponseData {
 
 const PAGE_CACHE = new Map<string, { rows: ShipmentListRow[]; total: number; expiresAt: number }>();
 const COUNT_CACHE = new Map<string, { total: number; expiresAt: number }>();
+const SUMMARY_CACHE = new Map<
+  string,
+  { summaryRow: Record<string, unknown>; totalCount: number; expiresAt: number }
+>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const CACHE_VERSION = 'shipment-list-v3';
 const MAX_CACHE_ENTRIES = 80;
@@ -129,6 +134,33 @@ export function buildShipmentListCountCacheKey(filterCacheKey: string): string {
   return `${filterCacheKey}:count`;
 }
 
+export function buildShipmentSummaryCacheKey(filterCacheKey: string, scopeStatus?: string): string {
+  return `${filterCacheKey}:summary:${scopeStatus ?? ''}`;
+}
+
+export async function loadShipmentListSummary(
+  summaryCountQuery: string,
+  params: unknown[],
+  cacheKey: string,
+): Promise<{ summaryRow: Record<string, unknown>; totalCount: number }> {
+  const cached = SUMMARY_CACHE.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return { summaryRow: cached.summaryRow, totalCount: cached.totalCount };
+  }
+  if (cached) SUMMARY_CACHE.delete(cacheKey);
+
+  const result = await query(summaryCountQuery, params);
+  const summaryRow = (result.rows[0] || {}) as Record<string, unknown>;
+  const totalCount = parseInt(String(summaryRow.total_count ?? '0'), 10) || 0;
+  SUMMARY_CACHE.set(cacheKey, {
+    summaryRow,
+    totalCount,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
+  evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+  return { summaryRow, totalCount };
+}
+
 function evictMapIfNeeded(map: Map<string, { expiresAt: number }>, max: number): void {
   const now = Date.now();
   for (const [key, entry] of map.entries()) {
@@ -145,11 +177,16 @@ function evictMapIfNeeded(map: Map<string, { expiresAt: number }>, max: number):
 export function invalidateShipmentsListCache(): void {
   PAGE_CACHE.clear();
   COUNT_CACHE.clear();
+  SUMMARY_CACHE.clear();
 }
 
 export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentListRow[] {
   for (const row of rows) {
     delete (row as { __filter_total?: unknown }).__filter_total;
+    delete (row as { contract_numbers_from_join?: unknown }).contract_numbers_from_join;
+    delete (row as { po_numbers_from_join?: unknown }).po_numbers_from_join;
+    delete (row as { contract_count_from_join?: unknown }).contract_count_from_join;
+    delete (row as { contract_ext_no_from_join?: unknown }).contract_ext_no_from_join;
     if (Object.prototype.hasOwnProperty.call(row, 'contract_ext_no_merged')) {
       row.contract_ext_no = row.contract_ext_no_merged as string | null;
       delete (row as { contract_ext_no_merged?: unknown }).contract_ext_no_merged;
@@ -236,6 +273,7 @@ function buildPaginatedListQuery(
         COALESCE(sa.sto_quantity, 0) AS sto_quantity,
         COALESCE(sa.quantity_receive, 0) AS quantity_receive,
         COALESCE(sa.quantity_delivered_sap, 0) AS quantity_delivered_sap,
+        ${shipmentListOutstandingQtySql()} AS outstanding_quantity,
         COALESCE(sl.incoterm, sp.incoterm) AS incoterm,
         sl.b2b_flag AS b2b_flag,
         sl.source_type AS source_type,

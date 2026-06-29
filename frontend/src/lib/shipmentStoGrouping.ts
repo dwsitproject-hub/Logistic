@@ -8,10 +8,13 @@ export function resolveShipmentStoKey(row: {
   sto_key?: string | null
   shipment_id?: string | null
 }): string {
+  const operationalKey = String(row.sto_key ?? '').trim()
+  if (operationalKey) return operationalKey
+  const numericShipmentId = String(row.shipment_id ?? '').trim()
+  if (/^[0-9]+$/.test(numericShipmentId)) return numericShipmentId
   const displaySto = String(row.sto_number ?? '').trim()
   if (displaySto) return displaySto
-  const stoKey = String(row.sto_key ?? row.shipment_id ?? '').trim()
-  return stoKey || `__no_sto__${row.id}`
+  return numericShipmentId || `__no_sto__${row.id}`
 }
 
 import { resolveShipmentDisplayStoNumber } from '@/lib/shipmentStoDisplay'

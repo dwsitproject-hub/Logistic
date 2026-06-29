@@ -1,3 +1,5 @@
+import { shipmentManualQtyResolveSql } from './shipmentManualQtyResolveSql';
+
 /**
  * STO-level outstanding quantity (kg) using the same incoterm rules as the Contracts list:
  * CIF/CFR/FRC → Quantity Receive; FOB/LCO → Quantity Delivery; others → receive or delivery.
@@ -33,8 +35,14 @@ export function shipmentListOutstandingQtySql(
 ): string {
   return shipmentOutstandingQtyExpr({
     stoQtyExpr: `NULLIF(${saAlias}.sto_quantity, 0)`,
-    receiveExpr: `COALESCE(NULLIF(${saAlias}.quantity_receive, 0), ${spAlias}.actual_vessel_qty_receive, 0)`,
-    deliveryExpr: `COALESCE(NULLIF(${saAlias}.quantity_delivered_sap, 0), ${spAlias}.quantity_delivered, 0)`,
+    receiveExpr: shipmentManualQtyResolveSql(
+      `${spAlias}.actual_vessel_qty_receive`,
+      `${saAlias}.quantity_receive`,
+    ),
+    deliveryExpr: shipmentManualQtyResolveSql(
+      `${spAlias}.quantity_delivered`,
+      `${saAlias}.quantity_delivered_sap`,
+    ),
     incotermExpr: `COALESCE(${slAlias}.incoterm, ${spAlias}.incoterm)`,
   });
 }

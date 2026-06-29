@@ -1,5 +1,6 @@
 /**
- * SAP raw field expressions for Oil Loss — Quantity Delivery/Receive always from sap_processed_data.
+ * SAP raw field expressions for Oil Loss — Quantity Delivery/Receive from sap_processed_data,
+ * with KLIP manual override from shipments when edited qty differs from SAP.
  * SFAL/SFBD primary from SAP raw; shipment.sfal_qty / sfbd_qty used as fallback in the controller.
  */
 

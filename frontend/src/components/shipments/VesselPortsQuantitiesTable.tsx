@@ -18,23 +18,11 @@ import {
   VESSEL_MODAL_TABLE_FOOTER_CLASS,
 } from '@/lib/vesselModalUi'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import type { VesselPortsQuantityEdits, VesselPortsQuantityRow } from '@/lib/vesselPortsQuantityEdits'
 import { Check, Edit2, Loader2, X } from 'lucide-react'
 
-export type VesselPortsQuantityRow = {
-  rowKey: string
-  contract_ext_no?: string | null
-  po_number?: string | null
-  contract_qty?: number | null
-  sto_qty?: number | null
-  quantity_delivered?: number | null
-  quantity_receive?: number | null
-  locked_from_sap?: boolean
-}
-
-export type VesselPortsQuantityEdits = Record<
-  string,
-  { quantity_delivered?: number | null; quantity_receive?: number | null }
->
+export type { VesselPortsQuantityEdits, VesselPortsQuantityRow } from '@/lib/vesselPortsQuantityEdits'
+export { hasVesselPortsQuantityUserEdits, quantityKgValuesEqual } from '@/lib/vesselPortsQuantityEdits'
 
 function parseKg(value: number | null | undefined): number | null {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return null

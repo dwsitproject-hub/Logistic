@@ -38,6 +38,7 @@ import {
   type ShippingSummaryMetricKey,
 } from '@/lib/shippingPerformanceLabels'
 import { formatSapDisplayValue, formatSapGroupDisplayLabel } from '@/lib/sapDisplayValue'
+import { formatShipmentStatusLabel } from '@/lib/shipmentStatusDisplay'
 import {
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
   COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
@@ -2491,7 +2492,7 @@ function ShippingPerformancePageContent() {
                                     getStatusColor(String(rawValue)),
                                   )}
                                 >
-                                  {String(rawValue)}
+                                  {formatShipmentStatusLabel(String(rawValue))}
                                 </Badge>
                               ) : (
                                 <span className="text-sm text-gray-400">-</span>

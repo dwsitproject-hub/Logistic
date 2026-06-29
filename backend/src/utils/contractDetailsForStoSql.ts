@@ -1,4 +1,6 @@
 
+import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+
 function spdEffectiveSto(alias: string): string {
   return `NULLIF(TRIM(COALESCE(
   ${alias}.sto_number::text,
@@ -37,6 +39,22 @@ const QTY_RECEIVE_NUM = `NULLIF(regexp_replace(COALESCE(
   ''
 ), '[^0-9\\.-]', '', 'g'), '')::numeric`;
 
+const GLOBAL_OUTSTANDING = sqlContractGlobalOutstandingExpr({
+  contractQtyExpr: 'pl.contract_qty',
+  incotermExpr: 'pl.incoterm',
+  contractNumberExpr: 'pl.contract_number',
+});
+
+const GLOBAL_OUTSTANDING_SAP_ONLY = sqlContractGlobalOutstandingExpr({
+  contractQtyExpr: `COALESCE((
+          SELECT MAX(CAST(REPLACE(REPLACE(spd.data->'contract'->>'contract_quantity', ',', ''), ' ', '') AS NUMERIC))
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = soc.contract_number
+        ), 0)`,
+  incotermExpr: `(SELECT c.incoterm FROM contracts c WHERE c.contract_id = soc.contract_number LIMIT 1)`,
+  contractNumberExpr: 'soc.contract_number',
+});
+
 /** SQL for GET /shipments/contracts/details — one row per PO line on the STO. */
 export function buildContractDetailsForStoSql(): string {
   const stoMatch = (alias: string) => `(
@@ -48,6 +66,11 @@ export function buildContractDetailsForStoSql(): string {
               OR ${spdPoNumber(alias)} = pl.po_number
             )`;
 
+  const qtyMoveCte = buildQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: 'SELECT contract_number FROM contract_candidates',
+  });
+
   return `
       WITH contract_candidates AS (
         SELECT DISTINCT contract_number
@@ -55,8 +78,22 @@ export function buildContractDetailsForStoSql(): string {
           SELECT unnest($2::text[]) AS contract_number
           UNION
           SELECT DISTINCT c.contract_id
+          FROM contract_stos cs
+          INNER JOIN contracts c ON c.id = cs.contract_id
+          WHERE TRIM(cs.sto_number::text) = TRIM($1::text)
+            AND c.contract_id IS NOT NULL
+            AND TRIM(c.contract_id) != ''
+          UNION
+          SELECT DISTINCT c.contract_id
           FROM contracts c
           WHERE TRIM(COALESCE(c.sto_number::text, '')) = TRIM($1::text)
+            AND c.contract_id IS NOT NULL
+            AND TRIM(c.contract_id) != ''
+          UNION
+          SELECT DISTINCT c.contract_id
+          FROM shipments s
+          INNER JOIN contracts c ON c.id = s.contract_id
+          WHERE TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($1::text)
             AND c.contract_id IS NOT NULL
             AND TRIM(c.contract_id) != ''
           UNION
@@ -75,11 +112,13 @@ export function buildContractDetailsForStoSql(): string {
         ) u
         WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
       ),
+      ${qtyMoveCte},
       po_lines AS (
         SELECT
           c.contract_id AS contract_number,
           NULLIF(TRIM(c.po_number), '') AS po_number,
           c.quantity_ordered AS contract_qty,
+          c.incoterm,
           c.delivery_start_date,
           c.delivery_end_date
         FROM contracts c
@@ -99,16 +138,7 @@ export function buildContractDetailsForStoSql(): string {
         pl.contract_number,
         pl.po_number,
         COALESCE(pl.contract_qty, 0) AS contract_qty,
-        GREATEST(
-          0,
-          COALESCE(pl.contract_qty, 0)::numeric
-          - COALESCE((
-              SELECT SUM(u.sto_qty_assigned)
-              FROM user_sto_contract_assignments u
-              WHERE u.contract_number = pl.contract_number
-                AND COALESCE(u.po_number, '') = COALESCE(pl.po_number, '')
-            ), 0)::numeric
-        ) AS outstanding_qty,
+        ${GLOBAL_OUTSTANDING} AS outstanding_qty,
         COALESCE(
           (SELECT u.sto_qty_assigned
            FROM user_sto_contract_assignments u
@@ -177,7 +207,7 @@ export function buildContractDetailsForStoSql(): string {
           FROM sap_processed_data spd
           WHERE spd.contract_number = soc.contract_number
         ), 0) AS contract_qty,
-        0::numeric AS outstanding_qty,
+        ${GLOBAL_OUTSTANDING_SAP_ONLY} AS outstanding_qty,
         COALESCE((
           SELECT ${STO_QTY_NUM}
           FROM sap_processed_data spd

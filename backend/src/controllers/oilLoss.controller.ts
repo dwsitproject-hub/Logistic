@@ -20,8 +20,8 @@ export const getOilLoss = async (_req: AuthRequest, res: Response) => {
         gainCount:   Number(gainRow.gain_count),
       },
       dataSources: {
-        quantityDelivery: 'sap_processed_data',
-        quantityReceive: 'sap_processed_data',
+        quantityDelivery: 'sap_processed_data|shipments.quantity_delivered',
+        quantityReceive: 'sap_processed_data|shipments.actual_vessel_qty_receive',
         quantitySfal: 'sap_processed_data|shipments.sfal_qty',
         quantitySfbd: 'sap_processed_data|shipments.sfbd_qty',
       },

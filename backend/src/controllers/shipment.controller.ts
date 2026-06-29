@@ -8,7 +8,9 @@ import { runShippingPerformance } from '../services/shippingPerformance.service'
 import {
   buildShipmentListCacheKey,
   buildShipmentListFilterCacheKey,
+  buildShipmentSummaryCacheKey,
   invalidateShipmentsListCache,
+  loadShipmentListSummary,
   normalizeShipmentListRows,
   resolveShipmentsListForRequest,
 } from '../services/shipmentList.service';
@@ -74,6 +76,11 @@ import {
 import { hydrateShipmentInfoAtaGaps } from '../utils/shipmentAtaHydration';
 import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
 import { SQL_CONTRACT_IMPORT_STATUS, getContractImportStatusForShipment, sqlIsContractSapClosedExpr } from '../utils/contractDeliveryStatus';
+import {
+  buildStoLinkedContractCountSql,
+  buildStoLinkedContractNumbersSql,
+  buildStoLinkedPoNumbersSql,
+} from '../utils/stoLinkedContractSql';
 
 /** Normalize date-like fields for shipments / loading ports (YYYY-MM-DD or null). */
 function toShipmentDateOrNull(v: unknown): string | null {
@@ -340,71 +347,75 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     const listStoKeySql = shipmentListStoKeyExpr('c', 'l', 's');
     const listStoDisplaySql = shipmentListDisplayStoNumberExpr('c', 'l', 's');
 
-    /** STO on grouped row — used to pull all contracts/POs sharing the same STO (multi-contract per vessel). */
-    const groupedStoTrimExpr = `TRIM(COALESCE(MAX(c.sto_number::text), MAX(l.effective_sto), ''))`;
-    const stoLinkedContractNumbersSql = `CASE
-          WHEN NULLIF(${groupedStoTrimExpr}, '') IS NOT NULL THEN
-            (SELECT STRING_AGG(DISTINCT cc.contract_id, ', ' ORDER BY cc.contract_id)
-             FROM contracts cc
-             WHERE TRIM(cc.sto_number::text) = ${groupedStoTrimExpr}
-               AND cc.contract_id IS NOT NULL)
-          ELSE STRING_AGG(DISTINCT c.contract_id, ', ' ORDER BY c.contract_id) FILTER (WHERE c.contract_id IS NOT NULL)
-        END`;
-    const stoLinkedPoNumbersSql = `CASE
-          WHEN NULLIF(${groupedStoTrimExpr}, '') IS NOT NULL THEN
-            (SELECT STRING_AGG(DISTINCT cc.po_number, ', ' ORDER BY cc.po_number)
-             FROM contracts cc
-             WHERE TRIM(cc.sto_number::text) = ${groupedStoTrimExpr}
-               AND cc.po_number IS NOT NULL AND TRIM(cc.po_number) != '')
-          ELSE STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '')
-        END`;
-    const stoLinkedContractCountSql = `CASE
-          WHEN NULLIF(${groupedStoTrimExpr}, '') IS NOT NULL THEN
-            (SELECT COUNT(DISTINCT cc.contract_id)::int
-             FROM contracts cc
-             WHERE TRIM(cc.sto_number::text) = ${groupedStoTrimExpr}
-               AND cc.contract_id IS NOT NULL)
-          ELSE COUNT(DISTINCT c.contract_id) FILTER (WHERE c.contract_id IS NOT NULL)
-        END`;
+    /** Grouped STO key on shipment_base rows (safe for scalar subqueries in the outer enrich CTE). */
+    const groupedStoFromRow = `NULLIF(TRIM(g.sto_key::text), '')`;
+    const stoLinkedContractNumbersSql = buildStoLinkedContractNumbersSql(
+      groupedStoFromRow,
+      'c',
+      'g.contract_numbers_from_join',
+    );
+    const stoLinkedPoNumbersSql = buildStoLinkedPoNumbersSql(
+      groupedStoFromRow,
+      'c',
+      'g.po_numbers_from_join',
+    );
+    const stoLinkedContractCountSql = buildStoLinkedContractCountSql(
+      groupedStoFromRow,
+      'c',
+      'g.contract_count_from_join',
+    );
 
-    const contractMetaSelect = compact
-      ? `
+    const contractMetaSelectCore = `
           MAX(NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '')) AS contract_reference_po,
-          CASE
-            WHEN NULLIF(${groupedStoTrimExpr}, '') IS NOT NULL THEN
+          STRING_AGG(
+            DISTINCT NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), ''),
+            ', ' ORDER BY NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), '')
+          ) FILTER (WHERE NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), '') IS NOT NULL) AS contract_ext_no_from_join,
+          STRING_AGG(DISTINCT c.contract_id, ', ' ORDER BY c.contract_id)
+            FILTER (WHERE c.contract_id IS NOT NULL) AS contract_numbers_from_join,
+          STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number)
+            FILTER (WHERE c.po_number IS NOT NULL AND TRIM(c.po_number) != '') AS po_numbers_from_join,
+          COUNT(DISTINCT c.contract_id) FILTER (WHERE c.contract_id IS NOT NULL) AS contract_count_from_join`;
+
+    const contractExtNoEnrichedSql = compact
+      ? `CASE
+            WHEN ${groupedStoFromRow} IS NOT NULL THEN
               (SELECT STRING_AGG(DISTINCT v, ', ' ORDER BY v)
                FROM (
                  SELECT NULLIF(TRIM(COALESCE(l2.contract_ext_no_raw, '')), '') AS v
                  FROM contracts cc
                  LEFT JOIN latest_spd_contract l2 ON l2.contract_number = cc.contract_id
-                 WHERE TRIM(cc.sto_number::text) = ${groupedStoTrimExpr}
+                 WHERE cc.contract_id IN (
+                   SELECT DISTINCT cxs.contract_id FROM contract_stos cs
+                   INNER JOIN contracts cxs ON cxs.id = cs.contract_id
+                   WHERE TRIM(cs.sto_number::text) = ${groupedStoFromRow}
+                   UNION
+                   SELECT cc2.contract_id FROM contracts cc2
+                   WHERE TRIM(COALESCE(cc2.sto_number::text, '')) = ${groupedStoFromRow}
+                 )
                ) ext
                WHERE v IS NOT NULL AND v != '')
-            ELSE
-              STRING_AGG(
-                DISTINCT NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), ''),
-                ', ' ORDER BY NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), '')
-              ) FILTER (WHERE NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), '') IS NOT NULL)
+            ELSE g.contract_ext_no_from_join
           END AS contract_ext_no`
-      : `
-          -- Get contract reference PO from contracts or sap_processed_data
-          MAX((SELECT COALESCE(
-                  spd.data->'contract'->>'contract_reference_po',
-                  spd.data->>'CONTRACT REFF PO'
-                )
-           FROM sap_processed_data spd
-           WHERE TRIM(spd.sto_number::text) = TRIM(${listStoKeySql})
-           ORDER BY spd.created_at DESC NULLS LAST
-           LIMIT 1)) AS contract_reference_po,
-          -- Get Contract Ext No from sap_processed_data
-          MAX((SELECT COALESCE(
-                  spd.data->'raw'->>'Contract Ext No',
-                  spd.data->>'Contract Ext No'
-                )
-           FROM sap_processed_data spd
-           WHERE TRIM(spd.sto_number::text) = TRIM(${listStoKeySql})
-           ORDER BY spd.created_at DESC NULLS LAST
-           LIMIT 1)) AS contract_ext_no`;
+      : `(SELECT COALESCE(
+            spd.data->'raw'->>'Contract Ext No',
+            spd.data->>'Contract Ext No'
+          )
+          FROM sap_processed_data spd
+          WHERE TRIM(spd.sto_number::text) = TRIM(${groupedStoFromRow})
+          ORDER BY spd.created_at DESC NULLS LAST
+          LIMIT 1) AS contract_ext_no`;
+
+    const shipmentBaseEnrichCte = `,
+      shipment_base AS (
+        SELECT
+          g.*,
+          ${stoLinkedContractNumbersSql} AS contract_numbers,
+          ${stoLinkedPoNumbersSql} AS po_numbers,
+          ${stoLinkedContractCountSql} AS contract_count,
+          ${contractExtNoEnrichedSql}
+        FROM shipment_base_core g
+      )`;
 
     const seaMixTransportCond = buildShipmentSeaMixTransportSql('c');
     const excludeStoTypeTCond = buildShipmentExcludeStoTypeTSql('c', 'l', 's');
@@ -504,7 +515,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
       ),
-      shipment_base AS (
+      shipment_base_core AS (
         SELECT 
 `
       : `WITH ${vlpCtes}
@@ -514,13 +525,13 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
       ),
-      shipment_base AS (
+      shipment_base_core AS (
         SELECT 
 `;
 
     let queryText = `${prelude}
           ${listStoKeySql} as sto_key,
-          ${sqlShipmentListPrimaryIdAgg(listStoKeySql)} as id,
+          ${sqlShipmentListPrimaryIdAgg(listStoKeySql, 'c', 'l', 's', 'cs_sto')} as id,
           MAX(${listStoDisplaySql}) as sto_number,
           MAX(s.shipment_id) as shipment_id,
           MAX(s.operation_id) as operation_id,
@@ -572,9 +583,6 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.sap_delivery_id) as sap_delivery_id,
           MAX(s.created_at) as created_at,
           MAX(s.updated_at) as updated_at,
-          -- Aggregate contract data (STO-linked: all contracts on same sto_number, not only shipment join)
-          ${stoLinkedContractNumbersSql} as contract_numbers,
-          ${stoLinkedPoNumbersSql} as po_numbers,
           MAX(c.supplier) as supplier,
           STRING_AGG(DISTINCT c.supplier, ', ' ORDER BY c.supplier) FILTER (WHERE c.supplier IS NOT NULL) as suppliers,
           MAX(c.buyer) as buyer,
@@ -584,7 +592,6 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(c.incoterm) as incoterm,
           MAX(c.group_name) as group_name,
           STRING_AGG(DISTINCT c.group_name, ', ' ORDER BY c.group_name) FILTER (WHERE c.group_name IS NOT NULL) as group_names,
-          ${stoLinkedContractCountSql} as contract_count,
           -- Get delivery dates from contracts
           MAX(c.contract_date) as contract_date,
           MAX(c.delivery_start_date) as delivery_start_date,
@@ -592,10 +599,13 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           BOOL_OR(${sqlIsContractSapClosedExpr('c')}) AS is_contract_sap_closed,
 ${ataSelect}
 ${etaExtraSelect}
-${contractMetaSelect}
+${contractMetaSelectCore}
         FROM shipments s
         LEFT JOIN contracts c ON s.contract_id = c.id
         LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+        LEFT JOIN contract_stos cs_sto ON cs_sto.contract_id = c.id
+          AND NULLIF(TRIM(cs_sto.sto_number::text), '') IS NOT NULL
+          AND TRIM(cs_sto.sto_number::text) = TRIM((${listStoKeySql})::text)
         LEFT JOIN vlp_load_first vlp_l ON vlp_l.shipment_id = s.id
         LEFT JOIN vlp_disc_first vlp_d ON vlp_d.shipment_id = s.id
         ${SHIPMENT_ATA_OVERRIDES_JOIN}
@@ -631,10 +641,12 @@ ${contractMetaSelect}
 
     queryText += `
         GROUP BY ${listStoKeySql}
-      )`;
+      )${shipmentBaseEnrichCte}`;
 
     /** Full grouped dataset (expensive on large YTD). Used for summary aggregates. */
     const shipmentBaseCteSqlFull = queryText;
+    /** Summary skips sto-linked enrich subqueries — status/ETA only needs shipment_base_core columns. */
+    const shipmentBaseCteSqlSummary = shipmentBaseCteSqlFull.replace(shipmentBaseEnrichCte, '');
 
     const stoKeyExpr = listStoKeySql;
 
@@ -667,6 +679,25 @@ ${contractMetaSelect}
     const toolbarOuterParams = [...gSearch.params, ...cCol.params, ...li.params, ...vo.params];
     const countParams = [...innerParams, ...outerParams];
     const toolbarCountParams = [...innerParams, ...toolbarOuterParams];
+
+    const shipmentListFilterCacheKey = buildShipmentListFilterCacheKey({
+      vessel,
+      port,
+      dateFrom,
+      dateTo,
+      delayed,
+      sto,
+      contract,
+      plants,
+      globalSearch,
+      colFilters,
+      lateIndicator: lateIndicatorParam,
+      viewOption: viewOptionParam,
+      viewQuery: viewQueryParam,
+      status: typeof status === 'string' ? status : 'ALL',
+      etaLoading: etaLoadingBucket ?? 'ALL',
+      etaDischarge: etaDischargeBucket ?? 'ALL',
+    });
 
     /**
      * Default list view (YTD, no toolbar filters): aggregate only the current page's STO keys.
@@ -709,15 +740,15 @@ ${contractMetaSelect}
         LIMIT $${outerFilterStartIndex} OFFSET $${outerFilterStartIndex + 1}
       ),`;
       shipmentBaseCteSqlList = shipmentBaseCteSqlFull.replace(
-        ',\n      shipment_base AS (',
+        ',\n      shipment_base_core AS (',
         `,${rankedStoCte}${pagedStoCte}
-      shipment_base AS (`,
+      shipment_base_core AS (`,
       );
       if (shipmentBaseCteSqlList === shipmentBaseCteSqlFull) {
         shipmentBaseCteSqlList = shipmentBaseCteSqlFull.replace(
-          ',      shipment_base AS (',
+          ',      shipment_base_core AS (',
           `,${rankedStoCte}${pagedStoCte}
-      shipment_base AS (`,
+      shipment_base_core AS (`,
         );
       }
       shipmentBaseCteSqlList = shipmentBaseCteSqlList.replace(
@@ -755,10 +786,10 @@ ${contractMetaSelect}
     const summaryFilterSql = summaryOnly ? toolbarOuterSql : outerSql;
     const summaryFilterParams = summaryOnly ? toolbarCountParams : countParams;
 
-    const summaryCountQuery = `${shipmentBaseCteSqlFull}
+    const summaryCountQuery = `${shipmentBaseCteSqlSummary}
       , filtered_shipments AS (
         SELECT sb.*
-        FROM shipment_base sb
+        FROM shipment_base_core sb
         WHERE 1=1 ${summaryFilterSql}
       )${summaryScopeCte}
       , enriched AS (
@@ -849,8 +880,16 @@ ${contractMetaSelect}
       FROM enriched`;
 
     if (compact && summaryOnly) {
+      const summaryCacheKey = buildShipmentSummaryCacheKey(
+        shipmentListFilterCacheKey,
+        scopeStatusParam,
+      );
       const tSum0 = performance.now();
-      const summaryResult = await query(summaryCountQuery, [...summaryFilterParams, ...summaryScopeParams]);
+      const { summaryRow: sr, totalCount: tc } = await loadShipmentListSummary(
+        summaryCountQuery,
+        [...summaryFilterParams, ...summaryScopeParams],
+        summaryCacheKey,
+      );
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
@@ -858,9 +897,8 @@ ${contractMetaSelect}
         compact,
         page: Number(page),
         limit: Number(limit),
+        summaryCacheKey,
       });
-      const sr = (summaryResult.rows[0] || {}) as Record<string, unknown>;
-      const tc = parseInt(String(sr.total_count ?? '0'), 10) || 0;
       return res.json({
         success: true,
         data: {
@@ -877,24 +915,7 @@ ${contractMetaSelect}
     }
 
     if (compact) {
-      const filterCacheKey = buildShipmentListFilterCacheKey({
-        vessel,
-        port,
-        dateFrom,
-        dateTo,
-        delayed,
-        sto,
-        contract,
-        plants,
-        globalSearch,
-        colFilters,
-        lateIndicator: lateIndicatorParam,
-        viewOption: viewOptionParam,
-        viewQuery: viewQueryParam,
-        status: typeof status === 'string' ? status : 'ALL',
-        etaLoading: etaLoadingBucket ?? 'ALL',
-        etaDischarge: etaDischargeBucket ?? 'ALL',
-      });
+      const filterCacheKey = shipmentListFilterCacheKey;
       const cacheKey = buildShipmentListCacheKey({
         vessel,
         port,
@@ -942,8 +963,16 @@ ${contractMetaSelect}
     }
 
     if (summaryOnly) {
+      const summaryCacheKey = buildShipmentSummaryCacheKey(
+        shipmentListFilterCacheKey,
+        scopeStatusParam,
+      );
       const tSum0 = performance.now();
-      const summaryResult = await query(summaryCountQuery, [...summaryFilterParams, ...summaryScopeParams]);
+      const { summaryRow: sr, totalCount: tc } = await loadShipmentListSummary(
+        summaryCountQuery,
+        [...summaryFilterParams, ...summaryScopeParams],
+        summaryCacheKey,
+      );
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
@@ -953,9 +982,8 @@ ${contractMetaSelect}
         effectiveListStoPaging,
         page: Number(page),
         limit: Number(limit),
+        summaryCacheKey,
       });
-      const sr = (summaryResult.rows[0] || {}) as Record<string, unknown>;
-      const tc = parseInt(String(sr.total_count ?? '0'), 10) || 0;
       return res.json({
         success: true,
         data: {

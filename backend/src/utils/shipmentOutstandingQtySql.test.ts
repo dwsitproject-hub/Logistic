@@ -14,12 +14,14 @@ describe('shipmentOutstandingQtySql', () => {
     expect(sql).toContain('GREATEST');
   });
 
-  it('builds list projection with SAP and shipment fallbacks', () => {
+  it('builds list projection with SAP and shipment manual resolve', () => {
     const sql = shipmentListOutstandingQtySql();
     expect(sql).toContain('sa.sto_quantity');
     expect(sql).toContain('sa.quantity_receive');
     expect(sql).toContain('sa.quantity_delivered_sap');
     expect(sql).toContain('sp.actual_vessel_qty_receive');
+    expect(sql).toContain('sp.quantity_delivered');
+    expect(sql).toContain('ABS');
     expect(sql).toContain('sl.incoterm');
   });
 });

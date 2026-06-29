@@ -29,10 +29,11 @@ describe('shipmentStoTypeSql', () => {
     expect(sql.indexOf('s.shipment_id::text')).toBeLessThan(sql.indexOf('c.sto_number::text'));
   });
 
-  it('display STO expr excludes operation_id fallback', () => {
+  it('display STO expr prefers distinct numeric shipment_id before contract sto_number', () => {
     const sql = shipmentListDisplayStoNumberExpr('c', 'l', 's');
+    expect(sql).toContain('s.shipment_id::text');
     expect(sql).toContain('c.sto_number::text');
-    expect(sql).toContain('l.effective_sto');
+    expect(sql.indexOf('s.shipment_id::text')).toBeLessThan(sql.indexOf('c.sto_number::text'));
     expect(sql).not.toContain('operation_id');
   });
 

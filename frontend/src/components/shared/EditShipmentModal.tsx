@@ -39,6 +39,12 @@ import {
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatQtyMtFromKg } from '@/lib/utils'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { hasVesselPortsQuantityUserEdits } from '@/lib/vesselPortsQuantityEdits'
+import {
+  mergeShipmentQtyOverridesOnContractRows,
+  sapDeliveredOrReceiveMtToKg,
+  shipmentStoredQtyKg,
+} from '@/lib/shipmentQuantityUnits'
 import {
   sumVesselPortsQuantityEdits,
   type VesselPortsQuantityEdits,
@@ -221,6 +227,8 @@ type EtaBlock = {
   contractLabels: string[]
   fields: EditEtaFields
   isEditing: boolean
+  /** Unsaved block created via Add — Cancel restores the previous active ETA. */
+  isDraft?: boolean
 }
 
 type ActivityLogRow = {
@@ -333,13 +341,13 @@ export function EditShipmentModal({
   )
 
   const vesselCapacityMt = parseApiNumber(vesselMeta.vessel_capacity)
-  // sto_qty_assigned is stored in MT (SAP sto_quantity / user assignment), same unit as vessel_capacity.
+  // sto_qty_assigned from contract details API is kg (same as contract_qty / list sto_quantity).
   const totalAssignedMt = useMemo(() => {
-    let sum = 0
+    let sumKg = 0
     for (const row of detailRows) {
-      sum += row.sto_qty_assigned ?? 0
+      sumKg += row.sto_qty_assigned ?? 0
     }
-    return sum
+    return sumKg / 1000
   }, [detailRows])
 
   const qtyTotals = useMemo(
@@ -501,8 +509,8 @@ export function EditShipmentModal({
                 contract_qty: parseApiNumber(d.contract_qty) ?? 0,
                 outstanding_qty: parseApiNumber(d.outstanding_qty) ?? 0,
                 sto_qty_assigned: parseApiNumber(d.sto_qty_assigned) ?? 0,
-                quantity_delivered: parseApiNumber(d.quantity_delivered),
-                quantity_receive: parseApiNumber(d.quantity_receive),
+                quantity_delivered: sapDeliveredOrReceiveMtToKg(parseApiNumber(d.quantity_delivered)),
+                quantity_receive: sapDeliveredOrReceiveMtToKg(parseApiNumber(d.quantity_receive)),
               })
             }
           }
@@ -537,11 +545,19 @@ export function EditShipmentModal({
               contract_qty: contractQty,
               outstanding_qty: outstanding,
               sto_qty_assigned: 0,
-              quantity_delivered: parseApiNumber(info.quantity_delivered),
-              quantity_receive: parseApiNumber(info.actual_vessel_qty_receive),
+              quantity_delivered: shipmentStoredQtyKg(parseApiNumber(info.quantity_delivered)),
+              quantity_receive: shipmentStoredQtyKg(parseApiNumber(info.actual_vessel_qty_receive)),
             })
           }
         }
+
+        const shipmentDeliveredKg = shipmentStoredQtyKg(parseApiNumber(info.quantity_delivered))
+        const shipmentReceiveKg = shipmentStoredQtyKg(parseApiNumber(info.actual_vessel_qty_receive))
+        contractDetails = mergeShipmentQtyOverridesOnContractRows(
+          contractDetails,
+          shipmentDeliveredKg,
+          shipmentReceiveKg,
+        )
 
         setDetailRows(contractDetails)
 
@@ -574,10 +590,10 @@ export function EditShipmentModal({
 
         const deliveredKg =
           contractDetails.reduce((s, r) => s + (r.quantity_delivered ?? 0), 0) ||
-          parseApiNumber(info.quantity_delivered)
+          shipmentDeliveredKg
         const receiveKg =
           contractDetails.reduce((s, r) => s + (r.quantity_receive ?? 0), 0) ||
-          parseApiNumber(info.actual_vessel_qty_receive)
+          shipmentReceiveKg
         setOriginalDeliveredKg(deliveredKg)
         setOriginalReceiveKg(receiveKg)
 
@@ -757,6 +773,7 @@ export function EditShipmentModal({
     setSaving(true)
     setNotification(null)
     try {
+      const qtyUserEdited = hasVesselPortsQuantityUserEdits(qtyTableRows, qtyEdits)
       await saveEditShipmentChanges({
         shipmentId,
         vesselName,
@@ -783,8 +800,12 @@ export function EditShipmentModal({
         kind: 'update',
         shipmentId,
         vessel_name: vesselName.trim() !== originalVesselName.trim() ? vesselName.trim() : undefined,
-        quantity_delivered: qtyTotals.quantity_delivered,
-        actual_vessel_qty_receive: qtyTotals.quantity_receive,
+        ...(qtyUserEdited && qtyTotals.quantity_delivered !== null
+          ? { quantity_delivered: qtyTotals.quantity_delivered }
+          : {}),
+        ...(qtyUserEdited && qtyTotals.quantity_receive !== null
+          ? { actual_vessel_qty_receive: qtyTotals.quantity_receive }
+          : {}),
         sfal_qty: sfalQty,
         sfbd_qty: sfbdQty,
         eta_arrival: toApiDateOnly(activeBlock.fields.etaVesselArrivalAtLoadingPort),
@@ -811,8 +832,8 @@ export function EditShipmentModal({
   const handleAddEta = () => {
     setEtaBlocks((prev) => {
       const active = prev.find((b) => b.status === 'active')
-      if (!active) return prev
-      const historical = { ...active, status: 'historical' as const, isEditing: false }
+      if (!active || active.isDraft) return prev
+      const historical = { ...active, status: 'historical' as const, isEditing: false, isDraft: false }
       const newActive: EtaBlock = {
         id: `eta-${Date.now()}`,
         status: 'active',
@@ -820,8 +841,31 @@ export function EditShipmentModal({
         contractLabels: [...active.contractLabels],
         fields: emptyEtaFields(),
         isEditing: true,
+        isDraft: true,
       }
       return [...prev.filter((b) => b.id !== active.id), historical, newActive]
+    })
+  }
+
+  const handleCancelAddEta = () => {
+    setEtaBlocks((prev) => {
+      const draft = prev.find((b) => b.status === 'active' && b.isDraft)
+      if (!draft) return prev
+      const withoutDraft = prev.filter((b) => b.id !== draft.id)
+      const promotedHistorical = [...withoutDraft]
+        .reverse()
+        .find((b) => b.status === 'historical')
+      if (!promotedHistorical) return withoutDraft
+      const restored: EtaBlock = {
+        ...promotedHistorical,
+        status: 'active',
+        isEditing: false,
+        isDraft: false,
+      }
+      return [
+        ...withoutDraft.filter((b) => b.id !== promotedHistorical.id),
+        restored,
+      ]
     })
   }
 
@@ -1083,7 +1127,7 @@ export function EditShipmentModal({
                             </TableCell>
                             <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right tabular-nums`}>
                               {row.sto_qty_assigned > 0
-                                ? `${formatNumber(row.sto_qty_assigned)} MT`
+                                ? formatQtyMtFromKg(row.sto_qty_assigned)
                                 : '—'}
                             </TableCell>
                             <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right tabular-nums`}>
@@ -1218,57 +1262,61 @@ export function EditShipmentModal({
                 <h4 className="text-sm font-semibold text-gray-800">3. ETA + Loading Port</h4>
               </div>
               <div className="space-y-4 p-4">
-                {historicalEtaBlocks.map((block) => (
-                  <div key={block.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 opacity-80">
-                    <div className="mb-2 flex items-center gap-2">
-                      <Badge variant="outline" className="text-[10px]">
-                        Previous ETA (historical)
-                      </Badge>
-                      <span className="text-xs text-gray-500">{block.loadingPort || '—'}</span>
-                    </div>
-                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
-                      {ETA_FIELD_ROWS.map(({ key, label }) => (
-                        <div key={key}>
-                          <div className="text-[10px] text-gray-500">{label}</div>
-                          <div className="text-xs font-medium">{formatDateDMY(block.fields[key]) || '—'}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-
                 {activeEtaBlock && (
                   <div className="rounded-lg border border-blue-100 bg-white p-3">
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                      <Badge className="bg-blue-600 text-white text-[10px]">Active ETA</Badge>
+                      <Badge
+                        className={
+                          activeEtaBlock.isDraft
+                            ? 'bg-amber-600 text-white text-[10px]'
+                            : 'bg-blue-600 text-white text-[10px]'
+                        }
+                      >
+                        {activeEtaBlock.isDraft ? 'New ETA' : 'Active ETA'}
+                      </Badge>
                       {canModifyShipment && (
                       <div className="flex gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs"
-                          onClick={() =>
-                            setEtaBlocks((prev) =>
-                              prev.map((b) =>
-                                b.status === 'active' ? { ...b, isEditing: !b.isEditing } : b,
-                              ),
-                            )
-                          }
-                        >
-                          <Edit2 className="h-3.5 w-3.5 mr-1" />
-                          {activeEtaBlock.isEditing ? 'Lock' : 'Edit'}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs"
-                          onClick={handleAddEta}
-                        >
-                          <Plus className="h-3.5 w-3.5 mr-1" />
-                          Add
-                        </Button>
+                        {activeEtaBlock.isDraft ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs text-red-600 hover:text-red-700"
+                            onClick={handleCancelAddEta}
+                          >
+                            <X className="h-3.5 w-3.5 mr-1" />
+                            Cancel
+                          </Button>
+                        ) : (
+                          <>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs"
+                              onClick={() =>
+                                setEtaBlocks((prev) =>
+                                  prev.map((b) =>
+                                    b.status === 'active' ? { ...b, isEditing: !b.isEditing } : b,
+                                  ),
+                                )
+                              }
+                            >
+                              <Edit2 className="h-3.5 w-3.5 mr-1" />
+                              {activeEtaBlock.isEditing ? 'Lock' : 'Edit'}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs"
+                              onClick={handleAddEta}
+                            >
+                              <Plus className="h-3.5 w-3.5 mr-1" />
+                              Add
+                            </Button>
+                          </>
+                        )}
                       </div>
                       )}
                     </div>
@@ -1312,6 +1360,25 @@ export function EditShipmentModal({
                     </div>
                   </div>
                 )}
+
+                {historicalEtaBlocks.map((block) => (
+                  <div key={block.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 opacity-80">
+                    <div className="mb-2 flex items-center gap-2">
+                      <Badge variant="outline" className="text-[10px]">
+                        Previous ETA (historical)
+                      </Badge>
+                      <span className="text-xs text-gray-500">{block.loadingPort || '—'}</span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
+                      {ETA_FIELD_ROWS.map(({ key, label }) => (
+                        <div key={key}>
+                          <div className="text-[10px] text-gray-500">{label}</div>
+                          <div className="text-xs font-medium">{formatDateDMY(block.fields[key]) || '—'}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 

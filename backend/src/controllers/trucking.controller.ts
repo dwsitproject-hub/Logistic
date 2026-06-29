@@ -26,9 +26,11 @@ import {
   sqlTruckingQuantitySentCoalesce,
 } from '../utils/truckingQuantitySql';
 import {
-  truckingPageLandTransportForContractWhereSql,
+  isTruckingPageIncoterm,
   truckingPageListScopeWhereSql,
-} from '../utils/truckingStoTypeSql';
+} from '../utils/truckingIncotermScope';
+import { sqlContractGlobalOutstandingExpr } from '../utils/contractGlobalOutstandingSql';
+import { buildQtyMoveCte } from '../utils/contractGlobalOutstandingSql';
 import {
   sqlSapTruckingLastReceiveDate,
   sqlSapTruckingStartReceiveDate,
@@ -142,7 +144,7 @@ export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Resp
         UPPER(TRIM(COALESCE(l.b2b_flag, c.contract_type::text, ''))) = 'B2B'
         AND NULLIF(TRIM(COALESCE(l.contract_reference_po, '')), '') IS NOT NULL
       )
-      ${truckingPageLandTransportForContractWhereSql}
+      ${truckingPageListScopeWhereSql}
       ORDER BY
         CASE
           WHEN COALESCE(c.po_number, '') = $2 THEN 0
@@ -523,13 +525,43 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
           (COALESCE(l.contract_ext_no, '') = $1) DESC,
           c.contract_date DESC NULLS LAST
         LIMIT 1
+      ),
+      contract_candidates AS (
+        SELECT contract_id AS contract_number FROM matched
+      ),
+      ${buildQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_number FROM contract_candidates' })},
+      sto_lines AS (
+        SELECT STRING_AGG(DISTINCT TRIM(sto.sto_number), ', ' ORDER BY TRIM(sto.sto_number)) AS sto_numbers
+        FROM (
+          SELECT TRIM(cs.sto_number::text) AS sto_number
+          FROM contract_stos cs
+          INNER JOIN matched m ON m.id = cs.contract_id
+          WHERE cs.sto_number IS NOT NULL AND TRIM(cs.sto_number::text) != ''
+          UNION
+          SELECT TRIM(COALESCE(
+            spd.sto_number::text,
+            spd.data->'raw'->>'STO No.',
+            spd.data->'raw'->>'STO Number',
+            spd.data->'shipment'->>'sto_no'
+          )) AS sto_number
+          FROM sap_processed_data spd
+          INNER JOIN matched m ON m.contract_id = spd.contract_number
+          WHERE TRIM(COALESCE(
+            spd.sto_number::text,
+            spd.data->'raw'->>'STO No.',
+            spd.data->'raw'->>'STO Number',
+            spd.data->'shipment'->>'sto_no'
+          )) != ''
+        ) sto
+        WHERE sto.sto_number IS NOT NULL AND TRIM(sto.sto_number) != ''
       )
       SELECT
         c.id,
         c.contract_id,
         c.po_number,
         l.contract_ext_no,
-        c.sto_number,
+        COALESCE(NULLIF(TRIM(sl.sto_numbers), ''), NULLIF(TRIM(c.sto_number::text), '')) AS sto_number,
+        sl.sto_numbers,
         c.supplier,
         c.buyer,
         c.product,
@@ -540,6 +572,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         c.delivery_end_date,
         c.cargo_readiness_date,
         c.transport_mode,
+        c.incoterm,
         c.status AS contract_status,
         (
           SELECT COALESCE(spd.data->'contract'->>'status', spd.data->>'status')
@@ -576,27 +609,14 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
           ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC NULLS LAST
           LIMIT 1
         ) AS supplier_mills_suggestion,
-        GREATEST(
-          COALESCE(c.quantity_ordered, 0)
-          - COALESCE((
-              SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-              FROM (
-                SELECT COALESCE(
-                  spd.data->'raw'->>'Qty Receive',
-                  spd.data->'raw'->>'Quantity Receive',
-                  spd.data->>'quantity_delivered_via_trucking'
-                ) AS val
-                FROM sap_processed_data spd
-                WHERE spd.contract_number = c.contract_id
-                ORDER BY spd.created_at DESC NULLS LAST
-                LIMIT 1
-              ) q
-              WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\s]+$'
-            ), 0),
-          0
-        ) AS outstanding_quantity
+        ${sqlContractGlobalOutstandingExpr({
+          contractQtyExpr: 'COALESCE(c.quantity_ordered, 0)',
+          incotermExpr: 'c.incoterm',
+          contractNumberExpr: 'c.contract_id',
+        })} AS outstanding_quantity
       FROM matched c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+      LEFT JOIN sto_lines sl ON TRUE
       LEFT JOIN master_plants mp ON mp.plant_code = c.plant_code
       LEFT JOIN LATERAL (
         SELECT
@@ -619,13 +639,13 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       });
     }
 
-    const row = result.rows[0] as { transport_mode?: string | null };
-    if (String(row.transport_mode ?? '').trim().toUpperCase() === 'SEA') {
+    const row = result.rows[0] as { transport_mode?: string | null; incoterm?: string | null };
+    if (!isTruckingPageIncoterm(row.incoterm)) {
       return res.json({
         success: true,
         exists: false,
         message:
-          'Trucking operations cannot be created for SEA-only contracts. Use Shipments for sea logistics, or set transport mode to MIX/LAND.',
+          'Trucking operations are only available for FRC/LCO incoterms. Use Shipments for sea logistics (CIF/FOB/CFR).',
       });
     }
 

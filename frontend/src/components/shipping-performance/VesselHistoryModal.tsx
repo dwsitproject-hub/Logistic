@@ -23,6 +23,7 @@ import {
   type VesselModalOpenColumnKey,
 } from '@/lib/shippingPerformanceVesselModal'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { formatShipmentStatusLabel } from '@/lib/shipmentStatusDisplay'
 import { cn } from '@/lib/utils'
 import { Anchor, Loader2, Ship, X } from 'lucide-react'
 
@@ -165,7 +166,7 @@ function renderOpenCell(row: ShippingPerfVesselModalAggregatedRow, key: VesselMo
   if (key === 'status') {
     const status = String(row.status ?? '').trim()
     if (!status) return <span className="text-gray-400">-</span>
-    return <Badge className={getStatusColor(status)}>{status}</Badge>
+    return <Badge className={getStatusColor(status)}>{formatShipmentStatusLabel(status)}</Badge>
   }
   if (isVesselModalOpenDeltaColumn(key)) {
     return renderDeltaDaysCell(resolveVesselModalOpenDeltaDays(row, key))
@@ -186,7 +187,7 @@ function renderHistoryCell(row: ShippingPerfVesselModalAggregatedRow, key: Vesse
   if (key === 'status') {
     const status = String(row.status ?? '').trim()
     if (!status) return <span className="text-gray-400">-</span>
-    return <Badge className={getStatusColor(status)}>{status}</Badge>
+    return <Badge className={getStatusColor(status)}>{formatShipmentStatusLabel(status)}</Badge>
   }
   if (isVesselModalHistoryDeltaColumn(key)) {
     return renderDeltaDaysCell(resolveVesselModalHistoryDeltaDays(row, key))

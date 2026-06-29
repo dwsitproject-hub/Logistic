@@ -1,4 +1,5 @@
 import { OIL_LOSS_ELIGIBILITY_WHERE_SQL, OIL_LOSS_TRANSPORTER_EXPR } from './oilLossEligibility';
+import { shipmentManualQtyResolveSql } from './shipmentManualQtyResolveSql';
 import {
   OIL_LOSS_SFAL_QTY_EXPR,
   OIL_LOSS_SFBD_QTY_EXPR,
@@ -13,11 +14,10 @@ import {
 
 /** Pre-aggregated lookups — avoids per-row LATERAL scans over full SAP dataset. */
 export const OIL_LOSS_LOOKUP_CTES = `
-  oil_loss_only AS (
+  oil_loss_closed AS (
     SELECT *
     FROM parsed
-    WHERE qty_receive < qty_delivery
-      AND LOWER(status) = 'close'
+    WHERE LOWER(status) = 'close'
   ),
   contracts_latest AS (
     SELECT DISTINCT ON (contract_id)
@@ -35,7 +35,9 @@ export const OIL_LOSS_LOOKUP_CTES = `
     SELECT DISTINCT ON (TRIM(shipment_id))
       TRIM(shipment_id) AS sto_key,
       sfal_qty,
-      sfbd_qty
+      sfbd_qty,
+      quantity_delivered,
+      actual_vessel_qty_receive
     FROM shipments
     WHERE NULLIF(TRIM(shipment_id), '') IS NOT NULL
     ORDER BY TRIM(shipment_id), updated_at DESC NULLS LAST
@@ -44,7 +46,9 @@ export const OIL_LOSS_LOOKUP_CTES = `
     SELECT DISTINCT ON (c.contract_id)
       c.contract_id,
       s.sfal_qty,
-      s.sfbd_qty
+      s.sfbd_qty,
+      s.quantity_delivered,
+      s.actual_vessel_qty_receive
     FROM shipments s
     INNER JOIN contracts c ON c.id = s.contract_id
     WHERE NULLIF(TRIM(c.contract_id), '') IS NOT NULL
@@ -169,8 +173,10 @@ export function buildOilLossMainSql(): string {
           NULLIF(TRIM(pbc.group_plant), ''),
           NULLIF(TRIM(pbco.group_plant), ''),
           'Blank'
-        ) AS group_plant_resolved
-      FROM oil_loss_only p
+        ) AS group_plant_resolved,
+        COALESCE(sh_sto.quantity_delivered, sh_ct.quantity_delivered) AS shipment_qty_delivered_kg,
+        COALESCE(sh_sto.actual_vessel_qty_receive, sh_ct.actual_vessel_qty_receive) AS shipment_qty_receive_kg
+      FROM oil_loss_closed p
       LEFT JOIN contracts_latest ct
         ON NULLIF(TRIM(p.contract_number), '') IS NOT NULL
        AND ct.contract_id = TRIM(p.contract_number)
@@ -192,6 +198,13 @@ export function buildOilLossMainSql(): string {
        AND NULLIF(TRIM(ct.company_name), '') IS NOT NULL
       LEFT JOIN plants_by_code pbco
         ON pbco.plant_code_key = TRIM(UPPER(COALESCE(ct.plant_code, '')))
+    ),
+    with_qty AS (
+      SELECT
+        e.*,
+        ${shipmentManualQtyResolveSql('e.shipment_qty_delivered_kg', 'e.qty_delivery')} AS qty_delivery_resolved,
+        ${shipmentManualQtyResolveSql('e.shipment_qty_receive_kg', 'e.qty_receive')} AS qty_receive_resolved
+      FROM enriched e
     )
     SELECT
       id,
@@ -224,20 +237,21 @@ export function buildOilLossMainSql(): string {
         ''
       )                                             AS unloading_location,
       status,
-      qty_delivery                                AS quantity_delivery,
-      qty_receive                                 AS quantity_received,
-      qty_delivery                                AS quantity_sent,
+      qty_delivery_resolved                         AS quantity_delivery,
+      qty_receive_resolved                          AS quantity_received,
+      qty_delivery_resolved                         AS quantity_sent,
       ${OIL_LOSS_SFAL_QTY_EXPR}                   AS quantity_sfal,
       ${OIL_LOSS_SFBD_QTY_EXPR}                   AS quantity_sfbd,
-      (qty_receive - qty_delivery)                AS gain_loss_amount,
+      (qty_receive_resolved - qty_delivery_resolved) AS gain_loss_amount,
       CASE
-        WHEN qty_delivery > 0
-        THEN ROUND((qty_receive - qty_delivery) / qty_delivery * 100, 4)
+        WHEN qty_delivery_resolved > 0
+        THEN ROUND((qty_receive_resolved - qty_delivery_resolved) / qty_delivery_resolved * 100, 4)
         ELSE 0
       END                                         AS gain_loss_percentage
-    FROM enriched
+    FROM with_qty
     WHERE ${OIL_LOSS_ELIGIBILITY_WHERE_SQL}
-    ORDER BY (qty_receive - qty_delivery) ASC
+      AND qty_receive_resolved < qty_delivery_resolved
+    ORDER BY (qty_receive_resolved - qty_delivery_resolved) ASC
   `;
 }
 

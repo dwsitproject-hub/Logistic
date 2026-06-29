@@ -15,6 +15,10 @@ import { FieldHelp } from '@/components/FieldHelp'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import {
+  formatShipmentStatusLabel,
+  SHIPMENT_STATUS_DISPLAY_LABELS,
+} from '@/lib/shipmentStatusDisplay'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
@@ -25,6 +29,7 @@ import {
   VesselPortsQuantitiesTable,
   type VesselPortsQuantityEdits,
 } from '@/components/shipments/VesselPortsQuantitiesTable'
+import { hasVesselPortsQuantityUserEdits } from '@/lib/vesselPortsQuantityEdits'
 import {
   VESSEL_MODAL_BODY_CLASS,
   VESSEL_MODAL_HEADER_CLASS,
@@ -37,6 +42,13 @@ import {
 import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
 import { fetchContractPurchaseOrderOptions } from '@/components/shared/addNewShipmentTypes'
 import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
+import {
+  mergeShipmentQtyOverridesOnContractRows,
+  resolveShipmentListDeliveredKg,
+  resolveShipmentListReceiveKg,
+  sapDeliveredOrReceiveMtToKg,
+  shipmentStoredQtyKg,
+} from '@/lib/shipmentQuantityUnits'
 import {
   BulkUploadStatusModal,
   type BulkUploadStatusResult,
@@ -131,17 +143,7 @@ function etaDischargeCardHelp(specific: string): string {
   return `${FIELD_HELP.shipmentEtaDischargeScope}\n\n${FIELD_HELP.shipmentEtaDayDiff}\n\n${specific}`
 }
 
-const SHIPMENT_STATUS_LABELS: Record<string, string> = {
-  UNPLANNED: 'Unplanned',
-  PLANNED: 'Planned',
-  IN_PROGRESS: 'In Progress',
-  LOADING: 'Loading',
-  IN_TRANSIT: 'In Transit',
-  ARRIVED: 'Arrived',
-  UNLOADING: 'Unloading',
-  COMPLETED: 'Completed',
-  CANCELLED: 'Cancelled',
-}
+const SHIPMENT_STATUS_LABELS = SHIPMENT_STATUS_DISPLAY_LABELS
 
 interface Shipment {
   id: string
@@ -580,8 +582,8 @@ function mapContractDetailFromApi(detail: Record<string, unknown>): PortsModalCo
     po_number: detail.po_number != null ? String(detail.po_number) : '',
     delivery_start_date: (detail.delivery_start_date as string | null | undefined) ?? null,
     delivery_end_date: (detail.delivery_end_date as string | null | undefined) ?? null,
-    quantity_delivered: parseApiNumber(detail.quantity_delivered),
-    quantity_receive: parseApiNumber(detail.quantity_receive),
+    quantity_delivered: sapDeliveredOrReceiveMtToKg(parseApiNumber(detail.quantity_delivered)),
+    quantity_receive: sapDeliveredOrReceiveMtToKg(parseApiNumber(detail.quantity_receive)),
     contract_ext_no: detail.contract_ext_no != null ? String(detail.contract_ext_no) : null,
     locked_from_sap: Boolean(detail.locked_from_sap),
   }
@@ -1244,6 +1246,79 @@ function ShipmentsPageContent() {
 
       const listUrl = `/shipments?${params.toString()}`
       const listCacheKey = buildCacheKey('GET', listUrl)
+
+      // Status distribution summary — fire in parallel with table list (do not wait for list response).
+      if (shipmentsSummaryTimerRef.current) clearTimeout(shipmentsSummaryTimerRef.current)
+      const section1SummaryParams = new URLSearchParams(params.toString())
+      section1SummaryParams.delete('status')
+      section1SummaryParams.delete('etaLoading')
+      section1SummaryParams.delete('etaDischarge')
+      section1SummaryParams.delete('includeSummary')
+      section1SummaryParams.delete('skipSapJoin')
+      section1SummaryParams.set('summaryOnly', 'true')
+      section1SummaryParams.set('page', '1')
+      section1SummaryParams.set('limit', '1')
+      const summaryUrl = `/shipments?${section1SummaryParams.toString()}`
+      const summaryCacheKey = buildCacheKey('GET', summaryUrl)
+      const summaryGen = ++summaryFetchGenRef.current
+      const forceSummaryFetch = section1SummaryForceNextFetchRef.current
+      section1SummaryForceNextFetchRef.current = false
+      void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+        force: options?.force || forceSummaryFetch,
+        onRevalidate: (fresh) => {
+          if (summaryGen !== summaryFetchGenRef.current) return
+          if (fresh?.data?.summary) setShipmentsSection1Summary(fresh.data.summary)
+          if (statusFilter === 'ALL') {
+            setSection2EtaSummary(null)
+          }
+          setSummaryFetching(false)
+        },
+      })
+        .then(({ data, revalidating }) => {
+          if (summaryGen !== summaryFetchGenRef.current) return
+          if (data?.data?.summary) setShipmentsSection1Summary(data.data.summary)
+          if (statusFilter === 'ALL') {
+            setSection2EtaSummary(null)
+          }
+          if (!revalidating) setSummaryFetching(false)
+        })
+        .catch(() => {
+          if (summaryGen === summaryFetchGenRef.current) setSummaryFetching(false)
+        })
+
+      if (statusFilter !== 'ALL') {
+        const section2Params = new URLSearchParams(section1SummaryParams.toString())
+        section2Params.set('scopeStatus', statusFilter)
+        const section2Url = `/shipments?${section2Params.toString()}`
+        const section2CacheKey = buildCacheKey('GET', section2Url)
+        void cachedGet(section2CacheKey, () => api.get(section2Url).then((r) => r.data), {
+          force: true,
+          onRevalidate: (fresh) => {
+            if (summaryGen !== summaryFetchGenRef.current) return
+            if (fresh?.data?.summary) {
+              setSection2EtaSummary({
+                etaLoading: fresh.data.summary.etaLoading,
+                etaDischarge: fresh.data.summary.etaDischarge,
+              })
+            }
+          },
+        })
+          .then(({ data }) => {
+            if (summaryGen !== summaryFetchGenRef.current) return
+            if (data?.data?.summary) {
+              setSection2EtaSummary({
+                etaLoading: data.data.summary.etaLoading,
+                etaDischarge: data.data.summary.etaDischarge,
+              })
+            }
+          })
+          .catch(() => {
+            if (summaryGen === summaryFetchGenRef.current) setSection2EtaSummary(null)
+          })
+      } else {
+        setSection2EtaSummary(null)
+      }
+
       const applyListEnvelope = (envelope: {
         data?: { shipments?: Shipment[]; pagination?: { total?: number; totalPages?: number } }
       }) => {
@@ -1295,80 +1370,6 @@ function ShipmentsPageContent() {
         .catch((err) => {
           console.warn('Shipment SAP hydrate failed (table shows shell data):', err)
         })
-
-      if (shipmentsSummaryTimerRef.current) clearTimeout(shipmentsSummaryTimerRef.current)
-      const section1SummaryParams = new URLSearchParams(params.toString())
-      section1SummaryParams.delete('status')
-      section1SummaryParams.delete('etaLoading')
-      section1SummaryParams.delete('etaDischarge')
-      section1SummaryParams.delete('includeSummary')
-      section1SummaryParams.delete('skipSapJoin')
-      section1SummaryParams.set('summaryOnly', 'true')
-      section1SummaryParams.set('page', '1')
-      section1SummaryParams.set('limit', '1')
-      const summaryUrl = `/shipments?${section1SummaryParams.toString()}`
-      const summaryCacheKey = buildCacheKey('GET', summaryUrl)
-      const summaryGen = ++summaryFetchGenRef.current
-
-      shipmentsSummaryTimerRef.current = setTimeout(() => {
-        const forceSummaryFetch = section1SummaryForceNextFetchRef.current
-        section1SummaryForceNextFetchRef.current = false
-        void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
-          force: options?.force || forceSummaryFetch,
-          onRevalidate: (fresh) => {
-            if (summaryGen !== summaryFetchGenRef.current) return
-            if (fresh?.data?.summary) setShipmentsSection1Summary(fresh.data.summary)
-            if (statusFilter === 'ALL') {
-              setSection2EtaSummary(null)
-            }
-            setSummaryFetching(false)
-          },
-        })
-          .then(({ data, revalidating }) => {
-            if (summaryGen !== summaryFetchGenRef.current) return
-            if (data?.data?.summary) setShipmentsSection1Summary(data.data.summary)
-            if (statusFilter === 'ALL') {
-              setSection2EtaSummary(null)
-            }
-            if (!revalidating) setSummaryFetching(false)
-          })
-          .catch(() => {
-            if (summaryGen === summaryFetchGenRef.current) setSummaryFetching(false)
-          })
-
-        if (statusFilter !== 'ALL') {
-          const section2Params = new URLSearchParams(section1SummaryParams.toString())
-          section2Params.set('scopeStatus', statusFilter)
-          const section2Url = `/shipments?${section2Params.toString()}`
-          const section2CacheKey = buildCacheKey('GET', section2Url)
-          void cachedGet(section2CacheKey, () => api.get(section2Url).then((r) => r.data), {
-            force: true,
-            onRevalidate: (fresh) => {
-              if (summaryGen !== summaryFetchGenRef.current) return
-              if (fresh?.data?.summary) {
-                setSection2EtaSummary({
-                  etaLoading: fresh.data.summary.etaLoading,
-                  etaDischarge: fresh.data.summary.etaDischarge,
-                })
-              }
-            },
-          })
-            .then(({ data }) => {
-              if (summaryGen !== summaryFetchGenRef.current) return
-              if (data?.data?.summary) {
-                setSection2EtaSummary({
-                  etaLoading: data.data.summary.etaLoading,
-                  etaDischarge: data.data.summary.etaDischarge,
-                })
-              }
-            })
-            .catch(() => {
-              if (summaryGen === summaryFetchGenRef.current) setSection2EtaSummary(null)
-            })
-        } else {
-          setSection2EtaSummary(null)
-        }
-      }, 150)
     } catch (error: any) {
       if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch shipments:', error)
@@ -2163,7 +2164,7 @@ function ShipmentsPageContent() {
   }, [statusFilter])
 
   const section3TableLoading = loading && shipments.length === 0
-  const section1DataLoading = listFetching || summaryFetching || section3TableLoading
+  const section1DataLoading = summaryFetching && shipmentsSection1Summary == null
 
   const shipmentsTableScopeLabel = useMemo(() => {
     if (statusFilter !== 'ALL') {
@@ -2641,7 +2642,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => s.status || '',
       render: (s) => (
         <Badge className={getStatusColor(s.status)}>
-          {s.status}
+          {formatShipmentStatusLabel(s.status)}
         </Badge>
       )
     },
@@ -2680,10 +2681,10 @@ function ShipmentsPageContent() {
       label: 'Delivery Qty (MT)',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => s.quantity_delivered_sap || s.total_quantity_delivered || s.quantity_delivered || 0,
+      getSortValue: (s) => resolveShipmentListDeliveredKg(s) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(s.quantity_delivered_sap ?? s.total_quantity_delivered ?? s.quantity_delivered)}
+          {formatQtyMtFromKg(resolveShipmentListDeliveredKg(s))}
         </span>
       )
     },
@@ -2692,10 +2693,10 @@ function ShipmentsPageContent() {
       label: 'Received Qty (MT)',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => (s.quantity_receive ?? 0),
+      getSortValue: (s) => resolveShipmentListReceiveKg(s) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(s.quantity_receive)}
+          {formatQtyMtFromKg(resolveShipmentListReceiveKg(s))}
         </span>
       )
     },
@@ -3598,34 +3599,27 @@ function ShipmentsPageContent() {
               ),
             },
       )
-      if (portsQtyRows.length > 0) {
+      const qtyUserEdited = hasVesselPortsQuantityUserEdits(portsQtyRows, editedPortsContractQty)
+      if (qtyUserEdited && portsQtyRows.length > 0) {
         const sums = sumVesselPortsQuantityEdits(portsQtyRows, editedPortsContractQty)
         if (sums.quantity_delivered !== null) info.quantity_delivered = sums.quantity_delivered
         if (sums.quantity_receive !== null) info.actual_vessel_qty_receive = sums.quantity_receive
       }
 
-      const deliveryChanged = !shipmentQuantityValuesEqual(
-        info.quantity_delivered,
-        shipmentInfo?.quantity_delivered,
-      )
-      const receiveChanged = !shipmentQuantityValuesEqual(
-        info.actual_vessel_qty_receive,
-        shipmentInfo?.actual_vessel_qty_receive,
-      )
-      if ((deliveryChanged || receiveChanged) && !isQuantityUnlockedRef.current) {
+      if (qtyUserEdited && !isQuantityUnlockedRef.current) {
         alert('Please upload an SLD or SDD document before editing Quantity Delivery or Quantity Receive.')
         return
       }
-      if ((deliveryChanged || receiveChanged) && !(sldDocIdRef.current || sddDocIdRef.current)) {
+      if (qtyUserEdited && !(sldDocIdRef.current || sddDocIdRef.current)) {
         alert('An SLD or SDD document must be attached before saving quantity changes.')
         return
       }
 
       const updateData: Record<string, unknown> = {}
-      if (info.quantity_delivered !== undefined && info.quantity_delivered !== null) {
+      if (qtyUserEdited && info.quantity_delivered !== undefined && info.quantity_delivered !== null) {
         updateData.quantity_delivered = info.quantity_delivered
       }
-      if (info.actual_vessel_qty_receive !== undefined && info.actual_vessel_qty_receive !== null) {
+      if (qtyUserEdited && info.actual_vessel_qty_receive !== undefined && info.actual_vessel_qty_receive !== null) {
         updateData.actual_vessel_qty_receive = info.actual_vessel_qty_receive
       }
       if (info.sfal_qty !== undefined) {
@@ -4047,10 +4041,10 @@ function ShipmentsPageContent() {
               {[
                 { status: 'UNPLANNED', label: 'Unplanned', color: 'bg-slate-100', textColor: 'text-slate-800', badgeColor: 'bg-slate-600', tooltip: 'Shipment has no ETA milestones entered yet.' },
                 { status: 'PLANNED',     label: 'Planned',     color: 'bg-blue-100',   textColor: 'text-blue-800',   badgeColor: 'bg-blue-600',   tooltip: 'Shipment has an ETA — at least one ETA milestone has been entered.' },
-                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600', tooltip: 'Shipment in progress — vessel en route to the loading port (ATA arrival at loading port).' },
-                { status: 'LOADING',     label: 'Loading',     color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600', tooltip: 'Vessel is loading cargo at the origin port.' },
-                { status: 'IN_TRANSIT',  label: 'In Transit',  color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600', tooltip: 'Vessel has departed and is en route to the destination port.' },
-                { status: 'ARRIVED',     label: 'Arrived',     color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600', tooltip: 'Vessel has arrived at the destination port, awaiting unloading.' },
+                { status: 'IN_PROGRESS', label: SHIPMENT_STATUS_DISPLAY_LABELS.IN_PROGRESS, color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600', tooltip: 'Shipment in progress — vessel en route to the loading port (ATA arrival at loading port).' },
+                { status: 'LOADING',     label: SHIPMENT_STATUS_DISPLAY_LABELS.LOADING,     color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600', tooltip: 'Vessel is loading cargo at the origin port.' },
+                { status: 'IN_TRANSIT',  label: SHIPMENT_STATUS_DISPLAY_LABELS.IN_TRANSIT,  color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600', tooltip: 'Vessel has departed and is en route to the destination port.' },
+                { status: 'ARRIVED',     label: SHIPMENT_STATUS_DISPLAY_LABELS.ARRIVED,     color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600', tooltip: 'Vessel has arrived at the destination port, awaiting unloading.' },
                 { status: 'UNLOADING',   label: 'Unloading',   color: 'bg-cyan-100',   textColor: 'text-cyan-800',   badgeColor: 'bg-cyan-600',   tooltip: 'Cargo is being unloaded from the vessel at the destination port.' },
                 { status: 'COMPLETED',   label: 'Completed',   color: 'bg-green-100',  textColor: 'text-green-800',  badgeColor: 'bg-green-600',  tooltip: 'Shipment complete — cargo has been received at destination.' },
                 { status: 'CANCELLED',   label: 'Cancelled',   color: 'bg-red-100',    textColor: 'text-red-800',    badgeColor: 'bg-red-600',    tooltip: 'Shipment cancelled and will not continue.' },
@@ -4324,10 +4318,10 @@ function ShipmentsPageContent() {
                 <option value="ALL">All Status</option>
                 <option value="UNPLANNED">Unplanned</option>
                 <option value="PLANNED">Planned</option>
-                <option value="IN_PROGRESS">In Progress</option>
-                <option value="LOADING">Loading</option>
-                <option value="IN_TRANSIT">In Transit</option>
-                <option value="ARRIVED">Arrived</option>
+                <option value="IN_PROGRESS">{SHIPMENT_STATUS_DISPLAY_LABELS.IN_PROGRESS}</option>
+                <option value="LOADING">{SHIPMENT_STATUS_DISPLAY_LABELS.LOADING}</option>
+                <option value="IN_TRANSIT">{SHIPMENT_STATUS_DISPLAY_LABELS.IN_TRANSIT}</option>
+                <option value="ARRIVED">{SHIPMENT_STATUS_DISPLAY_LABELS.ARRIVED}</option>
                 <option value="UNLOADING">Unloading</option>
                 <option value="COMPLETED">Completed</option>
                 <option value="CANCELLED">Cancelled</option>
@@ -5229,7 +5223,7 @@ function ShipmentsPageContent() {
                                               className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full bg-white"
                                               title="Status lowered automatically. Can only be cancelled manually."
                                             >
-                                              <option value={currentStatus}>{shipment.status}</option>
+                                              <option value={currentStatus}>{formatShipmentStatusLabel(shipment.status)}</option>
                                               <option value="CANCELLED">CANCELLED</option>
                                             </select>
                                           )
@@ -5547,7 +5541,7 @@ function ShipmentsPageContent() {
                                 <div className="text-xs text-gray-600 truncate">{formatSapDisplayValue(shipment.vessel_name)} • {formatSapDisplayValue(shipment.contract_number)}</div>
                               </div>
                               <Badge className={getStatusColor(shipment.status)}>
-                                {shipment.status}
+                                {formatShipmentStatusLabel(shipment.status)}
                               </Badge>
                             </div>
                             <div className="flex gap-2">
