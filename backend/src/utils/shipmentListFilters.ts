@@ -3,8 +3,32 @@
  */
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
+import {
+  LEGACY_SHIPMENT_STATUS_ALIASES,
+  SHIPMENT_AUTO_STATUSES,
+  SHIPMENT_DISCHARGE_ETA_PHASE_STATUSES,
+  SHIPMENT_LOADING_ETA_PHASE_STATUSES,
+  type ShipmentAutoStatus,
+} from './shipmentStatus'
 
 export { parseColumnFiltersQuery }
+
+function sqlQuoteStatusList(statuses: readonly ShipmentAutoStatus[]): string {
+  return statuses.map((s) => `'${s}'`).join(', ')
+}
+
+function resolveShipmentStatusFilterParam(raw: string | undefined): ShipmentAutoStatus | null {
+  const normalized = String(raw ?? '')
+    .trim()
+    .toUpperCase()
+  if (!normalized || normalized === 'ALL') return null
+  const legacy = LEGACY_SHIPMENT_STATUS_ALIASES[normalized]
+  if (legacy) return legacy
+  if ((SHIPMENT_AUTO_STATUSES as readonly string[]).includes(normalized)) {
+    return normalized as ShipmentAutoStatus
+  }
+  return null
+}
 
 /** Late indicator: compare actual/ETA first; same calendar day = On Time. */
 function lateIndicatorExpr(alias: string): string {
@@ -148,7 +172,8 @@ export function appendShipmentColumnFilters(
   let pi = startIndex
 
   for (const [colId, raw] of Object.entries(filters)) {
-    const expr = SB_COL[colId]
+    const expr =
+      colId === 'status' ? shipmentEffectiveStatusExpr('sb') : SB_COL[colId]
     if (!expr || !raw || typeof raw !== 'object') continue
 
     const f = raw as ColumnFilterPayload[string]
@@ -348,8 +373,7 @@ export function shipmentHasAnyEtaExpr(alias: string): string {
 
 /**
  * Effective SEA shipment status on grouped list rows (`shipment_base` / `filtered_shipments`).
- * SAP contract Close/Completed → always COMPLETED (excluded from pre-completed buckets).
- * Otherwise PLANNED from ETA; IN_PROGRESS–COMPLETED from ATA.
+ * Mirrors deriveShipmentStatus — granular ATA tiers for Shipments module.
  */
 export function shipmentEffectiveStatusExpr(alias: string): string {
   const f = alias
@@ -359,10 +383,13 @@ export function shipmentEffectiveStatusExpr(alias: string): string {
       WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS TRUE THEN 'COMPLETED'
       WHEN ${f}.ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'
       WHEN ${f}.ata_vessel_start_discharging IS NOT NULL THEN 'UNLOADING'
-      WHEN ${f}.ata_vessel_arrive_at_discharge_port IS NOT NULL THEN 'ARRIVED'
-      WHEN ${f}.ata_vessel_sailed_from_loading_port IS NOT NULL THEN 'IN_TRANSIT'
+      WHEN ${f}.ata_vessel_berthed_at_discharge_port IS NOT NULL THEN 'BERTHED_DP'
+      WHEN ${f}.ata_vessel_arrive_at_discharge_port IS NOT NULL THEN 'ARRIVED_DP'
+      WHEN ${f}.ata_vessel_sailed_from_loading_port IS NOT NULL THEN 'SAILED'
+      WHEN ${f}.ata_vessel_completed_loading IS NOT NULL THEN 'COMPLETED_LOADING'
       WHEN ${f}.ata_vessel_start_loading IS NOT NULL THEN 'LOADING'
-      WHEN ${f}.ata_vessel_arrival_at_loading_port IS NOT NULL THEN 'IN_PROGRESS'
+      WHEN ${f}.ata_vessel_berthed_at_loading_port IS NOT NULL THEN 'BERTHED_LP'
+      WHEN ${f}.ata_vessel_arrival_at_loading_port IS NOT NULL THEN 'ARRIVED_LP'
       WHEN ${shipmentHasAnyEtaExpr(f)} THEN 'PLANNED'
       ELSE 'UNPLANNED'
     END
@@ -371,41 +398,27 @@ export function shipmentEffectiveStatusExpr(alias: string): string {
 
 /** Statuses that contribute to ETA Loading buckets (matches shipmentsPageDerivedData). */
 export function shipmentLoadingEtaPhaseExpr(alias: string): string {
-  return `${shipmentEffectiveStatusExpr(alias)} IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'LOADING')`
+  return `${shipmentEffectiveStatusExpr(alias)} IN (${sqlQuoteStatusList(SHIPMENT_LOADING_ETA_PHASE_STATUSES)})`
 }
 
 /** Statuses that contribute to ETA Discharge buckets (matches shipmentsPageDerivedData). */
 export function shipmentDischargeEtaPhaseExpr(alias: string): string {
-  return `${shipmentEffectiveStatusExpr(alias)} IN ('IN_TRANSIT', 'ARRIVED', 'UNLOADING')`
+  return `${shipmentEffectiveStatusExpr(alias)} IN (${sqlQuoteStatusList(SHIPMENT_DISCHARGE_ETA_PHASE_STATUSES)})`
 }
-
-const SHIPMENT_STATUS_FILTER_VALUES = new Set([
-  'UNPLANNED',
-  'PLANNED',
-  'IN_PROGRESS',
-  'LOADING',
-  'IN_TRANSIT',
-  'ARRIVED',
-  'UNLOADING',
-  'COMPLETED',
-  'CANCELLED',
-])
 
 /** Filter list rows by derived status (matches deriveShipmentStatus / shipmentEffectiveStatusExpr). */
 export function appendShipmentStatusFilter(
   statusParam: string | undefined,
   startIndex: number
 ): { sql: string; params: unknown[]; nextIndex: number } {
-  const normalized = String(statusParam ?? '')
-    .trim()
-    .toUpperCase()
-  if (!normalized || normalized === 'ALL' || !SHIPMENT_STATUS_FILTER_VALUES.has(normalized)) {
+  const resolved = resolveShipmentStatusFilterParam(statusParam)
+  if (!resolved) {
     return { sql: '', params: [], nextIndex: startIndex }
   }
 
   return {
     sql: ` AND ${shipmentEffectiveStatusExpr('sb')} = $${startIndex}`,
-    params: [normalized],
+    params: [resolved],
     nextIndex: startIndex + 1,
   }
 }
@@ -415,16 +428,14 @@ export function appendShipmentScopeStatusFilter(
   scopeStatusParam: string | undefined,
   startIndex: number
 ): { sql: string; params: unknown[]; nextIndex: number } {
-  const normalized = String(scopeStatusParam ?? '')
-    .trim()
-    .toUpperCase()
-  if (!normalized || normalized === 'ALL' || !SHIPMENT_STATUS_FILTER_VALUES.has(normalized)) {
+  const resolved = resolveShipmentStatusFilterParam(scopeStatusParam)
+  if (!resolved) {
     return { sql: '', params: [], nextIndex: startIndex }
   }
 
   return {
     sql: ` AND ${shipmentEffectiveStatusExpr('sb')} = $${startIndex}`,
-    params: [normalized],
+    params: [resolved],
     nextIndex: startIndex + 1,
   }
 }

@@ -1,0 +1,57 @@
+import { describe, expect, it } from 'vitest';
+import {
+  appendShipmentPipelineStageFilter,
+  normalizeShipmentPagePipelineStageParam,
+  shipmentHasAnyDischargePortAtaExpr,
+  shipmentHasAnyLoadingPortAtaExpr,
+  shipmentPagePipelineStageExpr,
+  shipmentPagePipelineUnplannedRowPredicate,
+} from './shipmentPagePipelineSql';
+
+describe('shipmentPagePipelineSql', () => {
+  it('maps legacy status keys to pipeline stages', () => {
+    expect(normalizeShipmentPagePipelineStageParam('IN_PROGRESS')).toBe('AT_LOADING_PORT');
+    expect(normalizeShipmentPagePipelineStageParam('IN_TRANSIT')).toBe('SAILED');
+    expect(normalizeShipmentPagePipelineStageParam('UNLOADING')).toBe('AT_DISCHARGE_PORT');
+    expect(normalizeShipmentPagePipelineStageParam('PLANNED')).toBe('PLANNED');
+  });
+
+  it('builds mutually exclusive pipeline stage expression', () => {
+    const sql = shipmentPagePipelineStageExpr('sb');
+    expect(sql).toContain('AT_LOADING_PORT');
+    expect(sql).toContain('AT_DISCHARGE_PORT');
+    expect(sql).toContain('SAILED');
+    expect(sql).toContain('PLANNED');
+    expect(sql).toContain('COMPLETED');
+    expect(sql).toContain('CANCELLED');
+  });
+
+  it('uses loading and discharge ATA helpers', () => {
+    expect(shipmentHasAnyLoadingPortAtaExpr('f')).toContain('ata_vessel_arrival_at_loading_port');
+    expect(shipmentHasAnyDischargePortAtaExpr('f')).toContain('ata_vessel_start_discharging');
+  });
+
+  it('filters unplanned rows without ETA or ATA', () => {
+    const sql = shipmentPagePipelineUnplannedRowPredicate('sb');
+    expect(sql).toContain('is_contract_sap_closed');
+    expect(sql).toContain('eta_arrival');
+  });
+
+  it('builds stage filter SQL for pipeline and unplanned', () => {
+    const planned = appendShipmentPipelineStageFilter('PLANNED', 3);
+    expect(planned.sql).toContain('= $3');
+    expect(planned.params).toEqual(['PLANNED']);
+
+    const atLoading = appendShipmentPipelineStageFilter('AT_LOADING_PORT', 3);
+    expect(atLoading.sql).toContain('IN ($3, $4');
+    expect(atLoading.params).toEqual(['ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING']);
+
+    const sailed = appendShipmentPipelineStageFilter('SAILED', 5);
+    expect(sailed.sql).toContain('= $5');
+    expect(sailed.params).toEqual(['SAILED']);
+
+    const unplanned = appendShipmentPipelineStageFilter('UNPLANNED', 3);
+    expect(unplanned.sql).toContain('is_contract_sap_closed');
+    expect(unplanned.params).toEqual([]);
+  });
+});

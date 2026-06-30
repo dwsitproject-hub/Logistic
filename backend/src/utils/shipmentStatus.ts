@@ -1,14 +1,67 @@
 import { isContractDeliveryClosed } from './contractDeliveryStatus';
 
+/** Shipment execution status derived from ATA ladder (Shipments module). */
 export type ShipmentAutoStatus =
   | 'UNPLANNED'
   | 'PLANNED'
-  | 'IN_PROGRESS'
+  | 'ARRIVED_LP'
+  | 'BERTHED_LP'
   | 'LOADING'
-  | 'IN_TRANSIT'
-  | 'ARRIVED'
+  | 'COMPLETED_LOADING'
+  | 'SAILED'
+  | 'ARRIVED_DP'
+  | 'BERTHED_DP'
   | 'UNLOADING'
-  | 'COMPLETED';
+  | 'COMPLETED'
+  | 'CANCELLED';
+
+export const SHIPMENT_AUTO_STATUSES: readonly ShipmentAutoStatus[] = [
+  'UNPLANNED',
+  'PLANNED',
+  'ARRIVED_LP',
+  'BERTHED_LP',
+  'LOADING',
+  'COMPLETED_LOADING',
+  'SAILED',
+  'ARRIVED_DP',
+  'BERTHED_DP',
+  'UNLOADING',
+  'COMPLETED',
+  'CANCELLED',
+] as const;
+
+/** @deprecated Pre-granular keys — normalized to ShipmentAutoStatus at read/filter time. */
+export const LEGACY_SHIPMENT_STATUS_ALIASES: Readonly<Record<string, ShipmentAutoStatus>> = {
+  IN_PROGRESS: 'ARRIVED_LP',
+  IN_TRANSIT: 'SAILED',
+  ARRIVED: 'ARRIVED_DP',
+};
+
+export const SHIPMENT_AT_LOADING_PORT_STATUSES: readonly ShipmentAutoStatus[] = [
+  'ARRIVED_LP',
+  'BERTHED_LP',
+  'LOADING',
+  'COMPLETED_LOADING',
+];
+
+export const SHIPMENT_SAILED_STATUSES: readonly ShipmentAutoStatus[] = ['SAILED'];
+
+export const SHIPMENT_AT_DISCHARGE_PORT_STATUSES: readonly ShipmentAutoStatus[] = [
+  'ARRIVED_DP',
+  'BERTHED_DP',
+  'UNLOADING',
+];
+
+export const SHIPMENT_LOADING_ETA_PHASE_STATUSES: readonly ShipmentAutoStatus[] = [
+  'UNPLANNED',
+  'PLANNED',
+  ...SHIPMENT_AT_LOADING_PORT_STATUSES,
+];
+
+export const SHIPMENT_DISCHARGE_ETA_PHASE_STATUSES: readonly ShipmentAutoStatus[] = [
+  ...SHIPMENT_SAILED_STATUSES,
+  ...SHIPMENT_AT_DISCHARGE_PORT_STATUSES,
+];
 
 export type ShipmentMilestones = {
   eta_arrival_at_loading_port?: unknown;
@@ -43,7 +96,6 @@ const hasDate = (v: unknown): boolean => {
   const s = String(v).trim();
   if (!s) return false;
 
-  // ISO / date-only inputs commonly returned by Postgres.
   const ymd = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
   if (ymd) {
     const yyyy = Number(ymd[1]);
@@ -53,7 +105,6 @@ const hasDate = (v: unknown): boolean => {
     return d.getFullYear() === yyyy && d.getMonth() === mm - 1 && d.getDate() === dd;
   }
 
-  // Day-first display strings from UI/API payloads (DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY).
   const dmy = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/.exec(s);
   if (dmy) {
     const dd = Number(dmy[1]);
@@ -81,23 +132,42 @@ export function hasAnyEtaMilestone(m: Pick<ShipmentMilestones, keyof ShipmentMil
   );
 }
 
+export function normalizeShipmentDetailStatus(raw: string | null | undefined): ShipmentAutoStatus {
+  const normalized = String(raw ?? '')
+    .trim()
+    .toUpperCase();
+  if (!normalized) return 'UNPLANNED';
+  if (normalized === 'CANCELLED') return 'CANCELLED';
+  const legacy = LEGACY_SHIPMENT_STATUS_ALIASES[normalized];
+  if (legacy) return legacy;
+  if ((SHIPMENT_AUTO_STATUSES as readonly string[]).includes(normalized)) {
+    return normalized as ShipmentAutoStatus;
+  }
+  return 'UNPLANNED';
+}
+
 /**
- * Derive SEA shipment status:
- * - SAP contract Close/Completed → always COMPLETED (never PLANNED / IN_PROGRESS / etc.)
- * - Otherwise IN_PROGRESS … COMPLETED from ATA milestones (latest ATA stage wins)
- * - PLANNED / UNPLANNED from ETA when contract is still open
+ * Derive SEA shipment status from milestones (latest ATA stage wins).
+ * Maps 1:1 with summary breakdown tiers on the Shipments page.
  */
 export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus {
   if (isContractDeliveryClosed(m.contract_import_status)) return 'COMPLETED';
   if (hasDate(m.ata_complete_discharge)) return 'COMPLETED';
   if (hasDate(m.ata_start_discharging)) return 'UNLOADING';
-  if (hasDate(m.ata_arrive_at_discharge_port)) return 'ARRIVED';
-  if (hasDate(m.ata_sailed_from_loading_port)) return 'IN_TRANSIT';
+  if (hasDate(m.ata_berthed_at_discharge_port)) return 'BERTHED_DP';
+  if (hasDate(m.ata_arrive_at_discharge_port)) return 'ARRIVED_DP';
+  if (hasDate(m.ata_sailed_from_loading_port)) return 'SAILED';
+  if (hasDate(m.ata_completed_loading)) return 'COMPLETED_LOADING';
   if (hasDate(m.ata_start_loading)) return 'LOADING';
-  if (hasDate(m.ata_arrival_at_loading_port)) return 'IN_PROGRESS';
+  if (hasDate(m.ata_berthed_at_loading_port)) return 'BERTHED_LP';
+  if (hasDate(m.ata_arrival_at_loading_port)) return 'ARRIVED_LP';
   if (hasAnyEtaMilestone(m)) return 'PLANNED';
   return 'UNPLANNED';
 }
+
+/** Statuses auto-persisted on milestone update (excludes manual CANCELLED). */
+export const SHIPMENT_PERSISTABLE_AUTO_STATUSES: readonly ShipmentAutoStatus[] =
+  SHIPMENT_AUTO_STATUSES.filter((s) => s !== 'CANCELLED');
 
 /** @deprecated Use deriveShipmentStatus — ATA stages only (no ETA → UNPLANNED). */
 export function deriveShipmentStatusFromAta(

@@ -1,4 +1,8 @@
 import { shipmentManualQtyResolveSql } from './shipmentManualQtyResolveSql';
+import {
+  buildQtyMoveCte,
+  sqlContractGlobalOutstandingExpr,
+} from './contractGlobalOutstandingSql';
 
 /**
  * STO-level outstanding quantity (kg) using the same incoterm rules as the Contracts list:
@@ -45,4 +49,41 @@ export function shipmentListOutstandingQtySql(
     ),
     incotermExpr: `COALESCE(${slAlias}.incoterm, ${spAlias}.incoterm)`,
   });
+}
+
+/** Page-scoped qty_move for shipments list (contracts on current page only). */
+export function shipmentListQtyMoveCteFromPage(pageCte = 'shipment_page'): string {
+  return buildQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `SELECT DISTINCT TRIM(cn) AS contract_number
+      FROM ${pageCte} sp
+      CROSS JOIN LATERAL unnest(regexp_split_to_array(sp.contract_numbers, E'\\\\s*,\\\\s*')) AS cn
+      WHERE sp.contract_numbers IS NOT NULL
+        AND TRIM(sp.contract_numbers) <> ''
+        AND TRIM(cn) <> ''`,
+  });
+}
+
+/**
+ * Sum contract-global outstanding (kg) for all contracts on a grouped list row —
+ * same rules as Edit Shipment modal / GET /shipments/contracts/details.
+ */
+export function shipmentListRowGlobalOutstandingSql(spAlias = 'sp'): string {
+  const perContract = sqlContractGlobalOutstandingExpr({
+    contractQtyExpr: 'c.quantity_ordered',
+    incotermExpr: 'c.incoterm',
+    contractNumberExpr: 'c.contract_id',
+  });
+  return `COALESCE((
+    SELECT SUM(${perContract})
+    FROM contracts c
+    WHERE c.contract_id IS NOT NULL
+      AND ${spAlias}.contract_numbers IS NOT NULL
+      AND TRIM(${spAlias}.contract_numbers) <> ''
+      AND EXISTS (
+        SELECT 1
+        FROM unnest(regexp_split_to_array(${spAlias}.contract_numbers, E'\\\\s*,\\\\s*')) AS cn
+        WHERE TRIM(cn) = TRIM(c.contract_id)
+      )
+  ), 0)`;
 }

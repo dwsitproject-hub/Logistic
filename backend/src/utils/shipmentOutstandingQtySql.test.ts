@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { shipmentListOutstandingQtySql, shipmentOutstandingQtyExpr } from './shipmentOutstandingQtySql';
+import {
+  shipmentListOutstandingQtySql,
+  shipmentListQtyMoveCteFromPage,
+  shipmentListRowGlobalOutstandingSql,
+  shipmentOutstandingQtyExpr,
+} from './shipmentOutstandingQtySql';
 
 describe('shipmentOutstandingQtySql', () => {
   it('applies incoterm branches for CIF and FOB', () => {
@@ -23,5 +28,19 @@ describe('shipmentOutstandingQtySql', () => {
     expect(sql).toContain('sp.quantity_delivered');
     expect(sql).toContain('ABS');
     expect(sql).toContain('sl.incoterm');
+  });
+
+  it('builds page-scoped qty_move CTE from shipment_page contracts', () => {
+    const sql = shipmentListQtyMoveCteFromPage();
+    expect(sql).toContain('qty_move AS');
+    expect(sql).toContain('FROM shipment_page sp');
+    expect(sql).toContain('contract_numbers');
+  });
+
+  it('sums contract-global outstanding per list row', () => {
+    const sql = shipmentListRowGlobalOutstandingSql('sp');
+    expect(sql).toContain('FROM contracts c');
+    expect(sql).toContain('qty_move qm');
+    expect(sql).toContain('sp.contract_numbers');
   });
 });

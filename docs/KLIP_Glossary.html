@@ -172,6 +172,7 @@
             <li><a href="#sp-dates">ETA / ATA</a></li>
             <li><a href="#sp-cycles">Cycle deltas</a></li>
             <li><a href="#sp-qty">Quantity</a></li>
+            <li><a href="#sp-outstanding">Outstanding Qty</a></li>
             <li><a href="#sp-cards">Section 1 cards</a></li>
             <li><a href="#sp-ontime">On Time / Late</a></li>
             <li><a href="#sp-section23">Section 2 &amp; 3</a></li>
@@ -545,11 +546,63 @@
           <tbody>
             <tr><td><strong>STO Qty</strong></td><td><code>COALESCE(sap_sto_qty, contracts.sto_quantity, 0)</code></td></tr>
             <tr><td><strong>Received Qty</strong></td><td>Incoterm FRC/CIF/CFR → SAP Receive; LCO/FOB → SAP Delivered; else prioritas SAP; fallback <code>actual_vessel_qty_receive</code>, <code>bl_quantity</code></td></tr>
-            <tr><td><strong>Delivered Qty</strong></td><td>SAP Quantity Delivered</td></tr>
-            <tr><td><strong>Outstanding Qty</strong></td><td><code>GREATEST(sto_qty − fulfilled_qty, 0)</code> — incoterm sama seperti Contract Performance</td></tr>
+            <tr><td><strong>Delivered Qty</strong></td><td>SAP Quantity Delivered (agregat per shipment)</td></tr>
+            <tr><td><strong>Outstanding Qty</strong></td><td>Lihat <a href="#sp-outstanding">Outstanding Qty (MT)</a></td></tr>
           </tbody>
         </table>
         <p>Join SAP: <code>sto_number</code> / raw <code>STO No.</code> / <code>STO Number</code> ↔ shipment <code>shipment_id</code> / <code>operation_id</code> / <code>contracts.sto_number</code>.</p>
+
+        <h3 id="sp-outstanding">Outstanding Qty (MT) — kolom tabel &amp; agregasi</h3>
+        <p>
+          Dihitung <strong>per baris shipment</strong> di backend SQL (<code>shippingPerformance.service.ts</code>).
+          Basis kuantitas bukan <em>Contract Qty</em> global, melainkan <strong>STO Qty</strong> pada leg shipment tersebut.
+          Nilai disimpan <strong>Kg</strong> di API; kolom tabel &amp; view <em>By Vessel</em> ditampilkan dalam <strong>MT</strong> (÷ 1000).
+        </p>
+        <p><span class="formula">Outstanding Qty = GREATEST(STO Qty − fulfilled_qty, 0)</span></p>
+        <table>
+          <thead>
+            <tr><th>Langkah</th><th>Definisi</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>STO Qty</strong> (<code>sto_qty</code>)</td>
+              <td><code>COALESCE(sap_sto_quantity, contracts.sto_quantity, 0)</code> — SAP dijumlahkan per shipment dari <code>contract.sto_quantity</code> / <code>shipment.sto_quantity</code> / raw <code>STO Quantity</code></td>
+            </tr>
+            <tr>
+              <td><strong>fulfilled_qty</strong></td>
+              <td>Bergantung incoterm kontrak (lihat tabel di bawah)</td>
+            </tr>
+            <tr>
+              <td><strong>Floor nol</strong></td>
+              <td><code>GREATEST(…, 0)</code> — tidak pernah negatif; over-delivery ditampilkan sebagai <strong>0</strong> (berbeda dari Contract Performance yang boleh negatif)</td>
+            </tr>
+          </tbody>
+        </table>
+        <table>
+          <thead>
+            <tr><th>Incoterm</th><th>Qty yang dikurangi dari STO Qty</th><th>Sumber SAP (per shipment)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>FRC, CIF, CFR</strong></td><td><code>Quantity Receive</code></td><td><code>sa.quantity_receive</code> — SUM raw <code>Quantity Receive</code> / <code>Qty Receive</code></td></tr>
+            <tr><td><strong>LCO, FOB</strong></td><td><code>Quantity Delivered</code></td><td><code>sa.quantity_delivered_sap</code> — SUM raw <code>Quantity Delivered</code> / <code>Quantity Delivery</code></td></tr>
+            <tr>
+              <td><strong>Lainnya</strong></td>
+              <td>Prioritas: SAP Receive → SAP Delivered → fallback shipment</td>
+              <td><code>COALESCE(quantity_receive, quantity_delivered_sap, actual_vessel_qty_receive, bl_quantity, 0)</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Perbedaan vs Contract Performance:</strong> halaman kontrak memakai <code>quantity_ordered</code> (contract-level) dan agregat SAP per kontrak (<code>qty_move</code>).
+          Shipping Performance memakai <strong>STO Qty per shipment</strong> dan SAP yang di-join ke shipment lewat STO key
+          (<code>shipment_id</code> / <code>operation_id</code> / <code>contracts.sto_number</code>).
+        </div>
+        <p><strong>Penggunaan di UI:</strong></p>
+        <ul>
+          <li><strong>Section 3 — kolom Outstanding Qty</strong>: nilai per shipment (atau <code>SUM</code> pada view <em>By Vessel</em> → label <em>Qty Outstanding (MT)</em>).</li>
+          <li><strong>Section 2 drilldown</strong>: hanya baris dengan <code>outstanding_qty &gt; 0</code> dan status bukan <code>COMPLETED</code>; <code>totalQty</code> tiap node = jumlah outstanding baris eligible.</li>
+          <li><strong>Section 1 kartu</strong>: metrik <code>totalQty</code> internal = <code>SUM(outstanding_qty)</code> baris dalam scope kartu (Kg).</li>
+        </ul>
 
         <h3 id="sp-cards">Section 1 — Kartu ringkasan</h3>
         <p>Klasifikasi per <strong>kontrak</strong> (bukan per baris shipment):</p>

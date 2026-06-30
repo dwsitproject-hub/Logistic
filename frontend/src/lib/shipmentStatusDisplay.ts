@@ -1,17 +1,24 @@
 /**
- * Display-only labels for shipment effective status.
- * Used on Shipments and Shipping Performance pages only — no logic / filter / API changes.
+ * Display-only labels for shipment effective status (Shipments page primary).
+ * Legacy keys kept for backward-compatible API rows and other modules.
  */
 export const SHIPMENT_STATUS_DISPLAY_LABELS: Record<string, string> = {
   UNPLANNED: 'Unplanned',
   PLANNED: 'Planned',
-  IN_PROGRESS: 'Sailing to LP',
-  LOADING: 'Loading at DP',
-  IN_TRANSIT: 'Sailing to DP',
-  ARRIVED: 'Arrived at DP',
+  ARRIVED_LP: 'Arrived LP',
+  BERTHED_LP: 'Berthed LP',
+  LOADING: 'Loading',
+  COMPLETED_LOADING: 'Completed Loading',
+  SAILED: 'Sailed',
+  ARRIVED_DP: 'Arrived DP',
+  BERTHED_DP: 'Berthed DP',
   UNLOADING: 'Unloading',
   COMPLETED: 'Completed',
   CANCELLED: 'Cancelled',
+  /** @deprecated legacy keys */
+  IN_PROGRESS: 'Arrived LP',
+  IN_TRANSIT: 'Sailed',
+  ARRIVED: 'Arrived DP',
 }
 
 /** Map UI-facing status text back to enum key when needed for display lookup. */

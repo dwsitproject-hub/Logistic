@@ -263,6 +263,8 @@ export type EditShipmentModalProps = {
   editStoNumber?: string | null
   /** All contract numbers on the grouped list row (comma-separated). */
   editContractNumbers?: string | null
+  /** Read-only mode (e.g. Cancelled shipments on Shipments view table). */
+  readOnly?: boolean
 }
 
 export function EditShipmentModal({
@@ -273,6 +275,7 @@ export function EditShipmentModal({
   editShipmentId: editShipmentIdProp = null,
   editStoNumber = null,
   editContractNumbers = null,
+  readOnly = false,
 }: EditShipmentModalProps) {
   const perms = usePermissions()
   const canEditShipment = canEditPermission(perms, 'data.shipments')
@@ -324,7 +327,7 @@ export function EditShipmentModal({
   const initSessionRef = useRef<string | null>(null)
 
   const isQuantityUnlocked = hasUploadedSld || hasUploadedSdd
-  const canModifyShipment = canEditShipment
+  const canModifyShipment = canEditShipment && !readOnly
 
   const qtyTableRows: VesselPortsQuantityRow[] = useMemo(
     () =>
@@ -896,11 +899,15 @@ export function EditShipmentModal({
                 <Ship className="h-4 w-4" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-gray-900">Edit Shipment</h3>
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {readOnly ? 'View Shipment' : 'Edit Shipment'}
+                </h3>
                 <p className="text-xs text-gray-500">
-                  {stoNumber
-                    ? `STO ${stoNumber} — edit ETA schedule and manual ATA (SAP reference preserved)`
-                    : 'Update vessel, quantities, ETA schedule, and manual ATA'}
+                  {readOnly
+                    ? 'Read-only view of shipment execution details'
+                    : stoNumber
+                      ? `STO ${stoNumber} — edit ETA schedule and manual ATA (SAP reference preserved)`
+                      : 'Update vessel, quantities, ETA schedule, and manual ATA'}
                 </p>
               </div>
             </div>
@@ -1520,22 +1527,24 @@ export function EditShipmentModal({
 
         <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4 flex justify-end gap-2 rounded-b-lg">
           <Button variant="outline" onClick={onClose} disabled={saving}>
-            Cancel
+            {readOnly ? 'Close' : 'Cancel'}
           </Button>
-          <Button
-            className="bg-blue-600 hover:bg-blue-700 text-white"
-            onClick={() => void handleSave()}
-            disabled={saving || loading || !shipmentId || !canModifyShipment}
-          >
-            {saving ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Saving…
-              </>
-            ) : (
-              'Save Changes'
-            )}
-          </Button>
+          {!readOnly ? (
+            <Button
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              onClick={() => void handleSave()}
+              disabled={saving || loading || !shipmentId || !canModifyShipment}
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Saving…
+                </>
+              ) : (
+                'Save Changes'
+              )}
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>

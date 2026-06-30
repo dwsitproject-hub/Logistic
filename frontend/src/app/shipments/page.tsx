@@ -17,12 +17,16 @@ import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import {
   formatShipmentStatusLabel,
+  normalizeShipmentStatusKey,
   SHIPMENT_STATUS_DISPLAY_LABELS,
 } from '@/lib/shipmentStatusDisplay'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
+import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
+import { fetchContractPurchaseOrderOptions, fetchStoLinkedPurchaseOrderOptions } from '@/components/shared/addNewShipmentTypes'
+import { ShipmentViewTableRowActions } from '@/components/shipments/ShipmentViewTableRowActions'
 import {
   buildVesselPortsQuantityRows,
   sumVesselPortsQuantityEdits,
@@ -39,8 +43,6 @@ import {
   VESSEL_MODAL_SECTION_HEADER_CLASS,
   VESSEL_MODAL_SUBSECTION_LABEL_CLASS,
 } from '@/lib/vesselModalUi'
-import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
-import { fetchContractPurchaseOrderOptions } from '@/components/shared/addNewShipmentTypes'
 import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
 import {
   mergeShipmentQtyOverridesOnContractRows,
@@ -56,7 +58,6 @@ import {
 import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
 import { MasterLoadingPortCombobox } from '@/components/MasterLoadingPortCombobox'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
-import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
@@ -95,7 +96,23 @@ import {
   type EtaBucketFilterKey,
 } from '@/lib/shipmentsPageDerivedData'
 import {
-  OperationalNowrapCell,
+  pipelineCountForStage,
+  SHIPMENT_PAGE_PIPELINE_CARDS,
+  SHIPMENT_PAGE_PIPELINE_LABELS,
+  type DischargePortBreakdown,
+  type LoadingPortBreakdown,
+  type ShipmentPagePipelineStage,
+  type ShipmentPagePipelineStatusCounts,
+} from '@/lib/shipmentPagePipeline'
+import { ShipmentStatusDistribution } from '@/components/shipments/ShipmentStatusDistribution'
+import { ShipmentsGlobalFiltersSection } from '@/components/shipments/ShipmentsGlobalFiltersSection'
+import {
+  buildShipmentsListQueryKey,
+  normalizePipelineStageFilter,
+  togglePipelineStageFilter,
+  type ShipmentsPipelineStageFilter,
+} from '@/lib/shipmentsPageFilterState'
+import {
   OperationalStackedCommaCell,
   getOperationalColumnLayout,
   operationalTableColumnClass,
@@ -110,6 +127,13 @@ import {
   canViewPermission,
 } from '@/components/PermissionsContext'
 // import * as XLSX from 'xlsx' // Temporarily disabled
+
+/**
+ * Section 2 — ETA Loading Status + ETA Discharge Status cards (Shipments page only).
+ * When false: cards hidden, no scoped ETA summary fetch, no etaLoading/etaDischarge list filters.
+ * Set true to restore UI and interactive ETA bucket filtering.
+ */
+const SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED = false
 
 const ETA_LOADING_FILTER_LABELS: Record<EtaBucketFilterKey, string> = {
   MORE_THAN_7D: 'ETA Loading > 7D',
@@ -147,6 +171,9 @@ const SHIPMENT_STATUS_LABELS = SHIPMENT_STATUS_DISPLAY_LABELS
 
 interface Shipment {
   id: string
+  /** contract_backlog = PO without shipment; shipment_execution = grouped STO row */
+  row_kind?: 'contract_backlog' | 'shipment_execution' | string
+  contract_row_id?: string | null
   shipment_id: string
   operation_id?: string
   contract_id: string
@@ -447,36 +474,6 @@ function resolveShipmentEditContractId(shipment: Shipment): string {
   )
 }
 
-function ShipmentTableEditShipmentButton({
-  visible,
-  onEdit,
-}: {
-  visible: boolean
-  onEdit: () => void
-}) {
-  if (!visible) return null
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={onEdit}
-          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-          aria-label="Edit Shipment"
-        >
-          <span className="relative inline-flex h-4 w-4 items-center justify-center">
-            <Ship className="h-4 w-4" />
-            <Pencil className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
-          </span>
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="top">Edit Shipment</TooltipContent>
-    </Tooltip>
-  )
-}
-
 function ShipmentRowEditButton({
   visible,
   hasShipmentEditData,
@@ -768,8 +765,6 @@ function ShipmentsPageContent() {
   const perms = usePermissions()
   const canAddShipment = canCreatePermission(perms, 'data.shipments')
   const canEditShipment = canEditPermission(perms, 'data.shipments')
-  // Permissions load async. For UX, fail-open on button visibility and enforce on click.
-  const canShowEditShipmentButton = !perms.loaded || canEditShipment
   const canOpenAddShipmentModal = canAddShipment || canEditShipment
   const canExportShipments = canViewPermission(perms, 'action.export_data')
   const canBulkShipments = canCreatePermission(perms, 'data.shipments') || canCreatePermission(perms, 'action.bulk_operations')
@@ -785,7 +780,14 @@ function ShipmentsPageContent() {
   /** Section 1 status circles — toolbar scope only (excludes status / ETA card filters). */
   const [shipmentsSection1Summary, setShipmentsSection1Summary] = useState<{
     total?: number
-    status?: Record<string, number>
+    status?: Partial<ShipmentPagePipelineStatusCounts>
+    loadingPortBreakdown?: Partial<LoadingPortBreakdown>
+    dischargePortBreakdown?: Partial<DischargePortBreakdown>
+    unplannedTable?: {
+      contractRows?: number
+      shipmentRows?: number
+      totalTableRows?: number
+    }
     etaLoading?: Record<string, number>
     etaDischarge?: Record<string, number>
   } | null>(null)
@@ -803,7 +805,7 @@ function ShipmentsPageContent() {
   const [searchTerm, setSearchTerm] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editedData, setEditedData] = useState<Partial<Shipment>>({})
-  const [statusFilter, setStatusFilter] = useState<string>('ALL')
+  const [statusFilter, setStatusFilter] = useState<ShipmentsPipelineStageFilter>('ALL')
   const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
   const [etaLoadingFilter, setEtaLoadingFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
   const [etaDischargeFilter, setEtaDischargeFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
@@ -823,6 +825,7 @@ function ShipmentsPageContent() {
     () => JSON.stringify({ p: [...selectedProducts].sort(), g: [...selectedGroupPlants].sort() }),
     [selectedProducts, selectedGroupPlants],
   )
+
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
@@ -1016,11 +1019,18 @@ function ShipmentsPageContent() {
   const [showDocs, setShowDocs] = useState(false)
 
   const [showAddShipment, setShowAddShipment] = useState(false)
+  const [addShipmentPrefilledPOs, setAddShipmentPrefilledPOs] = useState<ShipmentPoOption[] | null>(null)
+  const [unplannedTableBreakdown, setUnplannedTableBreakdown] = useState<{
+    contractRows: number
+    shipmentRows: number
+    totalTableRows: number
+  } | null>(null)
   const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
     shipmentId: string
     editContractId: string | null
     editStoNumber: string
     editContractNumbers: string
+    readOnly?: boolean
   } | null>(null)
 
   // Master Vessel / Master Loading Port suggestions (inline edit row + AddShipmentModal has its own)
@@ -1039,6 +1049,54 @@ function ShipmentsPageContent() {
   const [dragColId, setDragColId] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<string>('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
+  const globalFilterScope = useMemo(
+    () => ({
+      dateFrom,
+      dateTo,
+      searchTerm,
+      selectedIncoterms,
+      selectedProducts,
+      selectedGroupPlants,
+      lateIndicatorFilter,
+      viewOption,
+      viewFilterValue,
+      columnFiltersJson: JSON.stringify(
+        appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+          selectedIncoterms,
+          selectedProducts,
+        }),
+      ),
+      urlDelayed: searchParams.get('delayed') === 'true',
+      urlSto: searchParams.get('sto'),
+      urlContract: searchParams.get('contract'),
+    }),
+    [
+      dateFrom,
+      dateTo,
+      searchTerm,
+      selectedIncoterms,
+      selectedProducts,
+      selectedGroupPlants,
+      lateIndicatorFilter,
+      viewOption,
+      viewFilterValue,
+      columnFilters,
+      searchParams,
+    ],
+  )
+
+  const listQueryKey = useMemo(
+    () =>
+      buildShipmentsListQueryKey({
+        ...globalFilterScope,
+        pipelineStage: statusFilter,
+        page,
+        sortKey: '',
+        sortDir: '',
+      }),
+    [globalFilterScope, statusFilter, page],
+  )
 
   // Desktop table horizontal scroll sync (top + bottom)
   const topScrollRef = useRef<HTMLDivElement | null>(null)
@@ -1086,7 +1144,7 @@ function ShipmentsPageContent() {
   // Sync URL params -> local filter state
   useEffect(() => {
     const statusParam = searchParams.get('status')
-    if (statusParam) setStatusFilter(statusParam)
+    if (statusParam) setStatusFilter(normalizePipelineStageFilter(statusParam))
     setPage(1)
   }, [searchParams])
 
@@ -1095,40 +1153,64 @@ function ShipmentsPageContent() {
     section1SummaryForceNextFetchRef.current = true
   }, [userScopeReady, scopeSummaryRequestKey])
 
+  /** Single consolidated fetch — global scope + pipeline stage + pagination/sort. */
   useEffect(() => {
     if (!userScopeReady) return
     fetchShipments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    userScopeReady,
-    page,
-    statusFilter,
-    etaLoadingFilter,
-    etaDischargeFilter,
-    searchParams,
-    sortKey,
-    sortDir,
-    selectedGroupPlants,
-    selectedIncoterms,
-    selectedProducts,
-    dateFrom,
-    dateTo,
-    searchTerm,
-    lateIndicatorFilter,
-    viewOption,
-    viewFilterValue,
-  ])
+  }, [userScopeReady, listQueryKey])
 
-  const isFirstLateIndicatorEffect = useRef(true)
-  useEffect(() => {
-    if (isFirstLateIndicatorEffect.current) {
-      isFirstLateIndicatorEffect.current = false
-      return
-    }
+  const resetPageForGlobalFilter = useCallback(() => {
     setPage(1)
-    fetchShipments(1)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lateIndicatorFilter])
+  }, [])
+
+  const onGlobalDateFromChange = useCallback(
+    (iso: string) => {
+      resetPageForGlobalFilter()
+      setDateFrom(iso)
+    },
+    [resetPageForGlobalFilter],
+  )
+
+  const onGlobalDateToChange = useCallback(
+    (iso: string) => {
+      resetPageForGlobalFilter()
+      setDateTo(iso)
+    },
+    [resetPageForGlobalFilter],
+  )
+
+  const onIncotermsChange = useCallback(
+    (values: string[]) => {
+      resetPageForGlobalFilter()
+      setSelectedIncoterms(values)
+    },
+    [resetPageForGlobalFilter],
+  )
+
+  const onLateIndicatorChange = useCallback(
+    (value: string) => {
+      resetPageForGlobalFilter()
+      setLateIndicatorFilter(value)
+    },
+    [resetPageForGlobalFilter],
+  )
+
+  const onProductsChangeWithPageReset = useCallback(
+    (values: string[]) => {
+      resetPageForGlobalFilter()
+      handleProductsChange(values)
+    },
+    [resetPageForGlobalFilter, handleProductsChange],
+  )
+
+  const onGroupPlantsChangeWithPageReset = useCallback(
+    (values: string[]) => {
+      resetPageForGlobalFilter()
+      handleGroupPlantsChange(values)
+    },
+    [resetPageForGlobalFilter, handleGroupPlantsChange],
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -1166,15 +1248,28 @@ function ShipmentsPageContent() {
   const applySearch = useCallback(() => {
     setPage(1)
     setSearchTerm(searchDraft)
-    fetchShipments(1, searchDraft)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchDraft])
 
   const applyViewFilter = useCallback(() => {
     setPage(1)
-    fetchShipments(1)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const handlePipelineStageChange = useCallback((stage: ShipmentsPipelineStageFilter) => {
+    setPage(1)
+    if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
+      setSection2EtaSummary(null)
+      setEtaLoadingFilter('ALL')
+      setEtaDischargeFilter('ALL')
+    }
+    setStatusFilter(stage)
+  }, [])
+
+  const handleStatusCardClick = useCallback(
+    (stage: ShipmentPagePipelineStage) => {
+      handlePipelineStageChange(togglePipelineStageFilter(statusFilter, stage))
+    },
+    [handlePipelineStageChange, statusFilter],
+  )
 
   // Column header filters apply only when user presses Enter inside the filter popover.
 
@@ -1195,15 +1290,17 @@ function ShipmentsPageContent() {
       params.append('skipSapJoin', 'true')
       params.append('limit', String(pageSize))
       params.append('page', String(effectivePage))
-      params.append('includeSummary', 'false')
+      params.append('includeSummary', 'true')
       if (statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
       }
-      if (etaLoadingFilter !== 'ALL') {
-        params.append('etaLoading', etaLoadingFilter)
-      }
-      if (etaDischargeFilter !== 'ALL') {
-        params.append('etaDischarge', etaDischargeFilter)
+      if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
+        if (etaLoadingFilter !== 'ALL') {
+          params.append('etaLoading', etaLoadingFilter)
+        }
+        if (etaDischargeFilter !== 'ALL') {
+          params.append('etaDischarge', etaDischargeFilter)
+        }
       }
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
@@ -1248,50 +1345,19 @@ function ShipmentsPageContent() {
       const listUrl = `/shipments?${params.toString()}`
       const listCacheKey = buildCacheKey('GET', listUrl)
 
-      // Status distribution summary — fire in parallel with table list (do not wait for list response).
-      if (shipmentsSummaryTimerRef.current) clearTimeout(shipmentsSummaryTimerRef.current)
-      const section1SummaryParams = new URLSearchParams(params.toString())
-      section1SummaryParams.delete('status')
-      section1SummaryParams.delete('etaLoading')
-      section1SummaryParams.delete('etaDischarge')
-      section1SummaryParams.delete('includeSummary')
-      section1SummaryParams.delete('skipSapJoin')
-      section1SummaryParams.set('summaryOnly', 'true')
-      section1SummaryParams.set('page', '1')
-      section1SummaryParams.set('limit', '1')
-      const summaryUrl = `/shipments?${section1SummaryParams.toString()}`
-      const summaryCacheKey = buildCacheKey('GET', summaryUrl)
-      const summaryGen = ++summaryFetchGenRef.current
-      const forceSummaryFetch = section1SummaryForceNextFetchRef.current
-      section1SummaryForceNextFetchRef.current = false
-      void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
-        force: options?.force || forceSummaryFetch,
-        onRevalidate: (fresh) => {
-          if (summaryGen !== summaryFetchGenRef.current) return
-          if (fresh?.data?.summary) setShipmentsSection1Summary(fresh.data.summary)
-          if (statusFilter === 'ALL') {
-            setSection2EtaSummary(null)
-          }
-          setSummaryFetching(false)
-        },
-      })
-        .then(({ data, revalidating }) => {
-          if (summaryGen !== summaryFetchGenRef.current) return
-          if (data?.data?.summary) setShipmentsSection1Summary(data.data.summary)
-          if (statusFilter === 'ALL') {
-            setSection2EtaSummary(null)
-          }
-          if (!revalidating) setSummaryFetching(false)
-        })
-        .catch(() => {
-          if (summaryGen === summaryFetchGenRef.current) setSummaryFetching(false)
-        })
-
-      if (statusFilter !== 'ALL') {
-        const section2Params = new URLSearchParams(section1SummaryParams.toString())
+      if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && statusFilter !== 'ALL') {
+        const section2Params = new URLSearchParams(params.toString())
+        section2Params.delete('status')
+        section2Params.delete('etaLoading')
+        section2Params.delete('etaDischarge')
+        section2Params.delete('includeSummary')
+        section2Params.set('summaryOnly', 'true')
+        section2Params.set('page', '1')
+        section2Params.set('limit', '1')
         section2Params.set('scopeStatus', statusFilter)
         const section2Url = `/shipments?${section2Params.toString()}`
         const section2CacheKey = buildCacheKey('GET', section2Url)
+        const summaryGen = ++summaryFetchGenRef.current
         void cachedGet(section2CacheKey, () => api.get(section2Url).then((r) => r.data), {
           force: true,
           onRevalidate: (fresh) => {
@@ -1321,7 +1387,16 @@ function ShipmentsPageContent() {
       }
 
       const applyListEnvelope = (envelope: {
-        data?: { shipments?: Shipment[]; pagination?: { total?: number; totalPages?: number } }
+        data?: {
+          shipments?: Shipment[]
+          pagination?: { total?: number; totalPages?: number }
+          summary?: typeof shipmentsSection1Summary
+          unplannedBreakdown?: {
+            contractRows?: number
+            shipmentRows?: number
+            totalTableRows?: number
+          }
+        }
       }) => {
         const items = envelope?.data?.shipments || []
         setShipments(items)
@@ -1329,13 +1404,27 @@ function ShipmentsPageContent() {
         const pages = Number(envelope?.data?.pagination?.totalPages || 1)
         setTotalCount(total)
         setTotalPages(Math.max(1, pages))
+        if (envelope?.data?.summary) {
+          setShipmentsSection1Summary(envelope.data.summary)
+          setSummaryFetching(false)
+        }
+        const breakdown = envelope?.data?.unplannedBreakdown
+        if (breakdown) {
+          setUnplannedTableBreakdown({
+            contractRows: Number(breakdown.contractRows ?? 0),
+            shipmentRows: Number(breakdown.shipmentRows ?? 0),
+            totalTableRows: Number(breakdown.totalTableRows ?? total),
+          })
+        } else {
+          setUnplannedTableBreakdown(null)
+        }
       }
 
       const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
         listCacheKey,
         () => api.get(listUrl).then((r) => r.data),
         {
-          force: options?.force,
+          force: options?.force || section1SummaryForceNextFetchRef.current,
           onRevalidate: (fresh) => {
             if (listGen !== listFetchGenRef.current) return
             applyListEnvelope(fresh)
@@ -1343,34 +1432,46 @@ function ShipmentsPageContent() {
           },
         },
       )
+      section1SummaryForceNextFetchRef.current = false
       if (listGen !== listFetchGenRef.current) return
       applyListEnvelope(listEnvelope)
-      if (!listRevalidating) setListFetching(false)
+      if (!listRevalidating) {
+        setListFetching(false)
+        if (!listEnvelope?.data?.summary) setSummaryFetching(false)
+      }
 
-      const hydrateParams = new URLSearchParams(params.toString())
-      hydrateParams.set('skipSapJoin', 'false')
-      const hydrateUrl = `/shipments?${hydrateParams.toString()}`
-      const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
-      void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
-        force: options?.force,
-        onRevalidate: (fresh) => {
-          if (listGen !== listFetchGenRef.current) return
-          const hydrated = fresh?.data?.shipments || []
-          if (hydrated.length) {
-            setShipments((prev) => mergeShipmentSapFields(prev, hydrated))
-          }
-        },
-      })
-        .then(({ data }) => {
-          if (listGen !== listFetchGenRef.current) return
-          const hydrated = data?.data?.shipments || []
-          if (hydrated.length) {
-            setShipments((prev) => mergeShipmentSapFields(prev, hydrated))
-          }
+      // SAP hydrate after table paint — avoids competing with shell query on DB/CPU.
+      const scheduleHydrate = () => {
+        const hydrateParams = new URLSearchParams(params.toString())
+        hydrateParams.set('skipSapJoin', 'false')
+        const hydrateUrl = `/shipments?${hydrateParams.toString()}`
+        const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
+        void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
+          force: options?.force,
+          onRevalidate: (fresh) => {
+            if (listGen !== listFetchGenRef.current) return
+            const hydrated = fresh?.data?.shipments || []
+            if (hydrated.length) {
+              setShipments((prev) => mergeShipmentSapFields(prev, hydrated))
+            }
+          },
         })
-        .catch((err) => {
-          console.warn('Shipment SAP hydrate failed (table shows shell data):', err)
-        })
+          .then(({ data }) => {
+            if (listGen !== listFetchGenRef.current) return
+            const hydrated = data?.data?.shipments || []
+            if (hydrated.length) {
+              setShipments((prev) => mergeShipmentSapFields(prev, hydrated))
+            }
+          })
+          .catch((err) => {
+            console.warn('Shipment SAP hydrate failed (table shows shell data):', err)
+          })
+      }
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => scheduleHydrate(), { timeout: 2000 })
+      } else {
+        setTimeout(scheduleHydrate, 250)
+      }
     } catch (error: any) {
       if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch shipments:', error)
@@ -1475,14 +1576,15 @@ function ShipmentsPageContent() {
     }
   }
 
-  const handleOpenEditShipmentModal = (shipment: Shipment) => {
-    if (perms.loaded && !canEditShipment) {
+  const handleOpenEditShipmentModal = (shipment: Shipment, options?: { readOnly?: boolean }) => {
+    const readOnly = options?.readOnly === true
+    if (!readOnly && perms.loaded && !canEditShipment) {
       alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
       return
     }
     const editContractId = resolveShipmentEditContractId(shipment)
     if (!editContractId && !shipment.id) {
-      alert('Contract ID is required to edit this shipment.')
+      alert('Contract ID is required to open this shipment.')
       return
     }
     setEditShipmentFromTable({
@@ -1490,12 +1592,68 @@ function ShipmentsPageContent() {
       editContractId: editContractId || null,
       editStoNumber: resolveShipmentApiLookupKey(shipment),
       editContractNumbers: shipment.contract_numbers ?? '',
+      readOnly,
     })
+  }
+
+  const handleOpenViewShipmentModal = (shipment: Shipment) => {
+    handleOpenEditShipmentModal(shipment, { readOnly: true })
   }
 
   const handleCloseShipmentModal = () => {
     setShowAddShipment(false)
     setEditShipmentFromTable(null)
+    setAddShipmentPrefilledPOs(null)
+  }
+
+  const isContractBacklogRow = (shipment: Shipment): boolean =>
+    String(shipment.row_kind ?? '').trim() === 'contract_backlog'
+
+  const contractBacklogRowToPoOption = (shipment: Shipment): ShipmentPoOption => {
+    const contractId = String(shipment.contract_number || shipment.contract_numbers || '').trim()
+    const poNumber = String(shipment.po_numbers ?? '').split(',')[0]?.trim() || null
+    const plantCode = shipment.plant_site ? String(shipment.plant_site).trim() : null
+    const key = String(shipment.contract_row_id || shipment.id || `${contractId}::${poNumber ?? ''}`).trim()
+    const label = poNumber
+      ? plantCode
+        ? `${poNumber} - ${plantCode}`
+        : poNumber
+      : contractId
+    return { key, contractId, poNumber, plantCode, label }
+  }
+
+  const handleOpenAddShipmentForContractRow = async (shipment: Shipment) => {
+    if (perms.loaded && !canOpenAddShipmentModal) {
+      alert('You need permission to create shipments. Ask an admin to update your role.')
+      return
+    }
+    const contractNumbers = resolveShipmentContractNumbers(shipment)
+    const contractId = String(
+      shipment.contract_number ||
+        shipment.contract_numbers ||
+        contractNumbers[0] ||
+        '',
+    ).trim()
+    const stoDisplay = shipmentModalStoDisplay(shipment)
+    const stoLookup = resolveShipmentApiLookupKey(shipment)
+
+    try {
+      let poOptions: Awaited<ReturnType<typeof fetchContractPurchaseOrderOptions>> = []
+      if (stoDisplay !== '-' && stoLookup.trim()) {
+        poOptions = await fetchStoLinkedPurchaseOrderOptions(stoLookup.trim(), contractNumbers)
+      } else if (contractId) {
+        poOptions = await fetchContractPurchaseOrderOptions(contractId)
+      } else {
+        poOptions = [contractBacklogRowToPoOption(shipment)]
+      }
+      setAddShipmentPrefilledPOs(
+        poOptions.length > 0 ? poOptions : [contractBacklogRowToPoOption(shipment)],
+      )
+      setShowAddShipment(true)
+    } catch {
+      setAddShipmentPrefilledPOs([contractBacklogRowToPoOption(shipment)])
+      setShowAddShipment(true)
+    }
   }
 
   const handleCancelEdit = () => {
@@ -2005,14 +2163,17 @@ function ShipmentsPageContent() {
   }
 
   const getStatusColor = (status: string) => {
-    switch (status) {
+    switch (normalizeShipmentStatusKey(status)) {
       case 'UNPLANNED': return 'bg-slate-100 text-slate-800'
       case 'PLANNED': return 'bg-blue-100 text-blue-800'
-      case 'IN_PROGRESS': return 'bg-yellow-100 text-yellow-800'
+      case 'ARRIVED_LP': return 'bg-yellow-100 text-yellow-800'
+      case 'BERTHED_LP': return 'bg-amber-100 text-amber-800'
       case 'LOADING': return 'bg-orange-100 text-orange-800'
-      case 'IN_TRANSIT': return 'bg-purple-100 text-purple-800'
-      case 'ARRIVED': return 'bg-purple-100 text-purple-800'
-      case 'UNLOADING': return 'bg-orange-100 text-orange-800'
+      case 'COMPLETED_LOADING': return 'bg-orange-200 text-orange-900'
+      case 'SAILED': return 'bg-purple-100 text-purple-800'
+      case 'ARRIVED_DP': return 'bg-indigo-100 text-indigo-800'
+      case 'BERTHED_DP': return 'bg-cyan-100 text-cyan-800'
+      case 'UNLOADING': return 'bg-teal-100 text-teal-800'
       case 'COMPLETED': return 'bg-green-100 text-green-800'
       case 'CANCELLED': return 'bg-red-100 text-red-800'
       default: return 'bg-gray-100 text-gray-800'
@@ -2066,8 +2227,8 @@ function ShipmentsPageContent() {
     selectedGroupPlants.length > 0 ||
     selectedIncoterms.length > 0 ||
     selectedProducts.length > 0 ||
-    etaLoadingFilter !== 'ALL' ||
-    etaDischargeFilter !== 'ALL' ||
+    (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && etaLoadingFilter !== 'ALL') ||
+    (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && etaDischargeFilter !== 'ALL') ||
     hasActiveShipmentColumnFilters(columnFilters)
 
   const clearShipmentFilters = useCallback(() => {
@@ -2083,23 +2244,48 @@ function ShipmentsPageContent() {
     setDateFrom('')
     setDateTo('')
     setColumnFilters({})
-    setEtaLoadingFilter('ALL')
-    setEtaDischargeFilter('ALL')
+    if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
+      setEtaLoadingFilter('ALL')
+      setEtaDischargeFilter('ALL')
+    }
     setPage(1)
-    fetchShipments(1, '')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetUserScopeFilters])
 
-  /** Section 1 status circles — mutually exclusive with ETA summary cards for count parity with Section 3. */
-  const handleStatusCardClick = useCallback((status: string) => {
-    setPage(1)
-    setSection2EtaSummary(null)
-    setStatusFilter((prev) => (prev === status ? 'ALL' : status))
-    setEtaLoadingFilter('ALL')
-    setEtaDischargeFilter('ALL')
-  }, [])
+  const section1StatusCounts = useMemo((): ShipmentPagePipelineStatusCounts => {
+    const s = shipmentsSection1Summary?.status
+    return {
+      unplanned: Number(s?.unplanned ?? 0),
+      planned: Number(s?.planned ?? 0),
+      atLoadingPort: Number(s?.atLoadingPort ?? 0),
+      sailed: Number(s?.sailed ?? 0),
+      atDischargePort: Number(s?.atDischargePort ?? 0),
+      completed: Number(s?.completed ?? 0),
+      cancelled: Number(s?.cancelled ?? 0),
+      total: Number(shipmentsSection1Summary?.total ?? 0),
+    }
+  }, [shipmentsSection1Summary])
+
+  const loadingPortBreakdown = useMemo((): LoadingPortBreakdown => {
+    const b = shipmentsSection1Summary?.loadingPortBreakdown
+    return {
+      arrived: Number(b?.arrived ?? 0),
+      berthed: Number(b?.berthed ?? 0),
+      loading: Number(b?.loading ?? 0),
+      completedLoading: Number(b?.completedLoading ?? 0),
+    }
+  }, [shipmentsSection1Summary])
+
+  const dischargePortBreakdown = useMemo((): DischargePortBreakdown => {
+    const b = shipmentsSection1Summary?.dischargePortBreakdown
+    return {
+      arrived: Number(b?.arrived ?? 0),
+      berthed: Number(b?.berthed ?? 0),
+      unloading: Number(b?.unloading ?? 0),
+    }
+  }, [shipmentsSection1Summary])
 
   const handleEtaLoadingCardClick = useCallback((key: EtaBucketFilterKey) => {
+    if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) return
     setPage(1)
     setEtaLoadingFilter((prev) => (prev === key ? 'ALL' : key))
     setStatusFilter('ALL')
@@ -2107,29 +2293,15 @@ function ShipmentsPageContent() {
   }, [])
 
   const handleEtaDischargeCardClick = useCallback((key: EtaBucketFilterKey) => {
+    if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) return
     setPage(1)
     setEtaDischargeFilter((prev) => (prev === key ? 'ALL' : key))
     setStatusFilter('ALL')
     setEtaLoadingFilter('ALL')
   }, [])
 
-  const section1StatusCounts = useMemo(() => {
-    const s = shipmentsSection1Summary?.status
-    return {
-      unplanned: Number(s?.unplanned ?? 0),
-      planned: Number(s?.planned ?? 0),
-      inProgress: Number(s?.inProgress ?? 0),
-      loading: Number(s?.loading ?? 0),
-      inTransit: Number(s?.inTransit ?? 0),
-      arrived: Number(s?.arrived ?? 0),
-      unloading: Number(s?.unloading ?? 0),
-      completed: Number(s?.completed ?? 0),
-      cancelled: Number(s?.cancelled ?? 0),
-      total: Number(shipmentsSection1Summary?.total ?? 0),
-    }
-  }, [shipmentsSection1Summary])
-
   const section2EtaLoadingCounts = useMemo(() => {
+    if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) return { ...EMPTY_ETA_BUCKET_COUNTS }
     const src =
       statusFilter !== 'ALL'
         ? section2EtaSummary?.etaLoading ?? (summaryFetching ? EMPTY_ETA_BUCKET_COUNTS : null)
@@ -2145,6 +2317,7 @@ function ShipmentsPageContent() {
   }, [statusFilter, section2EtaSummary, shipmentsSection1Summary, summaryFetching])
 
   const section2EtaDischargeCounts = useMemo(() => {
+    if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) return { ...EMPTY_ETA_BUCKET_COUNTS }
     const src =
       statusFilter !== 'ALL'
         ? section2EtaSummary?.etaDischarge ?? (summaryFetching ? EMPTY_ETA_BUCKET_COUNTS : null)
@@ -2160,21 +2333,39 @@ function ShipmentsPageContent() {
   }, [statusFilter, section2EtaSummary, shipmentsSection1Summary, summaryFetching])
 
   const section2EtaScopeLabel = useMemo(() => {
-    if (statusFilter === 'ALL') return null
-    return SHIPMENT_STATUS_LABELS[statusFilter] ?? statusFilter
+    if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED || statusFilter === 'ALL') return null
+    return SHIPMENT_PAGE_PIPELINE_LABELS[statusFilter as ShipmentPagePipelineStage] ?? statusFilter
   }, [statusFilter])
+  const tableShipmentCount = useMemo(() => totalCount, [totalCount])
+
+  const unplannedTableSummaryLabel = useMemo(() => {
+    if (statusFilter !== 'UNPLANNED') return null
+    const fromList = unplannedTableBreakdown
+    const fromSummary = shipmentsSection1Summary?.unplannedTable
+    const contractRows = Number(
+      fromList?.contractRows ?? fromSummary?.contractRows ?? section1StatusCounts.unplanned ?? 0,
+    )
+    const shipmentRows = Number(fromList?.shipmentRows ?? fromSummary?.shipmentRows ?? 0)
+    return `Contract: ${contractRows.toLocaleString('en-US')} · Shipment: ${shipmentRows.toLocaleString('en-US')}`
+  }, [
+    statusFilter,
+    unplannedTableBreakdown,
+    shipmentsSection1Summary,
+    section1StatusCounts.unplanned,
+  ])
 
   const section3TableLoading = loading && shipments.length === 0
-  const section1DataLoading = summaryFetching && shipmentsSection1Summary == null
+  const section1DataLoading =
+    summaryFetching || (userScopeReady && shipmentsSection1Summary == null)
 
   const shipmentsTableScopeLabel = useMemo(() => {
     if (statusFilter !== 'ALL') {
-      return SHIPMENT_STATUS_LABELS[statusFilter] ?? statusFilter
+      return SHIPMENT_PAGE_PIPELINE_LABELS[statusFilter as ShipmentPagePipelineStage] ?? statusFilter
     }
-    if (etaLoadingFilter !== 'ALL') {
+    if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && etaLoadingFilter !== 'ALL') {
       return ETA_LOADING_FILTER_LABELS[etaLoadingFilter]
     }
-    if (etaDischargeFilter !== 'ALL') {
+    if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && etaDischargeFilter !== 'ALL') {
       return ETA_DISCHARGE_FILTER_LABELS[etaDischargeFilter]
     }
     return null
@@ -2268,6 +2459,7 @@ function ShipmentsPageContent() {
   }
 
   const clearColumnFilter = (colId: string) => {
+    resetPageForGlobalFilter()
     setColumnFilters(prev => {
       const next = { ...prev }
       delete next[colId]
@@ -2282,6 +2474,7 @@ function ShipmentsPageContent() {
       (next.type === 'number' && Boolean((next.min && next.min !== '') || (next.max && next.max !== ''))) ||
       (next.type === 'date' && Boolean((next.from && next.from !== '') || (next.to && next.to !== '')))
 
+    resetPageForGlobalFilter()
     setColumnFilters(prev => {
       const copy = { ...prev }
       if (!active) {
@@ -2594,9 +2787,9 @@ function ShipmentsPageContent() {
       label: 'STO',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => resolveShipmentDisplayStoNumber(s.sto_number),
+      getSortValue: (s) => (s.row_kind === 'contract_backlog' ? '' : resolveShipmentDisplayStoNumber(s.sto_number)),
       render: (s) => (
-        <OperationalNowrapCell value={resolveShipmentDisplayStoNumber(s.sto_number)} />
+        <span className="text-sm">{resolveShipmentDisplayStoNumber(s.sto_number)}</span>
       ),
     },
     {
@@ -3535,8 +3728,8 @@ function ShipmentsPageContent() {
         const docId = res.data?.data?.id ? String(res.data.data.id) : null
         setDocId(docId)
         setUploaded(true)
-        if (showDocs) {
-          await fetchShipmentDocuments(selectedShipment.id)
+        if (showDocs && selectedShipment) {
+          await fetchShipmentDocuments(selectedShipment)
         }
       } else {
         alert(res.data?.error?.message || 'Failed to upload document')
@@ -3817,7 +4010,7 @@ function ShipmentsPageContent() {
       if (res.data?.success) {
         alert('Document uploaded successfully!')
         if (selectedShipment && selectedShipment.id === shipment.id) {
-          await fetchShipmentDocuments(shipment.id)
+          await fetchShipmentDocuments(shipment)
         }
       } else {
         alert(res.data?.error?.message || 'Failed to upload document')
@@ -3831,11 +4024,15 @@ function ShipmentsPageContent() {
     }
   }
 
-  const fetchShipmentDocuments = async (shipmentInternalId: string) => {
+  const fetchShipmentDocuments = async (shipment: Shipment) => {
     try {
       setDocsLoading(true)
       const params = new URLSearchParams()
-      params.append('shipmentId', shipmentInternalId)
+      if (isContractBacklogRow(shipment)) {
+        params.append('contractId', shipment.id)
+      } else {
+        params.append('shipmentId', shipment.id)
+      }
       const res = await api.get(`/documents?${params.toString()}`)
       const docs: DocumentItem[] = res.data?.data || []
       setShipmentDocs(docs)
@@ -3845,6 +4042,12 @@ function ShipmentsPageContent() {
     } finally {
       setDocsLoading(false)
     }
+  }
+
+  const handleViewDocuments = async (shipment: Shipment) => {
+    setSelectedShipment(shipment)
+    setShowDocs(true)
+    await fetchShipmentDocuments(shipment)
   }
 
   const handleDownloadDocument = async (docId: string, fileName: string) => {
@@ -3866,12 +4069,6 @@ function ShipmentsPageContent() {
       console.error('Download document error:', err)
       alert('Failed to download document. Please try again.')
     }
-  }
-
-  const handleViewDocuments = async (shipment: Shipment) => {
-    setSelectedShipment(shipment)
-    setShowDocs(true)
-    await fetchShipmentDocuments(shipment.id)
   }
 
   const fetchVesselSuggestions = async (search: string) => {
@@ -4022,84 +4219,43 @@ function ShipmentsPageContent() {
           </div>
         </div>
 
-        {/* Status Distribution */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <span>Status Distribution</span>
-              {section1DataLoading ? (
-                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
-              ) : null}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div
-              className={`flex w-full min-w-0 items-center justify-start gap-3 overflow-x-auto py-4 px-4 md:gap-6 transition-opacity duration-200 ${
-                section1DataLoading ? 'opacity-65' : 'opacity-100'
-              }`}
-            >
-              <div className="flex flex-nowrap items-center shrink-0">
-              {[
-                { status: 'UNPLANNED', label: 'Unplanned', color: 'bg-slate-100', textColor: 'text-slate-800', badgeColor: 'bg-slate-600', tooltip: 'Shipment has no ETA milestones entered yet.' },
-                { status: 'PLANNED',     label: 'Planned',     color: 'bg-blue-100',   textColor: 'text-blue-800',   badgeColor: 'bg-blue-600',   tooltip: 'Shipment has an ETA — at least one ETA milestone has been entered.' },
-                { status: 'IN_PROGRESS', label: SHIPMENT_STATUS_DISPLAY_LABELS.IN_PROGRESS, color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600', tooltip: 'Shipment in progress — vessel en route to the loading port (ATA arrival at loading port).' },
-                { status: 'LOADING',     label: SHIPMENT_STATUS_DISPLAY_LABELS.LOADING,     color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600', tooltip: 'Vessel is loading cargo at the origin port.' },
-                { status: 'IN_TRANSIT',  label: SHIPMENT_STATUS_DISPLAY_LABELS.IN_TRANSIT,  color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600', tooltip: 'Vessel has departed and is en route to the destination port.' },
-                { status: 'ARRIVED',     label: SHIPMENT_STATUS_DISPLAY_LABELS.ARRIVED,     color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600', tooltip: 'Vessel has arrived at the destination port, awaiting unloading.' },
-                { status: 'UNLOADING',   label: 'Unloading',   color: 'bg-cyan-100',   textColor: 'text-cyan-800',   badgeColor: 'bg-cyan-600',   tooltip: 'Cargo is being unloaded from the vessel at the destination port.' },
-                { status: 'COMPLETED',   label: 'Completed',   color: 'bg-green-100',  textColor: 'text-green-800',  badgeColor: 'bg-green-600',  tooltip: 'Shipment complete — cargo has been received at destination.' },
-                { status: 'CANCELLED',   label: 'Cancelled',   color: 'bg-red-100',    textColor: 'text-red-800',    badgeColor: 'bg-red-600',    tooltip: 'Shipment cancelled and will not continue.' },
-              ].map((statusInfo, index, array) => {
-                const isStatusActive = statusFilter === statusInfo.status
-                const summaryCount =
-                  statusInfo.status === 'UNPLANNED' ? section1StatusCounts.unplanned
-                    : statusInfo.status === 'PLANNED' ? section1StatusCounts.planned
-                      : statusInfo.status === 'IN_PROGRESS' ? section1StatusCounts.inProgress
-                        : statusInfo.status === 'LOADING' ? section1StatusCounts.loading
-                          : statusInfo.status === 'IN_TRANSIT' ? section1StatusCounts.inTransit
-                            : statusInfo.status === 'ARRIVED' ? section1StatusCounts.arrived
-                              : statusInfo.status === 'UNLOADING' ? section1StatusCounts.unloading
-                                : statusInfo.status === 'COMPLETED' ? section1StatusCounts.completed
-                                  : statusInfo.status === 'CANCELLED' ? section1StatusCounts.cancelled
-                                    : 0
-                const count =
-                  isStatusActive && statusFilter !== 'ALL' ? totalCount : summaryCount
-                return (
-                  <div key={statusInfo.status} className="flex items-center flex-shrink-0">
-                    <div className="relative">
-                      <button
-                        type="button"
-                        title={statusInfo.tooltip}
-                        onClick={() => handleStatusCardClick(statusInfo.status)}
-                        className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full border-2 border-white shadow-lg transition-all cursor-pointer hover:shadow-xl hover:scale-[1.02] ${statusInfo.color} flex items-center justify-center ${
-                          isStatusActive ? 'ring-4 ring-blue-400 ring-offset-2' : ''
-                        }`}
-                      >
-                        {/* Count Badge */}
-                        <div className={`absolute -top-3 -right-3 text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10 ${statusInfo.badgeColor}`}>
-                          {count}
-                        </div>
-                        {/* Status Label */}
-                        <span className={`text-xs md:text-sm font-semibold px-2 leading-tight ${statusInfo.textColor} text-center`}>
-                          {statusInfo.label}
-                        </span>
-                      </button>
-                    </div>
-                    {index < array.length - 1 && (
-                      <div className="flex-shrink-0 mx-2 md:mx-3">
-                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-gray-400">
-                          <path d="M9 18L15 12L9 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <ShipmentsGlobalFiltersSection
+          searchDraft={searchDraft}
+          onSearchDraftChange={setSearchDraft}
+          onSearchApply={applySearch}
+          pipelineStage={statusFilter}
+          onPipelineStageChange={handlePipelineStageChange}
+          lateIndicatorFilter={lateIndicatorFilter}
+          onLateIndicatorChange={onLateIndicatorChange}
+          availableIncoterms={availableIncoterms}
+          selectedIncoterms={selectedIncoterms}
+          onIncotermsChange={onIncotermsChange}
+          availableProducts={availableProducts}
+          selectedProducts={selectedProducts}
+          onProductsChange={onProductsChangeWithPageReset}
+          availableGroupPlants={availableGroupPlants}
+          selectedGroupPlants={selectedGroupPlants}
+          onGroupPlantsChange={onGroupPlantsChangeWithPageReset}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateFromChange={onGlobalDateFromChange}
+          onDateToChange={onGlobalDateToChange}
+          hasActiveFilters={hasActiveShipmentFilters}
+          onClearFilters={clearShipmentFilters}
+        />
 
+        <ShipmentStatusDistribution
+          loading={section1DataLoading}
+          statusFilter={statusFilter}
+          counts={section1StatusCounts}
+          loadingPortBreakdown={loadingPortBreakdown}
+          dischargePortBreakdown={dischargePortBreakdown}
+          onStageClick={handleStatusCardClick}
+        />
+
+        {/* Section 2 — ETA Loading / Discharge (hidden while SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED is false) */}
+        {SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED ? (
+        <>
         {/* ETA Loading Status */}
         <Card className="mt-4">
           <CardHeader>
@@ -4283,108 +4439,8 @@ function ShipmentsPageContent() {
             </div>
           </CardContent>
         </Card>
-
-
-        {/* Filters */}
-        <Card>
-          <CardContent className="pt-6">
-            <div className="space-y-4">
-              <div className="flex flex-wrap gap-4">
-                <div className="relative min-w-[12rem] flex-1">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
-                  <Input
-                    placeholder="Search by Shipment ID, Contract Ext No, Contract Numbers, PO No, or Vessel Name..."
-                    value={searchDraft}
-                    onChange={(e) => setSearchDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        applySearch()
-                      }
-                    }}
-                    className="pl-10"
-                  />
-                </div>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => {
-                    setPage(1)
-                    setSection2EtaSummary(null)
-                    setStatusFilter(e.target.value)
-                    setEtaLoadingFilter('ALL')
-                    setEtaDischargeFilter('ALL')
-                  }}
-                  className="rounded-lg border px-4 py-2"
-                >
-                <option value="ALL">All Status</option>
-                <option value="UNPLANNED">Unplanned</option>
-                <option value="PLANNED">Planned</option>
-                <option value="IN_PROGRESS">{SHIPMENT_STATUS_DISPLAY_LABELS.IN_PROGRESS}</option>
-                <option value="LOADING">{SHIPMENT_STATUS_DISPLAY_LABELS.LOADING}</option>
-                <option value="IN_TRANSIT">{SHIPMENT_STATUS_DISPLAY_LABELS.IN_TRANSIT}</option>
-                <option value="ARRIVED">{SHIPMENT_STATUS_DISPLAY_LABELS.ARRIVED}</option>
-                <option value="UNLOADING">Unloading</option>
-                <option value="COMPLETED">Completed</option>
-                <option value="CANCELLED">Cancelled</option>
-                </select>
-                <select
-                  value={lateIndicatorFilter}
-                  onChange={(e) => setLateIndicatorFilter(e.target.value)}
-                  className="rounded-lg border px-4 py-2"
-                >
-                <option value="ALL">All Late Indicator</option>
-                <option value="ON_TIME">On Time</option>
-                <option value="LATE">Late</option>
-                <option value="NA">N/A</option>
-                </select>
-              </div>
-
-              <PerformanceScopeFilters
-                hideGroupPlantFilter={false}
-                incotermOptions={availableIncoterms}
-                selectedIncoterms={selectedIncoterms}
-                onIncotermsChange={setSelectedIncoterms}
-                showProductFilter
-                productOptions={availableProducts}
-                selectedProducts={selectedProducts}
-                onProductsChange={handleProductsChange}
-                groupPlantOptions={availableGroupPlants}
-                selectedGroupPlants={selectedGroupPlants}
-                onGroupPlantsChange={handleGroupPlantsChange}
-                dateFrom={dateFrom}
-                dateTo={dateTo}
-                onDateFromChange={setDateFrom}
-                onDateToChange={setDateTo}
-                showDateRange={false}
-                incotermEmptyMessage="Loading incoterms..."
-                productEmptyMessage="Loading products..."
-                groupPlantPlaceholder="Select group plant(s)"
-                groupPlantEmptyMessage="No group plants"
-              />
-
-              <div className="flex gap-4 items-center">
-                <div className="flex items-center gap-2">
-                  <label className="text-sm font-medium text-gray-700">Contract Date:</label>
-                  <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={setDateFrom} className="w-40" />
-                  <span className="text-gray-500">to</span>
-                  <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={setDateTo} className="w-40" />
-                  {hasActiveShipmentFilters && (
-                    <Button
-                      type="button"
-                      onClick={clearShipmentFilters}
-                      variant="ghost"
-                      size="sm"
-                      className="text-gray-500"
-                    >
-                      <X className="h-4 w-4 mr-1" />
-                      Clear
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        </>
+        ) : null}
 
         {false && (
           <>
@@ -4745,13 +4801,13 @@ function ShipmentsPageContent() {
                 </CardTitle>
                 <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                     <span className="whitespace-nowrap tabular-nums text-gray-700">
-                      <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> shipments
+                      <span className="font-semibold">{tableShipmentCount.toLocaleString('en-US')}</span> shipments
                     </span>
                     <span className="text-gray-400" aria-hidden>
                       ·
                     </span>
                     <span className="whitespace-nowrap tabular-nums">
-                      Page {page}/{totalPages} · {totalCount.toLocaleString('en-US')} rows
+                      Page {page}/{totalPages} · {tableShipmentCount.toLocaleString('en-US')} rows
                     </span>
                     {shipmentsTableScopeLabel ? (
                       <>
@@ -4760,6 +4816,16 @@ function ShipmentsPageContent() {
                         </span>
                         <span className="whitespace-nowrap font-medium text-blue-700">
                           {shipmentsTableScopeLabel}
+                        </span>
+                      </>
+                    ) : null}
+                    {unplannedTableSummaryLabel ? (
+                      <>
+                        <span className="text-gray-400" aria-hidden>
+                          ·
+                        </span>
+                        <span className="whitespace-nowrap font-medium text-slate-700">
+                          {unplannedTableSummaryLabel}
                         </span>
                       </>
                     ) : null}
@@ -5240,95 +5306,42 @@ function ShipmentsPageContent() {
                                   })}
 
                                   <td className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
-                                  <div className="flex items-center justify-end gap-2 min-h-[40px]">
-                                    {isEditing ? (
+                                    {tableInlineEditActive ? (
                                       <div className="hidden">
-                                      <>
-                                        <Button
-                                          variant="outline"
-                                          size="icon"
-                                          onClick={handleCancelEdit}
-                                          disabled={saving}
-                                          title="Cancel"
-                                        >
-                                          <X className="h-4 w-4" />
-                                        </Button>
-                                        <Button
-                                          size="icon"
-                                          onClick={() => handleSave(shipment.id)}
-                                          disabled={saving}
-                                          title="Save"
-                                          className="bg-green-600 hover:bg-green-700 text-white"
-                                        >
-                                          {saving ? (
-                                            <Loader2 className="h-4 w-4 animate-spin" />
-                                          ) : (
-                                            <Save className="h-4 w-4" />
-                                          )}
-                                        </Button>
-                                      </>
+                                        <>
+                                          <Button
+                                            variant="outline"
+                                            size="icon"
+                                            onClick={handleCancelEdit}
+                                            disabled={saving}
+                                            title="Cancel"
+                                          >
+                                            <X className="h-4 w-4" />
+                                          </Button>
+                                          <Button
+                                            size="icon"
+                                            onClick={() => handleSave(shipment.id)}
+                                            disabled={saving}
+                                            title="Save"
+                                            className="bg-green-600 hover:bg-green-700 text-white"
+                                          >
+                                            {saving ? (
+                                              <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : (
+                                              <Save className="h-4 w-4" />
+                                            )}
+                                          </Button>
+                                        </>
                                       </div>
                                     ) : (
-                                      <>
-                                      <div className="hidden">
-                                      <ShipmentRowEditButton
-                                        visible={canShowEditShipmentButton}
-                                        hasShipmentEditData={hasShipmentEditData}
-                                        onEdit={() => {
-                                          if (perms.loaded && !canEditShipment) {
-                                            alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
-                                            return
-                                          }
-                                          handleEdit(shipment)
-                                        }}
+                                      <ShipmentViewTableRowActions
+                                        shipment={shipment}
+                                        onAddShipment={() => void handleOpenAddShipmentForContractRow(shipment)}
+                                        onEditShipment={() => handleOpenEditShipmentModal(shipment)}
+                                        onViewShipment={() => handleOpenViewShipmentModal(shipment)}
+                                        onViewDocs={() => void handleViewDocuments(shipment)}
                                       />
-                                        <Button
-                                          variant="outline"
-                                          size="icon"
-                                          onClick={() => handleViewLoadingPorts(shipment)}
-                                          title="Ports"
-                                          className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-                                        >
-                                          <Ship className="h-4 w-4" />
-                                        </Button>
-                                      </div>
-                                      <ShipmentTableEditShipmentButton
-                                        visible={canShowEditShipmentButton}
-                                        onEdit={() => handleOpenEditShipmentModal(shipment)}
-                                      />
-                                        <Button
-                                          variant="outline"
-                                          size="icon"
-                                          onClick={() => handleViewDocuments(shipment)}
-                                          title="Docs"
-                                          className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
-                                        >
-                                          <FileText className="h-4 w-4" />
-                                        </Button>
-                                        <input
-                                          id={`shipment-file-${shipment.id}`}
-                                          type="file"
-                                          accept="application/pdf,image/png,image/jpeg"
-                                          className="hidden"
-                                          onChange={(e) => handleUploadFileChange(shipment, e)}
-                                        />
-                                        <Button
-                                          variant="outline"
-                                          size="icon"
-                                          onClick={() => document.getElementById(`shipment-file-${shipment.id}`)?.click()}
-                                          disabled={uploadingId === shipment.id}
-                                          title="Upload"
-                                          className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
-                                        >
-                                          {uploadingId === shipment.id ? (
-                                            <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
-                                          ) : (
-                                            <Upload className="h-4 w-4" />
-                                          )}
-                                        </Button>
-                                      </>
                                     )}
-                                  </div>
                                   </td>
                               </tr>
                               {false && expandedShipmentIds.has(shipment.id) && (
@@ -5546,7 +5559,7 @@ function ShipmentsPageContent() {
                               </Badge>
                             </div>
                             <div className="flex gap-2">
-                              {isEditing ? (
+                              {tableInlineEditActive ? (
                                 <div className="hidden">
                                 <>
                                   <Button variant="outline" size="icon" onClick={handleCancelEdit} disabled={saving} title="Cancel">
@@ -5558,52 +5571,13 @@ function ShipmentsPageContent() {
                                 </>
                                 </div>
                               ) : (
-                                <>
-                                  <div className="hidden">
-                                  <ShipmentRowEditButton
-                                    visible={canShowEditShipmentButton}
-                                    hasShipmentEditData={hasShipmentEditData}
-                                    onEdit={() => {
-                                      if (perms.loaded && !canEditShipment) {
-                                        alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
-                                        return
-                                      }
-                                      handleEdit(shipment)
-                                    }}
-                                  />
-                                  <Button variant="outline" size="icon" onClick={() => handleViewLoadingPorts(shipment)} title="Ports" className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
-                                    <Ship className="h-4 w-4" />
-                                  </Button>
-                                  </div>
-                                  <ShipmentTableEditShipmentButton
-                                    visible={canShowEditShipmentButton}
-                                    onEdit={() => handleOpenEditShipmentModal(shipment)}
-                                  />
-                                  <Button variant="outline" size="icon" onClick={() => handleViewDocuments(shipment)} title="Docs" className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100">
-                                    <FileText className="h-4 w-4" />
-                                  </Button>
-                                  <input
-                                    id={`shipment-file-${shipment.id}`}
-                                    type="file"
-                                    accept="application/pdf,image/png,image/jpeg"
-                                    className="hidden"
-                                    onChange={(e) => handleUploadFileChange(shipment, e)}
-                                  />
-                                  <Button
-                                    variant="outline"
-                                    size="icon"
-                                    onClick={() => document.getElementById(`shipment-file-${shipment.id}`)?.click()}
-                                    disabled={uploadingId === shipment.id}
-                                    title="Upload"
-                                    className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
-                                  >
-                                    {uploadingId === shipment.id ? (
-                                      <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
-                                    ) : (
-                                      <Upload className="h-4 w-4" />
-                                    )}
-                                  </Button>
-                                </>
+                                <ShipmentViewTableRowActions
+                                  shipment={shipment}
+                                  onAddShipment={() => void handleOpenAddShipmentForContractRow(shipment)}
+                                  onEditShipment={() => handleOpenEditShipmentModal(shipment)}
+                                  onViewShipment={() => handleOpenViewShipmentModal(shipment)}
+                                  onViewDocs={() => void handleViewDocuments(shipment)}
+                                />
                               )}
                             </div>
                           </div>
@@ -5755,7 +5729,7 @@ function ShipmentsPageContent() {
                 {totalPages > 1 && (
                   <div className="mt-6 flex items-center justify-between border-t pt-4">
                     <div className="text-sm text-gray-700">
-                      Showing page {page} of {totalPages} ({totalCount} total shipments)
+                      Showing page {page} of {totalPages} ({tableShipmentCount} total shipments)
                     </div>
                     <div className="flex items-center gap-2">
                       <Button
@@ -7090,12 +7064,15 @@ function ShipmentsPageContent() {
       <AddNewShipmentModal
         open={showAddShipment || editShipmentFromTable != null}
         mode={editShipmentFromTable ? 'edit' : 'add'}
+        readOnly={editShipmentFromTable?.readOnly === true}
         editContractId={editShipmentFromTable?.editContractId ?? null}
         editShipmentId={editShipmentFromTable?.shipmentId ?? null}
         editStoNumber={editShipmentFromTable?.editStoNumber ?? null}
         editContractNumbers={editShipmentFromTable?.editContractNumbers ?? null}
+        prefilledPOs={addShipmentPrefilledPOs}
         onClose={handleCloseShipmentModal}
         onSubmit={async (payload) => {
+          if (editShipmentFromTable?.readOnly) return
           await submitAddNewShipmentPayload(payload)
           handleCloseShipmentModal()
           invalidateLogisticsListCaches()
@@ -7103,6 +7080,7 @@ function ShipmentsPageContent() {
           void fetchShipments(1, undefined, { force: true })
         }}
       />
+
     </Layout>
   )
 }

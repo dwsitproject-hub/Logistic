@@ -3,16 +3,16 @@
  * Used by shipmentList.service ROW_CACHE path.
  */
 
-export type ShipmentEffectiveStatus =
-  | 'UNPLANNED'
-  | 'PLANNED'
-  | 'IN_PROGRESS'
-  | 'LOADING'
-  | 'IN_TRANSIT'
-  | 'ARRIVED'
-  | 'UNLOADING'
-  | 'COMPLETED'
-  | 'CANCELLED';
+import {
+  normalizeShipmentDetailStatus,
+  SHIPMENT_AT_DISCHARGE_PORT_STATUSES,
+  SHIPMENT_AT_LOADING_PORT_STATUSES,
+  SHIPMENT_DISCHARGE_ETA_PHASE_STATUSES,
+  SHIPMENT_LOADING_ETA_PHASE_STATUSES,
+  type ShipmentAutoStatus,
+} from './shipmentStatus';
+
+export type ShipmentEffectiveStatus = ShipmentAutoStatus;
 
 export type EtaBucketFilterKey = 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA';
 
@@ -38,30 +38,13 @@ export type ShipmentListDerivedRow = {
   eta_vessel_complete_discharge?: unknown;
 };
 
-const LOADING_ETA_PHASE_STATUSES: ReadonlySet<ShipmentEffectiveStatus> = new Set([
-  'UNPLANNED',
-  'PLANNED',
-  'IN_PROGRESS',
-  'LOADING',
-]);
+const LOADING_ETA_PHASE_STATUSES: ReadonlySet<ShipmentEffectiveStatus> = new Set(
+  SHIPMENT_LOADING_ETA_PHASE_STATUSES,
+);
 
-const DISCHARGE_ETA_PHASE_STATUSES: ReadonlySet<ShipmentEffectiveStatus> = new Set([
-  'IN_TRANSIT',
-  'ARRIVED',
-  'UNLOADING',
-]);
-
-const VALID_STATUSES: ReadonlySet<string> = new Set([
-  'UNPLANNED',
-  'PLANNED',
-  'IN_PROGRESS',
-  'LOADING',
-  'IN_TRANSIT',
-  'ARRIVED',
-  'UNLOADING',
-  'COMPLETED',
-  'CANCELLED',
-]);
+const DISCHARGE_ETA_PHASE_STATUSES: ReadonlySet<ShipmentEffectiveStatus> = new Set(
+  SHIPMENT_DISCHARGE_ETA_PHASE_STATUSES,
+);
 
 export function resolveShipmentGroupKey(row: ShipmentListDerivedRow): string {
   const sto = row.sto_number && String(row.sto_number).trim();
@@ -70,10 +53,15 @@ export function resolveShipmentGroupKey(row: ShipmentListDerivedRow): string {
 }
 
 export function normalizeEffectiveStatus(raw: string | null | undefined): ShipmentEffectiveStatus {
-  const s = String(raw ?? '')
-    .trim()
-    .toUpperCase();
-  return VALID_STATUSES.has(s) ? (s as ShipmentEffectiveStatus) : 'UNPLANNED';
+  return normalizeShipmentDetailStatus(raw);
+}
+
+function isAtLoadingPortStatus(status: ShipmentEffectiveStatus): boolean {
+  return (SHIPMENT_AT_LOADING_PORT_STATUSES as readonly string[]).includes(status);
+}
+
+function isAtDischargePortStatus(status: ShipmentEffectiveStatus): boolean {
+  return (SHIPMENT_AT_DISCHARGE_PORT_STATUSES as readonly string[]).includes(status);
 }
 
 export function matchesStatusFilter(
@@ -84,7 +72,10 @@ export function matchesStatusFilter(
     .trim()
     .toUpperCase();
   if (!filter || filter === 'ALL') return true;
-  return status === filter;
+  if (filter === 'AT_LOADING_PORT') return isAtLoadingPortStatus(status);
+  if (filter === 'AT_DISCHARGE_PORT') return isAtDischargePortStatus(status);
+  if (filter === 'SAILED') return status === 'SAILED';
+  return status === normalizeShipmentDetailStatus(filter);
 }
 
 type EtaBucketCounts = {
@@ -256,11 +247,9 @@ export type ShipmentListSummaryPayload = {
   status: {
     unplanned: number;
     planned: number;
-    inProgress: number;
-    loading: number;
-    inTransit: number;
-    arrived: number;
-    unloading: number;
+    atLoadingPort: number;
+    sailed: number;
+    atDischargePort: number;
     completed: number;
     cancelled: number;
   };
@@ -279,47 +268,43 @@ export function buildShipmentListSummaryFromRows(
 
   let unplanned = 0;
   let planned = 0;
-  let inProgress = 0;
-  let loading = 0;
-  let inTransit = 0;
-  let arrived = 0;
-  let unloading = 0;
+  let atLoadingPort = 0;
+  let sailed = 0;
+  let atDischargePort = 0;
   let completed = 0;
   let cancelled = 0;
 
   for (const row of rows) {
-    switch (normalizeEffectiveStatus(row.status)) {
-      case 'UNPLANNED':
-        unplanned += 1;
-        break;
-      case 'PLANNED':
-        planned += 1;
-        break;
-      case 'IN_PROGRESS':
-        inProgress += 1;
-        break;
-      case 'LOADING':
-        loading += 1;
-        break;
-      case 'IN_TRANSIT':
-        inTransit += 1;
-        break;
-      case 'ARRIVED':
-        arrived += 1;
-        break;
-      case 'UNLOADING':
-        unloading += 1;
-        break;
-      case 'COMPLETED':
-        completed += 1;
-        break;
-      case 'CANCELLED':
-        cancelled += 1;
-        break;
-      default:
-        unplanned += 1;
-        break;
+    const status = normalizeEffectiveStatus(row.status);
+    if (status === 'UNPLANNED') {
+      unplanned += 1;
+      continue;
     }
+    if (status === 'PLANNED') {
+      planned += 1;
+      continue;
+    }
+    if (isAtLoadingPortStatus(status)) {
+      atLoadingPort += 1;
+      continue;
+    }
+    if (status === 'SAILED') {
+      sailed += 1;
+      continue;
+    }
+    if (isAtDischargePortStatus(status)) {
+      atDischargePort += 1;
+      continue;
+    }
+    if (status === 'COMPLETED') {
+      completed += 1;
+      continue;
+    }
+    if (status === 'CANCELLED') {
+      cancelled += 1;
+      continue;
+    }
+    unplanned += 1;
   }
 
   const loadingBuckets = computeEtaBuckets(scoped, 'loading');
@@ -330,11 +315,9 @@ export function buildShipmentListSummaryFromRows(
     status: {
       unplanned,
       planned,
-      inProgress,
-      loading,
-      inTransit,
-      arrived,
-      unloading,
+      atLoadingPort,
+      sailed,
+      atDischargePort,
       completed,
       cancelled,
     },

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { deriveShipmentStatus } from './shipmentStatus';
+import {
+  deriveShipmentStatus,
+  normalizeShipmentDetailStatus,
+} from './shipmentStatus';
 
 describe('deriveShipmentStatus', () => {
   it('returns COMPLETED when ATA complete discharge exists', () => {
@@ -22,18 +25,74 @@ describe('deriveShipmentStatus', () => {
     expect(deriveShipmentStatus({})).toBe('UNPLANNED');
   });
 
-  it('returns COMPLETED for SAP Close contract even with partial ATA or ETA', () => {
+  it('maps loading-port ATA tiers', () => {
     expect(
       deriveShipmentStatus({
-        contract_import_status: 'Close',
         ata_arrival_at_loading_port: '2026-01-01',
       }),
-    ).toBe('COMPLETED');
+    ).toBe('ARRIVED_LP');
     expect(
       deriveShipmentStatus({
-        contract_import_status: 'CLOSED',
-        eta_arrival_at_loading_port: '2026-02-01',
+        ata_arrival_at_loading_port: '2026-01-01',
+        ata_berthed_at_loading_port: '2026-01-02',
       }),
-    ).toBe('COMPLETED');
+    ).toBe('BERTHED_LP');
+    expect(
+      deriveShipmentStatus({
+        ata_start_loading: '2026-01-03',
+      }),
+    ).toBe('LOADING');
+    expect(
+      deriveShipmentStatus({
+        ata_completed_loading: '2026-01-04',
+      }),
+    ).toBe('COMPLETED_LOADING');
+  });
+
+  it('maps sailed and discharge-port ATA tiers', () => {
+    expect(
+      deriveShipmentStatus({
+        ata_sailed_from_loading_port: '2026-01-05',
+      }),
+    ).toBe('SAILED');
+    expect(
+      deriveShipmentStatus({
+        ata_arrive_at_discharge_port: '2026-01-06',
+      }),
+    ).toBe('ARRIVED_DP');
+    expect(
+      deriveShipmentStatus({
+        ata_berthed_at_discharge_port: '2026-01-07',
+      }),
+    ).toBe('BERTHED_DP');
+    expect(
+      deriveShipmentStatus({
+        ata_start_discharging: '2026-01-08',
+      }),
+    ).toBe('UNLOADING');
+  });
+
+  it('latest ATA milestone wins across phases', () => {
+    expect(
+      deriveShipmentStatus({
+        ata_arrival_at_loading_port: '2026-01-01',
+        ata_sailed_from_loading_port: '2026-01-05',
+        ata_arrive_at_discharge_port: '2026-01-06',
+      }),
+    ).toBe('ARRIVED_DP');
+  });
+});
+
+describe('normalizeShipmentDetailStatus', () => {
+  it('maps legacy shipment status keys', () => {
+    expect(normalizeShipmentDetailStatus('IN_PROGRESS')).toBe('ARRIVED_LP');
+    expect(normalizeShipmentDetailStatus('IN_TRANSIT')).toBe('SAILED');
+    expect(normalizeShipmentDetailStatus('ARRIVED')).toBe('ARRIVED_DP');
+  });
+
+  it('passes through granular statuses', () => {
+    expect(normalizeShipmentDetailStatus('BERTHED_LP')).toBe('BERTHED_LP');
+    expect(normalizeShipmentDetailStatus('COMPLETED_LOADING')).toBe('COMPLETED_LOADING');
+    expect(normalizeShipmentDetailStatus('BERTHED_DP')).toBe('BERTHED_DP');
   });
 });

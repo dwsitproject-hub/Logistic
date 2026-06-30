@@ -14,24 +14,40 @@ import {
   normalizeShipmentListRows,
   resolveShipmentsListForRequest,
 } from '../services/shipmentList.service';
+import {
+  isUnplannedHybridListRequest,
+  resolveUnplannedHybridShipmentsList,
+} from '../services/shipmentUnplannedHybridList.service';
 import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
 import { normalizeAndValidateShipmentDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/shipmentDailyDeliverables';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
-import { deriveShipmentStatus } from '../utils/shipmentStatus';
+import { deriveShipmentStatus, SHIPMENT_PERSISTABLE_AUTO_STATUSES } from '../utils/shipmentStatus';
 import {
   appendShipmentColumnFilters,
   appendShipmentEtaBucketFilters,
   appendShipmentGlobalSearch,
   appendShipmentLateIndicatorFilter,
-  appendShipmentScopeStatusFilter,
-  appendShipmentStatusFilter,
   appendShipmentViewOptionFilter,
   normalizeShipmentEtaBucketParam,
   parseColumnFiltersQuery,
   shipmentEffectiveStatusExpr,
 } from '../utils/shipmentListFilters';
+import {
+  appendShipmentPipelineScopeStageFilter,
+  appendShipmentPipelineStageFilter,
+  buildShipmentPageUnplannedOpenContractsCte,
+  shipmentPagePipelineSummarySelectSql,
+  shipmentPagePipelineUnplannedRowPredicate,
+} from '../utils/shipmentPagePipelineSql';
+import {
+  buildUnplannedContractBacklogTableCountCte,
+  appendContractScopeToolbarFilters,
+} from '../utils/shipmentUnplannedHybridSql';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
-import { shipmentListOutstandingQtySql } from '../utils/shipmentOutstandingQtySql';
+import {
+  shipmentListQtyMoveCteFromPage,
+  shipmentListRowGlobalOutstandingSql,
+} from '../utils/shipmentOutstandingQtySql';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
 import {
   allocateNextSyntheticSequenceDefault,
@@ -221,13 +237,22 @@ function shipmentListSummaryPayload(totalCount: number, summaryRow: Record<strin
     status: {
       unplanned: Number(summaryRow.unplanned_count || 0),
       planned: Number(summaryRow.planned_count || 0),
-      inProgress: Number(summaryRow.in_progress_count || 0),
-      loading: Number(summaryRow.loading_count || 0),
-      inTransit: Number(summaryRow.in_transit_count || 0),
-      arrived: Number(summaryRow.arrived_count || 0),
-      unloading: Number(summaryRow.unloading_count || 0),
+      atLoadingPort: Number(summaryRow.at_loading_port_count || 0),
+      sailed: Number(summaryRow.sailed_count || 0),
+      atDischargePort: Number(summaryRow.at_discharge_port_count || 0),
       completed: Number(summaryRow.completed_count || 0),
       cancelled: Number(summaryRow.cancelled_count || 0),
+    },
+    loadingPortBreakdown: {
+      arrived: Number(summaryRow.loading_port_arrived_count || 0),
+      berthed: Number(summaryRow.loading_port_berthed_count || 0),
+      loading: Number(summaryRow.loading_port_loading_count || 0),
+      completedLoading: Number(summaryRow.loading_port_completed_loading_count || 0),
+    },
+    dischargePortBreakdown: {
+      arrived: Number(summaryRow.discharge_port_arrived_count || 0),
+      berthed: Number(summaryRow.discharge_port_berthed_count || 0),
+      unloading: Number(summaryRow.discharge_port_unloading_count || 0),
     },
     etaLoading: {
       moreThan7D: Number(summaryRow.eta_loading_more_than_7d || 0),
@@ -242,6 +267,13 @@ function shipmentListSummaryPayload(totalCount: number, summaryRow: Record<strin
       d: Number(summaryRow.eta_discharge_d || 0),
       delay: Number(summaryRow.eta_discharge_delay || 0),
       noEta: Number(summaryRow.eta_discharge_no_eta || 0),
+    },
+    unplannedTable: {
+      contractRows: Number(summaryRow.unplanned_contract_backlog_count || 0),
+      shipmentRows: Number(summaryRow.unplanned_shipment_execution_count || 0),
+      totalTableRows:
+        Number(summaryRow.unplanned_contract_backlog_count || 0) +
+        Number(summaryRow.unplanned_shipment_execution_count || 0),
     },
   };
 }
@@ -421,6 +453,18 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         FROM shipment_base_core g
       )`;
 
+    /** Fast path for compact shell rows — join aggregates only, no per-STO subqueries. */
+    const shipmentBaseShellEnrichCte = `,
+      shipment_base AS (
+        SELECT
+          g.*,
+          g.contract_numbers_from_join AS contract_numbers,
+          g.po_numbers_from_join AS po_numbers,
+          g.contract_count_from_join AS contract_count,
+          g.contract_ext_no_from_join AS contract_ext_no
+        FROM shipment_base_core g
+      )`;
+
     const seaMixTransportCond = buildShipmentSeaMixTransportSql('c');
     const excludeStoTypeTCond = buildShipmentExcludeStoTypeTSql('c', 'l', 's');
     const stoIsSet = Boolean(sto && String(sto).trim() !== '');
@@ -428,6 +472,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     const scopeLatestSpdToContracts = !stoIsSet;
 
     const coreWhereParts: string[] = [seaMixTransportCond];
+    /** Contract-only scope (date/plant/contract) reused by Unplanned open-contract count. */
+    const contractScopeParts: string[] = [];
     const coreParams: any[] = [];
     let cp = 1;
 
@@ -443,11 +489,13 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     }
     if (dateFrom) {
       coreWhereParts.push(`c.contract_date >= $${cp}`);
+      contractScopeParts.push(`c.contract_date >= $${cp}`);
       coreParams.push(dateFrom);
       cp += 1;
     }
     if (dateTo) {
       coreWhereParts.push(`c.contract_date <= $${cp}`);
+      contractScopeParts.push(`c.contract_date <= $${cp}`);
       coreParams.push(dateTo);
       cp += 1;
     }
@@ -456,6 +504,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     }
     if (contract) {
       coreWhereParts.push(`c.contract_id = $${cp}`);
+      contractScopeParts.push(`c.contract_id = $${cp}`);
       coreParams.push(contract);
       cp += 1;
     }
@@ -468,12 +517,25 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       'c.plant_code',
     );
     if (groupPlantFilter.sql) {
-      coreWhereParts.push(groupPlantFilter.sql.replace(/^ AND /, ''));
+      const plantSql = groupPlantFilter.sql.replace(/^ AND /, '');
+      coreWhereParts.push(plantSql);
+      contractScopeParts.push(plantSql);
       coreParams.push(...groupPlantFilter.params);
       cp = groupPlantFilter.nextIndex;
     }
 
+    const contractToolbarFilter = appendContractScopeToolbarFilters(colFilters, cp);
+    if (contractToolbarFilter.sql) {
+      const toolbarSql = contractToolbarFilter.sql.replace(/^ AND /, '');
+      coreWhereParts.push(toolbarSql);
+      contractScopeParts.push(toolbarSql);
+      coreParams.push(...contractToolbarFilter.params);
+      cp = contractToolbarFilter.nextIndex;
+    }
+
     const coreWhereSql = coreWhereParts.join(' AND ');
+    const contractScopeSql =
+      contractScopeParts.length > 0 ? `AND ${contractScopeParts.join(' AND ')}` : '';
 
     const latestSpdSelectList = `
         SELECT DISTINCT ON (spd.contract_number)
@@ -649,8 +711,12 @@ ${contractMetaSelectCore}
 
     /** Full grouped dataset (expensive on large YTD). Used for summary aggregates. */
     const shipmentBaseCteSqlFull = queryText;
-    /** Summary skips sto-linked enrich subqueries — status/ETA only needs shipment_base_core columns. */
+    /** Summary + compact shell skip sto-linked enrich subqueries — status/ETA only needs core columns. */
     const shipmentBaseCteSqlSummary = shipmentBaseCteSqlFull.replace(shipmentBaseEnrichCte, '');
+    const shipmentBaseCteSqlShell = shipmentBaseCteSqlFull.replace(
+      shipmentBaseEnrichCte,
+      shipmentBaseShellEnrichCte,
+    );
 
     const stoKeyExpr = listStoKeySql;
 
@@ -664,7 +730,7 @@ ${contractMetaSelectCore}
     const vo = appendShipmentViewOptionFilter(viewOptionParam, viewQueryParam, fp);
     fp = vo.nextIndex;
     const etaBuckets = appendShipmentEtaBucketFilters(etaLoadingBucket, etaDischargeBucket);
-    const statusFilter = appendShipmentStatusFilter(
+    const statusFilter = appendShipmentPipelineStageFilter(
       typeof status === 'string' ? status : undefined,
       fp,
     );
@@ -681,7 +747,6 @@ ${contractMetaSelectCore}
       ...statusFilter.params,
     ];
     const toolbarOuterParams = [...gSearch.params, ...cCol.params, ...li.params, ...vo.params];
-    const countParams = [...innerParams, ...outerParams];
     const toolbarCountParams = [...innerParams, ...toolbarOuterParams];
 
     const shipmentListFilterCacheKey = buildShipmentListFilterCacheKey({
@@ -703,21 +768,12 @@ ${contractMetaSelectCore}
       etaDischarge: etaDischargeBucket ?? 'ALL',
     });
 
-    /** STO-key paging disabled — ranked_sto CTE breaks pg parse with sto key regex; re-enable after refactor. */
+    /**
+     * STO-key paging disabled — ranked_sto + sto_key regex (`~ '^[0-9]+$'`) still breaks PG parse
+     * when injected into the base CTE. Shell enrich (skipSapJoin) is the safe win for now.
+     */
     const listUsesStoPaging = false;
     const { limit: listLimit, offset: listOffset } = shipmentListLimitOffset(limit, page);
-
-    /*
-    const listUsesStoPaging =
-      !summaryOnly &&
-      !stoIsSet &&
-      !gSearch.sql &&
-      !cCol.sql &&
-      !li.sql &&
-      !vo.sql &&
-      !etaBuckets.sql &&
-      !statusFilter.sql;
-    */
 
     const rankedStoCte = `
       ranked_sto AS (
@@ -737,7 +793,7 @@ ${contractMetaSelectCore}
         GROUP BY 1
       ),`;
 
-    let shipmentBaseCteSqlList = shipmentBaseCteSqlFull;
+    let shipmentBaseCteSqlList = skipSapJoin ? shipmentBaseCteSqlShell : shipmentBaseCteSqlFull;
     if (listUsesStoPaging) {
       const pagedStoCte = `
       paged_sto AS (
@@ -768,10 +824,16 @@ ${contractMetaSelectCore}
     const effectiveListStoPaging =
       listUsesStoPaging && shipmentBaseCteSqlList.includes('ranked_sto AS');
     if (listUsesStoPaging && !effectiveListStoPaging) {
-      shipmentBaseCteSqlList = shipmentBaseCteSqlFull;
+      shipmentBaseCteSqlList = skipSapJoin ? shipmentBaseCteSqlShell : shipmentBaseCteSqlFull;
     }
 
-    const summaryScopeFilter = appendShipmentScopeStatusFilter(
+    const shipmentBaseCteForList = effectiveListStoPaging
+      ? shipmentBaseCteSqlList
+      : skipSapJoin
+        ? shipmentBaseCteSqlShell
+        : shipmentBaseCteSqlFull;
+
+    const summaryScopeFilter = appendShipmentPipelineScopeStageFilter(
       summaryOnly ? scopeStatusParam : undefined,
       1,
     );
@@ -789,14 +851,17 @@ ${contractMetaSelectCore}
         ? 'scoped_shipments'
         : 'filtered_shipments';
     const summaryScopeParams = summaryOnly ? summaryScopeFilter.params : [];
-    const summaryFilterSql = summaryOnly ? toolbarOuterSql : outerSql;
-    const summaryFilterParams = summaryOnly ? toolbarCountParams : countParams;
+    /** Section 1 summary cards always use toolbar scope (exclude status / ETA card filters). */
+    const section1SummaryFilterSql = toolbarOuterSql;
+    const section1SummaryFilterParams = toolbarCountParams;
 
-    const summaryCountQuery = `${shipmentBaseCteSqlSummary}
+    const summaryCountQuery = `${shipmentBaseCteSqlSummary},
+      ${buildShipmentPageUnplannedOpenContractsCte(contractScopeSql).trim()}
+      ${buildUnplannedContractBacklogTableCountCte(contractScopeSql)}
       , filtered_shipments AS (
         SELECT sb.*
         FROM shipment_base_core sb
-        WHERE 1=1 ${summaryFilterSql}
+        WHERE 1=1 ${section1SummaryFilterSql}
       )${summaryScopeCte}
       , enriched AS (
         SELECT
@@ -864,26 +929,20 @@ ${contractMetaSelectCore}
       )
       SELECT
         COUNT(*)::bigint AS total_count,
-        COUNT(*) FILTER (WHERE effective_status = 'UNPLANNED')::bigint AS unplanned_count,
-        COUNT(*) FILTER (WHERE effective_status = 'PLANNED')::bigint AS planned_count,
-        COUNT(*) FILTER (WHERE effective_status = 'IN_PROGRESS')::bigint AS in_progress_count,
-        COUNT(*) FILTER (WHERE effective_status = 'LOADING')::bigint AS loading_count,
-        COUNT(*) FILTER (WHERE effective_status = 'IN_TRANSIT')::bigint AS in_transit_count,
-        COUNT(*) FILTER (WHERE effective_status = 'ARRIVED')::bigint AS arrived_count,
-        COUNT(*) FILTER (WHERE effective_status = 'UNLOADING')::bigint AS unloading_count,
-        COUNT(*) FILTER (WHERE effective_status = 'COMPLETED')::bigint AS completed_count,
-        COUNT(*) FILTER (WHERE effective_status = 'CANCELLED')::bigint AS cancelled_count,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'LOADING') AND loading_no_eta)::bigint AS eta_loading_no_eta,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'LOADING') AND NOT loading_no_eta AND loading_delay)::bigint AS eta_loading_delay,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'LOADING') AND NOT loading_no_eta AND NOT loading_delay AND loading_d)::bigint AS eta_loading_d,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'LOADING') AND NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND loading_d_minus_2)::bigint AS eta_loading_d_minus_2,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'LOADING') AND NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND NOT loading_d_minus_2 AND loading_more_than_7d)::bigint AS eta_loading_more_than_7d,
-        COUNT(*) FILTER (WHERE effective_status IN ('IN_TRANSIT', 'ARRIVED', 'UNLOADING') AND discharge_no_eta)::bigint AS eta_discharge_no_eta,
-        COUNT(*) FILTER (WHERE effective_status IN ('IN_TRANSIT', 'ARRIVED', 'UNLOADING') AND NOT discharge_no_eta AND discharge_delay)::bigint AS eta_discharge_delay,
-        COUNT(*) FILTER (WHERE effective_status IN ('IN_TRANSIT', 'ARRIVED', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND discharge_d)::bigint AS eta_discharge_d,
-        COUNT(*) FILTER (WHERE effective_status IN ('IN_TRANSIT', 'ARRIVED', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND discharge_d_minus_2)::bigint AS eta_discharge_d_minus_2,
-        COUNT(*) FILTER (WHERE effective_status IN ('IN_TRANSIT', 'ARRIVED', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND NOT discharge_d_minus_2 AND discharge_more_than_7d)::bigint AS eta_discharge_more_than_7d
-      FROM enriched`;
+        ${shipmentPagePipelineSummarySelectSql()},
+        (SELECT backlog_count FROM unplanned_contract_backlog_table)::bigint AS unplanned_contract_backlog_count,
+        COUNT(*) FILTER (WHERE ${shipmentPagePipelineUnplannedRowPredicate('e')})::bigint AS unplanned_shipment_execution_count,
+        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND loading_no_eta)::bigint AS eta_loading_no_eta,
+        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND loading_delay)::bigint AS eta_loading_delay,
+        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND NOT loading_delay AND loading_d)::bigint AS eta_loading_d,
+        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND loading_d_minus_2)::bigint AS eta_loading_d_minus_2,
+        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND NOT loading_d_minus_2 AND loading_more_than_7d)::bigint AS eta_loading_more_than_7d,
+        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND discharge_no_eta)::bigint AS eta_discharge_no_eta,
+        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND discharge_delay)::bigint AS eta_discharge_delay,
+        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND discharge_d)::bigint AS eta_discharge_d,
+        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND discharge_d_minus_2)::bigint AS eta_discharge_d_minus_2,
+        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND NOT discharge_d_minus_2 AND discharge_more_than_7d)::bigint AS eta_discharge_more_than_7d
+      FROM enriched e`;
 
     if (compact && summaryOnly) {
       const summaryCacheKey = buildShipmentSummaryCacheKey(
@@ -893,7 +952,7 @@ ${contractMetaSelectCore}
       const tSum0 = performance.now();
       const { summaryRow: sr, totalCount: tc } = await loadShipmentListSummary(
         summaryCountQuery,
-        [...summaryFilterParams, ...summaryScopeParams],
+        [...section1SummaryFilterParams, ...summaryScopeParams],
         summaryCacheKey,
       );
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
@@ -943,8 +1002,66 @@ ${contractMetaSelectCore}
         etaLoading: etaLoadingBucket ?? 'ALL',
         etaDischarge: etaDischargeBucket ?? 'ALL',
       });
+
+      if (isUnplannedHybridListRequest(status)) {
+        const hybrid = await resolveUnplannedHybridShipmentsList(req, {
+          shipmentCtx: {
+            shipmentBaseCteSql: shipmentBaseCteForList,
+            outerSql,
+            innerParams,
+            outerParams,
+            skipSapJoin,
+            cacheKey: `${cacheKey}:hybrid`,
+            filterCacheKey,
+            usesStoKeyPaging: effectiveListStoPaging,
+          },
+          contractScope: {
+            dateFrom,
+            dateTo,
+            contract,
+            plants,
+          },
+          globalSearch,
+          colFilters,
+        });
+        let hybridSummary: ReturnType<typeof shipmentListSummaryPayload> | undefined;
+        if (includeSummary) {
+          const summaryCacheKey = buildShipmentSummaryCacheKey(
+            shipmentListFilterCacheKey,
+            scopeStatusParam,
+          );
+          const { summaryRow: sr, totalCount: tc } = await loadShipmentListSummary(
+            summaryCountQuery,
+            [...section1SummaryFilterParams, ...summaryScopeParams],
+            summaryCacheKey,
+          );
+          hybridSummary = shipmentListSummaryPayload(tc, sr);
+        }
+        timingsMs.total = performance.now() - tReq0;
+        emitShipmentListTimings(res, timingsMs, {
+          path: 'list-unplanned-hybrid',
+          compact,
+          skipSapJoin,
+          includeSummary,
+          page: Number(page),
+          limit: Number(limit),
+          rowCount: hybrid.shipments.length,
+          contractRows: hybrid.unplannedBreakdown.contractRows,
+          shipmentRows: hybrid.unplannedBreakdown.shipmentRows,
+        });
+        return res.json({
+          success: true,
+          data: {
+            shipments: hybrid.shipments,
+            pagination: hybrid.pagination,
+            unplannedBreakdown: hybrid.unplannedBreakdown,
+            ...(hybridSummary ? { summary: hybridSummary } : {}),
+          },
+        });
+      }
+
       const data = await resolveShipmentsListForRequest(req, {
-        shipmentBaseCteSql: effectiveListStoPaging ? shipmentBaseCteSqlList : shipmentBaseCteSqlFull,
+        shipmentBaseCteSql: shipmentBaseCteForList,
         outerSql,
         innerParams,
         outerParams,
@@ -953,6 +1070,36 @@ ${contractMetaSelectCore}
         filterCacheKey,
         usesStoKeyPaging: effectiveListStoPaging,
       });
+      if (includeSummary) {
+        const summaryCacheKey = buildShipmentSummaryCacheKey(
+          shipmentListFilterCacheKey,
+          scopeStatusParam,
+        );
+        const { summaryRow: sr, totalCount: tc } = await loadShipmentListSummary(
+          summaryCountQuery,
+          [...section1SummaryFilterParams, ...summaryScopeParams],
+          summaryCacheKey,
+        );
+        timingsMs.total = performance.now() - tReq0;
+        emitShipmentListTimings(res, timingsMs, {
+          path: skipSapJoin ? 'list-page-shell-with-summary' : 'list-page-sap-with-summary',
+          compact,
+          skipSapJoin,
+          includeSummary,
+          effectiveListStoPaging,
+          page: Number(page),
+          limit: Number(limit),
+          rowCount: data.shipments.length,
+          cacheKey,
+        });
+        return res.json({
+          success: true,
+          data: {
+            ...data,
+            summary: shipmentListSummaryPayload(tc, sr),
+          },
+        });
+      }
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
         path: skipSapJoin
@@ -984,7 +1131,7 @@ ${contractMetaSelectCore}
       const tSum0 = performance.now();
       const { summaryRow: sr, totalCount: tc } = await loadShipmentListSummary(
         summaryCountQuery,
-        [...summaryFilterParams, ...summaryScopeParams],
+        [...section1SummaryFilterParams, ...summaryScopeParams],
         summaryCacheKey,
       );
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
@@ -1039,13 +1186,14 @@ ${contractMetaSelectCore}
         WHERE 1=1 ${outerSql}
       ),
       ${shipmentPageCte},
+      ${shipmentListQtyMoveCteFromPage()},
       ${spdAggCtes}
       SELECT 
         sp.*,
         COALESCE(sa.sto_quantity, 0) AS sto_quantity,
         COALESCE(sa.quantity_receive, 0) AS quantity_receive,
         COALESCE(sa.quantity_delivered_sap, 0) AS quantity_delivered_sap,
-        ${shipmentListOutstandingQtySql()} AS outstanding_quantity,
+        ${shipmentListRowGlobalOutstandingSql()} AS outstanding_quantity,
         COALESCE(sl.incoterm, sp.incoterm) AS incoterm,
         sl.b2b_flag AS b2b_flag,
         sl.source_type AS source_type,
@@ -1099,7 +1247,7 @@ ${contractMetaSelectCore}
     let summaryRow: Record<string, unknown> = {};
     if (includeSummary) {
       const tSa0 = performance.now();
-      const summaryResult = await query(summaryCountQuery, [...summaryFilterParams, ...summaryScopeParams]);
+      const summaryResult = await query(summaryCountQuery, [...section1SummaryFilterParams, ...summaryScopeParams]);
       timingsMs.dbSummaryAgg = performance.now() - tSa0;
       summaryRow = summaryResult.rows[0] || {};
     }
@@ -1617,11 +1765,13 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       contract_import_status: contractImportStatus,
     });
 
-    const VALID_AUTO_STATUSES = ['PLANNED', 'IN_TRANSIT', 'ARRIVED', 'UNLOADING', 'COMPLETED'];
     const persistedStatus = String(updated.status || '').trim().toUpperCase();
     if (persistedStatus === 'CANCELLED') {
       updated.status = 'CANCELLED';
-    } else if (VALID_AUTO_STATUSES.includes(autoStatus) && persistedStatus !== autoStatus) {
+    } else if (
+      (SHIPMENT_PERSISTABLE_AUTO_STATUSES as readonly string[]).includes(autoStatus) &&
+      persistedStatus !== autoStatus
+    ) {
       const sRes = await query(
         `UPDATE shipments SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING status`,
         [autoStatus, shipmentId]

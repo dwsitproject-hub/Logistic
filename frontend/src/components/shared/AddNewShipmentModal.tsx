@@ -295,6 +295,8 @@ export type AddNewShipmentModalProps = {
   /** Comma-separated contract numbers from grouped Shipments list row. */
   editContractNumbers?: string | null
   mode?: 'add' | 'edit'
+  /** Read-only edit/view (Shipments table — Cancelled rows). */
+  readOnly?: boolean
 }
 
 export function AddNewShipmentModal({
@@ -308,6 +310,7 @@ export function AddNewShipmentModal({
   editStoNumber = null,
   editContractNumbers = null,
   mode = 'add',
+  readOnly = false,
 }: AddNewShipmentModalProps) {
   const perms = usePermissions()
   const canAddShipment = canCreatePermission(perms, 'data.shipments')
@@ -1452,7 +1455,9 @@ export function AddNewShipmentModal({
           },
           message: 'Contract found',
         }
-        qtySeed[po.key] = ''
+        const assignedKg = Number(po.contractData?.sto_qty_assigned ?? 0)
+        qtySeed[po.key] =
+          assignedKg > 0 ? String(assignedKg / 1000) : ''
       }
       setContractValidations(validations)
       setContractQtyAssigned(qtySeed)
@@ -1838,6 +1843,7 @@ export function AddNewShipmentModal({
         editShipmentId={editShipmentIdProp}
         editStoNumber={editStoNumber}
         editContractNumbers={editContractNumbers}
+        readOnly={readOnly}
       />
     )
   }

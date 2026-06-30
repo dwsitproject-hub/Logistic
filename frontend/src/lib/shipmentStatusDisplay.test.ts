@@ -5,17 +5,21 @@ import {
 } from './shipmentStatusDisplay'
 
 describe('formatShipmentStatusLabel', () => {
-  it('maps renamed pipeline statuses for display', () => {
-    expect(formatShipmentStatusLabel('IN_PROGRESS')).toBe('Sailing to LP')
-    expect(formatShipmentStatusLabel('LOADING')).toBe('Loading at DP')
-    expect(formatShipmentStatusLabel('IN_TRANSIT')).toBe('Sailing to DP')
-    expect(formatShipmentStatusLabel('ARRIVED')).toBe('Arrived at DP')
+  it('maps granular shipment statuses for display', () => {
+    expect(formatShipmentStatusLabel('ARRIVED_LP')).toBe('Arrived LP')
+    expect(formatShipmentStatusLabel('BERTHED_LP')).toBe('Berthed LP')
+    expect(formatShipmentStatusLabel('LOADING')).toBe('Loading')
+    expect(formatShipmentStatusLabel('COMPLETED_LOADING')).toBe('Completed Loading')
+    expect(formatShipmentStatusLabel('SAILED')).toBe('Sailed')
+    expect(formatShipmentStatusLabel('ARRIVED_DP')).toBe('Arrived DP')
+    expect(formatShipmentStatusLabel('BERTHED_DP')).toBe('Berthed DP')
+    expect(formatShipmentStatusLabel('UNLOADING')).toBe('Unloading')
   })
 
-  it('keeps other statuses unchanged', () => {
-    expect(formatShipmentStatusLabel('PLANNED')).toBe('Planned')
-    expect(formatShipmentStatusLabel('UNLOADING')).toBe('Unloading')
-    expect(formatShipmentStatusLabel('COMPLETED')).toBe('Completed')
+  it('maps legacy keys to granular labels', () => {
+    expect(formatShipmentStatusLabel('IN_PROGRESS')).toBe('Arrived LP')
+    expect(formatShipmentStatusLabel('IN_TRANSIT')).toBe('Sailed')
+    expect(formatShipmentStatusLabel('ARRIVED')).toBe('Arrived DP')
   })
 
   it('covers all display labels', () => {

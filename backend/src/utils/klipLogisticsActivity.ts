@@ -103,7 +103,20 @@ export function isPlaceholderShipmentEligibleForSapConsolidate(
   const sid = String(shipmentId ?? '').trim();
   if (isSapSourcedShipmentId(sid)) return false;
   if (
-    ['COMPLETED', 'IN_TRANSIT', 'ARRIVED', 'UNLOADING', 'LOADING', 'IN_PROGRESS'].includes(statusUpper)
+    [
+      'COMPLETED',
+      'SAILED',
+      'IN_TRANSIT',
+      'ARRIVED_DP',
+      'ARRIVED',
+      'BERTHED_DP',
+      'UNLOADING',
+      'LOADING',
+      'COMPLETED_LOADING',
+      'BERTHED_LP',
+      'ARRIVED_LP',
+      'IN_PROGRESS',
+    ].includes(statusUpper)
   ) {
     return false;
   }

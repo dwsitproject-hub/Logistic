@@ -8,16 +8,19 @@ export const SHIPMENTS_CATALOG_FETCH_LIMIT = 10_000
 /** Page size per API round-trip when building the catalog (avoids single heavy limit=10000 query). */
 export const SHIPMENTS_CATALOG_PAGE_SIZE = 500
 
-export type ShipmentEffectiveStatus =
-  | 'UNPLANNED'
-  | 'PLANNED'
-  | 'IN_PROGRESS'
-  | 'LOADING'
-  | 'IN_TRANSIT'
-  | 'ARRIVED'
-  | 'UNLOADING'
-  | 'COMPLETED'
-  | 'CANCELLED'
+import {
+  isAtDischargePortStatus,
+  isAtLoadingPortStatus,
+  normalizeShipmentDetailStatus,
+  SHIPMENT_AT_DISCHARGE_PORT_STATUSES,
+  SHIPMENT_AT_LOADING_PORT_STATUSES,
+  SHIPMENT_DETAIL_STATUSES,
+  SHIPMENT_DISCHARGE_ETA_PHASE_STATUSES,
+  SHIPMENT_LOADING_ETA_PHASE_STATUSES,
+  type ShipmentDetailStatus,
+} from '@/lib/shipmentDetailStatus'
+
+export type ShipmentEffectiveStatus = ShipmentDetailStatus
 
 export type EtaBucketFilterKey = 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'
 
@@ -42,31 +45,14 @@ export type ShipmentsPageRow = {
 }
 
 /** Statuses eligible for ETA Loading buckets (pre-loading / loading phases). */
-export const LOADING_ETA_PHASE_STATUSES: ReadonlySet<ShipmentEffectiveStatus> = new Set([
-  'UNPLANNED',
-  'PLANNED',
-  'IN_PROGRESS',
-  'LOADING',
-])
+export const LOADING_ETA_PHASE_STATUSES: ReadonlySet<ShipmentEffectiveStatus> = new Set(
+  SHIPMENT_LOADING_ETA_PHASE_STATUSES,
+)
 
 /** Statuses eligible for ETA Discharge buckets. */
-export const DISCHARGE_ETA_PHASE_STATUSES: ReadonlySet<ShipmentEffectiveStatus> = new Set([
-  'IN_TRANSIT',
-  'ARRIVED',
-  'UNLOADING',
-])
-
-const VALID_STATUSES: ReadonlySet<string> = new Set([
-  'UNPLANNED',
-  'PLANNED',
-  'IN_PROGRESS',
-  'LOADING',
-  'IN_TRANSIT',
-  'ARRIVED',
-  'UNLOADING',
-  'COMPLETED',
-  'CANCELLED',
-])
+export const DISCHARGE_ETA_PHASE_STATUSES: ReadonlySet<ShipmentEffectiveStatus> = new Set(
+  SHIPMENT_DISCHARGE_ETA_PHASE_STATUSES,
+)
 
 export function resolveShipmentGroupKey(row: ShipmentsPageRow): string {
   const sto = row.sto_number && String(row.sto_number).trim()
@@ -75,10 +61,7 @@ export function resolveShipmentGroupKey(row: ShipmentsPageRow): string {
 }
 
 export function normalizeEffectiveStatus(raw: string | null | undefined): ShipmentEffectiveStatus {
-  const s = String(raw ?? '')
-    .trim()
-    .toUpperCase()
-  return VALID_STATUSES.has(s) ? (s as ShipmentEffectiveStatus) : 'UNPLANNED'
+  return normalizeShipmentDetailStatus(raw)
 }
 
 /** @deprecated UNPLANNED and PLANNED are separate status filters on the Shipments page. */
@@ -94,17 +77,18 @@ export function matchesStatusFilter(
     .trim()
     .toUpperCase()
   if (!filter || filter === 'ALL') return true
-  return status === filter
+  if (filter === 'AT_LOADING_PORT') return isAtLoadingPortStatus(status)
+  if (filter === 'AT_DISCHARGE_PORT') return isAtDischargePortStatus(status)
+  if (filter === 'SAILED') return status === 'SAILED'
+  return status === normalizeShipmentDetailStatus(filter)
 }
 
 export type Section1StatusCounts = {
   unplanned: number
   planned: number
-  inProgress: number
-  loading: number
-  inTransit: number
-  arrived: number
-  unloading: number
+  atLoadingPort: number
+  sailed: number
+  atDischargePort: number
   completed: number
   cancelled: number
   total: number
@@ -113,59 +97,51 @@ export type Section1StatusCounts = {
 export function computeSection1StatusCounts(rows: readonly ShipmentsPageRow[]): Section1StatusCounts {
   let unplanned = 0
   let planned = 0
-  let inProgress = 0
-  let loading = 0
-  let inTransit = 0
-  let arrived = 0
-  let unloading = 0
+  let atLoadingPort = 0
+  let sailed = 0
+  let atDischargePort = 0
   let completed = 0
   let cancelled = 0
 
   for (const row of rows) {
-    switch (normalizeEffectiveStatus(row.status)) {
-      case 'UNPLANNED':
-        unplanned += 1
-        break
-      case 'PLANNED':
-        planned += 1
-        break
-      case 'IN_PROGRESS':
-        inProgress += 1
-        break
-      case 'LOADING':
-        loading += 1
-        break
-      case 'IN_TRANSIT':
-        inTransit += 1
-        break
-      case 'ARRIVED':
-        arrived += 1
-        break
-      case 'UNLOADING':
-        unloading += 1
-        break
-      case 'COMPLETED':
-        completed += 1
-        break
-      case 'CANCELLED':
-        cancelled += 1
-        break
-      default:
-        unplanned += 1
-        break
+    const status = normalizeEffectiveStatus(row.status)
+    if (status === 'UNPLANNED') {
+      unplanned += 1
+      continue
     }
+    if (status === 'PLANNED') {
+      planned += 1
+      continue
+    }
+    if (isAtLoadingPortStatus(status)) {
+      atLoadingPort += 1
+      continue
+    }
+    if (status === 'SAILED') {
+      sailed += 1
+      continue
+    }
+    if (isAtDischargePortStatus(status)) {
+      atDischargePort += 1
+      continue
+    }
+    if (status === 'COMPLETED') {
+      completed += 1
+      continue
+    }
+    if (status === 'CANCELLED') {
+      cancelled += 1
+      continue
+    }
+    unplanned += 1
   }
-
-  const plannedDisplay = planned
 
   return {
     unplanned,
-    planned: plannedDisplay,
-    inProgress,
-    loading,
-    inTransit,
-    arrived,
-    unloading,
+    planned,
+    atLoadingPort,
+    sailed,
+    atDischargePort,
     completed,
     cancelled,
     total: rows.length,
@@ -176,14 +152,47 @@ export function section1BadgeSum(counts: Section1StatusCounts): number {
   return (
     counts.unplanned +
     counts.planned +
-    counts.inProgress +
-    counts.loading +
-    counts.inTransit +
-    counts.arrived +
-    counts.unloading +
+    counts.atLoadingPort +
+    counts.sailed +
+    counts.atDischargePort +
     counts.completed +
     counts.cancelled
   )
+}
+
+/** Section 1 distribution badge count for a status card (stable while table is filtered). */
+export function section1CountForStatus(
+  status: string,
+  counts: Section1StatusCounts,
+): number {
+    switch (String(status ?? '').trim().toUpperCase()) {
+    case 'UNPLANNED':
+      return counts.unplanned
+    case 'PLANNED':
+      return counts.planned
+    case 'AT_LOADING_PORT':
+    case 'ARRIVED_LP':
+    case 'BERTHED_LP':
+    case 'LOADING':
+    case 'COMPLETED_LOADING':
+    case 'IN_PROGRESS':
+      return counts.atLoadingPort
+    case 'SAILED':
+    case 'IN_TRANSIT':
+      return counts.sailed
+    case 'AT_DISCHARGE_PORT':
+    case 'ARRIVED_DP':
+    case 'BERTHED_DP':
+    case 'UNLOADING':
+    case 'ARRIVED':
+      return counts.atDischargePort
+    case 'COMPLETED':
+      return counts.completed
+    case 'CANCELLED':
+      return counts.cancelled
+    default:
+      return 0
+  }
 }
 
 export type EtaBucketCounts = {

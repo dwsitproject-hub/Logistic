@@ -3,7 +3,10 @@ import { AuthRequest } from '../middleware/auth';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import { resolveContractLogisticsStoNumber } from '../utils/contractLogisticsStoDisplay';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
-import { shipmentListOutstandingQtySql } from '../utils/shipmentOutstandingQtySql';
+import {
+  shipmentListQtyMoveCteFromPage,
+  shipmentListRowGlobalOutstandingSql,
+} from '../utils/shipmentOutstandingQtySql';
 import {
   mergeShipmentVesselFromSapRow,
   queueShipmentVesselSapBackfill,
@@ -52,7 +55,7 @@ const SUMMARY_CACHE = new Map<
   { summaryRow: Record<string, unknown>; totalCount: number; expiresAt: number }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'shipment-list-v6';
+const CACHE_VERSION = 'shipment-list-v13';
 const MAX_CACHE_ENTRIES = 80;
 
 function stableColumnFiltersKey(colFilters: Record<string, unknown>): string {
@@ -185,6 +188,10 @@ export function invalidateShipmentsListCache(): void {
 
 export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentListRow[] {
   for (const row of rows) {
+    if (String(row.row_kind ?? '').trim() === 'contract_backlog') {
+      row.status = 'UNPLANNED';
+      continue;
+    }
     delete (row as { __filter_total?: unknown }).__filter_total;
     delete (row as { contract_numbers_from_join?: unknown }).contract_numbers_from_join;
     delete (row as { po_numbers_from_join?: unknown }).po_numbers_from_join;
@@ -244,7 +251,7 @@ const LIST_PAGE_SELECT = `
         COALESCE(sa.sto_quantity, 0) AS sto_quantity,
         COALESCE(sa.quantity_receive, 0) AS quantity_receive,
         COALESCE(sa.quantity_delivered_sap, 0) AS quantity_delivered_sap,
-        ${shipmentListOutstandingQtySql()} AS outstanding_quantity,
+        ${shipmentListRowGlobalOutstandingSql()} AS outstanding_quantity,
         COALESCE(sl.incoterm, sp.incoterm) AS incoterm,
         sl.b2b_flag AS b2b_flag,
         sl.source_type AS source_type,
@@ -294,6 +301,7 @@ export function buildShipmentListPageQuery(
         WHERE 1=1 ${ctx.outerSql}
       ),
       ${shipmentPageCte},
+      ${shipmentListQtyMoveCteFromPage()},
       ${spdAggCtes}
       ${LIST_PAGE_SELECT}`;
 

@@ -103,6 +103,88 @@ export function mapPurchaseOrderToPoOption(row: Record<string, unknown>): Shipme
   }
 }
 
+export function mapStoContractDetailToPoOption(detail: Record<string, unknown>): ShipmentPoOption {
+  const contractId = String(detail.contract_number ?? detail.contract_id ?? '').trim()
+  const poNumber = detail.po_number != null ? String(detail.po_number).trim() : ''
+  const key = `${contractId}::${poNumber || contractId}`
+  const label = poNumber || contractId
+  return {
+    key,
+    contractId,
+    poNumber: poNumber || null,
+    plantCode: null,
+    label,
+    contractData: {
+      contract_id: contractId,
+      po_number: poNumber || null,
+      quantity_ordered: detail.contract_qty,
+      outstanding_quantity: detail.outstanding_qty,
+      delivery_start_date: detail.delivery_start_date,
+      delivery_end_date: detail.delivery_end_date,
+      contract_ext_no: detail.contract_ext_no,
+      sto_qty_assigned: detail.sto_qty_assigned,
+      locked_from_sap: detail.locked_from_sap,
+    },
+  }
+}
+
+function mergePoOptionMetadata(base: ShipmentPoOption, enriched: ShipmentPoOption): ShipmentPoOption {
+  return {
+    ...enriched,
+    key: base.key,
+    contractId: base.contractId,
+    poNumber: base.poNumber ?? enriched.poNumber,
+    label: enriched.label || base.label,
+    plantCode: enriched.plantCode ?? base.plantCode,
+    contractData: {
+      ...enriched.contractData,
+      ...base.contractData,
+    },
+  }
+}
+
+async function enrichPoOptionsFromPurchaseOrders(options: ShipmentPoOption[]): Promise<ShipmentPoOption[]> {
+  if (options.length === 0) return options
+  const contractIds = [...new Set(options.map((o) => o.contractId).filter(Boolean))]
+  const byContract = new Map<string, ShipmentPoOption[]>()
+  await Promise.all(
+    contractIds.map(async (contractId) => {
+      try {
+        byContract.set(contractId, await fetchContractPurchaseOrderOptions(contractId))
+      } catch {
+        byContract.set(contractId, [])
+      }
+    }),
+  )
+  return options.map((opt) => {
+    const candidates = byContract.get(opt.contractId) ?? []
+    const match =
+      candidates.find((c) => c.poNumber && opt.poNumber && c.poNumber === opt.poNumber) ??
+      candidates.find((c) => !opt.poNumber || !c.poNumber) ??
+      candidates[0]
+    return match ? mergePoOptionMetadata(opt, match) : opt
+  })
+}
+
+/** PO lines linked to a grouped STO row (multi-contract / multi-PO). */
+export async function fetchStoLinkedPurchaseOrderOptions(
+  stoNumber: string,
+  contractNumbers: string[] = [],
+): Promise<ShipmentPoOption[]> {
+  const sto = String(stoNumber ?? '').trim()
+  if (!sto) return []
+  const api = (await import('@/lib/api')).default
+  const res = await api.get('/shipments/contracts/details', {
+    params: {
+      sto,
+      contractNumbers: contractNumbers.filter(Boolean).join(','),
+    },
+  })
+  const rows: Record<string, unknown>[] = res.data?.data ?? []
+  const base = rows.map(mapStoContractDetailToPoOption)
+  return enrichPoOptionsFromPurchaseOrders(base)
+}
+
 export async function fetchContractPurchaseOrderOptions(contractId: string): Promise<ShipmentPoOption[]> {
   const api = (await import('@/lib/api')).default
   const res = await api.get(`/shipments/contracts/${encodeURIComponent(contractId)}/purchase-orders`)

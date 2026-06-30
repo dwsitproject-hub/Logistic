@@ -6,6 +6,7 @@ import {
   filterRowsByStatusScope,
   filterRowsForTableDisplay,
   section1BadgeSum,
+  section1CountForStatus,
   SHIPMENTS_CATALOG_PAGE_SIZE,
   type ShipmentsPageRow,
 } from './shipmentsPageDerivedData'
@@ -23,14 +24,32 @@ describe('computeSection1StatusCounts', () => {
     const rows = [
       baseRow({ id: '1', status: 'PLANNED' }),
       baseRow({ id: '2', status: 'UNPLANNED', sto_number: 'STO-2' }),
-      baseRow({ id: '3', status: 'IN_TRANSIT', sto_number: 'STO-3' }),
+      baseRow({ id: '3', status: 'SAILED', sto_number: 'STO-3' }),
     ]
     const counts = computeSection1StatusCounts(rows)
     expect(counts.total).toBe(3)
     expect(counts.unplanned).toBe(1)
     expect(counts.planned).toBe(1)
-    expect(counts.inTransit).toBe(1)
+    expect(counts.sailed).toBe(1)
     expect(section1BadgeSum(counts)).toBe(counts.total)
+  })
+})
+
+describe('section1CountForStatus', () => {
+  it('returns distribution count for each pipeline status card', () => {
+    const counts = {
+      unplanned: 7,
+      planned: 32,
+      atLoadingPort: 5,
+      sailed: 8,
+      atDischargePort: 3,
+      completed: 83,
+      cancelled: 0,
+      total: 134,
+    }
+    expect(section1CountForStatus('PLANNED', counts)).toBe(32)
+    expect(section1CountForStatus('AT_LOADING_PORT', counts)).toBe(5)
+    expect(section1CountForStatus('ALL', counts)).toBe(0)
   })
 })
 
@@ -46,7 +65,7 @@ describe('computeEtaBuckets contextual phases', () => {
       }),
       baseRow({
         id: '2',
-        status: 'IN_TRANSIT',
+        status: 'SAILED',
         sto_number: 'STO-2',
         eta_arrival: '2026-06-01',
       }),
@@ -64,7 +83,7 @@ describe('computeEtaBuckets contextual phases', () => {
       }),
       baseRow({
         id: '2',
-        status: 'IN_TRANSIT',
+        status: 'SAILED',
         sto_number: 'STO-2',
         eta_discharge_arrival: '2026-06-01',
       }),
@@ -80,7 +99,7 @@ describe('filterRowsByStatusScope', () => {
       baseRow({ id: '1', status: 'IN_TRANSIT', sto_number: 'STO-1' }),
       baseRow({ id: '2', status: 'PLANNED', sto_number: 'STO-2' }),
     ]
-    const scoped = filterRowsByStatusScope(rows, 'IN_TRANSIT')
+    const scoped = filterRowsByStatusScope(rows, 'SAILED')
     expect(scoped).toHaveLength(1)
     expect(scoped[0].id).toBe('1')
   })

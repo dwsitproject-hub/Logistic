@@ -1,10 +1,10 @@
+import { isEmptySapDisplayValue } from '@/lib/sapDisplayValue'
+
 /** Display rules for Shipments list + Edit Shipment modal (mirrors contractLogisticsStoDisplay). */
 
 function trimOrNull(value: unknown): string | null {
-  if (value === null || value === undefined) return null
-  const text = String(value).trim()
-  if (!text || text === '-') return null
-  return text
+  if (isEmptySapDisplayValue(value)) return null
+  return String(value).trim()
 }
 
 function isKlipSyntheticLogisticsKey(value: string): boolean {
