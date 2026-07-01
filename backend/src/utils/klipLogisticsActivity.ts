@@ -412,7 +412,22 @@ export async function reconcileSupersededSapShipments(
   return { cancelledShipmentIds, skippedShipmentIds };
 }
 
-/** Cancel duplicate active trucking rows on the same contract (SAP-only siblings). */
+/**
+ * After SAP upsert on the keeper trucking op: no auto-cancel of sibling rows.
+ * SAP import reuses/updates the keeper in place (same philosophy as finalizeSapShipmentAfterUpsert).
+ */
+export async function finalizeSapTruckingAfterUpsert(
+  _db: Queryable,
+  _contractUuid: string,
+  _keeperTruckingUuid: string,
+): Promise<Pick<SapReconcileResult, 'cancelledTruckingIds' | 'skippedTruckingIds'>> {
+  return { cancelledTruckingIds: [], skippedTruckingIds: [] };
+}
+
+/**
+ * @deprecated SAP import no longer mass-cancels trucking siblings — use finalizeSapTruckingAfterUpsert.
+ * Retained for one-off maintenance; prefer cleanup scripts for explicit dedupe.
+ */
 export async function reconcileSupersededSapTrucking(
   db: Queryable,
   contractUuid: string,

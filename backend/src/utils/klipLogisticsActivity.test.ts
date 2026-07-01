@@ -47,3 +47,15 @@ describe('finalizeSapShipmentAfterUpsert', () => {
     expect(result.skippedShipmentIds).toEqual([]);
   });
 });
+
+describe('finalizeSapTruckingAfterUpsert', () => {
+  it('returns empty cancel lists (upsert-only, aligned with shipment import)', async () => {
+    const { finalizeSapTruckingAfterUpsert } = await import('./klipLogisticsActivity');
+    const fakeDb = {
+      query: async () => ({ rows: [] }),
+    };
+    const result = await finalizeSapTruckingAfterUpsert(fakeDb, 'contract-uuid', 'trucking-uuid');
+    expect(result.cancelledTruckingIds).toEqual([]);
+    expect(result.skippedTruckingIds).toEqual([]);
+  });
+});

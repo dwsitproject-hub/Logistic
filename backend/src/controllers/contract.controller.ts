@@ -13,6 +13,7 @@ import {
 } from '../utils/contractListFilters';
 import { CONTRACTS_LIST_OUTER_SQL } from './contractsListOuterSql';
 import { CONTRACTS_QTY_MOVE_CTE, buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractsQtyMoveSql';
+import { sqlIncotermImportStatusFromJson, sqlIncotermQuantityDeliveryCase, sqlTransportModeFromContractAndJson } from '../utils/sapIncotermMetrics';
 import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL } from './contractSqlFragments';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { isTruckingPageIncoterm, contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
@@ -43,7 +44,7 @@ import {
   resolveContractLogisticsStoNumber,
   resolveContractLogisticsStoStatus,
 } from '../utils/contractLogisticsStoDisplay';
-import { sqlContractImportStatusExpr } from '../utils/contractDeliveryStatus';
+import { sqlContractImportStatusExpr, sqlContractImportStatusIsClosedExpr, sqlContractImportStatusIsOpenExpr } from '../utils/contractDeliveryStatus';
 
 export { B2B_CHILD_EXCLUSION_SQL };
 
@@ -168,7 +169,13 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           (array_agg(s.sto_numbers ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS sto_numbers_agg,
           (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
           (array_agg(s.sto_count ORDER BY s.sto_count DESC NULLS LAST))[1] AS sto_count,
-          (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery,
+          MAX(${sqlIncotermImportStatusFromJson('l.data', 'c.incoterm', 'c.status::text')}) AS import_status,
+          MAX(${sqlIncotermQuantityDeliveryCase(
+            'c.incoterm',
+            'qm.quantity_delivery_trucking',
+            'qm.quantity_delivery_vessel',
+            sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
+          )}) AS quantity_delivery,
           (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
           COUNT(DISTINCT c.po_number) FILTER (WHERE c.po_number IS NOT NULL) AS po_count,
           -- For Log Cycle calculation (LAND): earliest and latest trucking dates
@@ -312,17 +319,17 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const statusNorm = typeof status === 'string' ? status.trim() : '';
     if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {
       if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
-        queryText += ` AND (
-          (base.latest_spd_data->'contract'->>'status' = 'Open' OR UPPER(base.latest_spd_data->'contract'->>'status') = 'ACTIVE')
-          OR (base.latest_spd_data IS NULL AND UPPER(base.status) IN ('OPEN', 'ACTIVE'))
-        )`;
+        queryText += ` AND ${sqlContractImportStatusIsOpenExpr(
+          'base.import_status',
+          'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+        )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
-        queryText += ` AND (
-          (base.latest_spd_data->'contract'->>'status' = 'Close' OR UPPER(base.latest_spd_data->'contract'->>'status') IN ('CLOSE', 'COMPLETED', 'CLOSED'))
-          OR (base.latest_spd_data IS NULL AND UPPER(base.status) IN ('CLOSE', 'COMPLETED', 'CLOSED'))
-        )`;
+        queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
+          'base.import_status',
+          'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+        )}`;
       } else {
-        queryText += ` AND (base.status = $${paramIndex} OR base.latest_spd_data->'contract'->>'status' = $${paramIndex})`;
+        queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
         queryParams.push(statusNorm);
         paramIndex++;
       }
@@ -371,16 +378,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     queryText += appendContractPerfSourceTypeFilter(sourceTypeFilter, 'base.source_type');
 
     if (outstanding === 'true') {
-      queryText += ` AND (
-        base.quantity_ordered - COALESCE(
-          CASE
-            WHEN UPPER(TRIM(COALESCE(base.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN base.quantity_receive
-            WHEN UPPER(TRIM(COALESCE(base.incoterm, ''))) IN ('LCO', 'FOB') THEN base.quantity_delivery
-            ELSE base.total_sto_quantity
-          END,
-          0
-        )
-      ) > 0`;
+      queryText += ` AND GREATEST(0, base.quantity_ordered - COALESCE(base.quantity_delivery, 0)) > 0`;
     }
 
     // Optional: delivered=true -> only contracts that have any STO quantity (delivered > 0)
@@ -478,7 +476,8 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const wantExcludeUnscheduled = String((req.query as any).excludeUnscheduled || 'false') === 'true';
 
     // Reusable SQL fragments that mirror latePerformance.service.ts inclusion rules.
-    const _statusExpr = `UPPER(TRIM(COALESCE(NULLIF(TRIM(COALESCE(latest_spd_data->'contract'->>'status', '')), ''), NULLIF(TRIM(status), ''), '')))`;
+    // Use incoterm-aware import_status (UAT) — same as Open/Close filters and tree aggregation.
+    const _statusExpr = `UPPER(TRIM(COALESCE(NULLIF(TRIM(import_status), ''), NULLIF(TRIM(status), ''), '')))`;
     const _transportExpr = `UPPER(TRIM(COALESCE(transport_mode, '')))`;
     // A contract is "schedulable" (counted in late/ontrack tree) when:
     //   - delivery_end_date exists, AND
@@ -509,7 +508,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     //   negative  = on / ahead of schedule                         → ON TRACK
     const tradeCycleSqlExpr = `
       CASE
-        WHEN UPPER(TRIM(COALESCE(NULLIF(TRIM(COALESCE(latest_spd_data->'contract'->>'status', '')), ''), NULLIF(TRIM(status), ''), ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED')
+        WHEN ${_statusExpr} IN ('CLOSE', 'CLOSED', 'COMPLETED')
              AND delivery_end_date IS NOT NULL
           THEN CASE
             WHEN UPPER(TRIM(COALESCE(transport_mode, ''))) LIKE 'LAND%' AND last_trucking_completion_date IS NOT NULL
@@ -517,14 +516,14 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
             WHEN UPPER(TRIM(COALESCE(transport_mode, ''))) LIKE 'SEA%' AND last_ata_vessel_complete_discharge IS NOT NULL
               THEN (last_ata_vessel_complete_discharge::date - delivery_end_date::date)
             ELSE NULL END
-        WHEN UPPER(TRIM(COALESCE(NULLIF(TRIM(COALESCE(latest_spd_data->'contract'->>'status', '')), ''), NULLIF(TRIM(status), ''), ''))) IN ('OPEN', 'ACTIVE')
+        WHEN ${_statusExpr} IN ('OPEN', 'ACTIVE')
              AND delivery_end_date IS NOT NULL
           THEN CASE
             WHEN UPPER(TRIM(COALESCE(transport_mode, ''))) LIKE 'LAND%' AND last_trucking_daily_deliverable_date IS NOT NULL
               THEN (last_trucking_daily_deliverable_date::date - delivery_end_date::date)
             WHEN UPPER(TRIM(COALESCE(transport_mode, ''))) LIKE 'SEA%' AND last_eta_vessel_complete_discharge IS NOT NULL
               THEN (last_eta_vessel_complete_discharge::date - delivery_end_date::date)
-            ELSE NULL END
+            ELSE -1 END
         ELSE NULL
       END`;
 
@@ -735,6 +734,13 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
 
       // Trade Cycle — same rules as late-performance tree (Section 2).
       let tradeCycle = computePerfTradeCycleDaysForRow(row, todayMid);
+      if (
+        tradeCycle == null &&
+        (statusText === 'OPEN' || statusText === 'ACTIVE')
+      ) {
+        // Open + due end present but trade cycle still null → On Time (mirrors aggregateLatePerformanceRows).
+        tradeCycle = -1;
+      }
       (row as any).trade_cycle_days = tradeCycle;
       if (typeof tradeCycle === 'number' && !Number.isNaN(tradeCycle)) {
         (row as any).contract_perf_on_time = isContractPerfOnTimeTradeCycle(row, tradeCycle);
@@ -1048,13 +1054,18 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           MAX(c.status) AS status,
           MAX(c.plant_code) AS plant_code,
           MAX(c.company_name) AS company_name,
-          -- Align with GET /contracts: SAP import status is the primary "open/close" signal in Contract Performance.
-          (array_agg(l.data->'contract'->>'status' ORDER BY l.created_at DESC NULLS LAST))[1] AS import_status,
+          -- Align with GET /contracts: incoterm-aware SAP import status (GR PO vs GR STO).
+          MAX(${sqlIncotermImportStatusFromJson('l.data', 'c.incoterm', 'c.status::text')}) AS import_status,
           MAX(c.delivery_end_date) AS delivery_end_date,
           MAX(c.cargo_readiness_date) AS cargo_readiness_date,
           (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
           (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
-          (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery,
+          MAX(${sqlIncotermQuantityDeliveryCase(
+            'c.incoterm',
+            'qm.quantity_delivery_trucking',
+            'qm.quantity_delivery_vessel',
+            sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
+          )}) AS quantity_delivery,
           (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
           -- For Trade Cycle (LAND open): latest date in daily_deliverables JSONB
           (
@@ -1171,17 +1182,17 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
     const statusNorm = scope === 'filtered' && typeof status === 'string' ? status.trim() : '';
     if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {
       if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
-        queryText += ` AND (
-          (base.latest_spd_data->'contract'->>'status' = 'Open' OR UPPER(base.latest_spd_data->'contract'->>'status') = 'ACTIVE')
-          OR (base.latest_spd_data IS NULL AND UPPER(base.status) IN ('OPEN', 'ACTIVE'))
-        )`;
+        queryText += ` AND ${sqlContractImportStatusIsOpenExpr(
+          'base.import_status',
+          'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+        )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
-        queryText += ` AND (
-          (base.latest_spd_data->'contract'->>'status' = 'Close' OR UPPER(base.latest_spd_data->'contract'->>'status') IN ('CLOSE', 'COMPLETED', 'CLOSED'))
-          OR (base.latest_spd_data IS NULL AND UPPER(base.status) IN ('CLOSE', 'COMPLETED', 'CLOSED'))
-        )`;
+        queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
+          'base.import_status',
+          'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+        )}`;
       } else {
-        queryText += ` AND (base.status = $${paramIndex} OR base.latest_spd_data->'contract'->>'status' = $${paramIndex})`;
+        queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
         queryParams.push(statusNorm);
         paramIndex++;
       }
@@ -1740,7 +1751,7 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
 
     // Section 1 alert cards always count Open contracts only (toolbar status does not apply).
     aggConditions.push(`(
-      (base.latest_spd_data->'contract'->>'status' = 'Open' OR UPPER(base.latest_spd_data->'contract'->>'status') = 'ACTIVE')
+      UPPER(TRIM(COALESCE(base.import_status, ''))) IN ('OPEN', 'ACTIVE')
       OR (base.latest_spd_data IS NULL AND UPPER(base.raw_status) IN ('OPEN', 'ACTIVE'))
     )`);
 
@@ -1808,6 +1819,7 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
           (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
           MAX(c.status) AS raw_status,
           MAX(c.status) AS status,
+          MAX(${sqlIncotermImportStatusFromJson('l.data', 'c.incoterm', 'c.status::text')}) AS import_status,
           MAX(c.product) AS product,
           MAX(c.incoterm) AS incoterm,
           MAX(c.supplier) AS supplier,

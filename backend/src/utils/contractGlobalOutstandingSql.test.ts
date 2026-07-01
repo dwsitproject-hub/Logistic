@@ -9,6 +9,8 @@ describe('contractGlobalOutstandingSql', () => {
     const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
     expect(sql).toContain('contract_scope');
     expect(sql).toContain('latest_per_sto');
+    expect(sql).toContain('quantity_delivery_trucking');
+    expect(sql).toContain('quantity_delivery_vessel');
     expect(sql).toContain('deduped');
   });
 
@@ -29,5 +31,13 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('qty_move');
     expect(sql).toContain('FRC');
     expect(sql).toContain('FOB');
+    expect(sql).toContain('quantity_delivery_trucking');
+  });
+
+  it('qty_move quantity_delivery ignores zero vessel so trucking qty is not masked', () => {
+    const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
+    expect(sql).toContain('NULLIF');
+    expect(sql).toContain('quantity_delivery_vessel');
+    expect(sql).toContain('quantity_delivery_trucking');
   });
 });

@@ -6,12 +6,13 @@ import {
   resolveTruckingIncotermFromParsedData,
 } from '../utils/truckingIncotermScope';
 import { isSeaSapRowEligibleForShipmentCreation } from '../utils/seaShipmentEligibility';
-import { deriveShipmentStatus } from '../utils/shipmentStatus';
+import { deriveShipmentStatus, sqlShipmentStatusRank } from '../utils/shipmentStatus';
 import {
   SQL_CONTRACT_IMPORT_STATUS,
   isContractDeliveryClosed,
 } from '../utils/contractDeliveryStatus';
 import { resolveSapVesselIdentity } from '../utils/sapVesselFields';
+import { resolveSapTruckingQuantityDelivered } from '../utils/sapMasterV2UatFormat';
 import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
 import {
   upsertTruckingRealization,
@@ -23,7 +24,7 @@ import {
   hasKlipShipmentActivity,
   hasKlipTruckingActivity,
   isSapSourcedShipmentId,
-  reconcileSupersededSapTrucking,
+  finalizeSapTruckingAfterUpsert,
 } from '../utils/klipLogisticsActivity';
 import {
   buildShipmentKlipProtectedSetSql,
@@ -325,7 +326,7 @@ export class SapDataDistributionService {
               trucking_oa_actual_at_starting_location: null,
               quantity_sent_via_trucking_based_on_surat_jalan:
                 parsedData.shipment?.quantity_at_loading_port_1_based_on_bast || null,
-              quantity_delivered_via_trucking: parsedData.shipment?.quantity_delivered || null,
+              quantity_delivered_via_trucking: resolveSapTruckingQuantityDelivered(parsedData),
               trucking_gain_loss_at_starting_location: null,
             },
           };
@@ -910,14 +911,7 @@ export class SapDataDistributionService {
           sfal_qty = COALESCE($47::numeric, sfal_qty),
           sfbd_qty = COALESCE($48::numeric, sfbd_qty),
           status = CASE
-            WHEN (CASE $49::text
-              WHEN 'UNPLANNED' THEN 0 WHEN 'PLANNED' THEN 1 WHEN 'IN_PROGRESS' THEN 2
-              WHEN 'LOADING' THEN 3 WHEN 'IN_TRANSIT' THEN 4 WHEN 'ARRIVED' THEN 5
-              WHEN 'UNLOADING' THEN 6 WHEN 'COMPLETED' THEN 7 ELSE 0 END)
-            > (CASE status
-              WHEN 'UNPLANNED' THEN 0 WHEN 'PLANNED' THEN 1 WHEN 'IN_PROGRESS' THEN 2
-              WHEN 'LOADING' THEN 3 WHEN 'IN_TRANSIT' THEN 4 WHEN 'ARRIVED' THEN 5
-              WHEN 'UNLOADING' THEN 6 WHEN 'COMPLETED' THEN 7 ELSE 0 END)
+            WHEN ${sqlShipmentStatusRank('$49::text')} > ${sqlShipmentStatusRank('status')}
             THEN $49
             ELSE status
           END,
@@ -1079,14 +1073,7 @@ export class SapDataDistributionService {
           sfal_qty = COALESCE(EXCLUDED.sfal_qty, shipments.sfal_qty),
           sfbd_qty = COALESCE(EXCLUDED.sfbd_qty, shipments.sfbd_qty),
           status = CASE
-            WHEN (CASE EXCLUDED.status
-              WHEN 'UNPLANNED' THEN 0 WHEN 'PLANNED' THEN 1 WHEN 'IN_PROGRESS' THEN 2
-              WHEN 'LOADING' THEN 3 WHEN 'IN_TRANSIT' THEN 4 WHEN 'ARRIVED' THEN 5
-              WHEN 'UNLOADING' THEN 6 WHEN 'COMPLETED' THEN 7 ELSE 0 END)
-            > (CASE shipments.status
-              WHEN 'UNPLANNED' THEN 0 WHEN 'PLANNED' THEN 1 WHEN 'IN_PROGRESS' THEN 2
-              WHEN 'LOADING' THEN 3 WHEN 'IN_TRANSIT' THEN 4 WHEN 'ARRIVED' THEN 5
-              WHEN 'UNLOADING' THEN 6 WHEN 'COMPLETED' THEN 7 ELSE 0 END)
+            WHEN ${sqlShipmentStatusRank('EXCLUDED.status')} > ${sqlShipmentStatusRank('shipments.status')}
             THEN EXCLUDED.status
             ELSE shipments.status
           END,
@@ -1548,6 +1535,9 @@ export class SapDataDistributionService {
         'trucking last receive date',
       ]);
     }
+    if (!data.quantity_delivered_via_trucking) {
+      data.quantity_delivered_via_trucking = resolveSapTruckingQuantityDelivered(parsedData);
+    }
     return { sequence: truckingData?.sequence ?? 1, data };
   }
 
@@ -1709,18 +1699,7 @@ export class SapDataDistributionService {
         });
       }
       if (contractUuid) {
-        const truckingReconcile = await reconcileSupersededSapTrucking(
-          client,
-          contractUuid,
-          targetTruckingId,
-        );
-        if (truckingReconcile.cancelledTruckingIds.length > 0) {
-          logger.info('createTruckingOperation: cancelled superseded SAP trucking rows', {
-            contractUuid,
-            keeperTruckingId: targetTruckingId,
-            cancelled: truckingReconcile.cancelledTruckingIds,
-          });
-        }
+        await finalizeSapTruckingAfterUpsert(client, contractUuid, targetTruckingId);
       }
       return targetTruckingId;
     }
@@ -1764,18 +1743,7 @@ export class SapDataDistributionService {
     }
 
     if (contractUuid) {
-      const truckingReconcile = await reconcileSupersededSapTrucking(
-        client,
-        contractUuid,
-        newTruckingId,
-      );
-      if (truckingReconcile.cancelledTruckingIds.length > 0) {
-        logger.info('createTruckingOperation: cancelled superseded SAP trucking rows after insert', {
-          contractUuid,
-          keeperTruckingId: newTruckingId,
-          cancelled: truckingReconcile.cancelledTruckingIds,
-        });
-      }
+      await finalizeSapTruckingAfterUpsert(client, contractUuid, newTruckingId);
     }
     return newTruckingId;
   }

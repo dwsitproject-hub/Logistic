@@ -165,6 +165,51 @@ export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus 
   return 'UNPLANNED';
 }
 
+/** Monotonic rank for SAP upsert — higher = further along execution ladder. */
+export const SHIPMENT_STATUS_RANK: Readonly<Record<string, number>> = {
+  UNPLANNED: 0,
+  PLANNED: 1,
+  IN_PROGRESS: 2,
+  ARRIVED_LP: 2,
+  BERTHED_LP: 3,
+  LOADING: 4,
+  COMPLETED_LOADING: 5,
+  IN_TRANSIT: 6,
+  SAILED: 6,
+  ARRIVED: 7,
+  ARRIVED_DP: 7,
+  BERTHED_DP: 8,
+  UNLOADING: 9,
+  COMPLETED: 10,
+  CANCELLED: -1,
+  CANCELED: -1,
+};
+
+/** SQL CASE ranking a shipments.status column/expression for monotonic SAP merge. */
+export function sqlShipmentStatusRank(expr = 'status'): string {
+  return `
+CASE UPPER(TRIM(COALESCE(${expr}, '')))
+  WHEN 'UNPLANNED' THEN 0
+  WHEN 'PLANNED' THEN 1
+  WHEN 'IN_PROGRESS' THEN 2
+  WHEN 'ARRIVED_LP' THEN 2
+  WHEN 'BERTHED_LP' THEN 3
+  WHEN 'LOADING' THEN 4
+  WHEN 'COMPLETED_LOADING' THEN 5
+  WHEN 'IN_TRANSIT' THEN 6
+  WHEN 'SAILED' THEN 6
+  WHEN 'ARRIVED' THEN 7
+  WHEN 'ARRIVED_DP' THEN 7
+  WHEN 'BERTHED_DP' THEN 8
+  WHEN 'UNLOADING' THEN 9
+  WHEN 'COMPLETED' THEN 10
+  ELSE 0
+END`;
+}
+
+/** @deprecated Use sqlShipmentStatusRank('status') */
+export const SQL_SHIPMENT_STATUS_RANK = sqlShipmentStatusRank('status');
+
 /** Statuses auto-persisted on milestone update (excludes manual CANCELLED). */
 export const SHIPMENT_PERSISTABLE_AUTO_STATUSES: readonly ShipmentAutoStatus[] =
   SHIPMENT_AUTO_STATUSES.filter((s) => s !== 'CANCELLED');

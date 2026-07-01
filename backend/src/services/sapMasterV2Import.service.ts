@@ -2,6 +2,13 @@ import * as XLSX from 'xlsx';
 import * as fs from 'fs';
 import pool from '../database/connection';
 import logger from '../utils/logger';
+import {
+  SAP_MASTER_V2_UAT_FIELD_MAPPING,
+  applySapMasterV2RawFieldAliases,
+  isSapMasterV2UatFlatHeaderRow,
+  isTruckingQuantityField,
+  resolveSapMasterV2QualityLocation,
+} from '../utils/sapMasterV2UatFormat';
 import { SapDataDistributionService } from './sapDataDistribution.service';
 
 export interface MasterV2Config {
@@ -85,8 +92,9 @@ export class SapMasterV2ImportService {
       raw: false,
     }) as any[][];
 
-    const fieldMetadata = this.parseFieldMetadata(jsonData);
-    const dataRows = jsonData.slice(this.DEFAULT_CONFIG.dataStartRow);
+    const config = this.resolveWorkbookConfig(jsonData);
+    const fieldMetadata = this.parseFieldMetadata(jsonData, config);
+    const dataRows = jsonData.slice(config.dataStartRow);
     const validDataRows = dataRows.filter(
       (row) => row && row.some((cell) => cell !== null && cell !== undefined && cell !== '')
     );
@@ -94,6 +102,31 @@ export class SapMasterV2ImportService {
     logger.info('Excel file loaded', { totalRows: jsonData.length, sheetName, dataRows: validDataRows.length });
 
     return { fieldMetadata, validDataRows, sheetName };
+  }
+
+  /** Detect UAT flat header (82 cols) vs legacy multi-row MASTER v2 template. */
+  private static resolveWorkbookConfig(jsonData: any[][]): MasterV2Config {
+    if (isSapMasterV2UatFlatHeaderRow(jsonData[0] ?? [])) {
+      return { ...this.DEFAULT_CONFIG };
+    }
+    // Legacy template: metadata rows 0-7, headers row 8, data from row 9
+    const legacyHeaderIdx = jsonData.findIndex((row, idx) =>
+      idx > 0 &&
+      Array.isArray(row) &&
+      row.some((cell) => String(cell ?? '').toLowerCase().includes('contract no')),
+    );
+    if (legacyHeaderIdx >= 0) {
+      return {
+        ...this.DEFAULT_CONFIG,
+        legendRow1: Math.max(0, legacyHeaderIdx - 2),
+        legendRow2: Math.max(0, legacyHeaderIdx - 1),
+        headerRow: legacyHeaderIdx,
+        sapFieldRow1: legacyHeaderIdx,
+        sapFieldRow2: legacyHeaderIdx,
+        dataStartRow: legacyHeaderIdx + 1,
+      };
+    }
+    return { ...this.DEFAULT_CONFIG };
   }
 
   private static async markImportFailed(importId: string, error: unknown): Promise<void> {
@@ -415,8 +448,7 @@ export class SapMasterV2ImportService {
   /**
    * Parse field metadata from header rows
    */
-  private static parseFieldMetadata(jsonData: any[][]): FieldMetadata[] {
-    const config = this.DEFAULT_CONFIG;
+  private static parseFieldMetadata(jsonData: any[][], config: MasterV2Config = this.DEFAULT_CONFIG): FieldMetadata[] {
     const metadata: FieldMetadata[] = [];
     
     const legendRow1 = jsonData[config.legendRow1] || [];
@@ -535,10 +567,7 @@ export class SapMasterV2ImportService {
       // Store in raw object with proper field name
         if (fieldName && fieldName.trim() !== '') {
         parsed.raw[fieldName] = value;
-        // Raw aliases so backend (shipment.controller) finds expected keys from sap_processed_data.data.raw
-        const lower = fieldName.trim().toLowerCase();
-        if (lower === 'quantity delivery' || lower === 'qty deliver') parsed.raw['Quantity Delivered'] = value;
-        if (lower === 'quantity receive' || lower === 'qty receive') parsed.raw['Quantity Receive'] = value;
+        applySapMasterV2RawFieldAliases(parsed.raw, fieldName, value);
 
         // Categorize by type - STO should go to shipment first
         const normalizedFieldName = this.normalizeFieldName(fieldName);
@@ -547,6 +576,8 @@ export class SapMasterV2ImportService {
           parsed.shipment[normalizedFieldName] = value;
         } else if (this.isContractField(fieldName)) {
           parsed.contract[normalizedFieldName] = value;
+        } else if (isTruckingQuantityField(fieldName)) {
+          this.addTruckingData(parsed.trucking, fieldName, value);
         } else if (this.isShipmentField(fieldName)) {
           parsed.shipment[normalizedFieldName] = value;
         } else if (this.isQualityField(fieldName)) {
@@ -575,22 +606,26 @@ export class SapMasterV2ImportService {
       'sea / land', 'sea/land', // Handle with and without spaces
       'contract quantity', 'unit price', 'due date delivery',
       'source', 'ltc / spot', 'lt/spot', // Handle with and without space
-      'status', 'sto no', 'sto quantity', 'classification',
-      'b2b flag', 'contract type', 'contract reff po', 'contract reff po ini', 'contract reff so ini', // Updated fields
-      'contract ref po', 'company code', 'plant code' // Company Code / Plant Code fields
+      'status', 'gr po status', 'gr sto status', 'sto no', 'sto quantity', 'classification',
+      'b2b flag', 'contract type', 'contract reff po', 'contract reff po ini', 'contract reff so ini',
+      'contract ref po', 'contract ref po initial', 'contract ref so initial',
+      'contract ext no', 'company code', 'plant code', 'vendor group',
     ];
     return contractFields.some(cf => lower.includes(cf));
   }
   
   private static isShipmentField(fieldName: string): boolean {
+    const lower = fieldName.toLowerCase();
+    if (isTruckingQuantityField(fieldName)) return false;
     const shipmentFields = [
       'vessel', 'voyage', 'loading port', 'discharge port', 'eta', 'ata',
       'berthed', 'sailed', 'arrival', 'quantity at', 'sto', 'shipment',
       'qty deliver', 'quantity delivery', 'qty receive', 'quantity receive', 'last receive',
       'sto item',
       'ship figure', 'sfal', 'sfbd',
+      'transit destination', 'discharge destination',
     ];
-    return shipmentFields.some(sf => fieldName.toLowerCase().includes(sf));
+    return shipmentFields.some(sf => lower.includes(sf));
   }
   
   private static isQualityField(fieldName: string): boolean {
@@ -600,11 +635,12 @@ export class SapMasterV2ImportService {
   
   private static isTruckingField(fieldName: string): boolean {
     const lower = fieldName.toLowerCase();
+    if (isTruckingQuantityField(fieldName)) return true;
     return lower.includes('truck') ||
            lower.includes('trucking') ||
            lower.includes('cargo readiness') ||
-           lower.includes('qty deliver') ||
-           lower.includes('qty receive') ||
+           (lower.includes('qty deliver') && !lower.includes('vessel')) ||
+           (lower.includes('qty receive') && !lower.includes('vessel')) ||
            lower.includes('selisih qty');
   }
   
@@ -963,8 +999,10 @@ export class SapMasterV2ImportService {
     };
     
     // Check for exact match first
-    if (fieldMapping[cleanFieldName]) {
-      return fieldMapping[cleanFieldName];
+    const mergedMapping = { ...fieldMapping, ...SAP_MASTER_V2_UAT_FIELD_MAPPING };
+
+    if (mergedMapping[cleanFieldName]) {
+      return mergedMapping[cleanFieldName];
     }
     
     // Check for partial matches with priority order
@@ -979,12 +1017,12 @@ export class SapMasterV2ImportService {
     
     for (const key of priorityKeys) {
       if (cleanFieldName.includes(key)) {
-        return fieldMapping[key];
+        return mergedMapping[key];
       }
     }
     
     // Check for general partial matches
-    for (const [key, value] of Object.entries(fieldMapping)) {
+    for (const [key, value] of Object.entries(mergedMapping)) {
       if (cleanFieldName.includes(key) || key.includes(cleanFieldName)) {
         return value;
       }
@@ -1000,18 +1038,7 @@ export class SapMasterV2ImportService {
    * Add quality data (handles multiple locations)
    */
   private static addQualityData(qualityArray: any[], fieldName: string, value: any): void {
-    // Determine location from field name (case-insensitive)
-    const lowerFieldName = fieldName.toLowerCase();
-    let location = 'Unknown';
-    if (lowerFieldName.includes('loading loc 1') || lowerFieldName.includes('loading location 1') || lowerFieldName.includes('loading port 1')) {
-      location = 'Loading Port 1';
-    } else if (lowerFieldName.includes('loading loc 2') || lowerFieldName.includes('loading location 2') || lowerFieldName.includes('loading port 2')) {
-      location = 'Loading Port 2';
-    } else if (lowerFieldName.includes('loading loc 3') || lowerFieldName.includes('loading location 3') || lowerFieldName.includes('loading port 3')) {
-      location = 'Loading Port 3';
-    } else if (lowerFieldName.includes('discharge port')) {
-      location = 'Discharge Port';
-    }
+    const location = resolveSapMasterV2QualityLocation(fieldName);
     
     // Find or create quality record for this location
     let qualityRecord = qualityArray.find(q => q.location === location);
@@ -1118,6 +1145,11 @@ export class SapMasterV2ImportService {
       logger.error('Data distribution failed', error);
       throw error;
     }
+  }
+
+  /** Parse one SAP MASTER v2 row (for tests and diagnostics). */
+  static parseDataRowForTest(row: unknown[], fieldMetadata: FieldMetadata[]): Record<string, unknown> {
+    return this.parseDataRow(row as any[], fieldMetadata);
   }
 }
 

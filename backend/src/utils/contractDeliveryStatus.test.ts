@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   isContractDeliveryClosed,
   sqlContractImportStatusExpr,
+  sqlContractImportStatusIsClosedExpr,
+  sqlContractImportStatusIsOpenExpr,
   sqlIsContractSapClosedExpr,
 } from './contractDeliveryStatus';
 
@@ -26,7 +28,8 @@ describe('sqlContractImportStatusExpr', () => {
   it('prefers PO-scoped SAP status over contract-level rows', () => {
     const sql = sqlContractImportStatusExpr('c', 'c.po_number');
     expect(sql).toContain('spd.po_number');
-    expect(sql).toContain("spd.data->'raw'->>'Status'");
+    expect(sql).toContain('GR PO Status');
+    expect(sql).toContain('GR STO Status');
     expect(sql).toContain('ORDER BY');
     expect(sql).toContain('THEN 0');
   });
@@ -35,5 +38,12 @@ describe('sqlContractImportStatusExpr', () => {
     const sql = sqlIsContractSapClosedExpr('c');
     expect(sql).toContain("'CLOSE'");
     expect(sql).toContain('c.po_number');
+  });
+});
+
+describe('sqlContractImportStatusIsOpenExpr / ClosedExpr', () => {
+  it('matches Open/Close on import_status column', () => {
+    expect(sqlContractImportStatusIsOpenExpr('base.import_status')).toContain('OPEN');
+    expect(sqlContractImportStatusIsClosedExpr('base.import_status')).toContain('CLOSED');
   });
 });

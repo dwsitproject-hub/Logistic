@@ -11,6 +11,15 @@ import { AuthRequest } from '../middleware/auth';
 import { CONTRACTS_QTY_MOVE_CTE } from '../controllers/contractsQtyMoveSql';
 import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL } from '../controllers/contractSqlFragments';
 import { appendContractPerfProductSubstringSql } from '../utils/contractPerfProductFilterSql';
+import {
+  sqlContractImportStatusIsClosedExpr,
+  sqlContractImportStatusIsOpenExpr,
+} from '../utils/contractDeliveryStatus';
+import {
+  sqlIncotermImportStatusFromJson,
+  sqlIncotermQuantityDeliveryCase,
+  sqlTransportModeFromContractAndJson,
+} from '../utils/sapIncotermMetrics';
 
 export type LatePerformancePart = 'summary' | 'tree' | 'all';
 
@@ -214,12 +223,17 @@ export function buildLatePerformanceQuery(filters: LatePerformanceFilters): {
           MAX(c.status) AS status,
           MAX(c.plant_code) AS plant_code,
           MAX(c.company_name) AS company_name,
-          (array_agg(l.data->'contract'->>'status' ORDER BY l.created_at DESC NULLS LAST))[1] AS import_status,
+          MAX(${sqlIncotermImportStatusFromJson('l.data', 'c.incoterm', 'c.status::text')}) AS import_status,
           MAX(c.delivery_end_date) AS delivery_end_date,
           MAX(c.cargo_readiness_date) AS cargo_readiness_date,
           (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
           (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
-          (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery,
+          MAX(${sqlIncotermQuantityDeliveryCase(
+            'c.incoterm',
+            'qm.quantity_delivery_trucking',
+            'qm.quantity_delivery_vessel',
+            sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
+          )}) AS quantity_delivery,
           (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
           -- Use the denormalized column instead of CROSS JOIN LATERAL jsonb_array_elements
           (
@@ -349,17 +363,17 @@ export function buildLatePerformanceQuery(filters: LatePerformanceFilters): {
 
   if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {
     if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
-      queryText += ` AND (
-          (base.latest_spd_data->'contract'->>'status' = 'Open' OR UPPER(base.latest_spd_data->'contract'->>'status') = 'ACTIVE')
-          OR (base.latest_spd_data IS NULL AND UPPER(base.status) IN ('OPEN', 'ACTIVE'))
-        )`;
+      queryText += ` AND ${sqlContractImportStatusIsOpenExpr(
+        'base.import_status',
+        'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+      )}`;
     } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
-      queryText += ` AND (
-          (base.latest_spd_data->'contract'->>'status' = 'Close' OR UPPER(base.latest_spd_data->'contract'->>'status') IN ('CLOSE', 'COMPLETED', 'CLOSED'))
-          OR (base.latest_spd_data IS NULL AND UPPER(base.status) IN ('CLOSE', 'COMPLETED', 'CLOSED'))
-        )`;
+      queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
+        'base.import_status',
+        'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+      )}`;
     } else {
-      queryText += ` AND (base.status = $${paramIndex} OR base.latest_spd_data->'contract'->>'status' = $${paramIndex})`;
+      queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
       queryParams.push(statusNorm);
       paramIndex++;
     }
@@ -854,19 +868,34 @@ export function isContractIncludedInPerfDrilldownTreeWithComputed(
 
   const filter = String(options.lateOnTimeFilter || 'ALL').toUpperCase();
   const tradeCycleRaw = row.trade_cycle_days;
-  const hasTradeCycle =
-    tradeCycleRaw != null && !Number.isNaN(Number(tradeCycleRaw));
+  let tradeCycle: number | null =
+    tradeCycleRaw != null && !Number.isNaN(Number(tradeCycleRaw)) ? Number(tradeCycleRaw) : null;
+
+  if (tradeCycle == null) {
+    if (isOpen) {
+      // Mirrors aggregateLatePerformanceRows: Open + due end but no ETA → on-time bucket.
+      tradeCycle = -1;
+    } else if (isClosed) {
+      if (filter === 'LATE' || filter === 'ON_TIME') {
+        if (typeof row.contract_perf_on_time === 'boolean') {
+          return filter === 'ON_TIME' ? row.contract_perf_on_time : !row.contract_perf_on_time;
+        }
+        return filter === 'LATE';
+      }
+      return false;
+    }
+  }
 
   if (filter === 'LATE' || filter === 'ON_TIME') {
     if (typeof row.contract_perf_on_time === 'boolean') {
       return filter === 'ON_TIME' ? row.contract_perf_on_time : !row.contract_perf_on_time;
     }
-    if (!hasTradeCycle) return filter === 'LATE';
-    const onTime = isContractPerfOnTimeTradeCycle(row, Number(tradeCycleRaw));
+    if (tradeCycle == null || Number.isNaN(tradeCycle)) return filter === 'LATE';
+    const onTime = isContractPerfOnTimeTradeCycle(row, tradeCycle);
     return filter === 'ON_TIME' ? onTime : !onTime;
   }
 
-  if (isClosed && !hasTradeCycle) return false;
+  if (isClosed && tradeCycle == null) return false;
   return true;
 }
 
@@ -1069,14 +1098,8 @@ export function aggregateLatePerformanceRows(
     const openUsesConditionB =
       isOpen && !hasCalendarDate(resolveOpenStandardEta(row, transport));
 
-    const _inc = String(row.incoterm || '').trim().toUpperCase();
     const _qtyOrdered = Number(row.quantity_ordered || 0);
-    const _subtracted = ['FRC', 'CIF', 'CFR'].includes(_inc)
-      ? Number(row.quantity_receive || 0)
-      : ['LCO', 'FOB'].includes(_inc)
-        ? Number(row.quantity_delivery || 0)
-        : Number(row.total_sto_quantity || 0);
-    const _outstandingQty = Math.max(0, _qtyOrdered - _subtracted);
+    const _outstandingQty = Math.max(0, _qtyOrdered - Number(row.quantity_delivery || 0));
     /** Open Section 1/2: outstanding qty. Close Section 1/2: total contract qty (quantity_ordered). */
     const _qtyForPerf = isClosed ? _qtyOrdered : _outstandingQty;
 

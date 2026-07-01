@@ -1,4 +1,5 @@
 import { query } from '../database/connection';
+import { sqlIncotermImportStatusFromJson } from './sapIncotermMetrics';
 
 export function isContractDeliveryClosed(status: unknown): boolean {
   const normalized = String(status ?? '').trim().toUpperCase();
@@ -10,7 +11,7 @@ export function isContractDeliveryClosed(status: unknown): boolean {
   );
 }
 
-/** SAP import status with contracts.status fallback — same signal as Contract Performance Open/Close. */
+/** SAP import status with incoterm matrix (GR PO vs GR STO) and PO-scoped row pick. */
 export function sqlContractImportStatusExpr(
   contractAlias = 'c',
   poNumberRef = `${contractAlias}.po_number`,
@@ -18,11 +19,7 @@ export function sqlContractImportStatusExpr(
   return `
     COALESCE(
       (
-        SELECT COALESCE(
-          spd.data->'contract'->>'status',
-          spd.data->'raw'->>'Status',
-          spd.data->>'status'
-        )
+        SELECT ${sqlIncotermImportStatusFromJson('spd.data', `${contractAlias}.incoterm`, `${contractAlias}.status::text`)}
         FROM sap_processed_data spd
         WHERE spd.contract_number = ${contractAlias}.contract_id
           AND (
@@ -48,9 +45,29 @@ export function sqlContractImportStatusExpr(
 
 export const SQL_CONTRACT_IMPORT_STATUS = sqlContractImportStatusExpr('c');
 
+/** SQL predicate: contract row matches Open import status (UAT GR PO/STO matrix). */
+export function sqlContractImportStatusIsOpenExpr(
+  importStatusExpr: string,
+  fallbackWhenNoSapExpr?: string,
+): string {
+  const open = `UPPER(TRIM(COALESCE((${importStatusExpr}), ''))) IN ('OPEN', 'ACTIVE')`;
+  if (!fallbackWhenNoSapExpr) return open;
+  return `(${open} OR (${fallbackWhenNoSapExpr}))`;
+}
+
+/** SQL predicate: contract row matches Close import status (UAT GR PO/STO matrix). */
+export function sqlContractImportStatusIsClosedExpr(
+  importStatusExpr: string,
+  fallbackWhenNoSapExpr?: string,
+): string {
+  const closed = `UPPER(TRIM(COALESCE((${importStatusExpr}), ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')`;
+  if (!fallbackWhenNoSapExpr) return closed;
+  return `(${closed} OR (${fallbackWhenNoSapExpr}))`;
+}
+
 /** SQL predicate: true when SAP import status (or contracts.status fallback) is Close/Completed. */
 export function sqlIsContractSapClosedExpr(contractAlias = 'c'): string {
-  return `UPPER(TRIM(COALESCE((${sqlContractImportStatusExpr(contractAlias)}), ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')`;
+  return sqlContractImportStatusIsClosedExpr(sqlContractImportStatusExpr(contractAlias));
 }
 
 export async function getContractImportStatusForTruckingOperation(

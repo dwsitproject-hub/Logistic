@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   deriveShipmentStatus,
   normalizeShipmentDetailStatus,
+  sqlShipmentStatusRank,
 } from './shipmentStatus';
 
 describe('deriveShipmentStatus', () => {
@@ -94,5 +95,14 @@ describe('normalizeShipmentDetailStatus', () => {
     expect(normalizeShipmentDetailStatus('BERTHED_LP')).toBe('BERTHED_LP');
     expect(normalizeShipmentDetailStatus('COMPLETED_LOADING')).toBe('COMPLETED_LOADING');
     expect(normalizeShipmentDetailStatus('BERTHED_DP')).toBe('BERTHED_DP');
+  });
+});
+
+describe('sqlShipmentStatusRank', () => {
+  it('includes granular ATA ladder statuses for SAP merge', () => {
+    const sql = sqlShipmentStatusRank('EXCLUDED.status');
+    expect(sql).toContain('SAILED');
+    expect(sql).toContain('ARRIVED_LP');
+    expect(sql).toContain('BERTHED_DP');
   });
 });

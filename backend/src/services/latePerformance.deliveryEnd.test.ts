@@ -186,4 +186,35 @@ describe('isContractIncludedInPerfDrilldownTreeWithComputed', () => {
       isContractIncludedInPerfDrilldownTreeWithComputed(row, { lateOnTimeFilter: 'ALL' }),
     ).toBe(true);
   });
+
+  it('Open row with null trade_cycle_days is on-time (mirrors tree aggregate fallback)', () => {
+    const row = {
+      import_status: 'OPEN',
+      transport_mode: 'MIX',
+      delivery_end_date: '2026-06-01',
+      product: 'CPO',
+      trade_cycle_days: null,
+    };
+    expect(
+      isContractIncludedInPerfDrilldownTreeWithComputed(row, { lateOnTimeFilter: 'ON_TIME' }),
+    ).toBe(true);
+    expect(
+      isContractIncludedInPerfDrilldownTreeWithComputed(row, { lateOnTimeFilter: 'LATE' }),
+    ).toBe(false);
+  });
+
+  it('Open row with import_status Open but raw GR PO Close is on-time when trade_cycle_days is -1', () => {
+    const row = {
+      import_status: 'OPEN',
+      status: 'Close',
+      transport_mode: 'SEA',
+      delivery_end_date: '2026-06-01',
+      product: 'CPO',
+      trade_cycle_days: -1,
+      contract_perf_on_time: true,
+    };
+    expect(
+      isContractIncludedInPerfDrilldownTreeWithComputed(row, { lateOnTimeFilter: 'ON_TIME' }),
+    ).toBe(true);
+  });
 });

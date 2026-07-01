@@ -38,15 +38,7 @@ export const CONTRACTS_LIST_OUTER_SQL = `
         base.sto_numbers_agg AS sto_numbers,
         base.total_sto_quantity,
         (
-          base.quantity_ordered
-          - COALESCE(
-              CASE
-                WHEN UPPER(TRIM(COALESCE(base.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN base.quantity_receive
-                WHEN UPPER(TRIM(COALESCE(base.incoterm, ''))) IN ('LCO', 'FOB') THEN base.quantity_delivery
-                ELSE base.total_sto_quantity
-              END,
-              0
-            )
+          GREATEST(0, base.quantity_ordered - COALESCE(base.quantity_delivery, 0))
         )::numeric AS outstanding_quantity,
         base.po_count,
         base.sto_count,
@@ -62,7 +54,7 @@ export const CONTRACTS_LIST_OUTER_SQL = `
         ) AS contract_reference_po,
         COALESCE(base.latest_spd_data->'raw'->>'Contract Ext No', base.latest_spd_data->>'Contract Ext No') AS contract_ext_no,
         COALESCE(base.latest_spd_data->'contract'->>'ltc_spot', base.contract_type::text) AS lt_spot,
-        base.latest_spd_data->'contract'->>'status' AS import_status,
+        base.import_status,
         COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'due_date_payment'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Due Date Payment'), ''), NULLIF(trim(base.latest_spd_data->>'due date payment'), '')) AS due_date_payment_raw,
         COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date'), ''), NULLIF(trim(base.latest_spd_data->>'dp date'), '')) AS dp_date_raw,
         COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date'), ''), NULLIF(trim(base.latest_spd_data->>'payoff date'), '')) AS payoff_date_raw,

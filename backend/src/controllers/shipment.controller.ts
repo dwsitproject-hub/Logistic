@@ -715,8 +715,11 @@ ${contractMetaSelectCore}
 
     /** Full grouped dataset (expensive on large YTD). Used for summary aggregates. */
     const shipmentBaseCteSqlFull = queryText;
-    /** Summary + compact shell skip sto-linked enrich subqueries — status/ETA only needs core columns. */
-    const shipmentBaseCteSqlSummary = shipmentBaseCteSqlFull.replace(shipmentBaseEnrichCte, '');
+    /** Summary uses shell enrich (join aggregates only) — not full STO subqueries, not bare core. */
+    const shipmentBaseCteSqlSummary = shipmentBaseCteSqlFull.replace(
+      shipmentBaseEnrichCte,
+      shipmentBaseShellEnrichCte,
+    );
     const shipmentBaseCteSqlShell = shipmentBaseCteSqlFull.replace(
       shipmentBaseEnrichCte,
       shipmentBaseShellEnrichCte,
@@ -864,7 +867,7 @@ ${contractMetaSelectCore}
       ${buildUnplannedContractBacklogTableCountCte(contractScopeSql)}
       , filtered_shipments AS (
         SELECT sb.*
-        FROM shipment_base_core sb
+        FROM shipment_base sb
         WHERE 1=1 ${section1SummaryFilterSql}
       )${summaryScopeCte}
       , enriched AS (
