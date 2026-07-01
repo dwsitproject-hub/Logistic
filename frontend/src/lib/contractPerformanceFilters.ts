@@ -413,8 +413,16 @@ export function contractMeetsPerformanceTreeInclusion(
     return false
   }
 
+  let tradeCycle = c.trade_cycle_days
+  if (
+    isOpen &&
+    (tradeCycle == null || Number.isNaN(Number(tradeCycle)))
+  ) {
+    tradeCycle = -1
+  }
+
   return contractMatchesLateOnTimeFilter(
-    c.trade_cycle_days,
+    tradeCycle,
     lateOnTimeFilter,
     c.contract_perf_on_time,
   )
@@ -438,9 +446,11 @@ export function filterContractsForPerformanceTable(
       return false
     }
 
+    let backendTreeInclusionApplied = false
     if (applyTreeInclusionGuard) {
       if (typeof c.contract_perf_in_tree === 'boolean') {
         if (!c.contract_perf_in_tree) return false
+        backendTreeInclusionApplied = true
       } else if (!contractMeetsPerformanceTreeInclusion(c, lateOnTimeFilter)) {
         return false
       }
@@ -467,7 +477,9 @@ export function filterContractsForPerformanceTable(
       return false
     }
 
+    // When backend set contract_perf_in_tree (excludeUnscheduled=true), late/on-time is already applied.
     if (
+      !backendTreeInclusionApplied &&
       !contractMatchesLateOnTimeFilter(
         c.trade_cycle_days,
         lateOnTimeFilter,

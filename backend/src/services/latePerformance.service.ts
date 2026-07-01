@@ -807,7 +807,9 @@ export function computePerfTradeCycleDaysForRow(row: any, todayMid: Date = new D
     return null;
   }
   if (statusText === 'OPEN' || statusText === 'ACTIVE') {
-    return computeOpenTradeCycleDays(row, transport, today, deliveryEnd);
+    const openCycle = computeOpenTradeCycleDays(row, transport, today, deliveryEnd);
+    // Open + due end present but Trade Cycle still null → On Time (aggregateLatePerformanceRows).
+    return openCycle == null ? -1 : openCycle;
   }
   return null;
 }

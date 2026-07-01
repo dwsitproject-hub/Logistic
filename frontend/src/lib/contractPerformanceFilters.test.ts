@@ -652,6 +652,16 @@ describe('Section 3 — performance tree inclusion guard', () => {
         }),
         'LATE',
       ),
+    ).toBe(false)
+    expect(
+      contractMeetsPerformanceTreeInclusion(
+        tableContract({
+          delivery_end_date: '2026-05-01',
+          import_status: 'OPEN',
+          trade_cycle_days: null,
+        }),
+        'ON_TIME',
+      ),
     ).toBe(true)
     expect(
       contractMeetsPerformanceTreeInclusion(
@@ -696,6 +706,33 @@ describe('Section 3 — performance tree inclusion guard', () => {
       'LATE',
     )
     expect(rows.map((r) => r.contract_id)).toEqual(['OK'])
+  })
+
+  it('filterContractsForPerformanceTable trusts contract_perf_in_tree from backend (no duplicate late filter)', () => {
+    const global = { ...BASE_GLOBAL, summaryCardStatus: 'Open' as const }
+    const drilldown: ContractPerfDrilldownFilters = {
+      product: 'CPO',
+      plant: null,
+      incoterm: null,
+      supplier: null,
+    }
+    const { scope: s3Scope } = resolveSection3Scope(global, drilldown)
+    const rows = filterContractsForPerformanceTable(
+      [
+        tableContract({
+          contract_id: 'IN-TREE',
+          product: 'CPO',
+          import_status: 'OPEN',
+          delivery_end_date: '2026-05-01',
+          trade_cycle_days: 0,
+          contract_perf_on_time: false,
+          contract_perf_in_tree: true,
+        }),
+      ],
+      s3Scope,
+      'ON_TIME',
+    )
+    expect(rows.map((r) => r.contract_id)).toEqual(['IN-TREE'])
   })
 })
 

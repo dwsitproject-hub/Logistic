@@ -261,6 +261,8 @@ interface Contract {
   trade_cycle_days?: number | null
   cash_cycle_days?: number | null
   dp_cycle_days?: number | null
+  contract_perf_on_time?: boolean | null
+  contract_perf_in_tree?: boolean | null
   payment_status?: string
   company_name?: string
   vessel_name?: string | null
