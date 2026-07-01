@@ -800,7 +800,11 @@ ${contractMetaSelectCore}
         GROUP BY 1
       ),`;
 
-    let shipmentBaseCteSqlList = skipSapJoin ? shipmentBaseCteSqlShell : shipmentBaseCteSqlFull;
+    let shipmentBaseCteSqlList = compact
+      ? shipmentBaseCteSqlShell
+      : skipSapJoin
+        ? shipmentBaseCteSqlShell
+        : shipmentBaseCteSqlFull;
     if (listUsesStoPaging) {
       const pagedStoCte = `
       paged_sto AS (
@@ -836,9 +840,11 @@ ${contractMetaSelectCore}
 
     const shipmentBaseCteForList = effectiveListStoPaging
       ? shipmentBaseCteSqlList
-      : skipSapJoin
+      : compact
         ? shipmentBaseCteSqlShell
-        : shipmentBaseCteSqlFull;
+        : skipSapJoin
+          ? shipmentBaseCteSqlShell
+          : shipmentBaseCteSqlFull;
 
     const summaryScopeFilter = appendShipmentPipelineScopeStageFilter(
       summaryOnly ? scopeStatusParam : undefined,

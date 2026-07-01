@@ -1429,6 +1429,8 @@ function ShipmentsPageContent() {
       const scheduleHydrate = () => {
         const hydrateParams = new URLSearchParams(params.toString())
         hydrateParams.set('skipSapJoin', 'false')
+        hydrateParams.set('includeSummary', 'false')
+        hydrateParams.delete('summaryOnly')
         const hydrateUrl = `/shipments?${hydrateParams.toString()}`
         const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
         void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
