@@ -126,6 +126,37 @@ Di server yang bermasalah:
   docker compose -f docker-compose.frontend.yml up -d --build  # di .56
 
 ================================================================================
+Cleanup trucking duplicate + CANCELLED (database staging)
+================================================================================
+Jalankan di PuTTY → backend server 172.28.92.57 (bukan frontend .56).
+
+Membersihkan:
+  1. Duplikat operation_id lintas PO (Unplanned upload lama)
+  2. Semua baris status CANCELLED
+  3. Duplikat per contract (sisakan 1 keeper terbaik)
+
+Audit trail: cleanup_audit_duplicate_trucking_op_id,
+             cleanup_audit_cancelled_trucking,
+             cleanup_audit_duplicate_trucking_per_contract
+
+  cd /opt/klip
+  git fetch origin && git checkout SIT && git pull origin SIT
+
+  # Preview (read-only):
+  bash docs/scripts/run-cleanup-trucking-staging.sh
+
+  # Execute:
+  bash docs/scripts/run-cleanup-trucking-staging.sh --apply
+
+Jika script belum ada di server (belum push/pull), salin 4 file SQL dari repo:
+  backend/src/scripts/sql/previewTruckingCleanupStaging.sql
+  backend/src/scripts/sql/cleanupDuplicateTruckingByOperationId.sql
+  backend/src/scripts/sql/deleteCancelledTruckingOperations.sql
+  backend/src/scripts/sql/cleanupDuplicateTruckingPerContract.sql
+
+Verifikasi UI: http://8.215.6.189/trucking (hard refresh Ctrl+Shift+R)
+
+================================================================================
 Referensi
 ================================================================================
   docs/scripts/staging-deploy-backend.sh
