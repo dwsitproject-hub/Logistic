@@ -7,10 +7,10 @@ GROUP BY 1
 ORDER BY row_count DESC;
 
 \echo ''
-\echo '=== CANCELLED rows (step 2 target) ==='
+\echo '=== Cancelled rows (step 2 target — CANCELLED / CANCELED / CANCEL) ==='
 SELECT COUNT(*)::int AS cancelled_rows
 FROM trucking_operations
-WHERE UPPER(COALESCE(status, '')) = 'CANCELLED';
+WHERE UPPER(TRIM(COALESCE(status, ''))) IN ('CANCELLED', 'CANCELED', 'CANCEL');
 
 \echo ''
 \echo '=== Duplicate operation_id groups (step 1 target) ==='
@@ -18,7 +18,7 @@ WITH dup_op_ids AS (
   SELECT TRIM(t.operation_id::text) AS op_key
   FROM trucking_operations t
   WHERE NULLIF(TRIM(t.operation_id::text), '') IS NOT NULL
-    AND COALESCE(t.status, '') <> 'CANCELLED'
+    AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
   GROUP BY TRIM(t.operation_id::text)
   HAVING COUNT(*) > 1
 )
@@ -29,7 +29,7 @@ FROM (
   SELECT d.op_key, COUNT(*)::int AS cnt
   FROM trucking_operations t
   INNER JOIN dup_op_ids d ON TRIM(t.operation_id::text) = d.op_key
-  WHERE COALESCE(t.status, '') <> 'CANCELLED'
+  WHERE UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
   GROUP BY d.op_key
 ) x;
 
@@ -39,7 +39,7 @@ WITH dup_contracts AS (
   SELECT contract_id
   FROM trucking_operations
   WHERE contract_id IS NOT NULL
-    AND COALESCE(status, '') <> 'CANCELLED'
+    AND UPPER(TRIM(COALESCE(status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
   GROUP BY contract_id
   HAVING COUNT(*) > 1
 )
@@ -49,13 +49,13 @@ SELECT
     SELECT COUNT(*)::int
     FROM trucking_operations t
     WHERE t.contract_id IN (SELECT contract_id FROM dup_contracts)
-      AND COALESCE(t.status, '') <> 'CANCELLED'
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
   ) AS rows_in_dup_groups,
   (
     SELECT COUNT(*)::int
     FROM trucking_operations t
     WHERE t.contract_id IN (SELECT contract_id FROM dup_contracts)
-      AND COALESCE(t.status, '') <> 'CANCELLED'
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
   ) - (SELECT COUNT(*)::int FROM dup_contracts) AS rows_to_delete_keep_one_per_contract;
 
 \echo ''
@@ -64,7 +64,7 @@ WITH dup_op_ids AS (
   SELECT TRIM(t.operation_id::text) AS op_key
   FROM trucking_operations t
   WHERE NULLIF(TRIM(t.operation_id::text), '') IS NOT NULL
-    AND COALESCE(t.status, '') <> 'CANCELLED'
+    AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
   GROUP BY TRIM(t.operation_id::text)
   HAVING COUNT(*) > 1
 )
@@ -74,7 +74,7 @@ SELECT TRIM(t.operation_id::text) AS operation_id,
 FROM trucking_operations t
 INNER JOIN dup_op_ids d ON TRIM(t.operation_id::text) = d.op_key
 INNER JOIN contracts c ON c.id = t.contract_id
-WHERE COALESCE(t.status, '') <> 'CANCELLED'
+WHERE UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
 GROUP BY TRIM(t.operation_id::text)
 ORDER BY row_count DESC
 LIMIT 5;

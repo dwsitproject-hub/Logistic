@@ -21,7 +21,7 @@ WITH dup_contracts AS (
   SELECT contract_id
   FROM trucking_operations
   WHERE contract_id IS NOT NULL
-    AND COALESCE(status, '') <> 'CANCELLED'
+    AND UPPER(TRIM(COALESCE(status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
   GROUP BY contract_id
   HAVING COUNT(*) > 1
 ),
@@ -31,7 +31,7 @@ keepers AS (
     t.id AS keeper_id
   FROM trucking_operations t
   INNER JOIN dup_contracts d ON d.contract_id = t.contract_id
-  WHERE COALESCE(t.status, '') <> 'CANCELLED'
+  WHERE UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
   ORDER BY
     t.contract_id,
     CASE UPPER(COALESCE(t.status, ''))
@@ -61,7 +61,7 @@ to_delete AS (
   INNER JOIN dup_contracts d ON d.contract_id = t.contract_id
   INNER JOIN keepers k ON k.contract_id = t.contract_id
   INNER JOIN contracts c ON c.id = t.contract_id
-  WHERE COALESCE(t.status, '') <> 'CANCELLED'
+  WHERE UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
     AND t.id <> k.keeper_id
 ),
 audited AS (

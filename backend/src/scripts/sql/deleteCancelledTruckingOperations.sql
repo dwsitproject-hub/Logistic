@@ -27,7 +27,7 @@ WITH to_delete AS (
     t.created_at
   FROM trucking_operations t
   LEFT JOIN contracts c ON c.id = t.contract_id
-  WHERE UPPER(COALESCE(t.status, '')) = 'CANCELLED'
+  WHERE UPPER(TRIM(COALESCE(t.status, ''))) IN ('CANCELLED', 'CANCELED', 'CANCEL')
 ),
 audited AS (
   INSERT INTO cleanup_audit_cancelled_trucking (

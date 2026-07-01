@@ -22,7 +22,7 @@ WITH dup_op_ids AS (
   SELECT TRIM(t.operation_id::text) AS op_key
   FROM trucking_operations t
   WHERE NULLIF(TRIM(t.operation_id::text), '') IS NOT NULL
-    AND COALESCE(t.status, '') <> 'CANCELLED'
+    AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
   GROUP BY TRIM(t.operation_id::text)
   HAVING COUNT(*) > 1
 ),
@@ -38,7 +38,7 @@ to_delete AS (
   FROM trucking_operations t
   INNER JOIN dup_op_ids d ON TRIM(t.operation_id::text) = d.op_key
   INNER JOIN contracts c ON c.id = t.contract_id
-  WHERE COALESCE(t.status, '') <> 'CANCELLED'
+  WHERE UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
 ),
 audited AS (
   INSERT INTO cleanup_audit_duplicate_trucking_op_id (
