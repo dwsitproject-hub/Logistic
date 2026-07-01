@@ -55,7 +55,7 @@ const SUMMARY_CACHE = new Map<
   { summaryRow: Record<string, unknown>; totalCount: number; expiresAt: number }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'shipment-list-v13';
+const CACHE_VERSION = 'shipment-list-v14';
 const MAX_CACHE_ENTRIES = 80;
 
 function stableColumnFiltersKey(colFilters: Record<string, unknown>): string {
@@ -306,6 +306,36 @@ export function buildShipmentListPageQuery(
       ${LIST_PAGE_SELECT}`;
 
   return { text, params: ctx.usesStoKeyPaging ? baseParams : [...baseParams, limit, offset] };
+}
+
+/** Enriched page rows (SAP qty, contract ext no, outstanding) without __filter_total. */
+export function buildShipmentListEnrichedPageQuery(
+  ctx: ShipmentListQueryContext,
+  limit: number,
+  offset: number,
+): { text: string; params: unknown[] } {
+  const baseParams = [...ctx.innerParams, ...ctx.outerParams];
+  const limitIdx = baseParams.length + 1;
+  const offsetIdx = baseParams.length + 2;
+  const spdAggCtes = shipmentListSpdAggCtes(ctx.skipSapJoin);
+
+  const text = `${ctx.shipmentBaseCteSql},
+      filtered_shipments AS (
+        SELECT sb.*
+        FROM shipment_base sb
+        WHERE 1=1 ${ctx.outerSql}
+      ),
+      shipment_page AS (
+        SELECT fs.*
+        FROM filtered_shipments fs
+        ORDER BY fs.created_at DESC
+        LIMIT $${limitIdx} OFFSET $${offsetIdx}
+      ),
+      ${shipmentListQtyMoveCteFromPage()},
+      ${spdAggCtes}
+      ${LIST_PAGE_SELECT}`;
+
+  return { text, params: [...baseParams, limit, offset] };
 }
 
 /** When the page query returns zero rows, total still needed for pagination UI. */

@@ -1,10 +1,10 @@
 import { Response } from 'express';
 import { query } from '../database/connection';
-import { assertTruckingOperationContractOpen } from '../utils/contractDeliveryStatus';
+import { assertTruckingOperationContractOpen, isContractDeliveryClosed, SQL_CONTRACT_IMPORT_STATUS } from '../utils/contractDeliveryStatus';
 import { sapTruckingLoadingLocationSql } from '../utils/sapTruckingLoadingLocationSql';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
-import { normalizeAndValidateDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/truckingDailyDeliverables';
+import { mergeDailyDeliverablesRows, normalizeAndValidateDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/truckingDailyDeliverables';
 import {
   appendTruckingColumnFilters,
   appendTruckingGlobalSearch,
@@ -12,7 +12,7 @@ import {
   parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
-import { sqlTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
+import { appendTruckingPipelineStageFilter } from '../utils/truckingPagePipelineSql';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import {
   allocateNextSyntheticSequenceDefault,
@@ -48,9 +48,19 @@ import {
 import { SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP } from '../utils/truckingEffectiveStatus';
 import {
   findActiveTruckingOpsByContractId,
+  findTruckingOpForUnplannedPlanningUpload,
   formatDuplicateTruckingMessage,
   resolveContractByExtNoOrId,
+  resolveContractForUnplannedPlanningUpload,
+  truckingOperationIdIsAssigned,
 } from '../utils/truckingOperationUniqueness';
+import {
+  buildDailyDeliverablesKgFromMtEntries,
+  filterEntriesWithinUnplannedWindow,
+  isUnplannedWidePlanningTemplateMatrix,
+  parseUnplannedWidePlanningMatrix,
+  resolvePlanningStartEndFromDeliverables,
+} from '../utils/truckingUnplannedPlanningUpload';
 
 let truckingOpIdBackfillChecked = false;
 let truckingStatusReconcileLastRun = 0;
@@ -831,16 +841,14 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
     const truckingStoExprForStatus = `NULLIF(TRIM(c.sto_number::text), '')`;
 
     if (status && String(status).toUpperCase() !== 'ALL') {
-      const s = String(status).toUpperCase();
-      if (s === 'UNPLANNED' || s === 'PLANNED' || s === 'IN_PROGRESS' || s === 'COMPLETED' || s === 'CANCELLED') {
-        extraWhere += ` AND ${sqlTruckingEffectiveStatus('c', truckingStoExprForStatus)} = $${idx}`;
-        params.push(s);
-        idx += 1;
-      } else {
-        extraWhere += ` AND t.status = $${idx}`;
-        params.push(status);
-        idx += 1;
-      }
+      const stageFilter = appendTruckingPipelineStageFilter(
+        String(status),
+        truckingStoExprForStatus,
+        idx,
+      );
+      extraWhere += stageFilter.sql;
+      params.push(...stageFilter.params);
+      idx = stageFilter.nextIndex;
     }
     if (loadingLocation && String(loadingLocation).trim() !== '') {
       extraWhere += ` AND t.loading_location ILIKE $${idx}`;
@@ -1901,6 +1909,318 @@ async function upsertTruckingDailyFromGroup(
   );
   return 'created';
 }
+
+/** Unplanned view-table XLSX: upsert daily planning; assign/create Operation ID only when PO has none yet. */
+export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Response) => {
+  try {
+    const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+    if (!file?.buffer) {
+      return res.status(400).json({ success: false, error: { message: 'File is required (CSV or Excel)' } });
+    }
+
+    let matrix: unknown[][];
+    try {
+      matrix = parsePlanningSheetToMatrix(file.buffer);
+    } catch (e: any) {
+      return res.status(400).json({
+        success: false,
+        error: { message: e?.message || 'Could not read spreadsheet' },
+      });
+    }
+
+    if (matrix.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'File must include a header row and at least one data row' },
+      });
+    }
+
+    if (!isUnplannedWidePlanningTemplateMatrix(matrix)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message:
+            'Invalid Unplanned template. Expected headers: Contract Ext No, PO, optional Outstanding Qty (MT), then date columns.',
+        },
+      });
+    }
+
+    const { rows: parsedRows, rowParseFailures } = parseUnplannedWidePlanningMatrix(matrix);
+    const operationFailures: BulkTruckingOpFailure[] = [];
+    const operationWarnings: BulkTruckingOpFailure[] = [];
+    let operationsCreated = 0;
+    let operationsUpdated = 0;
+    let succeededRows = 0;
+
+    const allocateLandTruckingOperationId = async (): Promise<string> => {
+      const dmy = formatDDMMYYYY(new Date());
+      const seq = await allocateNextSyntheticSequenceDefault('trucking_operations', 'LAND', dmy);
+      return buildSyntheticOperationId('LAND', dmy, seq);
+    };
+
+    for (const parsed of parsedRows) {
+      const label = parsed.contract_ext_no || parsed.po_number || '-';
+      const op = await findTruckingOpForUnplannedPlanningUpload({
+        poNumber: parsed.po_number,
+        contractExtNo: parsed.contract_ext_no,
+      });
+
+      let deliveryEnd: unknown;
+      let contractForCreate: Awaited<ReturnType<typeof resolveContractForUnplannedPlanningUpload>> = null;
+      let dueWindowSource: {
+        delivery_start_date?: unknown;
+        delivery_end_date?: unknown;
+        eta_delivery_start_date?: unknown;
+        eta_delivery_end_date?: unknown;
+        eta_trucking_start_date?: unknown;
+        eta_trucking_completion_date?: unknown;
+        trucking_start_date?: unknown;
+        trucking_completion_date?: unknown;
+        quantity_delivered?: unknown;
+      };
+
+      if (op) {
+        const contractOpen = await assertTruckingOperationContractOpen(op.id);
+        if (!contractOpen.ok) {
+          operationFailures.push({
+            contract_ext_no: label,
+            rowNumbers: [parsed.rowNumber],
+            reason: contractOpen.message,
+            operation_ids: op.operation_id ? [String(op.operation_id)] : [op.id],
+          });
+          continue;
+        }
+        deliveryEnd = op.delivery_end_date;
+        dueWindowSource = op;
+      } else {
+        const contract = await resolveContractForUnplannedPlanningUpload({
+          poNumber: parsed.po_number,
+          contractExtNo: parsed.contract_ext_no,
+        });
+        if (!contract) {
+          operationFailures.push({
+            contract_ext_no: label,
+            rowNumbers: [parsed.rowNumber],
+            reason: 'Contract not found for this PO / Contract Ext No',
+          });
+          continue;
+        }
+        if (String(contract.transport_mode ?? '').trim().toUpperCase() === 'SEA') {
+          operationFailures.push({
+            contract_ext_no: label,
+            rowNumbers: [parsed.rowNumber],
+            reason: 'Cannot create trucking operation for SEA-only contract',
+          });
+          continue;
+        }
+        const importStatusRes = await query(
+          `SELECT ${SQL_CONTRACT_IMPORT_STATUS} AS import_status FROM contracts c WHERE c.id = $1::uuid LIMIT 1`,
+          [contract.id],
+        );
+        const importStatus = (importStatusRes.rows[0] as { import_status?: string | null } | undefined)
+          ?.import_status;
+        if (isContractDeliveryClosed(importStatus)) {
+          operationFailures.push({
+            contract_ext_no: label,
+            rowNumbers: [parsed.rowNumber],
+            reason: 'Contract status is Close — cannot add Unplanned planning',
+          });
+          continue;
+        }
+        deliveryEnd = contract.delivery_end_date;
+        dueWindowSource = contract;
+        contractForCreate = contract;
+      }
+
+      if (!deliveryEnd) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'Due Date Delivery (End) is missing for this contract/operation',
+          operation_ids: op?.operation_id ? [String(op.operation_id)] : undefined,
+        });
+        continue;
+      }
+
+      const inWindowEntries = filterEntriesWithinUnplannedWindow(
+        parsed.entries,
+        deliveryEnd,
+        label,
+        rowParseFailures,
+      );
+
+      if (inWindowEntries.length === 0) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'All quantity cells are outside the allowed Unplanned planning date window',
+          operation_ids: op?.operation_id ? [String(op.operation_id)] : undefined,
+        });
+        continue;
+      }
+
+      const incomingDaily = buildDailyDeliverablesKgFromMtEntries(inWindowEntries);
+      const mergedDaily =
+        op && truckingOperationIdIsAssigned(op.operation_id)
+          ? mergeDailyDeliverablesRows(op.daily_deliverables, incomingDaily)
+          : incomingDaily;
+      const planningDates = resolvePlanningStartEndFromDeliverables(mergedDaily);
+      if (!planningDates) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'No valid planning quantities after parsing',
+          operation_ids: op?.operation_id ? [String(op.operation_id)] : undefined,
+        });
+        continue;
+      }
+
+      const { startRaw, endRaw } = resolveTruckingDueWindow(dueWindowSource);
+      const dd = normalizeAndValidateDailyDeliverables({
+        daily_deliverables: mergedDaily,
+        startRaw,
+        endRaw,
+        maxQtyRaw: dueWindowSource.quantity_delivered,
+      });
+      if (!dd.ok) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: dd.message,
+          operation_ids: op?.operation_id ? [String(op.operation_id)] : undefined,
+        });
+        continue;
+      }
+
+      const lastDdDate =
+        dd.rows.length > 0
+          ? dd.rows.reduce((mx: string, r: { date: string }) => (!mx || r.date > mx ? r.date : mx), '')
+          : null;
+
+      if (op && truckingOperationIdIsAssigned(op.operation_id)) {
+        await query(
+          `UPDATE trucking_operations
+           SET daily_deliverables = $2::jsonb,
+               last_daily_deliverable_date = $3::date,
+               trucking_start_date = COALESCE(trucking_start_date, $4::date),
+               trucking_completion_date = GREATEST(
+                 COALESCE(trucking_completion_date, $5::date),
+                 $5::date
+               ),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1::uuid`,
+          [op.id, JSON.stringify(dd.rows), lastDdDate, planningDates.startIso, planningDates.endIso],
+        );
+        operationsUpdated += 1;
+        succeededRows += inWindowEntries.length;
+
+        const siblingCount = Number(op.duplicate_sibling_count ?? 1);
+        if (siblingCount > 1) {
+          operationWarnings.push({
+            contract_ext_no: label,
+            rowNumbers: [parsed.rowNumber],
+            reason: `Multiple trucking operations exist for this PO/contract (${siblingCount} active). Updated the operation with Operation ID only.`,
+            operation_ids: [String(op.operation_id)],
+          });
+        }
+        continue;
+      }
+
+      const newOperationId = await allocateLandTruckingOperationId();
+      const etaStart =
+        toIsoDate10FromCell(dueWindowSource.delivery_start_date) ?? planningDates.startIso;
+      const etaEnd =
+        toIsoDate10FromCell(dueWindowSource.delivery_end_date) ?? planningDates.endIso;
+
+      if (op) {
+        await query(
+          `UPDATE trucking_operations
+           SET operation_id = $2,
+               daily_deliverables = $3::jsonb,
+               last_daily_deliverable_date = $4::date,
+               trucking_start_date = COALESCE(trucking_start_date, $5::date),
+               trucking_completion_date = GREATEST(
+                 COALESCE(trucking_completion_date, $6::date),
+                 $6::date
+               ),
+               eta_delivery_start_date = COALESCE(eta_delivery_start_date, $7::date),
+               eta_delivery_end_date = COALESCE(eta_delivery_end_date, $8::date),
+               status = CASE WHEN status IS NULL OR TRIM(status) = '' THEN 'PLANNED' ELSE status END,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1::uuid
+             AND (operation_id IS NULL OR TRIM(operation_id::text) = '')`,
+          [
+            op.id,
+            newOperationId,
+            JSON.stringify(dd.rows),
+            lastDdDate,
+            planningDates.startIso,
+            planningDates.endIso,
+            etaStart,
+            etaEnd,
+          ],
+        );
+        operationsCreated += 1;
+        succeededRows += inWindowEntries.length;
+        continue;
+      }
+
+      if (!contractForCreate) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'Contract not found for this PO / Contract Ext No',
+        });
+        continue;
+      }
+
+      await query(
+        `INSERT INTO trucking_operations (
+           contract_id, operation_id,
+           eta_delivery_start_date, eta_delivery_end_date,
+           trucking_start_date, trucking_completion_date,
+           status, daily_deliverables, last_daily_deliverable_date
+         ) VALUES (
+           $1::uuid, $2,
+           $3::date, $4::date,
+           $5::date, $6::date,
+           'PLANNED', $7::jsonb, $8::date
+         )`,
+        [
+          contractForCreate.id,
+          newOperationId,
+          etaStart,
+          etaEnd,
+          planningDates.startIso,
+          planningDates.endIso,
+          JSON.stringify(dd.rows),
+          lastDdDate,
+        ],
+      );
+      operationsCreated += 1;
+      succeededRows += inWindowEntries.length;
+    }
+
+    if (operationsCreated > 0 || operationsUpdated > 0) invalidateTruckingListCache();
+
+    return res.json({
+      success: true,
+      data: {
+        processedRows: parsedRows.length + rowParseFailures.length,
+        operationsCreated,
+        operationsUpdated,
+        operationsFailed: operationFailures.length,
+        succeededRows,
+        rowParseFailures,
+        operationFailures,
+        operationWarnings,
+      },
+    });
+  } catch (error) {
+    logger.error('Bulk upload unplanned planning error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to process Unplanned planning upload' } });
+  }
+};
 
 export const downloadCargoReadinessTemplate = async (_req: AuthRequest, res: Response) => {
   const header = 'PO,Date';

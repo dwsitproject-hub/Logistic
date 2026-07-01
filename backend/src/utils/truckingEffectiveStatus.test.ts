@@ -58,6 +58,13 @@ describe('truckingEffectiveStatus', () => {
     ).toBe('COMPLETED');
   });
 
+  it('returns UNPLANNED for open SAP contract without STO when no planning/realization', () => {
+    expect(deriveTruckingEffectiveStatus('PLANNED', null, null)).toBe('UNPLANNED');
+    expect(
+      deriveTruckingEffectiveStatus('PLANNED', null, null, { contractImportStatus: 'Open' }),
+    ).toBe('UNPLANNED');
+  });
+
   it('hasTruckingKlipPlanning requires dated rows with qty', () => {
     expect(hasTruckingKlipPlanning([])).toBe(false);
     expect(hasTruckingKlipPlanning([{ date: '2026-01-01', quantity_delivered: 0 }])).toBe(false);

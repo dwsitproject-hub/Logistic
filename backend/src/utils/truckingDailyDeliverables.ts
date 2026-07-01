@@ -98,3 +98,26 @@ export function normalizeAndValidateDailyDeliverables(args: {
   return { ok: true, rows };
 }
 
+/** Upsert by date — incoming rows override existing dates; other dates are preserved. */
+export function mergeDailyDeliverablesRows(
+  existing: unknown,
+  incoming: NormalizedDailyDeliverableRow[],
+): NormalizedDailyDeliverableRow[] {
+  const byDate = new Map<string, number>();
+  if (Array.isArray(existing)) {
+    for (const row of existing as DailyDeliverableInputRow[]) {
+      const date = String(row?.date ?? '').trim().slice(0, 10);
+      const qty = parseDailyDeliverableQuantity(row?.quantity_delivered);
+      if (date && qty !== null && qty >= 0) {
+        byDate.set(date, qty);
+      }
+    }
+  }
+  for (const row of incoming) {
+    byDate.set(row.date, row.quantity_delivered);
+  }
+  return Array.from(byDate.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, quantity_delivered]) => ({ date, quantity_delivered }));
+}
+

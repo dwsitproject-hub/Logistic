@@ -37,6 +37,7 @@ function buildPagePrefetchRequests(href: string): PrefetchRequest[] {
         sortDir: 'desc',
         dateFrom,
         dateTo,
+        skipSapJoin: 'true',
         includeSummary: 'false',
       })
       const listUrl = `/trucking?${listParams}`

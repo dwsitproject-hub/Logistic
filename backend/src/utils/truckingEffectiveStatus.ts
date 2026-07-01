@@ -35,23 +35,20 @@ export function hasTruckingSto(stoNumber: unknown): boolean {
 
 /**
  * Effective status: IN_PROGRESS / COMPLETED from realization layer only (extension + SAP).
- * PLANNED / UNPLANNED from KLIP planning + STO presence.
+ * PLANNED / UNPLANNED from KLIP planning; open SAP without planning → UNPLANNED (STO not required).
  */
 export function sqlTruckingEffectiveStatus(
   contractAlias = 'c',
-  stoExpr?: string,
+  _stoExpr?: string,
 ): string {
-  const stoCheck =
-    stoExpr ??
-    `NULLIF(TRIM(${contractAlias}.sto_number::text), '')`;
   return `CASE
     WHEN COALESCE(t.status, '') = 'CANCELLED' THEN 'CANCELLED'
     WHEN ${sqlIsContractSapClosedExpr(contractAlias)} THEN 'COMPLETED'
     WHEN ${sqlRealizationEndDate(contractAlias)} IS NOT NULL THEN 'COMPLETED'
     WHEN ${sqlRealizationStartDate(contractAlias)} IS NOT NULL THEN 'IN_PROGRESS'
     WHEN ${sqlHasTruckingKlipPlanning('t')} THEN 'PLANNED'
-    WHEN ${stoCheck} IS NOT NULL THEN 'UNPLANNED'
-    ELSE 'UNPLANNED'
+    WHEN NOT (${sqlIsContractSapClosedExpr(contractAlias)}) THEN 'UNPLANNED'
+    ELSE 'COMPLETED'
   END`;
 }
 
@@ -71,8 +68,8 @@ export function deriveTruckingEffectiveStatus(
   if (hasDateValue(realizationEndDate)) return 'COMPLETED';
   if (hasDateValue(realizationStartDate)) return 'IN_PROGRESS';
   if (hasTruckingKlipPlanning(options?.dailyDeliverables)) return 'PLANNED';
-  if (hasTruckingSto(options?.stoNumber)) return 'UNPLANNED';
-  return 'UNPLANNED';
+  if (!isContractDeliveryClosed(options?.contractImportStatus)) return 'UNPLANNED';
+  return 'COMPLETED';
 }
 
 function hasDateValue(v: unknown): boolean {

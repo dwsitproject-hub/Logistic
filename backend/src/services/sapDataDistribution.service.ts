@@ -29,6 +29,8 @@ import {
   buildShipmentKlipProtectedSetSql,
   buildTruckingKlipProtectedSetSql,
 } from '../utils/klipSapFieldMerge';
+import { sqlHasTruckingKlipPlanning } from '../utils/truckingEffectiveStatus';
+import { SQL_TRUCKING_KEEPER_PRIORITY_ORDER } from '../utils/truckingOperationUniqueness';
 
 export interface DistributionResult {
   contractId?: string;
@@ -1619,30 +1621,36 @@ export class SapDataDistributionService {
 
     const truckingOwner = data.trucking_owner_at_starting_location;
 
-    // Try to find existing trucking operation by contract + similar trucking owner (>= 0.8)
+    // Reuse existing active trucking row on this contract (never insert duplicate SAP siblings).
     let targetTruckingId: string | null = null;
     if (contractUuid) {
-      const existingForContract = await client.query(
-        `SELECT id, trucking_owner FROM trucking_operations WHERE contract_id = $1`,
-        [contractUuid]
+      const existingForContract = await client.query<{ id: string; trucking_owner: string | null }>(
+        `SELECT t.id, t.trucking_owner
+         FROM trucking_operations t
+         WHERE t.contract_id = $1::uuid
+           AND COALESCE(t.status, '') <> 'CANCELLED'
+         ORDER BY
+           CASE WHEN ${sqlHasTruckingKlipPlanning('t')} THEN 0 ELSE 1 END,
+           ${SQL_TRUCKING_KEEPER_PRIORITY_ORDER}`,
+        [contractUuid],
       );
 
-      if (truckingOwner && existingForContract.rows.length > 0) {
-        let bestId: string | null = null;
-        let bestScore = 0;
-        for (const row of existingForContract.rows) {
-          const score = this.stringSimilarity(truckingOwner, row.trucking_owner);
-          if (score > bestScore) {
-            bestScore = score;
-            bestId = row.id;
+      if (existingForContract.rows.length > 0) {
+        const keeperRow = existingForContract.rows[0]!;
+        if (truckingOwner) {
+          let bestId = keeperRow.id;
+          let bestScore = 0;
+          for (const row of existingForContract.rows) {
+            const score = this.stringSimilarity(truckingOwner, row.trucking_owner);
+            if (score > bestScore) {
+              bestScore = score;
+              bestId = row.id;
+            }
           }
+          targetTruckingId = bestScore >= 0.8 ? bestId : keeperRow.id;
+        } else {
+          targetTruckingId = keeperRow.id;
         }
-        if (bestId && bestScore >= 0.8) {
-          targetTruckingId = bestId;
-        }
-      } else if (!truckingOwner && existingForContract.rows.length === 1) {
-        // No owner to match by but only one row for this contract — update it
-        targetTruckingId = existingForContract.rows[0].id;
       }
     }
 

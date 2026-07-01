@@ -7,12 +7,20 @@ import {
   appendTruckingLateIndicatorFilter,
   parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
-import { deriveTruckingEffectiveStatus, sqlTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
+import {
+  appendTruckingUnplannedBacklogColumnFilters,
+  appendTruckingUnplannedBacklogGlobalSearch,
+  buildTruckingUnplannedBacklogCountQuery,
+  buildTruckingUnplannedContractToolbarScope,
+} from '../utils/truckingUnplannedHybridSql';
+import { deriveTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
+import { appendTruckingPipelineStageFilter, normalizeTruckingPagePipelineStageParam } from '../utils/truckingPagePipelineSql';
 import { truckingPageListScopeWhereSql } from '../utils/truckingIncotermScope';
 import { wrapTruckingListQueryWithStoExpansion } from '../utils/truckingListStoExpandSql';
 import {
   buildTruckingListFromClause,
   buildTruckingListSelectClause,
+  truckingListB2bExcludeSql,
 } from '../utils/truckingListSelectSql';
 
 /**
@@ -54,12 +62,21 @@ export interface TruckingListResponseData {
     limit: number;
     totalPages: number;
   };
+  unplannedBreakdown?: {
+    contractRows: number;
+    executionRows: number;
+    totalTableRows: number;
+  };
 }
 
 const PAGE_CACHE = new Map<string, { rows: TruckingListRow[]; total: number; expiresAt: number }>();
 const COUNT_CACHE = new Map<string, { total: number; expiresAt: number }>();
+const SUMMARY_CACHE = new Map<
+  string,
+  { summary: TruckingListResponseData['summary']; expiresAt: number }
+>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v11';
+const CACHE_VERSION = 'trucking-list-v21';
 const MAX_CACHE_ENTRIES = 80;
 
 const SORT_FIELD_BY_KEY: Record<string, string> = {
@@ -165,6 +182,16 @@ export function buildTruckingListCountCacheKey(filterCacheKey: string): string {
   return `${filterCacheKey}:count`;
 }
 
+export function buildTruckingSummaryCacheKey(filterCacheKey: string): string {
+  return `${filterCacheKey}:summary`;
+}
+
+export function invalidateTruckingListCache(): void {
+  PAGE_CACHE.clear();
+  COUNT_CACHE.clear();
+  SUMMARY_CACHE.clear();
+}
+
 function evictMapIfNeeded(map: Map<string, { expiresAt: number }>, max: number): void {
   const now = Date.now();
   for (const [key, entry] of map.entries()) {
@@ -176,11 +203,6 @@ function evictMapIfNeeded(map: Map<string, { expiresAt: number }>, max: number):
   for (let i = 0; i < removeCount; i += 1) {
     map.delete(sorted[i][0]);
   }
-}
-
-export function invalidateTruckingListCache(): void {
-  PAGE_CACHE.clear();
-  COUNT_CACHE.clear();
 }
 
 function normalizeSortValue(v: unknown): string | number | null {
@@ -338,11 +360,7 @@ export function buildTruckingListQuery(
         ${buildTruckingListSelectClause(skipSapJoin)}
       ${buildTruckingListFromClause(skipSapJoin)}
       WHERE 1=1
-        AND NOT (
-          c.contract_id IS NOT NULL
-          AND UPPER(NULLIF(TRIM(COALESCE(b2b.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
-          AND NULLIF(TRIM(COALESCE(b2b.contract_reference_po_raw, '')), '') IS NOT NULL
-        )
+        ${truckingListB2bExcludeSql(skipSapJoin)}
         ${truckingPageListScopeWhereSql}
     `;
 
@@ -354,16 +372,14 @@ export function buildTruckingListQuery(
     : `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers)), '')`;
 
   if (status && !options?.omitStatusFilter) {
-    const s = String(status).toUpperCase();
-    if (s === 'UNPLANNED' || s === 'PLANNED' || s === 'IN_PROGRESS' || s === 'COMPLETED' || s === 'CANCELLED') {
-      queryText += ` AND ${sqlTruckingEffectiveStatus('c', truckingStoExprForStatus)} = $${paramIndex}`;
-      queryParams.push(s);
-      paramIndex += 1;
-    } else {
-      queryText += ` AND t.status = $${paramIndex}`;
-      queryParams.push(status);
-      paramIndex += 1;
-    }
+    const stageFilter = appendTruckingPipelineStageFilter(
+      String(status),
+      truckingStoExprForStatus,
+      paramIndex,
+    );
+    queryText += stageFilter.sql;
+    queryParams.push(...stageFilter.params);
+    paramIndex = stageFilter.nextIndex;
   }
 
   if (location) {
@@ -498,12 +514,16 @@ export function buildTruckingListQuery(
 
 export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text: string; params: unknown[] } {
   const innerSql = `${built.preOuterQuery}${built.outerSql}`;
-  const expanded = wrapTruckingListQueryWithStoExpansion(innerSql, { selectOutstanding: false });
+  const expanded = wrapTruckingListQueryWithStoExpansion(innerSql, {
+    selectOutstanding: false,
+    skipSapJoin: built.skipSapJoin,
+  });
   const text = `
       WITH filtered AS (
         SELECT
           status,
           status_db,
+          contract_number,
           trucking_start_date,
           trucking_completion_date
         FROM (
@@ -512,11 +532,11 @@ export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text
       )
       SELECT
         COUNT(*)::bigint AS total_count,
-        COUNT(*) FILTER (WHERE status = 'CANCELLED')::bigint AS cancelled_count,
-        COUNT(*) FILTER (WHERE status = 'COMPLETED')::bigint AS completed_count,
-        COUNT(*) FILTER (WHERE status = 'IN_PROGRESS')::bigint AS in_progress_count,
-        COUNT(*) FILTER (WHERE status = 'UNPLANNED')::bigint AS unplanned_count,
+        COUNT(DISTINCT contract_number) FILTER (WHERE status = 'UNPLANNED')::bigint AS unplanned_count,
         COUNT(*) FILTER (WHERE status = 'PLANNED')::bigint AS planned_count,
+        COUNT(*) FILTER (WHERE status = 'IN_PROGRESS')::bigint AS in_progress_count,
+        COUNT(*) FILTER (WHERE status = 'COMPLETED')::bigint AS completed_count,
+        COUNT(*) FILTER (WHERE status = 'CANCELLED')::bigint AS cancelled_count,
         COUNT(*) FILTER (WHERE status_db = 'LOADING')::bigint AS loading_count,
         COUNT(*) FILTER (WHERE status_db = 'IN_TRANSIT')::bigint AS in_transit_count,
         COUNT(*) FILTER (WHERE status_db = 'UNLOADING')::bigint AS unloading_count
@@ -524,52 +544,155 @@ export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text
   return { text, params: [...built.innerParams, ...built.outerParams] };
 }
 
-function buildPaginatedListQuery(
+function buildTruckingFilteredExpansionSql(built: TruckingListBuiltQuery): string {
+  const innerSql = `${built.preOuterQuery}${built.outerSql}`;
+  return wrapTruckingListQueryWithStoExpansion(innerSql, {
+    selectOutstanding: !built.skipSapJoin,
+    skipSapJoin: built.skipSapJoin,
+  });
+}
+
+export function buildPaginatedListQuery(
   built: TruckingListBuiltQuery,
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
   limit: number,
   offset: number,
+  stageFilter?: string | null,
 ): { text: string; params: unknown[] } {
   const field = SORT_FIELD_BY_KEY[sortKey] || 'created_at';
   const baseParams = [...built.innerParams, ...built.outerParams];
-  const limitIdx = baseParams.length + 1;
-  const offsetIdx = baseParams.length + 2;
-  const innerSql = `${built.preOuterQuery}${built.outerSql}`;
-  const expanded = wrapTruckingListQueryWithStoExpansion(innerSql);
+  const normalizedStage = normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined);
+  const stageParamIdx = normalizedStage ? baseParams.length + 1 : null;
+  const stageWhereSql = normalizedStage && stageParamIdx
+    ? ` WHERE tf.status = $${stageParamIdx}`
+    : '';
+  const listParams = normalizedStage ? [...baseParams, normalizedStage] : [...baseParams];
+  const limitIdx = listParams.length + 1;
+  const offsetIdx = listParams.length + 2;
+  const expanded = buildTruckingFilteredExpansionSql(built);
   const text = `
-      SELECT * FROM (
-        ${expanded}
-      ) trucking_filtered
-      ORDER BY ${field} ${sortDir} NULLS LAST, created_at DESC
-      LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
-  return { text, params: [...baseParams, limit, offset] };
+      WITH trucking_filtered AS (
+        SELECT * FROM (
+          ${expanded}
+        ) expanded_sub
+      ),
+      trucking_status_scoped AS (
+        SELECT tf.*
+        FROM trucking_filtered tf${stageWhereSql}
+      ),
+      trucking_page AS (
+        SELECT
+          tf.*,
+          (SELECT COUNT(*)::bigint FROM trucking_status_scoped) AS __filter_total
+        FROM trucking_status_scoped tf
+        ORDER BY ${field} ${sortDir} NULLS LAST, created_at DESC
+        LIMIT $${limitIdx} OFFSET $${offsetIdx}
+      )
+      SELECT * FROM trucking_page`;
+  return {
+    text,
+    params: [...listParams, limit, offset],
+  };
 }
 
-function buildFilteredCountQuery(built: TruckingListBuiltQuery): { text: string; params: unknown[] } {
-  const innerSql = `${built.preOuterQuery}${built.outerSql}`;
-  const expanded = wrapTruckingListQueryWithStoExpansion(innerSql, { selectOutstanding: false });
+function buildFilteredCountQuery(
+  built: TruckingListBuiltQuery,
+  stageFilter?: string | null,
+): { text: string; params: unknown[] } {
+  const expanded = buildTruckingFilteredExpansionSql(built);
+  const baseParams = [...built.innerParams, ...built.outerParams];
+  const normalizedStage = normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined);
+  const stageParamIdx = normalizedStage ? baseParams.length + 1 : null;
+  const stageWhereSql = normalizedStage && stageParamIdx
+    ? ` WHERE tf.status = $${stageParamIdx}`
+    : '';
   const text = `
-      SELECT COUNT(*)::bigint AS c FROM (
-        ${expanded}
-      ) trucking_filtered`;
-  return { text, params: [...built.innerParams, ...built.outerParams] };
+      WITH trucking_filtered AS (
+        SELECT * FROM (
+          ${expanded}
+        ) expanded_sub
+      )
+      SELECT COUNT(*)::bigint AS c
+      FROM trucking_filtered tf${stageWhereSql}`;
+  return {
+    text,
+    params: normalizedStage && stageParamIdx ? [...baseParams, normalizedStage] : baseParams,
+  };
 }
 
-async function loadFilteredTotal(built: TruckingListBuiltQuery): Promise<number> {
-  const countKey = buildTruckingListCountCacheKey(built.filterCacheKey);
-  const cached = COUNT_CACHE.get(countKey);
-  if (cached && Date.now() < cached.expiresAt) {
-    return cached.total;
+function normalizeTruckingListRows(rows: TruckingListRow[]): TruckingListRow[] {
+  for (const row of rows) {
+    delete (row as { __filter_total?: unknown }).__filter_total;
   }
-  if (cached) COUNT_CACHE.delete(countKey);
+  return rows;
+}
 
-  const { text, params } = buildFilteredCountQuery(built);
-  const result = await query(text, params);
-  const total = parseInt(String(result.rows[0]?.c ?? '0'), 10) || 0;
-  COUNT_CACHE.set(countKey, { total, expiresAt: Date.now() + CACHE_TTL_MS });
+function cacheFilteredTotal(filterCacheKey: string, total: number): void {
+  COUNT_CACHE.set(buildTruckingListCountCacheKey(filterCacheKey), {
+    total,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
   evictMapIfNeeded(COUNT_CACHE, MAX_CACHE_ENTRIES);
-  return total;
+}
+
+export async function loadTruckingListSummary(
+  built: TruckingListBuiltQuery,
+): Promise<TruckingListResponseData['summary']> {
+  const summaryCacheKey = buildTruckingSummaryCacheKey(built.filterCacheKey);
+  const cached = SUMMARY_CACHE.get(summaryCacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.summary;
+  }
+  if (cached) SUMMARY_CACHE.delete(summaryCacheKey);
+
+  const { text, params } = buildTruckingSummaryQuery(built);
+  const summaryResult = await query(text, params);
+  const summary = buildTruckingSummaryFromSqlRow((summaryResult.rows[0] || {}) as Record<string, unknown>);
+  SUMMARY_CACHE.set(summaryCacheKey, { summary, expiresAt: Date.now() + CACHE_TTL_MS });
+  evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+  return summary;
+}
+
+async function countTruckingUnplannedContractBacklogForRequest(req: AuthRequest): Promise<number> {
+  const { dateFrom, dateTo, contract, plant } = req.query;
+  const globalSearch =
+    typeof (req.query as { search?: string }).search === 'string'
+      ? (req.query as { search?: string }).search!.trim()
+      : '';
+  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
+  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  const scope = buildTruckingUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
+  let idx = scope.params.length + 1;
+  const g = appendTruckingUnplannedBacklogGlobalSearch(globalSearch, idx);
+  idx = g.nextIndex;
+  const c = appendTruckingUnplannedBacklogColumnFilters(colFilters, idx);
+  const res = await query(
+    buildTruckingUnplannedBacklogCountQuery(scope.sql, `${g.sql}${c.sql}`),
+    [...scope.params, ...g.params, ...c.params],
+  );
+  return parseInt(String(res.rows[0]?.c ?? '0'), 10) || 0;
+}
+
+export async function loadTruckingListSummaryWithBacklog(
+  req: AuthRequest,
+  built: TruckingListBuiltQuery,
+): Promise<TruckingListResponseData['summary']> {
+  const base = await loadTruckingListSummary(built);
+  if (!base) return base;
+  try {
+    const backlogCount = await countTruckingUnplannedContractBacklogForRequest(req);
+    return {
+      ...base,
+      status: {
+        ...base.status,
+        unplanned: (base.status?.unplanned ?? 0) + backlogCount,
+      },
+    };
+  } catch {
+    return base;
+  }
 }
 
 async function loadTruckingListPage(
@@ -578,6 +701,7 @@ async function loadTruckingListPage(
   sortDir: 'ASC' | 'DESC',
   page: number,
   limit: number,
+  stageFilter?: string | null,
 ): Promise<{ rows: TruckingListRow[]; total: number }> {
   const cached = PAGE_CACHE.get(built.cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
@@ -586,10 +710,21 @@ async function loadTruckingListPage(
   if (cached) PAGE_CACHE.delete(built.cacheKey);
 
   const offset = (page - 1) * limit;
-  const total = await loadFilteredTotal(built);
-  const { text, params } = buildPaginatedListQuery(built, sortKey, sortDir, limit, offset);
+  const { text, params } = buildPaginatedListQuery(built, sortKey, sortDir, limit, offset, stageFilter);
   const result = await query(text, params);
-  const rows = result.rows as TruckingListRow[];
+
+  let total = 0;
+  if (result.rows.length > 0) {
+    const raw = (result.rows[0] as { __filter_total?: unknown }).__filter_total;
+    total = parseInt(String(raw ?? '0'), 10) || 0;
+  } else {
+    const { text: countText, params: countParams } = buildFilteredCountQuery(built, stageFilter);
+    const countRes = await query(countText, countParams);
+    total = parseInt(String(countRes.rows[0]?.c ?? '0'), 10) || 0;
+  }
+
+  cacheFilteredTotal(built.filterCacheKey, total);
+  const rows = normalizeTruckingListRows(result.rows as TruckingListRow[]);
 
   PAGE_CACHE.set(built.cacheKey, { rows, total, expiresAt: Date.now() + CACHE_TTL_MS });
   evictMapIfNeeded(PAGE_CACHE, MAX_CACHE_ENTRIES);
@@ -597,51 +732,73 @@ async function loadTruckingListPage(
 }
 
 export async function resolveTruckingListForRequest(req: AuthRequest): Promise<TruckingListResponseData> {
-  const { page = 1, limit = 20 } = req.query;
+  const { page = 1, limit = 20, status } = req.query;
   const summaryOnly =
     String((req.query as { summaryOnly?: string }).summaryOnly || '').toLowerCase() === 'true';
   const sortKey = String((req.query as { sortKey?: string }).sortKey || 'created_at');
   const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'desc').toLowerCase();
   const sortDir: 'ASC' | 'DESC' = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
 
-  const built = buildTruckingListQuery(req);
+  // Pipeline status is computed per expanded STO row — filter only after expansion.
+  const built = buildTruckingListQuery(req, { omitStatusFilter: true });
   const pageNum = Math.max(1, Number(page) || 1);
   const limitNum = Math.max(1, Math.min(500, Number(limit) || 20));
+  const stageFilter = typeof status === 'string' ? status : undefined;
+  const isUnplannedHybrid = String(status ?? '').trim().toUpperCase() === 'UNPLANNED';
 
   const includeSummary =
     String((req.query as { includeSummary?: string }).includeSummary ?? 'true').toLowerCase() !== 'false';
 
+  const summaryBuilt = buildTruckingListQuery(req, {
+    skipSapJoin: true,
+    omitStatusFilter: true,
+  });
+
   if (summaryOnly) {
-    const summaryBuilt = buildTruckingListQuery(req, {
-      skipSapJoin: true,
-      omitStatusFilter: true,
-    });
-    const { text, params } = buildTruckingSummaryQuery(summaryBuilt);
-    const summaryResult = await query(text, params);
-    const summary = buildTruckingSummaryFromSqlRow((summaryResult.rows[0] || {}) as Record<string, unknown>);
+    const summary = await loadTruckingListSummaryWithBacklog(req, summaryBuilt);
     return {
       truckingOperations: [],
       summary,
       pagination: {
-        total: summary.total,
+        total: summary?.total ?? 0,
         page: pageNum,
         limit: limitNum,
-        totalPages: Math.ceil(summary.total / limitNum) || 0,
+        totalPages: Math.ceil((summary?.total ?? 0) / limitNum) || 0,
       },
     };
   }
 
-  const { rows, total } = await loadTruckingListPage(built, sortKey, sortDir, pageNum, limitNum);
+  if (isUnplannedHybrid) {
+    const {
+      buildTruckingUnplannedHybridContext,
+      resolveTruckingUnplannedHybridList,
+    } = await import('./truckingUnplannedHybridList.service');
+    const ctx = buildTruckingUnplannedHybridContext(req, sortKey, sortDir);
+    const hybrid = await resolveTruckingUnplannedHybridList(req, ctx);
+    let summary: TruckingListResponseData['summary'];
+    if (includeSummary) {
+      summary = await loadTruckingListSummaryWithBacklog(req, summaryBuilt);
+    }
+    return {
+      truckingOperations: hybrid.truckingOperations,
+      unplannedBreakdown: hybrid.unplannedBreakdown,
+      summary,
+      pagination: hybrid.pagination,
+    };
+  }
+
+  const { rows, total } = await loadTruckingListPage(
+    built,
+    sortKey,
+    sortDir,
+    pageNum,
+    limitNum,
+    stageFilter,
+  );
 
   let summary: TruckingListResponseData['summary'];
   if (includeSummary) {
-    const summaryBuilt = buildTruckingListQuery(req, {
-      skipSapJoin: true,
-      omitStatusFilter: true,
-    });
-    const { text, params } = buildTruckingSummaryQuery(summaryBuilt);
-    const summaryResult = await query(text, params);
-    summary = buildTruckingSummaryFromSqlRow((summaryResult.rows[0] || {}) as Record<string, unknown>);
+    summary = await loadTruckingListSummaryWithBacklog(req, summaryBuilt);
   }
 
   return {

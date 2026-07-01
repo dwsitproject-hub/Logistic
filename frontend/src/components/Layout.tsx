@@ -227,7 +227,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const stored = readStoredUser()
     if (!stored) {
-      router.push('/login')
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      router.replace('/login')
       return
     }
     setUser(stored)

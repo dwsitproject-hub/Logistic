@@ -12,6 +12,10 @@ import {
   getOperationalColumnLayout,
   type OperationalColumnLayout,
 } from '@/lib/operationalTableLayout'
+import {
+  formatSapOutstandingQtyMtDisplay,
+  formatSapQtyMtDisplay,
+} from '@/lib/sapDisplayValue'
 
 export {
   COMPACT_TABLE_HEADER_ROW_CLASS as CONTRACT_PERF_TABLE_HEADER_ROW_CLASS,
@@ -273,21 +277,12 @@ export function contractPerfCellTooltipText(
       return row.vessel_name?.trim() || null
     case 'sto_number':
       return (row.sto_numbers || row.sto_number || '').trim() || null
-    case 'contract_qty': {
-      const mt = (Number(row.quantity_ordered) || 0) / 1000
-      return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
-    }
-    case 'received_qty': {
-      const mt = (Number(row.quantity_receive) || 0) / 1000
-      return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
-    }
-    case 'outstanding_qty_mt': {
-      const oqMt = (Number(row.outstanding_quantity) || 0) / 1000
-      if (oqMt < 0) {
-        return `+${Math.abs(oqMt).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
-      }
-      return `${oqMt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
-    }
+    case 'contract_qty':
+      return formatSapQtyMtDisplay(row.quantity_ordered)
+    case 'received_qty':
+      return formatSapQtyMtDisplay(row.quantity_receive)
+    case 'outstanding_qty_mt':
+      return formatSapOutstandingQtyMtDisplay(row.outstanding_quantity)
     default:
       return null
   }

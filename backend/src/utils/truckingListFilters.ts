@@ -3,7 +3,7 @@
  */
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
-import { sqlTruckingEffectiveStatus } from './truckingEffectiveStatus'
+import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql'
 import {
   sqlTruckingOutstandingQtyByIncoterm,
   sqlTruckingQuantityDeliveredCoalesce,
@@ -38,7 +38,7 @@ const TRUCK_COL: Record<string, string> = {
   contract_number: 'c.contract_id',
   po_number: 'c.po_number',
   sto_number: 'c.sto_number',
-  status: sqlTruckingEffectiveStatus('c'),
+  status: sqlTruckingPagePipelineStageExpr('c'),
   location: 't.location',
   loading_location: 't.loading_location',
   unloading_location: 't.unloading_location',

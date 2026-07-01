@@ -2,9 +2,11 @@ import {
   TRUCKING_REALIZATIONS_JOIN,
   sqlRealizationEndDate,
   sqlRealizationStartDate,
+  sqlShellRealizationEndDate,
+  sqlShellRealizationStartDate,
 } from './truckingRealizationSql';
 import { SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
-import { sqlTruckingEffectiveStatus } from './truckingEffectiveStatus';
+import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql';
 import {
   sqlTruckingOutstandingQtyByIncoterm,
   sqlTruckingQuantityDeliveredCoalesce,
@@ -116,6 +118,23 @@ export const TRUCKING_LIST_STO_LATERAL = `
         WHERE x.effective_sto IS NOT NULL AND x.effective_sto != ''
       ) sa ON true`;
 
+/** B2B child-contract exclusion — shell uses contract_type only (no SAP lateral). */
+export function truckingListB2bExcludeSql(skipSapJoin: boolean): string {
+  if (skipSapJoin) {
+    return `
+        AND NOT (
+          c.contract_id IS NOT NULL
+          AND UPPER(NULLIF(TRIM(COALESCE(c.contract_type::text, '')), '')) = 'B2B'
+        )`;
+  }
+  return `
+        AND NOT (
+          c.contract_id IS NOT NULL
+          AND UPPER(NULLIF(TRIM(COALESCE(b2b.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
+          AND NULLIF(TRIM(COALESCE(b2b.contract_reference_po_raw, '')), '') IS NOT NULL
+        )`;
+}
+
 export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
   if (skipSapJoin) {
     return `
@@ -130,23 +149,23 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.daily_deliverables,
         t.trucking_start_date AS planning_start_date,
         t.trucking_completion_date AS planning_end_date,
-        ${sqlRealizationStartDate('c')} AS realization_start_date,
-        ${sqlRealizationEndDate('c')} AS realization_end_date,
-        ${sqlRealizationStartDate('c')} AS trucking_start_date,
-        ${sqlRealizationEndDate('c')} AS trucking_completion_date,
+        ${sqlShellRealizationStartDate()} AS realization_start_date,
+        ${sqlShellRealizationEndDate()} AS realization_end_date,
+        ${sqlShellRealizationStartDate()} AS trucking_start_date,
+        ${sqlShellRealizationEndDate()} AS trucking_completion_date,
         t.eta_trucking_start_date,
         t.eta_trucking_completion_date,
         t.eta_delivery_start_date,
         t.eta_delivery_end_date,
-        COALESCE(t.quantity_sent, 0) AS quantity_sent,
-        COALESCE(t.quantity_delivered, 0) AS quantity_delivered,
-        COALESCE(t.quantity_delivered, 0) AS quantity_receive,
+        t.quantity_sent,
+        t.quantity_delivered,
+        t.quantity_delivered AS quantity_receive,
         t.gain_loss_percentage,
         t.gain_loss_amount,
         t.oa_budget,
         t.oa_actual,
         t.status AS status_db,
-        ${sqlTruckingEffectiveStatus(
+        ${sqlTruckingPagePipelineStageExpr(
           'c',
           `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), '')), '')`,
         )} AS status,
@@ -171,7 +190,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
           'COALESCE(t.quantity_delivered, 0)',
         )} AS outstanding_quantity,
         s.estimated_km,
-        NULL::text AS contract_ext_no,
+        ${TRUCKING_LIST_CONTRACT_EXT_NO_FULL} AS contract_ext_no,
         ${SQL_CONTRACT_IMPORT_STATUS} AS contract_import_status`;
   }
 
@@ -203,7 +222,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.oa_budget,
         t.oa_actual,
         t.status AS status_db,
-        ${sqlTruckingEffectiveStatus(
+        ${sqlTruckingPagePipelineStageExpr(
           'c',
           `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers)), '')`,
         )} AS status,
@@ -234,11 +253,12 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
 
 export function buildTruckingListFromClause(skipSapJoin: boolean): string {
   const stoJoin = skipSapJoin ? '' : TRUCKING_LIST_STO_LATERAL;
+  const b2bJoin = skipSapJoin ? '' : TRUCKING_LIST_B2B_LATERAL;
   return `
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
       LEFT JOIN shipments s ON t.shipment_id = s.id
       ${TRUCKING_REALIZATIONS_JOIN}
-      ${TRUCKING_LIST_B2B_LATERAL}
+      ${b2bJoin}
       ${stoJoin}`;
 }

@@ -6,6 +6,8 @@ import {
   getShipments,
   getShipmentById,
   getShipmentEditContext,
+  getShipmentAvailablePurchaseOrders,
+  attachPurchaseOrderToShipmentHandler,
   updateShipment,
   getShipmentDailyDeliverablesCalendar,
   updateShipmentDailyDeliverables,
@@ -90,6 +92,12 @@ router.get('/', getShipments);
 
 // Edit Shipment modal — lightweight sibling PO/contract resolve (before /:id)
 router.get('/:id/edit-context', getShipmentEditContext);
+router.get('/:id/available-purchase-orders', getShipmentAvailablePurchaseOrders);
+router.post(
+  '/:id/purchase-orders',
+  auditLog('CREATE', 'SHIPMENT'),
+  attachPurchaseOrderToShipmentHandler,
+);
 
 // Get shipment by ID
 router.get('/:id', getShipmentById);

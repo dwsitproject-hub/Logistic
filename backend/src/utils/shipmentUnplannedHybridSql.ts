@@ -3,7 +3,9 @@
  */
 
 import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { appendGroupPlantFilter, groupPlantExpr } from './groupPlantSql';
+import { contractExtNoSubquery } from './portDisplaySql';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
 import {
   buildShipmentPageUnplannedOpenContractsCte,
@@ -161,8 +163,12 @@ export function unplannedContractBacklogBaseWhereSql(contractAlias = 'c', spdAli
 }
 
 /** SELECT list aligned with shipment list row shape for contract backlog rows. */
-export function unplannedContractBacklogRowSelectSql(): string {
+export function unplannedContractBacklogRowSelectSql(outstandingExpr: string): string {
   const plant = groupPlantExpr('c.plant_code', 'c.company_name');
+  const contractExtNoExpr = `COALESCE(
+    NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), ''),
+    ${contractExtNoSubquery('c.contract_id', 'c.po_number')}
+  )`;
   return `
     c.id::text AS id,
     'contract_backlog'::text AS row_kind,
@@ -203,8 +209,8 @@ export function unplannedContractBacklogRowSelectSql(): string {
     FALSE AS is_contract_sap_closed,
     c.created_at AS created_at,
     c.id::text AS contract_row_id,
-    NULL::text AS contract_ext_no,
-    NULL::text AS contract_reference_po,
+    ${contractExtNoExpr} AS contract_ext_no,
+    NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') AS contract_reference_po,
     1::bigint AS contract_count,
     NULL::date AS eta_arrival,
     NULL::date AS eta_berthed,
@@ -224,7 +230,8 @@ export function unplannedContractBacklogRowSelectSql(): string {
     NULL::date AS ata_vessel_arrive_at_discharge_port,
     NULL::date AS ata_vessel_berthed_at_discharge_port,
     NULL::date AS ata_vessel_start_discharging,
-    NULL::date AS ata_vessel_complete_discharge`;
+    NULL::date AS ata_vessel_complete_discharge,
+    ${outstandingExpr} AS outstanding_quantity`;
 }
 
 export function buildUnplannedContractBacklogLatestSpdCte(): string {
@@ -286,15 +293,27 @@ export function buildUnplannedContractBacklogPageQuery(
   limit: number,
   offset: number,
 ): string {
-  return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
-    unplanned_contract_backlog AS (
-      SELECT ${unplannedContractBacklogRowSelectSql()}
+  const backlogWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  const outstandingExpr = sqlContractGlobalOutstandingExpr({
+    contractQtyExpr: 'c.quantity_ordered',
+    incotermExpr: 'c.incoterm',
+    contractNumberExpr: 'c.contract_id',
+  });
+  const qtyMoveCte = buildQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `SELECT c.contract_id
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${unplannedContractBacklogBaseWhereSql('c', 'l')}
-        ${contractScopeSql}
-        ${toolbarSql}
+      WHERE ${backlogWhere}`,
+  });
+  return `
+    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    ${qtyMoveCte},
+    unplanned_contract_backlog AS (
+      SELECT ${unplannedContractBacklogRowSelectSql(outstandingExpr)}
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}
       ORDER BY c.contract_date DESC NULLS LAST, c.contract_id ASC
       LIMIT ${limit} OFFSET ${offset}
     )

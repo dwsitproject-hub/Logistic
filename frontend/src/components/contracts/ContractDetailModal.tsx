@@ -193,6 +193,15 @@ function StoDetailSection({
   )
 }
 
+function coalesceSapQtyKg(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (value === null || value === undefined || value === '') continue
+    const n = Number(value)
+    if (Number.isFinite(n)) return n
+  }
+  return null
+}
+
 function StoDetailField({
   label,
   value,
@@ -799,8 +808,8 @@ export function ContractDetailModal({
                             </td>
                             <td className="p-2">{row.status}</td>
                             <td className="p-2">{formatQtyMtFromKg(row.sto_quantity)}</td>
-                            <td className="p-2">{formatQtyMtFromKg(row.quantity_delivered ?? 0)}</td>
-                            <td className="p-2">{formatQtyMtFromKg(row.quantity_receive ?? 0)}</td>
+                            <td className="p-2">{formatQtyMtFromKg(row.quantity_delivered)}</td>
+                            <td className="p-2">{formatQtyMtFromKg(row.quantity_receive)}</td>
                             <td className="p-2">
                               {row.type === 'shipment' ? (row.vessel_name ?? '-') : (row.trucking_owner ?? '-')}
                             </td>
@@ -913,11 +922,11 @@ export function ContractDetailModal({
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">Quantity Delivery</div>
-                    <div className="font-medium mt-1 text-base">{formatQtyMtFromKg(contract.quantity_delivery ?? 0)}</div>
+                    <div className="font-medium mt-1 text-base">{formatQtyMtFromKg(contract.quantity_delivery)}</div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">Quantity Receive</div>
-                    <div className="font-medium mt-1 text-base">{formatQtyMtFromKg(contract.quantity_receive ?? 0)}</div>
+                    <div className="font-medium mt-1 text-base">{formatQtyMtFromKg(contract.quantity_receive)}</div>
                   </div>
                   <div className="p-3 bg-blue-50 rounded border-2 border-blue-200">
                     <div className="text-gray-500">
@@ -1262,18 +1271,18 @@ export function ContractDetailModal({
                   <StoDetailSection title="Quantity">
                     <StoDetailField
                       label="STO Quantity (MT)"
-                      value={formatQtyMtFromKg(Number(stoDetailData.sto_quantity ?? 0))}
+                      value={formatQtyMtFromKg(coalesceSapQtyKg(stoDetailData.sto_quantity))}
                     />
                     <StoDetailField
                       label="Quantity Delivery (MT)"
                       value={formatQtyMtFromKg(
-                        Number(stoDetailData.quantity_delivered ?? stoDetailRow.quantity_delivered ?? 0),
+                        coalesceSapQtyKg(stoDetailData.quantity_delivered, stoDetailRow.quantity_delivered),
                       )}
                     />
                     <StoDetailField
                       label="Quantity Receive (MT)"
                       value={formatQtyMtFromKg(
-                        Number(stoDetailData.quantity_receive ?? stoDetailRow.quantity_receive ?? 0),
+                        coalesceSapQtyKg(stoDetailData.quantity_receive, stoDetailRow.quantity_receive),
                       )}
                     />
                   </StoDetailSection>
@@ -1321,24 +1330,26 @@ export function ContractDetailModal({
                   <StoDetailSection title="Quantity">
                     <StoDetailField
                       label="Contract Qty (MT)"
-                      value={formatQtyMtFromKg(Number(stoDetailData.contract_qty ?? stoDetailData.sto_quantity ?? 0))}
+                      value={formatQtyMtFromKg(
+                        coalesceSapQtyKg(stoDetailData.contract_qty, stoDetailData.sto_quantity),
+                      )}
                     />
                     <StoDetailField
                       label="Outstanding Qty (MT)"
                       value={formatOutstandingQtyMtFromKg(
-                        Number(stoDetailData.outstanding_quantity ?? contract?.outstanding_quantity ?? 0),
+                        coalesceSapQtyKg(stoDetailData.outstanding_quantity, contract?.outstanding_quantity),
                       )}
                     />
                     <StoDetailField
                       label="Quantity Delivery (MT)"
                       value={formatQtyMtFromKg(
-                        Number(stoDetailData.quantity_delivered ?? stoDetailRow.quantity_delivered ?? 0),
+                        coalesceSapQtyKg(stoDetailData.quantity_delivered, stoDetailRow.quantity_delivered),
                       )}
                     />
                     <StoDetailField
                       label="Quantity Receive (MT)"
                       value={formatQtyMtFromKg(
-                        Number(stoDetailData.quantity_receive ?? stoDetailRow.quantity_receive ?? 0),
+                        coalesceSapQtyKg(stoDetailData.quantity_receive, stoDetailRow.quantity_receive),
                       )}
                     />
                   </StoDetailSection>

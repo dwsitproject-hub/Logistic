@@ -16,6 +16,7 @@ export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
   'contract_date',
   'contract_ext_no',
   'po_numbers',
+  'supplier',
   'vessel_name',
   'status',
   'product',
@@ -31,7 +32,7 @@ export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
 ] as const
 
 /** Bump when default column order/visibility changes — resets users without matching saved layout. */
-export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v4'
+export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v5'
 
 export const SHIPMENT_COLUMN_LAYOUT_VERSION_KEY = 'shipments.compact.columnLayoutVersion'
 
@@ -41,6 +42,7 @@ export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   contract_date: 100,
   contract_ext_no: 120,
   po_numbers: 72,
+  supplier: 96,
   vessel_name: 88,
   status: 80,
   shipment_id: 72,

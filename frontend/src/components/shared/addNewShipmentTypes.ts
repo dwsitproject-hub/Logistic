@@ -191,3 +191,31 @@ export async function fetchContractPurchaseOrderOptions(contractId: string): Pro
   const rows: Record<string, unknown>[] = res.data?.data ?? []
   return rows.map(mapPurchaseOrderToPoOption)
 }
+
+/** PO lines eligible to add on Edit Shipment (outstanding > 0, same STO group, not yet linked). */
+export async function fetchShipmentAvailablePurchaseOrders(
+  shipmentId: string,
+): Promise<ShipmentPoOption[]> {
+  const api = (await import('@/lib/api')).default
+  const res = await api.get(`/shipments/${encodeURIComponent(shipmentId)}/available-purchase-orders`)
+  const rows: Record<string, unknown>[] = res.data?.data ?? []
+  return rows.map(mapPurchaseOrderToPoOption)
+}
+
+export async function attachPurchaseOrderToShipment(args: {
+  shipmentId: string
+  contractRowId: string
+  stoQtyAssignedMt: number
+}): Promise<void> {
+  const api = (await import('@/lib/api')).default
+  const res = await api.post(
+    `/shipments/${encodeURIComponent(args.shipmentId)}/purchase-orders`,
+    {
+      contractRowId: args.contractRowId,
+      stoQtyAssignedMt: args.stoQtyAssignedMt,
+    },
+  )
+  if (!res.data?.success) {
+    throw new Error(res.data?.error?.message || 'Failed to add PO to shipment')
+  }
+}

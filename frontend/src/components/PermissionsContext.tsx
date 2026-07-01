@@ -41,6 +41,12 @@ function readPermissionsCache(userId?: string): PermissionsCache | null {
   return permissionsCache
 }
 
+function permissionsCacheKey(userId?: string, userRole?: string): string | undefined {
+  if (userId) return userId
+  if (userRole) return `role:${userRole}`
+  return undefined
+}
+
 export function PermissionsProvider({
   children,
   userRole,
@@ -50,12 +56,17 @@ export function PermissionsProvider({
   userRole?: string
   userId?: string
 }) {
-  const cached = readPermissionsCache(userId)
+  const cacheKey = permissionsCacheKey(userId, userRole)
+  const cached = readPermissionsCache(cacheKey)
   const [byKey, setByKey] = useState<Record<string, PermFlags>>(() => cached?.byKey ?? {})
   const [loaded, setLoaded] = useState(() => !!cached)
 
   useEffect(() => {
     let cancelled = false
+    const timeoutId = window.setTimeout(() => {
+      if (!cancelled) setLoaded(true)
+    }, 12_000)
+
     api
       .get('/roles/my-permissions')
       .then((res) => {
@@ -71,20 +82,24 @@ export function PermissionsProvider({
           }
         }
         setByKey(next)
-        if (userId) {
-          permissionsCache = { userId, byKey: next }
+        const cacheKey = userId ?? (userRole ? `role:${userRole}` : null)
+        if (cacheKey) {
+          permissionsCache = { userId: cacheKey, byKey: next }
         }
       })
       .catch(() => {
-        if (!cancelled && !readPermissionsCache(userId)) setByKey({})
+        if (!cancelled && !readPermissionsCache(cacheKey)) {
+          setByKey({})
+        }
       })
       .finally(() => {
         if (!cancelled) setLoaded(true)
       })
     return () => {
       cancelled = true
+      window.clearTimeout(timeoutId)
     }
-  }, [userId])
+  }, [userId, userRole])
 
   const value = useMemo(() => ({ byKey, loaded, userRole }), [byKey, loaded, userRole])
   return <PermissionsContext.Provider value={value}>{children}</PermissionsContext.Provider>

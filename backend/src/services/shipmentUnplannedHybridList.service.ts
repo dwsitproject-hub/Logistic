@@ -1,6 +1,7 @@
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import {
+  buildShipmentListEnrichedPageQuery,
   normalizeShipmentListRows,
   type ShipmentListQueryContext,
   type ShipmentListResponseData,
@@ -94,25 +95,8 @@ async function fetchShipmentExecutionPage(
 ): Promise<Record<string, unknown>[]> {
   if (limit <= 0) return [];
 
-  const baseParams = [...ctx.innerParams, ...ctx.outerParams];
-  const limitIdx = baseParams.length + 1;
-  const offsetIdx = baseParams.length + 2;
-
-  const text = `${ctx.shipmentBaseCteSql},
-    filtered_shipments AS (
-      SELECT sb.*
-      FROM shipment_base sb
-      WHERE 1=1 ${ctx.outerSql}
-    ),
-    shipment_page AS (
-      SELECT fs.*
-      FROM filtered_shipments fs
-      ORDER BY fs.created_at DESC
-      LIMIT $${limitIdx} OFFSET $${offsetIdx}
-    )
-    SELECT sp.* FROM shipment_page sp`;
-
-  const result = await query(text, [...baseParams, limit, offset]);
+  const { text, params } = buildShipmentListEnrichedPageQuery(ctx, limit, offset);
+  const result = await query(text, params);
   const rows = normalizeShipmentListRows(result.rows as Record<string, unknown>[]);
   for (const row of rows) {
     row.row_kind = 'shipment_execution';
@@ -154,9 +138,13 @@ export async function resolveUnplannedHybridShipmentsList(
 
   for (const row of contractPage) {
     row.status = 'UNPLANNED';
+    row.row_kind = 'contract_backlog';
   }
 
-  const shipments = [...contractPage, ...shipmentPage] as ShipmentListResponseData['shipments'];
+  const shipments = normalizeShipmentListRows([
+    ...contractPage,
+    ...shipmentPage,
+  ] as Record<string, unknown>[]) as ShipmentListResponseData['shipments'];
 
   return {
     shipments,

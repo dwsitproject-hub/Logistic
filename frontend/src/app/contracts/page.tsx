@@ -37,7 +37,7 @@ import {
   signedCycleDaysClass,
 } from '@/lib/cycleDaysDisplay'
 import { formatDateDMY, toSortableTimestamp } from '@/lib/dateFormat'
-import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay } from '@/lib/sapDisplayValue'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import {
@@ -2827,7 +2827,7 @@ function ContractsPageContent() {
       getSortValue: (c) => typeof c.quantity_ordered === 'number' ? c.quantity_ordered : 0,
       render: (c) => (
         <span className="text-sm truncate">
-          {((Number(c.quantity_ordered) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT
+          {formatSapQtyMtDisplay(c.quantity_ordered)}
         </span>
       )
     },
@@ -2840,7 +2840,7 @@ function ContractsPageContent() {
       getSortValue: (c) => typeof c.quantity_receive === 'number' ? c.quantity_receive : 0,
       render: (c) => (
         <span className="text-sm truncate">
-          {((Number(c.quantity_receive) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT
+          {formatSapQtyMtDisplay(c.quantity_receive)}
         </span>
       )
     },
@@ -2868,7 +2868,7 @@ function ContractsPageContent() {
       getSortValue: (c) => Number(c.quantity_ordered) || 0,
       render: (c) => (
         <span className="text-sm truncate">
-          {((Number(c.quantity_ordered) || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT
+          {formatSapQtyMtDisplay(c.quantity_ordered)}
         </span>
       )
     },
@@ -2880,14 +2880,15 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : 0,
       render: (c) => {
-        const oqMt = (Number(c.outstanding_quantity) || 0) / 1000
+        if (c.outstanding_quantity == null) {
+          return <span className="text-sm truncate text-gray-500">-</span>
+        }
+        const oqMt = Number(c.outstanding_quantity) / 1000
         const isOver = oqMt < 0
         const isUnder = oqMt > 0
         return (
           <span className={`text-sm truncate font-medium ${isOver ? 'text-green-600' : isUnder ? 'text-red-600' : 'text-gray-500'}`}>
-            {isOver
-              ? `+${Math.abs(oqMt).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
-              : `${oqMt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`}
+            {formatSapOutstandingQtyMtDisplay(c.outstanding_quantity)}
           </span>
         )
       }
@@ -5226,11 +5227,13 @@ function ContractsPageContent() {
                               {formatSapDisplayValue(contract.product)}
                               {' • '}
                               <span className="text-gray-500">Outstanding:</span>{' '}
-                              <span className={contract.outstanding_quantity < 0 ? 'text-green-600 font-medium' : contract.outstanding_quantity > 0 ? 'text-red-600 font-medium' : 'text-gray-800'}>
-                                {contract.outstanding_quantity < 0
-                                  ? `+${formatNumber(Math.abs(contract.outstanding_quantity))} ${contract.unit}`
-                                  : `${formatNumber(contract.outstanding_quantity)} ${contract.unit}`}
-                              </span>
+                              {contract.outstanding_quantity == null ? (
+                                <span className="text-gray-800">-</span>
+                              ) : (
+                                <span className={contract.outstanding_quantity < 0 ? 'text-green-600 font-medium' : contract.outstanding_quantity > 0 ? 'text-red-600 font-medium' : 'text-gray-800'}>
+                                  {formatSapOutstandingQtyMtDisplay(contract.outstanding_quantity)}
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>

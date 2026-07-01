@@ -19,6 +19,10 @@ import {
   resolveUnplannedHybridShipmentsList,
 } from '../services/shipmentUnplannedHybridList.service';
 import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
+import {
+  attachPurchaseOrderToShipment,
+  listAvailablePurchaseOrdersForShipmentEdit,
+} from '../services/shipmentPoAssignment.service';
 import { normalizeAndValidateShipmentDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/shipmentDailyDeliverables';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { deriveShipmentStatus, SHIPMENT_PERSISTABLE_AUTO_STATUSES } from '../utils/shipmentStatus';
@@ -1415,6 +1419,84 @@ export const getShipmentById = async (req: AuthRequest, res: Response) => {
     return res.status(500).json({
       success: false,
       error: { message: 'Failed to fetch shipment' },
+    });
+  }
+};
+
+/** PO lines eligible to add on Edit Shipment (same STO group, outstanding > 0, not yet linked). */
+export const getShipmentAvailablePurchaseOrders = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    if (!isUUID) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Shipment UUID is required' },
+      });
+    }
+
+    const rows = await listAvailablePurchaseOrdersForShipmentEdit(id);
+    if (rows === null) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Shipment not found' },
+      });
+    }
+
+    return res.json({ success: true, data: rows });
+  } catch (error) {
+    logger.error('Get shipment available purchase orders error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch available purchase orders' },
+    });
+  }
+};
+
+/** Attach a PO with STO qty assignment to an existing grouped shipment (Edit Shipment modal). */
+export const attachPurchaseOrderToShipmentHandler = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    if (!isUUID) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Shipment UUID is required' },
+      });
+    }
+
+    const contractRowId = String(req.body?.contractRowId ?? req.body?.contract_row_id ?? '').trim();
+    const stoQtyAssignedMt = Number(req.body?.stoQtyAssignedMt ?? req.body?.sto_qty_assigned_mt);
+
+    const result = await attachPurchaseOrderToShipment({
+      anchorShipmentUuid: id,
+      contractRowId,
+      stoQtyAssignedMt,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status).json({
+        success: false,
+        error: { message: result.message },
+      });
+    }
+
+    invalidateShipmentsListCache();
+
+    return res.json({
+      success: true,
+      message: 'PO added to shipment successfully',
+      data: {
+        shipmentId: result.shipmentUuid,
+        contractNumber: result.contractNumber,
+        poNumber: result.poNumber,
+      },
+    });
+  } catch (error) {
+    logger.error('Attach purchase order to shipment error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to add PO to shipment' },
     });
   }
 };

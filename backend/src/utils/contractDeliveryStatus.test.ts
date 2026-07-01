@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { isContractDeliveryClosed } from './contractDeliveryStatus';
+import {
+  isContractDeliveryClosed,
+  sqlContractImportStatusExpr,
+  sqlIsContractSapClosedExpr,
+} from './contractDeliveryStatus';
 
 describe('isContractDeliveryClosed', () => {
   it('returns true for Close variants', () => {
@@ -15,5 +19,21 @@ describe('isContractDeliveryClosed', () => {
     expect(isContractDeliveryClosed('ACTIVE')).toBe(false);
     expect(isContractDeliveryClosed('')).toBe(false);
     expect(isContractDeliveryClosed(null)).toBe(false);
+  });
+});
+
+describe('sqlContractImportStatusExpr', () => {
+  it('prefers PO-scoped SAP status over contract-level rows', () => {
+    const sql = sqlContractImportStatusExpr('c', 'c.po_number');
+    expect(sql).toContain('spd.po_number');
+    expect(sql).toContain("spd.data->'raw'->>'Status'");
+    expect(sql).toContain('ORDER BY');
+    expect(sql).toContain('THEN 0');
+  });
+
+  it('builds SAP closed predicate from PO-aware import status', () => {
+    const sql = sqlIsContractSapClosedExpr('c');
+    expect(sql).toContain("'CLOSE'");
+    expect(sql).toContain('c.po_number');
   });
 });

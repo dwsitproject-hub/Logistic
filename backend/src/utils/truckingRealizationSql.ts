@@ -26,3 +26,13 @@ export function sqlRealizationEndDate(contractAlias = 'c'): string {
     ${sqlSapTruckingLastReceiveDate(contractAlias)}
   )`;
 }
+
+/** Fast shell list — DB / extension only (no sap_processed_data). */
+export function sqlShellRealizationStartDate(): string {
+  return `COALESCE(tr.realization_start_date, t.trucking_start_date)`;
+}
+
+/** Fast shell list — DB / extension only (no sap_processed_data). */
+export function sqlShellRealizationEndDate(): string {
+  return `COALESCE(tr.realization_end_date, t.trucking_completion_date)`;
+}

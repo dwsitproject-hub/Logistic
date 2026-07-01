@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildUnplannedContractBacklogCountQuery,
+  buildUnplannedContractBacklogPageQuery,
   buildUnplannedContractBacklogTableCountCte,
   appendContractScopeToolbarFilters,
   unplannedContractBacklogBaseWhereSql,
@@ -17,6 +18,15 @@ describe('shipmentUnplannedHybridSql', () => {
     const text = buildUnplannedContractBacklogCountQuery('AND c.contract_date >= $1', '');
     expect(text).toContain('unplanned_contract_backlog');
     expect(text).toContain('latest_spd_contract');
+  });
+
+  it('builds contract backlog page query with contract ext no and outstanding qty', () => {
+    const text = buildUnplannedContractBacklogPageQuery('AND c.contract_date >= $1', '', 20, 0);
+    expect(text).toContain('qty_move');
+    expect(text).toContain('contract_ext_no_raw');
+    expect(text).toContain('Contract Ext No');
+    expect(text).toContain('AS outstanding_quantity');
+    expect(text).not.toContain('NULL::text AS contract_ext_no');
   });
 
   it('builds summary table count CTE', () => {

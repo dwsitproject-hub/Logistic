@@ -53,10 +53,11 @@ import {
   resolveCalendarCellQtyKg,
 } from '@/lib/truckingCalendarActuals'
 import {
-  buildTruckingActualsTemplateCsv,
+  buildTruckingActualsTemplateXlsxBlob,
   DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP,
   isActualsTemplateDownloadEnabled,
-  isActualsWideTemplateHeader,
+  isActualsWidePlanningTemplateFile,
+  isUnplannedPlanningTemplateMode,
   type TruckingActualsTemplateRow,
 } from '@/lib/truckingActualsTemplate'
 import {
@@ -175,6 +176,12 @@ function isTruckingUnplanned(operation: Pick<TruckingOperation, 'status'>): bool
   return String(operation.status ?? '').trim().toUpperCase() === 'UNPLANNED'
 }
 
+function isTruckingContractBacklogRow(
+  operation: Pick<TruckingOperation, 'row_kind'>,
+): boolean {
+  return String(operation.row_kind ?? '').trim() === 'contract_backlog'
+}
+
 function TruckTableAddTruckingButton({ onAdd }: { onAdd: () => void }) {
   return (
     <Tooltip>
@@ -287,6 +294,8 @@ interface TruckingOperation {
   contract_import_status?: string
   sto_numbers?: string | null
   daily_deliverables?: Array<{ date: string; quantity_delivered: number }>
+  /** contract_backlog = open PO without trucking op; execution = normal trucking row */
+  row_kind?: 'contract_backlog' | string
 }
 
 function mergeTruckingSapFields(
@@ -303,6 +312,8 @@ function mergeTruckingSapFields(
     if (!match) return row
     return {
       ...row,
+      status: match.status ?? row.status,
+      status_db: match.status_db ?? row.status_db,
       contract_ext_no: match.contract_ext_no ?? row.contract_ext_no,
       sto_number: match.sto_number ?? row.sto_number,
       sto_numbers: match.sto_numbers ?? row.sto_numbers,
@@ -311,6 +322,16 @@ function mergeTruckingSapFields(
       quantity_receive: match.quantity_receive ?? row.quantity_receive,
       outstanding_quantity: match.outstanding_quantity ?? row.outstanding_quantity,
     }
+  })
+}
+
+function dedupeTruckingOperationsForTemplate(ops: TruckingOperation[]): TruckingOperation[] {
+  const seen = new Set<string>()
+  return ops.filter((op) => {
+    const key = op.id || `${op.contract_number}|${op.po_number ?? ''}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
   })
 }
 
@@ -1016,6 +1037,7 @@ function TruckingPageContent() {
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [templateDownloading, setTemplateDownloading] = useState(false)
   const defaultContractDateRange = useMemo(() => {
     const now = new Date()
     const yyyy = now.getFullYear()
@@ -1077,6 +1099,12 @@ function TruckingPageContent() {
     succeededRows: number
     rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[]
     operationFailures: {
+      contract_ext_no: string
+      rowNumbers: number[]
+      reason: string
+      operation_ids?: string[]
+    }[]
+    operationWarnings?: {
       contract_ext_no: string
       rowNumbers: number[]
       reason: string
@@ -1488,84 +1516,6 @@ function TruckingPageContent() {
 
   const isListActualsTemplateDownloadEnabled = isActualsTemplateDownloadEnabled(statusFilter)
 
-  const downloadFilteredActualsTemplate = useCallback(() => {
-    const rows: TruckingActualsTemplateRow[] = truckingOperations
-      .filter((op) => op.status === 'PLANNED' || op.status === 'IN_PROGRESS')
-      .map((op) => ({
-        contract_ext_no: op.contract_ext_no,
-        contract_number: op.contract_number,
-        po_number: op.po_number,
-        planning_start_date: op.planning_start_date,
-        planning_end_date: op.planning_end_date,
-        daily_deliverables: op.daily_deliverables,
-      }))
-
-    if (rows.length === 0) {
-      alert('No Planned or In Progress operations on this page to include in the template.')
-      return
-    }
-
-    const csv = buildTruckingActualsTemplateCsv(rows)
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'trucking_daily_actuals_template.csv'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-  }, [truckingOperations])
-
-  const handleBulkCreateFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-
-    const headerSnippet = await file.slice(0, 8192).text()
-    const firstLine = headerSnippet.split(/\r?\n/).find((line) => line.trim()) ?? ''
-    const isActualsTemplate = isActualsWideTemplateHeader(firstLine)
-
-    setBulkCreateUploading(true)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-
-      if (isActualsTemplate) {
-        const res = await api.post('/trucking/daily-actuals/bulk-upload', fd)
-        const data = res.data?.data
-        if (data) {
-          const opFailures = data.operationFailures ?? []
-          setActualsUploadSummary({
-            processedRows: Number(data.processedRows ?? 0),
-            operationsUpdated: Number(data.operationsUpdated ?? data.contractsUpdated ?? 0),
-            operationsFailed: opFailures.length,
-            succeededRows: Number(data.succeededRows ?? 0),
-            rowParseFailures: data.rowParseFailures ?? [],
-            operationFailures: opFailures,
-          })
-          setActualsUploadOpen(true)
-        }
-        invalidateLogisticsListCaches()
-        section1SummaryForceNextFetchRef.current = true
-        await fetchTruckingOperations(page, undefined, { force: true })
-        return
-      }
-
-      const res = await api.post('/trucking/bulk-create', fd)
-      const data = res.data?.data
-      if (data) {
-        setBulkCreateSummary(data)
-        setBulkCreateUploadOpen(true)
-      }
-      await fetchTruckingOperations(1, undefined, { force: true })
-    } catch (err: any) {
-      alert(err?.response?.data?.error?.message || err?.message || 'Upload failed')
-    } finally {
-      setBulkCreateUploading(false)
-    }
-  }
-
   const planningYearOptions = useMemo(() => {
     const y = new Date().getFullYear()
     return Array.from({ length: 18 }, (_, i) => y - 8 + i)
@@ -1591,10 +1541,194 @@ function TruckingPageContent() {
     contractExtNo?: string
     poNumber?: string
   } | null>(null)
+  const [createTruckingPrefill, setCreateTruckingPrefill] = useState<{
+    contractId: string
+    contractExtNo?: string
+    poNumber?: string
+  } | null>(null)
+  const [unplannedBreakdown, setUnplannedBreakdown] = useState<{
+    contractRows: number
+    executionRows: number
+    totalTableRows: number
+  } | null>(null)
 
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [sortKey, setSortKey] = useState<string>('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
+  const buildTruckingListSearchParams = useCallback(
+    (opts?: {
+      page?: number
+      limit?: number
+      includeSummary?: boolean
+      summaryOnly?: boolean
+      searchOverride?: string
+      /** Full SAP join for exports (accurate contract ext no, qty, dates). */
+      skipSapJoin?: boolean
+    }) => {
+      const params = new URLSearchParams()
+      params.append('skipSapJoin', opts?.skipSapJoin === false ? 'false' : 'true')
+      params.append('limit', String(opts?.limit ?? pageSize))
+      params.append('page', String(opts?.page ?? page))
+      params.append('sortKey', sortKey)
+      params.append('sortDir', sortDir)
+      if (statusFilter && statusFilter !== 'ALL') {
+        params.append('status', statusFilter)
+      }
+      if (loadingLocationFilter) {
+        params.append('loadingLocation', loadingLocationFilter)
+      }
+      if (unloadingLocationFilter) {
+        params.append('unloadingLocation', unloadingLocationFilter)
+      }
+      if (dateFrom) params.append('dateFrom', dateFrom)
+      if (dateTo) params.append('dateTo', dateTo)
+      const searchTrim = (opts?.searchOverride ?? searchTerm).trim()
+      if (searchTrim.length >= 2) {
+        params.append('search', searchTrim)
+      }
+      const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+        selectedIncoterms,
+        selectedProducts,
+      })
+      const cfKeys = Object.keys(mergedColumnFilters)
+      if (cfKeys.length > 0) {
+        params.append('columnFilters', JSON.stringify(mergedColumnFilters))
+      }
+      if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
+        params.append('lateIndicator', lateIndicatorFilter)
+      }
+      const stoParam = searchParams.get('sto')
+      if (stoParam) {
+        params.append('sto', stoParam)
+      }
+      const contractParam = searchParams.get('contract')
+      if (contractParam) {
+        params.append('contract', contractParam)
+      }
+      if (selectedGroupPlants.length > 0) {
+        selectedGroupPlants.forEach((p) => params.append('plant', p))
+      }
+      if (opts?.summaryOnly) {
+        params.delete('status')
+        params.set('summaryOnly', 'true')
+      } else if (opts?.includeSummary === false) {
+        params.append('includeSummary', 'false')
+      }
+      return params
+    },
+    [
+      page,
+      pageSize,
+      sortKey,
+      sortDir,
+      statusFilter,
+      loadingLocationFilter,
+      unloadingLocationFilter,
+      dateFrom,
+      dateTo,
+      searchTerm,
+      columnFilters,
+      selectedIncoterms,
+      selectedProducts,
+      lateIndicatorFilter,
+      searchParams,
+      selectedGroupPlants,
+    ],
+  )
+
+  const downloadFilteredActualsTemplate = useCallback(async () => {
+    const unplannedMode = isUnplannedPlanningTemplateMode(statusFilter)
+    const exportPageSize = 500
+
+    setTemplateDownloading(true)
+    try {
+      const collected: TruckingOperation[] = []
+      let exportPage = 1
+      let exportTotalPages = 1
+
+      while (exportPage <= exportTotalPages) {
+        const params = buildTruckingListSearchParams({
+          page: exportPage,
+          limit: exportPageSize,
+          includeSummary: false,
+          skipSapJoin: false,
+        })
+        const response = await api.get(`/trucking?${params.toString()}`)
+        const envelope = response.data as {
+          data?: {
+            truckingOperations?: TruckingOperation[]
+            pagination?: { totalPages?: number }
+          }
+        }
+        const items = envelope?.data?.truckingOperations || []
+        collected.push(...items)
+        exportTotalPages = Number(envelope?.data?.pagination?.totalPages || 1)
+        exportPage += 1
+      }
+
+      const deduped = dedupeTruckingOperationsForTemplate(collected)
+      const rows: TruckingActualsTemplateRow[] = deduped
+        .filter((op) =>
+          unplannedMode
+            ? op.status === 'UNPLANNED'
+            : op.status === 'PLANNED' || op.status === 'IN_PROGRESS',
+        )
+        .map((op) =>
+          unplannedMode
+            ? {
+                contract_ext_no: op.contract_ext_no,
+                contract_number: op.contract_number,
+                po_number: op.po_number,
+                delivery_end_date: op.delivery_end_date,
+                outstanding_quantity: op.outstanding_quantity,
+                templateKind: 'unplanned' as const,
+              }
+            : {
+                contract_ext_no: op.contract_ext_no,
+                contract_number: op.contract_number,
+                po_number: op.po_number,
+                planning_start_date: op.planning_start_date,
+                planning_end_date: op.planning_end_date,
+                daily_deliverables: op.daily_deliverables,
+              },
+        )
+
+      if (rows.length === 0) {
+        alert(
+          unplannedMode
+            ? 'No Unplanned operations match the current filters.'
+            : 'No Planned or In Progress operations match the current filters.',
+        )
+        return
+      }
+
+      if (unplannedMode && rows.some((row) => !String(row.delivery_end_date ?? '').trim())) {
+        alert(
+          'Some Unplanned rows are missing Due Date Delivery (End) from SAP. Refresh the list or open the row in Add Trucking first.',
+        )
+        return
+      }
+
+      const blob = buildTruckingActualsTemplateXlsxBlob(rows)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = unplannedMode
+        ? 'trucking_unplanned_planning_template.xlsx'
+        : 'trucking_daily_actuals_template.xlsx'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Failed to download trucking template:', error)
+      alert('Failed to download template. Please try again.')
+    } finally {
+      setTemplateDownloading(false)
+    }
+  }, [buildTruckingListSearchParams, statusFilter])
+
   const columnStorageKey = 'trucking.compact.visibleColumns'
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => {
     if (typeof window === 'undefined') return new Set()
@@ -1728,65 +1862,60 @@ function TruckingPageContent() {
     const listGen = ++listFetchGenRef.current
     setListFetching(true)
     setSummaryFetching(true)
+    if (statusFilter !== 'ALL') {
+      setTruckingOperations([])
+    }
     try {
       const effectivePage = forcedPage ?? page
-      const params = new URLSearchParams()
-      params.append('skipSapJoin', 'true')
-      params.append('limit', String(pageSize))
-      params.append('page', String(effectivePage))
-      params.append('sortKey', sortKey)
-      params.append('sortDir', sortDir)
-      if (statusFilter && statusFilter !== 'ALL') {
-        params.append('status', statusFilter)
-      }
-      if (loadingLocationFilter) {
-        params.append('loadingLocation', loadingLocationFilter)
-      }
-      if (unloadingLocationFilter) {
-        params.append('unloadingLocation', unloadingLocationFilter)
-      }
-      if (dateFrom) params.append('dateFrom', dateFrom)
-      if (dateTo) params.append('dateTo', dateTo)
-      const searchTrim = (searchOverride ?? searchTerm).trim()
-      if (searchTrim.length >= 2) {
-        params.append('search', searchTrim)
-      }
-      const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
-        selectedIncoterms,
-        selectedProducts,
+      const params = buildTruckingListSearchParams({
+        page: effectivePage,
+        limit: pageSize,
+        includeSummary: false,
+        searchOverride,
       })
-      const cfKeys = Object.keys(mergedColumnFilters)
-      if (cfKeys.length > 0) {
-        params.append('columnFilters', JSON.stringify(mergedColumnFilters))
-      }
-      if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
-        params.append('lateIndicator', lateIndicatorFilter)
-      }
-      
-      // Check for STO parameter from URL
-      const stoParam = searchParams.get('sto')
-      if (stoParam) {
-        params.append('sto', stoParam)
-      }
-      
-      // Check for contract parameter from URL
-      const contractParam = searchParams.get('contract')
-      if (contractParam) {
-        params.append('contract', contractParam)
-      }
-      if (selectedGroupPlants.length > 0) {
-        selectedGroupPlants.forEach((p) => params.append('plant', p))
-      }
-      
-      // List + Section 1 summary in one API round-trip (same toolbar scope, no status on summary).
-      params.append('includeSummary', 'true')
 
       const listUrl = `/trucking?${params.toString()}`
       const listCacheKey = buildCacheKey('GET', listUrl)
+
+      const summaryParams = new URLSearchParams(params.toString())
+      summaryParams.delete('status')
+      summaryParams.delete('includeSummary')
+      summaryParams.set('summaryOnly', 'true')
+      summaryParams.set('page', '1')
+      summaryParams.set('limit', '1')
+      const summaryUrl = `/trucking?${summaryParams.toString()}`
+      const summaryCacheKey = buildCacheKey('GET', summaryUrl)
+      const summaryGen = ++summaryFetchGenRef.current
+      void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+        force: options?.force || section1SummaryForceNextFetchRef.current,
+        onRevalidate: (fresh) => {
+          if (summaryGen !== summaryFetchGenRef.current) return
+          if (fresh?.data?.summary) {
+            setTruckingSection1Summary(fresh.data.summary)
+            setSummaryFetching(false)
+          }
+        },
+      })
+        .then(({ data }) => {
+          if (summaryGen !== summaryFetchGenRef.current) return
+          if (data?.data?.summary) {
+            setTruckingSection1Summary(data.data.summary)
+            setSummaryFetching(false)
+          }
+        })
+        .catch(() => {
+          if (summaryGen === summaryFetchGenRef.current) setSummaryFetching(false)
+        })
+
       const applyListEnvelope = (envelope: {
         data?: {
           truckingOperations?: TruckingOperation[]
           pagination?: { total?: number; totalPages?: number }
+          unplannedBreakdown?: {
+            contractRows?: number
+            executionRows?: number
+            totalTableRows?: number
+          }
           summary?: {
             status?: {
               planned?: number
@@ -1804,9 +1933,15 @@ function TruckingPageContent() {
         setTotalCount(total)
         setTotalPages(pages)
         setHasMore(effectivePage < pages)
-        if (envelope?.data?.summary) {
-          setTruckingSection1Summary(envelope.data.summary)
-          setSummaryFetching(false)
+        const breakdown = envelope?.data?.unplannedBreakdown
+        if (breakdown) {
+          setUnplannedBreakdown({
+            contractRows: Number(breakdown.contractRows ?? 0),
+            executionRows: Number(breakdown.executionRows ?? 0),
+            totalTableRows: Number(breakdown.totalTableRows ?? 0),
+          })
+        } else {
+          setUnplannedBreakdown(null)
         }
       }
 
@@ -1822,40 +1957,124 @@ function TruckingPageContent() {
           },
         },
       )
+      section1SummaryForceNextFetchRef.current = false
       if (listGen !== listFetchGenRef.current) return
       applyListEnvelope(listEnvelope)
       if (!listRevalidating) setListFetching(false)
 
-      const hydrateParams = new URLSearchParams(params.toString())
-      hydrateParams.set('skipSapJoin', 'false')
-      const hydrateUrl = `/trucking?${hydrateParams.toString()}`
-      const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
-      void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
-        force: options?.force,
-        onRevalidate: (fresh) => {
-          if (listGen !== listFetchGenRef.current) return
-          const hydrated = fresh?.data?.truckingOperations || []
-          if (hydrated.length) {
-            setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
-          }
-        },
-      })
-        .then(({ data }) => {
-          if (listGen !== listFetchGenRef.current) return
-          const hydrated = data?.data?.truckingOperations || []
-          if (hydrated.length) {
-            setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
-          }
+      // SAP hydrate after table paint — avoids competing with shell query on DB/CPU.
+      const scheduleHydrate = () => {
+        const hydrateParams = new URLSearchParams(params.toString())
+        hydrateParams.delete('includeSummary')
+        hydrateParams.set('skipSapJoin', 'false')
+        const hydrateUrl = `/trucking?${hydrateParams.toString()}`
+        const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
+        void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
+          force: options?.force,
+          onRevalidate: (fresh) => {
+            if (listGen !== listFetchGenRef.current) return
+            const hydrated = fresh?.data?.truckingOperations || []
+            if (hydrated.length) {
+              setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
+            }
+          },
         })
-        .catch((err) => {
-          console.warn('Trucking SAP hydrate failed (table shows shell data):', err)
-        })
+          .then(({ data }) => {
+            if (listGen !== listFetchGenRef.current) return
+            const hydrated = data?.data?.truckingOperations || []
+            if (hydrated.length) {
+              setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
+            }
+          })
+          .catch((err) => {
+            console.warn('Trucking SAP hydrate failed (table shows shell data):', err)
+          })
+      }
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => scheduleHydrate(), { timeout: 2000 })
+      } else {
+        setTimeout(scheduleHydrate, 250)
+      }
     } catch (error) {
       if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch trucking operations:', error)
       alert('Failed to load trucking operations. Please refresh the page.')
       setListFetching(false)
       setSummaryFetching(false)
+    }
+  }
+
+  const uploadUnplannedPlanningFromWideTemplate = useCallback(async (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await api.post('/trucking/unplanned-planning/bulk-upload', fd)
+    const data = res.data?.data
+    if (data) {
+      setBulkCreateSummary({
+        processedRows: Number(data.processedRows ?? 0),
+        operationsCreated: Number(data.operationsCreated ?? 0),
+        operationsUpdated: Number(data.operationsUpdated ?? 0),
+        operationsFailed: Number(data.operationsFailed ?? 0),
+        succeededRows: Number(data.succeededRows ?? 0),
+        rowParseFailures: data.rowParseFailures ?? [],
+        operationFailures: data.operationFailures ?? [],
+        operationWarnings: data.operationWarnings ?? [],
+      })
+      setBulkCreateUploadOpen(true)
+    }
+    invalidateLogisticsListCaches()
+    section1SummaryForceNextFetchRef.current = true
+    await fetchTruckingOperations(page, undefined, { force: true })
+  }, [fetchTruckingOperations, page])
+
+  const handleBulkCreateFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+
+    setBulkCreateUploading(true)
+    try {
+      if (isUnplannedPlanningTemplateMode(statusFilter)) {
+        await uploadUnplannedPlanningFromWideTemplate(file)
+        return
+      }
+
+      const isActualsTemplate = await isActualsWidePlanningTemplateFile(file)
+      const fd = new FormData()
+      fd.append('file', file)
+
+      if (isActualsTemplate) {
+        const res = await api.post('/trucking/daily-actuals/bulk-upload', fd)
+        const data = res.data?.data
+        if (data) {
+          const opFailures = data.operationFailures ?? []
+          setActualsUploadSummary({
+            processedRows: Number(data.processedRows ?? 0),
+            operationsUpdated: Number(data.operationsUpdated ?? data.contractsUpdated ?? 0),
+            operationsFailed: opFailures.length,
+            succeededRows: Number(data.succeededRows ?? 0),
+            rowParseFailures: data.rowParseFailures ?? [],
+            operationFailures: opFailures,
+          })
+          setActualsUploadOpen(true)
+        }
+        invalidateLogisticsListCaches()
+        section1SummaryForceNextFetchRef.current = true
+        await fetchTruckingOperations(page, undefined, { force: true })
+        return
+      }
+
+      const res = await api.post('/trucking/bulk-create', fd)
+      const data = res.data?.data
+      if (data) {
+        setBulkCreateSummary(data)
+        setBulkCreateUploadOpen(true)
+      }
+      await fetchTruckingOperations(1, undefined, { force: true })
+    } catch (err: any) {
+      alert(err?.response?.data?.error?.message || err?.message || 'Upload failed')
+    } finally {
+      setBulkCreateUploading(false)
     }
   }
 
@@ -1925,7 +2144,18 @@ function TruckingPageContent() {
       return
     }
     setEditTruckingFromTable(null)
+    if (isTruckingContractBacklogRow(operation)) {
+      setPlotTruckingFromTable(null)
+      setCreateTruckingPrefill({
+        contractId,
+        contractExtNo: operation.contract_ext_no || operation.contract_number,
+        poNumber,
+      })
+      setShowCreateForm(true)
+      return
+    }
     setShowCreateForm(false)
+    setCreateTruckingPrefill(null)
     setPlotTruckingFromTable({
       operationId: operation.id,
       contractId,
@@ -1938,6 +2168,7 @@ function TruckingPageContent() {
     setShowCreateForm(false)
     setEditTruckingFromTable(null)
     setPlotTruckingFromTable(null)
+    setCreateTruckingPrefill(null)
   }
 
   const handleCreated = () => {
@@ -2286,7 +2517,38 @@ function TruckingPageContent() {
   }
 
   // Search, column filters, and late indicator are applied on the server across the full dataset.
-  const filteredOperations = truckingOperations
+  const filteredOperations = useMemo(() => {
+    if (!statusFilter || statusFilter === 'ALL') return truckingOperations
+    const stage = statusFilter.trim().toUpperCase()
+    return truckingOperations.filter(
+      (op) => String(op.status ?? '').trim().toUpperCase() === stage,
+    )
+  }, [truckingOperations, statusFilter])
+
+  /** Unplanned view table: headline count matches Section 2 card (distinct contracts), not expanded row total. */
+  const tableHeaderCount = useMemo(() => {
+    if (statusFilter === 'UNPLANNED') {
+      return {
+        value: Number(truckingSection1Summary?.status?.unplanned ?? 0),
+        noun: 'contracts' as const,
+      }
+    }
+    if (
+      statusFilter === 'PLANNED' ||
+      statusFilter === 'IN_PROGRESS' ||
+      statusFilter === 'COMPLETED' ||
+      statusFilter === 'CANCELLED'
+    ) {
+      return {
+        value: totalCount,
+        noun: 'trucking' as const,
+      }
+    }
+    return {
+      value: totalCount,
+      noun: 'operations' as const,
+    }
+  }, [statusFilter, truckingSection1Summary?.status?.unplanned, totalCount])
 
   // Compact columns definition
   interface CompactColumn {
@@ -2322,8 +2584,13 @@ function TruckingPageContent() {
       label: 'STO',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (o) => o.sto_number || '',
-      render: (o) => <OperationalNowrapCell value={o.sto_number} title={o.sto_number || ''} />
+      getSortValue: (o) => (isTruckingContractBacklogRow(o) ? '' : o.sto_number || ''),
+      render: (o) => (
+        <OperationalNowrapCell
+          value={isTruckingContractBacklogRow(o) ? '—' : o.sto_number}
+          title={isTruckingContractBacklogRow(o) ? '—' : o.sto_number || ''}
+        />
+      )
     },
     {
       id: 'contract_date',
@@ -2919,18 +3186,20 @@ function TruckingPageContent() {
               onChange={handleBulkCreateFileChange}
               disabled={bulkCreateUploading}
             />
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
-              disabled={bulkCreateUploading}
-            >
-              {bulkCreateUploading ? (
-                <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
-              ) : (
-                <><Upload className="h-4 w-4 mr-2" />Upload CSV</>
-              )}
-            </Button>
+            {!isUnplannedPlanningTemplateMode(statusFilter) ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+                disabled={bulkCreateUploading}
+              >
+                {bulkCreateUploading ? (
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
+                ) : (
+                  <><Upload className="h-4 w-4 mr-2" />Upload CSV</>
+                )}
+              </Button>
+            ) : null}
             <Button
               size="sm"
               onClick={() => {
@@ -2945,11 +3214,109 @@ function TruckingPageContent() {
           </div>
         </div>
 
-        {/* Status Distribution */}
+        {/* Section 1: Global Filters */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Global Filters</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-4">
+                <div className="relative min-w-[12rem] flex-1">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
+                  <Input
+                    placeholder="Search by Operation ID, Contract Numbers, PO No, or Supplier..."
+                    value={searchDraft}
+                    onChange={(e) => setSearchDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        applySearch()
+                      }
+                    }}
+                    className="pl-10"
+                  />
+                </div>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => {
+                    setPage(1)
+                    setHasMore(true)
+                    setStatusFilter(e.target.value)
+                  }}
+                  className="rounded-lg border px-4 py-2"
+                >
+                  <option value="ALL">All Status</option>
+                  <option value="UNPLANNED">Unplanned</option>
+                  <option value="PLANNED">Planned</option>
+                  <option value="IN_PROGRESS">In Progress</option>
+                  <option value="COMPLETED">Completed</option>
+                  <option value="CANCELLED">Cancelled</option>
+                </select>
+                <select
+                  value={lateIndicatorFilter}
+                  onChange={(e) => setLateIndicatorFilter(e.target.value)}
+                  className="rounded-lg border px-4 py-2"
+                >
+                  <option value="ALL">All Late Indicator</option>
+                  <option value="ON_TIME">On Time</option>
+                  <option value="LATE">Late</option>
+                  <option value="NA">N/A</option>
+                </select>
+              </div>
+
+              <PerformanceScopeFilters
+                hideGroupPlantFilter={false}
+                incotermOptions={availableIncoterms}
+                selectedIncoterms={selectedIncoterms}
+                onIncotermsChange={setSelectedIncoterms}
+                showProductFilter
+                productOptions={availableProducts}
+                selectedProducts={selectedProducts}
+                onProductsChange={handleProductsChange}
+                groupPlantOptions={availableGroupPlants}
+                selectedGroupPlants={selectedGroupPlants}
+                onGroupPlantsChange={handleGroupPlantsChange}
+                dateFrom={dateFrom}
+                dateTo={dateTo}
+                onDateFromChange={setDateFrom}
+                onDateToChange={setDateTo}
+                showDateRange={false}
+                incotermEmptyMessage="Loading incoterms..."
+                productEmptyMessage="Loading products..."
+                groupPlantPlaceholder="Select group plant(s)"
+                groupPlantEmptyMessage="No group plants"
+              />
+
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-sm font-medium text-gray-700">Contract Date:</label>
+                  <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={setDateFrom} className="w-40" />
+                  <span className="text-gray-500">to</span>
+                  <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={setDateTo} className="w-40" />
+                  {hasActiveTruckingFilters ? (
+                    <Button
+                      type="button"
+                      onClick={clearTruckingFilters}
+                      variant="ghost"
+                      size="sm"
+                      className="text-gray-500"
+                    >
+                      <X className="h-4 w-4 mr-1" />
+                      Clear
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Section 2: Summary Trucking Status */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              Status Distribution
+              Summary Trucking Status
               {summaryFetching ? (
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
               ) : null}
@@ -3001,7 +3368,7 @@ function TruckingPageContent() {
               ].map((statusInfo, index, array) => {
                 const isStatusActive = statusFilter === statusInfo.status
                 const s = truckingSection1Summary?.status
-                const summaryCount =
+                const count =
                   statusInfo.status === 'UNPLANNED'
                     ? Number(s?.unplanned ?? 0)
                     : statusInfo.status === 'PLANNED'
@@ -3013,8 +3380,6 @@ function TruckingPageContent() {
                         : statusInfo.status === 'CANCELLED'
                           ? Number(s?.cancelled ?? 0)
                           : 0
-                const count =
-                  isStatusActive && statusFilter !== 'ALL' ? totalCount : summaryCount
                 return (
                   <div key={statusInfo.status} className="flex items-center flex-shrink-0">
                     <div className="relative">
@@ -3026,17 +3391,14 @@ function TruckingPageContent() {
                           isStatusActive ? 'ring-4 ring-blue-400 ring-offset-2' : ''
                         }`}
                       >
-                        {/* Count Badge */}
                         <div className={`absolute -top-3 -right-3 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10`}>
                           {count}
                         </div>
-                        {/* Status Label */}
                         <span className={`text-xs md:text-sm font-semibold ${statusInfo.textColor} text-center px-2 leading-tight ${isStatusActive ? 'font-bold' : ''}`}>
                           {statusInfo.label}
                         </span>
                       </button>
                     </div>
-                    {/* Arrow */}
                     {index < array.length - 1 && (
                       <div className="flex-shrink-0 mx-2 md:mx-3">
                         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-gray-400">
@@ -3051,119 +3413,7 @@ function TruckingPageContent() {
           </CardContent>
         </Card>
 
-        {/* Filters (list + daily planning) */}
-        <Card>
-          <CardContent className="pt-6">
-            <div className="space-y-4">
-              <div className="flex flex-wrap gap-4">
-                <div className="relative min-w-[12rem] flex-1">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
-                  <Input
-                    placeholder="Search by Operation ID, Contract Numbers, PO No, or Supplier..."
-                    value={searchDraft}
-                    onChange={(e) => setSearchDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        applySearch()
-                      }
-                    }}
-                    className="pl-10"
-                  />
-                </div>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => {
-                    setPage(1)
-                    setHasMore(true)
-                    setStatusFilter(e.target.value)
-                  }}
-                  className="rounded-lg border px-4 py-2"
-                >
-                  <option value="ALL">All Status</option>
-                  <option value="UNPLANNED">Unplanned</option>
-                  <option value="PLANNED">Planned</option>
-                  <option value="IN_PROGRESS">In Progress</option>
-                  <option value="COMPLETED">Completed</option>
-                  <option value="CANCELLED">Cancelled</option>
-                </select>
-                <select
-                  value={lateIndicatorFilter}
-                  onChange={(e) => setLateIndicatorFilter(e.target.value)}
-                  className="rounded-lg border px-4 py-2"
-                >
-                  <option value="ALL">All Late Indicator</option>
-                  <option value="ON_TIME">On Time</option>
-                  <option value="LATE">Late</option>
-                  <option value="NA">N/A</option>
-                </select>
-                {/* Truck Loading / Discharge location filters — hidden until master data is ready */}
-                {false && (
-                  <>
-                    <Input
-                      placeholder="Truck Loading Location"
-                      value={loadingLocationFilter}
-                      onChange={(e) => setLoadingLocationFilter(e.target.value)}
-                      className="w-full sm:w-48"
-                    />
-                    <Input
-                      placeholder="Truck Discharge Location"
-                      value={unloadingLocationFilter}
-                      onChange={(e) => setUnloadingLocationFilter(e.target.value)}
-                      className="w-full sm:w-48"
-                    />
-                  </>
-                )}
-              </div>
-
-              <PerformanceScopeFilters
-                hideGroupPlantFilter={false}
-                incotermOptions={availableIncoterms}
-                selectedIncoterms={selectedIncoterms}
-                onIncotermsChange={setSelectedIncoterms}
-                showProductFilter
-                productOptions={availableProducts}
-                selectedProducts={selectedProducts}
-                onProductsChange={handleProductsChange}
-                groupPlantOptions={availableGroupPlants}
-                selectedGroupPlants={selectedGroupPlants}
-                onGroupPlantsChange={handleGroupPlantsChange}
-                dateFrom={dateFrom}
-                dateTo={dateTo}
-                onDateFromChange={setDateFrom}
-                onDateToChange={setDateTo}
-                showDateRange={false}
-                incotermEmptyMessage="Loading incoterms..."
-                productEmptyMessage="Loading products..."
-                groupPlantPlaceholder="Select group plant(s)"
-                groupPlantEmptyMessage="No group plants"
-              />
-
-              <div className="flex flex-wrap items-center gap-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="text-sm font-medium text-gray-700">Contract Date:</label>
-                  <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={setDateFrom} className="w-40" />
-                  <span className="text-gray-500">to</span>
-                  <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={setDateTo} className="w-40" />
-                  {hasActiveTruckingFilters ? (
-                    <Button
-                      type="button"
-                      onClick={clearTruckingFilters}
-                      variant="ghost"
-                      size="sm"
-                      className="text-gray-500"
-                    >
-                      <X className="h-4 w-4 mr-1" />
-                      Clear
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Calendar is rendered in the main section below (replaces All Trucking Operations on that tab). */}
+        {/* Section 3: Main View Table — calendar or list tab below */}
 
         {activeTab === 'calendar' && (
           <>
@@ -3443,7 +3693,11 @@ function TruckingPageContent() {
         <Dialog open={bulkCreateUploadOpen} onOpenChange={setBulkCreateUploadOpen}>
           <DialogContent className="max-w-2xl max-h-[88vh]">
             <DialogHeader>
-              <DialogTitle>Bulk create trucking upload result</DialogTitle>
+              <DialogTitle>
+                {isUnplannedPlanningTemplateMode(statusFilter)
+                  ? 'Unplanned planning upload result'
+                  : 'Bulk create trucking upload result'}
+              </DialogTitle>
             </DialogHeader>
             {bulkCreateSummary ? (
               <div className="space-y-4 text-sm">
@@ -3498,6 +3752,22 @@ function TruckingPageContent() {
                           {f.operation_ids?.length ? (
                             <span className="text-gray-500"> [{f.operation_ids.join(', ')}]</span>
                           ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(bulkCreateSummary.operationWarnings?.length ?? 0) > 0 && (
+                  <div>
+                    <div className="font-medium text-amber-900 mb-2">Warnings</div>
+                    <ul className="max-h-40 overflow-auto rounded border border-amber-200 bg-amber-50 text-xs space-y-2 p-2">
+                      {bulkCreateSummary.operationWarnings!.map((f, i) => (
+                        <li key={`ow-${i}`} className="text-amber-950">
+                          <span className="font-semibold">{f.contract_ext_no}</span>
+                          {f.rowNumbers?.length ? (
+                            <span className="text-amber-800"> (rows {f.rowNumbers.join(', ')})</span>
+                          ) : null}
+                          : {f.reason}
                         </li>
                       ))}
                     </ul>
@@ -3584,13 +3854,21 @@ function TruckingPageContent() {
               </CardTitle>
               <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                 <span className="whitespace-nowrap tabular-nums text-gray-700">
-                  <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> operations
+                  <span className="font-semibold">{tableHeaderCount.value.toLocaleString('en-US')}</span>{' '}
+                  {tableHeaderCount.noun}
                 </span>
                 <span className="text-gray-400" aria-hidden>
                   ·
                 </span>
                 <span className="whitespace-nowrap tabular-nums">
-                  Page {page}/{totalPages} · {truckingOperations.length} rows
+                  Page {page}/{totalPages} · {totalCount.toLocaleString('en-US')} rows
+                  {statusFilter === 'UNPLANNED' && unplannedBreakdown ? (
+                    <>
+                      {' '}
+                      ({unplannedBreakdown.contractRows.toLocaleString('en-US')} without trucking ·{' '}
+                      {unplannedBreakdown.executionRows.toLocaleString('en-US')} ops)
+                    </>
+                  ) : null}
                 </span>
                 {truckingActiveFilterScopeLabel ? (
                   <>
@@ -3607,6 +3885,21 @@ function TruckingPageContent() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               {truckingViewToggle}
               <div className="flex flex-wrap items-center gap-2 ml-auto">
+                {isUnplannedPlanningTemplateMode(statusFilter) ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                    onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+                    disabled={bulkCreateUploading || listFetching}
+                  >
+                    {bulkCreateUploading ? (
+                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
+                    ) : (
+                      <><Upload className="h-4 w-4 mr-2" />Upload XLSX</>
+                    )}
+                  </Button>
+                ) : null}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex">
@@ -3615,9 +3908,15 @@ function TruckingPageContent() {
                         size="sm"
                         className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
                         onClick={downloadFilteredActualsTemplate}
-                        disabled={!isListActualsTemplateDownloadEnabled || listFetching}
+                        disabled={
+                          !isListActualsTemplateDownloadEnabled || listFetching || templateDownloading
+                        }
                       >
-                        <Download className="h-4 w-4 mr-2" />
+                        {templateDownloading ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Download className="h-4 w-4 mr-2" />
+                        )}
                         Download Template
                       </Button>
                     </span>
@@ -3961,36 +4260,40 @@ function TruckingPageContent() {
                                             tooltip={truckingEditTooltip(operation)}
                                           />
                                         )}
-                                        <Button
-                                          variant="outline"
-                                          size="icon"
-                                          onClick={() => handleViewDocuments(operation)}
-                                          title="Documents"
-                                          className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
-                                        >
-                                          <FileText className="h-4 w-4" />
-                                        </Button>
-                                        <input
-                                          id={`trucking-file-${operation.id}`}
-                                          type="file"
-                                          accept="application/pdf,image/png,image/jpeg"
-                                          className="hidden"
-                                          onChange={(e) => handleUploadFileChange(operation, e)}
-                                        />
-                                        <Button
-                                          variant="outline"
-                                          size="icon"
-                                          onClick={() => document.getElementById(`trucking-file-${operation.id}`)?.click()}
-                                          disabled={uploadingId === operation.id}
-                                          title="Upload"
-                                          className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
-                                        >
-                                          {uploadingId === operation.id ? (
-                                            <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
-                                          ) : (
-                                            <Upload className="h-4 w-4" />
-                                          )}
-                                        </Button>
+                                        {!isTruckingContractBacklogRow(operation) ? (
+                                          <>
+                                            <Button
+                                              variant="outline"
+                                              size="icon"
+                                              onClick={() => handleViewDocuments(operation)}
+                                              title="Documents"
+                                              className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
+                                            >
+                                              <FileText className="h-4 w-4" />
+                                            </Button>
+                                            <input
+                                              id={`trucking-file-${operation.id}`}
+                                              type="file"
+                                              accept="application/pdf,image/png,image/jpeg"
+                                              className="hidden"
+                                              onChange={(e) => handleUploadFileChange(operation, e)}
+                                            />
+                                            <Button
+                                              variant="outline"
+                                              size="icon"
+                                              onClick={() => document.getElementById(`trucking-file-${operation.id}`)?.click()}
+                                              disabled={uploadingId === operation.id}
+                                              title="Upload"
+                                              className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
+                                            >
+                                              {uploadingId === operation.id ? (
+                                                <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
+                                              ) : (
+                                                <Upload className="h-4 w-4" />
+                                              )}
+                                            </Button>
+                                          </>
+                                        ) : null}
                                       </>
                                     )}
                                   </div>
@@ -4093,36 +4396,40 @@ function TruckingPageContent() {
                                     tooltip={truckingEditTooltip(operation)}
                                   />
                                 )}
-                                <Button
-                                  variant="outline"
-                                  size="icon"
-                                  onClick={() => handleViewDocuments(operation)}
-                                  title="Documents"
-                                  className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
-                                >
-                                  <FileText className="h-4 w-4" />
-                                </Button>
-                                <input
-                                  id={`trucking-file-${operation.id}`}
-                                  type="file"
-                                  accept="application/pdf,image/png,image/jpeg"
-                                  className="hidden"
-                                  onChange={(e) => handleUploadFileChange(operation, e)}
-                                />
-                                <Button
-                                  variant="outline"
-                                  size="icon"
-                                  onClick={() => document.getElementById(`trucking-file-${operation.id}`)?.click()}
-                                  disabled={uploadingId === operation.id}
-                                  title="Upload"
-                                  className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
-                                >
-                                  {uploadingId === operation.id ? (
-                                    <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
-                                  ) : (
-                                    <Upload className="h-4 w-4" />
-                                  )}
-                                </Button>
+                                {!isTruckingContractBacklogRow(operation) ? (
+                                  <>
+                                    <Button
+                                      variant="outline"
+                                      size="icon"
+                                      onClick={() => handleViewDocuments(operation)}
+                                      title="Documents"
+                                      className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
+                                    >
+                                      <FileText className="h-4 w-4" />
+                                    </Button>
+                                    <input
+                                      id={`trucking-file-mobile-${operation.id}`}
+                                      type="file"
+                                      accept="application/pdf,image/png,image/jpeg"
+                                      className="hidden"
+                                      onChange={(e) => handleUploadFileChange(operation, e)}
+                                    />
+                                    <Button
+                                      variant="outline"
+                                      size="icon"
+                                      onClick={() => document.getElementById(`trucking-file-mobile-${operation.id}`)?.click()}
+                                      disabled={uploadingId === operation.id}
+                                      title="Upload"
+                                      className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
+                                    >
+                                      {uploadingId === operation.id ? (
+                                        <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
+                                      ) : (
+                                        <Upload className="h-4 w-4" />
+                                      )}
+                                    </Button>
+                                  </>
+                                ) : null}
                               </>
                             )}
                           </div>
@@ -4309,7 +4616,7 @@ function TruckingPageContent() {
                 {totalPages > 1 && (
                   <div className="flex items-center justify-between pt-4 border-t mt-2">
                     <div className="text-sm text-gray-700">
-                      Showing page {page} of {totalPages} ({totalCount} total operations)
+                      Showing page {page} of {totalPages} ({tableHeaderCount.value.toLocaleString('en-US')} total {tableHeaderCount.noun})
                     </div>
                     <div className="flex items-center gap-2">
                       <Button
@@ -4415,16 +4722,19 @@ function TruckingPageContent() {
         initialContractId={
           plotTruckingFromTable?.contractId ??
           editTruckingFromTable?.contractId ??
+          createTruckingPrefill?.contractId ??
           null
         }
         initialContractExtNo={
           plotTruckingFromTable?.contractExtNo ??
           editTruckingFromTable?.contractExtNo ??
+          createTruckingPrefill?.contractExtNo ??
           null
         }
         initialPoNumber={
           plotTruckingFromTable?.poNumber ??
           editTruckingFromTable?.poNumber ??
+          createTruckingPrefill?.poNumber ??
           null
         }
         onClose={handleCloseTruckingModal}

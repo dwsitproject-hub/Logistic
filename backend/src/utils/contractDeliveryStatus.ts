@@ -11,14 +11,35 @@ export function isContractDeliveryClosed(status: unknown): boolean {
 }
 
 /** SAP import status with contracts.status fallback — same signal as Contract Performance Open/Close. */
-export function sqlContractImportStatusExpr(contractAlias = 'c'): string {
+export function sqlContractImportStatusExpr(
+  contractAlias = 'c',
+  poNumberRef = `${contractAlias}.po_number`,
+): string {
   return `
     COALESCE(
       (
-        SELECT COALESCE(spd.data->'contract'->>'status', spd.data->>'status')
+        SELECT COALESCE(
+          spd.data->'contract'->>'status',
+          spd.data->'raw'->>'Status',
+          spd.data->>'status'
+        )
         FROM sap_processed_data spd
         WHERE spd.contract_number = ${contractAlias}.contract_id
-        ORDER BY spd.created_at DESC NULLS LAST
+          AND (
+            NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NULL
+            OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') IS NULL
+            OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
+          )
+        ORDER BY
+          CASE
+            WHEN NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NOT NULL
+              AND NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
+              THEN 0
+            WHEN NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') IS NULL
+              THEN 1
+            ELSE 2
+          END,
+          spd.created_at DESC NULLS LAST
         LIMIT 1
       ),
       ${contractAlias}.status

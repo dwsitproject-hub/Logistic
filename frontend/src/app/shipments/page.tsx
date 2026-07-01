@@ -1020,11 +1020,6 @@ function ShipmentsPageContent() {
 
   const [showAddShipment, setShowAddShipment] = useState(false)
   const [addShipmentPrefilledPOs, setAddShipmentPrefilledPOs] = useState<ShipmentPoOption[] | null>(null)
-  const [unplannedTableBreakdown, setUnplannedTableBreakdown] = useState<{
-    contractRows: number
-    shipmentRows: number
-    totalTableRows: number
-  } | null>(null)
   const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
     shipmentId: string
     editContractId: string | null
@@ -1407,16 +1402,6 @@ function ShipmentsPageContent() {
         if (envelope?.data?.summary) {
           setShipmentsSection1Summary(envelope.data.summary)
           setSummaryFetching(false)
-        }
-        const breakdown = envelope?.data?.unplannedBreakdown
-        if (breakdown) {
-          setUnplannedTableBreakdown({
-            contractRows: Number(breakdown.contractRows ?? 0),
-            shipmentRows: Number(breakdown.shipmentRows ?? 0),
-            totalTableRows: Number(breakdown.totalTableRows ?? total),
-          })
-        } else {
-          setUnplannedTableBreakdown(null)
         }
       }
 
@@ -2338,21 +2323,19 @@ function ShipmentsPageContent() {
   }, [statusFilter])
   const tableShipmentCount = useMemo(() => totalCount, [totalCount])
 
-  const unplannedTableSummaryLabel = useMemo(() => {
-    if (statusFilter !== 'UNPLANNED') return null
-    const fromList = unplannedTableBreakdown
-    const fromSummary = shipmentsSection1Summary?.unplannedTable
-    const contractRows = Number(
-      fromList?.contractRows ?? fromSummary?.contractRows ?? section1StatusCounts.unplanned ?? 0,
-    )
-    const shipmentRows = Number(fromList?.shipmentRows ?? fromSummary?.shipmentRows ?? 0)
-    return `Contract: ${contractRows.toLocaleString('en-US')} · Shipment: ${shipmentRows.toLocaleString('en-US')}`
-  }, [
-    statusFilter,
-    unplannedTableBreakdown,
-    shipmentsSection1Summary,
-    section1StatusCounts.unplanned,
-  ])
+  /** Unplanned view table: headline count matches Section 1 card (distinct open contracts), not hybrid row total. */
+  const tableHeaderCount = useMemo(() => {
+    if (statusFilter === 'UNPLANNED') {
+      return {
+        value: section1StatusCounts.unplanned,
+        noun: 'contracts' as const,
+      }
+    }
+    return {
+      value: tableShipmentCount,
+      noun: 'shipments' as const,
+    }
+  }, [statusFilter, section1StatusCounts.unplanned, tableShipmentCount])
 
   const section3TableLoading = loading && shipments.length === 0
   const section1DataLoading =
@@ -2821,6 +2804,19 @@ function ShipmentsPageContent() {
       )
     },
     {
+      id: 'supplier',
+      label: 'Supplier',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.supplier || s.suppliers || '',
+      render: (s) => (
+        <OperationalStackedCommaCell
+          value={s.supplier || s.suppliers}
+          title={s.supplier || s.suppliers || ''}
+        />
+      ),
+    },
+    {
       id: 'vessel_name',
       label: 'Vessel',
       defaultVisible: true,
@@ -2866,7 +2862,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => s.sto_quantity || s.total_quantity_shipped || s.quantity_shipped || 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(s.sto_quantity || s.total_quantity_shipped || s.quantity_shipped)}
+          {formatQtyMtFromKg(s.sto_quantity ?? s.total_quantity_shipped ?? s.quantity_shipped)}
         </span>
       )
     },
@@ -4801,7 +4797,8 @@ function ShipmentsPageContent() {
                 </CardTitle>
                 <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                     <span className="whitespace-nowrap tabular-nums text-gray-700">
-                      <span className="font-semibold">{tableShipmentCount.toLocaleString('en-US')}</span> shipments
+                      <span className="font-semibold">{tableHeaderCount.value.toLocaleString('en-US')}</span>{' '}
+                      {tableHeaderCount.noun}
                     </span>
                     <span className="text-gray-400" aria-hidden>
                       ·
@@ -4816,16 +4813,6 @@ function ShipmentsPageContent() {
                         </span>
                         <span className="whitespace-nowrap font-medium text-blue-700">
                           {shipmentsTableScopeLabel}
-                        </span>
-                      </>
-                    ) : null}
-                    {unplannedTableSummaryLabel ? (
-                      <>
-                        <span className="text-gray-400" aria-hidden>
-                          ·
-                        </span>
-                        <span className="whitespace-nowrap font-medium text-slate-700">
-                          {unplannedTableSummaryLabel}
                         </span>
                       </>
                     ) : null}
@@ -7071,6 +7058,11 @@ function ShipmentsPageContent() {
         editContractNumbers={editShipmentFromTable?.editContractNumbers ?? null}
         prefilledPOs={addShipmentPrefilledPOs}
         onClose={handleCloseShipmentModal}
+        onShipmentChanged={() => {
+          invalidateLogisticsListCaches()
+          section1SummaryForceNextFetchRef.current = true
+          void fetchShipments(1, undefined, { force: true })
+        }}
         onSubmit={async (payload) => {
           if (editShipmentFromTable?.readOnly) return
           await submitAddNewShipmentPayload(payload)

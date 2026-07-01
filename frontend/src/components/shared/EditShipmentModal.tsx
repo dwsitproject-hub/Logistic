@@ -50,7 +50,11 @@ import {
   type VesselPortsQuantityEdits,
   type VesselPortsQuantityRow,
 } from '@/components/shipments/VesselPortsQuantitiesTable'
-import type { AddNewShipmentSubmitPayload } from '@/components/shared/addNewShipmentTypes'
+import type { AddNewShipmentSubmitPayload, ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
+import {
+  attachPurchaseOrderToShipment,
+  fetchShipmentAvailablePurchaseOrders,
+} from '@/components/shared/addNewShipmentTypes'
 import {
   VESSEL_MODAL_BODY_CLASS,
   VESSEL_MODAL_COMPACT_TD,
@@ -76,6 +80,7 @@ import {
 } from '@/lib/shipmentAtaFields'
 import {
   usePermissions,
+  canCreatePermission,
   canEditPermission,
 } from '@/components/PermissionsContext'
 const SHIPMENT_SLD_DOC_TYPE = 'SLD'
@@ -265,6 +270,8 @@ export type EditShipmentModalProps = {
   editContractNumbers?: string | null
   /** Read-only mode (e.g. Cancelled shipments on Shipments view table). */
   readOnly?: boolean
+  /** Called after PO attach so parent can refresh Shipments list. */
+  onShipmentChanged?: () => void
 }
 
 export function EditShipmentModal({
@@ -276,9 +283,11 @@ export function EditShipmentModal({
   editStoNumber = null,
   editContractNumbers = null,
   readOnly = false,
+  onShipmentChanged,
 }: EditShipmentModalProps) {
   const perms = usePermissions()
   const canEditShipment = canEditPermission(perms, 'data.shipments')
+  const canAddShipment = canCreatePermission(perms, 'data.shipments')
 
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -319,6 +328,12 @@ export function EditShipmentModal({
   const [activityLog, setActivityLog] = useState<ActivityLogRow[]>([])
   const [activityLoading, setActivityLoading] = useState(false)
 
+  const [availablePoOptions, setAvailablePoOptions] = useState<ShipmentPoOption[]>([])
+  const [loadingAvailablePos, setLoadingAvailablePos] = useState(false)
+  const [selectedAddPoKey, setSelectedAddPoKey] = useState('')
+  const [addPoQtyMt, setAddPoQtyMt] = useState('')
+  const [addingPo, setAddingPo] = useState(false)
+
   const [vesselSuggestions, setVesselSuggestions] = useState<
     Array<{ vessel_code: string; vessel_name: string; vessel_owner: string | null }>
   >([])
@@ -328,6 +343,7 @@ export function EditShipmentModal({
 
   const isQuantityUnlocked = hasUploadedSld || hasUploadedSdd
   const canModifyShipment = canEditShipment && !readOnly
+  const canAddPoOnEdit = (canEditShipment || canAddShipment) && !readOnly && Boolean(shipmentId)
 
   const qtyTableRows: VesselPortsQuantityRow[] = useMemo(
     () =>
@@ -358,6 +374,17 @@ export function EditShipmentModal({
     [qtyTableRows, qtyEdits],
   )
 
+  const selectedAddPoOption = useMemo(
+    () => availablePoOptions.find((o) => o.key === selectedAddPoKey) ?? null,
+    [availablePoOptions, selectedAddPoKey],
+  )
+
+  const selectedPoOutstandingMt = useMemo(() => {
+    if (!selectedAddPoOption?.contractData) return null
+    const kg = Number(selectedAddPoOption.contractData.outstanding_quantity ?? 0)
+    return Number.isFinite(kg) ? kg / 1000 : null
+  }, [selectedAddPoOption])
+
   const resetState = useCallback(() => {
     setShipmentId(null)
     setVesselName('')
@@ -377,8 +404,34 @@ export function EditShipmentModal({
     setAtaIsEditing(false)
     setHasUploadedSld(false)
     setHasUploadedSdd(false)
+    setAvailablePoOptions([])
+    setSelectedAddPoKey('')
+    setAddPoQtyMt('')
+    setAddingPo(false)
+    setLoadingAvailablePos(false)
     initSessionRef.current = null
   }, [])
+
+  const loadAvailablePurchaseOrders = useCallback(
+    async (sid: string) => {
+      if (readOnly || (!canEditShipment && !canAddShipment)) {
+        setAvailablePoOptions([])
+        return
+      }
+      setLoadingAvailablePos(true)
+      try {
+        const options = await fetchShipmentAvailablePurchaseOrders(sid)
+        setAvailablePoOptions(options)
+        setSelectedAddPoKey('')
+        setAddPoQtyMt('')
+      } catch {
+        setAvailablePoOptions([])
+      } finally {
+        setLoadingAvailablePos(false)
+      }
+    },
+    [canAddShipment, canEditShipment, readOnly],
+  )
 
   const hydrateQuantityDocs = useCallback(async (sid: string) => {
     try {
@@ -668,6 +721,7 @@ export function EditShipmentModal({
 
         await hydrateQuantityDocs(sid)
         await loadActivityLog(sid)
+        await loadAvailablePurchaseOrders(sid)
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : 'Failed to load shipment'
         setNotification({ type: 'error', message: msg })
@@ -675,8 +729,80 @@ export function EditShipmentModal({
         setLoading(false)
       }
     },
-    [hydrateQuantityDocs, loadActivityLog, editContractNumbers],
+    [hydrateQuantityDocs, loadActivityLog, loadAvailablePurchaseOrders, editContractNumbers],
   )
+
+  const handleAddPo = useCallback(async () => {
+    if (!shipmentId || !selectedAddPoOption) {
+      setNotification({ type: 'error', message: 'Select a PO to add.' })
+      return
+    }
+    const qtyMt = parseFloat(String(addPoQtyMt).replace(/,/g, '').trim())
+    if (!Number.isFinite(qtyMt) || qtyMt <= 0) {
+      setNotification({ type: 'error', message: 'Assign STO (MT) must be greater than 0.' })
+      return
+    }
+    if (selectedPoOutstandingMt != null && qtyMt > selectedPoOutstandingMt + 1e-9) {
+      setNotification({
+        type: 'error',
+        message: `Assigned quantity (${formatNumber(qtyMt)} MT) exceeds outstanding (${formatNumber(selectedPoOutstandingMt)} MT).`,
+      })
+      return
+    }
+    if (
+      vesselCapacityMt != null &&
+      vesselCapacityMt > 0 &&
+      totalAssignedMt + qtyMt > vesselCapacityMt + 1e-9
+    ) {
+      setNotification({
+        type: 'error',
+        message: `Total assigned quantity would exceed vessel capacity (${formatNumber(vesselCapacityMt)} MT).`,
+      })
+      return
+    }
+
+    setAddingPo(true)
+    setNotification(null)
+    try {
+      await attachPurchaseOrderToShipment({
+        shipmentId,
+        contractRowId: selectedAddPoOption.key,
+        stoQtyAssignedMt: qtyMt,
+      })
+      setNotification({ type: 'success', message: 'PO added to shipment successfully.' })
+      const contractId = editContractId?.trim()
+      const directId = editShipmentIdProp?.trim()
+      const sto = editStoNumber?.trim()
+      if (directId) {
+        await loadShipment(contractId || directId, directId, sto)
+      } else if (contractId) {
+        await loadShipment(contractId, null, sto)
+      }
+      onShipmentChanged?.()
+    } catch (error: unknown) {
+      const axiosErr = error as {
+        response?: { data?: { error?: { message?: string } } }
+        message?: string
+      }
+      const msg =
+        axiosErr.response?.data?.error?.message || axiosErr.message || 'Failed to add PO to shipment'
+      setNotification({ type: 'error', message: msg })
+    } finally {
+      setAddingPo(false)
+    }
+  }, [
+    addPoQtyMt,
+    editContractId,
+    editShipmentIdProp,
+    editStoNumber,
+    loadShipment,
+    onShipmentChanged,
+    selectedAddPoOption,
+    selectedPoOutstandingMt,
+    shipmentId,
+    totalAssignedMt,
+    vesselCapacityMt,
+  ])
 
   useEffect(() => {
     if (!open) {
@@ -1098,6 +1224,115 @@ export function EditShipmentModal({
                   <label className="mb-1 block text-xs font-medium text-gray-600">STO Number</label>
                   <Input value={stoNumber || '—'} readOnly disabled className={`h-9 text-sm ${READONLY_FIELD_CLASS}`} />
                 </div>
+
+                {canAddPoOnEdit && (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-xs font-semibold text-gray-700">Add PO to shipment</label>
+                      <span className="text-[10px] text-gray-500">
+                        Same STO group · outstanding &gt; 0 · no SAP STO yet
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                      <div className="min-w-0 flex-1">
+                        <label className="mb-1 block text-xs font-medium text-gray-600">
+                          PO Number <span className="text-red-500">*</span>
+                        </label>
+                        <select
+                          value={selectedAddPoKey}
+                          onChange={(e) => {
+                            setSelectedAddPoKey(e.target.value)
+                            setAddPoQtyMt('')
+                          }}
+                          disabled={addingPo || loadingAvailablePos}
+                          className="h-9 w-full rounded-md border border-gray-300 bg-white px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="">
+                            {loadingAvailablePos
+                              ? 'Loading POs…'
+                              : availablePoOptions.length === 0
+                                ? 'No eligible PO available'
+                                : 'Select PO…'}
+                          </option>
+                          {availablePoOptions.map((po) => (
+                            <option key={po.key} value={po.key}>
+                              {po.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="w-full sm:w-36">
+                        <label className="mb-1 block text-xs font-medium text-gray-600">
+                          Assign STO (MT) <span className="text-red-500">*</span>
+                        </label>
+                        <Input
+                          value={addPoQtyMt}
+                          onChange={(e) => setAddPoQtyMt(e.target.value)}
+                          placeholder="0"
+                          className="h-9 text-sm"
+                          disabled={!selectedAddPoKey || addingPo || loadingAvailablePos}
+                        />
+                        {selectedPoOutstandingMt != null && selectedPoOutstandingMt > 0 && (
+                          <p className="mt-1 text-[10px] text-gray-500">
+                            Max {formatNumber(selectedPoOutstandingMt)} MT outstanding
+                          </p>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-9 shrink-0 bg-blue-600 px-4 text-white hover:bg-blue-700"
+                        disabled={
+                          !selectedAddPoKey ||
+                          addingPo ||
+                          loadingAvailablePos ||
+                          availablePoOptions.length === 0
+                        }
+                        onClick={() => void handleAddPo()}
+                      >
+                        {addingPo ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <>
+                            <Plus className="mr-1 h-3.5 w-3.5" />
+                            Add PO
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    {loadingAvailablePos ? (
+                      <div className="flex items-center gap-2 text-xs text-gray-500">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Loading available POs…
+                      </div>
+                    ) : availablePoOptions.length === 0 ? (
+                      <p className="text-xs italic text-gray-500">
+                        No PO lines available — only POs without SAP STO and with outstanding quantity can be added.
+                      </p>
+                    ) : availablePoOptions.length <= 8 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        <span className="w-full text-[10px] text-gray-500">Quick add:</span>
+                        {availablePoOptions.map((po) => (
+                          <button
+                            key={po.key}
+                            type="button"
+                            disabled={addingPo}
+                            className="inline-flex items-center rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+                            onClick={() => {
+                              setSelectedAddPoKey(po.key)
+                              const outstandingMt =
+                                (Number(po.contractData?.outstanding_quantity) || 0) / 1000
+                              if (outstandingMt > 0) setAddPoQtyMt(String(outstandingMt))
+                            }}
+                          >
+                            <Plus className="mr-0.5 h-3 w-3" />
+                            {po.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
 
                 <div className="overflow-x-auto rounded-lg border border-gray-200">
                   <Table>

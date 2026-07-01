@@ -56,6 +56,156 @@ export async function findActiveTruckingOpsByContractId(contractUuid: string): P
   return result.rows as ActiveTruckingOpRow[];
 }
 
+export function truckingOperationIdIsAssigned(operationId: unknown): boolean {
+  return String(operationId ?? '').trim().length > 0;
+}
+
+export type ContractForUnplannedPlanningRow = ContractByExtNoRow & {
+  po_number?: string | null;
+  transport_mode?: string | null;
+};
+
+/** Resolve LAND contract by PO (preferred) or Contract Ext No / contract_id. */
+export async function resolveContractForUnplannedPlanningUpload(args: {
+  poNumber?: string;
+  contractExtNo?: string;
+}): Promise<ContractForUnplannedPlanningRow | null> {
+  const po = String(args.poNumber ?? '').trim();
+  const ext = String(args.contractExtNo ?? '').trim();
+  if (!po && !ext) return null;
+
+  const params: string[] = [];
+  const matchParts: string[] = [];
+  if (po) {
+    params.push(po);
+    matchParts.push(`TRIM(COALESCE(c.po_number::text, '')) = TRIM($${params.length}::text)`);
+  }
+  if (ext) {
+    params.push(ext);
+    const p = `$${params.length}::text`;
+    matchParts.push(`(
+      TRIM(UPPER(COALESCE(l.contract_ext_no, ''))) = TRIM(UPPER(${p}))
+      OR TRIM(c.contract_id::text) = TRIM(${p})
+    )`);
+  }
+  const matchSql = matchParts.length === 1 ? matchParts[0] : matchParts.join(' AND ');
+
+  const result = await query(
+    `WITH latest_spd AS (
+       SELECT DISTINCT ON (spd.contract_number)
+         spd.contract_number,
+         COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no
+       FROM sap_processed_data spd
+       WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+       ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+     )
+     SELECT c.id, c.delivery_start_date, c.delivery_end_date, c.po_number, c.transport_mode
+     FROM contracts c
+     LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+     WHERE ${matchSql}
+     ORDER BY
+       CASE
+         WHEN $${params.length + 1}::text IS NOT NULL
+           AND TRIM(COALESCE(c.po_number::text, '')) = TRIM($${params.length + 1}::text)
+           THEN 0
+         ELSE 1
+       END,
+       c.updated_at DESC NULLS LAST,
+       c.created_at DESC
+     LIMIT 1`,
+    [...params, po || null],
+  );
+  return (result.rows[0] as ContractForUnplannedPlanningRow | undefined) ?? null;
+}
+
+export type UnplannedPlanningTruckingOpRow = ActiveTruckingOpRow & {
+  daily_deliverables: unknown;
+  contract_po_number: string | null;
+  contract_number: string | null;
+  contract_ext_no: string | null;
+  duplicate_sibling_count: number;
+};
+
+/**
+ * Resolve a single trucking operation for Unplanned planning upload (match PO / Contract Ext No).
+ * Prefers rows that already have an Operation ID assigned.
+ */
+export async function findTruckingOpForUnplannedPlanningUpload(args: {
+  poNumber?: string;
+  contractExtNo?: string;
+}): Promise<UnplannedPlanningTruckingOpRow | null> {
+  const po = String(args.poNumber ?? '').trim();
+  const ext = String(args.contractExtNo ?? '').trim();
+  if (!po && !ext) return null;
+
+  const params: string[] = [];
+  const matchParts: string[] = [];
+  if (po) {
+    params.push(po);
+    matchParts.push(`TRIM(COALESCE(c.po_number::text, '')) = TRIM($${params.length}::text)`);
+  }
+  if (ext) {
+    params.push(ext);
+    const p = `$${params.length}::text`;
+    matchParts.push(`(
+      TRIM(UPPER(COALESCE(ext.ext_no, ''))) = TRIM(UPPER(${p}))
+      OR TRIM(c.contract_id::text) = TRIM(${p})
+    )`);
+  }
+  const matchSql = matchParts.length === 1 ? matchParts[0] : matchParts.join(' AND ');
+
+  const result = await query(
+    `WITH candidates AS (
+       SELECT
+         t.id,
+         t.operation_id,
+         t.status,
+         t.quantity_delivered,
+         t.daily_deliverables,
+         c.delivery_start_date,
+         c.delivery_end_date,
+         t.eta_delivery_start_date,
+         t.eta_delivery_end_date,
+         t.eta_trucking_start_date,
+         t.eta_trucking_completion_date,
+         t.trucking_start_date,
+         t.trucking_completion_date,
+         c.po_number AS contract_po_number,
+         c.contract_id AS contract_number,
+         ext.ext_no AS contract_ext_no,
+         COUNT(*) OVER () AS duplicate_sibling_count,
+         ROW_NUMBER() OVER (
+           ORDER BY
+             CASE
+               WHEN NULLIF(TRIM(COALESCE(t.operation_id::text, '')), '') IS NOT NULL THEN 0
+               ELSE 1
+             END,
+             ${SQL_TRUCKING_KEEPER_PRIORITY_ORDER}
+         ) AS rn
+       FROM trucking_operations t
+       INNER JOIN contracts c ON c.id = t.contract_id
+       LEFT JOIN LATERAL (
+         SELECT NULLIF(TRIM(COALESCE(
+           spd.data->'raw'->>'Contract Ext No',
+           spd.data->>'Contract Ext No'
+         )), '') AS ext_no
+         FROM sap_processed_data spd
+         WHERE spd.contract_number = c.contract_id
+         ORDER BY spd.created_at DESC NULLS LAST
+         LIMIT 1
+       ) ext ON true
+       WHERE COALESCE(t.status, '') <> 'CANCELLED'
+         AND (${matchSql})
+     )
+     SELECT *
+     FROM candidates
+     WHERE rn = 1
+     LIMIT 1`,
+    params,
+  );
+  return (result.rows[0] as UnplannedPlanningTruckingOpRow | undefined) ?? null;
+}
+
 /** Resolve LAND contract by Contract Ext No or contract_id text. */
 export async function resolveContractByExtNoOrId(extNoOrId: string): Promise<ContractByExtNoRow | null> {
   const key = String(extNoOrId ?? '').trim();

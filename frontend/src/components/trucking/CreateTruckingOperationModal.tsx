@@ -184,10 +184,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     start_receive_date: '',
     last_receive_date: '',
   })
-  const [realization, setRealization] = useState({
-    start_date: '',
-    end_date: '',
-  })
 
   const [contractValidation, setContractValidation] = useState<{
     checking: boolean
@@ -449,7 +445,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     })
     setPlanning({ start_date: '', end_date: '', quantity_per_day_mt: '' })
     setSapReceiveDates({ start_receive_date: '', last_receive_date: '' })
-    setRealization({ start_date: '', end_date: '' })
     setContractValidation({ checking: false, exists: false, contractData: null, message: '' })
     setPoNumber('')
     setPoSuggestions([])
@@ -552,17 +547,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       setSapReceiveDates({
         start_receive_date: sliceIsoDate(op.sap_trucking_start_receive_date as string | undefined),
         last_receive_date: sliceIsoDate(op.sap_trucking_last_receive_date as string | undefined),
-      })
-
-      setRealization({
-        start_date:
-          sliceIsoDate(op.realization_start_date as string | undefined) ||
-          sliceIsoDate(op.effective_realization_start_date as string | undefined) ||
-          '',
-        end_date:
-          sliceIsoDate(op.realization_end_date as string | undefined) ||
-          sliceIsoDate(op.effective_realization_end_date as string | undefined) ||
-          '',
       })
 
       if (isEditMode) {
@@ -714,12 +698,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
           trucking_start_date: planning.start_date || null,
           trucking_completion_date: planning.end_date || null,
         })
-        if (isEditMode) {
-          await api.put(`/trucking/${targetOperationId}/realization`, {
-            realization_start_date: realization.start_date || null,
-            realization_end_date: realization.end_date || null,
-          })
-        }
         if (response.data.success) {
           showNotification(
             'success',
@@ -1204,58 +1182,30 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                 </div>
 
                 {isEditMode && (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                          SAP Trucking Start Receive Date
-                          <span className="ml-1 font-normal text-gray-400">(read-only)</span>
-                        </label>
-                        <DateInputDdMmYyyy
-                          valueIso={sapReceiveDates.start_receive_date}
-                          onChangeIso={() => {}}
-                          disabled
-                          className="bg-gray-100 cursor-not-allowed"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                          SAP Trucking Last Receive Date
-                          <span className="ml-1 font-normal text-gray-400">(read-only)</span>
-                        </label>
-                        <DateInputDdMmYyyy
-                          valueIso={sapReceiveDates.last_receive_date}
-                          onChangeIso={() => {}}
-                          disabled
-                          className="bg-gray-100 cursor-not-allowed"
-                        />
-                      </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+                        SAP Trucking Start Receive Date
+                        <span className="ml-1 font-normal text-gray-400">(read-only)</span>
+                      </label>
+                      <DateInputDdMmYyyy
+                        valueIso={sapReceiveDates.start_receive_date}
+                        onChangeIso={() => {}}
+                        disabled
+                        className="bg-gray-100 cursor-not-allowed"
+                      />
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                          Realization Start Receive Date
-                          <span className="ml-1 font-normal text-gray-400">(ATA / manual)</span>
-                        </label>
-                        <DateInputDdMmYyyy
-                          valueIso={realization.start_date}
-                          onChangeIso={(iso) => setRealization((prev) => ({ ...prev, start_date: iso }))}
-                          disabled={isContractClosedEditLocked}
-                          className={isContractClosedEditLocked ? 'bg-gray-100 cursor-not-allowed' : undefined}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                          Realization Last Receive Date
-                          <span className="ml-1 font-normal text-gray-400">(ATA / manual)</span>
-                        </label>
-                        <DateInputDdMmYyyy
-                          valueIso={realization.end_date}
-                          onChangeIso={(iso) => setRealization((prev) => ({ ...prev, end_date: iso }))}
-                          disabled={isContractClosedEditLocked}
-                          className={isContractClosedEditLocked ? 'bg-gray-100 cursor-not-allowed' : undefined}
-                        />
-                      </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+                        SAP Trucking Last Receive Date
+                        <span className="ml-1 font-normal text-gray-400">(read-only)</span>
+                      </label>
+                      <DateInputDdMmYyyy
+                        valueIso={sapReceiveDates.last_receive_date}
+                        onChangeIso={() => {}}
+                        disabled
+                        className="bg-gray-100 cursor-not-allowed"
+                      />
                     </div>
                   </div>
                 )}

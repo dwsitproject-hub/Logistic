@@ -297,6 +297,8 @@ export type AddNewShipmentModalProps = {
   mode?: 'add' | 'edit'
   /** Read-only edit/view (Shipments table — Cancelled rows). */
   readOnly?: boolean
+  /** Refresh Shipments list after Edit modal attaches a PO (without closing modal). */
+  onShipmentChanged?: () => void
 }
 
 export function AddNewShipmentModal({
@@ -311,6 +313,7 @@ export function AddNewShipmentModal({
   editContractNumbers = null,
   mode = 'add',
   readOnly = false,
+  onShipmentChanged,
 }: AddNewShipmentModalProps) {
   const perms = usePermissions()
   const canAddShipment = canCreatePermission(perms, 'data.shipments')
@@ -1844,6 +1847,7 @@ export function AddNewShipmentModal({
         editStoNumber={editStoNumber}
         editContractNumbers={editContractNumbers}
         readOnly={readOnly}
+        onShipmentChanged={onShipmentChanged}
       />
     )
   }

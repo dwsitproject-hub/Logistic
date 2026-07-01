@@ -23,6 +23,7 @@ import {
   bulkUploadDailyPlanningDeliverables,
   downloadBulkCreateTruckingTemplate,
   bulkCreateTruckingOperations,
+  bulkUploadUnplannedPlanning,
   downloadCargoReadinessTemplate,
   bulkUpdateCargoReadiness,
   getTruckingActivityLog,
@@ -71,6 +72,14 @@ router.post(
   planningUpload.single('file'),
   auditLog('CREATE', 'TRUCKING_OPERATION'),
   bulkCreateTruckingOperations,
+);
+
+// Unplanned view-table XLSX — upsert daily qty; create Operation ID only when PO has none yet
+router.post(
+  '/unplanned-planning/bulk-upload',
+  planningUpload.single('file'),
+  auditLog('UPDATE', 'TRUCKING_OPERATION'),
+  bulkUploadUnplannedPlanning,
 );
 
 // Bulk update cargo readiness date

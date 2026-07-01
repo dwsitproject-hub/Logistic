@@ -31,6 +31,7 @@ import {
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
 import { appendContractPerfProductSubstringSql } from '../utils/contractPerfProductFilterSql';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
+import { toSapDisplayNumber } from '../utils/sapDisplayNumber';
 import {
   CONTRACT_SAP_ONLY_STOS_SQL,
   SHIPMENT_SAP_STO_DETAIL_SQL,
@@ -2227,10 +2228,10 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
             ata_complete_discharge: r.ata_discharge_complete,
           },
         }),
-        sto_quantity: Number(r.sto_quantity) || 0,
-        quantity_delivered: Number(r.quantity_delivered) || 0,
-        quantity_receive: Number(r.quantity_receive) || 0,
-        vessel_name: r.vessel_name || '-',
+        sto_quantity: toSapDisplayNumber(r.sto_quantity),
+        quantity_delivered: toSapDisplayNumber(r.quantity_delivered),
+        quantity_receive: toSapDisplayNumber(r.quantity_receive),
+        vessel_name: r.vessel_name || null,
         eta_vessel_arrival_loading_port: r.eta_vessel_arrival_loading_port || null,
         ata_discharge_complete: r.ata_discharge_complete || null,
       };
@@ -2257,10 +2258,10 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
             stoNumber: r.sto_number,
           },
         }),
-        sto_quantity: Number(r.sto_quantity) || 0,
-        quantity_receive: Number(r.quantity_receive_sap ?? r.quantity_receive_db) || 0,
-        quantity_delivered: Number(r.quantity_delivered_sap ?? r.quantity_delivered_db) || 0,
-        trucking_owner: r.trucking_owner || '-',
+        sto_quantity: toSapDisplayNumber(r.sto_quantity),
+        quantity_receive: toSapDisplayNumber(r.quantity_receive_sap ?? r.quantity_receive_db),
+        quantity_delivered: toSapDisplayNumber(r.quantity_delivered_sap ?? r.quantity_delivered_db),
+        trucking_owner: r.trucking_owner || null,
         eta_trucking_completion_date: r.eta_trucking_completion_date || null,
         trucking_completion_date: r.trucking_completion_date || null,
       };
@@ -2307,10 +2308,10 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
                 ata_complete_discharge: r.ata_discharge_complete,
               },
             }),
-            sto_quantity: Number(r.sto_quantity) || 0,
-            quantity_delivered: Number(r.quantity_delivered) || 0,
-            quantity_receive: Number(r.quantity_receive) || 0,
-            vessel_name: r.vessel_name || '-',
+            sto_quantity: toSapDisplayNumber(r.sto_quantity),
+            quantity_delivered: toSapDisplayNumber(r.quantity_delivered),
+            quantity_receive: toSapDisplayNumber(r.quantity_receive),
+            vessel_name: r.vessel_name || null,
             eta_vessel_arrival_loading_port: r.eta_vessel_arrival_loading_port || null,
             ata_discharge_complete: r.ata_discharge_complete || null,
           };
@@ -2329,10 +2330,10 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
               stoNumber: r.sto_number,
             },
           }),
-          sto_quantity: Number(r.sto_quantity) || 0,
-          quantity_receive: Number(r.quantity_receive) || 0,
-          quantity_delivered: Number(r.quantity_delivered) || 0,
-          trucking_owner: r.trucking_owner || '-',
+          sto_quantity: toSapDisplayNumber(r.sto_quantity),
+          quantity_receive: toSapDisplayNumber(r.quantity_receive),
+          quantity_delivered: toSapDisplayNumber(r.quantity_delivered),
+          trucking_owner: r.trucking_owner || null,
           eta_trucking_completion_date: r.eta_trucking_completion_date || null,
           trucking_completion_date: r.trucking_completion_date || null,
         };
@@ -2388,9 +2389,9 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
           c.contract_id AS contract_numbers,
           s.port_of_loading,
           s.port_of_discharge,
-          COALESCE(s.quantity_shipped, 0) AS sto_quantity,
-          COALESCE(s.quantity_delivered, 0) AS quantity_delivered,
-          COALESCE((
+          s.quantity_shipped AS sto_quantity,
+          s.quantity_delivered,
+          (
             SELECT SUM(NULLIF(regexp_replace(COALESCE(
               NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
               NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
@@ -2403,7 +2404,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
                   = ANY($2::text[])
                 OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Operation ID', '')), '') = ANY($2::text[])
               )
-          ), 0) AS quantity_receive,
+          ) AS quantity_receive,
           c.delivery_start_date,
           c.delivery_end_date,
           c.product,
@@ -2547,7 +2548,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
         c.contract_id AS contract_number,
         t.loading_location,
         t.unloading_location,
-        COALESCE(c.quantity_ordered, 0) AS contract_qty,
+        c.quantity_ordered AS contract_qty,
         COALESCE((
           SELECT SUM(NULLIF(regexp_replace(COALESCE(
             NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered'), ''),
@@ -2557,7 +2558,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
           FROM sap_processed_data spd
           WHERE spd.contract_number = c.contract_id
             AND ${SPD_EFFECTIVE_STO_SQL} = ANY($2::text[])
-        ), COALESCE(t.quantity_delivered, 0)) AS quantity_delivered,
+        ), t.quantity_delivered) AS quantity_delivered,
         COALESCE((
           SELECT SUM(NULLIF(regexp_replace(COALESCE(
             NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
@@ -2567,7 +2568,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
           FROM sap_processed_data spd
           WHERE spd.contract_number = c.contract_id
             AND ${SPD_EFFECTIVE_STO_SQL} = ANY($2::text[])
-        ), COALESCE(t.quantity_delivered, 0)) AS quantity_receive,
+        ), t.quantity_delivered) AS quantity_receive,
         ${sqlContractGlobalOutstandingExpr({
           contractQtyExpr: 'c.quantity_ordered',
           incotermExpr: contractEffectiveIncotermExpr('c'),
