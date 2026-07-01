@@ -37,8 +37,15 @@ for f in "$SQL_PREVIEW" "$SQL_OP_ID" "$SQL_CANCELLED" "$SQL_PER_CONTRACT"; do
   fi
 done
 
+run_sql_in_container() {
+  local host_path="$1"
+  local container_path="$2"
+  docker cp "$host_path" "${CONTAINER}:${container_path}"
+  "${PSQL[@]}" -f "$container_path"
+}
+
 echo "=== PREVIEW (read-only) ==="
-"${PSQL[@]}" -f "$SQL_PREVIEW"
+run_sql_in_container "$SQL_PREVIEW" /tmp/previewTruckingCleanupStaging.sql
 
 if ! $APPLY; then
   echo ""
@@ -49,22 +56,19 @@ fi
 
 echo ""
 echo "=== APPLY: Step 1/3 — duplicate operation_id groups ==="
-docker cp "$SQL_OP_ID" "${CONTAINER}:/tmp/cleanupDuplicateTruckingByOperationId.sql"
-"${PSQL[@]}" -f /tmp/cleanupDuplicateTruckingByOperationId.sql
+run_sql_in_container "$SQL_OP_ID" /tmp/cleanupDuplicateTruckingByOperationId.sql
 
 echo ""
 echo "=== APPLY: Step 2/3 — CANCELLED trucking operations ==="
-docker cp "$SQL_CANCELLED" "${CONTAINER}:/tmp/deleteCancelledTruckingOperations.sql"
-"${PSQL[@]}" -f /tmp/deleteCancelledTruckingOperations.sql
+run_sql_in_container "$SQL_CANCELLED" /tmp/deleteCancelledTruckingOperations.sql
 
 echo ""
 echo "=== APPLY: Step 3/3 — duplicate per contract (keep best row) ==="
-docker cp "$SQL_PER_CONTRACT" "${CONTAINER}:/tmp/cleanupDuplicateTruckingPerContract.sql"
-"${PSQL[@]}" -f /tmp/cleanupDuplicateTruckingPerContract.sql
+run_sql_in_container "$SQL_PER_CONTRACT" /tmp/cleanupDuplicateTruckingPerContract.sql
 
 echo ""
 echo "=== POST-CLEANUP SUMMARY ==="
-"${PSQL[@]}" -f "$SQL_PREVIEW"
+run_sql_in_container "$SQL_PREVIEW" /tmp/previewTruckingCleanupStaging.sql
 
 echo ""
 echo "Restarting backend to refresh list caches..."
