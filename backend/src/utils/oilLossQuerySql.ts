@@ -1,15 +1,20 @@
 import { OIL_LOSS_ELIGIBILITY_WHERE_SQL, OIL_LOSS_TRANSPORTER_EXPR } from './oilLossEligibility';
+import { sqlContractImportStatusIsClosedExpr } from './contractDeliveryStatus';
 import { shipmentManualQtyResolveSql } from './shipmentManualQtyResolveSql';
 import {
   OIL_LOSS_SFAL_QTY_EXPR,
   OIL_LOSS_SFBD_QTY_EXPR,
-  SAP_OIL_LOSS_QTY_DELIVERY_NUMERIC,
+  SAP_OIL_LOSS_IMPORT_STATUS_EXPR,
+  SAP_OIL_LOSS_QTY_DELIVERY_LEGACY_NUMERIC,
   SAP_OIL_LOSS_QTY_RECEIVE_NUMERIC,
+  SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC,
+  SAP_OIL_LOSS_QTY_VESSEL_NUMERIC,
   SAP_OIL_LOSS_QTY_WHERE_CLAUSE,
   SAP_OIL_LOSS_TRUCK_TRANSPORTER_RAW,
   SAP_OIL_LOSS_VESSEL_NAME_RAW,
   SAP_SFAL_NUMERIC_EXPR,
   SAP_SFBD_NUMERIC_EXPR,
+  sqlOilLossUatQtyDeliveryExpr,
 } from './oilLossSapSql';
 
 /** Pre-aggregated lookups — avoids per-row LATERAL scans over full SAP dataset. */
@@ -17,7 +22,10 @@ export const OIL_LOSS_LOOKUP_CTES = `
   oil_loss_closed AS (
     SELECT *
     FROM parsed
-    WHERE LOWER(status) = 'close'
+    WHERE ${sqlContractImportStatusIsClosedExpr(
+      'import_status',
+      "LOWER(COALESCE(status, '')) IN ('close', 'closed', 'completed', 'complete')",
+    )}
   ),
   contracts_latest AS (
     SELECT DISTINCT ON (contract_id)
@@ -136,13 +144,16 @@ export function buildOilLossMainSql(): string {
           ELSE NULL
         END                                                         AS operation_date,
         COALESCE(spd.data->'raw'->>'Status', '')                   AS status,
+        ${SAP_OIL_LOSS_IMPORT_STATUS_EXPR}                        AS import_status,
         COALESCE(NULLIF(TRIM(spd.data->'raw'->>'Incoterm'), ''), '') AS incoterm_raw,
         REPLACE(REPLACE(COALESCE(
           spd.data->'raw'->>'Contract Quantity\r\n(or PO Qty)',
           spd.data->'raw'->>'Contract Quantity',
           ''
         ), ',', ''), ' ', '')::numeric                           AS qty_contract_raw,
-        ${SAP_OIL_LOSS_QTY_DELIVERY_NUMERIC}                      AS qty_delivery,
+        ${SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC}                      AS qty_trucking,
+        ${SAP_OIL_LOSS_QTY_VESSEL_NUMERIC}                        AS qty_vessel,
+        ${SAP_OIL_LOSS_QTY_DELIVERY_LEGACY_NUMERIC}               AS qty_delivery_legacy,
         ${SAP_OIL_LOSS_QTY_RECEIVE_NUMERIC}                       AS qty_receive,
         ${SAP_SFAL_NUMERIC_EXPR}                                  AS qty_sfal_raw,
         ${SAP_SFBD_NUMERIC_EXPR}                                  AS qty_sfbd_raw,
@@ -199,12 +210,24 @@ export function buildOilLossMainSql(): string {
       LEFT JOIN plants_by_code pbco
         ON pbco.plant_code_key = TRIM(UPPER(COALESCE(ct.plant_code, '')))
     ),
-    with_qty AS (
+    with_qty_base AS (
       SELECT
         e.*,
-        ${shipmentManualQtyResolveSql('e.shipment_qty_delivered_kg', 'e.qty_delivery')} AS qty_delivery_resolved,
-        ${shipmentManualQtyResolveSql('e.shipment_qty_receive_kg', 'e.qty_receive')} AS qty_receive_resolved
+        ${sqlOilLossUatQtyDeliveryExpr({
+          incotermExpr: `COALESCE(NULLIF(e.contract_incoterm, ''), NULLIF(e.incoterm_raw, ''), '')`,
+          transportExpr: `UPPER(TRIM(COALESCE(NULLIF(e.transport_mode, ''), 'LAND')))`,
+          truckingCol: 'e.qty_trucking',
+          vesselCol: 'e.qty_vessel',
+          legacyCol: 'e.qty_delivery_legacy',
+        })} AS qty_delivery_sap
       FROM enriched e
+    ),
+    with_qty AS (
+      SELECT
+        b.*,
+        ${shipmentManualQtyResolveSql('b.shipment_qty_delivered_kg', 'b.qty_delivery_sap')} AS qty_delivery_resolved,
+        ${shipmentManualQtyResolveSql('b.shipment_qty_receive_kg', 'b.qty_receive')} AS qty_receive_resolved
+      FROM with_qty_base b
     )
     SELECT
       id,
@@ -259,17 +282,37 @@ export function buildOilLossGainSql(): string {
   return `
     WITH parsed AS (
       SELECT
-        ${SAP_OIL_LOSS_QTY_DELIVERY_NUMERIC} AS qty_delivery,
+        ${SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC} AS qty_trucking,
+        ${SAP_OIL_LOSS_QTY_VESSEL_NUMERIC} AS qty_vessel,
+        ${SAP_OIL_LOSS_QTY_DELIVERY_LEGACY_NUMERIC} AS qty_delivery_legacy,
         ${SAP_OIL_LOSS_QTY_RECEIVE_NUMERIC} AS qty_receive,
+        COALESCE(NULLIF(TRIM(spd.data->'raw'->>'Incoterm'), ''), '') AS incoterm_raw,
+        COALESCE(spd.data->'raw'->>'SEA / LAND', 'LAND') AS transport_mode,
+        ${SAP_OIL_LOSS_IMPORT_STATUS_EXPR} AS import_status,
         COALESCE(spd.data->'raw'->>'Status', '') AS status
       FROM sap_processed_data spd
       WHERE ${SAP_OIL_LOSS_QTY_WHERE_CLAUSE}
+    ),
+    with_delivery AS (
+      SELECT
+        p.*,
+        ${sqlOilLossUatQtyDeliveryExpr({
+          incotermExpr: 'p.incoterm_raw',
+          transportExpr: `UPPER(TRIM(COALESCE(NULLIF(p.transport_mode, ''), 'LAND')))`,
+          truckingCol: 'p.qty_trucking',
+          vesselCol: 'p.qty_vessel',
+          legacyCol: 'p.qty_delivery_legacy',
+        })} AS qty_delivery
+      FROM parsed p
     )
     SELECT
       COALESCE(SUM(qty_receive - qty_delivery), 0) AS total_gain_kg,
       COUNT(*)::int                                 AS gain_count
-    FROM parsed
+    FROM with_delivery
     WHERE qty_receive > qty_delivery
-      AND LOWER(status) = 'close'
+      AND ${sqlContractImportStatusIsClosedExpr(
+        'import_status',
+        "LOWER(COALESCE(status, '')) IN ('close', 'closed', 'completed', 'complete')",
+      )}
   `;
 }

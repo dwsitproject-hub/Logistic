@@ -66,8 +66,8 @@ export const FIELD_HELP = {
   truckingOutstandingQtyMt: `Outstanding Qty by incoterm: FRC = Contract Qty − Received Qty; LCO = Contract Qty − Delivered Qty. Displayed in MT. Green = over delivered; red = still outstanding. Other incoterms show —.`,
 
   // Oil Loss
-  oilLossAmount: `Formula: Qty Receive − Qty Delivery (displayed in MT). Negative values indicate oil loss.`,
-  oilLossPct: `Formula: (Qty Receive − Qty Delivery) ÷ Qty Delivery × 100%. Negative values indicate oil loss.`,
+  oilLossAmount: `Formula: Qty Receive − Qty Delivery (displayed in MT). Qty Delivery follows SAP UAT incoterm rules (Trucking for FRC/LCO; Vessel for FOB/CIF; MIX sums by transport). Negative values indicate oil loss.`,
+  oilLossPct: `Formula: (Qty Receive − Qty Delivery) ÷ Qty Delivery × 100%. Qty Delivery uses SAP UAT Quantity Delivery Trucking/Vessel matrix. Negative values indicate oil loss.`,
 
   // Shipping Performance
   shipmentTotalDelta: `Sum of all delay gaps in days: (Loading ETA−ETR) + (Loading ETA−ETB) + (Loading ETB−ETC) + (Discharge ETA−ETB) + (Discharge ETB−ETC). Positive = late, negative = ahead of schedule.`,
