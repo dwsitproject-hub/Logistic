@@ -192,14 +192,29 @@ export async function fetchContractPurchaseOrderOptions(contractId: string): Pro
   return rows.map(mapPurchaseOrderToPoOption)
 }
 
-/** PO lines eligible to add on Edit Shipment (outstanding > 0, same STO group, not yet linked). */
+/** PO lines eligible to add on Edit Shipment (global search, no SAP STO, global outstanding > 0). */
 export async function fetchShipmentAvailablePurchaseOrders(
   shipmentId: string,
+  opts?: { search?: string; limit?: number },
 ): Promise<ShipmentPoOption[]> {
   const api = (await import('@/lib/api')).default
-  const res = await api.get(`/shipments/${encodeURIComponent(shipmentId)}/available-purchase-orders`)
+  const params: Record<string, string | number> = {}
+  if (opts?.search?.trim()) params.q = opts.search.trim()
+  if (opts?.limit != null) params.limit = opts.limit
+  const res = await api.get(`/shipments/${encodeURIComponent(shipmentId)}/available-purchase-orders`, {
+    params,
+  })
   const rows: Record<string, unknown>[] = res.data?.data ?? []
   return rows.map(mapPurchaseOrderToPoOption)
+}
+
+export type ShipmentEditContextData = {
+  lookup_key?: string
+  contract_numbers?: string
+  po_numbers?: string
+  has_sap_sto?: boolean
+  can_add_po?: boolean
+  add_po_blocked_reason?: string | null
 }
 
 export async function attachPurchaseOrderToShipment(args: {

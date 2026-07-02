@@ -50,11 +50,9 @@ import {
   type VesselPortsQuantityEdits,
   type VesselPortsQuantityRow,
 } from '@/components/shipments/VesselPortsQuantitiesTable'
-import type { AddNewShipmentSubmitPayload, ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
-import {
-  attachPurchaseOrderToShipment,
-  fetchShipmentAvailablePurchaseOrders,
-} from '@/components/shared/addNewShipmentTypes'
+import type { AddNewShipmentSubmitPayload, ShipmentEditContextData, ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
+import { attachPurchaseOrderToShipment } from '@/components/shared/addNewShipmentTypes'
+import { ShipmentPoSearchCombobox } from '@/components/shared/ShipmentPoSearchCombobox'
 import {
   VESSEL_MODAL_BODY_CLASS,
   VESSEL_MODAL_COMPACT_TD,
@@ -68,6 +66,7 @@ import {
 } from '@/lib/vesselModalUi'
 import {
   saveEditShipmentChanges,
+  type DischargeEtaFields,
   type EditEtaFields,
   type LoadingPortRef,
 } from '@/lib/editShipmentModalSave'
@@ -88,16 +87,24 @@ const SHIPMENT_SDD_DOC_TYPE = 'SDD'
 const READONLY_FIELD_CLASS = 'bg-gray-50 cursor-not-allowed text-gray-600'
 const ETA_INFO_VALUE_CLASS = 'text-sm font-medium text-gray-900 tabular-nums'
 
-const ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
+const LOADING_ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
   { key: 'etaVesselArrivalAtLoadingPort', label: 'ETA Vessel Arrival at Loading Port' },
   { key: 'etaVesselBerthedAtLoadingPort', label: 'ETA Vessel Berthed at Loading Port' },
   { key: 'etaVesselStartLoading', label: 'ETA Vessel Start Loading' },
   { key: 'etaVesselCompletedLoading', label: 'ETA Vessel Completed Loading' },
   { key: 'etaVesselSailedFromLoadingPort', label: 'ETA Vessel Sailed from Loading Port' },
+]
+
+const DISCHARGE_ETA_FIELD_ROWS: { key: keyof DischargeEtaFields; label: string }[] = [
   { key: 'etaVesselArriveAtDischargePort', label: 'ETA Vessel Arrive at Discharge Port' },
   { key: 'etaVesselBerthedAtDischargePort', label: 'ETA Vessel Berthed at Discharge Port' },
   { key: 'etaVesselStartDischarging', label: 'ETA Vessel Start Discharging' },
   { key: 'etaVesselCompleteDischarge', label: 'ETA Vessel Complete Discharge' },
+]
+
+const ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
+  ...LOADING_ETA_FIELD_ROWS,
+  ...DISCHARGE_ETA_FIELD_ROWS,
 ]
 
 const ATA_FIELD_ROWS: { key: ShipmentAtaApiField; label: string }[] = [
@@ -130,17 +137,73 @@ const QUALITY_DISCHARGE_FIELDS: { key: string; label: string }[] = [
   { key: 'quality_at_discharge_loc_1_stone', label: 'Stone' },
 ]
 
+function emptyDischargeEtaFields(): DischargeEtaFields {
+  return {
+    etaVesselArriveAtDischargePort: '',
+    etaVesselBerthedAtDischargePort: '',
+    etaVesselStartDischarging: '',
+    etaVesselCompleteDischarge: '',
+  }
+}
+
 function emptyEtaFields(): EditEtaFields {
   return {
+    ...emptyDischargeEtaFields(),
     etaVesselArrivalAtLoadingPort: '',
     etaVesselBerthedAtLoadingPort: '',
     etaVesselStartLoading: '',
     etaVesselCompletedLoading: '',
     etaVesselSailedFromLoadingPort: '',
-    etaVesselArriveAtDischargePort: '',
-    etaVesselBerthedAtDischargePort: '',
-    etaVesselStartDischarging: '',
-    etaVesselCompleteDischarge: '',
+  }
+}
+
+function dischargeEtaFromInfo(
+  info: Record<string, unknown>,
+  row: Record<string, unknown>,
+): DischargeEtaFields {
+  return {
+    etaVesselArriveAtDischargePort:
+      sliceIsoDate(info.eta_vessel_arrive_at_discharge_port as string) ||
+      sliceIsoDate(row.eta_discharge_arrival as string),
+    etaVesselBerthedAtDischargePort:
+      sliceIsoDate(info.eta_vessel_berthed_at_discharge_port as string) ||
+      sliceIsoDate(row.eta_discharge_berthed as string),
+    etaVesselStartDischarging:
+      sliceIsoDate(info.eta_vessel_start_discharging as string) ||
+      sliceIsoDate(row.eta_discharge_start as string),
+    etaVesselCompleteDischarge:
+      sliceIsoDate(info.eta_vessel_complete_discharge as string) ||
+      sliceIsoDate(row.eta_discharge_complete as string),
+  }
+}
+
+function loadingEtaFromPortRow(
+  portRow: LoadingPortRef | undefined,
+  info: Record<string, unknown>,
+  row: Record<string, unknown>,
+): EditEtaFields {
+  return {
+    etaVesselArrivalAtLoadingPort:
+      sliceIsoDate(portRow?.eta_vessel_arrival as string) ||
+      sliceIsoDate(info.eta_vessel_arrival_at_loading_port as string) ||
+      sliceIsoDate(row.eta_arrival as string),
+    etaVesselBerthedAtLoadingPort:
+      sliceIsoDate(portRow?.eta_vessel_berthed_at_loading_port as string) ||
+      sliceIsoDate(info.eta_vessel_berthed_at_loading_port as string) ||
+      sliceIsoDate(row.eta_berthed as string),
+    etaVesselStartLoading:
+      sliceIsoDate(portRow?.eta_loading_start as string) ||
+      sliceIsoDate(info.eta_vessel_start_loading as string) ||
+      sliceIsoDate(row.eta_loading_start as string),
+    etaVesselCompletedLoading:
+      sliceIsoDate(portRow?.eta_loading_completed as string) ||
+      sliceIsoDate(info.eta_vessel_completed_loading as string) ||
+      sliceIsoDate(row.eta_loading_complete as string),
+    etaVesselSailedFromLoadingPort:
+      sliceIsoDate(portRow?.eta_vessel_sailed as string) ||
+      sliceIsoDate(info.eta_vessel_sailed_from_loading_port as string) ||
+      sliceIsoDate(row.eta_sailed as string),
+    ...emptyDischargeEtaFields(),
   }
 }
 
@@ -227,6 +290,8 @@ type ShipmentDetailRow = {
 
 type EtaBlock = {
   id: string
+  portId?: string
+  portSequence: number
   status: 'active' | 'historical'
   loadingPort: string
   contractLabels: string[]
@@ -320,6 +385,9 @@ export function EditShipmentModal({
   const [dischargePort, setDischargePort] = useState('')
   const [loadingPorts, setLoadingPorts] = useState<LoadingPortRef[]>([])
   const [etaBlocks, setEtaBlocks] = useState<EtaBlock[]>([])
+  const [dischargeEtaFields, setDischargeEtaFields] = useState<DischargeEtaFields>(emptyDischargeEtaFields)
+  const [etaSectionEditing, setEtaSectionEditing] = useState(false)
+  const [isMultiPortLoading, setIsMultiPortLoading] = useState(false)
   const [shipmentInfo, setShipmentInfo] = useState<Record<string, unknown>>({})
   const [ataFields, setAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
   const [originalAtaFields, setOriginalAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
@@ -328,9 +396,8 @@ export function EditShipmentModal({
   const [activityLog, setActivityLog] = useState<ActivityLogRow[]>([])
   const [activityLoading, setActivityLoading] = useState(false)
 
-  const [availablePoOptions, setAvailablePoOptions] = useState<ShipmentPoOption[]>([])
-  const [loadingAvailablePos, setLoadingAvailablePos] = useState(false)
-  const [selectedAddPoKey, setSelectedAddPoKey] = useState('')
+  const [editContext, setEditContext] = useState<ShipmentEditContextData | null>(null)
+  const [selectedAddPoOption, setSelectedAddPoOption] = useState<ShipmentPoOption | null>(null)
   const [addPoQtyMt, setAddPoQtyMt] = useState('')
   const [addingPo, setAddingPo] = useState(false)
 
@@ -343,7 +410,11 @@ export function EditShipmentModal({
 
   const isQuantityUnlocked = hasUploadedSld || hasUploadedSdd
   const canModifyShipment = canEditShipment && !readOnly
-  const canAddPoOnEdit = (canEditShipment || canAddShipment) && !readOnly && Boolean(shipmentId)
+  const canAddPoOnEdit =
+    (canEditShipment || canAddShipment) &&
+    !readOnly &&
+    Boolean(shipmentId) &&
+    editContext?.can_add_po === true
 
   const qtyTableRows: VesselPortsQuantityRow[] = useMemo(
     () =>
@@ -374,11 +445,6 @@ export function EditShipmentModal({
     [qtyTableRows, qtyEdits],
   )
 
-  const selectedAddPoOption = useMemo(
-    () => availablePoOptions.find((o) => o.key === selectedAddPoKey) ?? null,
-    [availablePoOptions, selectedAddPoKey],
-  )
-
   const selectedPoOutstandingMt = useMemo(() => {
     if (!selectedAddPoOption?.contractData) return null
     const kg = Number(selectedAddPoOption.contractData.outstanding_quantity ?? 0)
@@ -396,6 +462,9 @@ export function EditShipmentModal({
     setSfalQty(null)
     setSfbdQty(null)
     setEtaBlocks([])
+    setDischargeEtaFields(emptyDischargeEtaFields())
+    setEtaSectionEditing(false)
+    setIsMultiPortLoading(false)
     setActivityLog([])
     setShipmentInfo({})
     setAtaFields(emptyAtaFields())
@@ -404,34 +473,12 @@ export function EditShipmentModal({
     setAtaIsEditing(false)
     setHasUploadedSld(false)
     setHasUploadedSdd(false)
-    setAvailablePoOptions([])
-    setSelectedAddPoKey('')
+    setEditContext(null)
+    setSelectedAddPoOption(null)
     setAddPoQtyMt('')
     setAddingPo(false)
-    setLoadingAvailablePos(false)
     initSessionRef.current = null
   }, [])
-
-  const loadAvailablePurchaseOrders = useCallback(
-    async (sid: string) => {
-      if (readOnly || (!canEditShipment && !canAddShipment)) {
-        setAvailablePoOptions([])
-        return
-      }
-      setLoadingAvailablePos(true)
-      try {
-        const options = await fetchShipmentAvailablePurchaseOrders(sid)
-        setAvailablePoOptions(options)
-        setSelectedAddPoKey('')
-        setAddPoQtyMt('')
-      } catch {
-        setAvailablePoOptions([])
-      } finally {
-        setLoadingAvailablePos(false)
-      }
-    },
-    [canAddShipment, canEditShipment, readOnly],
-  )
 
   const hydrateQuantityDocs = useCallback(async (sid: string) => {
     try {
@@ -469,8 +516,7 @@ export function EditShipmentModal({
       try {
         let row: Record<string, unknown>
         let sid: string
-        let editContext: { lookup_key?: string; contract_numbers?: string; po_numbers?: string } | null =
-          null
+        let editContext: ShipmentEditContextData | null = null
 
         if (directShipmentId?.trim()) {
           sid = directShipmentId.trim()
@@ -510,6 +556,10 @@ export function EditShipmentModal({
         setOriginalAtaFields(loadedAta)
         setAtaSapReference(ataSapReferenceFromShipmentInfo(info))
         setAtaIsEditing(false)
+
+        setEditContext(editContext)
+        setSelectedAddPoOption(null)
+        setAddPoQtyMt('')
 
         const contractNumbers = mergeContractNumberLists(
           editContractNumbers,
@@ -632,7 +682,19 @@ export function EditShipmentModal({
         setOperationId(String(row.operation_id ?? ''))
         setStoNumber(displaySto === '-' ? '' : displaySto)
 
-        const pol = String(info.vessel_loading_port_1 ?? row.port_of_loading ?? '')
+        const loadingPortRows = ports
+          .filter((p) => !p.is_discharge_port)
+          .slice()
+          .sort((a, b) => (a.port_sequence ?? 0) - (b.port_sequence ?? 0))
+
+        const resolveValidPortLabel = (value: unknown): string => {
+          const text = String(value ?? '').trim()
+          return text && text !== '0.00' ? text : ''
+        }
+        const pol =
+          resolveValidPortLabel(loadingPortRows[0]?.port_name) ||
+          resolveValidPortLabel(info.vessel_loading_port_1) ||
+          resolveValidPortLabel(row.port_of_loading)
         const pod = String(info.vessel_discharge_port_1 ?? row.port_of_discharge ?? '')
         setLoadingPort(pol)
         setDischargePort(pod)
@@ -653,56 +715,48 @@ export function EditShipmentModal({
         setOriginalDeliveredKg(deliveredKg)
         setOriginalReceiveKg(receiveKg)
 
-        const loadingPortRow =
-          ports.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
-          ports.find((p) => !p.is_discharge_port)
-
-        const etaFields: EditEtaFields = {
-          etaVesselArrivalAtLoadingPort:
-            sliceIsoDate(loadingPortRow?.eta_vessel_arrival as string) ||
-            sliceIsoDate(info.eta_vessel_arrival_at_loading_port as string) ||
-            sliceIsoDate(row.eta_arrival as string),
-          etaVesselBerthedAtLoadingPort:
-            sliceIsoDate(loadingPortRow?.eta_vessel_berthed_at_loading_port as string) ||
-            sliceIsoDate(info.eta_vessel_berthed_at_loading_port as string) ||
-            sliceIsoDate(row.eta_berthed as string),
-          etaVesselStartLoading:
-            sliceIsoDate(loadingPortRow?.eta_loading_start as string) ||
-            sliceIsoDate(info.eta_vessel_start_loading as string) ||
-            sliceIsoDate(row.eta_loading_start as string),
-          etaVesselCompletedLoading:
-            sliceIsoDate(loadingPortRow?.eta_loading_completed as string) ||
-            sliceIsoDate(info.eta_vessel_completed_loading as string) ||
-            sliceIsoDate(row.eta_loading_complete as string),
-          etaVesselSailedFromLoadingPort:
-            sliceIsoDate(loadingPortRow?.eta_vessel_sailed as string) ||
-            sliceIsoDate(info.eta_vessel_sailed_from_loading_port as string) ||
-            sliceIsoDate(row.eta_sailed as string),
-          etaVesselArriveAtDischargePort:
-            sliceIsoDate(info.eta_vessel_arrive_at_discharge_port as string) ||
-            sliceIsoDate(row.eta_discharge_arrival as string),
-          etaVesselBerthedAtDischargePort:
-            sliceIsoDate(info.eta_vessel_berthed_at_discharge_port as string) ||
-            sliceIsoDate(row.eta_discharge_berthed as string),
-          etaVesselStartDischarging:
-            sliceIsoDate(info.eta_vessel_start_discharging as string) ||
-            sliceIsoDate(row.eta_discharge_start as string),
-          etaVesselCompleteDischarge:
-            sliceIsoDate(info.eta_vessel_complete_discharge as string) ||
-            sliceIsoDate(row.eta_discharge_complete as string),
-        }
+        const dischargeEta = dischargeEtaFromInfo(info, row)
+        setDischargeEtaFields(dischargeEta)
 
         const poLabels = contractDetails.map((d) => d.po_number || d.contract_number).filter(Boolean)
-        setEtaBlocks([
-          {
-            id: `eta-active-${Date.now()}`,
-            status: 'active',
-            loadingPort: pol,
-            contractLabels: poLabels,
-            fields: etaFields,
-            isEditing: false,
-          },
-        ])
+        const multiPort = loadingPortRows.length > 1
+        setIsMultiPortLoading(multiPort)
+        setEtaSectionEditing(false)
+
+        if (multiPort) {
+          setEtaBlocks(
+            loadingPortRows.map((portRow) => ({
+              id: portRow.id || `port-${portRow.port_sequence ?? 1}`,
+              portId: portRow.id,
+              portSequence: portRow.port_sequence ?? 1,
+              status: 'active',
+              loadingPort: resolveValidPortLabel(portRow.port_name) || `Loading Port ${portRow.port_sequence ?? 1}`,
+              contractLabels: poLabels,
+              fields: loadingEtaFromPortRow(portRow, info, row),
+              isEditing: false,
+            })),
+          )
+        } else {
+          const loadingPortRow = loadingPortRows[0]
+
+          const etaFields: EditEtaFields = {
+            ...loadingEtaFromPortRow(loadingPortRow, info, row),
+            ...dischargeEta,
+          }
+
+          setEtaBlocks([
+            {
+              id: `eta-active-${Date.now()}`,
+              portId: loadingPortRow?.id,
+              portSequence: loadingPortRow?.port_sequence ?? 1,
+              status: 'active',
+              loadingPort: pol,
+              contractLabels: poLabels,
+              fields: etaFields,
+              isEditing: false,
+            },
+          ])
+        }
 
         const plantCode = String(row.plant_site ?? row.plant_code ?? '').trim()
         if (plantCode) {
@@ -721,7 +775,6 @@ export function EditShipmentModal({
 
         await hydrateQuantityDocs(sid)
         await loadActivityLog(sid)
-        await loadAvailablePurchaseOrders(sid)
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : 'Failed to load shipment'
         setNotification({ type: 'error', message: msg })
@@ -729,7 +782,7 @@ export function EditShipmentModal({
         setLoading(false)
       }
     },
-    [hydrateQuantityDocs, loadActivityLog, loadAvailablePurchaseOrders, editContractNumbers],
+    [hydrateQuantityDocs, loadActivityLog, editContractNumbers],
   )
 
   const handleAddPo = useCallback(async () => {
@@ -893,11 +946,20 @@ export function EditShipmentModal({
       setNotification({ type: 'error', message: 'You need Edit permission on Shipments.' })
       return
     }
-    const activeBlock = etaBlocks.find((b) => b.status === 'active')
+    const activeBlock = isMultiPortLoading
+      ? etaBlocks.find((b) => b.portSequence === 1) ?? etaBlocks[0]
+      : etaBlocks.find((b) => b.status === 'active')
     if (!activeBlock) {
       setNotification({ type: 'error', message: 'No active ETA block to save.' })
       return
     }
+
+    const saveActiveEta: EditEtaFields = isMultiPortLoading
+      ? {
+          ...activeBlock.fields,
+          ...dischargeEtaFields,
+        }
+      : activeBlock.fields
 
     setSaving(true)
     setNotification(null)
@@ -913,7 +975,23 @@ export function EditShipmentModal({
         originalSfbdQty,
         loadingPort,
         dischargePort,
-        activeEta: activeBlock.fields,
+        activeEta: saveActiveEta,
+        isMultiPortLoading,
+        loadingPortEtas: isMultiPortLoading
+          ? etaBlocks.map((block) => ({
+              portId: block.portId,
+              portSequence: block.portSequence,
+              portName: block.loadingPort,
+              fields: {
+                etaVesselArrivalAtLoadingPort: block.fields.etaVesselArrivalAtLoadingPort,
+                etaVesselBerthedAtLoadingPort: block.fields.etaVesselBerthedAtLoadingPort,
+                etaVesselStartLoading: block.fields.etaVesselStartLoading,
+                etaVesselCompletedLoading: block.fields.etaVesselCompletedLoading,
+                etaVesselSailedFromLoadingPort: block.fields.etaVesselSailedFromLoadingPort,
+              },
+            }))
+          : undefined,
+        dischargeEta: isMultiPortLoading ? dischargeEtaFields : undefined,
         qtyRows: qtyTableRows,
         qtyEdits,
         originalDeliveredKg,
@@ -937,15 +1015,15 @@ export function EditShipmentModal({
           : {}),
         sfal_qty: sfalQty,
         sfbd_qty: sfbdQty,
-        eta_arrival: toApiDateOnly(activeBlock.fields.etaVesselArrivalAtLoadingPort),
-        eta_berthed: toApiDateOnly(activeBlock.fields.etaVesselBerthedAtLoadingPort),
-        eta_loading_start: toApiDateOnly(activeBlock.fields.etaVesselStartLoading),
-        eta_loading_complete: toApiDateOnly(activeBlock.fields.etaVesselCompletedLoading),
-        eta_sailed: toApiDateOnly(activeBlock.fields.etaVesselSailedFromLoadingPort),
-        eta_discharge_arrival: toApiDateOnly(activeBlock.fields.etaVesselArriveAtDischargePort),
-        eta_discharge_berthed: toApiDateOnly(activeBlock.fields.etaVesselBerthedAtDischargePort),
-        eta_discharge_start: toApiDateOnly(activeBlock.fields.etaVesselStartDischarging),
-        eta_discharge_complete: toApiDateOnly(activeBlock.fields.etaVesselCompleteDischarge),
+        eta_arrival: toApiDateOnly(saveActiveEta.etaVesselArrivalAtLoadingPort),
+        eta_berthed: toApiDateOnly(saveActiveEta.etaVesselBerthedAtLoadingPort),
+        eta_loading_start: toApiDateOnly(saveActiveEta.etaVesselStartLoading),
+        eta_loading_complete: toApiDateOnly(saveActiveEta.etaVesselCompletedLoading),
+        eta_sailed: toApiDateOnly(saveActiveEta.etaVesselSailedFromLoadingPort),
+        eta_discharge_arrival: toApiDateOnly(saveActiveEta.etaVesselArriveAtDischargePort),
+        eta_discharge_berthed: toApiDateOnly(saveActiveEta.etaVesselBerthedAtDischargePort),
+        eta_discharge_start: toApiDateOnly(saveActiveEta.etaVesselStartDischarging),
+        eta_discharge_complete: toApiDateOnly(saveActiveEta.etaVesselCompleteDischarge),
       })
 
       setNotification({ type: 'success', message: 'Shipment updated successfully.' })
@@ -959,12 +1037,15 @@ export function EditShipmentModal({
   }
 
   const handleAddEta = () => {
+    if (isMultiPortLoading) return
     setEtaBlocks((prev) => {
       const active = prev.find((b) => b.status === 'active')
       if (!active || active.isDraft) return prev
       const historical = { ...active, status: 'historical' as const, isEditing: false, isDraft: false }
       const newActive: EtaBlock = {
         id: `eta-${Date.now()}`,
+        portId: active.portId,
+        portSequence: active.portSequence,
         status: 'active',
         loadingPort: active.loadingPort,
         contractLabels: [...active.contractLabels],
@@ -1004,6 +1085,16 @@ export function EditShipmentModal({
         b.status === 'active' ? { ...b, fields: { ...b.fields, [key]: value } } : b,
       ),
     )
+  }
+
+  const updateMultiPortEtaField = (blockId: string, key: keyof EditEtaFields, value: string) => {
+    setEtaBlocks((prev) =>
+      prev.map((b) => (b.id === blockId ? { ...b, fields: { ...b.fields, [key]: value } } : b)),
+    )
+  }
+
+  const updateDischargeEtaField = (key: keyof DischargeEtaFields, value: string) => {
+    setDischargeEtaFields((prev) => ({ ...prev, [key]: value }))
   }
 
   if (!open) return null
@@ -1225,12 +1316,19 @@ export function EditShipmentModal({
                   <Input value={stoNumber || '—'} readOnly disabled className={`h-9 text-sm ${READONLY_FIELD_CLASS}`} />
                 </div>
 
-                {canAddPoOnEdit && (
+                {!canAddPoOnEdit && editContext?.has_sap_sto && !readOnly && (canEditShipment || canAddShipment) && (
+                  <p className="text-xs italic text-gray-500">
+                    {editContext.add_po_blocked_reason ??
+                      'PO cannot be added — this shipment already has an STO from SAP.'}
+                  </p>
+                )}
+
+                {canAddPoOnEdit && shipmentId && (
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <label className="text-xs font-semibold text-gray-700">Add PO to shipment</label>
                       <span className="text-[10px] text-gray-500">
-                        Same STO group · outstanding &gt; 0 · no SAP STO yet
+                        Any operation · global outstanding &gt; 0 · no SAP STO
                       </span>
                     </div>
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
@@ -1238,28 +1336,16 @@ export function EditShipmentModal({
                         <label className="mb-1 block text-xs font-medium text-gray-600">
                           PO Number <span className="text-red-500">*</span>
                         </label>
-                        <select
-                          value={selectedAddPoKey}
-                          onChange={(e) => {
-                            setSelectedAddPoKey(e.target.value)
+                        <ShipmentPoSearchCombobox
+                          shipmentId={shipmentId}
+                          selected={selectedAddPoOption}
+                          onSelect={(opt) => {
+                            setSelectedAddPoOption(opt)
                             setAddPoQtyMt('')
                           }}
-                          disabled={addingPo || loadingAvailablePos}
-                          className="h-9 w-full rounded-md border border-gray-300 bg-white px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          <option value="">
-                            {loadingAvailablePos
-                              ? 'Loading POs…'
-                              : availablePoOptions.length === 0
-                                ? 'No eligible PO available'
-                                : 'Select PO…'}
-                          </option>
-                          {availablePoOptions.map((po) => (
-                            <option key={po.key} value={po.key}>
-                              {po.label}
-                            </option>
-                          ))}
-                        </select>
+                          disabled={addingPo}
+                          className="h-9 text-sm"
+                        />
                       </div>
                       <div className="w-full sm:w-36">
                         <label className="mb-1 block text-xs font-medium text-gray-600">
@@ -1270,7 +1356,7 @@ export function EditShipmentModal({
                           onChange={(e) => setAddPoQtyMt(e.target.value)}
                           placeholder="0"
                           className="h-9 text-sm"
-                          disabled={!selectedAddPoKey || addingPo || loadingAvailablePos}
+                          disabled={!selectedAddPoOption || addingPo}
                         />
                         {selectedPoOutstandingMt != null && selectedPoOutstandingMt > 0 && (
                           <p className="mt-1 text-[10px] text-gray-500">
@@ -1282,12 +1368,7 @@ export function EditShipmentModal({
                         type="button"
                         size="sm"
                         className="h-9 shrink-0 bg-blue-600 px-4 text-white hover:bg-blue-700"
-                        disabled={
-                          !selectedAddPoKey ||
-                          addingPo ||
-                          loadingAvailablePos ||
-                          availablePoOptions.length === 0
-                        }
+                        disabled={!selectedAddPoOption || addingPo}
                         onClick={() => void handleAddPo()}
                       >
                         {addingPo ? (
@@ -1300,37 +1381,9 @@ export function EditShipmentModal({
                         )}
                       </Button>
                     </div>
-                    {loadingAvailablePos ? (
-                      <div className="flex items-center gap-2 text-xs text-gray-500">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        Loading available POs…
-                      </div>
-                    ) : availablePoOptions.length === 0 ? (
-                      <p className="text-xs italic text-gray-500">
-                        No PO lines available — only POs without SAP STO and with outstanding quantity can be added.
-                      </p>
-                    ) : availablePoOptions.length <= 8 ? (
-                      <div className="flex flex-wrap gap-1.5">
-                        <span className="w-full text-[10px] text-gray-500">Quick add:</span>
-                        {availablePoOptions.map((po) => (
-                          <button
-                            key={po.key}
-                            type="button"
-                            disabled={addingPo}
-                            className="inline-flex items-center rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
-                            onClick={() => {
-                              setSelectedAddPoKey(po.key)
-                              const outstandingMt =
-                                (Number(po.contractData?.outstanding_quantity) || 0) / 1000
-                              if (outstandingMt > 0) setAddPoQtyMt(String(outstandingMt))
-                            }}
-                          >
-                            <Plus className="mr-0.5 h-3 w-3" />
-                            {po.label}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
+                    <p className="text-xs italic text-gray-500">
+                      Search by PO number, contract, supplier, or product (min. 2 characters).
+                    </p>
                   </div>
                 )}
 
@@ -1497,13 +1550,93 @@ export function EditShipmentModal({
 
             {/* Section 3: ETA + Loading Port */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100">
-                  <Clock className="h-3.5 w-3.5 text-blue-600" />
+              <div className={`${VESSEL_MODAL_SECTION_HEADER_CLASS} justify-between gap-2`}>
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100">
+                    <Clock className="h-3.5 w-3.5 text-blue-600" />
+                  </div>
+                  <h4 className="text-sm font-semibold text-gray-800">3. ETA + Loading Port</h4>
                 </div>
-                <h4 className="text-sm font-semibold text-gray-800">3. ETA + Loading Port</h4>
+                {isMultiPortLoading && canModifyShipment && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setEtaSectionEditing((v) => !v)}
+                  >
+                    <Edit2 className="h-3.5 w-3.5 mr-1" />
+                    {etaSectionEditing ? 'Lock' : 'Edit'}
+                  </Button>
+                )}
               </div>
               <div className="space-y-4 p-4">
+                {isMultiPortLoading ? (
+                  <>
+                    {etaBlocks.map((block) => (
+                      <div key={block.id} className="rounded-lg border border-blue-100 bg-white p-3">
+                        <div className="mb-3 flex flex-wrap items-center gap-2">
+                          <Badge className="bg-blue-600 text-white text-[10px]">
+                            Loading Port {block.portSequence}
+                          </Badge>
+                          <span className="text-xs text-gray-600">{block.loadingPort || '—'}</span>
+                        </div>
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                          {LOADING_ETA_FIELD_ROWS.map(({ key, label }) => (
+                            <div key={`${block.id}-${key}`}>
+                              <label className="mb-1 block text-[10px] font-medium text-gray-600">
+                                {label}
+                              </label>
+                              {etaSectionEditing && canModifyShipment ? (
+                                <DateInputDdMmYyyy
+                                  valueIso={block.fields[key]}
+                                  onChangeIso={(iso) => updateMultiPortEtaField(block.id, key, iso)}
+                                  className="h-8 text-xs"
+                                />
+                              ) : (
+                                <div className={`flex min-h-8 items-center ${ETA_INFO_VALUE_CLASS}`}>
+                                  {formatDateDMY(block.fields[key]) || '—'}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+
+                    <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3">
+                      <div className="mb-3 flex items-center gap-2">
+                        <Badge variant="outline" className="border-indigo-300 text-[10px] text-indigo-700">
+                          Shared discharge ETA
+                        </Badge>
+                        <span className="text-xs text-gray-600">
+                          One vessel timeline — unloading is the same for all loading ports
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                        {DISCHARGE_ETA_FIELD_ROWS.map(({ key, label }) => (
+                          <div key={key}>
+                            <label className="mb-1 block text-[10px] font-medium text-gray-600">
+                              {label}
+                            </label>
+                            {etaSectionEditing && canModifyShipment ? (
+                              <DateInputDdMmYyyy
+                                valueIso={dischargeEtaFields[key]}
+                                onChangeIso={(iso) => updateDischargeEtaField(key, iso)}
+                                className="h-8 text-xs"
+                              />
+                            ) : (
+                              <div className={`flex min-h-8 items-center ${ETA_INFO_VALUE_CLASS}`}>
+                                {formatDateDMY(dischargeEtaFields[key]) || '—'}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
                 {activeEtaBlock && (
                   <div className="rounded-lg border border-blue-100 bg-white p-3">
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -1621,6 +1754,8 @@ export function EditShipmentModal({
                     </div>
                   </div>
                 ))}
+                  </>
+                )}
               </div>
             </div>
 

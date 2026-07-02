@@ -1,4 +1,14 @@
 import { groupPlantExpr } from '../utils/groupPlantSql';
+import { sqlContractOutstandingFromFields } from '../utils/sapIncotermMetrics';
+
+const CONTRACT_LIST_OUTSTANDING_SQL = sqlContractOutstandingFromFields({
+  contractQtyExpr: 'base.quantity_ordered',
+  incotermExpr: 'base.incoterm',
+  receiveExpr: 'base.quantity_receive',
+  deliveryExpr: 'base.quantity_delivery',
+  stoQtyExpr: 'base.total_sto_quantity',
+  clampAtZero: false,
+});
 
 /**
  * Outer projection for GET /contracts list rows.
@@ -37,9 +47,7 @@ export const CONTRACTS_LIST_OUTER_SQL = `
         base.sto_number,
         base.sto_numbers_agg AS sto_numbers,
         base.total_sto_quantity,
-        (
-          GREATEST(0, base.quantity_ordered - COALESCE(base.quantity_delivery, 0))
-        )::numeric AS outstanding_quantity,
+        (${CONTRACT_LIST_OUTSTANDING_SQL})::numeric AS outstanding_quantity,
         base.po_count,
         base.sto_count,
         COALESCE(base.latest_spd_data->'contract'->>'company_code', base.latest_spd_data->'raw'->>'Company Code', base.latest_spd_data->'raw'->>'company code', base.latest_spd_data->>'Company Code', base.latest_spd_data->>'company code') AS company_code,

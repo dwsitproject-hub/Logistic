@@ -13,7 +13,7 @@ import {
 } from '../utils/contractListFilters';
 import { CONTRACTS_LIST_OUTER_SQL } from './contractsListOuterSql';
 import { CONTRACTS_QTY_MOVE_CTE, buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractsQtyMoveSql';
-import { sqlIncotermImportStatusFromJson, sqlIncotermQuantityDeliveryCase, sqlTransportModeFromContractAndJson } from '../utils/sapIncotermMetrics';
+import { sqlContractOutstandingFromFields, sqlIncotermImportStatusFromJson, sqlIncotermQuantityDeliveryCase, sqlTransportModeFromContractAndJson } from '../utils/sapIncotermMetrics';
 import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL } from './contractSqlFragments';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { isTruckingPageIncoterm, contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
@@ -45,6 +45,15 @@ import {
   resolveContractLogisticsStoStatus,
 } from '../utils/contractLogisticsStoDisplay';
 import { sqlContractImportStatusExpr, sqlContractImportStatusIsClosedExpr, sqlContractImportStatusIsOpenExpr } from '../utils/contractDeliveryStatus';
+import {
+  sqlMaxTruckingRealizationEndForContract,
+  sqlMinTruckingRealizationStartForContract,
+  sqlSapTruckingLastReceiveDateForLookupKeys,
+  sqlSapTruckingLastReceiveDateForStoKey,
+  sqlSapTruckingStartReceiveDateForStoKey,
+  sqlSapTruckingStartReceiveDateForLookupKeys,
+} from '../utils/truckingSapDates';
+import { TRUCKING_REALIZATIONS_JOIN } from '../utils/truckingRealizationSql';
 
 export { B2B_CHILD_EXCLUSION_SQL };
 
@@ -178,43 +187,15 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           )}) AS quantity_delivery,
           (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
           COUNT(DISTINCT c.po_number) FILTER (WHERE c.po_number IS NOT NULL) AS po_count,
-          -- For Log Cycle calculation (LAND): earliest and latest trucking dates
-          (SELECT MIN(t.trucking_start_date) FROM trucking_operations t WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]) AS first_trucking_start_date,
-          (
-            WITH trucking_contract AS (
-              SELECT (array_agg(c.contract_id ORDER BY c.created_at DESC))[1] AS contract_number
-            ),
-            latest_spd AS (
-              SELECT DISTINCT ON (spd.contract_number)
-                spd.contract_number,
-                COALESCE(spd.data->'raw'->>'Trucking Last Receive Date', spd.data->>'Trucking Last Receive Date') AS last_receive_raw
-              FROM sap_processed_data spd
-              JOIN trucking_contract tc ON tc.contract_number = spd.contract_number
-              ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-            ),
-            latest_receive AS (
-              SELECT
-                contract_number,
-                CASE
-                  WHEN last_receive_raw IS NULL OR length(trim(last_receive_raw)) < 6 THEN NULL
-                  WHEN trim(last_receive_raw) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(last_receive_raw)::date
-                  WHEN trim(last_receive_raw) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(last_receive_raw), 'MM/DD/YY')
-                  ELSE NULL
-                END AS trucking_last_receive_date
-              FROM latest_spd
-            )
-            SELECT MAX(
-              COALESCE(
-                t.trucking_completion_date,
-                lr.trucking_last_receive_date,
-                t.eta_trucking_completion_date,
-                t.eta_delivery_end_date
-              )
-            )
-            FROM trucking_operations t
-            LEFT JOIN latest_receive lr ON lr.contract_number = (array_agg(c.contract_id ORDER BY c.created_at DESC))[1]
-            WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_trucking_completion_date,
+          -- For Log Cycle calculation (LAND): earliest and latest trucking realization dates (SAP AV/AW — not planning columns)
+          ${sqlMinTruckingRealizationStartForContract(
+            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
+            '(array_agg(c.contract_id ORDER BY c.created_at DESC))[1]',
+          )} AS first_trucking_start_date,
+          ${sqlMaxTruckingRealizationEndForContract(
+            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
+            '(array_agg(c.contract_id ORDER BY c.created_at DESC))[1]',
+          )} AS last_trucking_completion_date,
           -- For Trade/Cash Cycle calculation (LAND open): latest date in daily_deliverables JSONB
           (
             SELECT MAX((dd->>'date')::date)
@@ -427,16 +408,14 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const limitParam = paramIndex;
     const offsetParam = paramIndex + 1;
 
-    const outstandingQtyExpr = `(
-      quantity_ordered - COALESCE(
-        CASE
-          WHEN UPPER(TRIM(COALESCE(incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN quantity_receive
-          WHEN UPPER(TRIM(COALESCE(incoterm, ''))) IN ('LCO', 'FOB') THEN quantity_delivery
-          ELSE total_sto_quantity
-        END,
-        0
-      )
-    )`;
+    const outstandingQtyExpr = sqlContractOutstandingFromFields({
+      contractQtyExpr: 'quantity_ordered',
+      incotermExpr: 'incoterm',
+      receiveExpr: 'quantity_receive',
+      deliveryExpr: 'quantity_delivery',
+      stoQtyExpr: 'total_sto_quantity',
+      clampAtZero: false,
+    });
     const allowedSort: Record<string, string> = {
       contract_date: 'contract_date::date',
       contract_id: 'contract_id',
@@ -1075,42 +1054,11 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
             WHERE tdd.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
               AND (dd->>'date') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
           ) AS last_trucking_daily_deliverable_date,
-          -- For Log/Trade Cycle calculation (LAND): latest trucking completion with SAP fallback
-          (
-            WITH trucking_contract AS (
-              SELECT (array_agg(c.contract_id ORDER BY c.created_at DESC))[1] AS contract_number
-            ),
-            latest_spd AS (
-              SELECT DISTINCT ON (spd.contract_number)
-                spd.contract_number,
-                COALESCE(spd.data->'raw'->>'Trucking Last Receive Date', spd.data->>'Trucking Last Receive Date') AS last_receive_raw
-              FROM sap_processed_data spd
-              JOIN trucking_contract tc ON tc.contract_number = spd.contract_number
-              ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-            ),
-            latest_receive AS (
-              SELECT
-                contract_number,
-                CASE
-                  WHEN last_receive_raw IS NULL OR length(trim(last_receive_raw)) < 6 THEN NULL
-                  WHEN trim(last_receive_raw) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(last_receive_raw)::date
-                  WHEN trim(last_receive_raw) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(last_receive_raw), 'MM/DD/YY')
-                  ELSE NULL
-                END AS trucking_last_receive_date
-              FROM latest_spd
-            )
-            SELECT MAX(
-              COALESCE(
-                t.trucking_completion_date,
-                lr.trucking_last_receive_date,
-                t.eta_trucking_completion_date,
-                t.eta_delivery_end_date
-              )
-            )
-            FROM trucking_operations t
-            LEFT JOIN latest_receive lr ON lr.contract_number = (array_agg(c.contract_id ORDER BY c.created_at DESC))[1]
-            WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_trucking_completion_date,
+          -- For Log/Trade Cycle calculation (LAND): latest trucking realization (SAP AW — not planning columns)
+          ${sqlMaxTruckingRealizationEndForContract(
+            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
+            '(array_agg(c.contract_id ORDER BY c.created_at DESC))[1]',
+          )} AS last_trucking_completion_date,
           -- For Trade Cycle (SEA closed): latest ATA discharge complete
           (
             SELECT MAX(
@@ -2187,28 +2135,14 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         ), 0) AS sto_qty_assigned,
         tp.trucking_owner,
         tp.eta_trucking_completion_date,
-        COALESCE(tp.trucking_completion_date, (
-          SELECT NULLIF(TRIM(COALESCE(
-            NULLIF(spd.data->>'trucking_last_receive_date', ''),
-            NULLIF(spd.data->'raw'->>'Trucking Last Receive Date', ''),
-            NULLIF(spd.data->'raw'->>'trucking last receive date', '')
-          )), '')::date
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-            AND TRIM(COALESCE(
-              spd.sto_number::text,
-              spd.data->'raw'->>'STO No.',
-              spd.data->'raw'->>'STO Number'
-            )) = sk.sto_key
-            AND COALESCE(
-              NULLIF(spd.data->>'trucking_last_receive_date', ''),
-              NULLIF(spd.data->'raw'->>'Trucking Last Receive Date', ''),
-              NULLIF(spd.data->'raw'->>'trucking last receive date', '')
-            ) IS NOT NULL
-          ORDER BY spd.created_at DESC
-          LIMIT 1
-        )) AS trucking_completion_date,
-        tp.trucking_start_date
+        COALESCE(
+          (SELECT tr.realization_end_date FROM trucking_realizations tr WHERE tr.trucking_operation_id = tp.id LIMIT 1),
+          ${sqlSapTruckingLastReceiveDateForStoKey('c.contract_id', 'sk.sto_key')}
+        ) AS trucking_completion_date,
+        COALESCE(
+          (SELECT tr.realization_start_date FROM trucking_realizations tr WHERE tr.trucking_operation_id = tp.id LIMIT 1),
+          ${sqlSapTruckingStartReceiveDateForStoKey('c.contract_id', 'sk.sto_key')}
+        ) AS trucking_start_date
       FROM sto_keys sk
       CROSS JOIN contracts c
       LEFT JOIN trucking_pick tp ON TRUE
@@ -2589,12 +2523,19 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
         c.delivery_start_date,
         c.delivery_end_date,
         c.product,
-        t.trucking_start_date,
-        t.trucking_completion_date,
+        COALESCE(
+          tr.realization_start_date,
+          ${sqlSapTruckingStartReceiveDateForLookupKeys('c.contract_id', '$2::text[]')}
+        ) AS trucking_start_date,
+        COALESCE(
+          tr.realization_end_date,
+          ${sqlSapTruckingLastReceiveDateForLookupKeys('c.contract_id', '$2::text[]')}
+        ) AS trucking_completion_date,
         t.eta_trucking_start_date,
         t.eta_trucking_completion_date
       FROM trucking_operations t
       INNER JOIN contracts c ON t.contract_id = c.id
+      ${TRUCKING_REALIZATIONS_JOIN}
       WHERE c.id = $1
         AND (
           TRIM(COALESCE(t.operation_id::text, '')) = ANY($2::text[])

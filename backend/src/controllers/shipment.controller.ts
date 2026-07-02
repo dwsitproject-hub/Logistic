@@ -19,6 +19,7 @@ import {
   resolveUnplannedHybridShipmentsList,
 } from '../services/shipmentUnplannedHybridList.service';
 import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
+import { syncVesselLoadingPortsFromLatestSap } from '../services/vesselLoadingPortsFromSap.service';
 import {
   attachPurchaseOrderToShipment,
   listAvailablePurchaseOrdersForShipmentEdit,
@@ -65,6 +66,7 @@ import {
   resolvedLoadingPortNameSql,
   resolvedPlantCodeSql,
 } from '../utils/portDisplaySql';
+import { sqlUserStoQtyAssignedToKgSql, stoQtyAssignedMtToKg } from '../utils/userStoAssignmentQty';
 import {
   buildShipmentExcludeStoTypeTSql,
   buildShipmentSeaMixTransportSql,
@@ -191,7 +193,7 @@ const PURCHASE_ORDER_LINES_SQL = `
       0,
       COALESCE(c.quantity_ordered, 0)::numeric
       - COALESCE((
-          SELECT SUM(u.sto_qty_assigned)
+          SELECT SUM(${sqlUserStoQtyAssignedToKgSql('u.sto_qty_assigned', 'c.quantity_ordered')})
           FROM user_sto_contract_assignments u
           WHERE u.contract_number = c.contract_id
             AND COALESCE(u.po_number, '') = COALESCE(c.po_number, '')
@@ -230,7 +232,7 @@ async function upsertPoQtyAssignment(
       INSERT INTO user_sto_contract_assignments (sto_number, contract_number, po_number, sto_qty_assigned)
       VALUES ($1, $2, NULLIF($3, ''), $4::numeric)
       `,
-      [assignmentKey, contractNumber, poKey || null, qtyMt],
+      [assignmentKey, contractNumber, poKey || null, stoQtyAssignedMtToKg(qtyMt)],
     );
   }
 }
@@ -1432,7 +1434,7 @@ export const getShipmentById = async (req: AuthRequest, res: Response) => {
   }
 };
 
-/** PO lines eligible to add on Edit Shipment (same STO group, outstanding > 0, not yet linked). */
+/** PO lines eligible to add on Edit Shipment (global, no SAP STO, global outstanding > 0). */
 export const getShipmentAvailablePurchaseOrders = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
@@ -1444,7 +1446,11 @@ export const getShipmentAvailablePurchaseOrders = async (req: AuthRequest, res: 
       });
     }
 
-    const rows = await listAvailablePurchaseOrdersForShipmentEdit(id);
+    const search = String(req.query.q ?? req.query.search ?? '').trim();
+    const limitRaw = parseInt(String(req.query.limit ?? '50'), 10);
+    const limit = Number.isFinite(limitRaw) ? limitRaw : 50;
+
+    const rows = await listAvailablePurchaseOrdersForShipmentEdit(id, { search, limit });
     if (rows === null) {
       return res.status(404).json({
         success: false,
@@ -2063,6 +2069,55 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
             );
           }
         }
+      }
+
+      try {
+        const synced = await syncVesselLoadingPortsFromLatestSap(shipmentId);
+        if (synced) {
+          portsResult = await query(
+            `SELECT 
+              vlp.id,
+              vlp.shipment_id,
+              vlp.port_name,
+              vlp.port_sequence,
+              vlp.quantity_at_loading_port,
+              vlp.eta_vessel_arrival,
+              vlp.ata_vessel_arrival,
+              vlp.eta_vessel_berthed,
+              vlp.ata_vessel_berthed,
+              vlp.eta_loading_start,
+              vlp.ata_loading_start,
+              vlp.eta_loading_completed,
+              vlp.ata_loading_completed,
+              vlp.eta_vessel_sailed,
+              vlp.ata_vessel_sailed,
+              vlp.eta_vessel_berthed_at_loading_port,
+              vlp.eta_vessel_arrive_at_discharge_port,
+              vlp.eta_vessel_berthed_at_discharge_port,
+              vlp.eta_vessel_start_discharging,
+              vlp.eta_vessel_complete_discharge,
+              vlp.loading_rate,
+              vlp.quality_ffa,
+              vlp.quality_mi,
+              vlp.quality_dobi,
+              vlp.quality_red,
+              vlp.quality_ds,
+              vlp.quality_stone,
+              vlp.is_discharge_port,
+              vlp.created_at,
+              vlp.updated_at,
+              c.contract_id as contract_number
+             FROM vessel_loading_ports vlp
+             LEFT JOIN shipments s ON vlp.shipment_id = s.id
+             LEFT JOIN contracts c ON s.contract_id = c.id
+             WHERE vlp.shipment_id = $1
+             ${activePortFilter}
+             ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
+            [shipmentId],
+          );
+        }
+      } catch (syncError) {
+        logger.warn('Vessel loading port SAP sync skipped', { shipmentId, syncError });
       }
 
       // Get shipment-level information

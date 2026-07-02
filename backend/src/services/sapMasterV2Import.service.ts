@@ -851,6 +851,7 @@ export class SapMasterV2ImportService {
       // SHIPPING/VESSEL FIELDS
       'loading method (pipeline / trucking)': 'loading_method',
       // UPDATED: Column positions changed (AN, AO, AP, AQ, AR, AS, AT, AU)
+      'vessel loading port': 'vessel_loading_port_1',
       'vessel loading port 1': 'vessel_loading_port_1', // Column AN
       'vessel loading port 2': 'vessel_loading_port_2',
       'vessel loading port 3': 'vessel_loading_port_3',

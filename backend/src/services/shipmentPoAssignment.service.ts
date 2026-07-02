@@ -1,6 +1,10 @@
 import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
+import {
+  buildQtyMoveCte,
+  sqlContractGlobalOutstandingExpr,
+} from '../utils/contractGlobalOutstandingSql';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import { resolveShipmentEditContext } from './shipmentEditContext.service';
 import { groupPlantExpr } from '../utils/groupPlantSql';
@@ -9,9 +13,15 @@ import {
   contractExtNoSubquery,
   resolvedPlantCodeSql,
 } from '../utils/portDisplaySql';
+import { stoQtyAssignedMtToKg } from '../utils/userStoAssignmentQty';
 
-const PURCHASE_ORDER_LINE_BY_ROW_ID_SQL = `
-  SELECT
+const GLOBAL_OUTSTANDING_EXPR = sqlContractGlobalOutstandingExpr({
+  contractQtyExpr: 'c.quantity_ordered',
+  incotermExpr: 'c.incoterm',
+  contractNumberExpr: 'c.contract_id',
+});
+
+const PO_LINE_SELECT_FIELDS = `
     c.id AS contract_row_id,
     c.contract_id,
     c.po_number,
@@ -26,76 +36,58 @@ const PURCHASE_ORDER_LINE_BY_ROW_ID_SQL = `
     ${resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code')} AS plant_code,
     ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), 'c.company_name')} AS plant_site,
     ${contractExtNoSubquery('c.contract_id', 'c.po_number')} AS contract_ext_no,
-    GREATEST(
-      0,
-      COALESCE(c.quantity_ordered, 0)::numeric
-      - COALESCE((
-          SELECT SUM(u.sto_qty_assigned)
-          FROM user_sto_contract_assignments u
-          WHERE u.contract_number = c.contract_id
-            AND COALESCE(u.po_number, '') = COALESCE(c.po_number, '')
-        ), 0)::numeric
-    ) AS outstanding_quantity,
+    ${GLOBAL_OUTSTANDING_EXPR} AS outstanding_quantity,
     ${poLineHasSapStoSql('c')} AS has_sap_sto
-  FROM contracts c
-  WHERE c.id = $1::uuid
-  LIMIT 1
 `;
 
-const STO_GROUP_CONTRACTS_SQL = `
-  SELECT DISTINCT c.contract_id
-  FROM contract_stos cs
-  INNER JOIN contracts c ON c.id = cs.contract_id
-  WHERE TRIM(cs.sto_number::text) = TRIM($1::text)
-    AND c.contract_id IS NOT NULL
-    AND TRIM(c.contract_id) != ''
-  UNION
-  SELECT DISTINCT c.contract_id
-  FROM shipments s
-  INNER JOIN contracts c ON c.id = s.contract_id
-  WHERE (
-    TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($1::text)
-    OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM($1::text)
-  )
-  AND COALESCE(s.status, '') <> 'CANCELLED'
-  UNION
-  SELECT DISTINCT TRIM(part) AS contract_id
-  FROM unnest(string_to_array(COALESCE($2::text, ''), ',')) AS part
-  WHERE TRIM(part) != ''
-`;
+function buildPoLineByRowIdSql(): string {
+  const qtyMoveCte = buildQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `(SELECT contract_id FROM contracts WHERE id = $1::uuid)`,
+  });
+  return `
+    WITH ${qtyMoveCte}
+    SELECT
+      ${PO_LINE_SELECT_FIELDS}
+    FROM contracts c
+    WHERE c.id = $1::uuid
+    LIMIT 1
+  `;
+}
 
-const PURCHASE_ORDER_LINES_FOR_CONTRACT_SQL = `
-  SELECT
-    c.id AS contract_row_id,
-    c.contract_id,
-    c.po_number,
-    c.quantity_ordered,
-    c.delivery_start_date,
-    c.delivery_end_date,
-    c.supplier,
-    c.buyer,
-    c.product,
-    c.incoterm,
-    c.transport_mode,
-    ${resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code')} AS plant_code,
-    ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), 'c.company_name')} AS plant_site,
-    ${contractExtNoSubquery('c.contract_id', 'c.po_number')} AS contract_ext_no,
-    GREATEST(
-      0,
-      COALESCE(c.quantity_ordered, 0)::numeric
-      - COALESCE((
-          SELECT SUM(u.sto_qty_assigned)
-          FROM user_sto_contract_assignments u
-          WHERE u.contract_number = c.contract_id
-            AND COALESCE(u.po_number, '') = COALESCE(c.po_number, '')
-        ), 0)::numeric
-    ) AS outstanding_quantity
-  FROM contracts c
-  WHERE c.contract_id = $1
-    AND UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIXED', 'MIX')
-    AND NOT (${poLineHasSapStoSql('c')})
-  ORDER BY COALESCE(c.po_number, ''), c.created_at ASC
-`;
+function buildGlobalAvailablePoLinesSql(): string {
+  const qtyMoveCte = buildQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `
+      SELECT c2.contract_id
+      FROM contracts c2
+      WHERE UPPER(COALESCE(NULLIF(TRIM(c2.transport_mode), ''), 'SEA')) IN ('SEA', 'MIXED', 'MIX')
+    `,
+  });
+  return `
+    WITH ${qtyMoveCte},
+    candidates AS (
+      SELECT
+        ${PO_LINE_SELECT_FIELDS}
+      FROM contracts c
+      WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIXED', 'MIX')
+        AND NOT (${poLineHasSapStoSql('c')})
+        AND (
+          $1::text = ''
+          OR COALESCE(c.po_number::text, '') ILIKE $1::text
+          OR COALESCE(c.contract_id::text, '') ILIKE $1::text
+          OR COALESCE(c.supplier::text, '') ILIKE $1::text
+          OR COALESCE(c.product::text, '') ILIKE $1::text
+          OR COALESCE(c.buyer::text, '') ILIKE $1::text
+        )
+    )
+    SELECT *
+    FROM candidates
+    WHERE COALESCE(outstanding_quantity, 0)::numeric > 0
+    ORDER BY COALESCE(po_number, contract_id), contract_id
+    LIMIT $2::int
+  `;
+}
 
 export function poLineKey(contractNumber: string, poNumber: string | null | undefined): string {
   return `${String(contractNumber).trim().toLowerCase()}::${String(poNumber ?? '').trim().toLowerCase()}`;
@@ -124,7 +116,7 @@ export async function upsertPoQtyAssignment(
       INSERT INTO user_sto_contract_assignments (sto_number, contract_number, po_number, sto_qty_assigned)
       VALUES ($1, $2, NULLIF($3, ''), $4::numeric)
       `,
-      [assignmentKey, contractNumber, poKey || null, qtyMt],
+      [assignmentKey, contractNumber, poKey || null, stoQtyAssignedMtToKg(qtyMt)],
     );
   }
 }
@@ -135,24 +127,31 @@ async function fetchExistingPoKeys(lookupKey: string, contractNumbersCsv: string
     .split(',')
     .map((c) => c.trim())
     .filter(Boolean);
+  const keys = new Set<string>();
+
+  const assignRes = await query(
+    `
+    SELECT contract_number, po_number
+    FROM user_sto_contract_assignments
+    WHERE TRIM(sto_number::text) = TRIM($1::text)
+    `,
+    [lookupKey],
+  );
+  for (const row of assignRes.rows as Array<{ contract_number?: string; po_number?: string | null }>) {
+    keys.add(poLineKey(String(row.contract_number ?? ''), row.po_number));
+  }
+
   const detailsSql = buildContractDetailsForStoSql();
   const result = await query(detailsSql, [lookupKey, contractList]);
-  const keys = new Set<string>();
   for (const row of result.rows as Array<{ contract_number?: string; po_number?: string | null }>) {
     keys.add(poLineKey(String(row.contract_number ?? ''), row.po_number));
   }
   return keys;
 }
 
-async function resolveStoGroupContractIds(lookupKey: string, contractNumbersCsv: string): Promise<string[]> {
-  const result = await query(STO_GROUP_CONTRACTS_SQL, [lookupKey, contractNumbersCsv]);
-  return result.rows
-    .map((r: { contract_id?: string }) => String(r.contract_id ?? '').trim())
-    .filter(Boolean);
-}
-
 export async function listAvailablePurchaseOrdersForShipmentEdit(
   shipmentUuid: string,
+  opts?: { search?: string; limit?: number },
 ): Promise<Array<Record<string, unknown>> | null> {
   const context = await resolveShipmentEditContext(shipmentUuid);
   if (!context?.lookup_key) return null;
@@ -160,32 +159,30 @@ export async function listAvailablePurchaseOrdersForShipmentEdit(
   const anchorExists = await query(`SELECT 1 FROM shipments WHERE id = $1::uuid LIMIT 1`, [shipmentUuid]);
   if (anchorExists.rows.length === 0) return null;
 
-  const contractIds = await resolveStoGroupContractIds(context.lookup_key, context.contract_numbers);
-  if (contractIds.length === 0) return [];
+  if (!context.can_add_po) return [];
+
+  const searchRaw = String(opts?.search ?? '').trim();
+  if (searchRaw.length < 2) return [];
+
+  const limit = Math.min(Math.max(Number(opts?.limit) || 50, 1), 100);
+  const searchPattern = `%${searchRaw}%`;
 
   const existingKeys = await fetchExistingPoKeys(context.lookup_key, context.contract_numbers);
+  const lines = await query(buildGlobalAvailablePoLinesSql(), [searchPattern, limit]);
+
   const out: Record<string, unknown>[] = [];
   const seenRowIds = new Set<string>();
 
-  for (const contractId of contractIds) {
-    const lines = await query(PURCHASE_ORDER_LINES_FOR_CONTRACT_SQL, [contractId]);
-    for (const row of lines.rows as Array<Record<string, unknown>>) {
-      const rowId = String(row.contract_row_id ?? '');
-      if (!rowId || seenRowIds.has(rowId)) continue;
-      const outstanding = Number(row.outstanding_quantity ?? 0);
-      if (!Number.isFinite(outstanding) || outstanding <= 0) continue;
-      const key = poLineKey(String(row.contract_id ?? ''), row.po_number as string | null);
-      if (existingKeys.has(key)) continue;
-      seenRowIds.add(rowId);
-      out.push(row);
-    }
+  for (const row of lines.rows as Array<Record<string, unknown>>) {
+    const rowId = String(row.contract_row_id ?? '');
+    if (!rowId || seenRowIds.has(rowId)) continue;
+    const outstanding = Number(row.outstanding_quantity ?? 0);
+    if (!Number.isFinite(outstanding) || outstanding <= 0) continue;
+    const key = poLineKey(String(row.contract_id ?? ''), row.po_number as string | null);
+    if (existingKeys.has(key)) continue;
+    seenRowIds.add(rowId);
+    out.push(row);
   }
-
-  out.sort((a, b) => {
-    const poA = String(a.po_number ?? a.contract_id ?? '');
-    const poB = String(b.po_number ?? b.contract_id ?? '');
-    return poA.localeCompare(poB);
-  });
 
   return out;
 }
@@ -228,10 +225,17 @@ export async function attachPurchaseOrderToShipment(args: {
   if (!context?.lookup_key) {
     return { ok: false, status: 400, message: 'Could not resolve shipment STO / operation group' };
   }
+  if (!context.can_add_po) {
+    return {
+      ok: false,
+      status: 403,
+      message: context.add_po_blocked_reason ?? 'Cannot add PO to this shipment',
+    };
+  }
 
   await ensureUserStoContractAssignmentsTable();
 
-  const poLineRes = await query(PURCHASE_ORDER_LINE_BY_ROW_ID_SQL, [contractRowId]);
+  const poLineRes = await query(buildPoLineByRowIdSql(), [contractRowId]);
   if (poLineRes.rows.length === 0) {
     return { ok: false, status: 404, message: 'Contract / PO line not found' };
   }

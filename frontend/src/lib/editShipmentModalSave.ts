@@ -56,16 +56,28 @@ export function buildLoadingPortUpdatePayload(
   }
 }
 
-export type EditEtaFields = {
+export type LoadingEtaFields = {
   etaVesselArrivalAtLoadingPort: string
   etaVesselBerthedAtLoadingPort: string
   etaVesselStartLoading: string
   etaVesselCompletedLoading: string
   etaVesselSailedFromLoadingPort: string
+}
+
+export type DischargeEtaFields = {
   etaVesselArriveAtDischargePort: string
   etaVesselBerthedAtDischargePort: string
   etaVesselStartDischarging: string
   etaVesselCompleteDischarge: string
+}
+
+export type EditEtaFields = LoadingEtaFields & DischargeEtaFields
+
+export type LoadingPortEtaSave = {
+  portId?: string
+  portSequence: number
+  portName: string
+  fields: LoadingEtaFields
 }
 
 export type LoadingPortRef = {
@@ -98,6 +110,10 @@ export type SaveEditShipmentInput = {
   loadingPort: string
   dischargePort: string
   activeEta: EditEtaFields
+  /** When true, `loadingPortEtas` holds per-port loading ETAs; discharge ETAs are shared via `dischargeEta`. */
+  isMultiPortLoading?: boolean
+  loadingPortEtas?: LoadingPortEtaSave[]
+  dischargeEta?: DischargeEtaFields
   qtyRows: VesselPortsQuantityRow[]
   qtyEdits: VesselPortsQuantityEdits
   originalDeliveredKg: number | null
@@ -113,6 +129,25 @@ function quantityValuesEqual(a: unknown, b: unknown): boolean {
   return quantityKgValuesEqual(a, b)
 }
 
+function mergeActiveEtaFromMultiPort(
+  loadingPortEtas: LoadingPortEtaSave[],
+  dischargeEta: DischargeEtaFields,
+): EditEtaFields {
+  const first =
+    loadingPortEtas.find((p) => p.portSequence === 1) ??
+    loadingPortEtas.slice().sort((a, b) => a.portSequence - b.portSequence)[0]
+  return {
+    ...(first?.fields ?? {
+      etaVesselArrivalAtLoadingPort: '',
+      etaVesselBerthedAtLoadingPort: '',
+      etaVesselStartLoading: '',
+      etaVesselCompletedLoading: '',
+      etaVesselSailedFromLoadingPort: '',
+    }),
+    ...dischargeEta,
+  }
+}
+
 export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Promise<void> {
   const sums = sumVesselPortsQuantityEdits(input.qtyRows, input.qtyEdits)
   const qtyUserEdited = hasVesselPortsQuantityUserEdits(input.qtyRows, input.qtyEdits)
@@ -124,16 +159,21 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
     throw new Error('An SLD or SDD document must be attached before saving quantity changes.')
   }
 
+  const effectiveEta =
+    input.isMultiPortLoading && input.loadingPortEtas?.length && input.dischargeEta
+      ? mergeActiveEtaFromMultiPort(input.loadingPortEtas, input.dischargeEta)
+      : input.activeEta
+
   const updateBody: Record<string, unknown> = {
-    eta_arrival: toApiDateOnly(input.activeEta.etaVesselArrivalAtLoadingPort),
-    eta_berthed: toApiDateOnly(input.activeEta.etaVesselBerthedAtLoadingPort),
-    eta_loading_start: toApiDateOnly(input.activeEta.etaVesselStartLoading),
-    eta_loading_complete: toApiDateOnly(input.activeEta.etaVesselCompletedLoading),
-    eta_sailed: toApiDateOnly(input.activeEta.etaVesselSailedFromLoadingPort),
-    eta_discharge_arrival: toApiDateOnly(input.activeEta.etaVesselArriveAtDischargePort),
-    eta_discharge_berthed: toApiDateOnly(input.activeEta.etaVesselBerthedAtDischargePort),
-    eta_discharge_start: toApiDateOnly(input.activeEta.etaVesselStartDischarging),
-    eta_discharge_complete: toApiDateOnly(input.activeEta.etaVesselCompleteDischarge),
+    eta_arrival: toApiDateOnly(effectiveEta.etaVesselArrivalAtLoadingPort),
+    eta_berthed: toApiDateOnly(effectiveEta.etaVesselBerthedAtLoadingPort),
+    eta_loading_start: toApiDateOnly(effectiveEta.etaVesselStartLoading),
+    eta_loading_complete: toApiDateOnly(effectiveEta.etaVesselCompletedLoading),
+    eta_sailed: toApiDateOnly(effectiveEta.etaVesselSailedFromLoadingPort),
+    eta_discharge_arrival: toApiDateOnly(effectiveEta.etaVesselArriveAtDischargePort),
+    eta_discharge_berthed: toApiDateOnly(effectiveEta.etaVesselBerthedAtDischargePort),
+    eta_discharge_start: toApiDateOnly(effectiveEta.etaVesselStartDischarging),
+    eta_discharge_complete: toApiDateOnly(effectiveEta.etaVesselCompleteDischarge),
   }
 
   if (input.vesselName.trim() && input.vesselName.trim() !== input.originalVesselName.trim()) {
@@ -161,65 +201,70 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
   const portsRes = await api.get(`/shipments/${input.shipmentId}/loading-ports`)
   const ports: LoadingPortRef[] = portsRes.data?.data?.ports ?? input.loadingPorts
 
-  const firstPort =
-    ports.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
-    ports.find((p) => !p.is_discharge_port)
-
-  const info = {
-    vessel_loading_port_1: input.loadingPort,
-    vessel_discharge_port_1: input.dischargePort,
-    actual_vessel_qty_receive: qtyUserEdited ? sums.quantity_receive : input.originalReceiveKg,
-    eta_vessel_arrival_at_loading_port: input.activeEta.etaVesselArrivalAtLoadingPort,
-    eta_vessel_berthed_at_loading_port: input.activeEta.etaVesselBerthedAtLoadingPort,
-    eta_vessel_start_loading: input.activeEta.etaVesselStartLoading,
-    eta_vessel_completed_loading: input.activeEta.etaVesselCompletedLoading,
-    eta_vessel_sailed_from_loading_port: input.activeEta.etaVesselSailedFromLoadingPort,
-    eta_vessel_arrive_at_discharge_port: input.activeEta.etaVesselArriveAtDischargePort,
-    eta_vessel_berthed_at_discharge_port: input.activeEta.etaVesselBerthedAtDischargePort,
-    eta_vessel_start_discharging: input.activeEta.etaVesselStartDischarging,
-    eta_vessel_complete_discharge: input.activeEta.etaVesselCompleteDischarge,
+  const dischargeEta = input.dischargeEta ?? {
+    etaVesselArriveAtDischargePort: effectiveEta.etaVesselArriveAtDischargePort,
+    etaVesselBerthedAtDischargePort: effectiveEta.etaVesselBerthedAtDischargePort,
+    etaVesselStartDischarging: effectiveEta.etaVesselStartDischarging,
+    etaVesselCompleteDischarge: effectiveEta.etaVesselCompleteDischarge,
   }
 
-  if (firstPort?.id) {
-    const payload = buildLoadingPortUpdatePayload(
-      {
-        ...(firstPort as Record<string, unknown>),
-        port_name: info.vessel_loading_port_1 || firstPort.port_name || 'Loading Port 1',
-        port_sequence: firstPort.port_sequence ?? 1,
-        quantity_at_loading_port: info.actual_vessel_qty_receive ?? firstPort.quantity_at_loading_port ?? 0,
-        is_discharge_port: false,
-        eta_vessel_arrival: info.eta_vessel_arrival_at_loading_port,
-        eta_vessel_berthed_at_loading_port: info.eta_vessel_berthed_at_loading_port,
-        eta_vessel_berthed: info.eta_vessel_berthed_at_loading_port,
-        eta_loading_start: info.eta_vessel_start_loading,
-        eta_loading_completed: info.eta_vessel_completed_loading,
-        eta_vessel_sailed: info.eta_vessel_sailed_from_loading_port,
-      },
-      firstPort.id,
-    )
-    await api.put(`/shipments/${input.shipmentId}/loading-ports/${firstPort.id}`, payload)
-  } else if (
-    info.eta_vessel_arrival_at_loading_port ||
-    info.eta_vessel_berthed_at_loading_port ||
-    info.vessel_loading_port_1
-  ) {
-    const createPayload = buildLoadingPortUpdatePayload(
-      {
-        port_name: info.vessel_loading_port_1 || 'Loading Port 1',
-        port_sequence: 1,
-        quantity_at_loading_port: info.actual_vessel_qty_receive || 0,
-        is_discharge_port: false,
-        eta_vessel_arrival: info.eta_vessel_arrival_at_loading_port,
-        eta_vessel_berthed_at_loading_port: info.eta_vessel_berthed_at_loading_port,
-        eta_vessel_berthed: info.eta_vessel_berthed_at_loading_port,
-        eta_loading_start: info.eta_vessel_start_loading,
-        eta_loading_completed: info.eta_vessel_completed_loading,
-        eta_vessel_sailed: info.eta_vessel_sailed_from_loading_port,
-      },
-      '',
-    )
-    delete createPayload.id
-    await api.post(`/shipments/${input.shipmentId}/loading-ports`, createPayload)
+  const loadingPortSaves: LoadingPortEtaSave[] =
+    input.isMultiPortLoading && input.loadingPortEtas?.length
+      ? input.loadingPortEtas
+      : [
+          {
+            portSequence: 1,
+            portName: input.loadingPort,
+            fields: {
+              etaVesselArrivalAtLoadingPort: effectiveEta.etaVesselArrivalAtLoadingPort,
+              etaVesselBerthedAtLoadingPort: effectiveEta.etaVesselBerthedAtLoadingPort,
+              etaVesselStartLoading: effectiveEta.etaVesselStartLoading,
+              etaVesselCompletedLoading: effectiveEta.etaVesselCompletedLoading,
+              etaVesselSailedFromLoadingPort: effectiveEta.etaVesselSailedFromLoadingPort,
+            },
+          },
+        ]
+
+  const receiveQty = qtyUserEdited ? sums.quantity_receive : input.originalReceiveKg
+
+  for (const portSave of loadingPortSaves) {
+    const existing =
+      (portSave.portId ? ports.find((p) => p.id === portSave.portId) : undefined) ??
+      ports.find((p) => !p.is_discharge_port && p.port_sequence === portSave.portSequence) ??
+      ports.find((p) => !p.is_discharge_port && p.port_name === portSave.portName)
+
+    const portName = portSave.portName || existing?.port_name || `Loading Port ${portSave.portSequence}`
+    const quantity =
+      portSave.portSequence === 1
+        ? receiveQty ?? existing?.quantity_at_loading_port ?? 0
+        : existing?.quantity_at_loading_port ?? 0
+
+    const portSource = {
+      ...(existing as Record<string, unknown> | undefined),
+      port_name: portName,
+      port_sequence: portSave.portSequence,
+      quantity_at_loading_port: quantity,
+      is_discharge_port: false,
+      eta_vessel_arrival: portSave.fields.etaVesselArrivalAtLoadingPort,
+      eta_vessel_berthed_at_loading_port: portSave.fields.etaVesselBerthedAtLoadingPort,
+      eta_vessel_berthed: portSave.fields.etaVesselBerthedAtLoadingPort,
+      eta_loading_start: portSave.fields.etaVesselStartLoading,
+      eta_loading_completed: portSave.fields.etaVesselCompletedLoading,
+      eta_vessel_sailed: portSave.fields.etaVesselSailedFromLoadingPort,
+    }
+
+    if (existing?.id) {
+      const payload = buildLoadingPortUpdatePayload(portSource, existing.id)
+      await api.put(`/shipments/${input.shipmentId}/loading-ports/${existing.id}`, payload)
+    } else if (
+      portSave.fields.etaVesselArrivalAtLoadingPort ||
+      portSave.fields.etaVesselBerthedAtLoadingPort ||
+      portName
+    ) {
+      const createPayload = buildLoadingPortUpdatePayload(portSource, '')
+      delete createPayload.id
+      await api.post(`/shipments/${input.shipmentId}/loading-ports`, createPayload)
+    }
   }
 
   const refreshed = await api.get(`/shipments/${input.shipmentId}/loading-ports`)
@@ -231,13 +276,13 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
     const dischargePayload = buildLoadingPortUpdatePayload(
       {
         ...(dischargePort as Record<string, unknown>),
-        port_name: info.vessel_discharge_port_1 || dischargePort.port_name || 'Discharge Port',
+        port_name: input.dischargePort || dischargePort.port_name || 'Discharge Port',
         port_sequence: dischargePort.port_sequence ?? 999,
         is_discharge_port: true,
-        eta_vessel_arrive_at_discharge_port: info.eta_vessel_arrive_at_discharge_port,
-        eta_vessel_berthed_at_discharge_port: info.eta_vessel_berthed_at_discharge_port,
-        eta_vessel_start_discharging: info.eta_vessel_start_discharging,
-        eta_vessel_complete_discharge: info.eta_vessel_complete_discharge,
+        eta_vessel_arrive_at_discharge_port: dischargeEta.etaVesselArriveAtDischargePort,
+        eta_vessel_berthed_at_discharge_port: dischargeEta.etaVesselBerthedAtDischargePort,
+        eta_vessel_start_discharging: dischargeEta.etaVesselStartDischarging,
+        eta_vessel_complete_discharge: dischargeEta.etaVesselCompleteDischarge,
         eta_vessel_arrival: null,
         eta_vessel_berthed_at_loading_port: null,
         eta_loading_start: null,

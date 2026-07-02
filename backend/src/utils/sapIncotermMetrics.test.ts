@@ -4,6 +4,7 @@ import {
   resolveIncotermOutstandingTs,
   resolveIncotermQuantityDeliveryTs,
   resolveUatQuantityDeliveryTs,
+  sqlContractOutstandingFromFields,
   sqlIncotermImportStatusFromJson,
   sqlIncotermOutstandingCase,
   sqlIncotermQuantityDeliveryCase,
@@ -64,6 +65,22 @@ describe('sapIncotermMetrics', () => {
     });
     expect(outstanding).toContain('GREATEST');
     expect(outstanding).toContain('quantity_delivery_vessel');
+  });
+
+  it('sqlContractOutstandingFromFields follows glossary incoterm matrix', () => {
+    const sql = sqlContractOutstandingFromFields({
+      contractQtyExpr: 'base.quantity_ordered',
+      incotermExpr: 'base.incoterm',
+      receiveExpr: 'base.quantity_receive',
+      deliveryExpr: 'base.quantity_delivery',
+      stoQtyExpr: 'base.total_sto_quantity',
+    });
+    expect(sql).toContain("'FRC', 'CIF', 'CFR'");
+    expect(sql).toContain('base.quantity_receive');
+    expect(sql).toContain("'LCO', 'FOB'");
+    expect(sql).toContain('base.quantity_delivery');
+    expect(sql).toContain('base.total_sto_quantity');
+    expect(sql).not.toContain('GREATEST(0');
   });
 
   it('emits incoterm import status SQL', () => {

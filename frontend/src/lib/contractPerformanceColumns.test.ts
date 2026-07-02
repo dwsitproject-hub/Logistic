@@ -38,8 +38,8 @@ describe('contractPerformanceColumns', () => {
 
   it('uses compact fixed widths for default visible columns', () => {
     const tracks = buildContractPerfColumnWidthTracks(CONTRACT_PERF_COLUMN_ORDER)
-    expect(tracks.contract_date).toBe('minmax(100px, 100px)')
-    expect(tracks.supplier).toBe('minmax(150px, 150px)')
+    expect(tracks.contract_date).toBe('minmax(88px, 88px)')
+    expect(tracks.supplier).toBe('minmax(112px, 112px)')
     const total = CONTRACT_PERF_COLUMN_ORDER.reduce((s, id) => s + contractPerfTableColumnWidthPx(id), 0)
     expect(total).toBeLessThan(1700)
   })
@@ -50,13 +50,18 @@ describe('contractPerformanceColumns', () => {
     expect(isContractPerformancePathname('/contracts')).toBe(false)
   })
 
-  it('buildContractPerfVisibleColumns ignores stale saved order', () => {
+  it('buildContractPerfVisibleColumns follows saved column order', () => {
     const cols = [
       { id: 'product', label: 'Product' },
       { id: 'contract_date', label: 'Contract Date' },
       { id: 'supplier', label: 'Supplier' },
     ]
     const visible = new Set(['product', 'contract_date', 'supplier'])
+    expect(
+      buildContractPerfVisibleColumns(cols, visible, ['product', 'supplier', 'contract_date']).map(
+        (c) => c.id,
+      ),
+    ).toEqual(['product', 'supplier', 'contract_date'])
     expect(buildContractPerfVisibleColumns(cols, visible).map((c) => c.id)).toEqual([
       'contract_date',
       'supplier',
@@ -64,7 +69,7 @@ describe('contractPerformanceColumns', () => {
     ])
   })
 
-  it('mergeContractPerfColumnOrder forces primary sequence ahead of saved extras', () => {
+  it('mergeContractPerfColumnOrder preserves saved sequence and appends new columns', () => {
     const allIds = [
       'contract_id',
       'contract_date',
@@ -75,12 +80,13 @@ describe('contractPerformanceColumns', () => {
     ]
     const saved = ['product', 'contract_date', 'contract_id', 'vessel_name', 'supplier', 'contract_qty']
     expect(mergeContractPerfColumnOrder(saved, allIds)).toEqual([
-      'contract_date',
-      'supplier',
       'product',
-      'contract_qty',
+      'contract_date',
       'contract_id',
       'vessel_name',
+      'supplier',
+      'contract_qty',
     ])
+    expect(mergeContractPerfColumnOrder(['supplier', 'contract_date'], allIds)[0]).toBe('supplier')
   })
 })

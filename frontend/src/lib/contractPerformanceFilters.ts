@@ -617,13 +617,15 @@ export function buildContractPerfTableFetchScope(input: {
   }
 }
 
-/** Late/On Time branch for Section 3 — mirrors Section 2 active tab when filter is ALL. */
+/** Late/On Time branch for Section 3 — passes ALL through when no segment is selected. */
 export function resolveEffectiveLateOnTimeFilter(
   lateOnTimeFilter: 'ALL' | 'LATE' | 'ON_TIME',
-  perfDashMode: 'late' | 'ontrack',
-): 'LATE' | 'ON_TIME' {
-  if (lateOnTimeFilter === 'LATE' || lateOnTimeFilter === 'ON_TIME') return lateOnTimeFilter
-  return perfDashMode === 'ontrack' ? 'ON_TIME' : 'LATE'
+  _perfDashMode?: 'late' | 'ontrack',
+): 'ALL' | 'LATE' | 'ON_TIME' {
+  if (lateOnTimeFilter === 'LATE' || lateOnTimeFilter === 'ON_TIME' || lateOnTimeFilter === 'ALL') {
+    return lateOnTimeFilter
+  }
+  return 'ALL'
 }
 
 /**

@@ -1,5 +1,6 @@
 
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlUserStoQtyAssignedToKgSql } from './userStoAssignmentQty';
 
 function spdEffectiveSto(alias: string): string {
   return `NULLIF(TRIM(COALESCE(
@@ -140,7 +141,7 @@ export function buildContractDetailsForStoSql(): string {
         COALESCE(pl.contract_qty, 0) AS contract_qty,
         ${GLOBAL_OUTSTANDING} AS outstanding_qty,
         COALESCE(
-          (SELECT u.sto_qty_assigned
+          (SELECT ${sqlUserStoQtyAssignedToKgSql('u.sto_qty_assigned', 'pl.contract_qty')}
            FROM user_sto_contract_assignments u
            WHERE u.sto_number = $1
              AND u.contract_number = pl.contract_number

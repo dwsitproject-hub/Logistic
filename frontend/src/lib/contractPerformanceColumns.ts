@@ -68,14 +68,22 @@ export function isContractPerformancePathname(pathname: string | null | undefine
   return normalized === '/contract-performance'
 }
 
-/** Section 3 table + visible rows in Columns menu — strict {@link CONTRACT_PERF_COLUMN_ORDER}. */
+/** Section 3 table + visible rows in Columns menu — respects saved {@link columnOrderIds} when provided. */
 export function buildContractPerfVisibleColumns<T extends { id: string }>(
   columns: T[],
   visibleIds: ReadonlySet<string>,
+  columnOrderIds?: readonly string[],
 ): T[] {
   const byId = new Map(columns.map((c) => [c.id, c]))
+  const allIds = columns.map((c) => c.id)
+  const fallback = contractPerfCompactColumnFallbackOrder(allIds)
+  const baseOrder =
+    columnOrderIds && columnOrderIds.length > 0
+      ? mergeContractPerfColumnOrder([...columnOrderIds], allIds)
+      : fallback
+
   const out: T[] = []
-  for (const id of CONTRACT_PERF_COLUMN_ORDER) {
+  for (const id of baseOrder) {
     if (!visibleIds.has(id)) continue
     const col = byId.get(id)
     if (col) out.push(col)
@@ -105,29 +113,26 @@ export function contractPerfCompactColumnFallbackOrder(allIds: string[]): string
   return out
 }
 
-/** Primary columns stay in {@link CONTRACT_PERF_COLUMN_ORDER}; extras keep saved order, then canonical. */
+/** Preserve saved user order; append any new columns from canonical fallback. */
 export function mergeContractPerfColumnOrder(saved: string[], allIds: string[]): string[] {
   const canonical = contractPerfCompactColumnFallbackOrder(allIds)
   if (saved.length === 0) return canonical
 
-  const primary = CONTRACT_PERF_COLUMN_ORDER.filter((id) => allIds.includes(id))
-  const primarySet = new Set(primary)
-  const extras: string[] = []
   const seen = new Set<string>()
-
+  const out: string[] = []
   for (const id of saved) {
-    if (allIds.includes(id) && !primarySet.has(id) && !seen.has(id)) {
-      extras.push(id)
+    if (allIds.includes(id) && !seen.has(id)) {
+      out.push(id)
       seen.add(id)
     }
   }
   for (const id of canonical) {
-    if (!primarySet.has(id) && !seen.has(id)) {
-      extras.push(id)
+    if (!seen.has(id)) {
+      out.push(id)
       seen.add(id)
     }
   }
-  return [...primary, ...extras]
+  return out
 }
 
 /** Section 3 compact table — shared by Contract Performance and Contracts pages. */

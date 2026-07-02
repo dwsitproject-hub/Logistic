@@ -17,7 +17,6 @@ import {
   resolveContractPerformanceScope,
   resolveEffectiveLateOnTimeFilter,
   resolveSection3Scope,
-  selectPerformanceTreeBranch,
   sumHotspotQtyKg,
 } from '@/lib/contractPerformanceFilters'
 
@@ -67,6 +66,10 @@ export type UseContractPerformanceFiltersResult = {
   unscheduledNodeContractCount: number
   /** Global scope only — Section 1 reconciliation (On Time + Late, no drilldown path). */
   section1Hotspots: ContractPerfHotspot[]
+  /** On Time branch under global scope — unified card merge source. */
+  onTrackBranchHotspotsGlobal: ContractPerfHotspot[]
+  /** Late branch under global scope — unified card merge source. */
+  lateBranchHotspotsGlobal: ContractPerfHotspot[]
   /** Active branch hotspots after global scope (before drilldown path). */
   activeBranchHotspots: ContractPerfHotspot[]
   /** Active branch after global + optional applied drilldown — Section 3 linked scope only. */
@@ -115,11 +118,6 @@ export function useContractPerformanceFilters(
     [global],
   )
 
-  const activeBranch = useMemo(
-    () => selectPerformanceTreeBranch(global.lateOnTimeFilter, global.perfDashMode),
-    [global.lateOnTimeFilter, global.perfDashMode],
-  )
-
   const onTrackHotspots = useMemo(
     () => flattenLatePerfApiTreeToHotspots(onTrackTree),
     [onTrackTree],
@@ -137,17 +135,37 @@ export function useContractPerformanceFilters(
   }, [onTrackHotspots, lateHotspots, globalScopeNoDrilldown])
 
   const activeBranchHotspots = useMemo(() => {
-    const branchRows = activeBranch === 'ontrack' ? onTrackHotspots : lateHotspots
+    const branchRows =
+      global.lateOnTimeFilter === 'ON_TIME'
+        ? onTrackHotspots
+        : global.lateOnTimeFilter === 'LATE'
+          ? lateHotspots
+          : [...onTrackHotspots, ...lateHotspots]
     return filterPerformanceHotspots(branchRows, globalScopeNoDrilldown, { applyDrilldown: false })
-  }, [activeBranch, onTrackHotspots, lateHotspots, globalScopeNoDrilldown])
+  }, [global.lateOnTimeFilter, onTrackHotspots, lateHotspots, globalScopeNoDrilldown])
+
+  const onTrackBranchHotspotsGlobal = useMemo(
+    () => filterPerformanceHotspots(onTrackHotspots, globalScopeNoDrilldown, { applyDrilldown: false }),
+    [onTrackHotspots, globalScopeNoDrilldown],
+  )
+
+  const lateBranchHotspotsGlobal = useMemo(
+    () => filterPerformanceHotspots(lateHotspots, globalScopeNoDrilldown, { applyDrilldown: false }),
+    [lateHotspots, globalScopeNoDrilldown],
+  )
 
   const unifiedFilteredHotspots = useMemo(() => {
-    const branchRows = activeBranch === 'ontrack' ? onTrackHotspots : lateHotspots
+    const branchRows =
+      global.lateOnTimeFilter === 'ON_TIME'
+        ? onTrackHotspots
+        : global.lateOnTimeFilter === 'LATE'
+          ? lateHotspots
+          : [...onTrackHotspots, ...lateHotspots]
     const treeScope = section3Mode === 'linked' ? scope : globalScopeNoDrilldown
     return filterPerformanceHotspots(branchRows, treeScope, {
       applyDrilldown: section3Mode === 'linked',
     })
-  }, [activeBranch, onTrackHotspots, lateHotspots, scope, globalScopeNoDrilldown, section3Mode])
+  }, [global.lateOnTimeFilter, onTrackHotspots, lateHotspots, scope, globalScopeNoDrilldown, section3Mode])
 
   const appliedDrilldownNodeHotspots = useMemo(() => {
     if (section3Mode !== 'linked') return unifiedFilteredHotspots
@@ -298,6 +316,8 @@ export function useContractPerformanceFilters(
     section2ActiveNodeContractCount,
     unscheduledNodeContractCount,
     section1Hotspots,
+    onTrackBranchHotspotsGlobal,
+    lateBranchHotspotsGlobal,
     activeBranchHotspots,
     unifiedFilteredHotspots,
     appliedDrilldownNodeHotspots,

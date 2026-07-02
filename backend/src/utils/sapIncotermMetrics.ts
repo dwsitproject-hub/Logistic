@@ -156,6 +156,32 @@ export function sqlIncotermQuantityDeliveryCase(
   END`;
 }
 
+/**
+ * Contract-level outstanding (kg) for Contracts / Contract Performance list.
+ * FRC/CIF/CFR → Quantity Receive; LCO/FOB → Quantity Delivery; others → total STO quantity.
+ * Section 3 allows negative values (over delivery) unless clampAtZero is true.
+ */
+export function sqlContractOutstandingFromFields(opts: {
+  contractQtyExpr: string;
+  incotermExpr: string;
+  receiveExpr: string;
+  deliveryExpr: string;
+  stoQtyExpr: string;
+  clampAtZero?: boolean;
+}): string {
+  const inc = `UPPER(TRIM(COALESCE(${opts.incotermExpr}, '')))`;
+  const subtracted = `COALESCE(
+    CASE
+      WHEN ${inc} IN ('FRC', 'CIF', 'CFR') THEN ${opts.receiveExpr}
+      WHEN ${inc} IN ('LCO', 'FOB') THEN ${opts.deliveryExpr}
+      ELSE ${opts.stoQtyExpr}
+    END,
+    0
+  )`;
+  const diff = `(COALESCE(${opts.contractQtyExpr}, 0)::numeric - ${subtracted}::numeric)`;
+  return opts.clampAtZero ? `GREATEST(0, ${diff})` : diff;
+}
+
 /** Step B — outstanding = contract qty − incoterm delivery (Step A). */
 export function sqlIncotermOutstandingCase(opts: {
   contractQtyExpr: string;

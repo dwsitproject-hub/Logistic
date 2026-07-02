@@ -402,13 +402,14 @@ describe('AC2 — Global Filter Propagation', () => {
     expect(p1.get('status')).toBeNull()
   })
 
-  it('resolveEffectiveLateOnTimeFilter follows perfDashMode when filter is ALL', () => {
-    expect(resolveEffectiveLateOnTimeFilter('ALL', 'late')).toBe('LATE')
-    expect(resolveEffectiveLateOnTimeFilter('ALL', 'ontrack')).toBe('ON_TIME')
+  it('resolveEffectiveLateOnTimeFilter passes ALL through for unified drilldown', () => {
+    expect(resolveEffectiveLateOnTimeFilter('ALL', 'late')).toBe('ALL')
+    expect(resolveEffectiveLateOnTimeFilter('ALL', 'ontrack')).toBe('ALL')
     expect(resolveEffectiveLateOnTimeFilter('LATE', 'ontrack')).toBe('LATE')
+    expect(resolveEffectiveLateOnTimeFilter('ON_TIME', 'late')).toBe('ON_TIME')
   })
 
-  it('buildContractPerfTableListParams sends Section 1 status and Section 2 late branch', () => {
+  it('buildContractPerfTableListParams sends ALL lateOnTimeFilter for unified drilldown', () => {
     const global: ContractPerformanceGlobalFilters = {
       ...BASE_GLOBAL,
       summaryCardStatus: 'Open',
@@ -432,7 +433,7 @@ describe('AC2 — Global Filter Propagation', () => {
       perfDashMode: 'late',
     })
     expect(params.get('status')).toBe('Open')
-    expect(params.get('lateOnTimeFilter')).toBe('LATE')
+    expect(params.get('lateOnTimeFilter')).toBe('ALL')
     expect(params.get('excludeUnscheduled')).toBe('true')
     expect(params.get('sourceType')).toBe('3rd Party')
     expect(params.get('product')).toBe('CPO')
