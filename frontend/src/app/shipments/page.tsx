@@ -791,6 +791,11 @@ function ShipmentsPageContent() {
     etaLoading?: Record<string, number>
     etaDischarge?: Record<string, number>
   } | null>(null)
+  const [unplannedBreakdown, setUnplannedBreakdown] = useState<{
+    contractRows: number
+    shipmentRows: number
+    totalTableRows: number
+  } | null>(null)
   /** Section 2 ETA cards when a status circle is active (scoped via scopeStatus). */
   const [section2EtaSummary, setSection2EtaSummary] = useState<{
     etaLoading?: Record<string, number>
@@ -1402,6 +1407,16 @@ function ShipmentsPageContent() {
         if (envelope?.data?.summary) {
           setShipmentsSection1Summary(envelope.data.summary)
           setSummaryFetching(false)
+        }
+        const breakdown = envelope?.data?.unplannedBreakdown
+        if (breakdown) {
+          setUnplannedBreakdown({
+            contractRows: Number(breakdown.contractRows ?? 0),
+            shipmentRows: Number(breakdown.shipmentRows ?? 0),
+            totalTableRows: Number(breakdown.totalTableRows ?? 0),
+          })
+        } else {
+          setUnplannedBreakdown(null)
         }
       }
 
@@ -2325,7 +2340,7 @@ function ShipmentsPageContent() {
   }, [statusFilter])
   const tableShipmentCount = useMemo(() => totalCount, [totalCount])
 
-  /** Unplanned view table: headline count matches Section 1 card (distinct open contracts), not hybrid row total. */
+  /** Unplanned: headline = contract count (summary card); subtitle shows hybrid row breakdown. */
   const tableHeaderCount = useMemo(() => {
     if (statusFilter === 'UNPLANNED') {
       return {
@@ -2338,6 +2353,17 @@ function ShipmentsPageContent() {
       noun: 'shipments' as const,
     }
   }, [statusFilter, section1StatusCounts.unplanned, tableShipmentCount])
+
+  const unplannedTableBreakdown = useMemo(() => {
+    if (unplannedBreakdown) return unplannedBreakdown
+    const fromSummary = shipmentsSection1Summary?.unplannedTable
+    if (!fromSummary) return null
+    return {
+      contractRows: Number(fromSummary.contractRows ?? 0),
+      shipmentRows: Number(fromSummary.shipmentRows ?? 0),
+      totalTableRows: Number(fromSummary.totalTableRows ?? 0),
+    }
+  }, [unplannedBreakdown, shipmentsSection1Summary?.unplannedTable])
 
   const section3TableLoading = loading && shipments.length === 0
   const section1DataLoading =
@@ -4806,7 +4832,20 @@ function ShipmentsPageContent() {
                       ·
                     </span>
                     <span className="whitespace-nowrap tabular-nums">
-                      Page {page}/{totalPages} · {tableShipmentCount.toLocaleString('en-US')} rows
+                      Page {page}/{totalPages}
+                      {statusFilter === 'UNPLANNED' && tableShipmentCount > 0 ? (
+                        <>
+                          {' · '}
+                          {tableShipmentCount.toLocaleString('en-US')} rows
+                          {unplannedTableBreakdown ? (
+                            <>
+                              {' '}
+                              ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')} without shipment ·{' '}
+                              {unplannedTableBreakdown.shipmentRows.toLocaleString('en-US')} STO groups)
+                            </>
+                          ) : null}
+                        </>
+                      ) : null}
                     </span>
                     {shipmentsTableScopeLabel ? (
                       <>
