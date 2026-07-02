@@ -16,7 +16,7 @@ COPY . .
 RUN mkdir -p uploads logs
 
 # Expose port
-EXPOSE 5001
+EXPOSE 5002
 
 # Start with nodemon for hot reload
 CMD ["npm", "run", "dev"]

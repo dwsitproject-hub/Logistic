@@ -44,6 +44,7 @@ import {
   AlertCircle,
   Eye,
   EyeOff,
+  Activity,
 } from 'lucide-react'
 import api from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -330,6 +331,13 @@ export default function UsersPage() {
           <div className="flex gap-3">
             <Button
               variant="outline"
+              onClick={() => router.push('/users/activity-log')}
+            >
+              <Activity className="h-4 w-4 mr-2" />
+              User Activity Log
+            </Button>
+            <Button
+              variant="outline"
               onClick={() => router.push('/users/roles')}
             >
               <Settings className="h-4 w-4 mr-2" />
@@ -367,12 +375,12 @@ export default function UsersPage() {
             <div className="flex gap-3">
               <Shield className="h-5 w-5 text-slate-600 shrink-0 mt-0.5" />
               <div className="text-sm text-slate-800">
-                <p className="font-semibold mb-1">Page access (including Commercial Documents)</p>
+                <p className="font-semibold mb-1">Page access &amp; activity monitoring</p>
                 <p>
                   User menu visibility and page access are controlled by role permissions. Use{' '}
-                  <strong>Manage Roles</strong> → <strong>Page Access</strong> to grant{' '}
-                  <code className="text-xs">page.commercial_documents</code> and{' '}
-                  <code className="text-xs">data.commercial_documents</code> for Commercial Documents upload and review.
+                  <strong>Manage Roles</strong> → <strong>Page Access</strong> to grant page permissions (e.g.{' '}
+                  <code className="text-xs">page.commercial_documents</code>). Admins can review daily user
+                  activity (clicks, edits, active time) via <strong>User Activity Log</strong>.
                 </p>
               </div>
             </div>

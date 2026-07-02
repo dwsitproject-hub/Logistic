@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { clearClientDataCache } from '@/lib/clientDataCache';
+import { mapHttpMethodToEventType, trackApiMutation } from '@/lib/userActivityTracker';
 
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api',
@@ -11,6 +12,12 @@ api.interceptors.request.use((config) => {
     const token = localStorage.getItem('token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
+    }
+    const method = config.method || 'get';
+    const eventType = mapHttpMethodToEventType(method);
+    if (eventType && config.url) {
+      const label = `${method.toUpperCase()} ${config.url}`;
+      trackApiMutation(method, config.url, eventType, label);
     }
   }
   return config;

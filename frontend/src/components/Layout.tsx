@@ -7,6 +7,7 @@ import { Button } from './ui/button'
 import { TooltipProvider } from './ui/tooltip'
 import { AppTourProvider, useAppTour } from './AppTourProvider'
 import { PageActivityFab } from './PageActivityFab'
+import { UserActivityTracker } from './UserActivityTracker'
 import { LogOut, Menu, X, BookOpen } from 'lucide-react'
 import {
   PermissionsProvider,
@@ -137,6 +138,7 @@ function LayoutChrome({
         </main>
 
         <PageActivityFab />
+        <UserActivityTracker />
       </div>
     </div>
   )
