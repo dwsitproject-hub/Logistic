@@ -194,6 +194,7 @@ export function buildTruckingListExpansionSql(
         e.product,
         e.incoterm,
         e.group_name,
+        e.source_type,
         ${selectOutstanding ? `${qty.outstanding} AS outstanding_quantity` : 'e.outstanding_quantity'},
         e.estimated_km,
         e.contract_ext_no,

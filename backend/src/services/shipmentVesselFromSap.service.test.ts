@@ -2,7 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { mergeShipmentVesselFromSapRow } from './shipmentVesselFromSap.service';
 
 describe('mergeShipmentVesselFromSapRow', () => {
-  it('fills missing shipment vessel fields when SAP has both code and name', () => {
+  it('prefers SAP vessel name over existing KLIP input for display', () => {
+    const row: Record<string, unknown> = {
+      id: 'ship-1',
+      vessel_name: 'MV KLIP USER',
+      vessel_code: 'K01',
+      vessel_name_sap: 'MV SAP',
+      vessel_code_sap: 'VT01',
+    };
+    expect(mergeShipmentVesselFromSapRow(row)).toBe(true);
+    expect(row.vessel_name).toBe('MV SAP');
+    expect(row.vessel_code).toBe('K01');
+  });
+
+  it('uses SAP vessel name when KLIP is empty', () => {
     const row: Record<string, unknown> = {
       id: 'ship-1',
       vessel_name: null,
@@ -13,15 +26,25 @@ describe('mergeShipmentVesselFromSapRow', () => {
     expect(mergeShipmentVesselFromSapRow(row)).toBe(true);
     expect(row.vessel_name).toBe('MV TEST');
     expect(row.vessel_code).toBe('VT01');
-    expect(row.vessel_name_sap).toBeUndefined();
   });
 
-  it('does not apply partial SAP vessel data', () => {
+  it('falls back to KLIP vessel name when SAP name is missing', () => {
     const row: Record<string, unknown> = {
+      vessel_name: 'MV KLIP ONLY',
+      vessel_name_sap: '',
+      vessel_code_sap: '',
+    };
+    expect(mergeShipmentVesselFromSapRow(row)).toBe(false);
+    expect(row.vessel_name).toBe('MV KLIP ONLY');
+  });
+
+  it('applies SAP vessel name even when SAP code is missing', () => {
+    const row: Record<string, unknown> = {
+      vessel_name: 'MV KLIP',
       vessel_name_sap: 'MV ONLY NAME',
       vessel_code_sap: '',
     };
     expect(mergeShipmentVesselFromSapRow(row)).toBe(false);
-    expect(row.vessel_name).toBeUndefined();
+    expect(row.vessel_name).toBe('MV ONLY NAME');
   });
 });

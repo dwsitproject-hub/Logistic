@@ -25,8 +25,11 @@ export function normalizeAndValidateDailyDeliverables(args: {
   startRaw: unknown;
   endRaw: unknown;
   maxQtyRaw: unknown;
+  /** Shown in cap-exceeded errors (default: allowed planning quantity in kg). */
+  maxQtyLabel?: string;
 }): { ok: true; rows: NormalizedDailyDeliverableRow[] } | { ok: false; message: string } {
-  const { daily_deliverables, maxQtyRaw } = args;
+  const { daily_deliverables, maxQtyRaw, maxQtyLabel } = args;
+  const capLabel = maxQtyLabel ?? 'allowed planning quantity (kg)';
 
   if (daily_deliverables == null) return { ok: true, rows: [] };
   if (!Array.isArray(daily_deliverables)) {
@@ -84,7 +87,7 @@ export function normalizeAndValidateDailyDeliverables(args: {
       return { ok: false, message: `Daily deliverables row ${idx + 1}: invalid date` };
     }
     if (maxQty != null && qn > maxQty) {
-      return { ok: false, message: `Daily deliverables row ${idx + 1}: quantity cannot exceed Quantity Delivered` };
+      return { ok: false, message: `Daily deliverables row ${idx + 1}: quantity cannot exceed ${capLabel}` };
     }
 
     sum += qn;
@@ -92,7 +95,7 @@ export function normalizeAndValidateDailyDeliverables(args: {
   }
 
   if (maxQty != null && sum > maxQty) {
-    return { ok: false, message: 'Sum of daily deliverables quantity cannot exceed Quantity Delivered' };
+    return { ok: false, message: `Sum of daily deliverables quantity cannot exceed ${capLabel}` };
   }
 
   return { ok: true, rows };

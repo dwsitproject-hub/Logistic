@@ -11,7 +11,7 @@ export function shipmentManualQtyResolveSql(manualExpr: string, sapExpr: string)
       THEN ${manual}
     WHEN ${sap} IS NOT NULL
       THEN ${sap}
-    ELSE COALESCE(${manual}, ${sap}, 0::numeric)
+    ELSE COALESCE(${manual}, ${sap})
   END`;
 }
 

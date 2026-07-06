@@ -1,12 +1,16 @@
 /** Shared SAP JSON paths for vessel identity (shipments list + distribution). */
 
-export const SAP_VESSEL_NAME_FROM_SK_SQL = `NULLIF(TRIM(COALESCE(
-  sk.data->'shipment'->>'vessel_name',
-  sk.data->'vessel'->>'vessel_name',
-  sk.data->'raw'->>'Vessel Name',
-  sk.data->'raw'->>'Vessel',
-  sk.data->'raw'->>'vessel name'
-)), '')`;
+export function sqlSapVesselNameFromSpdJsonb(dataExpr: string): string {
+  return `NULLIF(TRIM(COALESCE(
+    ${dataExpr}->'shipment'->>'vessel_name',
+    ${dataExpr}->'vessel'->>'vessel_name',
+    ${dataExpr}->'raw'->>'Vessel Name',
+    ${dataExpr}->'raw'->>'Vessel',
+    ${dataExpr}->'raw'->>'vessel name'
+  )), '')`;
+}
+
+export const SAP_VESSEL_NAME_FROM_SK_SQL = sqlSapVesselNameFromSpdJsonb('sk.data');
 
 export const SAP_VESSEL_CODE_FROM_SK_SQL = `NULLIF(TRIM(COALESCE(
   sk.data->'shipment'->>'vessel_code',
@@ -74,6 +78,21 @@ export function resolveSapVesselIdentity(
     ),
   };
 }
+
+/** View-table vessel: SAP Vessel Name first, then KLIP user input on shipments. */
+export function resolveShipmentDisplayVesselName(
+  vesselNameSap: unknown,
+  vesselNameKlip: unknown,
+): string | null {
+  const sap = pickSapText(vesselNameSap);
+  const klip = pickSapText(vesselNameKlip);
+  return sap ?? klip;
+}
+
+export const sqlShipmentDisplayVesselName = (
+  sapExpr: string,
+  klipExpr: string,
+): string => `COALESCE(${sapExpr}, NULLIF(TRIM(${klipExpr}), ''))`;
 
 export function hasCompleteSapVesselIdentity(identity: SapVesselIdentity): boolean {
   return Boolean(identity.vessel_code && identity.vessel_name);

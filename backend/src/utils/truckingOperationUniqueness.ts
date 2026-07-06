@@ -119,7 +119,9 @@ export async function resolveContractForUnplannedPlanningUpload(args: {
 }
 
 export type UnplannedPlanningTruckingOpRow = ActiveTruckingOpRow & {
+  contract_id: string;
   daily_deliverables: unknown;
+  daily_actuals?: unknown;
   contract_po_number: string | null;
   contract_number: string | null;
   contract_ext_no: string | null;
@@ -158,10 +160,25 @@ export async function findTruckingOpForUnplannedPlanningUpload(args: {
     `WITH candidates AS (
        SELECT
          t.id,
+         t.contract_id,
          t.operation_id,
          t.status,
          t.quantity_delivered,
          t.daily_deliverables,
+         (
+           SELECT COALESCE(
+             jsonb_agg(
+               jsonb_build_object(
+                 'date', to_char(da.progress_date, 'YYYY-MM-DD'),
+                 'quantity_delivered', da.quantity_kg
+               )
+               ORDER BY da.progress_date
+             ),
+             '[]'::jsonb
+           )
+           FROM trucking_daily_actuals da
+           WHERE da.trucking_operation_id = t.id
+         ) AS daily_actuals,
          c.delivery_start_date,
          c.delivery_end_date,
          t.eta_delivery_start_date,
@@ -195,6 +212,101 @@ export async function findTruckingOpForUnplannedPlanningUpload(args: {
          LIMIT 1
        ) ext ON true
        WHERE COALESCE(t.status, '') <> 'CANCELLED'
+         AND (${matchSql})
+     )
+     SELECT *
+     FROM candidates
+     WHERE rn = 1
+     LIMIT 1`,
+    params,
+  );
+  return (result.rows[0] as UnplannedPlanningTruckingOpRow | undefined) ?? null;
+}
+
+/**
+ * Resolve Planned / In Progress trucking operation for planning re-upload (match PO / Contract Ext No).
+ */
+export async function findTruckingOpForPlannedPlanningUpload(args: {
+  poNumber?: string;
+  contractExtNo?: string;
+}): Promise<UnplannedPlanningTruckingOpRow | null> {
+  const po = String(args.poNumber ?? '').trim();
+  const ext = String(args.contractExtNo ?? '').trim();
+  if (!po && !ext) return null;
+
+  const params: string[] = [];
+  const matchParts: string[] = [];
+  if (po) {
+    params.push(po);
+    matchParts.push(`TRIM(COALESCE(c.po_number::text, '')) = TRIM($${params.length}::text)`);
+  }
+  if (ext) {
+    params.push(ext);
+    const p = `$${params.length}::text`;
+    matchParts.push(`(
+      TRIM(UPPER(COALESCE(ext.ext_no, ''))) = TRIM(UPPER(${p}))
+      OR TRIM(c.contract_id::text) = TRIM(${p})
+    )`);
+  }
+  const matchSql = matchParts.length === 1 ? matchParts[0] : matchParts.join(' AND ');
+
+  const result = await query(
+    `WITH candidates AS (
+       SELECT
+         t.id,
+         t.contract_id,
+         t.operation_id,
+         t.status,
+         t.quantity_delivered,
+         t.daily_deliverables,
+         (
+           SELECT COALESCE(
+             jsonb_agg(
+               jsonb_build_object(
+                 'date', to_char(da.progress_date, 'YYYY-MM-DD'),
+                 'quantity_delivered', da.quantity_kg
+               )
+               ORDER BY da.progress_date
+             ),
+             '[]'::jsonb
+           )
+           FROM trucking_daily_actuals da
+           WHERE da.trucking_operation_id = t.id
+         ) AS daily_actuals,
+         c.delivery_start_date,
+         c.delivery_end_date,
+         t.eta_delivery_start_date,
+         t.eta_delivery_end_date,
+         t.eta_trucking_start_date,
+         t.eta_trucking_completion_date,
+         t.trucking_start_date,
+         t.trucking_completion_date,
+         c.po_number AS contract_po_number,
+         c.contract_id AS contract_number,
+         ext.ext_no AS contract_ext_no,
+         COUNT(*) OVER () AS duplicate_sibling_count,
+         ROW_NUMBER() OVER (
+           ORDER BY
+             CASE
+               WHEN NULLIF(TRIM(COALESCE(t.operation_id::text, '')), '') IS NOT NULL THEN 0
+               ELSE 1
+             END,
+             ${SQL_TRUCKING_KEEPER_PRIORITY_ORDER}
+         ) AS rn
+       FROM trucking_operations t
+       INNER JOIN contracts c ON c.id = t.contract_id
+       LEFT JOIN LATERAL (
+         SELECT NULLIF(TRIM(COALESCE(
+           spd.data->'raw'->>'Contract Ext No',
+           spd.data->>'Contract Ext No'
+         )), '') AS ext_no
+         FROM sap_processed_data spd
+         WHERE spd.contract_number = c.contract_id
+         ORDER BY spd.created_at DESC NULLS LAST
+         LIMIT 1
+       ) ext ON true
+       WHERE COALESCE(t.status, '') <> 'CANCELLED'
+         AND UPPER(COALESCE(t.status, '')) IN ('PLANNED', 'IN_PROGRESS')
          AND (${matchSql})
      )
      SELECT *

@@ -21,7 +21,7 @@ import {
   SHIPMENT_STATUS_DISPLAY_LABELS,
 } from '@/lib/shipmentStatusDisplay'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
-import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay } from '@/lib/sapDisplayValue'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
 import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
@@ -48,6 +48,7 @@ import {
   mergeShipmentQtyOverridesOnContractRows,
   resolveShipmentListDeliveredKg,
   resolveShipmentListReceiveKg,
+  resolveShipmentListStoKg,
   sapDeliveredOrReceiveMtToKg,
   shipmentStoredQtyKg,
 } from '@/lib/shipmentQuantityUnits'
@@ -87,6 +88,10 @@ import {
   shipmentCompactColumnFallbackOrder,
   shipmentDefaultVisibleColumnIds,
 } from '@/lib/shipmentColumns'
+import {
+  resolveShipmentListDischargePorts,
+  resolveShipmentListLoadingPorts,
+} from '@/lib/shipmentListPorts'
 import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
 import {
   resolveShipmentApiLookupKey,
@@ -246,6 +251,18 @@ interface Shipment {
   eta_vessel_complete_discharge?: string
   quantity_receive?: number
   outstanding_quantity?: number
+  outstanding_qty_planning?: number
+  contract_qty?: number
+  loading_ports?: string
+  discharge_ports?: string
+  loading_ports_klip?: string
+  discharge_ports_klip?: string
+  sap_loading_ports?: string
+  sap_discharge_ports?: string
+  sap_vessel_loading_port_1?: string
+  sap_vessel_discharge_port?: string
+  vlp_loading_port_name?: string
+  vlp_discharge_port_name?: string
   quantity_delivered_sap?: number
   sfal_qty?: number | null
   sfbd_qty?: number | null
@@ -260,6 +277,13 @@ interface Shipment {
   eta_discharge_berthed?: string
   eta_discharge_start?: string
   eta_discharge_complete?: string
+  ata_vessel_arrival_at_loading_port?: string
+  ata_vessel_berthed_at_loading_port?: string
+  ata_vessel_start_loading?: string
+  ata_vessel_sailed_from_loading_port?: string
+  ata_vessel_arrive_at_discharge_port?: string
+  ata_vessel_berthed_at_discharge_port?: string
+  ata_vessel_start_discharging?: string
   // Contract details (for expanded view)
   contract_details?: Array<{
     contract_number: string
@@ -449,6 +473,16 @@ function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipmen
       quantity_receive: match.quantity_receive ?? row.quantity_receive,
       quantity_delivered_sap: match.quantity_delivered_sap ?? row.quantity_delivered_sap,
       outstanding_quantity: match.outstanding_quantity ?? row.outstanding_quantity,
+      outstanding_qty_planning: match.outstanding_qty_planning ?? row.outstanding_qty_planning,
+      contract_qty: match.contract_qty ?? row.contract_qty,
+      loading_ports: match.loading_ports ?? row.loading_ports,
+      discharge_ports: match.discharge_ports ?? row.discharge_ports,
+      sap_loading_ports: match.sap_loading_ports ?? row.sap_loading_ports,
+      sap_discharge_ports: match.sap_discharge_ports ?? row.sap_discharge_ports,
+      sap_vessel_loading_port_1: match.sap_vessel_loading_port_1 ?? row.sap_vessel_loading_port_1,
+      sap_vessel_discharge_port: match.sap_vessel_discharge_port ?? row.sap_vessel_discharge_port,
+      loading_ports_klip: match.loading_ports_klip ?? row.loading_ports_klip,
+      discharge_ports_klip: match.discharge_ports_klip ?? row.discharge_ports_klip,
       incoterm: match.incoterm ?? row.incoterm,
       b2b_flag: match.b2b_flag ?? row.b2b_flag,
       source_type: match.source_type ?? row.source_type,
@@ -461,6 +495,8 @@ function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipmen
 
 /** Legacy inline table edit (pencil row edit). Hidden — use Edit Shipment modal instead. */
 const SHIPMENTS_TABLE_LEGACY_INLINE_EDIT_ENABLED = false
+/** Hide header CSV template/upload — set true to restore bulk import UI. */
+const SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED = false
 
 function resolveShipmentEditContractId(shipment: Shipment): string {
   const fromList = (shipment.contract_numbers || '')
@@ -1025,6 +1061,7 @@ function ShipmentsPageContent() {
 
   const [showAddShipment, setShowAddShipment] = useState(false)
   const [addShipmentPrefilledPOs, setAddShipmentPrefilledPOs] = useState<ShipmentPoOption[] | null>(null)
+  const [addShipmentPrefilledSto, setAddShipmentPrefilledSto] = useState<string | null>(null)
   const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
     shipmentId: string
     editContractId: string | null
@@ -1606,6 +1643,7 @@ function ShipmentsPageContent() {
     setShowAddShipment(false)
     setEditShipmentFromTable(null)
     setAddShipmentPrefilledPOs(null)
+    setAddShipmentPrefilledSto(null)
   }
 
   const isContractBacklogRow = (shipment: Shipment): boolean =>
@@ -1651,9 +1689,11 @@ function ShipmentsPageContent() {
       setAddShipmentPrefilledPOs(
         poOptions.length > 0 ? poOptions : [contractBacklogRowToPoOption(shipment)],
       )
+      setAddShipmentPrefilledSto(stoDisplay !== '-' && stoLookup.trim() ? stoLookup.trim() : null)
       setShowAddShipment(true)
     } catch {
       setAddShipmentPrefilledPOs([contractBacklogRowToPoOption(shipment)])
+      setAddShipmentPrefilledSto(stoDisplay !== '-' && stoLookup.trim() ? stoLookup.trim() : null)
       setShowAddShipment(true)
     }
   }
@@ -2253,10 +2293,24 @@ function ShipmentsPageContent() {
     setPage(1)
   }, [resetUserScopeFilters])
 
+  const unplannedTableBreakdown = useMemo(() => {
+    if (unplannedBreakdown) return unplannedBreakdown
+    const fromSummary = shipmentsSection1Summary?.unplannedTable
+    if (!fromSummary) return null
+    return {
+      contractRows: Number(fromSummary.contractRows ?? 0),
+      shipmentRows: Number(fromSummary.shipmentRows ?? 0),
+      totalTableRows: Number(fromSummary.totalTableRows ?? 0),
+    }
+  }, [unplannedBreakdown, shipmentsSection1Summary?.unplannedTable])
+
   const section1StatusCounts = useMemo((): ShipmentPagePipelineStatusCounts => {
     const s = shipmentsSection1Summary?.status
+    const unplannedFromTable =
+      unplannedTableBreakdown?.totalTableRows ??
+      shipmentsSection1Summary?.unplannedTable?.totalTableRows
     return {
-      unplanned: Number(s?.unplanned ?? 0),
+      unplanned: Number(unplannedFromTable ?? s?.unplanned ?? 0),
       planned: Number(s?.planned ?? 0),
       atLoadingPort: Number(s?.atLoadingPort ?? 0),
       sailed: Number(s?.sailed ?? 0),
@@ -2265,7 +2319,7 @@ function ShipmentsPageContent() {
       cancelled: Number(s?.cancelled ?? 0),
       total: Number(shipmentsSection1Summary?.total ?? 0),
     }
-  }, [shipmentsSection1Summary])
+  }, [shipmentsSection1Summary, unplannedTableBreakdown?.totalTableRows])
 
   const loadingPortBreakdown = useMemo((): LoadingPortBreakdown => {
     const b = shipmentsSection1Summary?.loadingPortBreakdown
@@ -2340,30 +2394,28 @@ function ShipmentsPageContent() {
   }, [statusFilter])
   const tableShipmentCount = useMemo(() => totalCount, [totalCount])
 
-  /** Unplanned: headline = contract count (summary card); subtitle shows hybrid row breakdown. */
+  /** Unplanned: headline and Section 1 card both use hybrid table row total. */
   const tableHeaderCount = useMemo(() => {
     if (statusFilter === 'UNPLANNED') {
+      const rowTotal =
+        unplannedTableBreakdown?.totalTableRows ??
+        section1StatusCounts.unplanned ??
+        tableShipmentCount
       return {
-        value: section1StatusCounts.unplanned,
-        noun: 'contracts' as const,
+        value: rowTotal,
+        noun: 'rows' as const,
       }
     }
     return {
       value: tableShipmentCount,
       noun: 'shipments' as const,
     }
-  }, [statusFilter, section1StatusCounts.unplanned, tableShipmentCount])
-
-  const unplannedTableBreakdown = useMemo(() => {
-    if (unplannedBreakdown) return unplannedBreakdown
-    const fromSummary = shipmentsSection1Summary?.unplannedTable
-    if (!fromSummary) return null
-    return {
-      contractRows: Number(fromSummary.contractRows ?? 0),
-      shipmentRows: Number(fromSummary.shipmentRows ?? 0),
-      totalTableRows: Number(fromSummary.totalTableRows ?? 0),
-    }
-  }, [unplannedBreakdown, shipmentsSection1Summary?.unplannedTable])
+  }, [
+    statusFilter,
+    unplannedTableBreakdown?.totalTableRows,
+    section1StatusCounts.unplanned,
+    tableShipmentCount,
+  ])
 
   const section3TableLoading = loading && shipments.length === 0
   const section1DataLoading =
@@ -2392,8 +2444,8 @@ function ShipmentsPageContent() {
 
   // Excel-like filtering helpers
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
-    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days') return 'number'
-    if (colId === 'shipment_date' || colId === 'arrival_date' || colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'ata_vessel_completed_loading' || colId === 'ata_vessel_complete_discharge' || colId === 'eta_vessel_complete_discharge' || colId === 'created_at') return 'date'
+    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'contract_qty' || colId === 'outstanding_qty_planning' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days' || colId === 'sfal_qty' || colId === 'sfbd_qty' || colId === 'outstanding_quantity') return 'number'
+    if (colId === 'shipment_date' || colId === 'arrival_date' || colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'ata_vessel_completed_loading' || colId === 'ata_vessel_complete_discharge' || colId === 'eta_vessel_complete_discharge' || colId === 'created_at' || colId === 'eta_arrival' || colId === 'eta_berthed' || colId === 'eta_loading_start' || colId === 'eta_loading_complete' || colId === 'eta_sailed' || colId === 'eta_discharge_arrival' || colId === 'eta_discharge_berthed' || colId === 'eta_discharge_start' || colId === 'eta_discharge_complete' || colId === 'ata_vessel_arrival_at_loading_port' || colId === 'ata_vessel_berthed_at_loading_port' || colId === 'ata_vessel_start_loading' || colId === 'ata_vessel_sailed_from_loading_port' || colId === 'ata_vessel_arrive_at_discharge_port' || colId === 'ata_vessel_berthed_at_discharge_port' || colId === 'ata_vessel_start_discharging') return 'date'
     return 'text'
   }
 
@@ -2413,6 +2465,8 @@ function ShipmentsPageContent() {
       case 'vessel_owner': return s.vessel_owner || ''
       case 'port_of_loading': return s.port_of_loading || ''
       case 'port_of_discharge': return s.port_of_discharge || ''
+      case 'loading_port': return resolveShipmentListLoadingPorts(s)
+      case 'discharge_port': return resolveShipmentListDischargePorts(s)
       case 'plant_site': return s.plant_site || ''
       case 'supplier': return s.supplier || ''
       case 'buyers': return s.buyers || ''
@@ -2427,6 +2481,11 @@ function ShipmentsPageContent() {
       case 'quantity_shipped': return typeof s.quantity_shipped === 'number' ? s.quantity_shipped : null
       case 'quantity_delivered': return typeof s.quantity_delivered === 'number' ? s.quantity_delivered : null
       case 'sto_quantity': return typeof s.sto_quantity === 'number' ? s.sto_quantity : null
+      case 'contract_qty': return typeof s.contract_qty === 'number' ? s.contract_qty : null
+      case 'outstanding_qty_planning': return typeof s.outstanding_qty_planning === 'number' ? s.outstanding_qty_planning : null
+      case 'outstanding_quantity': return typeof s.outstanding_quantity === 'number' ? s.outstanding_quantity : null
+      case 'sfal_qty': return typeof s.sfal_qty === 'number' ? s.sfal_qty : null
+      case 'sfbd_qty': return typeof s.sfbd_qty === 'number' ? s.sfbd_qty : null
       case 'inbound_weight': return typeof s.inbound_weight === 'number' ? s.inbound_weight : null
       case 'outbound_weight': return typeof s.outbound_weight === 'number' ? s.outbound_weight : null
       case 'gain_loss_percentage': return typeof s.gain_loss_percentage === 'number' ? s.gain_loss_percentage : null
@@ -2453,7 +2512,23 @@ function ShipmentsPageContent() {
       case 'delivery_end_date': return s.delivery_end_date || ''
       case 'ata_vessel_completed_loading': return s.ata_vessel_completed_loading || ''
       case 'ata_vessel_complete_discharge': return s.ata_vessel_complete_discharge || ''
-      case 'eta_vessel_complete_discharge': return s.eta_vessel_complete_discharge || ''
+      case 'eta_vessel_complete_discharge': return s.eta_vessel_complete_discharge || s.eta_discharge_complete || ''
+      case 'eta_arrival': return s.eta_arrival || ''
+      case 'eta_berthed': return s.eta_berthed || ''
+      case 'eta_loading_start': return s.eta_loading_start || ''
+      case 'eta_loading_complete': return s.eta_loading_complete || ''
+      case 'eta_sailed': return s.eta_sailed || ''
+      case 'eta_discharge_arrival': return s.eta_discharge_arrival || ''
+      case 'eta_discharge_berthed': return s.eta_discharge_berthed || ''
+      case 'eta_discharge_start': return s.eta_discharge_start || ''
+      case 'eta_discharge_complete': return s.eta_discharge_complete || ''
+      case 'ata_vessel_arrival_at_loading_port': return s.ata_vessel_arrival_at_loading_port || ''
+      case 'ata_vessel_berthed_at_loading_port': return s.ata_vessel_berthed_at_loading_port || ''
+      case 'ata_vessel_start_loading': return s.ata_vessel_start_loading || ''
+      case 'ata_vessel_sailed_from_loading_port': return s.ata_vessel_sailed_from_loading_port || ''
+      case 'ata_vessel_arrive_at_discharge_port': return s.ata_vessel_arrive_at_discharge_port || ''
+      case 'ata_vessel_berthed_at_discharge_port': return s.ata_vessel_berthed_at_discharge_port || ''
+      case 'ata_vessel_start_discharging': return s.ata_vessel_start_discharging || ''
       case 'created_at': return s.created_at || ''
       default: return (s as any)[colId] ?? ''
     }
@@ -2804,9 +2879,29 @@ function ShipmentsPageContent() {
       ),
     },
     {
+      id: 'loading_port',
+      label: 'Loading Port',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => resolveShipmentListLoadingPorts(s),
+      render: (s) => (
+        <span className="text-sm break-words">{formatSapDisplayValue(resolveShipmentListLoadingPorts(s))}</span>
+      ),
+    },
+    {
+      id: 'discharge_port',
+      label: 'Discharge Port',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => resolveShipmentListDischargePorts(s),
+      render: (s) => (
+        <span className="text-sm break-words">{formatSapDisplayValue(resolveShipmentListDischargePorts(s))}</span>
+      ),
+    },
+    {
       id: 'contract_date',
       label: 'Contract Date',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.contract_date || '',
       render: (s) => <span className="text-sm">{formatShortDate(s.contract_date || '')}</span>
@@ -2814,7 +2909,7 @@ function ShipmentsPageContent() {
     {
       id: 'contract_ext_no',
       label: 'Contract Ext No',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.contract_ext_no || '',
       render: (s) => (
@@ -2824,7 +2919,7 @@ function ShipmentsPageContent() {
     {
       id: 'po_numbers',
       label: 'PO',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.po_numbers || '',
       render: (s) => (
@@ -2854,7 +2949,7 @@ function ShipmentsPageContent() {
     },
     {
       id: 'status',
-      label: 'Status',
+      label: 'Status Shipment',
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => s.status || '',
@@ -2883,92 +2978,126 @@ function ShipmentsPageContent() {
       render: (s) => <span className="text-sm break-words">{formatSapDisplayValue(s.incoterm)}</span>
     },
     {
-      id: 'sto_quantity',
-      label: 'STO Qty (MT)',
+      id: 'contract_qty',
+      label: 'Contract Qty',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => s.sto_quantity || s.total_quantity_shipped || s.quantity_shipped || 0,
+      getSortValue: (s) => shipmentStoredQtyKg(s.contract_qty) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(s.sto_quantity ?? s.total_quantity_shipped ?? s.quantity_shipped)}
+          {formatSapQtyMtDisplay(s.contract_qty)}
+        </span>
+      ),
+    },
+    {
+      id: 'sto_quantity',
+      label: 'STO Qty (MT)',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => resolveShipmentListStoKg(s) ?? 0,
+      render: (s) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatSapQtyMtDisplay(resolveShipmentListStoKg(s))}
         </span>
       )
     },
     {
       id: 'quantity_delivered',
       label: 'Delivery Qty (MT)',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (s) => resolveShipmentListDeliveredKg(s) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(resolveShipmentListDeliveredKg(s))}
+          {formatSapQtyMtDisplay(resolveShipmentListDeliveredKg(s))}
         </span>
       )
     },
     {
       id: 'quantity_receive',
       label: 'Received Qty (MT)',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (s) => resolveShipmentListReceiveKg(s) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(resolveShipmentListReceiveKg(s))}
+          {formatSapQtyMtDisplay(resolveShipmentListReceiveKg(s))}
         </span>
       )
     },
     {
       id: 'outstanding_quantity',
-      label: 'Outstanding Qty (MT)',
+      label: 'Outstanding Qty',
       formulaHelp: FIELD_HELP.shipmentOutstandingQtyMt,
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => s.outstanding_quantity ?? 0,
+      getSortValue: (s) => shipmentStoredQtyKg(s.outstanding_quantity) ?? 0,
       render: (s) => {
-        const kg = Number(s.outstanding_quantity) || 0
-        const isOver = kg < 0
-        const isUnder = kg > 0
+        const kg = shipmentStoredQtyKg(s.outstanding_quantity)
+        const isOver = kg !== null && kg < 0
+        const isUnder = kg !== null && kg > 0
         return (
           <span
             className={`text-sm break-words tabular-nums font-medium ${
               isOver ? 'text-green-600' : isUnder ? 'text-red-600' : 'text-gray-500'
             }`}
           >
-            {formatOutstandingQtyMtFromKg(s.outstanding_quantity)}
+            {formatSapOutstandingQtyMtDisplay(s.outstanding_quantity)}
           </span>
         )
       }
     },
     {
+      id: 'outstanding_qty_planning',
+      label: 'Outstanding Qty (Plan)',
+      formulaHelp: FIELD_HELP.shipmentOutstandingQtyPlanning,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => shipmentStoredQtyKg(s.outstanding_qty_planning) ?? 0,
+      render: (s) => {
+        const kg = shipmentStoredQtyKg(s.outstanding_qty_planning)
+        const isOver = kg !== null && kg < 0
+        const isUnder = kg !== null && kg > 0
+        return (
+          <span
+            className={`text-sm break-words tabular-nums font-medium ${
+              isOver ? 'text-green-600' : isUnder ? 'text-red-600' : 'text-gray-500'
+            }`}
+          >
+            {formatSapOutstandingQtyMtDisplay(s.outstanding_qty_planning)}
+          </span>
+        )
+      },
+    },
+    {
       id: 'sfal_qty',
-      label: 'SFAL Qty (MT)',
+      label: 'SFAL Qty',
       formulaHelp: FIELD_HELP.shipmentSfalQtyMt,
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => s.sfal_qty ?? 0,
+      getSortValue: (s) => shipmentStoredQtyKg(s.sfal_qty) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(s.sfal_qty)}
+          {formatSapQtyMtDisplay(s.sfal_qty)}
         </span>
       )
     },
     {
       id: 'sfbd_qty',
-      label: 'SFBD Qty (MT)',
+      label: 'SFBD Qty',
       formulaHelp: FIELD_HELP.shipmentSfbdQtyMt,
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => s.sfbd_qty ?? 0,
+      getSortValue: (s) => shipmentStoredQtyKg(s.sfbd_qty) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(s.sfbd_qty)}
+          {formatSapQtyMtDisplay(s.sfbd_qty)}
         </span>
       )
     },
     {
       id: 'ata_vessel_completed_loading',
-      label: 'ATA Loading Complete',
+      label: 'ATA Load Complete',
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => s.ata_vessel_completed_loading || '',
@@ -3143,7 +3272,135 @@ function ShipmentsPageContent() {
           {s.average_vessel_speed ? `${formatNumber(s.average_vessel_speed)} knots` : '-'}
         </span>
       )
-    }
+    },
+    {
+      id: 'eta_arrival',
+      label: 'ETA Arrival at Loading Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_arrival || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_arrival || '')}</span>,
+    },
+    {
+      id: 'eta_berthed',
+      label: 'ETA Berthed at Loading Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_berthed || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_berthed || '')}</span>,
+    },
+    {
+      id: 'eta_loading_start',
+      label: 'ETA Start Loading',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_loading_start || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_loading_start || '')}</span>,
+    },
+    {
+      id: 'eta_loading_complete',
+      label: 'ETA Loading Complete',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_loading_complete || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_loading_complete || '')}</span>,
+    },
+    {
+      id: 'eta_sailed',
+      label: 'ETA Sailed from Loading Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_sailed || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_sailed || '')}</span>,
+    },
+    {
+      id: 'eta_discharge_arrival',
+      label: 'ETA Arrival at Discharge Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_discharge_arrival || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_discharge_arrival || '')}</span>,
+    },
+    {
+      id: 'eta_discharge_berthed',
+      label: 'ETA Berthed at Discharge Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_discharge_berthed || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_discharge_berthed || '')}</span>,
+    },
+    {
+      id: 'eta_discharge_start',
+      label: 'ETA Start Discharging',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_discharge_start || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_discharge_start || '')}</span>,
+    },
+    {
+      id: 'eta_discharge_complete',
+      label: 'ETA Discharge Complete',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_discharge_complete || s.eta_vessel_complete_discharge || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_discharge_complete || s.eta_vessel_complete_discharge || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_arrival_at_loading_port',
+      label: 'ATA Arrival at Loading Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_arrival_at_loading_port || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_arrival_at_loading_port || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_berthed_at_loading_port',
+      label: 'ATA Berthed at Loading Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_berthed_at_loading_port || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_berthed_at_loading_port || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_start_loading',
+      label: 'ATA Start Loading',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_start_loading || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_start_loading || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_sailed_from_loading_port',
+      label: 'ATA Sailed from Loading Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_sailed_from_loading_port || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_sailed_from_loading_port || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_arrive_at_discharge_port',
+      label: 'ATA Arrival at Discharge Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_arrive_at_discharge_port || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_arrive_at_discharge_port || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_berthed_at_discharge_port',
+      label: 'ATA Berthed at Discharge Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_berthed_at_discharge_port || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_berthed_at_discharge_port || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_start_discharging',
+      label: 'ATA Start Discharging',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_start_discharging || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_start_discharging || '')}</span>,
+    },
   ], [])
 
   const defaultVisibleColumnIds = useMemo(() => {
@@ -4177,15 +4434,17 @@ function ShipmentsPageContent() {
             <h1 className="text-3xl font-bold">Shipments</h1>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={downloadTemplate}
-              className="border-green-600 text-green-700 hover:bg-green-50"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Download Template
-            </Button>
+            {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={downloadTemplate}
+                className="border-green-600 text-green-700 hover:bg-green-50"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download Template
+              </Button>
+            ) : null}
             {canExportShipments && (
               <Button
                 size="sm"
@@ -4196,6 +4455,7 @@ function ShipmentsPageContent() {
                 Export Data
               </Button>
             )}
+            {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
             <>
               <input
                 type="file"
@@ -4224,6 +4484,7 @@ function ShipmentsPageContent() {
                 )}
               </Button>
             </>
+            ) : null}
             <Button
               size="sm"
               onClick={() => {
@@ -4833,17 +5094,11 @@ function ShipmentsPageContent() {
                     </span>
                     <span className="whitespace-nowrap tabular-nums">
                       Page {page}/{totalPages}
-                      {statusFilter === 'UNPLANNED' && tableShipmentCount > 0 ? (
+                      {statusFilter === 'UNPLANNED' && unplannedTableBreakdown ? (
                         <>
                           {' · '}
-                          {tableShipmentCount.toLocaleString('en-US')} rows
-                          {unplannedTableBreakdown ? (
-                            <>
-                              {' '}
-                              ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')} without shipment ·{' '}
-                              {unplannedTableBreakdown.shipmentRows.toLocaleString('en-US')} STO groups)
-                            </>
-                          ) : null}
+                          ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')} without shipment ·{' '}
+                          {unplannedTableBreakdown.shipmentRows.toLocaleString('en-US')} STO groups)
                         </>
                       ) : null}
                     </span>
@@ -7098,6 +7353,7 @@ function ShipmentsPageContent() {
         editStoNumber={editShipmentFromTable?.editStoNumber ?? null}
         editContractNumbers={editShipmentFromTable?.editContractNumbers ?? null}
         prefilledPOs={addShipmentPrefilledPOs}
+        prefilledStoNumber={addShipmentPrefilledSto}
         onClose={handleCloseShipmentModal}
         onShipmentChanged={() => {
           invalidateLogisticsListCaches()

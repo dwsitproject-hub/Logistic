@@ -56,10 +56,13 @@ import {
   buildTruckingActualsTemplateXlsxBlob,
   DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP,
   isActualsTemplateDownloadEnabled,
-  isActualsWidePlanningTemplateFile,
+  isPlannedPlanningTemplateMode,
   isUnplannedPlanningTemplateMode,
+  isWidePlanningTemplateFile,
+  triggerFailedUnplannedUploadRetemplateDownload,
   type TruckingActualsTemplateRow,
 } from '@/lib/truckingActualsTemplate'
+import { buildTruckingPlanningTemplateFilename } from '@/lib/truckingTemplateFilename'
 import {
   TRUCKING_COLUMN_LAYOUT_VERSION,
   TRUCKING_COLUMN_LAYOUT_VERSION_KEY,
@@ -77,6 +80,9 @@ import {
 import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
 
 const TRUCKING_ACTIONS_COL_WIDTH = 140
+
+/** Hide header Upload CSV + Create New above Global Filters — set true to restore. */
+const TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED = false
 
 const TRUCKING_STATUS_LABELS: Record<string, string> = {
   UNPLANNED: 'Unplanned',
@@ -290,6 +296,7 @@ interface TruckingOperation {
   product: string
   incoterm?: string
   group_name: string
+  source_type?: string
   contract_ext_no?: string
   contract_import_status?: string
   sto_numbers?: string | null
@@ -1058,6 +1065,11 @@ function TruckingPageContent() {
   const [truckingSection1Summary, setTruckingSection1Summary] = useState<any>(null)
   /** Stale-while-revalidate: true while summary API is in flight; keeps prior card counts. */
   const [summaryFetching, setSummaryFetching] = useState(false)
+  /** UI-only: active status card count from view-table pagination.total (summary API still authoritative for other cards). */
+  const [statusCardTotalFromList, setStatusCardTotalFromList] = useState<{
+    status: string
+    total: number
+  } | null>(null)
   const truckingSummaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const listFetchGenRef = useRef(0)
   const summaryFetchGenRef = useRef(0)
@@ -1089,6 +1101,22 @@ function TruckingPageContent() {
     operationFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string; operation_ids?: string[] }[]
   } | null>(null)
 
+  const [wbUploadOpen, setWbUploadOpen] = useState(false)
+  const [wbUploading, setWbUploading] = useState(false)
+  const [wbUploadSummary, setWbUploadSummary] = useState<{
+    importId: string
+    status: string
+    sheetsProcessed: string[]
+    sheetsSkipped: Array<{ sheetName: string; reason: string }>
+    rawTicketRows: number
+    aggregatedPoDates: number
+    operationsUpdated: number
+    operationsFailed: number
+    rowsUpserted: number
+    rowParseFailures: Array<{ sheetName?: string; rowNumber: number; po_number: string; reason: string }>
+    operationFailures: Array<{ po_number: string; progress_date?: string; reason: string; operation_ids?: string[] }>
+  } | null>(null)
+
   const [bulkCreateUploadOpen, setBulkCreateUploadOpen] = useState(false)
   const [bulkCreateUploading, setBulkCreateUploading] = useState(false)
   const [bulkCreateSummary, setBulkCreateSummary] = useState<{
@@ -1110,6 +1138,14 @@ function TruckingPageContent() {
       reason: string
       operation_ids?: string[]
     }[]
+    failedRetemplateRows?: Array<{
+      rowNumber: number
+      po_number: string
+      contract_ext_no: string
+      cells: string[]
+      reason: string
+    }>
+    uploadHeaderRow?: string[]
   } | null>(null)
   const [actualsUploadOpen, setActualsUploadOpen] = useState(false)
   const [actualsUploadSummary, setActualsUploadSummary] = useState<{
@@ -1514,6 +1550,50 @@ function TruckingPageContent() {
     }
   }
 
+  const handleWbRekapFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setWbUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await api.post('/trucking/wb-rekap/bulk-upload', fd)
+      const data = res.data?.data
+      if (data) {
+        setWbUploadSummary({
+          importId: String(data.importId ?? ''),
+          status: String(data.status ?? ''),
+          sheetsProcessed: data.sheetsProcessed ?? [],
+          sheetsSkipped: data.sheetsSkipped ?? [],
+          rawTicketRows: Number(data.rawTicketRows ?? 0),
+          aggregatedPoDates: Number(data.aggregatedPoDates ?? 0),
+          operationsUpdated: Number(data.operationsUpdated ?? 0),
+          operationsFailed: Number(data.operationsFailed ?? 0),
+          rowsUpserted: Number(data.rowsUpserted ?? 0),
+          rowParseFailures: data.rowParseFailures ?? [],
+          operationFailures: data.operationFailures ?? [],
+        })
+        setWbUploadOpen(true)
+      }
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      await fetchTruckingOperations(page, undefined, { force: true })
+      if (activeTab === 'calendar') {
+        await fetchCalendarRows()
+      }
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
+          ?.message ||
+        (err as Error)?.message ||
+        'WB upload failed'
+      alert(message)
+    } finally {
+      setWbUploading(false)
+    }
+  }
+
   const isListActualsTemplateDownloadEnabled = isActualsTemplateDownloadEnabled(statusFilter)
 
   const planningYearOptions = useMemo(() => {
@@ -1553,8 +1633,8 @@ function TruckingPageContent() {
   } | null>(null)
 
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
-  const [sortKey, setSortKey] = useState<string>('created_at')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [sortKey, setSortKey] = useState<string>('supplier')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
   const buildTruckingListSearchParams = useCallback(
     (opts?: {
@@ -1639,6 +1719,7 @@ function TruckingPageContent() {
 
   const downloadFilteredActualsTemplate = useCallback(async () => {
     const unplannedMode = isUnplannedPlanningTemplateMode(statusFilter)
+    const plannedMode = isPlannedPlanningTemplateMode(statusFilter)
     const exportPageSize = 500
 
     setTemplateDownloading(true)
@@ -1669,20 +1750,26 @@ function TruckingPageContent() {
 
       const deduped = dedupeTruckingOperationsForTemplate(collected)
       const rows: TruckingActualsTemplateRow[] = deduped
-        .filter((op) =>
-          unplannedMode
-            ? op.status === 'UNPLANNED'
-            : op.status === 'PLANNED' || op.status === 'IN_PROGRESS',
-        )
+        .filter((op) => {
+          const osKg = parseTruckingQtyKg(op.outstanding_quantity) ?? 0
+          if (osKg <= 0) return false
+          if (unplannedMode) return op.status === 'UNPLANNED'
+          if (plannedMode) return op.status === 'PLANNED' || op.status === 'IN_PROGRESS'
+          return false
+        })
         .map((op) =>
-          unplannedMode
+          unplannedMode || plannedMode
             ? {
                 contract_ext_no: op.contract_ext_no,
                 contract_number: op.contract_number,
                 po_number: op.po_number,
-                delivery_end_date: op.delivery_end_date,
+                group_name: op.group_name,
+                supplier: op.supplier,
+                source_type: op.source_type,
+                contract_date: op.contract_date,
                 outstanding_quantity: op.outstanding_quantity,
-                templateKind: 'unplanned' as const,
+                daily_deliverables: op.daily_deliverables,
+                templateKind: unplannedMode ? ('unplanned' as const) : ('planned' as const),
               }
             : {
                 contract_ext_no: op.contract_ext_no,
@@ -1697,15 +1784,8 @@ function TruckingPageContent() {
       if (rows.length === 0) {
         alert(
           unplannedMode
-            ? 'No Unplanned operations match the current filters.'
-            : 'No Planned or In Progress operations match the current filters.',
-        )
-        return
-      }
-
-      if (unplannedMode && rows.some((row) => !String(row.delivery_end_date ?? '').trim())) {
-        alert(
-          'Some Unplanned rows are missing Due Date Delivery (End) from SAP. Refresh the list or open the row in Add Trucking first.',
+            ? 'No Unplanned operations with outstanding qty match the current filters.'
+            : 'No Planned or In Progress operations with outstanding qty match the current filters.',
         )
         return
       }
@@ -1714,9 +1794,7 @@ function TruckingPageContent() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = unplannedMode
-        ? 'trucking_unplanned_planning_template.xlsx'
-        : 'trucking_daily_actuals_template.xlsx'
+      a.download = buildTruckingPlanningTemplateFilename(unplannedMode ? 'unplanned' : 'planned')
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -1860,10 +1938,12 @@ function TruckingPageContent() {
     options?: { force?: boolean },
   ) => {
     const listGen = ++listFetchGenRef.current
+    const fetchStatusFilter = statusFilter
     setListFetching(true)
     setSummaryFetching(true)
-    if (statusFilter !== 'ALL') {
+    if (fetchStatusFilter !== 'ALL') {
       setTruckingOperations([])
+      setStatusCardTotalFromList(null)
     }
     try {
       const effectivePage = forcedPage ?? page
@@ -1943,6 +2023,16 @@ function TruckingPageContent() {
         } else {
           setUnplannedBreakdown(null)
         }
+        const activeStage = String(fetchStatusFilter ?? '').trim().toUpperCase()
+        if (activeStage && activeStage !== 'ALL') {
+          const listTotal =
+            activeStage === 'UNPLANNED'
+              ? Number(breakdown?.totalTableRows ?? total)
+              : total
+          setStatusCardTotalFromList({ status: activeStage, total: listTotal })
+        } else {
+          setStatusCardTotalFromList(null)
+        }
       }
 
       const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
@@ -2019,6 +2109,33 @@ function TruckingPageContent() {
         rowParseFailures: data.rowParseFailures ?? [],
         operationFailures: data.operationFailures ?? [],
         operationWarnings: data.operationWarnings ?? [],
+        failedRetemplateRows: data.failedRetemplateRows ?? [],
+        uploadHeaderRow: data.uploadHeaderRow ?? [],
+      })
+      setBulkCreateUploadOpen(true)
+    }
+    invalidateLogisticsListCaches()
+    section1SummaryForceNextFetchRef.current = true
+    await fetchTruckingOperations(page, undefined, { force: true })
+  }, [fetchTruckingOperations, page])
+
+  const uploadPlannedPlanningFromWideTemplate = useCallback(async (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await api.post('/trucking/planned-planning/bulk-upload', fd)
+    const data = res.data?.data
+    if (data) {
+      setBulkCreateSummary({
+        processedRows: Number(data.processedRows ?? 0),
+        operationsCreated: Number(data.operationsCreated ?? 0),
+        operationsUpdated: Number(data.operationsUpdated ?? 0),
+        operationsFailed: Number(data.operationsFailed ?? 0),
+        succeededRows: Number(data.succeededRows ?? 0),
+        rowParseFailures: data.rowParseFailures ?? [],
+        operationFailures: data.operationFailures ?? [],
+        operationWarnings: data.operationWarnings ?? [],
+        failedRetemplateRows: data.failedRetemplateRows ?? [],
+        uploadHeaderRow: data.uploadHeaderRow ?? [],
       })
       setBulkCreateUploadOpen(true)
     }
@@ -2039,30 +2156,20 @@ function TruckingPageContent() {
         return
       }
 
-      const isActualsTemplate = await isActualsWidePlanningTemplateFile(file)
-      const fd = new FormData()
-      fd.append('file', file)
-
-      if (isActualsTemplate) {
-        const res = await api.post('/trucking/daily-actuals/bulk-upload', fd)
-        const data = res.data?.data
-        if (data) {
-          const opFailures = data.operationFailures ?? []
-          setActualsUploadSummary({
-            processedRows: Number(data.processedRows ?? 0),
-            operationsUpdated: Number(data.operationsUpdated ?? data.contractsUpdated ?? 0),
-            operationsFailed: opFailures.length,
-            succeededRows: Number(data.succeededRows ?? 0),
-            rowParseFailures: data.rowParseFailures ?? [],
-            operationFailures: opFailures,
-          })
-          setActualsUploadOpen(true)
+      if (isPlannedPlanningTemplateMode(statusFilter)) {
+        const isPlanningTemplate = await isWidePlanningTemplateFile(file)
+        if (!isPlanningTemplate) {
+          alert(
+            'Invalid file. Upload the Planned daily trucking template (Group, Supplier, …, date columns).',
+          )
+          return
         }
-        invalidateLogisticsListCaches()
-        section1SummaryForceNextFetchRef.current = true
-        await fetchTruckingOperations(page, undefined, { force: true })
+        await uploadPlannedPlanningFromWideTemplate(file)
         return
       }
+
+      const fd = new FormData()
+      fd.append('file', file)
 
       const res = await api.post('/trucking/bulk-create', fd)
       const data = res.data?.data
@@ -2525,12 +2632,58 @@ function TruckingPageContent() {
     )
   }, [truckingOperations, statusFilter])
 
-  /** Unplanned view table: headline count matches Section 2 card (distinct contracts), not expanded row total. */
+  /** Unplanned view table: headline and Section 2 card both use hybrid table row total. */
+  const unplannedTableBreakdown = useMemo(() => {
+    if (unplannedBreakdown) return unplannedBreakdown
+    const fromSummary = truckingSection1Summary?.unplannedTable
+    if (!fromSummary) return null
+    return {
+      contractRows: Number(fromSummary.contractRows ?? 0),
+      executionRows: Number(fromSummary.executionRows ?? 0),
+      totalTableRows: Number(fromSummary.totalTableRows ?? 0),
+    }
+  }, [unplannedBreakdown, truckingSection1Summary?.unplannedTable])
+
+  /** Section 2 card counts — summary SQL + instant patch for the active status from view-table total. */
+  const truckingStatusCardCounts = useMemo(() => {
+    const s = truckingSection1Summary?.status
+    const counts: Record<string, number> = {
+      UNPLANNED: Number(
+        unplannedTableBreakdown?.totalTableRows ??
+          truckingSection1Summary?.unplannedTable?.totalTableRows ??
+          s?.unplanned ??
+          0,
+      ),
+      PLANNED: Number(s?.planned ?? 0),
+      IN_PROGRESS: Number(s?.inProgress ?? 0),
+      COMPLETED: Number(s?.completed ?? 0),
+      CANCELLED: Number(s?.cancelled ?? 0),
+    }
+    if (
+      statusCardTotalFromList &&
+      summaryFetching &&
+      Object.prototype.hasOwnProperty.call(counts, statusCardTotalFromList.status)
+    ) {
+      counts[statusCardTotalFromList.status] = statusCardTotalFromList.total
+    }
+    return counts
+  }, [
+    truckingSection1Summary,
+    unplannedTableBreakdown?.totalTableRows,
+    statusCardTotalFromList,
+    summaryFetching,
+  ])
+
   const tableHeaderCount = useMemo(() => {
     if (statusFilter === 'UNPLANNED') {
+      const rowTotal =
+        unplannedTableBreakdown?.totalTableRows ??
+        (truckingSection1Summary?.status?.unplanned != null
+          ? Number(truckingSection1Summary.status.unplanned)
+          : totalCount)
       return {
-        value: Number(truckingSection1Summary?.status?.unplanned ?? 0),
-        noun: 'contracts' as const,
+        value: rowTotal,
+        noun: 'rows' as const,
       }
     }
     if (
@@ -2548,7 +2701,12 @@ function TruckingPageContent() {
       value: totalCount,
       noun: 'operations' as const,
     }
-  }, [statusFilter, truckingSection1Summary?.status?.unplanned, totalCount])
+  }, [
+    statusFilter,
+    unplannedTableBreakdown?.totalTableRows,
+    truckingSection1Summary?.status?.unplanned,
+    totalCount,
+  ])
 
   // Compact columns definition
   interface CompactColumn {
@@ -3172,45 +3330,76 @@ function TruckingPageContent() {
   return (
     <Layout>
       <div className="space-y-6">
+        <input
+          type="file"
+          accept=".csv,.xlsx,.xls"
+          className="hidden"
+          id="bulk-create-trucking-input"
+          onChange={handleBulkCreateFileChange}
+          disabled={bulkCreateUploading}
+        />
+        <input
+          type="file"
+          accept=".xlsx,.xls"
+          className="hidden"
+          id="wb-rekap-upload-input"
+          onChange={handleWbRekapFileChange}
+          disabled={wbUploading}
+        />
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold">Trucking Operations</h1>
           </div>
           <div className="flex items-center gap-2">
-            <input
-              type="file"
-              accept=".csv,.xlsx,.xls"
-              className="hidden"
-              id="bulk-create-trucking-input"
-              onChange={handleBulkCreateFileChange}
-              disabled={bulkCreateUploading}
-            />
-            {!isUnplannedPlanningTemplateMode(statusFilter) ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
-                disabled={bulkCreateUploading}
-              >
-                {bulkCreateUploading ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
-                ) : (
-                  <><Upload className="h-4 w-4 mr-2" />Upload CSV</>
-                )}
-              </Button>
-            ) : null}
             <Button
               size="sm"
-              onClick={() => {
-                setPlotTruckingFromTable(null)
-                setEditTruckingFromTable(null)
-                setShowCreateForm(true)
-              }}
+              variant="outline"
+              className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
+              onClick={() => document.getElementById('wb-rekap-upload-input')?.click()}
+              disabled={wbUploading}
             >
-              <Plus className="h-4 w-4 mr-2" />
-              Create New
+              {wbUploading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Upload WB
+                </>
+              )}
             </Button>
+            {TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED ? (
+              <>
+                {!isUnplannedPlanningTemplateMode(statusFilter) ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+                    disabled={bulkCreateUploading}
+                  >
+                    {bulkCreateUploading ? (
+                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
+                    ) : (
+                      <><Upload className="h-4 w-4 mr-2" />Upload CSV</>
+                    )}
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setPlotTruckingFromTable(null)
+                    setEditTruckingFromTable(null)
+                    setShowCreateForm(true)
+                  }}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create New
+                </Button>
+              </>
+            ) : null}
           </div>
         </div>
 
@@ -3367,19 +3556,7 @@ function TruckingPageContent() {
                 },
               ].map((statusInfo, index, array) => {
                 const isStatusActive = statusFilter === statusInfo.status
-                const s = truckingSection1Summary?.status
-                const count =
-                  statusInfo.status === 'UNPLANNED'
-                    ? Number(s?.unplanned ?? 0)
-                    : statusInfo.status === 'PLANNED'
-                    ? Number(s?.planned ?? 0)
-                    : statusInfo.status === 'IN_PROGRESS'
-                      ? Number(s?.inProgress ?? 0)
-                      : statusInfo.status === 'COMPLETED'
-                        ? Number(s?.completed ?? 0)
-                        : statusInfo.status === 'CANCELLED'
-                          ? Number(s?.cancelled ?? 0)
-                          : 0
+                const count = truckingStatusCardCounts[statusInfo.status] ?? 0
                 return (
                   <div key={statusInfo.status} className="flex items-center flex-shrink-0">
                     <div className="relative">
@@ -3622,7 +3799,7 @@ function TruckingPageContent() {
           </Card>
 
           <Dialog open={planningUploadOpen} onOpenChange={setPlanningUploadOpen}>
-            <DialogContent className="max-w-2xl max-h-[88vh]">
+            <DialogContent className="max-w-2xl max-h-[88vh]" aria-describedby={undefined}>
               <DialogHeader>
                 <DialogTitle>Daily actuals upload result</DialogTitle>
               </DialogHeader>
@@ -3690,13 +3867,106 @@ function TruckingPageContent() {
         )}
 
         {/* Bulk Create Trucking Result Modal */}
+        <Dialog open={wbUploadOpen} onOpenChange={setWbUploadOpen}>
+          <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto" aria-describedby={undefined}>
+            <DialogHeader>
+              <DialogTitle>WB rekap upload result</DialogTitle>
+            </DialogHeader>
+            {wbUploadSummary ? (
+              <div className="space-y-4 text-sm">
+                <div className="rounded-md border bg-slate-50 px-3 py-2 text-xs text-muted-foreground">
+                  Import ID: <span className="font-mono text-slate-800">{wbUploadSummary.importId}</span>
+                  {' · '}
+                  Status:{' '}
+                  <span className="font-semibold uppercase text-slate-800">{wbUploadSummary.status}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <div className="rounded-md border bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">WB tickets parsed</div>
+                    <div className="text-lg font-semibold tabular-nums">{wbUploadSummary.rawTicketRows}</div>
+                  </div>
+                  <div className="rounded-md border bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">PO × date aggregates</div>
+                    <div className="text-lg font-semibold tabular-nums">{wbUploadSummary.aggregatedPoDates}</div>
+                  </div>
+                  <div className="rounded-md border bg-green-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Operations updated</div>
+                    <div className="text-lg font-semibold tabular-nums text-green-800">
+                      {wbUploadSummary.operationsUpdated}
+                    </div>
+                  </div>
+                  <div className="rounded-md border bg-blue-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Daily actual rows upserted</div>
+                    <div className="text-lg font-semibold tabular-nums text-blue-800">
+                      {wbUploadSummary.rowsUpserted}
+                    </div>
+                  </div>
+                  <div className="rounded-md border bg-red-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Failed PO/date rows</div>
+                    <div className="text-lg font-semibold tabular-nums text-red-800">
+                      {wbUploadSummary.operationsFailed}
+                    </div>
+                  </div>
+                </div>
+                {wbUploadSummary.sheetsProcessed.length > 0 ? (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-1">Sheets processed</div>
+                    <p className="text-xs text-gray-700">{wbUploadSummary.sheetsProcessed.join(', ')}</p>
+                  </div>
+                ) : null}
+                {(wbUploadSummary.sheetsSkipped?.length ?? 0) > 0 ? (
+                  <div>
+                    <div className="font-medium text-amber-900 mb-2">Sheets skipped</div>
+                    <ul className="max-h-32 overflow-auto rounded border border-amber-200 bg-amber-50 text-xs space-y-1 p-2">
+                      {wbUploadSummary.sheetsSkipped.map((s, i) => (
+                        <li key={`wbs-${i}`} className="text-amber-950">
+                          <span className="font-semibold">{s.sheetName}</span>: {s.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(wbUploadSummary.rowParseFailures?.length ?? 0) > 0 ? (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-2">Row parse issues</div>
+                    <ul className="max-h-40 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
+                      {wbUploadSummary.rowParseFailures.map((f, i) => (
+                        <li key={`wb-rpf-${i}`} className="text-gray-800">
+                          {f.sheetName ? `${f.sheetName} · ` : ''}
+                          <span className="font-mono">Line {f.rowNumber}</span>
+                          {f.po_number ? ` · PO ${f.po_number}` : ''}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(wbUploadSummary.operationFailures?.length ?? 0) > 0 ? (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-2">Failed PO / date (skipped)</div>
+                    <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-2 p-2">
+                      {wbUploadSummary.operationFailures.map((f, i) => (
+                        <li key={`wb-of-${i}`} className="text-gray-800">
+                          <span className="font-semibold">PO {f.po_number}</span>
+                          {f.progress_date ? ` · ${f.progress_date}` : ''}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </DialogContent>
+        </Dialog>
+
         <Dialog open={bulkCreateUploadOpen} onOpenChange={setBulkCreateUploadOpen}>
-          <DialogContent className="max-w-2xl max-h-[88vh]">
+          <DialogContent className="max-w-2xl max-h-[88vh]" aria-describedby={undefined}>
             <DialogHeader>
               <DialogTitle>
                 {isUnplannedPlanningTemplateMode(statusFilter)
                   ? 'Unplanned planning upload result'
-                  : 'Bulk create trucking upload result'}
+                  : isPlannedPlanningTemplateMode(statusFilter)
+                    ? 'Planned planning upload result'
+                    : 'Bulk create trucking upload result'}
               </DialogTitle>
             </DialogHeader>
             {bulkCreateSummary ? (
@@ -3773,13 +4043,49 @@ function TruckingPageContent() {
                     </ul>
                   </div>
                 )}
+                {(isUnplannedPlanningTemplateMode(statusFilter) ||
+                  isPlannedPlanningTemplateMode(statusFilter)) &&
+                (bulkCreateSummary.failedRetemplateRows?.length ?? 0) > 0 &&
+                (bulkCreateSummary.uploadHeaderRow?.length ?? 0) > 0 ? (
+                  <div className="rounded-md border border-red-200 bg-red-50/70 p-3">
+                    <div className="font-medium text-red-900 mb-1">
+                      {bulkCreateSummary.failedRetemplateRows!.length} PO row(s) rejected — total planning qty ≠
+                      Outstanding Qty
+                    </div>
+                    <p className="text-xs text-red-800 mb-3">
+                      Download the corrected template with failure reasons, adjust daily qty (kg) so the row total
+                      matches OS Qty (kg), then upload the failed rows file again.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="border-red-300 bg-white text-red-800 hover:bg-red-100"
+                      onClick={() =>
+                        triggerFailedUnplannedUploadRetemplateDownload({
+                          uploadHeaderRow: bulkCreateSummary.uploadHeaderRow!,
+                          failedRows: bulkCreateSummary.failedRetemplateRows!.map((row) => ({
+                            cells: row.cells,
+                            reason: row.reason,
+                          })),
+                          filename: buildTruckingPlanningTemplateFilename(
+                            isUnplannedPlanningTemplateMode(statusFilter) ? 'unplanned' : 'planned',
+                          ).replace('.xlsx', '-failed.xlsx'),
+                        })
+                      }
+                    >
+                      <Download className="mr-2 h-4 w-4" />
+                      Download failed PO template
+                    </Button>
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </DialogContent>
         </Dialog>
 
         <Dialog open={actualsUploadOpen} onOpenChange={setActualsUploadOpen}>
-          <DialogContent className="max-w-2xl max-h-[88vh]">
+          <DialogContent className="max-w-2xl max-h-[88vh]" aria-describedby={undefined}>
             <DialogHeader>
               <DialogTitle>Daily actuals upload result</DialogTitle>
             </DialogHeader>
@@ -3861,13 +4167,15 @@ function TruckingPageContent() {
                   ·
                 </span>
                 <span className="whitespace-nowrap tabular-nums">
-                  Page {page}/{totalPages} · {totalCount.toLocaleString('en-US')} rows
-                  {statusFilter === 'UNPLANNED' && unplannedBreakdown ? (
+                  Page {page}/{totalPages}
+                  {statusFilter === 'UNPLANNED' && unplannedTableBreakdown ? (
                     <>
-                      {' '}
-                      ({unplannedBreakdown.contractRows.toLocaleString('en-US')} without trucking ·{' '}
-                      {unplannedBreakdown.executionRows.toLocaleString('en-US')} ops)
+                      {' · '}
+                      ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')} without trucking ·{' '}
+                      {unplannedTableBreakdown.executionRows.toLocaleString('en-US')} ops)
                     </>
+                  ) : statusFilter !== 'UNPLANNED' ? (
+                    <> · {totalCount.toLocaleString('en-US')} rows</>
                   ) : null}
                 </span>
                 {truckingActiveFilterScopeLabel ? (
@@ -3885,7 +4193,8 @@ function TruckingPageContent() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               {truckingViewToggle}
               <div className="flex flex-wrap items-center gap-2 ml-auto">
-                {isUnplannedPlanningTemplateMode(statusFilter) ? (
+                {(isUnplannedPlanningTemplateMode(statusFilter) ||
+                  isPlannedPlanningTemplateMode(statusFilter)) ? (
                   <Button
                     variant="outline"
                     size="sm"
@@ -3896,7 +4205,7 @@ function TruckingPageContent() {
                     {bulkCreateUploading ? (
                       <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
                     ) : (
-                      <><Upload className="h-4 w-4 mr-2" />Upload XLSX</>
+                      <><Upload className="h-4 w-4 mr-2" />Upload</>
                     )}
                   </Button>
                 ) : null}

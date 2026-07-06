@@ -1,6 +1,29 @@
 import { query } from '../database/connection';
 import { sqlIncotermImportStatusFromJson } from './sapIncotermMetrics';
 
+/** Display-aligned contract delivery status: Open / Close / Cancelled (not legacy ACTIVE/COMPLETED). */
+export function normalizeContractDeliveryStatusForDisplay(status: unknown): string {
+  const raw = String(status ?? '').trim();
+  if (!raw) return '';
+  const u = raw.toUpperCase();
+  if (u === 'ACTIVE' || u === 'OPEN') return 'Open';
+  if (u === 'CLOSE' || u === 'CLOSED' || u === 'COMPLETED' || u === 'COMPLETE') return 'Close';
+  if (u === 'CANCELLED' || u === 'CANCELED' || u === 'CANCEL') return 'Cancelled';
+  if (raw === 'Open' || raw === 'Close' || raw === 'Cancelled') return raw;
+  return raw;
+}
+
+/** SQL: map legacy/SAP status tokens to Open / Close / Cancelled for list + performance APIs. */
+export function sqlNormalizeContractDeliveryStatusExpr(statusExpr: string): string {
+  const u = `UPPER(TRIM(COALESCE(${statusExpr}, '')))`;
+  return `CASE
+    WHEN ${u} IN ('ACTIVE', 'OPEN') THEN 'Open'
+    WHEN ${u} IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE') THEN 'Close'
+    WHEN ${u} IN ('CANCELLED', 'CANCELED', 'CANCEL') THEN 'Cancelled'
+    ELSE NULLIF(TRIM(${statusExpr}::text), '')
+  END`;
+}
+
 export function isContractDeliveryClosed(status: unknown): boolean {
   const normalized = String(status ?? '').trim().toUpperCase();
   return (
@@ -16,10 +39,13 @@ export function sqlContractImportStatusExpr(
   contractAlias = 'c',
   poNumberRef = `${contractAlias}.po_number`,
 ): string {
+  const sapPick = sqlNormalizeContractDeliveryStatusExpr(
+    sqlIncotermImportStatusFromJson('spd.data', `${contractAlias}.incoterm`, `${contractAlias}.status::text`),
+  );
   return `
     COALESCE(
       (
-        SELECT ${sqlIncotermImportStatusFromJson('spd.data', `${contractAlias}.incoterm`, `${contractAlias}.status::text`)}
+        SELECT ${sapPick}
         FROM sap_processed_data spd
         WHERE spd.contract_number = ${contractAlias}.contract_id
           AND (
@@ -39,8 +65,14 @@ export function sqlContractImportStatusExpr(
           spd.created_at DESC NULLS LAST
         LIMIT 1
       ),
-      ${contractAlias}.status
+      ${sqlNormalizeContractDeliveryStatusExpr(`${contractAlias}.status`)}
     )`.trim();
+}
+
+/** Contracts list / performance — PO-aware SAP status (not latest_spd-only). */
+export function sqlContractListImportStatusAggExpr(contractAlias = 'c'): string {
+  const inner = sqlContractImportStatusExpr(contractAlias);
+  return `(array_agg((${inner}) ORDER BY ${contractAlias}.created_at DESC NULLS LAST))[1]`;
 }
 
 export const SQL_CONTRACT_IMPORT_STATUS = sqlContractImportStatusExpr('c');

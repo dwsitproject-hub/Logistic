@@ -21,8 +21,10 @@ import { assertTruckingOperationContractOpen } from '../utils/contractDeliverySt
 import { buildTruckingPageListScopeSql } from '../utils/truckingIncotermScope';
 import {
   parsePlanningSheetToMatrix,
+  parseWbRekapWorkbookSheetsFromBuffer,
   toIsoDate10FromCell,
 } from '../utils/planningSheetDate';
+import { processWbRekapWorkbookUpload } from '../services/truckingWbImport.service';
 
 const MAX_BULK_ACTUALS_ROWS = 20000;
 
@@ -543,5 +545,64 @@ export const getTruckingDailyActualsCalendar = async (req: AuthRequest, res: Res
   } catch (err) {
     logger.error('getTruckingDailyActualsCalendar error:', err);
     return res.status(500).json({ success: false, error: { message: 'Failed to load daily actuals calendar' } });
+  }
+};
+
+/** Upload WB rekap Excel — aggregate Netto PKS/EUP per PO + Tanggal Masuk into trucking_daily_actuals. */
+export const bulkUploadWbRekap = async (req: AuthRequest, res: Response) => {
+  try {
+    const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+    if (!file?.buffer) {
+      return res.status(400).json({ success: false, error: { message: 'File is required (Excel .xlsx/.xls)' } });
+    }
+
+    const filename = String(file.originalname ?? '').trim();
+    if (!/\.(xlsx|xls)$/i.test(filename)) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'WB upload requires an Excel file (.xlsx or .xls)' },
+      });
+    }
+
+    let sheets;
+    try {
+      sheets = parseWbRekapWorkbookSheetsFromBuffer(file.buffer);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Could not read workbook';
+      return res.status(400).json({ success: false, error: { message } });
+    }
+
+    if (sheets.length === 0) {
+      return res.status(400).json({ success: false, error: { message: 'Workbook has no worksheets' } });
+    }
+
+    const result = await processWbRekapWorkbookUpload({
+      originalFilename: filename,
+      uploadedBy: req.user?.id ?? null,
+      sheets,
+    });
+
+    invalidateTruckingListCache();
+
+    return res.json({
+      success: true,
+      message: `WB rekap processed — ${result.rowsUpserted} daily actual row(s) upserted across ${result.operationsUpdated} operation(s)`,
+      data: {
+        importId: result.importId,
+        status: result.status,
+        sheetsProcessed: result.sheetsProcessed,
+        sheetsSkipped: result.sheetsSkipped,
+        rawTicketRows: result.rawTicketRows,
+        aggregatedPoDates: result.aggregatedPoDates,
+        operationsUpdated: result.operationsUpdated,
+        operationsFailed: result.operationsFailed,
+        rowsUpserted: result.rowsUpserted,
+        rowParseFailures: result.rowParseFailures,
+        operationFailures: result.operationFailures,
+      },
+    });
+  } catch (err) {
+    logger.error('bulkUploadWbRekap error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to process WB rekap upload' } });
   }
 };

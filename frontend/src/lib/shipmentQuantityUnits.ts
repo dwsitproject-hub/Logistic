@@ -12,9 +12,10 @@ export function sapDeliveredOrReceiveMtToKg(mt: number | null | undefined): numb
   return n * 1000
 }
 
-export function shipmentStoredQtyKg(value: number | null | undefined): number | null {
-  if (value === null || value === undefined) return null
-  const n = Number(value)
+export function shipmentStoredQtyKg(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const raw = typeof value === 'string' ? value.replace(/,/g, '').trim() : value
+  const n = typeof raw === 'string' ? Number(raw) : Number(raw)
   return Number.isFinite(n) ? n : null
 }
 
@@ -66,28 +67,40 @@ export function mergeShipmentQtyOverridesOnContractRows<
   return rows
 }
 
-/** Shipments list table — kg for display (formatQtyMtFromKg). Prefer KLIP manual row when it differs from SAP. */
+/** Shipments list table — kg for display. Prefer KLIP manual row when it differs from SAP. */
 export function resolveShipmentListDeliveredKg(shipment: {
-  quantity_delivered?: number | null
-  total_quantity_delivered?: number | null
-  quantity_delivered_sap?: number | null
+  quantity_delivered?: number | string | null
+  total_quantity_delivered?: number | string | null
+  quantity_delivered_sap?: number | string | null
 }): number | null {
   const manual =
     shipmentStoredQtyKg(shipment.quantity_delivered)
     ?? shipmentStoredQtyKg(shipment.total_quantity_delivered)
   const sap = shipmentStoredQtyKg(shipment.quantity_delivered_sap)
   if (manual !== null && sap !== null && Math.abs(manual - sap) > 0.5) return manual
-  if (sap !== null && sap > 0) return sap
-  return manual ?? sap
+  if (sap !== null) return sap
+  return manual
 }
 
 export function resolveShipmentListReceiveKg(shipment: {
-  actual_vessel_qty_receive?: number | null
-  quantity_receive?: number | null
+  actual_vessel_qty_receive?: number | string | null
+  quantity_receive?: number | string | null
 }): number | null {
   const manual = shipmentStoredQtyKg(shipment.actual_vessel_qty_receive)
   const sap = shipmentStoredQtyKg(shipment.quantity_receive)
   if (manual !== null && sap !== null && Math.abs(manual - sap) > 0.5) return manual
-  if (sap !== null && sap > 0) return sap
-  return manual ?? sap
+  if (sap !== null) return sap
+  return manual
+}
+
+export function resolveShipmentListStoKg(shipment: {
+  sto_quantity?: number | string | null
+  total_quantity_shipped?: number | string | null
+  quantity_shipped?: number | string | null
+}): number | null {
+  return (
+    shipmentStoredQtyKg(shipment.sto_quantity)
+    ?? shipmentStoredQtyKg(shipment.total_quantity_shipped)
+    ?? shipmentStoredQtyKg(shipment.quantity_shipped)
+  )
 }

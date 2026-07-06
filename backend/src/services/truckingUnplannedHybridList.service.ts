@@ -175,6 +175,7 @@ export function buildTruckingUnplannedHybridContext(
   req: AuthRequest,
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
+  options?: { executionBuilt?: TruckingListBuiltQuery },
 ): TruckingUnplannedHybridContext {
   const { dateFrom, dateTo, contract, plant } = req.query;
   const globalSearch =
@@ -186,7 +187,8 @@ export function buildTruckingUnplannedHybridContext(
   const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
 
   return {
-    executionBuilt: buildTruckingListQuery(req, { omitStatusFilter: true }),
+    executionBuilt:
+      options?.executionBuilt ?? buildTruckingListQuery(req, { omitStatusFilter: true }),
     contractScope: { dateFrom, dateTo, contract, plants },
     globalSearch,
     colFilters,

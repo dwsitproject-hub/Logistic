@@ -23,7 +23,7 @@ import {
   type VesselModalOpenColumnKey,
 } from '@/lib/shippingPerformanceVesselModal'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
-import { formatShipmentStatusLabel } from '@/lib/shipmentStatusDisplay'
+import { formatShipmentStatusLabel, shipmentStatusBadgeClass } from '@/lib/shipmentStatusDisplay'
 import { cn } from '@/lib/utils'
 import { Anchor, Loader2, Ship, X } from 'lucide-react'
 
@@ -118,30 +118,6 @@ function avgAtaDelta(
   return Math.round(avg * 10) / 10
 }
 
-function getStatusColor(status: string): string {
-  switch (status) {
-    case 'PLANNED':
-      return 'bg-blue-100 text-blue-800'
-    case 'IN_PROGRESS':
-      return 'bg-yellow-100 text-yellow-800'
-    case 'LOADING':
-      return 'bg-orange-100 text-orange-800'
-    case 'IN_TRANSIT':
-      return 'bg-purple-100 text-purple-800'
-    case 'ARRIVED':
-      return 'bg-indigo-100 text-indigo-800'
-    case 'UNLOADING':
-      return 'bg-cyan-100 text-cyan-800'
-    case 'COMPLETED':
-      return 'bg-green-100 text-green-800'
-    case 'CANCELLED':
-    case 'CANCELED':
-      return 'bg-red-100 text-red-800'
-    default:
-      return 'bg-gray-100 text-gray-800'
-  }
-}
-
 function renderDeltaDaysCell(days: number | null) {
   if (days == null || !Number.isFinite(days)) {
     return <span className="text-gray-400">-</span>
@@ -166,7 +142,7 @@ function renderOpenCell(row: ShippingPerfVesselModalAggregatedRow, key: VesselMo
   if (key === 'status') {
     const status = String(row.status ?? '').trim()
     if (!status) return <span className="text-gray-400">-</span>
-    return <Badge className={getStatusColor(status)}>{formatShipmentStatusLabel(status)}</Badge>
+    return <Badge className={shipmentStatusBadgeClass(status)}>{formatShipmentStatusLabel(status)}</Badge>
   }
   if (isVesselModalOpenDeltaColumn(key)) {
     return renderDeltaDaysCell(resolveVesselModalOpenDeltaDays(row, key))
@@ -187,7 +163,7 @@ function renderHistoryCell(row: ShippingPerfVesselModalAggregatedRow, key: Vesse
   if (key === 'status') {
     const status = String(row.status ?? '').trim()
     if (!status) return <span className="text-gray-400">-</span>
-    return <Badge className={getStatusColor(status)}>{formatShipmentStatusLabel(status)}</Badge>
+    return <Badge className={shipmentStatusBadgeClass(status)}>{formatShipmentStatusLabel(status)}</Badge>
   }
   if (isVesselModalHistoryDeltaColumn(key)) {
     return renderDeltaDaysCell(resolveVesselModalHistoryDeltaDays(row, key))

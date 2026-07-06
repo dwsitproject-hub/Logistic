@@ -86,7 +86,8 @@ export function mapPurchaseOrderToPoOption(row: Record<string, unknown>): Shipme
       contract_id: contractId,
       po_number: poNumber || null,
       quantity_ordered: row.quantity_ordered,
-      outstanding_quantity: row.outstanding_quantity,
+      outstanding_quantity: row.outstanding_quantity_planning ?? row.outstanding_quantity,
+      outstanding_quantity_planning: row.outstanding_quantity_planning ?? row.outstanding_quantity,
       delivery_start_date: row.delivery_start_date,
       delivery_end_date: row.delivery_end_date,
       supplier: row.supplier,
@@ -166,6 +167,18 @@ async function enrichPoOptionsFromPurchaseOrders(options: ShipmentPoOption[]): P
   })
 }
 
+export function dedupeShipmentPoOptions(options: ShipmentPoOption[]): ShipmentPoOption[] {
+  const seen = new Set<string>()
+  const out: ShipmentPoOption[] = []
+  for (const opt of options) {
+    const dedupeKey = `${opt.contractId}::${opt.poNumber ?? ''}`
+    if (seen.has(dedupeKey)) continue
+    seen.add(dedupeKey)
+    out.push(opt)
+  }
+  return out
+}
+
 /** PO lines linked to a grouped STO row (multi-contract / multi-PO). */
 export async function fetchStoLinkedPurchaseOrderOptions(
   stoNumber: string,
@@ -181,7 +194,7 @@ export async function fetchStoLinkedPurchaseOrderOptions(
     },
   })
   const rows: Record<string, unknown>[] = res.data?.data ?? []
-  const base = rows.map(mapStoContractDetailToPoOption)
+  const base = dedupeShipmentPoOptions(rows.map(mapStoContractDetailToPoOption))
   return enrichPoOptionsFromPurchaseOrders(base)
 }
 
@@ -192,7 +205,7 @@ export async function fetchContractPurchaseOrderOptions(contractId: string): Pro
   return rows.map(mapPurchaseOrderToPoOption)
 }
 
-/** PO lines eligible to add on Edit Shipment (global search, no SAP STO, global outstanding > 0). */
+/** PO lines eligible to add on Edit Shipment (global search, global OS Qty Plan > 0). */
 export async function fetchShipmentAvailablePurchaseOrders(
   shipmentId: string,
   opts?: { search?: string; limit?: number },
@@ -220,17 +233,40 @@ export type ShipmentEditContextData = {
 export async function attachPurchaseOrderToShipment(args: {
   shipmentId: string
   contractRowId: string
-  stoQtyAssignedMt: number
+  stoQtyAssignedMt?: number
+  stoQtyAssignedKg?: number
 }): Promise<void> {
   const api = (await import('@/lib/api')).default
+  const body: Record<string, unknown> = { contractRowId: args.contractRowId }
+  if (args.stoQtyAssignedKg != null) body.shipment_plan_qty_kg = args.stoQtyAssignedKg
+  else if (args.stoQtyAssignedMt != null) body.stoQtyAssignedMt = args.stoQtyAssignedMt
+  else body.shipment_plan_qty_kg = 0
   const res = await api.post(
     `/shipments/${encodeURIComponent(args.shipmentId)}/purchase-orders`,
-    {
-      contractRowId: args.contractRowId,
-      stoQtyAssignedMt: args.stoQtyAssignedMt,
-    },
+    body,
   )
   if (!res.data?.success) {
     throw new Error(res.data?.error?.message || 'Failed to add PO to shipment')
+  }
+}
+
+export async function batchSaveShipmentPoPlanQty(args: {
+  shipmentId: string
+  rows: Array<{
+    contractNumber: string
+    poNumber?: string | null
+    shipmentPlanQtyKg: number
+  }>
+}): Promise<void> {
+  const api = (await import('@/lib/api')).default
+  const res = await api.put(`/shipments/${encodeURIComponent(args.shipmentId)}/po-plan-qty`, {
+    rows: args.rows.map((row) => ({
+      contractNumber: row.contractNumber,
+      poNumber: row.poNumber ?? null,
+      shipmentPlanQtyKg: row.shipmentPlanQtyKg,
+    })),
+  })
+  if (!res.data?.success) {
+    throw new Error(res.data?.error?.message || 'Failed to save Shipment Plan Qty')
   }
 }

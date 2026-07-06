@@ -17,7 +17,10 @@ import {
 } from '@/lib/cycleDaysDisplay'
 import { formatDateDMY } from '@/lib/dateFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { formatContractDeliveryStatusLabel } from '@/lib/contractDeliveryStatus'
 import { canViewPermission, usePermissions } from '@/components/PermissionsContext'
+import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
+import { ViewTruckingOperationModal } from '@/components/trucking/ViewTruckingOperationModal'
 
 const CONTRACT_PAYMENT_INFO_PERMISSION = 'data.contract_payment_info'
 
@@ -119,9 +122,10 @@ function getStatusColor(status: string) {
   switch (status) {
     case 'Close':
     case 'CLOSE':
+    case 'CLOSED':
     case 'Completed':
     case 'COMPLETED':
-      return 'bg-blue-100 text-blue-800'
+      return 'bg-red-100 text-red-800'
     case 'Open':
     case 'OPEN':
     case 'ACTIVE':
@@ -139,11 +143,12 @@ function getContractOverallStatus(
 ): string {
   const delivery = String(c.import_status || c.status || '').toUpperCase()
   const paid = String(c.payment_status || '').toUpperCase() === 'PAID'
-  return delivery === 'CLOSE' && paid ? 'Close' : formatSapDisplayValue(c.import_status || c.status)
+  return delivery === 'CLOSE' && paid ? 'Close' : formatContractDeliveryStatusLabel(c.import_status || c.status)
 }
 
 function ContractStatusBadge({ status }: { status: string }) {
-  return <Badge className={getStatusColor(status)}>{formatSapDisplayValue(status)}</Badge>
+  const label = formatContractDeliveryStatusLabel(status) || formatSapDisplayValue(status)
+  return <Badge className={getStatusColor(label)}>{label}</Badge>
 }
 
 /**
@@ -256,6 +261,55 @@ function pickContractForDetailModal(
   return exact ?? contracts[0] ?? null
 }
 
+function contractMatchesPo(c: ContractDetailModalContract, poNumber: string): boolean {
+  const needle = String(poNumber || '').trim().toLowerCase()
+  if (!needle) return false
+  if (String(c.po_number || '').trim().toLowerCase() === needle) return true
+  return String(c.po_numbers || '')
+    .split(',')
+    .map((part) => part.trim().toLowerCase())
+    .includes(needle)
+}
+
+/** Resolve contract detail row by PO (and optional contract id hint from shipment PO list). */
+export async function fetchContractForDetailModalByPo(
+  poNumber: string,
+  contractNumber?: string | null,
+): Promise<ContractDetailModalContract | null> {
+  const po = String(poNumber || '').trim()
+  const contractId = String(contractNumber || '').trim()
+
+  if (contractId) {
+    const byContract = await fetchContractForDetailModal(contractId)
+    if (byContract && (!po || contractMatchesPo(byContract, po))) {
+      return byContract
+    }
+  }
+
+  if (!po) {
+    return contractId ? fetchContractForDetailModal(contractId) : null
+  }
+
+  try {
+    const bySearch = await api.get<{
+      success: boolean
+      data?: { contracts?: ContractDetailModalContract[] }
+    }>('/contracts', { params: { search: po, limit: 25, page: 1 } })
+    if (bySearch.data?.success) {
+      const contracts = bySearch.data.data?.contracts ?? []
+      const poMatch = contracts.find((c) => contractMatchesPo(c, po))
+      if (poMatch) return poMatch
+      if (contractId) {
+        return contracts.find((c) => String(c.contract_id || '').trim() === contractId) ?? null
+      }
+    }
+  } catch (err) {
+    console.error('fetchContractForDetailModalByPo:', err)
+  }
+
+  return contractId ? fetchContractForDetailModal(contractId) : null
+}
+
 /** Load enriched contract row for ContractDetailModal (same source as Contracts list API). */
 export async function fetchContractForDetailModal(
   contractNumber: string,
@@ -293,13 +347,30 @@ export function ContractDetailModal({
   onClose,
   showMonthDeliveryEnd = false,
   documentsRefreshKey = 0,
+  stacked = false,
 }: {
   contract: ContractDetailModalContract | null
   onClose: () => void
   showMonthDeliveryEnd?: boolean
   /** Increment to refetch documents while the modal stays open (e.g. after table upload). */
   documentsRefreshKey?: number
+  /** Raise z-index when opened above vessel/shipment modals (z-[60]). */
+  stacked?: boolean
 }) {
+  const cycleHelp = showMonthDeliveryEnd
+    ? {
+        outstanding: FIELD_HELP.contractPerfOutstandingQty,
+        log: FIELD_HELP.contractPerfLogCycle,
+        trade: FIELD_HELP.contractPerfTradeCycle,
+        cash: FIELD_HELP.contractPerfCashCycle,
+      }
+    : {
+        outstanding: FIELD_HELP.outstandingQty,
+        log: FIELD_HELP.logCycle,
+        trade: FIELD_HELP.tradeCycle,
+        cash: FIELD_HELP.cashCycle,
+      }
+
   const perms = usePermissions()
   const canViewContractPaymentInfo = canViewPermission(perms, CONTRACT_PAYMENT_INFO_PERMISSION)
 
@@ -310,6 +381,19 @@ export function ContractDetailModal({
   const [stoDetailRow, setStoDetailRow] = useState<StoInfoRow | null>(null)
   const [stoDetailData, setStoDetailData] = useState<Record<string, unknown> | null>(null)
   const [stoDetailLoading, setStoDetailLoading] = useState(false)
+  const [stoLogisticsViewLoading, setStoLogisticsViewLoading] = useState(false)
+  const [viewShipmentModal, setViewShipmentModal] = useState<{
+    shipmentId: string
+    editContractId: string | null
+    editStoNumber: string | null
+    editContractNumbers: string | null
+  } | null>(null)
+  const [viewTruckingModal, setViewTruckingModal] = useState<{
+    operationId: string
+    contractId: string | null
+    contractExtNo: string | null
+    poNumber: string | null
+  } | null>(null)
   const [contractPayments, setContractPayments] = useState<Array<{ payment_status: string }>>([])
   const [contractPaymentsLoading, setContractPaymentsLoading] = useState(false)
   const [activityLog, setActivityLog] = useState<
@@ -510,8 +594,27 @@ export function ContractDetailModal({
     }
   }, [contract?.id, contract?.contract_type, contract?.b2b_flag, contract?.contract_reference_po])
 
+  const fetchStoDetailData = useCallback(
+    async (row: StoInfoRow): Promise<Record<string, unknown> | null> => {
+      if (!contract?.id) return null
+      const sto = String(row.sto_number ?? '').trim()
+      const operationId = String(row.operation_id ?? '').trim()
+      if ((!sto || sto === '-') && (!operationId || operationId === '-')) return null
+
+      const res = await api.get(`/contracts/${contract.id}/logistics-sto-detail`, {
+        params: {
+          type: row.type,
+          ...(sto && sto !== '-' ? { sto } : {}),
+          ...(operationId && operationId !== '-' ? { operation_id: operationId } : {}),
+        },
+      })
+      return (res.data?.data as Record<string, unknown> | undefined) ?? null
+    },
+    [contract?.id],
+  )
+
   const openStoDetail = useCallback(
-    (row: StoInfoRow) => {
+    async (row: StoInfoRow) => {
       if (!contract?.id) return
       const sto = String(row.sto_number ?? '').trim()
       const operationId = String(row.operation_id ?? '').trim()
@@ -520,21 +623,64 @@ export function ContractDetailModal({
       setStoDetailRow(row)
       setStoDetailData(null)
       setStoDetailLoading(true)
-      api
-        .get(`/contracts/${contract.id}/logistics-sto-detail`, {
-          params: {
-            type: row.type,
-            ...(sto && sto !== '-' ? { sto } : {}),
-            ...(operationId && operationId !== '-' ? { operation_id: operationId } : {}),
-          },
-        })
-        .then((res) => {
-          setStoDetailData(res.data?.data ?? null)
-        })
-        .catch(() => setStoDetailData(null))
-        .finally(() => setStoDetailLoading(false))
+      try {
+        setStoDetailData(await fetchStoDetailData(row))
+      } catch {
+        setStoDetailData(null)
+      } finally {
+        setStoDetailLoading(false)
+      }
     },
-    [contract?.id],
+    [contract?.id, fetchStoDetailData],
+  )
+
+  const openStoLogisticsView = useCallback(
+    async (row: StoInfoRow) => {
+      if (!contract?.id) return
+      setStoLogisticsViewLoading(true)
+      try {
+        const data = await fetchStoDetailData(row)
+        const entityId = String(data?.id ?? '').trim()
+        if (!data || !entityId) {
+          await openStoDetail(row)
+          return
+        }
+
+        const contractId = String(contract.contract_id || '').trim()
+        const poNumber =
+          String(contract.po_number || '').trim() ||
+          String(contract.po_numbers || '')
+            .split(',')
+            .map((part) => part.trim())
+            .filter(Boolean)[0] ||
+          null
+
+        if (row.type === 'shipment') {
+          setViewShipmentModal({
+            shipmentId: entityId,
+            editContractId: contractId || null,
+            editStoNumber:
+              String(row.sto_number ?? '').trim() ||
+              String(row.operation_id ?? '').trim() ||
+              null,
+            editContractNumbers: contractId || null,
+          })
+          return
+        }
+
+        setViewTruckingModal({
+          operationId: entityId,
+          contractId: contractId || null,
+          contractExtNo: String(contract.contract_ext_no || contractId || '').trim() || null,
+          poNumber,
+        })
+      } catch {
+        await openStoDetail(row)
+      } finally {
+        setStoLogisticsViewLoading(false)
+      }
+    },
+    [contract, fetchStoDetailData, openStoDetail],
   )
 
   const closeStoDetail = useCallback(() => {
@@ -547,7 +693,11 @@ export function ContractDetailModal({
 
   return (
     <>
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div
+        className={`fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 ${
+          stacked ? 'z-[70]' : 'z-50'
+        }`}
+      >
         <Card className="max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden">
           <CardHeader className="shrink-0 border-b">
             <div className="flex items-center justify-between">
@@ -580,7 +730,7 @@ export function ContractDetailModal({
                     <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">
                       PO Number{contract.po_count && contract.po_count > 1 ? ` (${contract.po_count})` : ''}
                     </div>
-                    <div className="font-semibold text-gray-900 mt-0.5 text-xs leading-snug break-words">
+                    <div className="font-semibold text-gray-900 mt-0.5 break-words whitespace-normal">
                       {formatSapDisplayValue(contract.po_numbers || contract.po_number)}
                     </div>
                   </div>
@@ -664,7 +814,7 @@ export function ContractDetailModal({
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500 flex items-center gap-1">
                       Log Cycle
-                      <FieldHelp text={FIELD_HELP.logCycle} />
+                      <FieldHelp text={cycleHelp.log} />
                     </div>
                     <div
                       className={cn(
@@ -678,7 +828,7 @@ export function ContractDetailModal({
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500 flex items-center gap-1">
                       Trade Cycle
-                      <FieldHelp text={FIELD_HELP.tradeCycle} />
+                      <FieldHelp text={cycleHelp.trade} />
                     </div>
                     <div className={cn('font-medium mt-1', signedCycleDaysClass(contract.trade_cycle_days))}>
                       {formatSignedCycleDays(contract.trade_cycle_days)}
@@ -687,7 +837,7 @@ export function ContractDetailModal({
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500 flex items-center gap-1">
                       Cash Cycle
-                      <FieldHelp text={FIELD_HELP.cashCycle} />
+                      <FieldHelp text={cycleHelp.cash} />
                     </div>
                     <div className={cn('font-medium mt-1', signedCycleDaysClass(contract.cash_cycle_days))}>
                       {formatSignedCycleDays(contract.cash_cycle_days)}
@@ -768,8 +918,12 @@ export function ContractDetailModal({
                             <td className="p-2">
                               <button
                                 type="button"
-                                onClick={() => openStoDetail(row)}
-                                className="text-left text-blue-600 hover:underline font-medium cursor-pointer"
+                                onClick={() => void openStoLogisticsView(row)}
+                                disabled={stoLogisticsViewLoading}
+                                className="text-left text-blue-600 hover:underline font-medium cursor-pointer disabled:opacity-50"
+                                title={
+                                  row.type === 'shipment' ? 'View shipment' : 'View trucking'
+                                }
                               >
                                 {formatSapDisplayValue(row.sto_number)}
                               </button>
@@ -955,7 +1109,7 @@ export function ContractDetailModal({
                       )}
                     >
                       Outstanding Quantity
-                      <FieldHelp text={FIELD_HELP.outstandingQty} />
+                      <FieldHelp text={cycleHelp.outstanding} />
                     </div>
                     <div
                       className={cn(
@@ -1386,6 +1540,26 @@ export function ContractDetailModal({
           </Card>
         </div>
       )}
+
+      <ViewShipmentModal
+        open={viewShipmentModal != null}
+        onClose={() => setViewShipmentModal(null)}
+        stacked
+        editShipmentId={viewShipmentModal?.shipmentId ?? null}
+        editContractId={viewShipmentModal?.editContractId ?? null}
+        editStoNumber={viewShipmentModal?.editStoNumber ?? null}
+        editContractNumbers={viewShipmentModal?.editContractNumbers ?? null}
+      />
+
+      <ViewTruckingOperationModal
+        open={viewTruckingModal != null}
+        onClose={() => setViewTruckingModal(null)}
+        stacked
+        editTruckingOperationId={viewTruckingModal?.operationId ?? null}
+        initialContractId={viewTruckingModal?.contractId ?? null}
+        initialContractExtNo={viewTruckingModal?.contractExtNo ?? null}
+        initialPoNumber={viewTruckingModal?.poNumber ?? null}
+      />
     </>
   )
 }

@@ -185,6 +185,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         c.product,
         c.incoterm,
         c.group_name,
+        c.source_type,
         ${sqlTruckingOutstandingQtyByIncoterm(
           'COALESCE(t.quantity_delivered, 0)',
           'COALESCE(t.quantity_delivered, 0)',
@@ -242,6 +243,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         c.product,
         c.incoterm,
         c.group_name,
+        c.source_type,
         ${sqlTruckingOutstandingQtyByIncoterm(
           sqlTruckingQuantityDeliveredCoalesce(),
           sqlTruckingQuantityReceiveCoalesce(),

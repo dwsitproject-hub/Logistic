@@ -2,8 +2,10 @@ import axios from 'axios';
 import { clearClientDataCache } from '@/lib/clientDataCache';
 import { mapHttpMethodToEventType, trackApiMutation } from '@/lib/userActivityTracker';
 
+const DEFAULT_API_BASE = 'http://127.0.0.1:5001/api';
+
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api',
+  baseURL: process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE,
 });
 
 // Add token to requests
@@ -29,13 +31,16 @@ api.interceptors.response.use(
   (error) => {
     // Enhanced error logging for debugging
     if (typeof window !== 'undefined') {
-      const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
+      const baseURL = process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE;
       
       if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
         console.error('❌ Network Error: Cannot connect to backend API');
         console.error('   API URL:', baseURL);
         console.error('   Make sure backend is running on port 5001');
-        console.error('   Test: http://localhost:5001/health');
+        console.error('   Test: http://127.0.0.1:5001/health');
+        if (baseURL.includes('localhost')) {
+          console.error('   Tip: On Windows, use http://127.0.0.1:5001/api instead of localhost');
+        }
       } else if (error.response) {
         // Server responded with error status
         const { status, data } = error.response;

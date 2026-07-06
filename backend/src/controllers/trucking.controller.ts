@@ -48,6 +48,7 @@ import {
 import { SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP } from '../utils/truckingEffectiveStatus';
 import {
   findActiveTruckingOpsByContractId,
+  findTruckingOpForPlannedPlanningUpload,
   findTruckingOpForUnplannedPlanningUpload,
   formatDuplicateTruckingMessage,
   resolveContractByExtNoOrId,
@@ -55,12 +56,22 @@ import {
   truckingOperationIdIsAssigned,
 } from '../utils/truckingOperationUniqueness';
 import {
-  buildDailyDeliverablesKgFromMtEntries,
+  buildDailyDeliverablesFromKgEntries,
+  filterEntriesLockedByActuals,
   filterEntriesWithinUnplannedWindow,
   isUnplannedWidePlanningTemplateMatrix,
+  isWidePlanningTemplateMatrix,
   parseUnplannedWidePlanningMatrix,
   resolvePlanningStartEndFromDeliverables,
+  unplannedUploadCellToString,
 } from '../utils/truckingUnplannedPlanningUpload';
+import {
+  fetchContractOutstandingQtyKg,
+  fetchTruckingOperationOutstandingQtyKg,
+  resolveTruckingPlanningMaxQtyKg,
+  sumPlanningEntriesKg,
+  validatePlanningTotalAgainstOutstandingKg,
+} from '../utils/truckingUnplannedPlanningOsQty';
 
 let truckingOpIdBackfillChecked = false;
 let truckingStatusReconcileLastRun = 0;
@@ -398,11 +409,13 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
       [contractId]
     );
     const contractDates = contractDatesRes.rows[0] || {};
+    const planningMaxQtyKg = await resolveTruckingPlanningMaxQtyKg(contractId);
     const dd = normalizeAndValidateDailyDeliverables({
       daily_deliverables,
       startRaw: contractDates.delivery_start_date ?? trucking_start_date,
       endRaw: contractDates.delivery_end_date ?? trucking_completion_date,
-      maxQtyRaw: quantity_delivered,
+      maxQtyRaw: planningMaxQtyKg,
+      maxQtyLabel: 'Outstanding Qty (kg)',
     });
     if (!dd.ok) {
       return res.status(400).json({ success: false, error: { message: dd.message } });
@@ -735,11 +748,13 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
       if (allowedFields.includes(key)) {
         if (key === 'daily_deliverables') {
           // Validate against merged record state (updates override current).
+          const planningMaxQtyKg = await resolveTruckingPlanningMaxQtyKg(cur.contract_id);
           const dd2 = normalizeAndValidateDailyDeliverables({
             daily_deliverables: value,
             startRaw: (cur.delivery_start_date ?? updateData.trucking_start_date ?? cur.trucking_start_date),
             endRaw: (cur.delivery_end_date ?? updateData.trucking_completion_date ?? cur.trucking_completion_date),
-            maxQtyRaw: updateData.quantity_delivered ?? cur.quantity_delivered,
+            maxQtyRaw: planningMaxQtyKg,
+            maxQtyLabel: 'Outstanding Qty (kg)',
           });
           if (!dd2.ok) {
             return res.status(400).json({ success: false, error: { message: dd2.message } });
@@ -1038,6 +1053,7 @@ export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Res
 
     const currentRes = await query(
       `SELECT t.id,
+              t.contract_id,
               c.delivery_start_date,
               c.delivery_end_date,
               t.eta_delivery_start_date,
@@ -1057,6 +1073,7 @@ export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Res
       return res.status(404).json({ success: false, error: { message: 'Trucking operation not found' } });
     }
     const cur = currentRes.rows[0] as {
+      contract_id: string;
       delivery_start_date?: string | null;
       delivery_end_date?: string | null;
       eta_delivery_start_date?: string | null;
@@ -1087,11 +1104,13 @@ export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Res
       cur.eta_trucking_completion_date ??
       cur.trucking_completion_date;
 
+    const planningMaxQtyKg = await resolveTruckingPlanningMaxQtyKg(cur.contract_id);
     const dd = normalizeAndValidateDailyDeliverables({
       daily_deliverables,
       startRaw,
       endRaw,
-      maxQtyRaw: cur.quantity_delivered,
+      maxQtyRaw: planningMaxQtyKg,
+      maxQtyLabel: 'Outstanding Qty (kg)',
     });
     if (!dd.ok) {
       return res.status(400).json({ success: false, error: { message: dd.message } });
@@ -1299,6 +1318,7 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
       const opRes = await query(
         `SELECT t.id,
                 t.operation_id,
+                t.contract_id,
                 c.delivery_start_date,
                 c.delivery_end_date,
                 t.eta_delivery_start_date,
@@ -1347,6 +1367,7 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
       const cur = opRes.rows[0] as {
         id: string;
         operation_id: string;
+        contract_id: string;
         delivery_start_date?: string | null;
         delivery_end_date?: string | null;
         eta_delivery_start_date?: string | null;
@@ -1400,11 +1421,13 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
 
       const dailyDeliverables = inWindow.map(({ date, quantity_delivered }) => ({ date, quantity_delivered }));
 
+      const planningMaxQtyKg = await resolveTruckingPlanningMaxQtyKg(cur.contract_id);
       const dd = normalizeAndValidateDailyDeliverables({
         daily_deliverables: dailyDeliverables,
         startRaw,
         endRaw,
-        maxQtyRaw: cur.quantity_delivered,
+        maxQtyRaw: planningMaxQtyKg,
+        maxQtyLabel: 'Outstanding Qty (kg)',
       });
 
       if (!dd.ok) {
@@ -1712,6 +1735,14 @@ type BulkTruckingOpFailure = {
   operation_ids?: string[];
 };
 
+type FailedUnplannedRetemplateRow = {
+  rowNumber: number;
+  po_number: string;
+  contract_ext_no: string;
+  cells: string[];
+  reason: string;
+};
+
 function resolveTruckingDueWindow(cur: {
   delivery_start_date?: unknown;
   delivery_end_date?: unknown;
@@ -1822,11 +1853,13 @@ async function upsertTruckingDailyFromGroup(
     }
 
     const dailyDeliverables = inWindow.map(({ date, quantity_delivered }) => ({ date, quantity_delivered }));
+    const planningMaxQtyKg = await resolveTruckingPlanningMaxQtyKg(contract.id);
     const dd = normalizeAndValidateDailyDeliverables({
       daily_deliverables: dailyDeliverables,
       startRaw,
       endRaw,
-      maxQtyRaw: cur.quantity_delivered,
+      maxQtyRaw: planningMaxQtyKg,
+      maxQtyLabel: 'Outstanding Qty (kg)',
     });
     if (!dd.ok) {
       opFailures.push({
@@ -1940,7 +1973,7 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
         success: false,
         error: {
           message:
-            'Invalid Unplanned template. Expected headers: Contract Ext No, PO, optional Outstanding Qty (MT), then date columns.',
+            'Invalid Unplanned template. Expected headers: Group, Supplier, Source, Contract Date, Contract Ext No, PO, OS Qty, Plan Qty, then date columns (today … +60 days).',
         },
       });
     }
@@ -1948,6 +1981,8 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
     const { rows: parsedRows, rowParseFailures } = parseUnplannedWidePlanningMatrix(matrix);
     const operationFailures: BulkTruckingOpFailure[] = [];
     const operationWarnings: BulkTruckingOpFailure[] = [];
+    const failedRetemplateRows: FailedUnplannedRetemplateRow[] = [];
+    const uploadHeaderRow = (matrix[0] ?? []).map((cell) => unplannedUploadCellToString(cell));
     let operationsCreated = 0;
     let operationsUpdated = 0;
     let succeededRows = 0;
@@ -2059,7 +2094,37 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
         continue;
       }
 
-      const incomingDaily = buildDailyDeliverablesKgFromMtEntries(inWindowEntries);
+      const contractUuid =
+        contractForCreate?.id ??
+        (
+          await resolveContractForUnplannedPlanningUpload({
+            poNumber: parsed.po_number,
+            contractExtNo: parsed.contract_ext_no,
+          })
+        )?.id ??
+        null;
+
+      const totalPlanningKg = sumPlanningEntriesKg(inWindowEntries);
+      const outstandingKg = contractUuid ? await fetchContractOutstandingQtyKg(contractUuid) : null;
+      const osValidation = validatePlanningTotalAgainstOutstandingKg(totalPlanningKg, outstandingKg);
+      if (!osValidation.ok) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: osValidation.reason,
+          operation_ids: op?.operation_id ? [String(op.operation_id)] : undefined,
+        });
+        failedRetemplateRows.push({
+          rowNumber: parsed.rowNumber,
+          po_number: parsed.po_number,
+          contract_ext_no: parsed.contract_ext_no,
+          cells: parsed.rawCells.map((cell) => unplannedUploadCellToString(cell)),
+          reason: osValidation.reason,
+        });
+        continue;
+      }
+
+      const incomingDaily = buildDailyDeliverablesFromKgEntries(inWindowEntries);
       const mergedDaily =
         op && truckingOperationIdIsAssigned(op.operation_id)
           ? mergeDailyDeliverablesRows(op.daily_deliverables, incomingDaily)
@@ -2076,11 +2141,13 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
       }
 
       const { startRaw, endRaw } = resolveTruckingDueWindow(dueWindowSource);
+      // Planning qty is kg and OS total is already validated above. Do not cap by
+      // t.quantity_delivered — SAP often stores MT-scale values (e.g. 250 MT as 250).
       const dd = normalizeAndValidateDailyDeliverables({
         daily_deliverables: mergedDaily,
         startRaw,
         endRaw,
-        maxQtyRaw: dueWindowSource.quantity_delivered,
+        maxQtyRaw: null,
       });
       if (!dd.ok) {
         operationFailures.push({
@@ -2214,11 +2281,224 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
         rowParseFailures,
         operationFailures,
         operationWarnings,
+        failedRetemplateRows,
+        uploadHeaderRow,
       },
     });
   } catch (error) {
     logger.error('Bulk upload unplanned planning error:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to process Unplanned planning upload' } });
+  }
+};
+
+/** Planned / In Progress view-table XLSX: replace editable daily planning; dates locked by WB actuals are skipped. */
+export const bulkUploadPlannedPlanning = async (req: AuthRequest, res: Response) => {
+  try {
+    const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+    if (!file?.buffer) {
+      return res.status(400).json({ success: false, error: { message: 'File is required (CSV or Excel)' } });
+    }
+
+    let matrix: unknown[][];
+    try {
+      matrix = parsePlanningSheetToMatrix(file.buffer);
+    } catch (e: any) {
+      return res.status(400).json({
+        success: false,
+        error: { message: e?.message || 'Could not read spreadsheet' },
+      });
+    }
+
+    if (matrix.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'File must include a header row and at least one data row' },
+      });
+    }
+
+    if (!isWidePlanningTemplateMatrix(matrix)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message:
+            'Invalid Planned template. Expected headers: Group, Supplier, Source, Contract Date, Contract Ext No, PO, OS Qty (kg), Plan Qty (kg), then date columns (today … +60 days).',
+        },
+      });
+    }
+
+    const { rows: parsedRows, rowParseFailures } = parseUnplannedWidePlanningMatrix(matrix);
+    const operationFailures: BulkTruckingOpFailure[] = [];
+    const operationWarnings: BulkTruckingOpFailure[] = [];
+    const failedRetemplateRows: FailedUnplannedRetemplateRow[] = [];
+    const uploadHeaderRow = (matrix[0] ?? []).map((cell) => unplannedUploadCellToString(cell));
+    let operationsUpdated = 0;
+    let succeededRows = 0;
+
+    for (const parsed of parsedRows) {
+      const label = parsed.contract_ext_no || parsed.po_number || '-';
+      const op = await findTruckingOpForPlannedPlanningUpload({
+        poNumber: parsed.po_number,
+        contractExtNo: parsed.contract_ext_no,
+      });
+
+      if (!op) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'Planned or In Progress trucking operation not found for this PO / Contract Ext No',
+        });
+        continue;
+      }
+
+      if (!truckingOperationIdIsAssigned(op.operation_id)) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'Operation ID is not assigned — use Unplanned planning upload first',
+          operation_ids: [String(op.operation_id ?? op.id)],
+        });
+        continue;
+      }
+
+      const contractOpen = await assertTruckingOperationContractOpen(op.id);
+      if (!contractOpen.ok) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: contractOpen.message,
+          operation_ids: [String(op.operation_id)],
+        });
+        continue;
+      }
+
+      const inWindowEntries = filterEntriesWithinUnplannedWindow(
+        parsed.entries,
+        op.delivery_end_date,
+        label,
+        rowParseFailures,
+      );
+
+      const editableEntries = filterEntriesLockedByActuals(
+        inWindowEntries,
+        op.daily_actuals,
+        label,
+        rowParseFailures,
+      );
+
+      if (editableEntries.length === 0) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason:
+            'No editable planning quantities — all dates are outside the window or locked by WB actuals',
+          operation_ids: [String(op.operation_id)],
+        });
+        continue;
+      }
+
+      const totalPlanningKg = sumPlanningEntriesKg(editableEntries);
+      const outstandingKg = await fetchTruckingOperationOutstandingQtyKg(op.id);
+      const osValidation = validatePlanningTotalAgainstOutstandingKg(totalPlanningKg, outstandingKg);
+      if (!osValidation.ok) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: osValidation.reason,
+          operation_ids: [String(op.operation_id)],
+        });
+        failedRetemplateRows.push({
+          rowNumber: parsed.rowNumber,
+          po_number: parsed.po_number,
+          contract_ext_no: parsed.contract_ext_no,
+          cells: parsed.rawCells.map((cell) => unplannedUploadCellToString(cell)),
+          reason: osValidation.reason,
+        });
+        continue;
+      }
+
+      const incomingDaily = buildDailyDeliverablesFromKgEntries(editableEntries);
+      const mergedDaily = mergeDailyDeliverablesRows(op.daily_deliverables, incomingDaily);
+      const planningDates = resolvePlanningStartEndFromDeliverables(mergedDaily);
+      if (!planningDates) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'No valid planning quantities after parsing',
+          operation_ids: [String(op.operation_id)],
+        });
+        continue;
+      }
+
+      const { startRaw, endRaw } = resolveTruckingDueWindow(op);
+      // Planning qty is kg; OS total already validated. Skip quantity_delivered cap (SAP MT-scale).
+      const dd = normalizeAndValidateDailyDeliverables({
+        daily_deliverables: mergedDaily,
+        startRaw,
+        endRaw,
+        maxQtyRaw: null,
+      });
+      if (!dd.ok) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: dd.message,
+          operation_ids: [String(op.operation_id)],
+        });
+        continue;
+      }
+
+      const lastDdDate =
+        dd.rows.length > 0
+          ? dd.rows.reduce((mx: string, r: { date: string }) => (!mx || r.date > mx ? r.date : mx), '')
+          : null;
+
+      await query(
+        `UPDATE trucking_operations
+         SET daily_deliverables = $2::jsonb,
+             last_daily_deliverable_date = $3::date,
+             trucking_start_date = COALESCE(trucking_start_date, $4::date),
+             trucking_completion_date = GREATEST(
+               COALESCE(trucking_completion_date, $5::date),
+               $5::date
+             ),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1::uuid`,
+        [op.id, JSON.stringify(dd.rows), lastDdDate, planningDates.startIso, planningDates.endIso],
+      );
+      operationsUpdated += 1;
+      succeededRows += editableEntries.length;
+
+      const siblingCount = Number(op.duplicate_sibling_count ?? 1);
+      if (siblingCount > 1) {
+        operationWarnings.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: `Multiple trucking operations exist for this PO/contract (${siblingCount} active). Updated the Planned operation with Operation ID only.`,
+          operation_ids: [String(op.operation_id)],
+        });
+      }
+    }
+
+    if (operationsUpdated > 0) invalidateTruckingListCache();
+
+    return res.json({
+      success: true,
+      data: {
+        processedRows: parsedRows.length + rowParseFailures.length,
+        operationsCreated: 0,
+        operationsUpdated,
+        operationsFailed: operationFailures.length,
+        succeededRows,
+        rowParseFailures,
+        operationFailures,
+        operationWarnings,
+        failedRetemplateRows,
+        uploadHeaderRow,
+      },
+    });
+  } catch (error) {
+    logger.error('Bulk upload planned planning error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to process Planned planning upload' } });
   }
 };
 

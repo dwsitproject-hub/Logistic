@@ -13,27 +13,23 @@ const SEGMENTS: PerfSegmentFilter[] = ['ALL', 'ON_TIME', 'LATE']
 
 const LEVEL_CARD_BORDER: Record<
   UnifiedPerfNodeLevel,
-  { idle: string; selected: string; selectedBg: string }
+  { idle: string; selected: string }
 > = {
   product: {
     idle: 'border-gray-200 hover:border-gray-300',
-    selected: 'border-amber-300 ring-1 ring-amber-200',
-    selectedBg: 'bg-amber-50/30',
+    selected: 'border-amber-200/90 ring-1 ring-amber-100/80',
   },
   plant: {
     idle: 'border-gray-200 hover:border-gray-300',
-    selected: 'border-emerald-300 ring-1 ring-emerald-200',
-    selectedBg: 'bg-emerald-50/30',
+    selected: 'border-emerald-200/90 ring-1 ring-emerald-100/80',
   },
   incoterm: {
     idle: 'border-gray-200 hover:border-gray-300',
-    selected: 'border-violet-300 ring-1 ring-violet-200',
-    selectedBg: 'bg-violet-50/30',
+    selected: 'border-violet-200/90 ring-1 ring-violet-100/80',
   },
   supplier: {
     idle: 'border-gray-200 hover:border-gray-300',
-    selected: 'border-rose-300 ring-1 ring-rose-200',
-    selectedBg: 'bg-rose-50/30',
+    selected: 'border-rose-200/90 ring-1 ring-rose-100/80',
   },
 }
 
@@ -155,7 +151,7 @@ export function ContractPerfUnifiedNodeCard({
     <div
       className={cn(
         'w-full rounded-lg border bg-white px-3 py-2 transition-colors',
-        selected ? `${levelBorder.selected} ${levelBorder.selectedBg}` : levelBorder.idle,
+        selected ? levelBorder.selected : levelBorder.idle,
       )}
     >
       <button

@@ -18,14 +18,14 @@ describe('shipmentEditContext.service', () => {
     expect(src).toContain('has_sap_sto');
   });
 
-  it('resolveAddPoGate blocks SAP STO and cancelled shipments', () => {
+  it('resolveAddPoGate blocks cancelled shipments only', () => {
     expect(
       resolveAddPoGate({
         lookupKey: '1016010783',
         hasSapSto: true,
         shipmentStatus: 'PLANNED',
       }).can_add_po,
-    ).toBe(false);
+    ).toBe(true);
 
     expect(
       resolveAddPoGate({
@@ -51,14 +51,13 @@ describe('shipmentPoAssignment.service', () => {
     expect(poLineKey('C100', null)).toBe('c100::');
   });
 
-  it('list SQL uses global outstanding and poLineHasSapSto', () => {
+  it('list SQL uses global OS Plan outstanding', () => {
     const src = readFileSync(
       resolve(__dirname, 'shipmentPoAssignment.service.ts'),
       'utf8',
     );
-    expect(src).toContain('buildQtyMoveCte');
-    expect(src).toContain('sqlContractGlobalOutstandingExpr');
-    expect(src).toContain('poLineHasSapStoSql');
-    expect(src).not.toContain('resolveStoGroupContractIds');
+    expect(src).toContain('buildSeaContractsQtyMoveCte');
+    expect(src).toContain('PO_GLOBAL_OUTSTANDING_PLANNING_EXPR');
+    expect(src).not.toContain('poLineHasSapStoSql');
   });
 });

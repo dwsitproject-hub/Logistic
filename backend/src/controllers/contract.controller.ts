@@ -13,7 +13,12 @@ import {
 } from '../utils/contractListFilters';
 import { CONTRACTS_LIST_OUTER_SQL } from './contractsListOuterSql';
 import { CONTRACTS_QTY_MOVE_CTE, buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractsQtyMoveSql';
-import { sqlContractOutstandingFromFields, sqlIncotermImportStatusFromJson, sqlIncotermQuantityDeliveryCase, sqlTransportModeFromContractAndJson } from '../utils/sapIncotermMetrics';
+import {
+  resolveContractActualQtySubtractedTs,
+  sqlContractOutstandingSignedExpr,
+  sqlIncotermQuantityDeliveryCase,
+  sqlTransportModeFromContractAndJson,
+} from '../utils/sapIncotermMetrics';
 import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL } from './contractSqlFragments';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { isTruckingPageIncoterm, contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
@@ -44,7 +49,7 @@ import {
   resolveContractLogisticsStoNumber,
   resolveContractLogisticsStoStatus,
 } from '../utils/contractLogisticsStoDisplay';
-import { sqlContractImportStatusExpr, sqlContractImportStatusIsClosedExpr, sqlContractImportStatusIsOpenExpr } from '../utils/contractDeliveryStatus';
+import { sqlContractImportStatusExpr, sqlContractImportStatusIsClosedExpr, sqlContractImportStatusIsOpenExpr, sqlContractListImportStatusAggExpr, normalizeContractDeliveryStatusForDisplay } from '../utils/contractDeliveryStatus';
 import {
   sqlMaxTruckingRealizationEndForContract,
   sqlMinTruckingRealizationStartForContract,
@@ -178,7 +183,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           (array_agg(s.sto_numbers ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS sto_numbers_agg,
           (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
           (array_agg(s.sto_count ORDER BY s.sto_count DESC NULLS LAST))[1] AS sto_count,
-          MAX(${sqlIncotermImportStatusFromJson('l.data', 'c.incoterm', 'c.status::text')}) AS import_status,
+          ${sqlContractListImportStatusAggExpr('c')} AS import_status,
           MAX(${sqlIncotermQuantityDeliveryCase(
             'c.incoterm',
             'qm.quantity_delivery_trucking',
@@ -186,6 +191,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
             sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
           )}) AS quantity_delivery,
           (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
+          (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery_sap,
           COUNT(DISTINCT c.po_number) FILTER (WHERE c.po_number IS NOT NULL) AS po_count,
           -- For Log Cycle calculation (LAND): earliest and latest trucking realization dates (SAP AV/AW — not planning columns)
           ${sqlMinTruckingRealizationStartForContract(
@@ -359,7 +365,12 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     queryText += appendContractPerfSourceTypeFilter(sourceTypeFilter, 'base.source_type');
 
     if (outstanding === 'true') {
-      queryText += ` AND GREATEST(0, base.quantity_ordered - COALESCE(base.quantity_delivery, 0)) > 0`;
+      queryText += ` AND (${sqlContractOutstandingSignedExpr({
+        contractQtyExpr: 'base.quantity_ordered',
+        incotermExpr: 'base.incoterm',
+        receiveExpr: 'base.quantity_receive',
+        deliveryExpr: 'base.quantity_delivery_sap',
+      })}) > 0`;
     }
 
     // Optional: delivered=true -> only contracts that have any STO quantity (delivered > 0)
@@ -408,13 +419,11 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const limitParam = paramIndex;
     const offsetParam = paramIndex + 1;
 
-    const outstandingQtyExpr = sqlContractOutstandingFromFields({
+    const outstandingQtyExpr = sqlContractOutstandingSignedExpr({
       contractQtyExpr: 'quantity_ordered',
       incotermExpr: 'incoterm',
       receiveExpr: 'quantity_receive',
-      deliveryExpr: 'quantity_delivery',
-      stoQtyExpr: 'total_sto_quantity',
-      clampAtZero: false,
+      deliveryExpr: 'quantity_delivery_sap',
     });
     const allowedSort: Record<string, string> = {
       contract_date: 'contract_date::date',
@@ -661,6 +670,8 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
 
     for (const row of result.rows) {
       row.due_date_payment = due(row.due_date_payment_raw) ?? due(row.due_date_payment_fb) ?? row.due_date_payment;
+      row.import_status = normalizeContractDeliveryStatusForDisplay(row.import_status || row.status) || row.import_status;
+      row.status = normalizeContractDeliveryStatusForDisplay(row.status) || row.status;
       // DP / Payoff display: SAP raw only (payment JSON + raw columns) — no payments-table or deviation synthesis
       row.dp_date = due(row.dp_date_raw);
       row.payoff_date = due(row.payoff_date_raw);
@@ -1034,7 +1045,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           MAX(c.plant_code) AS plant_code,
           MAX(c.company_name) AS company_name,
           -- Align with GET /contracts: incoterm-aware SAP import status (GR PO vs GR STO).
-          MAX(${sqlIncotermImportStatusFromJson('l.data', 'c.incoterm', 'c.status::text')}) AS import_status,
+          ${sqlContractListImportStatusAggExpr('c')} AS import_status,
           MAX(c.delivery_end_date) AS delivery_end_date,
           MAX(c.cargo_readiness_date) AS cargo_readiness_date,
           (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
@@ -1434,13 +1445,12 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         }
       }
 
-      const _inc = String(row.incoterm || '').trim().toUpperCase();
       const _qtyOrdered = Number(row.quantity_ordered || 0);
-      const _subtracted = ['FRC', 'CIF', 'CFR'].includes(_inc)
-        ? Number(row.quantity_receive || 0)
-        : ['LCO', 'FOB'].includes(_inc)
-        ? Number(row.quantity_delivery || 0)
-        : Number(row.total_sto_quantity || 0);
+      const _subtracted = resolveContractActualQtySubtractedTs(
+        row.incoterm,
+        row.quantity_receive,
+        row.quantity_delivery,
+      );
       const _outstandingQty = Math.max(0, _qtyOrdered - _subtracted);
 
       // Log Cycle: Cargo Readiness → completion (closed) or open A/B end (today when ETA empty)
@@ -1767,7 +1777,7 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
           (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
           MAX(c.status) AS raw_status,
           MAX(c.status) AS status,
-          MAX(${sqlIncotermImportStatusFromJson('l.data', 'c.incoterm', 'c.status::text')}) AS import_status,
+          ${sqlContractListImportStatusAggExpr('c')} AS import_status,
           MAX(c.product) AS product,
           MAX(c.incoterm) AS incoterm,
           MAX(c.supplier) AS supplier,

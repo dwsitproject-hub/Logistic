@@ -38,7 +38,8 @@ import {
   type ShippingSummaryMetricKey,
 } from '@/lib/shippingPerformanceLabels'
 import { formatSapDisplayValue, formatSapGroupDisplayLabel } from '@/lib/sapDisplayValue'
-import { formatShipmentStatusLabel } from '@/lib/shipmentStatusDisplay'
+import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { formatShipmentStatusLabel, shipmentStatusBadgeClass } from '@/lib/shipmentStatusDisplay'
 import {
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
   COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
@@ -48,7 +49,10 @@ import {
   SHIPPING_PERF_TABLE_HEADER_ROW_CLASS,
   SHIPPING_PERF_TABLE_ROW_MIN_H,
   SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS,
+  buildAllShipmentsPresetVisibleColumns,
+  ensureAllShipmentsPresetColumnOrder,
   getShippingPerfTableColumnLayout,
+  isAllShipmentsPresetVisibleColumn,
   shippingPerfCellTooltipText,
   shippingPerfTableColumnWidthPx,
 } from '@/lib/shippingPerformanceTableUi'
@@ -70,11 +74,8 @@ import {
   resolveShippingPerfLoadingPort,
 } from '@/lib/shippingPerformancePorts'
 import { cn } from '@/lib/utils'
-import {
-  ContractDetailModal,
-  fetchContractForDetailModal,
-  type ContractDetailModalContract,
-} from '@/components/contracts/ContractDetailModal'
+import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
+import { resolveShipmentApiLookupKey } from '@/lib/shipmentStoDisplay'
 
 interface ShippingPerformanceRow {
   id: string
@@ -102,6 +103,10 @@ interface ShippingPerformanceRow {
   sto_qty?: number | null
   received_qty?: number | null
   delivered_qty?: number | null
+  planning_qty?: number | null
+  outstanding_qty_actual?: number | null
+  outstanding_qty_planning?: number | null
+  /** @deprecated Use outstanding_qty_actual — kept for API backward compatibility. */
   outstanding_qty?: number | null
   shipment_count?: number | null
   cargo_readiness_date?: string | null
@@ -127,9 +132,9 @@ interface ShippingPerformanceRow {
   vlp_loading_port_name?: string | null
   /** Shipment operation — vessel_loading_ports.port_name (discharge leg). */
   vlp_discharge_port_name?: string | null
-  /** SAP fallback — Vessel Loading Port 1 text name. */
+  /** SAP fallback — Vessel Loading Port text name. */
   sap_vessel_loading_port_1?: string | null
-  /** SAP fallback — Vessel Discharge Port. */
+  /** SAP fallback — Vessel Discharge Port text name. */
   sap_vessel_discharge_port?: string | null
   remark?: string | null
   ata_loading_delta_eta_etr_days?: number | null
@@ -185,6 +190,7 @@ const DETAIL_COLUMN_KEYS = new Set<string>([
   'product',
   'supplier',
   'contract_qty',
+  'delivered_qty',
   'plant_site',
   'contract_date',
   'loading_port',
@@ -216,6 +222,12 @@ function isUnplannedShippingStatus(status: string | null | undefined): boolean {
 function excludeUnplannedShippingRows(rows: ShippingPerformanceRow[]): ShippingPerformanceRow[] {
   return rows.filter((row) => !isUnplannedShippingStatus(row.status))
 }
+
+/**
+ * Global filter section (search, incoterm, group plant, vessel, status, contract date).
+ * When false: UI is hidden (not removed) and the filter pipeline is bypassed.
+ */
+const SHIPPING_PERF_GLOBAL_FILTERS_ENABLED = false
 
 function avgMetric(rows: ShippingPerformanceRow[], key: TableColumnKey): number | null {
   const vals = rows
@@ -333,7 +345,9 @@ function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceR
       sto_qty: sumMetric(vesselRows, 'sto_qty'),
       received_qty: sumMetric(vesselRows, 'received_qty'),
       delivered_qty: sumMetric(vesselRows, 'delivered_qty'),
-      outstanding_qty: sumMetric(vesselRows, 'outstanding_qty'),
+      outstanding_qty_actual: sumMetric(vesselRows, 'outstanding_qty_actual'),
+      outstanding_qty_planning: sumMetric(vesselRows, 'outstanding_qty_planning'),
+      outstanding_qty: sumMetric(vesselRows, 'outstanding_qty_actual'),
       loading_delta_eta_etr_days: deltas.loading_delta_eta_etr_days,
       loading_delta_eta_etb_days: deltas.loading_delta_eta_etb_days,
       loading_delta_etb_etc_days: deltas.loading_delta_etb_etc_days,
@@ -667,7 +681,7 @@ function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): P
     vessels.add(normalizeVesselKey(row.vessel_name))
     const contractNumber = String(row.contract_number || '').trim()
     if (contractNumber) contracts.add(contractNumber)
-    totalQty += Number(row.outstanding_qty ?? 0)
+    totalQty += Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0)
   }
 
   const avgDelta = (logicalKey: (typeof PERF_DELTA_LOGICAL_KEYS)[number]) =>
@@ -782,33 +796,34 @@ function columnDefaultVisible(col: ColumnDef, tableViewMode: TableViewMode): boo
   if (tableViewMode === 'by_vessel' && col.byVesselDefaultVisible !== undefined) {
     return col.byVesselDefaultVisible
   }
+  if (tableViewMode === 'all') {
+    return isAllShipmentsPresetVisibleColumn(String(col.key))
+  }
   return col.defaultVisible !== false
 }
 
-/** Shipping Performance Section 3 — duration column header tooltips (ETA labels → ATA when Close). */
+/** Shipping Performance Section 3 — column header tooltips (ETA → ATA when Close via resolvePerfColumnTooltip). */
+const SHIPPING_PERF_OUTSTANDING_QTY_TOOLTIP =
+  'Contract Qty - Delivery Qty (FOB)/Receive Qty (CIF,CFR)'
+
 const SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS: Partial<Record<keyof ShippingPerformanceRow, string>> = {
   loading_delta_eta_etr_days:
-    'Duration in days: ETA Vessel Arrival at Loading Port − Cargo Readiness Date (ETR). ' +
-    'Uses vessel_loading_ports ETA arrival (first loading port), or shipment ETA arrival if missing, minus contracts.cargo_readiness_date.',
+    'ETA Vessel Arrival at Loading Port - Cargo Readiness Date',
   loading_delta_eta_etb_days:
-    'Duration in days: ETA Vessel Arrival at Loading Port − ETA Vessel Berthed at Loading Port. ' +
-    'Uses vessel_loading_ports loading-port dates, with shipment ETA arrival / ETA berthed as fallback.',
+    'ETA Vessel Arrival at Loading Port - ETA Vessel Berthed at Loading Port',
   loading_delta_etb_etc_days:
-    'Duration in days: ETA Vessel Berthed at Loading Port − ETA Loading Completed. ' +
-    'Uses vessel_loading_ports loading-port dates, with shipment ETA berthed / ETA loading complete as fallback.',
+    'ETA Vessel Berthed at Loading Port - ETA Vessel Completed Loading',
   discharge_delta_eta_etb_days:
-    'Duration in days: ETA Vessel Arrival at Discharge Port − ETA Vessel Berthed at Discharge Port. ' +
-    'Uses vessel_loading_ports discharge-port dates, with shipment ETA discharge arrival / berthed as fallback.',
+    'ETA Vessel Arrive at Discharge Port - ETA Vessel Berthed at Discharge Port',
   discharge_delta_etb_etc_days:
-    'Duration in days: ETA Vessel Berthed at Discharge Port − ETA Vessel Complete Discharge. ' +
-    'Uses vessel_loading_ports discharge-port dates, with shipment ETA discharge berthed / complete as fallback.',
+    'ETA Vessel Berthed at Discharge Port - ETA Vessel Complete Discharge',
   total_delta_days:
     'Total duration in days: sum of Loading (ETA−ETR), Loading (ETA−ETB), Loading (ETB−ETC), ' +
     'Discharge (ETA−ETB), and Discharge (ETB−ETC). Each missing segment counts as 0.',
 }
 
 const COLUMN_DEFS: ColumnDef[] = [
-  { key: 'vessel_name', label: 'Vessel', type: 'text', defaultVisible: true },
+  { key: 'vessel_name', label: 'Vessel', type: 'text', defaultVisible: false },
   {
     key: 'by_vessel_qty_contract',
     label: 'Qty Contract (MT)',
@@ -837,71 +852,94 @@ const COLUMN_DEFS: ColumnDef[] = [
     defaultVisible: false,
     byVesselDefaultVisible: false,
   },
-  { key: 'loading_port', label: 'Loading Port', type: 'text', defaultVisible: true },
-  { key: 'discharge_port', label: 'Discharge Port', type: 'text', defaultVisible: true },
-  { key: 'incoterm', label: 'Incoterm', type: 'text', defaultVisible: true },
-  { key: 'product', label: 'Product', type: 'text', defaultVisible: true },
-  { key: 'supplier', label: 'Supplier', type: 'text', defaultVisible: true },
-  { key: 'contract_qty', label: 'Contract Qty', type: 'number', defaultVisible: true },
+  { key: 'loading_port', label: 'Loading Port', type: 'text', defaultVisible: false },
+  { key: 'discharge_port', label: 'Discharge Port', type: 'text', defaultVisible: false },
+  { key: 'incoterm', label: 'Incoterm', type: 'text', defaultVisible: false },
+  { key: 'product', label: 'Product', type: 'text', defaultVisible: false },
+  { key: 'supplier', label: 'Supplier', type: 'text', defaultVisible: false },
+  { key: 'contract_qty', label: 'Contract Qty', type: 'number', defaultVisible: false },
   { key: 'group_name', label: 'Supplier Group', type: 'text', defaultVisible: false },
   { key: 'shipment_count', label: 'Shipments', type: 'number', defaultVisible: false },
-  { key: 'status', label: 'Status', type: 'text', defaultVisible: true },
+  { key: 'status', label: 'Status Shipment', type: 'text', defaultVisible: false },
   { key: 'po_number', label: 'PO No', type: 'text', defaultVisible: false },
   { key: 'contract_number', label: 'Contract No', type: 'text', defaultVisible: false },
-  { key: 'sto_number', label: 'STO No', type: 'text', defaultVisible: false },
+  { key: 'sto_number', label: 'STO', type: 'text', defaultVisible: false },
   { key: 'sto_qty', label: 'STO Qty', type: 'number', defaultVisible: false },
   { key: 'received_qty', label: 'Received Qty', type: 'number', defaultVisible: false },
+  { key: 'delivered_qty', label: 'Delivery Qty', type: 'number', defaultVisible: false },
+  { key: 'planning_qty', label: 'Shipment Planning Qty', type: 'number', defaultVisible: false },
   {
-    key: 'outstanding_qty',
+    key: 'outstanding_qty_actual',
     label: 'Outstanding Qty',
-    byVesselLabel: 'Qty Outstanding (MT)',
+    byVesselLabel: 'Qty Outstanding Actual (MT)',
     type: 'number',
-    defaultVisible: true,
+    defaultVisible: false,
     byVesselDefaultVisible: true,
+    tooltip: SHIPPING_PERF_OUTSTANDING_QTY_TOOLTIP,
+  },
+  {
+    key: 'outstanding_qty_planning',
+    label: 'Outstanding Qty (Planning)',
+    byVesselLabel: 'Qty Outstanding Planning (MT)',
+    type: 'number',
+    defaultVisible: false,
+    byVesselDefaultVisible: true,
+    tooltip: FIELD_HELP.shipmentOutstandingQtyPlanning,
   },
   {
     key: 'loading_delta_eta_etr_days',
     label: 'Loading ETA - ETR',
     type: 'number',
-    defaultVisible: true,
+    defaultVisible: false,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.loading_delta_eta_etr_days,
   },
   {
     key: 'loading_delta_eta_etb_days',
     label: 'Loading ETA - ETB',
     type: 'number',
-    defaultVisible: true,
+    defaultVisible: false,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.loading_delta_eta_etb_days,
   },
   {
     key: 'loading_delta_etb_etc_days',
     label: 'Loading ETB - ETC',
     type: 'number',
-    defaultVisible: true,
+    defaultVisible: false,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.loading_delta_etb_etc_days,
   },
   {
     key: 'discharge_delta_eta_etb_days',
     label: 'Discharge ETA - ETB',
     type: 'number',
-    defaultVisible: true,
+    defaultVisible: false,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.discharge_delta_eta_etb_days,
   },
   {
     key: 'discharge_delta_etb_etc_days',
     label: 'Discharge ETB - ETC',
     type: 'number',
-    defaultVisible: true,
+    defaultVisible: false,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.discharge_delta_etb_etc_days,
   },
   {
     key: 'total_delta_days',
     label: 'Total',
     type: 'number',
-    defaultVisible: true,
+    defaultVisible: false,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.total_delta_days,
   },
 ]
+
+function applyAllShipmentsColumnDefaults(): {
+  order: ShippingPerfColumnKey[]
+  visible: Record<string, boolean>
+} {
+  const allKeys = COLUMN_DEFS.map((col) => col.key)
+  return {
+    order: ensureAllShipmentsPresetColumnOrder(allKeys, allKeys) as ShippingPerfColumnKey[],
+    visible: buildAllShipmentsPresetVisibleColumns(allKeys),
+  }
+}
 
 const COLUMN_MAP = Object.fromEntries(COLUMN_DEFS.map((col) => [col.key, col])) as Record<string, ColumnDef>
 
@@ -983,18 +1021,10 @@ function ensureByVesselTableColumnOrder(order: ShippingPerfColumnKey[]): Shippin
   return withoutAnchors
 }
 
-/** Keep Contract Ext No immediately after Vessel in All Shipments table + column modal order. */
-function ensureContractExtNoAfterVessel(order: ShippingPerfColumnKey[]): ShippingPerfColumnKey[] {
-  const defOrder = COLUMN_DEFS.map((c) => c.key)
-  const deduped = order.filter((key) => defOrder.includes(key))
-  const missing = defOrder.filter((key) => !deduped.includes(key))
-  const merged: ShippingPerfColumnKey[] = [...deduped, ...missing]
-  const vesselIdx = merged.indexOf('vessel_name')
-  const extIdx = merged.indexOf('contract_ext_no')
-  if (vesselIdx < 0 || extIdx < 0 || extIdx === vesselIdx + 1) return merged
-  const withoutExt: ShippingPerfColumnKey[] = merged.filter((key) => key !== 'contract_ext_no')
-  withoutExt.splice(vesselIdx + 1, 0, 'contract_ext_no')
-  return withoutExt
+/** All Shipments view table — preset column order (On Going / Close share keys; ATA labels are display-only). */
+function ensureAllShipmentsTableColumnOrder(order: ShippingPerfColumnKey[]): ShippingPerfColumnKey[] {
+  const allKeys = COLUMN_DEFS.map((c) => c.key)
+  return ensureAllShipmentsPresetColumnOrder(order, allKeys) as ShippingPerfColumnKey[]
 }
 
 function ensureTableColumnOrder(
@@ -1002,7 +1032,7 @@ function ensureTableColumnOrder(
   tableViewMode: TableViewMode,
 ): ShippingPerfColumnKey[] {
   if (tableViewMode === 'by_vessel') return ensureByVesselTableColumnOrder(order)
-  return ensureContractExtNoAfterVessel(order)
+  return ensureAllShipmentsTableColumnOrder(order)
 }
 
 function applyByVesselColumnDefaults(
@@ -1031,21 +1061,6 @@ function reorderColumnsInOrder(
   return next
 }
 
-function getStatusColor(status: string): string {
-  switch (status) {
-    case 'PLANNED':     return 'bg-blue-100 text-blue-800'
-    case 'IN_PROGRESS': return 'bg-yellow-100 text-yellow-800'
-    case 'LOADING':     return 'bg-orange-100 text-orange-800'
-    case 'IN_TRANSIT':  return 'bg-purple-100 text-purple-800'
-    case 'ARRIVED':     return 'bg-indigo-100 text-indigo-800'
-    case 'UNLOADING':   return 'bg-cyan-100 text-cyan-800'
-    case 'COMPLETED':   return 'bg-green-100 text-green-800'
-    case 'CANCELLED':
-    case 'CANCELED':    return 'bg-red-100 text-red-800'
-    default:            return 'bg-gray-100 text-gray-800'
-  }
-}
-
 function asDisplayValue(value: unknown): string {
   return formatSapDisplayValue(value)
 }
@@ -1060,7 +1075,9 @@ function isMtQtyColumn(key: string): boolean {
     isByVesselOnlyColumnKey(key as ShippingPerfColumnKey) ||
     key === 'sto_qty' ||
     key === 'received_qty' ||
-    key === 'outstanding_qty' ||
+    key === 'planning_qty' ||
+    key === 'outstanding_qty_actual' ||
+    key === 'outstanding_qty_planning' ||
     key === 'contract_qty' ||
     key === 'delivered_qty'
   )
@@ -1119,10 +1136,10 @@ function ShippingPerformancePageContent() {
   }, [canViewPage, router])
   const [showColumnManager, setShowColumnManager] = useState(false)
   const [columnOrder, setColumnOrder] = useState<ShippingPerfColumnKey[]>(
-    () => ensureTableColumnOrder(COLUMN_DEFS.map((c) => c.key), 'all'),
+    () => applyAllShipmentsColumnDefaults().order,
   )
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(
-    Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, columnDefaultVisible(c, 'all')])),
+    () => applyAllShipmentsColumnDefaults().visible,
   )
   const [dragColId, setDragColId] = useState<string | null>(null)
   const [draggingColumn, setDraggingColumn] = useState<string | null>(null)
@@ -1158,22 +1175,28 @@ function ShippingPerformancePageContent() {
   const [tableViewMode, setTableViewMode] = useState<TableViewMode>('all')
   const [vesselModalOpen, setVesselModalOpen] = useState(false)
   const [selectedVesselData, setSelectedVesselData] = useState<VesselHistoryModalSelection | null>(null)
-  const [selectedContractForDetail, setSelectedContractForDetail] =
-    useState<ContractDetailModalContract | null>(null)
-  const [contractDetailLoading, setContractDetailLoading] = useState(false)
+  const [viewShipmentModal, setViewShipmentModal] = useState<{
+    shipmentId: string
+    editContractId: string | null
+    editStoNumber: string | null
+    editContractNumbers: string | null
+  } | null>(null)
 
-  const openContractDetailFromRow = useCallback(async (contractNumber: string) => {
-    const contractId = String(contractNumber || '').trim()
-    if (!contractId) return
-    setContractDetailLoading(true)
-    try {
-      const contract = await fetchContractForDetailModal(contractId)
-      if (contract) {
-        setSelectedContractForDetail(contract)
-      }
-    } finally {
-      setContractDetailLoading(false)
-    }
+  const openViewShipmentFromRow = useCallback((row: ShippingPerformanceRow) => {
+    const shipmentId = String(row.id || '').trim()
+    if (!shipmentId) return
+    const contractNumbers = String(row.contract_number || '').trim()
+    const editContractId =
+      contractNumbers
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean)[0] || null
+    setViewShipmentModal({
+      shipmentId,
+      editContractId,
+      editStoNumber: resolveShipmentApiLookupKey(row) || null,
+      editContractNumbers: contractNumbers || null,
+    })
   }, [])
 
   useEffect(() => {
@@ -1240,62 +1263,82 @@ function ShippingPerformancePageContent() {
   const baseFilteredRows = useMemo(() => excludeUnplannedShippingRows(rows), [rows])
 
   const availableIncoterms = useMemo(
-    () => distinctFieldValues(baseFilteredRows, 'incoterm'),
+    () =>
+      SHIPPING_PERF_GLOBAL_FILTERS_ENABLED
+        ? distinctFieldValues(baseFilteredRows, 'incoterm')
+        : [],
     [baseFilteredRows],
   )
   const availableGroupPlants = useMemo(
-    () => distinctFieldValues(baseFilteredRows, 'plant_site'),
+    () =>
+      SHIPPING_PERF_GLOBAL_FILTERS_ENABLED
+        ? distinctFieldValues(baseFilteredRows, 'plant_site')
+        : [],
     [baseFilteredRows],
   )
   const availableProducts = useMemo(
-    () => distinctFieldValues(baseFilteredRows, 'product'),
+    () =>
+      SHIPPING_PERF_GLOBAL_FILTERS_ENABLED
+        ? distinctFieldValues(baseFilteredRows, 'product')
+        : [],
     [baseFilteredRows],
   )
   const availableVessels = useMemo(
-    () => distinctVesselNames(baseFilteredRows),
+    () =>
+      SHIPPING_PERF_GLOBAL_FILTERS_ENABLED ? distinctVesselNames(baseFilteredRows) : [],
     [baseFilteredRows],
   )
 
   // Step B: apply global filters (incoterm, group plant, vessel, status, contract date)
-  const globallyFilteredRows = useMemo(
-    () =>
-      applyGlobalFiltersToRows(baseFilteredRows, {
-        selectedIncoterms,
-        selectedProducts,
-        selectedGroupPlants,
-        selectedVessels,
-        statusFilter,
-        dateFrom,
-        dateTo,
-        searchTerm,
-      }),
-    [baseFilteredRows, selectedIncoterms, selectedProducts, selectedGroupPlants, selectedVessels, statusFilter, dateFrom, dateTo, searchTerm],
-  )
-
-  /** Vessel history — Open + Close in toolbar scope; ignores summary card & status filter. */
-  const vesselHistorySourceRows = useMemo(
-    () =>
-      applyGlobalFiltersToRows(baseFilteredRows, {
-        selectedIncoterms,
-        selectedProducts,
-        selectedGroupPlants,
-        selectedVessels,
-        statusFilter: 'All',
-        dateFrom,
-        dateTo,
-        searchTerm,
-      }).map(applySection3PortDisplay),
-    [
-      baseFilteredRows,
+  const globallyFilteredRows = useMemo(() => {
+    if (!SHIPPING_PERF_GLOBAL_FILTERS_ENABLED) return baseFilteredRows
+    return applyGlobalFiltersToRows(baseFilteredRows, {
       selectedIncoterms,
       selectedProducts,
       selectedGroupPlants,
       selectedVessels,
+      statusFilter,
       dateFrom,
       dateTo,
       searchTerm,
-    ],
-  )
+    })
+  }, [
+    baseFilteredRows,
+    selectedIncoterms,
+    selectedProducts,
+    selectedGroupPlants,
+    selectedVessels,
+    statusFilter,
+    dateFrom,
+    dateTo,
+    searchTerm,
+  ])
+
+  /** Vessel history — Open + Close in toolbar scope; ignores summary card & status filter. */
+  const vesselHistorySourceRows = useMemo(() => {
+    if (!SHIPPING_PERF_GLOBAL_FILTERS_ENABLED) {
+      return baseFilteredRows.map(applySection3PortDisplay)
+    }
+    return applyGlobalFiltersToRows(baseFilteredRows, {
+      selectedIncoterms,
+      selectedProducts,
+      selectedGroupPlants,
+      selectedVessels,
+      statusFilter: 'All',
+      dateFrom,
+      dateTo,
+      searchTerm,
+    }).map(applySection3PortDisplay)
+  }, [
+    baseFilteredRows,
+    selectedIncoterms,
+    selectedProducts,
+    selectedGroupPlants,
+    selectedVessels,
+    dateFrom,
+    dateTo,
+    searchTerm,
+  ])
 
   const ongoingWithEtaFilteredData = useMemo(
     () => applyPerfCardFilter(globallyFilteredRows, 'ongoingWithEta'),
@@ -1386,24 +1429,41 @@ function ShippingPerformancePageContent() {
       drilldownFilters.vessel,
   )
 
+  const globalFilterEffectKey = SHIPPING_PERF_GLOBAL_FILTERS_ENABLED
+    ? [
+        selectedIncoterms.join('\0'),
+        selectedProducts.join('\0'),
+        selectedGroupPlants.join('\0'),
+        selectedVessels.join('\0'),
+        statusFilter,
+        dateFrom,
+        dateTo,
+        searchTerm,
+      ].join('|')
+    : ''
+
   useEffect(() => {
     setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
     setCurrentPage(1)
-  }, [perfCardFilter, selectedIncoterms, selectedProducts, selectedGroupPlants, selectedVessels, statusFilter, dateFrom, dateTo, searchTerm])
+  }, [perfCardFilter, globalFilterEffectKey])
 
   useEffect(() => {
     const allKeys = COLUMN_DEFS.map((col) => col.key)
-    setColumnOrder((prev) => {
-      const deduped = prev.filter((key) => allKeys.includes(key))
-      const missing = allKeys.filter((key) => !deduped.includes(key))
-      const next = ensureTableColumnOrder([...deduped, ...missing], tableViewMode)
-      if (prev.length === next.length && prev.every((key, index) => key === next[index])) return prev
-      return next
-    })
     if (tableViewMode === 'by_vessel') {
+      setColumnOrder((prev) => {
+        const deduped = prev.filter((key) => allKeys.includes(key))
+        const missing = allKeys.filter((key) => !deduped.includes(key))
+        const next = ensureByVesselTableColumnOrder([...deduped, ...missing])
+        if (prev.length === next.length && prev.every((key, index) => key === next[index])) return prev
+        return next
+      })
       setVisibleColumns((prev) => applyByVesselColumnDefaults(prev))
+      return
     }
-  }, [tableViewMode])
+    const { order, visible } = applyAllShipmentsColumnDefaults()
+    setColumnOrder(order)
+    setVisibleColumns(visible)
+  }, [tableViewMode, perfCardFilter])
 
   const activateByVesselTableView = useCallback(() => {
     setTableViewMode('by_vessel')
@@ -1591,7 +1651,11 @@ function ShippingPerformancePageContent() {
 
   /** Section 3 column headers — recompute when Close/Open card or global status filter changes. */
   const tableLabelMode = useMemo(
-    () => resolveShippingPerfLabelMode(perfCardFilter, statusFilter),
+    () =>
+      resolveShippingPerfLabelMode(
+        perfCardFilter,
+        SHIPPING_PERF_GLOBAL_FILTERS_ENABLED ? statusFilter : 'All',
+      ),
     [perfCardFilter, statusFilter],
   )
 
@@ -1608,23 +1672,25 @@ function ShippingPerformancePageContent() {
   const tableScopeParts = useMemo(() => {
     const parts: string[] =
       perfCardFilter === 'all' ? [] : [SHIPPING_PERF_CARD_TITLES[perfCardFilter]]
-    if (selectedIncoterms.length > 0) {
-      parts.push(`Incoterm: ${selectedIncoterms.map(displayGroupLabel).join(', ')}`)
-    }
-    if (selectedGroupPlants.length > 0) {
-      parts.push(`Group Plant: ${selectedGroupPlants.map(displayGroupLabel).join(', ')}`)
-    }
-    if (selectedVessels.length > 0) {
-      parts.push(`Vessel: ${selectedVessels.map(displayGroupLabel).join(', ')}`)
-    }
-    if (dateFrom || dateTo) {
-      parts.push(`Contract date: ${dateFrom || '…'} to ${dateTo || '…'}`)
+    if (SHIPPING_PERF_GLOBAL_FILTERS_ENABLED) {
+      if (selectedIncoterms.length > 0) {
+        parts.push(`Incoterm: ${selectedIncoterms.map(displayGroupLabel).join(', ')}`)
+      }
+      if (selectedGroupPlants.length > 0) {
+        parts.push(`Group Plant: ${selectedGroupPlants.map(displayGroupLabel).join(', ')}`)
+      }
+      if (selectedVessels.length > 0) {
+        parts.push(`Vessel: ${selectedVessels.map(displayGroupLabel).join(', ')}`)
+      }
+      if (dateFrom || dateTo) {
+        parts.push(`Contract date: ${dateFrom || '…'} to ${dateTo || '…'}`)
+      }
+      if (statusFilter !== 'All') parts.push(`Status: ${statusFilter}`)
     }
     if (drilldownFilters.product) parts.push(`Product: ${displayGroupLabel(drilldownFilters.product)}`)
     if (drilldownFilters.plant) parts.push(`Group Plant node: ${displayGroupLabel(drilldownFilters.plant)}`)
     if (drilldownFilters.incoterm) parts.push(`Incoterm node: ${displayGroupLabel(drilldownFilters.incoterm)}`)
     if (drilldownFilters.vessel) parts.push(`Vessel: ${drilldownFilters.vessel}`)
-    if (statusFilter !== 'All') parts.push(`Status: ${statusFilter}`)
     return parts
   }, [
     perfCardFilter,
@@ -1690,12 +1756,7 @@ function ShippingPerformancePageContent() {
   useEffect(() => {
     setCurrentPage(1)
   }, [
-    statusFilter,
-    selectedIncoterms,
-    selectedGroupPlants,
-    selectedVessels,
-    dateFrom,
-    dateTo,
+    globalFilterEffectKey,
     drilldownFilters,
     tableViewMode,
     sortBy,
@@ -2028,8 +2089,11 @@ function ShippingPerformancePageContent() {
           </CardContent>
         </Card>
 
-        {/* Global Filters — above table (matches Contract Performance layout) */}
-        <Card>
+        {/* Global Filters — hidden when SHIPPING_PERF_GLOBAL_FILTERS_ENABLED is false */}
+        <Card
+          className={cn(!SHIPPING_PERF_GLOBAL_FILTERS_ENABLED && 'hidden')}
+          aria-hidden={!SHIPPING_PERF_GLOBAL_FILTERS_ENABLED}
+        >
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Filters</CardTitle>
             <p className="text-sm text-gray-600 mt-1">
@@ -2121,7 +2185,7 @@ function ShippingPerformancePageContent() {
           </CardContent>
         </Card>
 
-        {/* Section 3: View Table — scope filters use global section above */}
+        {/* Section 3: View Table — scoped by Section 1 card + Section 2 drilldown */}
         <div>
         <Card>
           <CardHeader className="space-y-3">
@@ -2489,7 +2553,7 @@ function ShippingPerformancePageContent() {
                                 <Badge
                                   className={cn(
                                     'text-xs whitespace-nowrap shrink-0',
-                                    getStatusColor(String(rawValue)),
+                                    shipmentStatusBadgeClass(String(rawValue)),
                                   )}
                                 >
                                   {formatShipmentStatusLabel(String(rawValue))}
@@ -2569,13 +2633,12 @@ function ShippingPerformancePageContent() {
                           {showTableActionsColumn ? (
                             <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)}>
                               <div className="flex items-center justify-center">
-                                {String(row.contract_number || '').trim() ? (
+                                {String(row.id || '').trim() ? (
                                   <Button
                                     variant="outline"
                                     size="icon"
-                                    onClick={() => void openContractDetailFromRow(row.contract_number)}
-                                    title="View"
-                                    disabled={contractDetailLoading}
+                                    onClick={() => openViewShipmentFromRow(row)}
+                                    title="View shipment"
                                     className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
                                   >
                                     <Eye className="h-4 w-4" />
@@ -2612,9 +2675,13 @@ function ShippingPerformancePageContent() {
           sourceRows={vesselHistorySourceRows}
         />
 
-        <ContractDetailModal
-          contract={selectedContractForDetail}
-          onClose={() => setSelectedContractForDetail(null)}
+        <ViewShipmentModal
+          open={viewShipmentModal != null}
+          onClose={() => setViewShipmentModal(null)}
+          editShipmentId={viewShipmentModal?.shipmentId ?? null}
+          editContractId={viewShipmentModal?.editContractId ?? null}
+          editStoNumber={viewShipmentModal?.editStoNumber ?? null}
+          editContractNumbers={viewShipmentModal?.editContractNumbers ?? null}
         />
       </div>
   )

@@ -207,7 +207,6 @@ export function shipmentPagePipelineSummarySelectSql(): string {
   const loadingGroup = `${eff} IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING')`;
   const dischargeGroup = `${eff} IN ('ARRIVED_DP', 'BERTHED_DP', 'UNLOADING')`;
   return `
-        (SELECT unplanned_contract_count FROM unplanned_open_contracts)::bigint AS unplanned_count,
         COUNT(*) FILTER (WHERE ${eff} = 'PLANNED')::bigint AS planned_count,
         COUNT(*) FILTER (WHERE ${loadingGroup})::bigint AS at_loading_port_count,
         COUNT(*) FILTER (WHERE ${eff} = 'SAILED')::bigint AS sailed_count,

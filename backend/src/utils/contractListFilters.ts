@@ -2,6 +2,8 @@
  * Server-side global search + column filters for contracts list (base CTE scope).
  */
 
+import { sqlContractOutstandingSignedExpr } from './sapIncotermMetrics';
+
 export type ColumnFilterPayload = Record<
   string,
   {
@@ -56,17 +58,13 @@ const BASE_COL_SQL: Record<string, string> = {
   cargo_readiness_date: 'base.cargo_readiness_date',
   created_at: 'base.created_at',
   contract_qty: 'base.quantity_ordered',
-  outstanding_qty: `(
-    base.quantity_ordered - COALESCE(
-      CASE
-        WHEN UPPER(TRIM(COALESCE(base.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN base.quantity_receive
-        WHEN UPPER(TRIM(COALESCE(base.incoterm, ''))) IN ('LCO', 'FOB') THEN base.quantity_delivery
-        ELSE base.total_sto_quantity
-      END,
-      0
-    )
-  )`,
-  delivery_status: `COALESCE(base.latest_spd_data->'contract'->>'status', base.status::text, '')`,
+  outstanding_qty: sqlContractOutstandingSignedExpr({
+    contractQtyExpr: 'base.quantity_ordered',
+    incotermExpr: 'base.incoterm',
+    receiveExpr: 'base.quantity_receive',
+    deliveryExpr: 'base.quantity_delivery_sap',
+  }),
+  delivery_status: `COALESCE(base.import_status, base.status::text, '')`,
 }
 
 export function appendGlobalSearchBase(

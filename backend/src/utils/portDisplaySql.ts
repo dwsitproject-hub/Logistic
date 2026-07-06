@@ -9,14 +9,33 @@ export function isNumericPortCodeSql(valueExpr: string): string {
 
 const INVALID_PORT_LITERALS = `'', '0', '0.00'`;
 
+/** SAP JSON paths for loading port text on an spd row alias (Shipping Performance sap_agg, etc.). */
+export function sapSpdLoadingPortTextExpr(spdAlias = 'spd'): string {
+  return `NULLIF(TRIM(COALESCE(
+    ${spdAlias}.data->'raw'->>'Vessel Loading Port',
+    ${spdAlias}.data->'raw'->>'Vessel Loading Port ',
+    ${spdAlias}.data->'shipment'->>'vessel_loading_port',
+    ${spdAlias}.data->'raw'->>'Vessel Loading Port 1',
+    ${spdAlias}.data->'raw'->>'Vessel Loading Port 1 ',
+    ${spdAlias}.data->'shipment'->>'vessel_loading_port_1'
+  )), '')`;
+}
+
+/** SAP JSON paths for discharge port text on an spd row alias. */
+export function sapSpdDischargePortTextExpr(spdAlias = 'spd'): string {
+  return `NULLIF(TRIM(COALESCE(
+    ${spdAlias}.data->'raw'->>'Vessel Discharge Port',
+    ${spdAlias}.data->'raw'->>'Vessel Discharge Port ',
+    ${spdAlias}.data->'shipment'->>'vessel_discharge_port',
+    ${spdAlias}.data->'raw'->>'Port of Discharge',
+    ${spdAlias}.data->'shipment'->>'port_of_discharge'
+  )), '')`;
+}
+
 /** Latest SAP loading-port text for a contract business id (may still be numeric). */
 export function sapLoadingPortTextSubquery(contractIdRef: string): string {
   return `(
-    SELECT NULLIF(TRIM(COALESCE(
-      spd.data->'raw'->>'Vessel Loading Port 1',
-      spd.data->'raw'->>'Port of Loading',
-      spd.data->'shipment'->>'vessel_loading_port_1'
-    )), '')
+    SELECT ${sapSpdLoadingPortTextExpr('spd')}
     FROM sap_processed_data spd
     WHERE spd.contract_number = ${contractIdRef}
     ORDER BY spd.created_at DESC NULLS LAST
@@ -27,11 +46,7 @@ export function sapLoadingPortTextSubquery(contractIdRef: string): string {
 /** Latest SAP discharge-port text for a contract business id (may still be numeric). */
 export function sapDischargePortTextSubquery(contractIdRef: string): string {
   return `(
-    SELECT NULLIF(TRIM(COALESCE(
-      spd.data->'raw'->>'Vessel Discharge Port',
-      spd.data->'raw'->>'Port of Discharge',
-      spd.data->'shipment'->>'vessel_discharge_port'
-    )), '')
+    SELECT ${sapSpdDischargePortTextExpr('spd')}
     FROM sap_processed_data spd
     WHERE spd.contract_number = ${contractIdRef}
     ORDER BY spd.created_at DESC NULLS LAST

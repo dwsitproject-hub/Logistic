@@ -42,6 +42,12 @@ import type {
   ShipmentPoOption,
 } from '@/components/shared/addNewShipmentTypes'
 import { EditShipmentModal } from '@/components/shared/EditShipmentModal'
+import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
+import {
+  ContractDetailModal,
+  fetchContractForDetailModalByPo,
+  type ContractDetailModalContract,
+} from '@/components/contracts/ContractDetailModal'
 import { AiKlipAgentButton } from '@/components/shared/AiKlipAgentButton'
 import {
   suggestShipmentEta,
@@ -286,6 +292,8 @@ export type AddNewShipmentModalProps = {
   onClose: () => void
   onSubmit: (payload: AddNewShipmentSubmitPayload) => Promise<void>
   prefilledPOs?: ShipmentPoOption[] | null
+  /** STO from SAP when opening Add modal from an existing STO row (read-only display). */
+  prefilledStoNumber?: string | null
   availablePOs?: ShipmentPoOption[] | null
   editContractId?: string | null
   /** When set (Shipments table edit), load this shipment directly instead of first match by contract. */
@@ -306,6 +314,7 @@ export function AddNewShipmentModal({
   onClose,
   onSubmit,
   prefilledPOs = null,
+  prefilledStoNumber = null,
   availablePOs = null,
   editContractId = null,
   editShipmentId: editShipmentIdProp = null,
@@ -370,6 +379,9 @@ export function AddNewShipmentModal({
     product: string
     incoterm: string
   } | null>(null)
+  const [contractDetailTarget, setContractDetailTarget] =
+    useState<ContractDetailModalContract | null>(null)
+  const [contractDetailLoading, setContractDetailLoading] = useState(false)
 
   useEffect(() => {
     contractNumbersRef.current = newShipment.contractNumbers
@@ -1444,10 +1456,17 @@ export function AddNewShipmentModal({
     }
 
     if (prefilledPOs?.length) {
-      const keys = prefilledPOs.map((po) => po.key)
+      const seenPoKeys = new Set<string>()
+      const uniquePrefilled = prefilledPOs.filter((po) => {
+        const dedupeKey = `${po.contractId}::${po.poNumber ?? ''}`
+        if (seenPoKeys.has(dedupeKey)) return false
+        seenPoKeys.add(dedupeKey)
+        return true
+      })
+      const keys = uniquePrefilled.map((po) => po.key)
       const validations: typeof contractValidations = {}
       const qtySeed: Record<string, string> = {}
-      for (const po of prefilledPOs) {
+      for (const po of uniquePrefilled) {
         validations[po.key] = {
           checking: false,
           exists: true,
@@ -1468,7 +1487,8 @@ export function AddNewShipmentModal({
       setNewShipment((prev) => ({
         ...prev,
         contractNumbers: keys,
-        operationId: generateOperationId(prefilledPOs[0].contractId),
+        operationId: generateOperationId(uniquePrefilled[0].contractId),
+        stoNumber: String(prefilledStoNumber ?? '').trim(),
       }))
       setEtaDetails([createShipmentEtaDetail([...keys])])
     }
@@ -1478,6 +1498,7 @@ export function AddNewShipmentModal({
     editShipmentIdProp,
     isEditMode,
     prefilledPOs,
+    prefilledStoNumber,
     resetForm,
     loadShipmentForEdit,
     loadShipmentForEditById,
@@ -1772,7 +1793,7 @@ export function AddNewShipmentModal({
       await onSubmit({
         kind: 'create',
         operationId,
-        stoNumber: '',
+        stoNumber: newShipment.stoNumber.trim() || String(prefilledStoNumber ?? '').trim(),
         contractNumbers,
         contractQtyAssigned: contractQtyAssignedPayload,
         poQtyAssigned: Object.keys(poQtyAssigned).length > 0 ? poQtyAssigned : undefined,
@@ -1831,7 +1852,43 @@ export function AddNewShipmentModal({
     [newShipment.contractNumbers, contractValidations],
   )
 
+  const openContractDetailFromPoRow = async (contractId: string) => {
+    const validation = contractValidations[contractId]
+    const data = validation?.contractData
+    if (!validation?.exists || !data) return
+    const po = String(data.po_number ?? '').trim()
+    const contractNumber = String(data.contract_id ?? contractId).trim()
+    if (!po && !contractNumber) return
+    setContractDetailLoading(true)
+    try {
+      const contract = await fetchContractForDetailModalByPo(po || contractNumber, contractNumber)
+      if (contract) {
+        setContractDetailTarget(contract)
+      } else {
+        showNotification('error', 'Contract details not found for this PO.')
+      }
+    } finally {
+      setContractDetailLoading(false)
+    }
+  }
+
   if (!open) return null
+
+  if (isEditMode && readOnly) {
+    return (
+      <ViewShipmentModal
+        open={open}
+        onClose={() => {
+          resetForm()
+          onClose()
+        }}
+        editContractId={editContractId}
+        editShipmentId={editShipmentIdProp}
+        editStoNumber={editStoNumber}
+        editContractNumbers={editContractNumbers}
+      />
+    )
+  }
 
   if (isEditMode) {
     return (
@@ -1846,13 +1903,13 @@ export function AddNewShipmentModal({
         editShipmentId={editShipmentIdProp}
         editStoNumber={editStoNumber}
         editContractNumbers={editContractNumbers}
-        readOnly={readOnly}
         onShipmentChanged={onShipmentChanged}
       />
     )
   }
 
   return (
+    <>
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
       <div className="flex max-h-[90vh] w-full max-w-6xl flex-col rounded-lg bg-white shadow-xl">
         {/* Header */}
@@ -1992,7 +2049,10 @@ export function AddNewShipmentModal({
                     STO Number <span className="text-gray-400">(from SAP)</span>
                   </label>
                   <Input
-                    value=""
+                    value={
+                      newShipment.stoNumber.trim() ||
+                      String(editStoNumber ?? prefilledStoNumber ?? '').trim()
+                    }
                     readOnly
                     disabled
                     placeholder="Will be filled from SAP import"
@@ -2137,9 +2197,21 @@ export function AddNewShipmentModal({
                               >
                                 <TableCell className={COMPACT_TD}>
                                   <div className="flex items-center gap-1 min-w-[5.5rem]">
-                                    <span className="font-medium truncate max-w-[7rem]" title={label}>
-                                      {label}
-                                    </span>
+                                    {validation?.exists ? (
+                                      <button
+                                        type="button"
+                                        className="text-left font-medium text-blue-600 hover:underline disabled:cursor-not-allowed disabled:opacity-50 truncate max-w-[7rem]"
+                                        title="View contract details"
+                                        disabled={contractDetailLoading}
+                                        onClick={() => void openContractDetailFromPoRow(contractId)}
+                                      >
+                                        {label}
+                                      </button>
+                                    ) : (
+                                      <span className="font-medium truncate max-w-[7rem]" title={label}>
+                                        {label}
+                                      </span>
+                                    )}
                                     {validation?.checking && <Loader2 className="h-3 w-3 animate-spin shrink-0" />}
                                     {validation?.exists && <Check className="h-3 w-3 text-green-600 shrink-0" />}
                                     {validation?.exists === false && !validation?.checking && (
@@ -2790,5 +2862,12 @@ export function AddNewShipmentModal({
         </div>
       </div>
     </div>
+
+    <ContractDetailModal
+      contract={contractDetailTarget}
+      onClose={() => setContractDetailTarget(null)}
+      stacked
+    />
+    </>
   )
 }

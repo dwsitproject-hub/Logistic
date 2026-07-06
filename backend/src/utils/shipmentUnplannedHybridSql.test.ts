@@ -26,6 +26,7 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(text).toContain('contract_ext_no_raw');
     expect(text).toContain('Contract Ext No');
     expect(text).toContain('AS outstanding_quantity');
+    expect(text).toContain('c.quantity_ordered AS contract_qty');
     expect(text).not.toContain('NULL::text AS contract_ext_no');
   });
 

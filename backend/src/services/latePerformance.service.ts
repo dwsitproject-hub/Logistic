@@ -14,9 +14,10 @@ import { appendContractPerfProductSubstringSql } from '../utils/contractPerfProd
 import {
   sqlContractImportStatusIsClosedExpr,
   sqlContractImportStatusIsOpenExpr,
+  sqlContractListImportStatusAggExpr,
 } from '../utils/contractDeliveryStatus';
 import {
-  sqlIncotermImportStatusFromJson,
+  resolveContractActualQtySubtractedTs,
   sqlIncotermQuantityDeliveryCase,
   sqlTransportModeFromContractAndJson,
 } from '../utils/sapIncotermMetrics';
@@ -223,7 +224,7 @@ export function buildLatePerformanceQuery(filters: LatePerformanceFilters): {
           MAX(c.status) AS status,
           MAX(c.plant_code) AS plant_code,
           MAX(c.company_name) AS company_name,
-          MAX(${sqlIncotermImportStatusFromJson('l.data', 'c.incoterm', 'c.status::text')}) AS import_status,
+          ${sqlContractListImportStatusAggExpr('c')} AS import_status,
           MAX(c.delivery_end_date) AS delivery_end_date,
           MAX(c.cargo_readiness_date) AS cargo_readiness_date,
           (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
@@ -235,7 +236,8 @@ export function buildLatePerformanceQuery(filters: LatePerformanceFilters): {
             sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
           )}) AS quantity_delivery,
           (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
-          -- Use the denormalized column instead of CROSS JOIN LATERAL jsonb_array_elements
+          (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery_sap,
+          -- For Trade Cycle (LAND open): latest date in daily_deliverables JSONB
           (
             SELECT MAX(t.last_daily_deliverable_date)
             FROM trucking_operations t
@@ -1101,7 +1103,12 @@ export function aggregateLatePerformanceRows(
       isOpen && !hasCalendarDate(resolveOpenStandardEta(row, transport));
 
     const _qtyOrdered = Number(row.quantity_ordered || 0);
-    const _outstandingQty = Math.max(0, _qtyOrdered - Number(row.quantity_delivery || 0));
+    const _subtracted = resolveContractActualQtySubtractedTs(
+      row.incoterm,
+      row.quantity_receive,
+      row.quantity_delivery_sap ?? row.quantity_delivery,
+    );
+    const _outstandingQty = Math.max(0, _qtyOrdered - _subtracted);
     /** Open Section 1/2: outstanding qty. Close Section 1/2: total contract qty (quantity_ordered). */
     const _qtyForPerf = isClosed ? _qtyOrdered : _outstandingQty;
 

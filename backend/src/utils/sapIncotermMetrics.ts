@@ -157,27 +157,78 @@ export function sqlIncotermQuantityDeliveryCase(
 }
 
 /**
+ * Actual delivered/received qty (kg) subtracted from contract qty for outstanding.
+ * FRC/CIF/CFR → Quantity Receive; LCO/FOB → Quantity Delivery; others → receive or delivery (no STO fallback).
+ */
+export function sqlContractActualQtySubtractedCase(opts: {
+  incotermExpr: string;
+  receiveExpr: string;
+  deliveryExpr: string;
+}): string {
+  const inc = `UPPER(TRIM(COALESCE(${opts.incotermExpr}, '')))`;
+  return `COALESCE(
+    CASE
+      WHEN ${inc} IN ('FRC', 'CIF', 'CFR') THEN ${opts.receiveExpr}
+      WHEN ${inc} IN ('LCO', 'FOB') THEN ${opts.deliveryExpr}
+      ELSE COALESCE(NULLIF(${opts.receiveExpr}, 0), ${opts.deliveryExpr})
+    END,
+    0
+  )`;
+}
+
+/** PO fulfilled kg — Shipments / Shipping Performance / Contracts (FRC/CIF/CFR receive; LCO/FOB delivery). */
+export function sqlPoFulfilledKgCase(
+  incotermExpr: string,
+  receiveExpr: string,
+  deliveryExpr: string,
+): string {
+  return sqlContractActualQtySubtractedCase({ incotermExpr, receiveExpr, deliveryExpr });
+}
+
+/**
+ * Signed outstanding (kg): contract qty − PO fulfilled SAP qty.
+ * Positive = sisa belum terkirim/terima; negative = over-delivery (tampil + hijau di UI).
+ */
+export function sqlContractOutstandingSignedExpr(opts: {
+  contractQtyExpr: string;
+  incotermExpr: string;
+  receiveExpr: string;
+  deliveryExpr: string;
+}): string {
+  return sqlContractOutstandingFromFields({ ...opts, clampAtZero: false });
+}
+
+/** TypeScript mirror of {@link sqlContractActualQtySubtractedCase}. */
+export function resolveContractActualQtySubtractedTs(
+  incoterm: unknown,
+  receiveQty: unknown,
+  deliveryQty: unknown,
+): number {
+  const inc = String(incoterm ?? '').trim().toUpperCase();
+  const receive = Number(receiveQty) || 0;
+  const delivery = Number(deliveryQty) || 0;
+  if (['FRC', 'CIF', 'CFR'].includes(inc)) return receive;
+  if (['LCO', 'FOB'].includes(inc)) return delivery;
+  return receive || delivery;
+}
+
+/**
  * Contract-level outstanding (kg) for Contracts / Contract Performance list.
- * FRC/CIF/CFR → Quantity Receive; LCO/FOB → Quantity Delivery; others → total STO quantity.
- * Section 3 allows negative values (over delivery) unless clampAtZero is true.
+ * Uses actual receive/delivery only (no STO quantity fallback when actual is 0).
+ * Allows negative values (over delivery) unless clampAtZero is true.
  */
 export function sqlContractOutstandingFromFields(opts: {
   contractQtyExpr: string;
   incotermExpr: string;
   receiveExpr: string;
   deliveryExpr: string;
-  stoQtyExpr: string;
   clampAtZero?: boolean;
 }): string {
-  const inc = `UPPER(TRIM(COALESCE(${opts.incotermExpr}, '')))`;
-  const subtracted = `COALESCE(
-    CASE
-      WHEN ${inc} IN ('FRC', 'CIF', 'CFR') THEN ${opts.receiveExpr}
-      WHEN ${inc} IN ('LCO', 'FOB') THEN ${opts.deliveryExpr}
-      ELSE ${opts.stoQtyExpr}
-    END,
-    0
-  )`;
+  const subtracted = sqlContractActualQtySubtractedCase({
+    incotermExpr: opts.incotermExpr,
+    receiveExpr: opts.receiveExpr,
+    deliveryExpr: opts.deliveryExpr,
+  });
   const diff = `(COALESCE(${opts.contractQtyExpr}, 0)::numeric - ${subtracted}::numeric)`;
   return opts.clampAtZero ? `GREATEST(0, ${diff})` : diff;
 }

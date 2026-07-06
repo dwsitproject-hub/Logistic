@@ -12,7 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
-import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
+import { formatContractDeliveryStatusLabel, isContractRecordClosed } from '@/lib/contractDeliveryStatus'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
 import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
 import { fetchContractPurchaseOrderOptions } from '@/components/shared/addNewShipmentTypes'
@@ -310,19 +310,46 @@ function getStatusColor(status: string) {
   switch (status) {
     case 'Close':
     case 'CLOSE':
+    case 'CLOSED':
     case 'Completed':
     case 'COMPLETED':
-      return 'bg-blue-100 text-blue-800'
+      return 'bg-red-100 text-red-800 hover:bg-red-100'
     case 'Open':
     case 'OPEN':
     case 'ACTIVE':
-      return 'bg-green-100 text-green-800'
+      return 'bg-green-100 text-green-800 hover:bg-green-100'
     case 'Cancelled':
     case 'CANCELLED':
-      return 'bg-red-100 text-red-800'
+      return 'bg-red-100 text-red-800 hover:bg-red-100'
     default:
-      return 'bg-gray-100 text-gray-800'
+      return 'bg-gray-100 text-gray-800 hover:bg-gray-100'
   }
+}
+
+function resolveContractStatusDisplay(c: {
+  import_status?: string
+  status?: string
+  payment_status?: string
+}): string {
+  const delivery = String(c.import_status || c.status || '').toUpperCase()
+  const paid = String(c.payment_status || '').toUpperCase() === 'PAID'
+  if (delivery === 'CLOSE' && paid) return 'Close'
+  return formatContractDeliveryStatusLabel(c.import_status || c.status)
+}
+
+function contractStatusBadgeClass(c: {
+  import_status?: string
+  status?: string
+  payment_status?: string
+}): string {
+  const delivery = String(c.import_status || c.status || '').trim().toUpperCase()
+  if (delivery === 'OPEN' || delivery === 'ACTIVE') {
+    return getStatusColor('OPEN')
+  }
+  if (delivery === 'CLOSE' || delivery === 'CLOSED' || delivery === 'COMPLETED') {
+    return getStatusColor('CLOSE')
+  }
+  return getStatusColor(resolveContractStatusDisplay(c))
 }
 
 /** Default left-to-right order on `/contracts` when no saved column order (Supplier & Buyer after PO Number). */
@@ -2786,14 +2813,14 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => (c.import_status || c.status || ''),
       render: (c) => (
-        <Badge className={getStatusColor(c.import_status || c.status)}>
-          {c.import_status || c.status}
+        <Badge className={contractStatusBadgeClass(c)}>
+          {formatContractDeliveryStatusLabel(c.import_status || c.status) || '—'}
         </Badge>
       )
     },
     {
       id: 'status_overall',
-      label: 'Status',
+      label: isContractPerformance ? 'Status Contract' : 'Status',
       defaultVisible: false,
       sortable: true,
       getSortValue: (c) => {
@@ -2802,10 +2829,12 @@ function ContractsPageContent() {
         return delivery === 'CLOSE' && paid ? 'Close' : (c.import_status || c.status || '')
       },
       render: (c) => {
-        const delivery = String(c.import_status || c.status || '').toUpperCase()
-        const paid = String(c.payment_status || '').toUpperCase() === 'PAID'
-        const overall = delivery === 'CLOSE' && paid ? 'Close' : formatSapDisplayValue(c.import_status || c.status)
-        return <span className="text-sm font-medium">{overall}</span>
+        const overall = resolveContractStatusDisplay(c)
+        return (
+          <Badge className={contractStatusBadgeClass(c)}>
+            {overall || '—'}
+          </Badge>
+        )
       }
     },
     {
@@ -2889,7 +2918,7 @@ function ContractsPageContent() {
     {
       id: 'outstanding_qty_mt',
       label: isContractPerformance ? 'Outstanding Qty' : 'Outstanding Qty (MT)',
-      formulaHelp: FIELD_HELP.outstandingQtyMt,
+      formulaHelp: isContractPerformance ? FIELD_HELP.contractPerfOutstandingQty : FIELD_HELP.outstandingQtyMt,
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : 0,
@@ -2910,7 +2939,7 @@ function ContractsPageContent() {
     {
       id: 'trade_cycle_days',
       label: 'Trade Cycle',
-      formulaHelp: FIELD_HELP.tradeCycle,
+      formulaHelp: isContractPerformance ? FIELD_HELP.contractPerfTradeCycle : FIELD_HELP.tradeCycle,
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.trade_cycle_days ?? 0,
@@ -2930,7 +2959,7 @@ function ContractsPageContent() {
     {
       id: 'cash_cycle_days',
       label: 'Cash Cycle',
-      formulaHelp: FIELD_HELP.cashCycle,
+      formulaHelp: isContractPerformance ? FIELD_HELP.contractPerfCashCycle : FIELD_HELP.cashCycle,
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.cash_cycle_days ?? 0,
@@ -2952,7 +2981,7 @@ function ContractsPageContent() {
           {
             id: 'dp_cycle_days',
             label: 'DP Cycle',
-            formulaHelp: FIELD_HELP.dpCycle,
+            formulaHelp: FIELD_HELP.contractPerfDpCycle,
             defaultVisible: true,
             sortable: true,
             getSortValue: (c: Contract) => c.dp_cycle_days ?? 0,
@@ -2971,7 +3000,7 @@ function ContractsPageContent() {
     {
       id: 'log_cycle_days',
       label: 'Log Cycle',
-      formulaHelp: FIELD_HELP.logCycle,
+      formulaHelp: isContractPerformance ? FIELD_HELP.contractPerfLogCycle : FIELD_HELP.logCycle,
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.log_cycle_days ?? 0,
@@ -5163,8 +5192,8 @@ function ContractsPageContent() {
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 min-w-0">
                               <span className="font-semibold truncate">{contract.contract_id}</span>
-                              <Badge className={getStatusColor(contract.import_status || contract.status)}>
-                                {contract.import_status || contract.status}
+                              <Badge className={contractStatusBadgeClass(contract)}>
+                                {formatContractDeliveryStatusLabel(contract.import_status || contract.status) || '—'}
                               </Badge>
                               {contract.transport_mode && (
                                 <Badge variant="secondary" className="hidden sm:inline-flex">

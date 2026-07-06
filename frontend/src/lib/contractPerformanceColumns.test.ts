@@ -20,6 +20,9 @@ describe('contractPerformanceColumns', () => {
       'created_at',
       'vessel_name',
     ])
+    expect(CONTRACT_PERF_COLUMN_ORDER[0]).toBe('month_delivery_end')
+    expect(CONTRACT_PERF_COLUMN_ORDER).toContain('status_overall')
+    expect(CONTRACT_PERF_COLUMN_ORDER).not.toContain('source_type')
   })
 
   it('reorders column objects without changing ids', () => {
@@ -30,6 +33,13 @@ describe('contractPerformanceColumns', () => {
     ]
     const ordered = orderContractPerformanceColumns(cols)
     expect(ordered.map((c) => c.id)).toEqual(['contract_date', 'supplier', 'product'])
+    expect(CONTRACT_PERF_COLUMN_ORDER.slice(0, 5)).toEqual([
+      'month_delivery_end',
+      'contract_date',
+      'contract_ext_no',
+      'po_number',
+      'supplier',
+    ])
   })
 
   it('keeps CONTRACT_PERF_COLUMN_ORDER length', () => {
@@ -66,6 +76,22 @@ describe('contractPerformanceColumns', () => {
       'contract_date',
       'supplier',
       'product',
+    ])
+    expect(CONTRACT_PERF_COLUMN_ORDER).toEqual([
+      'month_delivery_end',
+      'contract_date',
+      'contract_ext_no',
+      'po_number',
+      'supplier',
+      'incoterm',
+      'product',
+      'status_overall',
+      'contract_qty',
+      'outstanding_qty_mt',
+      'trade_cycle_days',
+      'dp_cycle_days',
+      'cash_cycle_days',
+      'log_cycle_days',
     ])
   })
 

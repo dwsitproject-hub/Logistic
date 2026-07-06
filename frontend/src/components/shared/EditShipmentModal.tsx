@@ -29,6 +29,7 @@ import {
   Plus,
   Ship,
   Upload,
+  Download,
   X,
 } from 'lucide-react'
 import api from '@/lib/api'
@@ -51,8 +52,13 @@ import {
   type VesselPortsQuantityRow,
 } from '@/components/shipments/VesselPortsQuantitiesTable'
 import type { AddNewShipmentSubmitPayload, ShipmentEditContextData, ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
-import { attachPurchaseOrderToShipment } from '@/components/shared/addNewShipmentTypes'
+import { attachPurchaseOrderToShipment, batchSaveShipmentPoPlanQty } from '@/components/shared/addNewShipmentTypes'
 import { ShipmentPoSearchCombobox } from '@/components/shared/ShipmentPoSearchCombobox'
+import {
+  ContractDetailModal,
+  fetchContractForDetailModalByPo,
+  type ContractDetailModalContract,
+} from '@/components/contracts/ContractDetailModal'
 import {
   VESSEL_MODAL_BODY_CLASS,
   VESSEL_MODAL_COMPACT_TD,
@@ -82,10 +88,21 @@ import {
   canCreatePermission,
   canEditPermission,
 } from '@/components/PermissionsContext'
+import {
+  formatShipmentStatusLabel,
+  shipmentStatusBadgeClass,
+} from '@/lib/shipmentStatusDisplay'
 const SHIPMENT_SLD_DOC_TYPE = 'SLD'
 const SHIPMENT_SDD_DOC_TYPE = 'SDD'
-const READONLY_FIELD_CLASS = 'bg-gray-50 cursor-not-allowed text-gray-600'
+
+interface ShipmentDocumentItem {
+  id: string
+  document_type?: string
+  file_name: string
+  created_at?: string
+}
 const ETA_INFO_VALUE_CLASS = 'text-sm font-medium text-gray-900 tabular-nums'
+const INFO_VALUE_CLASS = 'text-sm font-medium text-gray-900'
 
 const LOADING_ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
   { key: 'etaVesselArrivalAtLoadingPort', label: 'ETA Vessel Arrival at Loading Port' },
@@ -240,37 +257,123 @@ function mergeContractNumberLists(...sources: Array<string | null | undefined>):
   return out
 }
 
+function formatInfoDisplayValue(value: unknown): string {
+  if (value === null || value === undefined) return '—'
+  const text = String(value).trim()
+  return text || '—'
+}
+
+function ReadOnlyInfoField({
+  label,
+  value,
+  compact = false,
+  className,
+}: {
+  label: string
+  value: unknown
+  compact?: boolean
+  className?: string
+}) {
+  return (
+    <div className={className}>
+      <label
+        className={
+          compact
+            ? 'mb-1 block text-[10px] font-medium text-gray-600'
+            : 'mb-1 block text-xs font-medium text-gray-600'
+        }
+      >
+        {label}
+      </label>
+      <div
+        className={
+          compact
+            ? `flex min-h-8 items-center ${ETA_INFO_VALUE_CLASS}`
+            : INFO_VALUE_CLASS
+        }
+      >
+        {formatInfoDisplayValue(value)}
+      </div>
+    </div>
+  )
+}
+
 function MtQtyInput({
   valueKg,
   disabled,
   onChange,
+  showKgHint = true,
 }: {
   valueKg: number | null
   disabled?: boolean
   onChange: (kg: number | null) => void
+  showKgHint?: boolean
 }) {
+  if (disabled) {
+    return (
+      <div className="text-right">
+        <div className={`flex min-h-8 items-center justify-end tabular-nums ${INFO_VALUE_CLASS}`}>
+          {valueKg === null ? '—' : formatQtyMtFromKg(valueKg)}
+        </div>
+        {showKgHint && valueKg != null && valueKg > 0 && (
+          <p className="mt-0.5 text-[10px] text-gray-500 tabular-nums">{formatNumber(valueKg)} kg</p>
+        )}
+      </div>
+    )
+  }
+
   const mtDisplay = valueKg === null ? '' : String(valueKg / 1000)
   return (
-    <div className="relative w-full min-w-[6.5rem]">
-      <Input
-        type="number"
-        step="0.01"
-        disabled={disabled}
-        value={mtDisplay}
-        onChange={(e) => {
-          const raw = e.target.value
-          if (raw === '') {
-            onChange(null)
-            return
-          }
-          const mt = parseFloat(raw)
-          onChange(Number.isNaN(mt) ? null : mt * 1000)
-        }}
-        className={`h-8 text-xs pr-10 text-right tabular-nums ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-      />
-      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-500">
-        MT
-      </span>
+    <div className="text-right">
+      <div className="relative w-full min-w-[6.5rem]">
+        <Input
+          type="number"
+          step="0.01"
+          value={mtDisplay}
+          onChange={(e) => {
+            const raw = e.target.value
+            if (raw === '') {
+              onChange(0)
+              return
+            }
+            const mt = parseFloat(raw)
+            onChange(Number.isNaN(mt) ? 0 : mt * 1000)
+          }}
+          className="h-8 text-xs pr-10 text-right tabular-nums"
+        />
+        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-medium text-gray-600">
+          MT
+        </span>
+      </div>
+      {showKgHint && (
+        <p className="mt-0.5 text-[10px] text-gray-500">
+          {valueKg != null && valueKg > 0 ? `${formatNumber(valueKg)} kg` : 'Metric tons (×1,000 kg)'}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function MtQtyReadOnly({ valueKg }: { valueKg: number | null | undefined }) {
+  if (valueKg === null || valueKg === undefined) {
+    return (
+      <div className="text-right tabular-nums">
+        <div>—</div>
+      </div>
+    )
+  }
+  const kg = typeof valueKg === 'number' ? valueKg : Number(String(valueKg).replace(/,/g, '').trim())
+  if (!Number.isFinite(kg)) {
+    return (
+      <div className="text-right tabular-nums">
+        <div>—</div>
+      </div>
+    )
+  }
+  return (
+    <div className="text-right tabular-nums">
+      <div>{formatQtyMtFromKg(kg)}</div>
+      {kg !== 0 && <p className="mt-0.5 text-[10px] text-gray-500">{formatNumber(kg)} kg</p>}
     </div>
   )
 }
@@ -282,10 +385,133 @@ type ShipmentDetailRow = {
   supplier: string
   product: string
   contract_qty: number
-  outstanding_qty: number
+  outstanding_qty_actual: number
+  outstanding_qty_planning: number
+  outstanding_qty_planning_budget: number
+  sap_sto_qty: number
+  shipment_plan_qty: number
+  /** @deprecated alias for shipment_plan_qty */
   sto_qty_assigned: number
+  /** @deprecated alias for outstanding_qty_actual */
+  outstanding_qty: number
   quantity_delivered: number | null
   quantity_receive: number | null
+}
+
+async function fetchContractValidateEnrichment(contractNumber: string): Promise<{
+  supplier: string
+  product: string
+  po_number: string
+  contract_qty: number
+  outstanding_qty: number
+}> {
+  try {
+    const valRes = await api.get(
+      `/shipments/contracts/validate?contract_number=${encodeURIComponent(contractNumber)}`,
+    )
+    const cd = valRes.data?.data as Record<string, unknown> | undefined
+    return {
+      supplier: String(cd?.supplier ?? ''),
+      product: String(cd?.product ?? ''),
+      po_number: String(cd?.po_number ?? ''),
+      contract_qty: parseApiNumber(cd?.quantity_ordered) ?? 0,
+      outstanding_qty: parseApiNumber(cd?.outstanding_quantity) ?? 0,
+    }
+  } catch {
+    return {
+      supplier: '',
+      product: '',
+      po_number: '',
+      contract_qty: 0,
+      outstanding_qty: 0,
+    }
+  }
+}
+
+function contractDetailRowFromApi(
+  d: Record<string, unknown>,
+  shipmentId: string,
+): ShipmentDetailRow {
+  const cn = String(d.contract_number ?? '').trim()
+  const po = String(d.po_number ?? '').trim()
+  const shipmentPlanQty = parseApiNumber(d.shipment_plan_qty ?? d.sto_qty_assigned) ?? 0
+  const osActual = parseApiNumber(d.outstanding_qty_actual ?? d.outstanding_qty) ?? 0
+  const osPlan = parseApiNumber(d.outstanding_qty_planning) ?? 0
+  const osPlanBudget = parseApiNumber(d.outstanding_qty_planning_budget) ?? osPlan
+  return {
+    rowKey: `${shipmentId}-${cn}-${po || 'po'}`,
+    contract_number: cn,
+    po_number: po,
+    supplier: String(d.supplier ?? '').trim(),
+    product: String(d.product ?? '').trim(),
+    contract_qty: parseApiNumber(d.contract_qty) ?? 0,
+    outstanding_qty_actual: osActual,
+    outstanding_qty_planning: osPlan,
+    outstanding_qty_planning_budget: osPlanBudget,
+    sap_sto_qty: parseApiNumber(d.sap_sto_qty) ?? 0,
+    shipment_plan_qty: shipmentPlanQty,
+    sto_qty_assigned: shipmentPlanQty,
+    outstanding_qty: osActual,
+    quantity_delivered: sapDeliveredOrReceiveMtToKg(parseApiNumber(d.quantity_delivered)),
+    quantity_receive: sapDeliveredOrReceiveMtToKg(parseApiNumber(d.quantity_receive)),
+  }
+}
+
+async function buildContractDetailRows(
+  detailsData: Array<Record<string, unknown>>,
+  shipmentId: string,
+  contractNumbers: string[],
+  info: Record<string, unknown>,
+): Promise<ShipmentDetailRow[]> {
+  let contractDetails = detailsData.map((d) => contractDetailRowFromApi(d, shipmentId))
+
+  const needsEnrichment = contractDetails
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => row.contract_number && (!row.supplier || !row.product))
+
+  if (needsEnrichment.length > 0) {
+    const enrichments = await Promise.all(
+      needsEnrichment.map(({ row }) => fetchContractValidateEnrichment(row.contract_number)),
+    )
+    contractDetails = contractDetails.map((row, index) => {
+      const enrichIdx = needsEnrichment.findIndex((item) => item.index === index)
+      if (enrichIdx < 0) return row
+      const enriched = enrichments[enrichIdx]
+      return {
+        ...row,
+        supplier: row.supplier || enriched.supplier,
+        product: row.product || enriched.product,
+      }
+    })
+  }
+
+  if (contractDetails.length === 0 && contractNumbers.length > 0) {
+    const enrichments = await Promise.all(
+      contractNumbers.map((cn) => fetchContractValidateEnrichment(cn)),
+    )
+    contractDetails = contractNumbers.map((cn, i) => {
+      const enriched = enrichments[i]
+      return {
+        rowKey: `${shipmentId}-${cn}`,
+        contract_number: cn,
+        po_number: enriched.po_number,
+        supplier: enriched.supplier,
+        product: enriched.product,
+        contract_qty: enriched.contract_qty,
+        outstanding_qty_actual: enriched.outstanding_qty,
+        outstanding_qty_planning: enriched.outstanding_qty,
+        outstanding_qty_planning_budget: enriched.outstanding_qty,
+        sap_sto_qty: 0,
+        shipment_plan_qty: 0,
+        sto_qty_assigned: 0,
+        outstanding_qty: enriched.outstanding_qty,
+        quantity_delivered: shipmentStoredQtyKg(parseApiNumber(info.quantity_delivered)),
+        quantity_receive: shipmentStoredQtyKg(parseApiNumber(info.actual_vessel_qty_receive)),
+      }
+    })
+  }
+
+  return contractDetails
 }
 
 type EtaBlock = {
@@ -335,6 +561,8 @@ export type EditShipmentModalProps = {
   editContractNumbers?: string | null
   /** Read-only mode (e.g. Cancelled shipments on Shipments view table). */
   readOnly?: boolean
+  /** Raise z-index when opened above contract detail modal. */
+  stacked?: boolean
   /** Called after PO attach so parent can refresh Shipments list. */
   onShipmentChanged?: () => void
 }
@@ -348,6 +576,7 @@ export function EditShipmentModal({
   editStoNumber = null,
   editContractNumbers = null,
   readOnly = false,
+  stacked = false,
   onShipmentChanged,
 }: EditShipmentModalProps) {
   const perms = usePermissions()
@@ -367,8 +596,11 @@ export function EditShipmentModal({
   const [plantSiteName, setPlantSiteName] = useState('')
 
   const [detailRows, setDetailRows] = useState<ShipmentDetailRow[]>([])
+  const [contractDetailTarget, setContractDetailTarget] =
+    useState<ContractDetailModalContract | null>(null)
+  const [contractDetailLoading, setContractDetailLoading] = useState(false)
+  const [planQtyEdits, setPlanQtyEdits] = useState<Record<string, number>>({})
   const [qtyEdits, setQtyEdits] = useState<VesselPortsQuantityEdits>({})
-  const [editingQtyRowKey, setEditingQtyRowKey] = useState<string | null>(null)
   const [sfalQty, setSfalQty] = useState<number | null>(null)
   const [sfbdQty, setSfbdQty] = useState<number | null>(null)
   const [originalSfalQty, setOriginalSfalQty] = useState<number | null>(null)
@@ -380,6 +612,9 @@ export function EditShipmentModal({
   const [hasUploadedSdd, setHasUploadedSdd] = useState(false)
   const [sldDocUploading, setSldDocUploading] = useState(false)
   const [sddDocUploading, setSddDocUploading] = useState(false)
+  const [shipmentStatus, setShipmentStatus] = useState<string | null>(null)
+  const [shipmentDocuments, setShipmentDocuments] = useState<ShipmentDocumentItem[]>([])
+  const [docsLoading, setDocsLoading] = useState(false)
 
   const [loadingPort, setLoadingPort] = useState('')
   const [dischargePort, setDischargePort] = useState('')
@@ -398,14 +633,8 @@ export function EditShipmentModal({
 
   const [editContext, setEditContext] = useState<ShipmentEditContextData | null>(null)
   const [selectedAddPoOption, setSelectedAddPoOption] = useState<ShipmentPoOption | null>(null)
-  const [addPoQtyMt, setAddPoQtyMt] = useState('')
   const [addingPo, setAddingPo] = useState(false)
 
-  const [vesselSuggestions, setVesselSuggestions] = useState<
-    Array<{ vessel_code: string; vessel_name: string; vessel_owner: string | null }>
-  >([])
-  const [showVesselSuggestions, setShowVesselSuggestions] = useState(false)
-  const vesselSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const initSessionRef = useRef<string | null>(null)
 
   const isQuantityUnlocked = hasUploadedSld || hasUploadedSdd
@@ -415,6 +644,8 @@ export function EditShipmentModal({
     !readOnly &&
     Boolean(shipmentId) &&
     editContext?.can_add_po === true
+
+  const planQtyReadOnly = editContext?.has_sap_sto === true
 
   const qtyTableRows: VesselPortsQuantityRow[] = useMemo(
     () =>
@@ -431,25 +662,32 @@ export function EditShipmentModal({
   )
 
   const vesselCapacityMt = parseApiNumber(vesselMeta.vessel_capacity)
-  // sto_qty_assigned from contract details API is kg (same as contract_qty / list sto_quantity).
-  const totalAssignedMt = useMemo(() => {
-    let sumKg = 0
+
+  const totalShipmentPlanKg = useMemo(() => {
+    let sum = 0
     for (const row of detailRows) {
-      sumKg += row.sto_qty_assigned ?? 0
+      sum += planQtyEdits[row.rowKey] ?? row.shipment_plan_qty ?? 0
     }
-    return sumKg / 1000
-  }, [detailRows])
+    return sum
+  }, [detailRows, planQtyEdits])
+
+  const footerOsPlanKg = useMemo(() => {
+    let budget = 0
+    for (const row of detailRows) {
+      budget += row.outstanding_qty_planning_budget ?? row.outstanding_qty_planning ?? 0
+    }
+    return Math.max(budget - totalShipmentPlanKg, 0)
+  }, [detailRows, totalShipmentPlanKg])
 
   const qtyTotals = useMemo(
     () => sumVesselPortsQuantityEdits(qtyTableRows, qtyEdits),
     [qtyTableRows, qtyEdits],
   )
 
-  const selectedPoOutstandingMt = useMemo(() => {
-    if (!selectedAddPoOption?.contractData) return null
-    const kg = Number(selectedAddPoOption.contractData.outstanding_quantity ?? 0)
-    return Number.isFinite(kg) ? kg / 1000 : null
-  }, [selectedAddPoOption])
+  const capacityPct =
+    vesselCapacityMt != null && vesselCapacityMt > 0
+      ? Math.min(100, (totalShipmentPlanKg / 1000 / vesselCapacityMt) * 100)
+      : 0
 
   const resetState = useCallback(() => {
     setShipmentId(null)
@@ -457,8 +695,8 @@ export function EditShipmentModal({
     setOriginalVesselName('')
     setVesselMeta({})
     setDetailRows([])
+    setPlanQtyEdits({})
     setQtyEdits({})
-    setEditingQtyRowKey(null)
     setSfalQty(null)
     setSfbdQty(null)
     setEtaBlocks([])
@@ -473,9 +711,11 @@ export function EditShipmentModal({
     setAtaIsEditing(false)
     setHasUploadedSld(false)
     setHasUploadedSdd(false)
+    setShipmentStatus(null)
+    setShipmentDocuments([])
+    setDocsLoading(false)
     setEditContext(null)
     setSelectedAddPoOption(null)
-    setAddPoQtyMt('')
     setAddingPo(false)
     initSessionRef.current = null
   }, [])
@@ -490,6 +730,37 @@ export function EditShipmentModal({
       setHasUploadedSdd(docs.some((d) => d.document_type === SHIPMENT_SDD_DOC_TYPE))
     } catch {
       // non-blocking
+    }
+  }, [])
+
+  const loadShipmentDocuments = useCallback(async (sid: string) => {
+    setDocsLoading(true)
+    try {
+      const params = new URLSearchParams()
+      params.append('shipmentId', sid)
+      const res = await api.get(`/documents?${params.toString()}`)
+      setShipmentDocuments(res.data?.data ?? [])
+    } catch {
+      setShipmentDocuments([])
+    } finally {
+      setDocsLoading(false)
+    }
+  }, [])
+
+  const handleDownloadDocument = useCallback(async (docId: string, fileName: string) => {
+    try {
+      const response = await api.get(`/documents/${docId}/download`, { responseType: 'blob' })
+      const blob = new Blob([response.data])
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = fileName
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+    } catch {
+      setNotification({ type: 'error', message: 'Failed to download document. Please try again.' })
     }
   }, [])
 
@@ -545,22 +816,6 @@ export function EditShipmentModal({
 
         setShipmentId(sid)
 
-        const portsRes = await api.get(`/shipments/${sid}/loading-ports`)
-        const ports: LoadingPortRef[] = portsRes.data?.data?.ports ?? []
-        const info: Record<string, unknown> =
-          portsRes.data?.data?.shipmentInfo ?? portsRes.data?.data?.shipment_info ?? {}
-        setLoadingPorts(ports)
-        setShipmentInfo(info)
-        const loadedAta = ataFieldsFromShipmentInfo(info)
-        setAtaFields(loadedAta)
-        setOriginalAtaFields(loadedAta)
-        setAtaSapReference(ataSapReferenceFromShipmentInfo(info))
-        setAtaIsEditing(false)
-
-        setEditContext(editContext)
-        setSelectedAddPoOption(null)
-        setAddPoQtyMt('')
-
         const contractNumbers = mergeContractNumberLists(
           editContractNumbers,
           editContext?.contract_numbers,
@@ -578,84 +833,54 @@ export function EditShipmentModal({
             shipment_id: row.shipment_id as string | undefined,
             id: sid,
           })
+        const plantCode = String(row.plant_site ?? row.plant_code ?? '').trim()
+
+        const [portsRes, detailsRes, plantsRes] = await Promise.all([
+          api.get(`/shipments/${sid}/loading-ports`),
+          apiLookupKey
+            ? api.get('/shipments/contracts/details', {
+                params: {
+                  sto: apiLookupKey,
+                  ...(contractNumbers.length > 0
+                    ? { contractNumbers: contractNumbers.join(',') }
+                    : {}),
+                },
+              })
+            : Promise.resolve(null),
+          plantCode
+            ? api.get('/master-plants', { params: { search: plantCode, limit: 20 } })
+            : Promise.resolve(null),
+        ])
+
+        const ports: LoadingPortRef[] = portsRes.data?.data?.ports ?? []
+        const info: Record<string, unknown> =
+          portsRes.data?.data?.shipmentInfo ?? portsRes.data?.data?.shipment_info ?? {}
+        setShipmentStatus(String(row.status ?? info.status ?? '').trim() || null)
+        setLoadingPorts(ports)
+        setShipmentInfo(info)
+        const loadedAta = ataFieldsFromShipmentInfo(info)
+        setAtaFields(loadedAta)
+        setOriginalAtaFields(loadedAta)
+        setAtaSapReference(ataSapReferenceFromShipmentInfo(info))
+        setAtaIsEditing(false)
+
+        setEditContext(editContext)
+        setSelectedAddPoOption(null)
+
         const displaySto = resolveShipmentDisplayStoNumber(
           row.contract_sto_number ?? row.sto_number,
         )
 
-        let contractDetails: ShipmentDetailRow[] = []
-        if (apiLookupKey) {
-          const detailsRes = await api.get('/shipments/contracts/details', {
-            params: {
-              sto: apiLookupKey,
-              ...(contractNumbers.length > 0 ? { contractNumbers: contractNumbers.join(',') } : {}),
-            },
-          })
-          if (detailsRes.data?.success && Array.isArray(detailsRes.data.data)) {
-            for (const d of detailsRes.data.data as Array<Record<string, unknown>>) {
-              const cn = String(d.contract_number ?? '').trim()
-              const po = String(d.po_number ?? '').trim()
-              let supplier = ''
-              let product = ''
-              try {
-                const valRes = await api.get(
-                  `/shipments/contracts/validate?contract_number=${encodeURIComponent(cn)}`,
-                )
-                const cd = valRes.data?.data as Record<string, unknown> | undefined
-                supplier = String(cd?.supplier ?? '')
-                product = String(cd?.product ?? '')
-              } catch {
-                // optional enrichment
-              }
-              contractDetails.push({
-                rowKey: `${sid}-${cn}-${po || 'po'}`,
-                contract_number: cn,
-                po_number: po,
-                supplier,
-                product,
-                contract_qty: parseApiNumber(d.contract_qty) ?? 0,
-                outstanding_qty: parseApiNumber(d.outstanding_qty) ?? 0,
-                sto_qty_assigned: parseApiNumber(d.sto_qty_assigned) ?? 0,
-                quantity_delivered: sapDeliveredOrReceiveMtToKg(parseApiNumber(d.quantity_delivered)),
-                quantity_receive: sapDeliveredOrReceiveMtToKg(parseApiNumber(d.quantity_receive)),
-              })
-            }
-          }
-        }
-
-        if (contractDetails.length === 0 && contractNumbers.length > 0) {
-          for (const cn of contractNumbers) {
-            let supplier = ''
-            let product = ''
-            let po = ''
-            let contractQty = 0
-            let outstanding = 0
-            try {
-              const valRes = await api.get(
-                `/shipments/contracts/validate?contract_number=${encodeURIComponent(cn)}`,
-              )
-              const cd = valRes.data?.data as Record<string, unknown> | undefined
-              supplier = String(cd?.supplier ?? '')
-              product = String(cd?.product ?? '')
-              po = String(cd?.po_number ?? '')
-              contractQty = parseApiNumber(cd?.quantity_ordered) ?? 0
-              outstanding = parseApiNumber(cd?.outstanding_quantity) ?? 0
-            } catch {
-              // fallback row
-            }
-            contractDetails.push({
-              rowKey: `${sid}-${cn}`,
-              contract_number: cn,
-              po_number: po,
-              supplier,
-              product,
-              contract_qty: contractQty,
-              outstanding_qty: outstanding,
-              sto_qty_assigned: 0,
-              quantity_delivered: shipmentStoredQtyKg(parseApiNumber(info.quantity_delivered)),
-              quantity_receive: shipmentStoredQtyKg(parseApiNumber(info.actual_vessel_qty_receive)),
-            })
-          }
-        }
+        const detailsData =
+          detailsRes?.data?.success && Array.isArray(detailsRes.data.data)
+            ? (detailsRes.data.data as Array<Record<string, unknown>>)
+            : []
+        let contractDetails = await buildContractDetailRows(
+          detailsData,
+          sid,
+          contractNumbers,
+          info,
+        )
 
         const shipmentDeliveredKg = shipmentStoredQtyKg(parseApiNumber(info.quantity_delivered))
         const shipmentReceiveKg = shipmentStoredQtyKg(parseApiNumber(info.actual_vessel_qty_receive))
@@ -666,6 +891,11 @@ export function EditShipmentModal({
         )
 
         setDetailRows(contractDetails)
+        setPlanQtyEdits(
+          Object.fromEntries(
+            contractDetails.map((detailRow) => [detailRow.rowKey, detailRow.shipment_plan_qty ?? 0]),
+          ),
+        )
 
         const vn = String(row.vessel_name ?? '')
         setVesselName(vn)
@@ -758,12 +988,10 @@ export function EditShipmentModal({
           ])
         }
 
-        const plantCode = String(row.plant_site ?? row.plant_code ?? '').trim()
         if (plantCode) {
           try {
-            const plantsRes = await api.get('/master-plants', { params: { search: plantCode, limit: 20 } })
             const items: Array<{ plant_code?: string; plant_name?: string }> =
-              plantsRes.data?.data?.items ?? []
+              plantsRes?.data?.data?.items ?? []
             const match = items.find(
               (p) => String(p.plant_code ?? '').trim().toUpperCase() === plantCode.toUpperCase(),
             )
@@ -773,8 +1001,14 @@ export function EditShipmentModal({
           }
         }
 
-        await hydrateQuantityDocs(sid)
-        await loadActivityLog(sid)
+        void (async () => {
+          if (readOnly) {
+            await loadShipmentDocuments(sid)
+          } else {
+            await hydrateQuantityDocs(sid)
+          }
+          void loadActivityLog(sid)
+        })()
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : 'Failed to load shipment'
         setNotification({ type: 'error', message: msg })
@@ -782,35 +1016,12 @@ export function EditShipmentModal({
         setLoading(false)
       }
     },
-    [hydrateQuantityDocs, loadActivityLog, editContractNumbers],
+    [hydrateQuantityDocs, loadActivityLog, loadShipmentDocuments, editContractNumbers, readOnly],
   )
 
   const handleAddPo = useCallback(async () => {
     if (!shipmentId || !selectedAddPoOption) {
       setNotification({ type: 'error', message: 'Select a PO to add.' })
-      return
-    }
-    const qtyMt = parseFloat(String(addPoQtyMt).replace(/,/g, '').trim())
-    if (!Number.isFinite(qtyMt) || qtyMt <= 0) {
-      setNotification({ type: 'error', message: 'Assign STO (MT) must be greater than 0.' })
-      return
-    }
-    if (selectedPoOutstandingMt != null && qtyMt > selectedPoOutstandingMt + 1e-9) {
-      setNotification({
-        type: 'error',
-        message: `Assigned quantity (${formatNumber(qtyMt)} MT) exceeds outstanding (${formatNumber(selectedPoOutstandingMt)} MT).`,
-      })
-      return
-    }
-    if (
-      vesselCapacityMt != null &&
-      vesselCapacityMt > 0 &&
-      totalAssignedMt + qtyMt > vesselCapacityMt + 1e-9
-    ) {
-      setNotification({
-        type: 'error',
-        message: `Total assigned quantity would exceed vessel capacity (${formatNumber(vesselCapacityMt)} MT).`,
-      })
       return
     }
 
@@ -820,9 +1031,9 @@ export function EditShipmentModal({
       await attachPurchaseOrderToShipment({
         shipmentId,
         contractRowId: selectedAddPoOption.key,
-        stoQtyAssignedMt: qtyMt,
+        stoQtyAssignedKg: 0,
       })
-      setNotification({ type: 'success', message: 'PO added to shipment successfully.' })
+      setNotification({ type: 'success', message: 'PO added — set Shipment Plan Qty and save changes.' })
       const contractId = editContractId?.trim()
       const directId = editShipmentIdProp?.trim()
       const sto = editStoNumber?.trim()
@@ -844,17 +1055,13 @@ export function EditShipmentModal({
       setAddingPo(false)
     }
   }, [
-    addPoQtyMt,
     editContractId,
     editShipmentIdProp,
     editStoNumber,
     loadShipment,
     onShipmentChanged,
     selectedAddPoOption,
-    selectedPoOutstandingMt,
     shipmentId,
-    totalAssignedMt,
-    vesselCapacityMt,
   ])
 
   useEffect(() => {
@@ -875,24 +1082,6 @@ export function EditShipmentModal({
       void loadShipment(contractId, null, sto)
     }
   }, [open, editContractId, editShipmentIdProp, editStoNumber, editContractNumbers, loadShipment, resetState])
-
-  const handleVesselSearch = (value: string) => {
-    setVesselName(value)
-    if (vesselSearchTimeoutRef.current) clearTimeout(vesselSearchTimeoutRef.current)
-    if (value.trim().length < 2) {
-      setVesselSuggestions([])
-      return
-    }
-    vesselSearchTimeoutRef.current = setTimeout(async () => {
-      try {
-        const res = await api.get('/master-vessels', { params: { search: value.trim(), limit: 20 } })
-        setVesselSuggestions(res.data?.data?.items ?? res.data?.data ?? [])
-        setShowVesselSuggestions(true)
-      } catch {
-        setVesselSuggestions([])
-      }
-    }, 300)
-  }
 
   const handleQtyDocUpload = async (
     kind: typeof SHIPMENT_SLD_DOC_TYPE | typeof SHIPMENT_SDD_DOC_TYPE,
@@ -964,6 +1153,17 @@ export function EditShipmentModal({
     setSaving(true)
     setNotification(null)
     try {
+      if (!planQtyReadOnly && detailRows.length > 0) {
+        await batchSaveShipmentPoPlanQty({
+          shipmentId,
+          rows: detailRows.map((row) => ({
+            contractNumber: row.contract_number,
+            poNumber: row.po_number || null,
+            shipmentPlanQtyKg: planQtyEdits[row.rowKey] ?? row.shipment_plan_qty ?? 0,
+          })),
+        })
+      }
+
       const qtyUserEdited = hasVesselPortsQuantityUserEdits(qtyTableRows, qtyEdits)
       await saveEditShipmentChanges({
         shipmentId,
@@ -1097,17 +1297,40 @@ export function EditShipmentModal({
     setDischargeEtaFields((prev) => ({ ...prev, [key]: value }))
   }
 
+  const openContractDetailFromPoRow = async (row: ShipmentDetailRow) => {
+    const po = String(row.po_number || '').trim()
+    const contractNumber = String(row.contract_number || '').trim()
+    if (!po && !contractNumber) return
+    setContractDetailLoading(true)
+    try {
+      const contract = await fetchContractForDetailModalByPo(po || contractNumber, contractNumber)
+      if (contract) {
+        setContractDetailTarget(contract)
+      } else {
+        setNotification({
+          type: 'error',
+          message: 'Contract details not found for this PO.',
+        })
+      }
+    } finally {
+      setContractDetailLoading(false)
+    }
+  }
+
   if (!open) return null
 
   const activeEtaBlock = etaBlocks.find((b) => b.status === 'active')
   const historicalEtaBlocks = etaBlocks.filter((b) => b.status === 'historical')
-  const capacityPct =
-    vesselCapacityMt && vesselCapacityMt > 0
-      ? Math.min(100, (totalAssignedMt / vesselCapacityMt) * 100)
-      : 0
 
   return (
-    <div className={VESSEL_MODAL_OVERLAY_CLASS}>
+    <>
+    <div
+      className={
+        stacked
+          ? 'fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4'
+          : VESSEL_MODAL_OVERLAY_CLASS
+      }
+    >
       <div className={VESSEL_MODAL_PANEL_CLASS}>
         <div className={VESSEL_MODAL_HEADER_CLASS}>
           <div className="flex items-center justify-between px-6 py-4">
@@ -1116,12 +1339,21 @@ export function EditShipmentModal({
                 <Ship className="h-4 w-4" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-gray-900">
-                  {readOnly ? 'View Shipment' : 'Edit Shipment'}
-                </h3>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    {readOnly ? 'View Shipment' : 'Edit Shipment'}
+                  </h3>
+                  {readOnly && (
+                    <Badge className={shipmentStatusBadgeClass(shipmentStatus)}>
+                      {formatShipmentStatusLabel(shipmentStatus)}
+                    </Badge>
+                  )}
+                </div>
                 <p className="text-xs text-gray-500">
                   {readOnly
-                    ? 'Read-only view of shipment execution details'
+                    ? stoNumber
+                      ? `STO ${stoNumber} — read-only shipment execution details`
+                      : 'Read-only view of shipment execution details'
                     : stoNumber
                       ? `STO ${stoNumber} — edit ETA schedule and manual ATA (SAP reference preserved)`
                       : 'Update vessel, quantities, ETA schedule, and manual ATA'}
@@ -1169,48 +1401,11 @@ export function EditShipmentModal({
                 <h4 className="text-sm font-semibold text-gray-800">1. Vessel Detail</h4>
               </div>
               <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 lg:grid-cols-3">
-                <div className="relative md:col-span-2 lg:col-span-3">
-                  <label className="mb-1 block text-xs font-medium text-gray-600">Vessel Name</label>
-                  <Input
-                    value={vesselName}
-                    onChange={(e) => {
-                      if (!canModifyShipment) return
-                      handleVesselSearch(e.target.value)
-                    }}
-                    onFocus={() => {
-                      if (!canModifyShipment) return
-                      vesselName.trim().length >= 2 && setShowVesselSuggestions(true)
-                    }}
-                    onBlur={() => setTimeout(() => setShowVesselSuggestions(false), 200)}
-                    readOnly={!canModifyShipment}
-                    disabled={!canModifyShipment}
-                    className={`h-9 text-sm ${!canModifyShipment ? READONLY_FIELD_CLASS : ''}`}
-                    placeholder="Search Master Vessel..."
-                  />
-                  {canModifyShipment && showVesselSuggestions && vesselSuggestions.length > 0 && (
-                    <div className="absolute z-20 mt-1 max-h-52 w-full overflow-y-auto rounded-md border bg-white shadow-lg">
-                      {vesselSuggestions.map((v) => (
-                        <button
-                          key={v.vessel_code}
-                          type="button"
-                          className="w-full border-b px-3 py-2 text-left text-xs hover:bg-gray-50 last:border-b-0"
-                          onMouseDown={() => {
-                            setVesselName(v.vessel_name)
-                            setVesselMeta((m) => ({
-                              ...m,
-                              vessel_code: v.vessel_code,
-                              vessel_owner: v.vessel_owner ?? m.vessel_owner,
-                            }))
-                            setShowVesselSuggestions(false)
-                          }}
-                        >
-                          <div className="font-medium">{v.vessel_name}</div>
-                          <div className="text-gray-500">{v.vessel_code}</div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <ReadOnlyInfoField
+                  className="md:col-span-2 lg:col-span-3"
+                  label="Vessel Name"
+                  value={vesselName}
+                />
                 {[
                   ['Vessel Code', vesselMeta.vessel_code],
                   ['Vessel Owner', vesselMeta.vessel_owner],
@@ -1220,12 +1415,8 @@ export function EditShipmentModal({
                   ['Charter Type', vesselMeta.charter_type],
                   ['Discharge Port', vesselMeta.port_of_discharge],
                   ['Plant / Site', plantSiteName],
-                  ['Operation ID', operationId],
                 ].map(([label, value]) => (
-                  <div key={String(label)}>
-                    <label className="mb-1 block text-xs font-medium text-gray-600">{label}</label>
-                    <Input value={value || '—'} readOnly disabled className={`h-9 text-sm ${READONLY_FIELD_CLASS}`} />
-                  </div>
+                  <ReadOnlyInfoField key={String(label)} label={String(label)} value={value} />
                 ))}
               </div>
             </div>
@@ -1239,6 +1430,78 @@ export function EditShipmentModal({
                 <h4 className="text-sm font-semibold text-gray-800">2. Shipment Detail</h4>
               </div>
               <div className="space-y-4 p-4">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <ReadOnlyInfoField
+                    label="STO Number"
+                    value={formatSapDisplayValue(stoNumber)}
+                  />
+                  <ReadOnlyInfoField
+                    label="Operation ID"
+                    value={formatSapDisplayValue(operationId)}
+                  />
+                  {readOnly && (
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-gray-600">
+                        Shipment Status
+                      </label>
+                      <Badge className={shipmentStatusBadgeClass(shipmentStatus)}>
+                        {formatShipmentStatusLabel(shipmentStatus)}
+                      </Badge>
+                    </div>
+                  )}
+                </div>
+
+                {readOnly ? (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50/80 p-4">
+                    <div className="mb-3 flex items-center gap-2">
+                      <FileText className="h-4 w-4 text-gray-600" />
+                      <h5 className="text-sm font-semibold text-gray-800">Uploaded Documents</h5>
+                    </div>
+                    {docsLoading ? (
+                      <div className="flex items-center gap-2 text-sm text-gray-500">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Loading documents…
+                      </div>
+                    ) : shipmentDocuments.length === 0 ? (
+                      <p className="text-sm text-gray-500">No documents uploaded for this shipment.</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {shipmentDocuments.map((doc) => (
+                          <li
+                            key={doc.id}
+                            className="flex flex-col gap-2 rounded-md border border-gray-100 bg-white px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant="outline" className="text-[10px]">
+                                  {doc.document_type || 'DOC'}
+                                </Badge>
+                                <span className="truncate text-sm font-medium text-gray-800">
+                                  {doc.file_name}
+                                </span>
+                              </div>
+                              {doc.created_at && (
+                                <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
+                                  Uploaded {formatDateTimeDMY(doc.created_at)}
+                                </p>
+                              )}
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 shrink-0 text-xs"
+                              onClick={() => void handleDownloadDocument(doc.id, doc.file_name)}
+                            >
+                              <Download className="mr-1 h-3.5 w-3.5" />
+                              Download
+                            </Button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ) : (
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
                     <p className="text-xs font-medium text-amber-900">Upload SLD</p>
@@ -1305,21 +1568,16 @@ export function EditShipmentModal({
                     </Button>
                   </div>
                 </div>
-                {!isQuantityUnlocked && (
+                )}
+                {!readOnly && !isQuantityUnlocked && (
                   <p className="text-[11px] text-amber-800/80">
-                    Delivered / Received quantities stay locked until at least one of SLD or SDD is uploaded.
+                    Delivered / Receive quantities stay locked until at least one of SLD or SDD is uploaded.
                   </p>
                 )}
 
-                <div className="max-w-xs">
-                  <label className="mb-1 block text-xs font-medium text-gray-600">STO Number</label>
-                  <Input value={stoNumber || '—'} readOnly disabled className={`h-9 text-sm ${READONLY_FIELD_CLASS}`} />
-                </div>
-
-                {!canAddPoOnEdit && editContext?.has_sap_sto && !readOnly && (canEditShipment || canAddShipment) && (
+                {planQtyReadOnly && !readOnly && (
                   <p className="text-xs italic text-gray-500">
-                    {editContext.add_po_blocked_reason ??
-                      'PO cannot be added — this shipment already has an STO from SAP.'}
+                    SAP STO shipment — Shipment Plan Qty is read-only. PO can still be added when global OS Qty (Plan) &gt; 0.
                   </p>
                 )}
 
@@ -1327,42 +1585,20 @@ export function EditShipmentModal({
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <label className="text-xs font-semibold text-gray-700">Add PO to shipment</label>
-                      <span className="text-[10px] text-gray-500">
-                        Any operation · global outstanding &gt; 0 · no SAP STO
-                      </span>
+                      <span className="text-[10px] text-gray-500">Global OS Qty (Plan) &gt; 0</span>
                     </div>
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                       <div className="min-w-0 flex-1">
                         <label className="mb-1 block text-xs font-medium text-gray-600">
-                          PO Number <span className="text-red-500">*</span>
+                          PO Number
                         </label>
                         <ShipmentPoSearchCombobox
                           shipmentId={shipmentId}
                           selected={selectedAddPoOption}
-                          onSelect={(opt) => {
-                            setSelectedAddPoOption(opt)
-                            setAddPoQtyMt('')
-                          }}
+                          onSelect={setSelectedAddPoOption}
                           disabled={addingPo}
                           className="h-9 text-sm"
                         />
-                      </div>
-                      <div className="w-full sm:w-36">
-                        <label className="mb-1 block text-xs font-medium text-gray-600">
-                          Assign STO (MT) <span className="text-red-500">*</span>
-                        </label>
-                        <Input
-                          value={addPoQtyMt}
-                          onChange={(e) => setAddPoQtyMt(e.target.value)}
-                          placeholder="0"
-                          className="h-9 text-sm"
-                          disabled={!selectedAddPoOption || addingPo}
-                        />
-                        {selectedPoOutstandingMt != null && selectedPoOutstandingMt > 0 && (
-                          <p className="mt-1 text-[10px] text-gray-500">
-                            Max {formatNumber(selectedPoOutstandingMt)} MT outstanding
-                          </p>
-                        )}
                       </div>
                       <Button
                         type="button"
@@ -1382,7 +1618,7 @@ export function EditShipmentModal({
                       </Button>
                     </div>
                     <p className="text-xs italic text-gray-500">
-                      Search by PO number, contract, supplier, or product (min. 2 characters).
+                      Search by PO, contract, supplier, or product (min. 2 characters). Set Shipment Plan Qty in the table, then Save Changes.
                     </p>
                   </div>
                 )}
@@ -1392,44 +1628,85 @@ export function EditShipmentModal({
                     <TableHeader>
                       <TableRow className="hover:bg-transparent">
                         <TableHead className={VESSEL_MODAL_COMPACT_TH}>PO</TableHead>
-                        <TableHead className={VESSEL_MODAL_COMPACT_TH}>Supplier / Product</TableHead>
-                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Contract Qty</TableHead>
-                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>STO Qty</TableHead>
-                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Outstanding Qty</TableHead>
-                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Delivered Qty</TableHead>
-                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Receive Qty</TableHead>
-                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-center`}>Actions</TableHead>
+                        <TableHead className={VESSEL_MODAL_COMPACT_TH}>Supplier</TableHead>
+                        <TableHead className={VESSEL_MODAL_COMPACT_TH}>Product</TableHead>
+                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
+                          <span title="Metric tons (1 MT = 1,000 kg)">Contract Qty (MT)</span>
+                        </TableHead>
+                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
+                          <span title="SAP STO quantity">STO Qty (MT)</span>
+                        </TableHead>
+                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
+                          <span title="Global per PO — incoterm-aware">OS Qty (MT)</span>
+                        </TableHead>
+                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
+                          <span title="Global per PO — contract − SAP STO − all plans">OS Qty (Plan) (MT)</span>
+                        </TableHead>
+                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
+                          <span title="KLIP plan on this STO">Shipment Plan Qty (MT)</span>
+                        </TableHead>
+                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Delivered Qty (MT)</TableHead>
+                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Receive Qty (MT)</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {detailRows.map((row) => {
                         const qtyRow = qtyTableRows.find((r) => r.rowKey === row.rowKey)!
-                        const isEditing = editingQtyRowKey === row.rowKey
                         const deliveredKg = resolveRowQty(qtyRow, 'quantity_delivered')
                         const receiveKg = resolveRowQty(qtyRow, 'quantity_receive')
+                        const planKg = planQtyEdits[row.rowKey] ?? row.shipment_plan_qty ?? 0
                         return (
                           <TableRow key={row.rowKey}>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
-                              {formatSapDisplayValue(row.po_number || row.contract_number)}
+                              {String(row.po_number || row.contract_number || '').trim() ? (
+                                <button
+                                  type="button"
+                                  className="text-left font-medium text-blue-600 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                                  title="View contract details"
+                                  disabled={contractDetailLoading}
+                                  onClick={() => void openContractDetailFromPoRow(row)}
+                                >
+                                  {formatSapDisplayValue(row.po_number || row.contract_number)}
+                                </button>
+                              ) : (
+                                '—'
+                              )}
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
-                              <span className="line-clamp-2 text-gray-600">
-                                {[row.supplier, row.product].filter(Boolean).join(' • ') || '—'}
-                              </span>
+                              <span className="line-clamp-2 text-gray-600">{row.supplier || '—'}</span>
                             </TableCell>
-                            <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right tabular-nums`}>
-                              {formatQtyMtFromKg(row.contract_qty)}
+                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
+                              <span className="line-clamp-2 text-gray-600">{row.product || '—'}</span>
                             </TableCell>
-                            <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right tabular-nums`}>
-                              {row.sto_qty_assigned > 0
-                                ? formatQtyMtFromKg(row.sto_qty_assigned)
-                                : '—'}
+                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
+                              <MtQtyReadOnly valueKg={row.contract_qty} />
                             </TableCell>
-                            <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right tabular-nums`}>
-                              {formatQtyMtFromKg(row.outstanding_qty)}
+                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
+                              <MtQtyReadOnly valueKg={row.sap_sto_qty} />
                             </TableCell>
-                            <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
-                              {isEditing ? (
+                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
+                              <MtQtyReadOnly valueKg={row.outstanding_qty_actual} />
+                            </TableCell>
+                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
+                              <MtQtyReadOnly valueKg={row.outstanding_qty_planning} />
+                            </TableCell>
+                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
+                              {readOnly ? (
+                                <MtQtyReadOnly valueKg={planKg} />
+                              ) : (
+                                <MtQtyInput
+                                  valueKg={planKg}
+                                  disabled={!canModifyShipment || planQtyReadOnly}
+                                  onChange={(kg) =>
+                                    setPlanQtyEdits((p) => ({ ...p, [row.rowKey]: kg ?? 0 }))
+                                  }
+                                />
+                              )}
+                            </TableCell>
+                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
+                              {readOnly ? (
+                                <MtQtyReadOnly valueKg={deliveredKg} />
+                              ) : (
                                 <MtQtyInput
                                   valueKg={deliveredKg}
                                   disabled={!canModifyShipment || !isQuantityUnlocked}
@@ -1440,12 +1717,12 @@ export function EditShipmentModal({
                                     }))
                                   }
                                 />
-                              ) : (
-                                formatQtyMtFromKg(deliveredKg)
                               )}
                             </TableCell>
-                            <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
-                              {isEditing ? (
+                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
+                              {readOnly ? (
+                                <MtQtyReadOnly valueKg={receiveKg} />
+                              ) : (
                                 <MtQtyInput
                                   valueKg={receiveKg}
                                   disabled={!canModifyShipment || !isQuantityUnlocked}
@@ -1456,45 +1733,6 @@ export function EditShipmentModal({
                                     }))
                                   }
                                 />
-                              ) : (
-                                formatQtyMtFromKg(receiveKg)
-                              )}
-                            </TableCell>
-                            <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-center`}>
-                              {isEditing ? (
-                                <div className="flex justify-center gap-1">
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="icon"
-                                    className="h-7 w-7"
-                                    onClick={() => setEditingQtyRowKey(null)}
-                                  >
-                                    <X className="h-3.5 w-3.5" />
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="icon"
-                                    className="h-7 w-7 bg-green-600 hover:bg-green-700 text-white"
-                                    disabled={!canModifyShipment || !isQuantityUnlocked}
-                                    onClick={() => setEditingQtyRowKey(null)}
-                                  >
-                                    <Check className="h-3.5 w-3.5" />
-                                  </Button>
-                                </div>
-                              ) : canModifyShipment ? (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="icon"
-                                  className="h-7 w-7"
-                                  title="Edit quantities"
-                                  onClick={() => setEditingQtyRowKey(row.rowKey)}
-                                >
-                                  <Edit2 className="h-3.5 w-3.5" />
-                                </Button>
-                              ) : (
-                                <span className="text-[10px] text-gray-400">—</span>
                               )}
                             </TableCell>
                           </TableRow>
@@ -1503,16 +1741,16 @@ export function EditShipmentModal({
                     </TableBody>
                     <TableFooter>
                       <TableRow className={VESSEL_MODAL_TABLE_FOOTER_CLASS}>
-                        <TableCell colSpan={5} className={VESSEL_MODAL_COMPACT_TD}>
+                        <TableCell colSpan={6} className={VESSEL_MODAL_COMPACT_TD}>
                           Grand Total
                         </TableCell>
-                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right tabular-nums`}>
-                          {formatQtyMtFromKg(qtyTotals.quantity_delivered)}
+                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
+                          <MtQtyReadOnly valueKg={footerOsPlanKg} />
                         </TableCell>
-                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right tabular-nums`}>
-                          {formatQtyMtFromKg(qtyTotals.quantity_receive)}
+                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
+                          <MtQtyReadOnly valueKg={totalShipmentPlanKg} />
                         </TableCell>
-                        <TableCell />
+                        <TableCell colSpan={2} />
                       </TableRow>
                     </TableFooter>
                   </Table>
@@ -1521,9 +1759,9 @@ export function EditShipmentModal({
                 {vesselCapacityMt != null && vesselCapacityMt > 0 && (
                   <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                     <div className="mb-1 flex justify-between text-xs text-gray-600">
-                      <span>Total Assigned (STO)</span>
+                      <span>Total Shipment Plan Qty vs vessel capacity</span>
                       <span className="tabular-nums">
-                        {formatNumber(totalAssignedMt)} / {formatNumber(vesselCapacityMt)} MT
+                        {formatNumber(totalShipmentPlanKg / 1000)} / {formatNumber(vesselCapacityMt)} MT
                       </span>
                     </div>
                     <div className="h-2 overflow-hidden rounded-full bg-gray-200">
@@ -1536,14 +1774,29 @@ export function EditShipmentModal({
                 )}
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-gray-600">SFAL Qty</label>
-                    <MtQtyInput valueKg={sfalQty} disabled={!canModifyShipment} onChange={setSfalQty} />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-gray-600">SFBD Qty</label>
-                    <MtQtyInput valueKg={sfbdQty} disabled={!canModifyShipment} onChange={setSfbdQty} />
-                  </div>
+                  {canModifyShipment ? (
+                    <>
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-gray-600">SFAL Qty (MT)</label>
+                        <MtQtyInput valueKg={sfalQty} onChange={setSfalQty} />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-gray-600">SFBD Qty (MT)</label>
+                        <MtQtyInput valueKg={sfbdQty} onChange={setSfbdQty} />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <ReadOnlyInfoField
+                        label="SFAL Qty (MT)"
+                        value={sfalQty === null ? null : formatQtyMtFromKg(sfalQty)}
+                      />
+                      <ReadOnlyInfoField
+                        label="SFBD Qty (MT)"
+                        value={sfbdQty === null ? null : formatQtyMtFromKg(sfbdQty)}
+                      />
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -1698,21 +1951,29 @@ export function EditShipmentModal({
                     <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                       <div>
                         <label className="mb-1 block text-xs font-medium text-gray-600">Loading Port</label>
-                        <Input
-                          value={activeEtaBlock.loadingPort}
-                          readOnly
-                          disabled
-                          className={`h-9 text-sm ${READONLY_FIELD_CLASS}`}
-                        />
+                        {activeEtaBlock.isEditing && canModifyShipment ? (
+                          <Input
+                            value={activeEtaBlock.loadingPort}
+                            onChange={(e) =>
+                              setEtaBlocks((prev) =>
+                                prev.map((b) =>
+                                  b.status === 'active' ? { ...b, loadingPort: e.target.value } : b,
+                                ),
+                              )
+                            }
+                            className="h-9 text-sm"
+                          />
+                        ) : (
+                          <div className={`flex min-h-9 items-center ${ETA_INFO_VALUE_CLASS}`}>
+                            {formatInfoDisplayValue(activeEtaBlock.loadingPort)}
+                          </div>
+                        )}
                       </div>
                       <div>
                         <label className="mb-1 block text-xs font-medium text-gray-600">Apply to PO</label>
-                        <Input
-                          value={activeEtaBlock.contractLabels.join(', ') || '—'}
-                          readOnly
-                          disabled
-                          className={`h-9 text-sm ${READONLY_FIELD_CLASS}`}
-                        />
+                        <div className={`flex min-h-9 items-center ${ETA_INFO_VALUE_CLASS}`}>
+                          {formatInfoDisplayValue(activeEtaBlock.contractLabels.join(', '))}
+                        </div>
                       </div>
                     </div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -1787,21 +2048,25 @@ export function EditShipmentModal({
                   const hasOverride = Boolean(ataFields[key] && sapRef && ataFields[key] !== sapRef)
                   return (
                     <div key={key}>
-                      <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">
-                        ATA {label}
-                      </div>
                       {ataIsEditing && canModifyShipment ? (
-                        <DateInputDdMmYyyy
-                          valueIso={ataFields[key]}
-                          onChangeIso={(iso) =>
-                            setAtaFields((prev) => ({ ...prev, [key]: iso }))
-                          }
-                          className="mt-1 h-8 text-xs"
-                        />
+                        <>
+                          <label className="mb-1 block text-[10px] font-medium text-gray-600">
+                            ATA {label}
+                          </label>
+                          <DateInputDdMmYyyy
+                            valueIso={ataFields[key]}
+                            onChangeIso={(iso) =>
+                              setAtaFields((prev) => ({ ...prev, [key]: iso }))
+                            }
+                            className="h-8 text-xs"
+                          />
+                        </>
                       ) : (
-                        <div className="mt-0.5 text-sm font-medium text-gray-800">
-                          {formatDateDMY(ataFields[key]) || '—'}
-                        </div>
+                        <ReadOnlyInfoField
+                          compact
+                          label={`ATA ${label}`}
+                          value={formatDateDMY(ataFields[key])}
+                        />
                       )}
                       {sapRef ? (
                         <div className="mt-1 text-[10px] text-gray-400">
@@ -1918,5 +2183,12 @@ export function EditShipmentModal({
         </div>
       </div>
     </div>
+
+    <ContractDetailModal
+      contract={contractDetailTarget}
+      onClose={() => setContractDetailTarget(null)}
+      stacked
+    />
+    </>
   )
 }

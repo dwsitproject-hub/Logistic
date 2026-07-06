@@ -13,6 +13,7 @@ import {
   buildUnplannedContractBacklogPageQuery,
   buildUnplannedShipmentExecutionCountQuery,
   buildUnplannedContractToolbarScope,
+  unplannedShipmentExecutionOuterSql,
 } from '../utils/shipmentUnplannedHybridSql';
 import type { ColumnFilterPayload } from '../utils/contractListFilters';
 
@@ -48,6 +49,35 @@ function buildContractQueryParts(ctx: UnplannedHybridListContext): {
     contractScopeSql: scope.sql,
     params: [...scope.params, ...g.params, ...c.params],
     toolbarSql: `${g.sql}${c.sql}`,
+  };
+}
+
+/** Same scope as the Unplanned hybrid table (toolbar + backlog filters + execution predicate). */
+export function buildShipmentUnplannedHybridListContext(input: {
+  shipmentBaseCteSql: string;
+  toolbarOuterSql: string;
+  innerParams: unknown[];
+  toolbarOuterParams: unknown[];
+  skipSapJoin: boolean;
+  filterCacheKey: string;
+  contractScope: UnplannedHybridListContext['contractScope'];
+  globalSearch: string;
+  colFilters: ColumnFilterPayload;
+}): UnplannedHybridListContext {
+  return {
+    shipmentCtx: {
+      shipmentBaseCteSql: input.shipmentBaseCteSql,
+      outerSql: unplannedShipmentExecutionOuterSql(input.toolbarOuterSql),
+      innerParams: input.innerParams,
+      outerParams: input.toolbarOuterParams,
+      skipSapJoin: input.skipSapJoin,
+      cacheKey: `${input.filterCacheKey}:unplanned-hybrid`,
+      filterCacheKey: input.filterCacheKey,
+      usesStoKeyPaging: false,
+    },
+    contractScope: input.contractScope,
+    globalSearch: input.globalSearch,
+    colFilters: input.colFilters,
   };
 }
 

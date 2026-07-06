@@ -8,6 +8,7 @@ import {
   getShipmentEditContext,
   getShipmentAvailablePurchaseOrders,
   attachPurchaseOrderToShipmentHandler,
+  batchSaveShipmentPoPlanQtyHandler,
   updateShipment,
   getShipmentDailyDeliverablesCalendar,
   updateShipmentDailyDeliverables,
@@ -97,6 +98,11 @@ router.post(
   '/:id/purchase-orders',
   auditLog('CREATE', 'SHIPMENT'),
   attachPurchaseOrderToShipmentHandler,
+);
+router.put(
+  '/:id/po-plan-qty',
+  auditLog('UPDATE', 'STO_QTY_ASSIGNED'),
+  batchSaveShipmentPoPlanQtyHandler,
 );
 
 // Get shipment by ID

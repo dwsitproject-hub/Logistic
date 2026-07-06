@@ -1,6 +1,7 @@
 /**
- * Shipping Performance Section 3 — loading/discharge port display with SAP fallback.
- * Shipment operation names take precedence; SAP text names fill gaps.
+ * Shipping Performance Section 3 — loading/discharge port display.
+ * Priority: SAP port name first; if SAP is null/invalid, fall back to KLIP shipment input
+ * (port_of_loading/discharge on shipments or vessel_loading_ports.port_name).
  * Numeric codes (e.g. Vessel LOA mistaken for ZNEGO-INCO2 port id) are skipped.
  */
 
@@ -39,22 +40,22 @@ function pickShippingPortName(...candidates: readonly (unknown)[]): string | nul
   return null
 }
 
-/** Shipment operation loading port name, then SAP Vessel Loading Port 1 text. */
+/** SAP Vessel Loading Port, then KLIP shipment loading port (add/edit shipment). */
 export function resolveShippingPerfLoadingPort(row: ShippingPerformancePortSource): string | null {
   return pickShippingPortName(
-    row.vlp_loading_port_name,
-    row.port_of_loading,
     row.sap_vessel_loading_port_1,
+    row.port_of_loading,
+    row.vlp_loading_port_name,
     row.loading_port,
   )
 }
 
-/** Shipment operation discharge port name, then SAP Vessel Discharge Port text. */
+/** SAP Vessel Discharge Port, then KLIP shipment discharge port (add/edit shipment). */
 export function resolveShippingPerfDischargePort(row: ShippingPerformancePortSource): string | null {
   return pickShippingPortName(
-    row.vlp_discharge_port_name,
-    row.port_of_discharge,
     row.sap_vessel_discharge_port,
+    row.port_of_discharge,
+    row.vlp_discharge_port_name,
     row.discharge_port,
   )
 }

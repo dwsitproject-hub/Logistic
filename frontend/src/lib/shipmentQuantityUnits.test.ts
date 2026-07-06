@@ -31,6 +31,8 @@ describe('resolveShipmentListDeliveredKg', () => {
       }),
     ).toBe(1_000_000)
     expect(resolveShipmentListDeliveredKg({ quantity_delivered_sap: 500_000 })).toBe(500_000)
+    expect(resolveShipmentListDeliveredKg({ quantity_delivered_sap: 0 })).toBe(0)
+    expect(resolveShipmentListDeliveredKg({})).toBeNull()
   })
 })
 

@@ -10,6 +10,8 @@ export type ParsedUnplannedPlanningRow = {
   contract_ext_no: string;
   po_number: string;
   entries: Array<{ dateIso: string; qtyMt: number; lineNumber: number }>;
+  /** Original spreadsheet cells for failed-row re-template export. */
+  rawCells: unknown[];
 };
 
 export type UnplannedPlanningUploadFailure = {
@@ -31,15 +33,39 @@ function cellToString(value: unknown): string {
   return String(value).trim();
 }
 
+export function unplannedUploadCellToString(value: unknown): string {
+  return cellToString(value);
+}
+
 function isWideTemplateMetadataHeader(header: string): boolean {
-  return header.trim().toLowerCase().includes('outstanding');
+  const h = header.trim().toLowerCase();
+  if (toIsoDate10FromCell(header)) return false;
+  if (
+    h === 'group' ||
+    h === 'supplier' ||
+    h === 'source' ||
+    h === 'contract date' ||
+    h === 'contract ext no' ||
+    h === 'po' ||
+    h === 'po number' ||
+    h === 'os qty' ||
+    h === 'os qty (kg)' ||
+    h === 'plan qty' ||
+    h === 'plan qty (kg)' ||
+    h === 'reason' ||
+    h === 'failure reason' ||
+    h.includes('outstanding')
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function parseTemplateHeaderDateFromCell(raw: unknown): string | null {
   return toIsoDate10FromCell(raw);
 }
 
-function parseTemplateQtyMt(raw: unknown): number | null {
+function parseTemplateQtyKg(raw: unknown): number | null {
   const n = parseDailyDeliverableQuantity(raw);
   if (n === null || n < 0) return null;
   return n;
@@ -49,7 +75,7 @@ function collectWideTemplateDateColumns(
   headerRow: unknown[],
 ): Array<{ colIndex: number; dateIso: string }> {
   const dateColumns: Array<{ colIndex: number; dateIso: string }> = [];
-  for (let ci = 2; ci < headerRow.length; ci += 1) {
+  for (let ci = 0; ci < headerRow.length; ci += 1) {
     const headerText = cellToString(headerRow[ci]);
     if (isWideTemplateMetadataHeader(headerText)) continue;
     const iso = parseTemplateHeaderDateFromCell(headerRow[ci]);
@@ -58,14 +84,39 @@ function collectWideTemplateDateColumns(
   return dateColumns;
 }
 
+function resolveWideTemplateRowKeys(
+  headerRow: unknown[],
+  cells: unknown[],
+): { contractExtNo: string; poNumber: string } {
+  const headers = headerRow.map((h) => cellToString(h).toLowerCase());
+  const extIdx = headers.findIndex((h) => h.includes('contract') && h.includes('ext'));
+  const poIdx = headers.findIndex((h) => h === 'po' || h === 'po number');
+  if (extIdx >= 0 || poIdx >= 0) {
+    return {
+      contractExtNo: extIdx >= 0 ? cellToString(cells[extIdx]) : '',
+      poNumber: poIdx >= 0 ? cellToString(cells[poIdx]) : '',
+    };
+  }
+  return {
+    contractExtNo: cellToString(cells[0]),
+    poNumber: cellToString(cells[1]),
+  };
+}
+
 export function isUnplannedWidePlanningTemplateMatrix(matrix: unknown[][]): boolean {
   const headerRow = matrix[0];
   if (!headerRow || headerRow.length < 3) return false;
+  const headers = headerRow.map((cell) => cellToString(cell).toLowerCase());
+  const hasGroup = headers.includes('group');
+  const hasExt = headers.some((h) => h.includes('contract') && h.includes('ext'));
+  const hasPo = headers.some((h) => h === 'po' || h === 'po number');
+  const hasDateCols = collectWideTemplateDateColumns(headerRow).length > 0;
+  if (hasGroup) {
+    return hasExt && hasPo && hasDateCols;
+  }
   const first = cellToString(headerRow[0]).toLowerCase();
   const second = cellToString(headerRow[1]).toLowerCase();
-  const hasExt = first.includes('contract') && first.includes('ext');
-  const hasPo = second === 'po' || second === 'po number';
-  return hasExt && hasPo;
+  return first.includes('contract') && first.includes('ext') && (second === 'po' || second === 'po number');
 }
 
 export function parseUnplannedWidePlanningMatrix(matrix: unknown[][]): {
@@ -92,8 +143,7 @@ export function parseUnplannedWidePlanningMatrix(matrix: unknown[][]): {
 
   for (let rIdx = 1; rIdx < matrix.length; rIdx += 1) {
     const cells = matrix[rIdx] ?? [];
-    const contractExtNo = cellToString(cells[0]);
-    const poNumber = cellToString(cells[1]);
+    const { contractExtNo, poNumber } = resolveWideTemplateRowKeys(headerRow, cells);
     const rowNumber = rIdx + 1;
     const hasAnyQty = dateColumns.some(({ colIndex }) => cellToString(cells[colIndex]) !== '');
 
@@ -111,8 +161,8 @@ export function parseUnplannedWidePlanningMatrix(matrix: unknown[][]): {
     for (const { colIndex, dateIso } of dateColumns) {
       const qtyRaw = cells[colIndex];
       if (qtyRaw === undefined || qtyRaw === null || cellToString(qtyRaw) === '') continue;
-      const qtyMt = parseTemplateQtyMt(qtyRaw);
-      if (qtyMt === null) {
+      const qtyKg = parseTemplateQtyKg(qtyRaw);
+      if (qtyKg === null) {
         rowParseFailures.push({
           rowNumber,
           contract_ext_no: contractExtNo || poNumber || '-',
@@ -120,7 +170,7 @@ export function parseUnplannedWidePlanningMatrix(matrix: unknown[][]): {
         });
         continue;
       }
-      entries.push({ dateIso, qtyMt, lineNumber: rowNumber });
+      entries.push({ dateIso, qtyMt: qtyKg, lineNumber: rowNumber });
     }
 
     if (entries.length === 0 && hasAnyQty) {
@@ -138,23 +188,31 @@ export function parseUnplannedWidePlanningMatrix(matrix: unknown[][]): {
       contract_ext_no: contractExtNo,
       po_number: poNumber,
       entries,
+      rawCells: [...cells],
     });
   }
 
   return { rows, rowParseFailures };
 }
 
-export function buildDailyDeliverablesKgFromMtEntries(
+export function buildDailyDeliverablesFromKgEntries(
   entries: Array<{ dateIso: string; qtyMt: number }>,
 ): NormalizedDailyDeliverableRow[] {
   const byDate = new Map<string, number>();
   for (const entry of entries) {
-    const kg = Math.round(entry.qtyMt * 1000 * 100) / 100;
+    const kg = Math.round(entry.qtyMt * 100) / 100;
     byDate.set(entry.dateIso, kg);
   }
   return Array.from(byDate.entries())
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, quantity_delivered]) => ({ date, quantity_delivered }));
+}
+
+/** @deprecated Values are already kg — use buildDailyDeliverablesFromKgEntries */
+export function buildDailyDeliverablesKgFromMtEntries(
+  entries: Array<{ dateIso: string; qtyMt: number }>,
+): NormalizedDailyDeliverableRow[] {
+  return buildDailyDeliverablesFromKgEntries(entries);
 }
 
 export function resolvePlanningStartEndFromDeliverables(
@@ -165,19 +223,47 @@ export function resolvePlanningStartEndFromDeliverables(
   return { startIso: dates[0], endIso: dates[dates.length - 1] };
 }
 
+export function filterEntriesLockedByActuals<T extends { dateIso: string; lineNumber: number }>(
+  entries: T[],
+  dailyActualsRaw: unknown,
+  contractExtNo: string,
+  rowParseFailures: Array<{ rowNumber: number; contract_ext_no: string; reason: string }>,
+): T[] {
+  const actualDates = new Set<string>();
+  if (Array.isArray(dailyActualsRaw)) {
+    for (const row of dailyActualsRaw) {
+      const date = String((row as { date?: string; progress_date?: string })?.date ?? (row as { progress_date?: string })?.progress_date ?? '').slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) actualDates.add(date);
+    }
+  }
+  return entries.filter((entry) => {
+    if (!actualDates.has(entry.dateIso)) return true;
+    rowParseFailures.push({
+      rowNumber: entry.lineNumber,
+      contract_ext_no: contractExtNo,
+      reason: `date ${entry.dateIso} is locked by WB actual and was skipped`,
+    });
+    return false;
+  });
+}
+
+export function isWidePlanningTemplateMatrix(matrix: unknown[][]): boolean {
+  return isUnplannedWidePlanningTemplateMatrix(matrix);
+}
+
 export function filterEntriesWithinUnplannedWindow<T extends { dateIso: string; lineNumber: number }>(
   entries: T[],
-  deliveryEndRaw: unknown,
+  _deliveryEndRaw: unknown,
   contractExtNo: string,
   rowParseFailures: Array<{ rowNumber: number; contract_ext_no: string; reason: string }>,
 ): T[] {
   return entries.filter((entry) => {
-    const ok = isDateWithinUnplannedPlanningWindow(entry.dateIso, deliveryEndRaw);
+    const ok = isDateWithinUnplannedPlanningWindow(entry.dateIso);
     if (!ok) {
       rowParseFailures.push({
         rowNumber: entry.lineNumber,
         contract_ext_no: contractExtNo,
-        reason: `date ${entry.dateIso} is outside allowed Unplanned planning window and was skipped`,
+        reason: `date ${entry.dateIso} is outside allowed planning window (today … today + 60 days) and was skipped`,
       });
     }
     return ok;

@@ -27,11 +27,18 @@ export const FIELD_HELP = {
 
   dpCycle: `Requires SAP DP Date (no payments-table fallback). Closed: completion receive/discharge → DP Date. Open: DP Date → completion end (same Open ETA/today rules as Cash Cycle). Missing DP or completion → no value.`,
 
+  /** Contract Performance — concise header tooltips (view table + contract detail modal). */
+  contractPerfOutstandingQty: `Contract Qty vs SAP Receive/Delivery by incoterm. Over-delivery: +MT (green). Remaining: -MT (red).`,
+  contractPerfTradeCycle: `Completion Date vs Due Date Delivery End`,
+  contractPerfDpCycle: `Completion Date vs DP Date`,
+  contractPerfCashCycle: `Completion Date vs Payoff Date`,
+  contractPerfLogCycle: `Completion Date vs Cargo Readiness Date`,
+
   outstandingQty: `Remaining quantity yet to be delivered. Green = Over Delivered; Red = Still Outstanding.`,
 
   receivedQty: `Actual quantity received based on contract data (quantity_receive). For sea shipments: received at destination. For land shipments: quantity delivered to plant/site.`,
 
-  outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery; others use total STO quantity. Not reduced by manual STO assignment on Shipments. Green = Over Delivered; Red = Still Outstanding.`,
+  outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (SAP). Over-delivery shows +MT (green); remaining outstanding shows -MT (red).`,
   shipmentOutstandingQtyMt: `STO Qty minus fulfilled SAP quantity by incoterm (same rules as Contract page): CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery; others use receive or delivery. Green = Over Delivered; Red = Still Outstanding.`,
   shipmentSfalQtyMt: `Ship Figure After Loading (SFAL) from shipment data, displayed in MT (stored as kg in the database).`,
   shipmentSfbdQtyMt: `Ship Figure Before Discharge (SFBD) from shipment data, displayed in MT (stored as kg in the database).`,
@@ -58,7 +65,7 @@ export const FIELD_HELP = {
   truckingOaBudget: `OA Budget is the planned operational allowance (budget) for the trucking leg.`,
   truckingOaActual: `OA Actual is the realized operational allowance (actual cost) for the trucking leg.`,
   etaVsDueDelivery: `ETA fields are planned dates; Due Date Delivery Start/End come from the contract delivery window. Use these to assess schedule risk and lateness.`,
-  truckingStatusUnplanned: `Open contracts (distinct Contract/PO) with STO from SAP, no KLIP ETA or Daily Planning yet, and no Trucking Last Receive Date (SAP AW) / completion on the shipment.`,
+  truckingStatusUnplanned: `Unplanned view table rows: open contracts without a trucking operation, plus unplanned trucking operations (no Daily Planning and not yet started/completed). The badge count matches the table row total.`,
   truckingStatusPlanned: `Open contract with at least one ETA or Daily Planning entry (Add New Trucking). Trucking Start Receive Date is not set yet.`,
   truckingStatusInProgress: `Trucking shipment (STO/Operation) with Daily Planning and a valid Trucking Start Receive Date (SAP AV). Last Receive Date is still empty.`,
   truckingStatusCompleted: `Trucking shipment (STO/Operation) with Trucking Last Receive Date populated (SAP AW) or contract/operation status Close.`,
@@ -74,6 +81,10 @@ export const FIELD_HELP = {
 
   shipmentStoQty: `STO Quantity from the linked contract in SAP (in MT). Represents the planned quantity allocated to this shipment.`,
   shipmentReceivedQty: `Actual quantity received at destination (actual_vessel_qty_receive or BL quantity as fallback), in MT.`,
+  shipmentOutstandingQtyActual: `SAP STO Qty minus actual Qty Receive/Delivered (per incoterm) for this shipment/STO. Uses SAP/manual fulfillment only — not planning calendar.`,
+  shipmentOutstandingQtyPlanning: `Contract Qty minus SAP STO Qty (planning via SAP) minus Shipment Planning Qty (KLIP daily deliverables on shipment + linked trucking for the STO). Net aggregate at STO level — over-planning on one PO can offset another. Displayed in MT.`,
+  shipmentPlanningQty: `KLIP shipment planning qty — sum of daily deliverables on the shipment calendar plus linked trucking daily deliverables for the same STO.`,
+  /** @deprecated Use shipmentOutstandingQtyActual */
   shipmentOutstandingQty: `SAP STO Qty minus Qty Receive/Delivered (per incoterm) for this shipment/STO. Same for Open and Close; Close = status COMPLETED.`,
 
   // Shipments

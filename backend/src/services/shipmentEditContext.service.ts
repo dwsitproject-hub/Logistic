@@ -115,15 +115,8 @@ export function resolveAddPoGate(args: {
       add_po_blocked_reason: 'Cannot add PO to a cancelled shipment',
     };
   }
-  if (args.hasSapSto) {
-    return {
-      has_sap_sto: true,
-      can_add_po: false,
-      add_po_blocked_reason: 'Shipment already has an STO from SAP',
-    };
-  }
   return {
-    has_sap_sto: false,
+    has_sap_sto: args.hasSapSto,
     can_add_po: true,
     add_po_blocked_reason: null,
   };

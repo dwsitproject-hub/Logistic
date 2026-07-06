@@ -231,6 +231,12 @@ export function unplannedContractBacklogRowSelectSql(outstandingExpr: string): s
     NULL::date AS ata_vessel_berthed_at_discharge_port,
     NULL::date AS ata_vessel_start_discharging,
     NULL::date AS ata_vessel_complete_discharge,
+    c.quantity_ordered AS contract_qty,
+    NULL::numeric AS sto_quantity,
+    NULL::numeric AS quantity_receive,
+    NULL::numeric AS quantity_delivered_sap,
+    NULL::numeric AS planning_qty,
+    NULL::numeric AS outstanding_qty_planning,
     ${outstandingExpr} AS outstanding_quantity`;
 }
 

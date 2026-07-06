@@ -5,8 +5,8 @@ import { resolveContractLogisticsStoNumber } from '../utils/contractLogisticsSto
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
 import {
   shipmentListQtyMoveCteFromPage,
-  shipmentListRowGlobalOutstandingSql,
 } from '../utils/shipmentOutstandingQtySql';
+import { shipmentListPageQtySelectSql } from '../utils/shipmentListQtySql';
 import {
   mergeShipmentVesselFromSapRow,
   queueShipmentVesselSapBackfill,
@@ -55,7 +55,7 @@ const SUMMARY_CACHE = new Map<
   { summaryRow: Record<string, unknown>; totalCount: number; expiresAt: number }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'shipment-list-v16';
+const CACHE_VERSION = 'shipment-list-v24';
 const MAX_CACHE_ENTRIES = 80;
 
 function stableColumnFiltersKey(colFilters: Record<string, unknown>): string {
@@ -248,10 +248,21 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
 const LIST_PAGE_SELECT = `
       SELECT
         sp.*,
-        COALESCE(sa.sto_quantity, 0) AS sto_quantity,
-        COALESCE(sa.quantity_receive, 0) AS quantity_receive,
-        COALESCE(sa.quantity_delivered_sap, 0) AS quantity_delivered_sap,
-        ${shipmentListRowGlobalOutstandingSql()} AS outstanding_quantity,
+        ${shipmentListPageQtySelectSql('sp')},
+        COALESCE(
+          NULLIF(TRIM(slpa.sap_loading_ports), ''),
+          NULLIF(TRIM(sp.loading_ports_klip), ''),
+          NULLIF(TRIM(sp.port_of_loading), '')
+        ) AS loading_ports,
+        COALESCE(
+          NULLIF(TRIM(sdpa.sap_discharge_ports), ''),
+          NULLIF(TRIM(sp.discharge_ports_klip), ''),
+          NULLIF(TRIM(sp.port_of_discharge), '')
+        ) AS discharge_ports,
+        slpa.sap_loading_ports,
+        sdpa.sap_discharge_ports,
+        NULLIF(TRIM(slpa.sap_loading_ports), '') AS sap_vessel_loading_port_1,
+        NULLIF(TRIM(sdpa.sap_discharge_ports), '') AS sap_vessel_discharge_port,
         COALESCE(sl.incoterm, sp.incoterm) AS incoterm,
         sl.b2b_flag AS b2b_flag,
         sl.source_type AS source_type,
@@ -261,8 +272,11 @@ const LIST_PAGE_SELECT = `
         sl.vessel_code_sap,
         sl.vessel_owner_sap
       FROM shipment_page sp
+      LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)
+      LEFT JOIN sap_loading_ports_agg slpa ON TRIM(slpa.sto_key::text) = TRIM(sp.sto_key::text)
+      LEFT JOIN sap_discharge_ports_agg sdpa ON TRIM(sdpa.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN contract_ext_agg cex ON TRIM(cex.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN po_numbers_agg pna ON TRIM(pna.sto_key::text) = TRIM(sp.sto_key::text)`;
 

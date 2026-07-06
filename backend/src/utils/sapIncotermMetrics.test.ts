@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  resolveContractActualQtySubtractedTs,
   resolveIncotermImportStatusTs,
   resolveIncotermOutstandingTs,
   resolveIncotermQuantityDeliveryTs,
   resolveUatQuantityDeliveryTs,
   sqlContractOutstandingFromFields,
+  sqlContractOutstandingSignedExpr,
+  sqlPoFulfilledKgCase,
   sqlIncotermImportStatusFromJson,
   sqlIncotermOutstandingCase,
   sqlIncotermQuantityDeliveryCase,
@@ -67,20 +70,44 @@ describe('sapIncotermMetrics', () => {
     expect(outstanding).toContain('quantity_delivery_vessel');
   });
 
+  it('resolveContractActualQtySubtractedTs uses actual only (no STO fallback)', () => {
+    expect(resolveContractActualQtySubtractedTs('FRC', 0, 500)).toBe(0);
+    expect(resolveContractActualQtySubtractedTs('FOB', 100, 200)).toBe(200);
+    expect(resolveContractActualQtySubtractedTs('EXW', 0, 300)).toBe(300);
+    expect(resolveContractActualQtySubtractedTs('EXW', 0, 0)).toBe(0);
+  });
+
   it('sqlContractOutstandingFromFields follows glossary incoterm matrix', () => {
     const sql = sqlContractOutstandingFromFields({
       contractQtyExpr: 'base.quantity_ordered',
       incotermExpr: 'base.incoterm',
       receiveExpr: 'base.quantity_receive',
       deliveryExpr: 'base.quantity_delivery',
-      stoQtyExpr: 'base.total_sto_quantity',
     });
     expect(sql).toContain("'FRC', 'CIF', 'CFR'");
     expect(sql).toContain('base.quantity_receive');
     expect(sql).toContain("'LCO', 'FOB'");
     expect(sql).toContain('base.quantity_delivery');
-    expect(sql).toContain('base.total_sto_quantity');
+    expect(sql).toContain('NULLIF(base.quantity_receive, 0)');
+    expect(sql).not.toContain('total_sto_quantity');
     expect(sql).not.toContain('GREATEST(0');
+  });
+
+  it('sqlContractOutstandingSignedExpr uses SAP delivery not incoterm matrix', () => {
+    const sql = sqlContractOutstandingSignedExpr({
+      contractQtyExpr: 'base.quantity_ordered',
+      incotermExpr: 'base.incoterm',
+      receiveExpr: 'base.quantity_receive',
+      deliveryExpr: 'base.quantity_delivery_sap',
+    });
+    expect(sql).toContain('base.quantity_delivery_sap');
+    expect(sql).not.toContain('GREATEST(0');
+  });
+
+  it('sqlPoFulfilledKgCase matches incoterm receive/delivery matrix', () => {
+    const sql = sqlPoFulfilledKgCase('c.incoterm', 'c.quantity_receive', 'c.quantity_delivery_sap');
+    expect(sql).toContain("'FRC', 'CIF', 'CFR'");
+    expect(sql).toContain("'LCO', 'FOB'");
   });
 
   it('emits incoterm import status SQL', () => {

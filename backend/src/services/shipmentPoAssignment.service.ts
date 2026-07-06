@@ -2,24 +2,17 @@ import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
 import {
-  buildQtyMoveCte,
-  sqlContractGlobalOutstandingExpr,
-} from '../utils/contractGlobalOutstandingSql';
+  buildSeaContractsQtyMoveCte,
+  PO_GLOBAL_OUTSTANDING_PLANNING_EXPR,
+} from '../utils/contractPoGlobalMetricsSql';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import { resolveShipmentEditContext } from './shipmentEditContext.service';
 import { groupPlantExpr } from '../utils/groupPlantSql';
-import { poLineHasSapStoSql } from '../utils/poLineSapStoSql';
 import {
   contractExtNoSubquery,
   resolvedPlantCodeSql,
 } from '../utils/portDisplaySql';
 import { stoQtyAssignedMtToKg } from '../utils/userStoAssignmentQty';
-
-const GLOBAL_OUTSTANDING_EXPR = sqlContractGlobalOutstandingExpr({
-  contractQtyExpr: 'c.quantity_ordered',
-  incotermExpr: 'c.incoterm',
-  contractNumberExpr: 'c.contract_id',
-});
 
 const PO_LINE_SELECT_FIELDS = `
     c.id AS contract_row_id,
@@ -36,15 +29,12 @@ const PO_LINE_SELECT_FIELDS = `
     ${resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code')} AS plant_code,
     ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), 'c.company_name')} AS plant_site,
     ${contractExtNoSubquery('c.contract_id', 'c.po_number')} AS contract_ext_no,
-    ${GLOBAL_OUTSTANDING_EXPR} AS outstanding_quantity,
-    ${poLineHasSapStoSql('c')} AS has_sap_sto
+    ${PO_GLOBAL_OUTSTANDING_PLANNING_EXPR} AS outstanding_quantity_planning,
+    ${PO_GLOBAL_OUTSTANDING_PLANNING_EXPR} AS outstanding_quantity
 `;
 
 function buildPoLineByRowIdSql(): string {
-  const qtyMoveCte = buildQtyMoveCte({
-    kind: 'in_subquery',
-    subquery: `(SELECT contract_id FROM contracts WHERE id = $1::uuid)`,
-  });
+  const qtyMoveCte = buildSeaContractsQtyMoveCte();
   return `
     WITH ${qtyMoveCte}
     SELECT
@@ -56,14 +46,7 @@ function buildPoLineByRowIdSql(): string {
 }
 
 function buildGlobalAvailablePoLinesSql(): string {
-  const qtyMoveCte = buildQtyMoveCte({
-    kind: 'in_subquery',
-    subquery: `
-      SELECT c2.contract_id
-      FROM contracts c2
-      WHERE UPPER(COALESCE(NULLIF(TRIM(c2.transport_mode), ''), 'SEA')) IN ('SEA', 'MIXED', 'MIX')
-    `,
-  });
+  const qtyMoveCte = buildSeaContractsQtyMoveCte();
   return `
     WITH ${qtyMoveCte},
     candidates AS (
@@ -71,7 +54,6 @@ function buildGlobalAvailablePoLinesSql(): string {
         ${PO_LINE_SELECT_FIELDS}
       FROM contracts c
       WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIXED', 'MIX')
-        AND NOT (${poLineHasSapStoSql('c')})
         AND (
           $1::text = ''
           OR COALESCE(c.po_number::text, '') ILIKE $1::text
@@ -83,7 +65,7 @@ function buildGlobalAvailablePoLinesSql(): string {
     )
     SELECT *
     FROM candidates
-    WHERE COALESCE(outstanding_quantity, 0)::numeric > 0
+    WHERE COALESCE(outstanding_quantity_planning, 0)::numeric > 0
     ORDER BY COALESCE(po_number, contract_id), contract_id
     LIMIT $2::int
   `;
@@ -97,7 +79,7 @@ export async function upsertPoQtyAssignment(
   assignmentKey: string,
   contractNumber: string,
   poNumber: string | null,
-  qtyMt: number,
+  qtyKg: number,
 ): Promise<void> {
   await ensureUserStoContractAssignmentsTable();
   const poKey = poNumber ? String(poNumber).trim() : '';
@@ -110,15 +92,25 @@ export async function upsertPoQtyAssignment(
     `,
     [assignmentKey, contractNumber, poKey],
   );
-  if (qtyMt > 0) {
+  if (qtyKg > 0) {
     await query(
       `
       INSERT INTO user_sto_contract_assignments (sto_number, contract_number, po_number, sto_qty_assigned)
       VALUES ($1, $2, NULLIF($3, ''), $4::numeric)
       `,
-      [assignmentKey, contractNumber, poKey || null, stoQtyAssignedMtToKg(qtyMt)],
+      [assignmentKey, contractNumber, poKey || null, qtyKg],
     );
   }
+}
+
+/** @deprecated Prefer upsertPoQtyAssignment with kg. */
+export async function upsertPoQtyAssignmentMt(
+  assignmentKey: string,
+  contractNumber: string,
+  poNumber: string | null,
+  qtyMt: number,
+): Promise<void> {
+  return upsertPoQtyAssignment(assignmentKey, contractNumber, poNumber, stoQtyAssignedMtToKg(qtyMt));
 }
 
 async function fetchExistingPoKeys(lookupKey: string, contractNumbersCsv: string): Promise<Set<string>> {
@@ -176,8 +168,8 @@ export async function listAvailablePurchaseOrdersForShipmentEdit(
   for (const row of lines.rows as Array<Record<string, unknown>>) {
     const rowId = String(row.contract_row_id ?? '');
     if (!rowId || seenRowIds.has(rowId)) continue;
-    const outstanding = Number(row.outstanding_quantity ?? 0);
-    if (!Number.isFinite(outstanding) || outstanding <= 0) continue;
+    const outstandingPlan = Number(row.outstanding_quantity_planning ?? row.outstanding_quantity ?? 0);
+    if (!Number.isFinite(outstandingPlan) || outstandingPlan <= 0) continue;
     const key = poLineKey(String(row.contract_id ?? ''), row.po_number as string | null);
     if (existingKeys.has(key)) continue;
     seenRowIds.add(rowId);
@@ -194,15 +186,22 @@ export type AttachPurchaseOrderResult =
 export async function attachPurchaseOrderToShipment(args: {
   anchorShipmentUuid: string;
   contractRowId: string;
-  stoQtyAssignedMt: number;
+  stoQtyAssignedMt?: number;
+  stoQtyAssignedKg?: number;
 }): Promise<AttachPurchaseOrderResult> {
   const contractRowId = String(args.contractRowId ?? '').trim();
-  const stoQtyAssignedMt = Number(args.stoQtyAssignedMt);
   if (!contractRowId) {
     return { ok: false, status: 400, message: 'contractRowId is required' };
   }
-  if (!Number.isFinite(stoQtyAssignedMt) || stoQtyAssignedMt <= 0) {
-    return { ok: false, status: 400, message: 'stoQtyAssignedMt must be greater than 0' };
+
+  let qtyKg = 0;
+  if (args.stoQtyAssignedKg != null) {
+    qtyKg = Number(args.stoQtyAssignedKg);
+  } else if (args.stoQtyAssignedMt != null) {
+    qtyKg = stoQtyAssignedMtToKg(Number(args.stoQtyAssignedMt));
+  }
+  if (!Number.isFinite(qtyKg) || qtyKg < 0) {
+    return { ok: false, status: 400, message: 'Shipment Plan Qty must be zero or greater' };
   }
 
   const anchorRes = await query(
@@ -240,14 +239,6 @@ export async function attachPurchaseOrderToShipment(args: {
     return { ok: false, status: 404, message: 'Contract / PO line not found' };
   }
   const poLine = poLineRes.rows[0] as Record<string, unknown>;
-  const hasSapSto = poLine.has_sap_sto === true || poLine.has_sap_sto === 't';
-  if (hasSapSto) {
-    return {
-      ok: false,
-      status: 400,
-      message: 'This PO already has an STO from SAP and cannot be added to a planned shipment',
-    };
-  }
   const transportMode = String(poLine.transport_mode ?? 'SEA').trim().toUpperCase();
   if (transportMode !== 'SEA' && transportMode !== 'MIXED' && transportMode !== 'MIX') {
     return { ok: false, status: 400, message: 'Only SEA / MIXED contract PO lines can be added to a shipment' };
@@ -255,26 +246,26 @@ export async function attachPurchaseOrderToShipment(args: {
 
   const contractNumber = String(poLine.contract_id ?? '').trim();
   const poNumber = poLine.po_number != null ? String(poLine.po_number).trim() : null;
-  const outstandingMt = Number(poLine.outstanding_quantity ?? 0) / 1000;
-  const outstandingKg = Number(poLine.outstanding_quantity ?? 0);
-  if (!Number.isFinite(outstandingKg) || outstandingKg <= 0) {
-    return { ok: false, status: 400, message: 'This PO has no outstanding quantity remaining' };
+  const outstandingPlanKg = Number(poLine.outstanding_quantity_planning ?? poLine.outstanding_quantity ?? 0);
+  if (!Number.isFinite(outstandingPlanKg) || outstandingPlanKg <= 0) {
+    return { ok: false, status: 400, message: 'This PO has no outstanding planning quantity remaining' };
   }
-  if (stoQtyAssignedMt > outstandingMt + 1e-9) {
+  if (qtyKg > outstandingPlanKg + 1e-6) {
     return {
       ok: false,
       status: 400,
-      message: `Assigned quantity (${stoQtyAssignedMt} MT) exceeds outstanding (${Math.round(outstandingMt * 100) / 100} MT)`,
+      message: `Shipment Plan Qty exceeds global OS Qty (Plan) (${Math.round(outstandingPlanKg)} kg)`,
     };
   }
 
   const vesselCapacity = anchor.vessel_capacity != null ? Number(anchor.vessel_capacity) : null;
-  if (vesselCapacity != null && Number.isFinite(vesselCapacity) && vesselCapacity > 0) {
-    if (stoQtyAssignedMt > vesselCapacity + 1e-9) {
+  if (vesselCapacity != null && Number.isFinite(vesselCapacity) && vesselCapacity > 0 && qtyKg > 0) {
+    const qtyMt = qtyKg / 1000;
+    if (qtyMt > vesselCapacity + 1e-9) {
       return {
         ok: false,
         status: 400,
-        message: `Assigned quantity (${stoQtyAssignedMt} MT) exceeds vessel capacity (${vesselCapacity} MT)`,
+        message: `Shipment Plan Qty (${qtyMt} MT) exceeds vessel capacity (${vesselCapacity} MT)`,
       };
     }
   }
@@ -439,7 +430,9 @@ export async function attachPurchaseOrderToShipment(args: {
     resultShipmentUuid = String(insertRes.rows[0].id);
   }
 
-  await upsertPoQtyAssignment(context.lookup_key, contractNumber, poNumber, stoQtyAssignedMt);
+  if (qtyKg > 0) {
+    await upsertPoQtyAssignment(context.lookup_key, contractNumber, poNumber, qtyKg);
+  }
 
   return {
     ok: true,
@@ -447,4 +440,65 @@ export async function attachPurchaseOrderToShipment(args: {
     contractNumber,
     poNumber,
   };
+}
+
+export interface PoPlanQtyRow {
+  contractNumber: string;
+  poNumber?: string | null;
+  shipmentPlanQtyKg: number;
+}
+
+export type BatchSavePoPlanResult =
+  | { ok: true }
+  | { ok: false; status: number; message: string };
+
+export async function batchSaveShipmentPoPlanQty(args: {
+  anchorShipmentUuid: string;
+  rows: PoPlanQtyRow[];
+}): Promise<BatchSavePoPlanResult> {
+  const context = await resolveShipmentEditContext(args.anchorShipmentUuid);
+  if (!context?.lookup_key) {
+    return { ok: false, status: 400, message: 'Could not resolve shipment STO / operation group' };
+  }
+
+  await ensureUserStoContractAssignmentsTable();
+
+  if (context.has_sap_sto) {
+    return { ok: true };
+  }
+
+  const contractList = context.contract_numbers
+    .split(',')
+    .map((c) => c.trim())
+    .filter(Boolean);
+  const detailsSql = buildContractDetailsForStoSql();
+  const detailsRes = await query(detailsSql, [context.lookup_key, contractList]);
+  const budgetByKey = new Map<string, number>();
+  for (const row of detailsRes.rows as Array<Record<string, unknown>>) {
+    const key = poLineKey(String(row.contract_number ?? ''), row.po_number as string | null);
+    budgetByKey.set(key, Number(row.outstanding_qty_planning_budget ?? row.outstanding_qty_planning ?? 0));
+  }
+
+  for (const row of args.rows) {
+    const contractNumber = String(row.contractNumber ?? '').trim();
+    if (!contractNumber) continue;
+    const poNumber = row.poNumber != null ? String(row.poNumber).trim() : null;
+    const qtyKg = Number(row.shipmentPlanQtyKg);
+    if (!Number.isFinite(qtyKg) || qtyKg < 0) {
+      return { ok: false, status: 400, message: `Invalid Shipment Plan Qty for ${contractNumber}` };
+    }
+
+    const budget = budgetByKey.get(poLineKey(contractNumber, poNumber)) ?? 0;
+    if (qtyKg > budget + 1e-6) {
+      return {
+        ok: false,
+        status: 400,
+        message: `Shipment Plan Qty for ${contractNumber} exceeds OS Qty (Plan)`,
+      };
+    }
+
+    await upsertPoQtyAssignment(context.lookup_key, contractNumber, poNumber, qtyKg);
+  }
+
+  return { ok: true };
 }

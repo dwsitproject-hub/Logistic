@@ -29,27 +29,27 @@ export {
 
 /** Left-to-right table order and Visible Column modal sequence (primary columns first). */
 export const CONTRACT_PERF_COLUMN_ORDER: readonly string[] = [
+  'month_delivery_end',
   'contract_date',
-  'supplier',
   'contract_ext_no',
   'po_number',
-  'source_type',
-  'product',
+  'supplier',
   'incoterm',
+  'product',
+  'status_overall',
   'contract_qty',
   'outstanding_qty_mt',
   'trade_cycle_days',
   'dp_cycle_days',
   'cash_cycle_days',
   'log_cycle_days',
-  'month_delivery_end',
 ] as const
 
 /** Default visible set matches {@link CONTRACT_PERF_COLUMN_ORDER}. */
 export const CONTRACT_PERF_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = CONTRACT_PERF_COLUMN_ORDER
 
 /** Bump when default column order/visibility changes — triggers one-time local reset on the CP page. */
-export const CONTRACT_PERF_COLUMN_LAYOUT_VERSION = 'cp-columns-v3'
+export const CONTRACT_PERF_COLUMN_LAYOUT_VERSION = 'cp-columns-v4'
 
 export const CONTRACT_PERF_COLUMN_LAYOUT_VERSION_KEY =
   'contract-performance.compact.columnLayoutVersion'

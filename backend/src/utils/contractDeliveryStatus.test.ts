@@ -1,11 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import {
   isContractDeliveryClosed,
+  normalizeContractDeliveryStatusForDisplay,
   sqlContractImportStatusExpr,
   sqlContractImportStatusIsClosedExpr,
   sqlContractImportStatusIsOpenExpr,
   sqlIsContractSapClosedExpr,
+  sqlNormalizeContractDeliveryStatusExpr,
 } from './contractDeliveryStatus';
+
+describe('normalizeContractDeliveryStatusForDisplay', () => {
+  it('maps legacy ACTIVE/COMPLETED to Open/Close', () => {
+    expect(normalizeContractDeliveryStatusForDisplay('ACTIVE')).toBe('Open');
+    expect(normalizeContractDeliveryStatusForDisplay('COMPLETED')).toBe('Close');
+    expect(normalizeContractDeliveryStatusForDisplay('Open')).toBe('Open');
+  });
+});
+
+describe('sqlNormalizeContractDeliveryStatusExpr', () => {
+  it('normalizes ACTIVE to Open in SQL', () => {
+    expect(sqlNormalizeContractDeliveryStatusExpr('c.status')).toContain("'ACTIVE'");
+    expect(sqlNormalizeContractDeliveryStatusExpr('c.status')).toContain("'Open'");
+  });
+});
 
 describe('isContractDeliveryClosed', () => {
   it('returns true for Close variants', () => {
@@ -32,6 +49,7 @@ describe('sqlContractImportStatusExpr', () => {
     expect(sql).toContain('GR STO Status');
     expect(sql).toContain('ORDER BY');
     expect(sql).toContain('THEN 0');
+    expect(sql).toContain("'ACTIVE'");
   });
 
   it('builds SAP closed predicate from PO-aware import status', () => {

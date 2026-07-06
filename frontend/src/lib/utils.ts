@@ -39,7 +39,7 @@ export function formatQtyMtFromKg(kg: number | string | null | undefined, opts?:
   return `${(n / 1000).toLocaleString('en-US', { maximumFractionDigits: maxFractionDigits })} MT`
 }
 
-/** Outstanding qty in kg; over-delivery (negative kg) shows +MT in green styling context. */
+/** Outstanding qty in kg; over-delivery (negative kg) shows +MT green; sisa (positive kg) shows -MT red. */
 export function formatOutstandingQtyMtFromKg(kg: number | string | null | undefined) {
   if (kg === null || kg === undefined || kg === '') return '-'
   const n = typeof kg === 'string' ? Number(kg) : kg
@@ -47,6 +47,7 @@ export function formatOutstandingQtyMtFromKg(kg: number | string | null | undefi
   const mt = n / 1000
   const absFmt = Math.abs(mt).toLocaleString('en-US', { maximumFractionDigits: 2 })
   if (n < 0) return `+${absFmt} MT`
-  return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+  if (n > 0) return `-${absFmt} MT`
+  return `${(0).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
 }
 

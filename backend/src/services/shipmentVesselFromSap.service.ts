@@ -15,24 +15,29 @@ const backfillInFlight = new Set<string>();
 
 /**
  * When shipment row lacks vessel but SAP has both code + name, expose SAP values on the row.
- * Returns true when a complete SAP vessel identity was applied.
+ * Display vessel name: SAP Vessel Name first, fallback to KLIP add/edit shipment input.
+ * Returns true when SAP has a complete vessel identity (code + name) for optional DB backfill.
  */
 export function mergeShipmentVesselFromSapRow(row: ShipmentVesselRow): boolean {
   const sapName = trimOrNull(row.vessel_name_sap);
   const sapCode = trimOrNull(row.vessel_code_sap);
   const sapOwner = trimOrNull(row.vessel_owner_sap);
+  const klipName = trimOrNull(row.vessel_name);
   delete (row as { vessel_name_sap?: unknown }).vessel_name_sap;
   delete (row as { vessel_code_sap?: unknown }).vessel_code_sap;
   delete (row as { vessel_owner_sap?: unknown }).vessel_owner_sap;
 
-  if (!hasCompleteSapVesselIdentity({ vessel_code: sapCode, vessel_name: sapName, vessel_owner: sapOwner })) {
-    return false;
-  }
+  const displayName = sapName ?? klipName;
+  if (displayName) row.vessel_name = displayName;
 
-  if (!trimOrNull(row.vessel_name)) row.vessel_name = sapName;
-  if (!trimOrNull(row.vessel_code)) row.vessel_code = sapCode;
-  if (!trimOrNull(row.vessel_owner) && sapOwner) row.vessel_owner = sapOwner;
-  return true;
+  if (sapCode && !trimOrNull(row.vessel_code)) row.vessel_code = sapCode;
+  if (sapOwner && !trimOrNull(row.vessel_owner)) row.vessel_owner = sapOwner;
+
+  return hasCompleteSapVesselIdentity({
+    vessel_code: sapCode,
+    vessel_name: sapName,
+    vessel_owner: sapOwner,
+  });
 }
 
 /** Persist SAP vessel onto shipments + master_vessels (page-scoped, fire-and-forget). */

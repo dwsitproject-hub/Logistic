@@ -7,12 +7,6 @@ import {
   appendTruckingLateIndicatorFilter,
   parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
-import {
-  appendTruckingUnplannedBacklogColumnFilters,
-  appendTruckingUnplannedBacklogGlobalSearch,
-  buildTruckingUnplannedBacklogCountQuery,
-  buildTruckingUnplannedContractToolbarScope,
-} from '../utils/truckingUnplannedHybridSql';
 import { deriveTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
 import { appendTruckingPipelineStageFilter, normalizeTruckingPagePipelineStageParam } from '../utils/truckingPagePipelineSql';
 import { truckingPageListScopeWhereSql } from '../utils/truckingIncotermScope';
@@ -55,6 +49,11 @@ export interface TruckingListResponseData {
       completed: number;
       cancelled: number;
     };
+    unplannedTable?: {
+      contractRows: number;
+      executionRows: number;
+      totalTableRows: number;
+    };
   };
   pagination: {
     total: number;
@@ -76,7 +75,7 @@ const SUMMARY_CACHE = new Map<
   { summary: TruckingListResponseData['summary']; expiresAt: number }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v21';
+const CACHE_VERSION = 'trucking-list-v23';
 const MAX_CACHE_ENTRIES = 80;
 
 const SORT_FIELD_BY_KEY: Record<string, string> = {
@@ -86,6 +85,7 @@ const SORT_FIELD_BY_KEY: Record<string, string> = {
   contract_number: 'contract_number',
   po_number: 'po_number',
   sto_number: 'sto_number',
+  supplier: 'supplier',
   trucking_owner: 'trucking_owner',
   loading_location: 'loading_location',
   unloading_location: 'unloading_location',
@@ -148,8 +148,8 @@ function buildTruckingListCacheKey(input: {
     skipSapJoin: input.skipSapJoin,
     page: input.page ?? 1,
     limit: input.limit ?? 20,
-    sortKey: input.sortKey ?? 'created_at',
-    sortDir: input.sortDir ?? 'desc',
+    sortKey: input.sortKey ?? 'supplier',
+    sortDir: input.sortDir ?? 'asc',
   };
   return `${CACHE_VERSION}:${JSON.stringify(norm)}`;
 }
@@ -326,6 +326,30 @@ export function buildTruckingSummaryFromSqlRow(row: Record<string, unknown>) {
   };
 }
 
+/** Align Section 2 Unplanned card with hybrid table row total. */
+export function mergeTruckingUnplannedBreakdownIntoSummary(
+  summary: TruckingListResponseData['summary'],
+  breakdown: {
+    contractRows: number;
+    executionRows: number;
+    totalTableRows: number;
+  },
+): TruckingListResponseData['summary'] {
+  if (!summary) return summary;
+  return {
+    ...summary,
+    status: {
+      ...summary.status,
+      unplanned: breakdown.totalTableRows,
+    },
+    unplannedTable: {
+      contractRows: breakdown.contractRows,
+      executionRows: breakdown.executionRows,
+      totalTableRows: breakdown.totalTableRows,
+    },
+  };
+}
+
 export function buildTruckingListQuery(
   req: AuthRequest,
   options?: { skipSapJoin?: boolean; omitStatusFilter?: boolean },
@@ -346,8 +370,8 @@ export function buildTruckingListQuery(
   const skipSapJoin =
     options?.skipSapJoin ??
     String((req.query as { skipSapJoin?: string }).skipSapJoin || '').toLowerCase() === 'true';
-  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'created_at');
-  const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'desc').toLowerCase();
+  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'supplier');
+  const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'asc').toLowerCase();
   const globalSearch =
     typeof (req.query as { search?: string }).search === 'string'
       ? (req.query as { search?: string }).search!.trim()
@@ -532,7 +556,7 @@ export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text
       )
       SELECT
         COUNT(*)::bigint AS total_count,
-        COUNT(DISTINCT contract_number) FILTER (WHERE status = 'UNPLANNED')::bigint AS unplanned_count,
+        COUNT(*) FILTER (WHERE status = 'UNPLANNED')::bigint AS unplanned_count,
         COUNT(*) FILTER (WHERE status = 'PLANNED')::bigint AS planned_count,
         COUNT(*) FILTER (WHERE status = 'IN_PROGRESS')::bigint AS in_progress_count,
         COUNT(*) FILTER (WHERE status = 'COMPLETED')::bigint AS completed_count,
@@ -654,27 +678,6 @@ export async function loadTruckingListSummary(
   return summary;
 }
 
-async function countTruckingUnplannedContractBacklogForRequest(req: AuthRequest): Promise<number> {
-  const { dateFrom, dateTo, contract, plant } = req.query;
-  const globalSearch =
-    typeof (req.query as { search?: string }).search === 'string'
-      ? (req.query as { search?: string }).search!.trim()
-      : '';
-  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
-  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
-  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-  const scope = buildTruckingUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
-  let idx = scope.params.length + 1;
-  const g = appendTruckingUnplannedBacklogGlobalSearch(globalSearch, idx);
-  idx = g.nextIndex;
-  const c = appendTruckingUnplannedBacklogColumnFilters(colFilters, idx);
-  const res = await query(
-    buildTruckingUnplannedBacklogCountQuery(scope.sql, `${g.sql}${c.sql}`),
-    [...scope.params, ...g.params, ...c.params],
-  );
-  return parseInt(String(res.rows[0]?.c ?? '0'), 10) || 0;
-}
-
 export async function loadTruckingListSummaryWithBacklog(
   req: AuthRequest,
   built: TruckingListBuiltQuery,
@@ -682,14 +685,18 @@ export async function loadTruckingListSummaryWithBacklog(
   const base = await loadTruckingListSummary(built);
   if (!base) return base;
   try {
-    const backlogCount = await countTruckingUnplannedContractBacklogForRequest(req);
-    return {
-      ...base,
-      status: {
-        ...base.status,
-        unplanned: (base.status?.unplanned ?? 0) + backlogCount,
-      },
-    };
+    const {
+      buildTruckingUnplannedHybridContext,
+      countTruckingUnplannedHybridBreakdown,
+    } = await import('./truckingUnplannedHybridList.service');
+    const sortKey = String((req.query as { sortKey?: string }).sortKey || 'supplier');
+    const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'asc').toLowerCase();
+    const sortDir: 'ASC' | 'DESC' = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
+    const ctx = buildTruckingUnplannedHybridContext(req, sortKey, sortDir, {
+      executionBuilt: built,
+    });
+    const breakdown = await countTruckingUnplannedHybridBreakdown(ctx);
+    return mergeTruckingUnplannedBreakdownIntoSummary(base, breakdown);
   } catch {
     return base;
   }
@@ -735,8 +742,8 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
   const { page = 1, limit = 20, status } = req.query;
   const summaryOnly =
     String((req.query as { summaryOnly?: string }).summaryOnly || '').toLowerCase() === 'true';
-  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'created_at');
-  const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'desc').toLowerCase();
+  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'supplier');
+  const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'asc').toLowerCase();
   const sortDir: 'ASC' | 'DESC' = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
 
   // Pipeline status is computed per expanded STO row — filter only after expansion.
@@ -778,6 +785,7 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
     let summary: TruckingListResponseData['summary'];
     if (includeSummary) {
       summary = await loadTruckingListSummaryWithBacklog(req, summaryBuilt);
+      summary = mergeTruckingUnplannedBreakdownIntoSummary(summary, hybrid.unplannedBreakdown);
     }
     return {
       truckingOperations: hybrid.truckingOperations,

@@ -65,7 +65,7 @@ export const SHIPMENT_PAGE_PIPELINE_CARDS: readonly ShipmentPipelineCardConfig[]
     textColor: 'text-slate-800',
     badgeColor: 'bg-slate-600',
     tooltip:
-      'Open contracts with no ETA registered yet. The view table shows one row per contract (no shipment) or per STO group (several contracts on one SAP STO).',
+      'Rows in the Unplanned view table: open contracts without a shipment record, plus unplanned STO/shipment execution groups (no ETA and no port milestones yet). The badge count matches the table row total.',
   },
   {
     status: 'PLANNED',

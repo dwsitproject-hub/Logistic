@@ -2,6 +2,18 @@ export function normalizeContractDeliveryStatus(status: string | null | undefine
   return String(status ?? '').trim().toUpperCase()
 }
 
+/** UI label: legacy ACTIVE/COMPLETED → Open/Close (aligned with Sea + SAP GR PO/STO). */
+export function formatContractDeliveryStatusLabel(status: unknown): string {
+  const raw = String(status ?? '').trim()
+  if (!raw) return ''
+  const u = raw.toUpperCase()
+  if (u === 'ACTIVE' || u === 'OPEN') return 'Open'
+  if (u === 'CLOSE' || u === 'CLOSED' || u === 'COMPLETED' || u === 'COMPLETE') return 'Close'
+  if (u === 'CANCELLED' || u === 'CANCELED' || u === 'CANCEL') return 'Cancelled'
+  if (raw === 'Open' || raw === 'Close' || raw === 'Cancelled') return raw
+  return raw
+}
+
 export function isContractDeliveryClosed(status: string | null | undefined): boolean {
   const normalized = normalizeContractDeliveryStatus(status)
   return (

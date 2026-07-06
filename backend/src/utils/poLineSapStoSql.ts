@@ -11,6 +11,7 @@ function spdEffectiveStoSql(alias: string): string {
 
 function spdPoNumberSql(alias: string): string {
   return `NULLIF(TRIM(COALESCE(
+    ${alias}.po_number::text,
     ${alias}.data->'raw'->>'PO No.',
     ${alias}.data->'raw'->>'PO Number',
     ${alias}.data->'raw'->>'PO No',

@@ -8,6 +8,7 @@ import {
   updateTruckingDailyActuals,
   downloadDailyActualsTemplate,
   bulkUploadDailyActuals,
+  bulkUploadWbRekap,
   getTruckingDailyActualsCalendar,
 } from '../controllers/truckingRealization.controller';
 import {
@@ -24,6 +25,7 @@ import {
   downloadBulkCreateTruckingTemplate,
   bulkCreateTruckingOperations,
   bulkUploadUnplannedPlanning,
+  bulkUploadPlannedPlanning,
   downloadCargoReadinessTemplate,
   bulkUpdateCargoReadiness,
   getTruckingActivityLog,
@@ -82,6 +84,13 @@ router.post(
   bulkUploadUnplannedPlanning,
 );
 
+router.post(
+  '/planned-planning/bulk-upload',
+  planningUpload.single('file'),
+  auditLog('UPDATE', 'TRUCKING_OPERATION'),
+  bulkUploadPlannedPlanning,
+);
+
 // Bulk update cargo readiness date
 router.get('/cargo-readiness/template', downloadCargoReadinessTemplate);
 router.post(
@@ -109,6 +118,14 @@ router.post(
   auditLog('UPDATE', 'TRUCKING_OPERATION'),
   bulkUploadDailyActuals,
 );
+
+router.post(
+  '/wb-rekap/bulk-upload',
+  planningUpload.single('file'),
+  auditLog('UPDATE', 'TRUCKING_OPERATION'),
+  bulkUploadWbRekap,
+);
+
 router.get('/daily-actuals/calendar', getTruckingDailyActualsCalendar);
 
 // Activity log (before generic :id route)

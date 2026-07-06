@@ -13,6 +13,63 @@ import {
   getOperationalColumnLayout,
   type OperationalColumnLayout,
 } from '@/lib/operationalTableLayout'
+import {
+  resolveShippingPerfDischargePort,
+  resolveShippingPerfLoadingPort,
+  type ShippingPerformancePortSource,
+} from '@/lib/shippingPerformancePorts'
+
+/** All Shipments view — default column order (On Going ETA / Close ATA share keys; headers follow label mode). */
+export const ALL_SHIPMENTS_PRESET_COLUMN_ORDER = [
+  'vessel_name',
+  'sto_number',
+  'loading_port',
+  'discharge_port',
+  'supplier',
+  'incoterm',
+  'product',
+  'status',
+  'contract_qty',
+  'outstanding_qty_actual',
+  'loading_delta_eta_etr_days',
+  'loading_delta_eta_etb_days',
+  'loading_delta_etb_etc_days',
+  'discharge_delta_eta_etb_days',
+  'discharge_delta_etb_etc_days',
+  'total_delta_days',
+] as const
+
+export type AllShipmentsPresetColumnKey = (typeof ALL_SHIPMENTS_PRESET_COLUMN_ORDER)[number]
+
+const ALL_SHIPMENTS_PRESET_VISIBLE_SET = new Set<string>(ALL_SHIPMENTS_PRESET_COLUMN_ORDER)
+
+/** Default visible flags for All Shipments — preset columns only; others available via column manager. */
+export function buildAllShipmentsPresetVisibleColumns(
+  allColumnKeys: readonly string[],
+): Record<string, boolean> {
+  const visible: Record<string, boolean> = {}
+  for (const key of allColumnKeys) {
+    visible[key] = ALL_SHIPMENTS_PRESET_VISIBLE_SET.has(key)
+  }
+  return visible
+}
+
+/** Preset column order first, then remaining columns in definition order. */
+export function ensureAllShipmentsPresetColumnOrder(
+  order: readonly string[],
+  allColumnKeys: readonly string[],
+): string[] {
+  const known = new Set(allColumnKeys)
+  const preset = ALL_SHIPMENTS_PRESET_COLUMN_ORDER.filter((key) => known.has(key))
+  const presetSet = new Set<string>(preset)
+  const trailingFromOrder = order.filter((key) => known.has(key) && !presetSet.has(key))
+  const trailingMissing = allColumnKeys.filter((key) => !presetSet.has(key) && !trailingFromOrder.includes(key))
+  return [...preset, ...trailingFromOrder, ...trailingMissing]
+}
+
+export function isAllShipmentsPresetVisibleColumn(key: string): boolean {
+  return ALL_SHIPMENTS_PRESET_VISIBLE_SET.has(key)
+}
 
 /** Section 3 — narrower truncate layout overrides (Shipping Performance only). */
 const SHIPPING_PERF_TABLE_COLUMN_LAYOUT_OVERRIDES: Partial<
@@ -71,6 +128,9 @@ export const SHIPPING_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   sto_number: 80,
   sto_qty: 80,
   received_qty: 80,
+  planning_qty: 80,
+  outstanding_qty_actual: 104,
+  outstanding_qty_planning: 112,
   outstanding_qty: 96,
   loading_delta_eta_etr_days: 72,
   loading_delta_eta_etb_days: 72,
@@ -114,13 +174,16 @@ export const SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS = new Set([
   'delivered_qty',
   'sto_qty',
   'received_qty',
+  'planning_qty',
+  'outstanding_qty_actual',
+  'outstanding_qty_planning',
   'outstanding_qty',
   'by_vessel_qty_contract',
   'by_vessel_qty_receive',
   'by_vessel_qty_delivery',
 ])
 
-export type ShippingPerfCellTooltipSource = {
+export type ShippingPerfCellTooltipSource = ShippingPerformancePortSource & {
   vessel_name?: string | null
   contract_ext_no?: string | null
   contract_number?: string | null
@@ -128,13 +191,14 @@ export type ShippingPerfCellTooltipSource = {
   product?: string | null
   supplier?: string | null
   incoterm?: string | null
-  loading_port?: string | null
-  discharge_port?: string | null
   group_name?: string | null
   contract_qty?: number | null
   delivered_qty?: number | null
   sto_qty?: number | null
   received_qty?: number | null
+  planning_qty?: number | null
+  outstanding_qty_actual?: number | null
+  outstanding_qty_planning?: number | null
   outstanding_qty?: number | null
 }
 
@@ -157,14 +221,10 @@ export function shippingPerfCellTooltipText(
       return String(row.supplier ?? '').trim() || null
     case 'incoterm':
       return String(row.incoterm ?? '').trim() || null
-    case 'loading_port': {
-      const v = String(row.loading_port ?? '').trim()
-      return v && v !== 'Blank' ? v : null
-    }
-    case 'discharge_port': {
-      const v = String(row.discharge_port ?? '').trim()
-      return v && v !== 'Blank' ? v : null
-    }
+    case 'loading_port':
+      return resolveShippingPerfLoadingPort(row)
+    case 'discharge_port':
+      return resolveShippingPerfDischargePort(row)
     case 'group_name':
       return String(row.group_name ?? '').trim() || null
     case 'contract_qty':
@@ -174,6 +234,9 @@ export function shippingPerfCellTooltipText(
     case 'by_vessel_qty_receive':
     case 'sto_qty':
     case 'received_qty':
+    case 'planning_qty':
+    case 'outstanding_qty_actual':
+    case 'outstanding_qty_planning':
     case 'outstanding_qty': {
       let raw: number | null | undefined
       if (colKey === 'contract_qty' || colKey === 'by_vessel_qty_contract') {
@@ -184,8 +247,14 @@ export function shippingPerfCellTooltipText(
         raw = row.received_qty
       } else if (colKey === 'sto_qty') {
         raw = row.sto_qty
+      } else if (colKey === 'planning_qty') {
+        raw = row.planning_qty
+      } else if (colKey === 'outstanding_qty_planning') {
+        raw = row.outstanding_qty_planning
+      } else if (colKey === 'outstanding_qty_actual' || colKey === 'outstanding_qty') {
+        raw = row.outstanding_qty_actual ?? row.outstanding_qty
       } else {
-        raw = row.outstanding_qty
+        raw = row.outstanding_qty_actual ?? row.outstanding_qty
       }
       if (raw === null || raw === undefined) return null
       const mt = Number(raw) / 1000

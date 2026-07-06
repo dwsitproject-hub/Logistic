@@ -1,6 +1,10 @@
 import * as XLSX from 'xlsx'
 import { parseDdMmYyyyToIso } from './dateFormat'
 import {
+  formatPlanningTemplateDateHeader,
+  parsePlanningTemplateDateText,
+} from './planningTemplateDateFormat'
+import {
   derivePerDayMtFromDailyDeliverables,
   enumerateInclusivePlanningDates,
 } from './truckingPlanningDeliverables'
@@ -9,21 +13,47 @@ export type TruckingActualsTemplateRow = {
   contract_ext_no?: string
   contract_number?: string
   po_number?: string
+  /** SAP vendor group (contracts.group_name). */
+  group_name?: string
+  supplier?: string
+  /** SAP Source — Interco / 3rd Party (contracts.source_type). */
+  source_type?: string
+  contract_date?: string
   planning_start_date?: string
   planning_end_date?: string
-  /** SAP Due Date Delivery (End) — used for Unplanned template window. */
+  /** Legacy — no longer required for Unplanned template date columns. */
   delivery_end_date?: string
-  /** Contract outstanding qty from API (kg) — shown as MT on Unplanned template. */
+  /** Contract OS Qty actual from KLIP (kg) — shown as MT on Unplanned template. */
   outstanding_quantity?: number
   daily_deliverables?: Array<{ date?: string; quantity_delivered?: number }>
-  /** Unplanned rows derive date columns from today −15 … due end +30. */
-  templateKind?: 'default' | 'unplanned'
+  /** Unplanned rows use date columns from today … today + 60 days. */
+  templateKind?: 'default' | 'unplanned' | 'planned'
 }
 
-export const UNPLANNED_TEMPLATE_OUTSTANDING_QTY_HEADER = 'Outstanding Qty (MT)'
+export const UNPLANNED_TEMPLATE_OS_QTY_HEADER = 'OS Qty (kg)'
+export const UNPLANNED_TEMPLATE_PLAN_QTY_HEADER = 'Plan Qty (kg)'
+/** @deprecated Use UNPLANNED_TEMPLATE_OS_QTY_HEADER */
+export const UNPLANNED_TEMPLATE_OUTSTANDING_QTY_HEADER = UNPLANNED_TEMPLATE_OS_QTY_HEADER
 
-export const UNPLANNED_PLANNING_START_BUFFER_DAYS = 15
-export const UNPLANNED_PLANNING_END_BUFFER_DAYS = 30
+export const UNPLANNED_PLANNING_FORWARD_DAYS = 60
+/** @deprecated Unplanned window is now today … today + UNPLANNED_PLANNING_FORWARD_DAYS */
+export const UNPLANNED_PLANNING_START_BUFFER_DAYS = 0
+/** @deprecated Unplanned window is now today … today + UNPLANNED_PLANNING_FORWARD_DAYS */
+export const UNPLANNED_PLANNING_END_BUFFER_DAYS = UNPLANNED_PLANNING_FORWARD_DAYS
+
+export const UNPLANNED_TEMPLATE_METADATA_HEADERS = [
+  'Group',
+  'Supplier',
+  'Source',
+  'Contract Date',
+  'Contract Ext No',
+  'PO',
+  UNPLANNED_TEMPLATE_OS_QTY_HEADER,
+  UNPLANNED_TEMPLATE_PLAN_QTY_HEADER,
+] as const
+
+export const UNPLANNED_TEMPLATE_PLAN_QTY_COL_INDEX = UNPLANNED_TEMPLATE_METADATA_HEADERS.length - 1
+export const UNPLANNED_TEMPLATE_FIRST_DATE_COL_INDEX = UNPLANNED_TEMPLATE_METADATA_HEADERS.length
 
 const DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP =
   'Download template is available when the status filter is Unplanned, Planned, or In Progress.'
@@ -38,6 +68,10 @@ export function isActualsTemplateDownloadEnabled(statusFilter: string): boolean 
 
 export function isUnplannedPlanningTemplateMode(statusFilter: string): boolean {
   return statusFilter === 'UNPLANNED'
+}
+
+export function isPlannedPlanningTemplateMode(statusFilter: string): boolean {
+  return statusFilter === 'PLANNED' || statusFilter === 'IN_PROGRESS'
 }
 
 export { DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP }
@@ -65,25 +99,27 @@ export function todayIsoDate(reference = new Date()): string {
   return `${yyyy}-${mm}-${dd}`
 }
 
-/** Unplanned planning window: today −15 days … SAP due delivery end +30 days. */
+/** Unplanned planning window: today … today + 60 days (inclusive). */
 export function resolveUnplannedPlanningWindow(
-  deliveryEndIso: string,
+  _deliveryEndIso?: string,
   referenceToday?: string,
 ): { startIso: string; endIso: string } | null {
-  const endBase = sliceIsoDate(deliveryEndIso)
-  if (!endBase) return null
   const today = sliceIsoDate(referenceToday ?? todayIsoDate())
   if (!today) return null
-  const startIso = shiftIsoDate(today, -UNPLANNED_PLANNING_START_BUFFER_DAYS)
-  const endIso = shiftIsoDate(endBase, UNPLANNED_PLANNING_END_BUFFER_DAYS)
+  const startIso = today
+  const endIso = shiftIsoDate(today, UNPLANNED_PLANNING_FORWARD_DAYS)
   if (startIso > endIso) return null
   return { startIso, endIso }
 }
 
+export function buildUnplannedTemplateDateColumns(referenceToday?: string): string[] {
+  const window = resolveUnplannedPlanningWindow('', referenceToday)
+  if (!window) return []
+  return enumerateInclusivePlanningDates(window.startIso, window.endIso)
+}
+
 function formatDateColumnHeader(iso: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
-  if (!m) return iso
-  return `${m[3]}/${m[2]}/${m[1]}`
+  return formatPlanningTemplateDateHeader(iso)
 }
 
 function escapeCsvCell(value: string): string {
@@ -104,13 +140,18 @@ function resolvePerDayMt(row: TruckingActualsTemplateRow, start: string, end: st
   return derivePerDayMtFromDailyDeliverables(daily, start, end)
 }
 
-/** API outstanding qty is kg; template displays MT (same as trucking list column). */
-export function formatTemplateOutstandingQtyMt(kg: unknown): string {
+/** API outstanding qty is kg; template displays kg (KLIP list shows MT). */
+export function formatTemplateOutstandingQtyKg(kg: unknown): string {
   if (kg === null || kg === undefined || kg === '') return ''
   const n = typeof kg === 'string' ? Number(String(kg).replace(/,/g, '')) : Number(kg)
   if (!Number.isFinite(n)) return ''
-  const mt = n / 1000
-  return String(Math.round(mt * 100) / 100)
+  if (Number.isInteger(n)) return String(n)
+  return String(Math.round(n * 100) / 100)
+}
+
+/** @deprecated Use formatTemplateOutstandingQtyKg */
+export function formatTemplateOutstandingQtyMt(kg: unknown): string {
+  return formatTemplateOutstandingQtyKg(kg)
 }
 
 function isUnplannedTemplateRow(row: TruckingActualsTemplateRow): boolean {
@@ -118,20 +159,73 @@ function isUnplannedTemplateRow(row: TruckingActualsTemplateRow): boolean {
     row.templateKind === 'unplanned' ||
     (!sliceIsoDate(row.planning_start_date) &&
       !sliceIsoDate(row.planning_end_date) &&
-      Boolean(sliceIsoDate(row.delivery_end_date)))
+      Boolean(sliceIsoDate(row.delivery_end_date)) &&
+      row.templateKind !== 'planned')
   )
+}
+
+function isPlannedTemplateRow(row: TruckingActualsTemplateRow): boolean {
+  return row.templateKind === 'planned'
+}
+
+function isWidePlanningTemplateRow(row: TruckingActualsTemplateRow): boolean {
+  return isUnplannedTemplateRow(row) || isPlannedTemplateRow(row)
 }
 
 function isWideTemplateMetadataHeader(header: string): boolean {
   const h = header.trim().toLowerCase()
-  return h.includes('outstanding')
+  if (parseDdMmYyyyToIso(header.trim())) return false
+  if (parsePlanningTemplateDateText(header.trim())) return false
+  if (
+    h === 'group' ||
+    h === 'supplier' ||
+    h === 'source' ||
+    h === 'contract date' ||
+    h === 'contract ext no' ||
+    h === 'po' ||
+    h === 'po number' ||
+    h === 'os qty' ||
+    h === 'os qty (kg)' ||
+    h === 'plan qty' ||
+    h === 'plan qty (kg)' ||
+    h === 'reason' ||
+    h === 'failure reason' ||
+    h.includes('outstanding')
+  ) {
+    return true
+  }
+  return false
+}
+
+function computePlanQtyKgFromDeliverables(row: TruckingActualsTemplateRow): string {
+  const daily = Array.isArray(row.daily_deliverables) ? row.daily_deliverables : []
+  const kg = daily.reduce((sum, d) => sum + Number(d?.quantity_delivered ?? 0), 0)
+  if (!Number.isFinite(kg) || kg <= 0) return ''
+  return formatTemplateOutstandingQtyKg(kg)
+}
+
+function resolveDailyQtyKgForDate(
+  row: TruckingActualsTemplateRow,
+  dateIso: string,
+): string {
+  const daily = Array.isArray(row.daily_deliverables) ? row.daily_deliverables : []
+  const entry = daily.find((d) => sliceIsoDate(d?.date) === dateIso)
+  const kg = Number(entry?.quantity_delivered ?? 0)
+  if (!Number.isFinite(kg) || kg <= 0) return ''
+  return formatTemplateOutstandingQtyKg(kg)
+}
+
+function formatContractDateForTemplate(value: unknown): string {
+  const iso = sliceIsoDate(value)
+  if (!iso) return ''
+  return formatPlanningTemplateDateHeader(iso, { includeYear: true })
 }
 
 function collectWideTemplateDateColumns(
   headerRow: unknown[],
 ): Array<{ colIndex: number; dateIso: string }> {
   const dateColumns: Array<{ colIndex: number; dateIso: string }> = []
-  for (let ci = 2; ci < headerRow.length; ci += 1) {
+  for (let ci = 0; ci < headerRow.length; ci += 1) {
     const headerText = cellToString(headerRow[ci])
     if (isWideTemplateMetadataHeader(headerText)) continue
     const iso = parseTemplateHeaderDateFromCell(headerRow[ci])
@@ -140,15 +234,38 @@ function collectWideTemplateDateColumns(
   return dateColumns
 }
 
-function resolveRowPlanningWindow(row: TruckingActualsTemplateRow): { start: string; end: string } | null {
+function resolveWideTemplateRowKeys(
+  headerRow: unknown[],
+  cells: unknown[],
+): { contractExtNo: string; poNumber: string } {
+  const headers = headerRow.map((h) => cellToString(h).toLowerCase())
+  const extIdx = headers.findIndex((h) => h.includes('contract') && h.includes('ext'))
+  const poIdx = headers.findIndex((h) => h === 'po' || h === 'po number')
+  if (extIdx >= 0 || poIdx >= 0) {
+    return {
+      contractExtNo: extIdx >= 0 ? cellToString(cells[extIdx]) : '',
+      poNumber: poIdx >= 0 ? cellToString(cells[poIdx]) : '',
+    }
+  }
+  return {
+    contractExtNo: cellToString(cells[0]),
+    poNumber: cellToString(cells[1]),
+  }
+}
+
+function resolveRowPlanningWindow(
+  row: TruckingActualsTemplateRow,
+  referenceToday?: string,
+): { start: string; end: string } | null {
   const isUnplanned =
     row.templateKind === 'unplanned' ||
-    (!sliceIsoDate(row.planning_start_date) &&
+    (row.templateKind !== 'planned' &&
+      !sliceIsoDate(row.planning_start_date) &&
       !sliceIsoDate(row.planning_end_date) &&
       Boolean(sliceIsoDate(row.delivery_end_date)))
 
-  if (isUnplanned) {
-    const window = resolveUnplannedPlanningWindow(String(row.delivery_end_date ?? ''))
+  if (isUnplanned || row.templateKind === 'planned') {
+    const window = resolveUnplannedPlanningWindow('', referenceToday)
     if (!window) return null
     return { start: window.startIso, end: window.endIso }
   }
@@ -160,11 +277,17 @@ function resolveRowPlanningWindow(row: TruckingActualsTemplateRow): { start: str
 }
 
 /** Build dynamic date columns (ISO) from earliest planning start to latest planning end. */
-export function buildActualsTemplateDateColumns(rows: TruckingActualsTemplateRow[]): string[] {
+export function buildActualsTemplateDateColumns(
+  rows: TruckingActualsTemplateRow[],
+  referenceToday?: string,
+): string[] {
+  if (rows.some(isWidePlanningTemplateRow)) {
+    return buildUnplannedTemplateDateColumns(referenceToday)
+  }
   let minStart = ''
   let maxEnd = ''
   for (const row of rows) {
-    const window = resolveRowPlanningWindow(row)
+    const window = resolveRowPlanningWindow(row, referenceToday)
     if (!window) continue
     if (!minStart || window.start < minStart) minStart = window.start
     if (!maxEnd || window.end > maxEnd) maxEnd = window.end
@@ -196,34 +319,65 @@ function excelSerialToIso10(serial: number): string | null {
 }
 
 /** Build header + data rows for wide planning template (CSV / XLSX). */
-export function buildActualsTemplateMatrix(rows: TruckingActualsTemplateRow[]): string[][] {
+export function buildActualsTemplateMatrix(
+  rows: TruckingActualsTemplateRow[],
+  referenceToday?: string,
+): string[][] {
   const eligible = rows.filter((row) => {
     const ext = resolveContractExtNo(row)
-    return ext && resolveRowPlanningWindow(row)
+    if (!ext) return false
+    const osKg = Number(row.outstanding_quantity ?? 0)
+    if (isWidePlanningTemplateRow(row) && (!Number.isFinite(osKg) || osKg <= 0)) return false
+    if (isWidePlanningTemplateRow(row)) return true
+    return Boolean(resolveRowPlanningWindow(row, referenceToday))
   })
 
-  const dateColumns = buildActualsTemplateDateColumns(eligible)
-  const isUnplannedTemplate = eligible.some(isUnplannedTemplateRow)
-  const headerCells = isUnplannedTemplate
-    ? ['Contract Ext No', 'PO', UNPLANNED_TEMPLATE_OUTSTANDING_QTY_HEADER, ...dateColumns.map(formatDateColumnHeader)]
+  const isWideTemplate = eligible.some(isWidePlanningTemplateRow)
+  const sortedEligible = isWideTemplate
+    ? [...eligible].sort((a, b) =>
+        String(a.supplier ?? '')
+          .localeCompare(String(b.supplier ?? ''), undefined, {
+            sensitivity: 'base',
+            numeric: true,
+          }),
+      )
+    : eligible
+
+  const dateColumns = buildActualsTemplateDateColumns(sortedEligible, referenceToday)
+  const headerCells = isWideTemplate
+    ? [...UNPLANNED_TEMPLATE_METADATA_HEADERS, ...dateColumns.map(formatDateColumnHeader)]
     : ['Contract Ext No', 'PO', ...dateColumns.map(formatDateColumnHeader)]
   const matrix: string[][] = [headerCells]
 
-  for (const row of eligible) {
+  for (const row of sortedEligible) {
     const ext = resolveContractExtNo(row)
     const po = String(row.po_number ?? '').trim()
-    const window = resolveRowPlanningWindow(row)!
-    const isUnplanned = isUnplannedTemplateRow(row)
-    const perDayMt = isUnplanned ? null : resolvePerDayMt(row, window.start, window.end)
+    const window = resolveRowPlanningWindow(row, referenceToday)!
+    const isLegacyPlanned = !isWidePlanningTemplateRow(row)
+    const perDayMt = isLegacyPlanned ? resolvePerDayMt(row, window.start, window.end) : null
     const rowDates = new Set(enumerateInclusivePlanningDates(window.start, window.end))
 
     const qtyCells = dateColumns.map((iso) => {
+      if (isWideTemplate) {
+        if (!rowDates.has(iso)) return ''
+        return resolveDailyQtyKgForDate(row, iso)
+      }
       if (!rowDates.has(iso) || perDayMt == null) return ''
-      return String(perDayMt)
+      return String(Math.round(perDayMt * 1000))
     })
 
-    if (isUnplannedTemplate) {
-      matrix.push([ext, po, formatTemplateOutstandingQtyMt(row.outstanding_quantity), ...qtyCells])
+    if (isWideTemplate) {
+      matrix.push([
+        String(row.group_name ?? '').trim(),
+        String(row.supplier ?? '').trim(),
+        String(row.source_type ?? '').trim(),
+        formatContractDateForTemplate(row.contract_date),
+        ext,
+        po,
+        formatTemplateOutstandingQtyKg(row.outstanding_quantity),
+        computePlanQtyKgFromDeliverables(row),
+        ...qtyCells,
+      ])
     } else {
       matrix.push([ext, po, ...qtyCells])
     }
@@ -232,21 +386,114 @@ export function buildActualsTemplateMatrix(rows: TruckingActualsTemplateRow[]): 
   return matrix
 }
 
-export function buildTruckingActualsTemplateCsv(rows: TruckingActualsTemplateRow[]): string {
-  const matrix = buildActualsTemplateMatrix(rows)
+export function buildTruckingActualsTemplateCsv(
+  rows: TruckingActualsTemplateRow[],
+  referenceToday?: string,
+): string {
+  const matrix = buildActualsTemplateMatrix(rows, referenceToday)
   const lines = matrix.map((line) => line.map(escapeCsvCell).join(','))
   return `\ufeff${lines.join('\n')}\n`
 }
 
-export function buildTruckingActualsTemplateXlsxBlob(rows: TruckingActualsTemplateRow[]): Blob {
-  const matrix = buildActualsTemplateMatrix(rows)
+function applyUnplannedPlanQtyFormulas(ws: XLSX.WorkSheet, matrix: string[][]): void {
+  if (matrix.length < 2) return
+  const header = matrix[0] ?? []
+  let lastDateColIdx = header.length - 1
+  const trailingHeader = header[lastDateColIdx]?.trim().toLowerCase() ?? ''
+  if (trailingHeader === 'reason' || trailingHeader === 'failure reason') {
+    lastDateColIdx -= 1
+  }
+  if (lastDateColIdx < UNPLANNED_TEMPLATE_FIRST_DATE_COL_INDEX) return
+  const firstDateCol = XLSX.utils.encode_col(UNPLANNED_TEMPLATE_FIRST_DATE_COL_INDEX)
+  const lastDateCol = XLSX.utils.encode_col(lastDateColIdx)
+  for (let r = 1; r < matrix.length; r += 1) {
+    const excelRow = r + 1
+    const cellRef = XLSX.utils.encode_cell({ r, c: UNPLANNED_TEMPLATE_PLAN_QTY_COL_INDEX })
+    ws[cellRef] = {
+      f: `SUM(${firstDateCol}${excelRow}:${lastDateCol}${excelRow})`,
+      t: 'n',
+      v: 0,
+    }
+  }
+}
+
+export function buildTruckingActualsTemplateXlsxBlob(
+  rows: TruckingActualsTemplateRow[],
+  referenceToday?: string,
+): Blob {
+  const matrix = buildActualsTemplateMatrix(rows, referenceToday)
   const ws = XLSX.utils.aoa_to_sheet(matrix)
+  if (rows.some(isWidePlanningTemplateRow)) {
+    applyUnplannedPlanQtyFormulas(ws, matrix)
+  }
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Planning')
   const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
   return new Blob([buf], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   })
+}
+
+export const UNPLANNED_UPLOAD_FAILURE_REASON_HEADER = 'Reason'
+
+function stripTrailingReasonColumn(headerRow: string[]): string[] {
+  const headers = [...headerRow]
+  while (headers.length > 0) {
+    const last = headers[headers.length - 1]?.trim().toLowerCase() ?? ''
+    if (last === 'reason' || last === 'failure reason') {
+      headers.pop()
+      continue
+    }
+    break
+  }
+  return headers
+}
+
+/** XLSX of failed Unplanned upload rows — same columns as upload + Reason at the end. */
+export function buildFailedUnplannedUploadRetemplateXlsx(args: {
+  uploadHeaderRow: string[]
+  failedRows: Array<{ cells: string[]; reason: string }>
+}): Blob {
+  const baseHeader = stripTrailingReasonColumn(args.uploadHeaderRow)
+  const header = [...baseHeader, UNPLANNED_UPLOAD_FAILURE_REASON_HEADER]
+  const matrix: string[][] = [header]
+
+  for (const row of args.failedRows) {
+    const dataCells = row.cells.slice(0, baseHeader.length)
+    while (dataCells.length < baseHeader.length) dataCells.push('')
+    matrix.push([...dataCells, row.reason])
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(matrix)
+  const isUnplannedMetadata =
+    baseHeader.length >= UNPLANNED_TEMPLATE_METADATA_HEADERS.length &&
+    baseHeader[0]?.trim().toLowerCase() === 'group'
+  if (isUnplannedMetadata) {
+    applyUnplannedPlanQtyFormulas(ws, matrix)
+  }
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Planning')
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+  return new Blob([buf], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  })
+}
+
+export function triggerFailedUnplannedUploadRetemplateDownload(args: {
+  uploadHeaderRow: string[]
+  failedRows: Array<{ cells: string[]; reason: string }>
+  filename?: string
+}): void {
+  const blob = buildFailedUnplannedUploadRetemplateXlsx(args)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = args.filename ?? 'trucking_unplanned_planning_failed_rows.xlsx'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 
 function normalizeTemplateHeaderLabels(headers: string[]): boolean {
@@ -322,8 +569,10 @@ function parseCsvLine(line: string): string[] {
   return cells
 }
 
-function parseTemplateHeaderDateToIso(header: string): string | null {
+function parseTemplateHeaderDateToIso(header: string, referenceIso?: string): string | null {
   const trimmed = header.trim().replace(/^"|"$/g, '')
+  const planning = parsePlanningTemplateDateText(trimmed, referenceIso)
+  if (planning) return planning
   return parseDdMmYyyyToIso(trimmed)
 }
 
@@ -339,7 +588,7 @@ function parseTemplateHeaderDateFromCell(raw: unknown): string | null {
     return `${yyyy}-${mm}-${dd}`
   }
   const asText = cellToString(raw)
-  const dmy = parseTemplateHeaderDateToIso(asText)
+  const dmy = parseTemplateHeaderDateToIso(asText, todayIsoDate())
   if (dmy) return dmy
   if (/^\d+(\.\d+)?$/.test(asText)) {
     return excelSerialToIso10(Number(asText))
@@ -347,7 +596,7 @@ function parseTemplateHeaderDateFromCell(raw: unknown): string | null {
   return null
 }
 
-function parseTemplateQtyMt(raw: string): number | null {
+function parseTemplateQtyKg(raw: string): number | null {
   const s = raw.trim().replace(/,/g, '')
   if (!s) return null
   const n = Number(s)
@@ -387,8 +636,7 @@ export function parseTruckingWidePlanningTemplateMatrix(matrix: unknown[][]): {
 
   for (let rIdx = 1; rIdx < matrix.length; rIdx += 1) {
     const cells = matrix[rIdx] ?? []
-    const contractExtNo = cellToString(cells[0])
-    const poNumber = cellToString(cells[1])
+    const { contractExtNo, poNumber } = resolveWideTemplateRowKeys(headerRow, cells)
     const rowNumber = rIdx + 1
     const hasAnyQty = dateColumns.some(({ colIndex }) => cellToString(cells[colIndex]) !== '')
 
@@ -404,9 +652,9 @@ export function parseTruckingWidePlanningTemplateMatrix(matrix: unknown[][]): {
 
     const entries: ParsedWidePlanningTemplateRow['entries'] = []
     for (const { colIndex, dateIso } of dateColumns) {
-      const qtyMt = parseTemplateQtyMt(cellToString(cells[colIndex]))
-      if (qtyMt == null || qtyMt === 0) continue
-      entries.push({ dateIso, qtyMt, colIndex })
+      const qtyKg = parseTemplateQtyKg(cellToString(cells[colIndex]))
+      if (qtyKg == null || qtyKg === 0) continue
+      entries.push({ dateIso, qtyMt: qtyKg, colIndex })
     }
 
     if (entries.length === 0) continue
@@ -454,6 +702,28 @@ export async function isActualsWidePlanningTemplateFile(file: File): Promise<boo
   return isActualsWideTemplateHeader(firstLine)
 }
 
+export function isWidePlanningTemplateMatrix(matrix: unknown[][]): boolean {
+  const headerRow = matrix[0]
+  if (!headerRow || headerRow.length < 3) return false
+  const headers = headerRow.map((cell) => cellToString(cell).toLowerCase())
+  const hasGroup = headers.includes('group')
+  const hasExt = headers.some((h) => h.includes('contract') && h.includes('ext'))
+  const hasPo = headers.some((h) => h === 'po' || h === 'po number')
+  const dateColumns = collectWideTemplateDateColumns(headerRow)
+  if (hasGroup) {
+    return hasExt && hasPo && dateColumns.length > 0
+  }
+  const first = cellToString(headerRow[0]).toLowerCase()
+  const second = cellToString(headerRow[1]).toLowerCase()
+  return first.includes('contract') && first.includes('ext') && (second === 'po' || second === 'po number')
+}
+
+export async function isWidePlanningTemplateFile(file: File): Promise<boolean> {
+  if (!isExcelPlanningTemplateFilename(file.name)) return false
+  const matrix = await readPlanningTemplateMatrix(file)
+  return isWidePlanningTemplateMatrix(matrix)
+}
+
 export async function parseTruckingWidePlanningTemplateFile(file: File): Promise<{
   rows: ParsedWidePlanningTemplateRow[]
   rowParseFailures: Array<{ rowNumber: number; contract_ext_no: string; reason: string }>
@@ -467,7 +737,7 @@ export function buildDailyDeliverablesFromWidePlanningEntries(
 ): Array<{ date: string; quantity_delivered: number }> {
   const byDate = new Map<string, number>()
   for (const entry of entries) {
-    const kg = Math.round(entry.qtyMt * 1000 * 100) / 100
+    const kg = Math.round(entry.qtyMt * 100) / 100
     byDate.set(entry.dateIso, kg)
   }
   return Array.from(byDate.entries())

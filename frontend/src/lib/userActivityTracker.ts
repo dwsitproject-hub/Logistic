@@ -47,7 +47,7 @@ function ensureFlushLoop(): void {
   window.addEventListener('beforeunload', () => {
     if (!queue.length) return;
     const token = localStorage.getItem('token');
-    const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
+    const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:5001/api';
     if (!token) return;
     const body = JSON.stringify({ events: queue });
     void fetch(`${baseURL}/user-activity/events`, {

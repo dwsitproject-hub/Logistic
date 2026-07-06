@@ -126,6 +126,7 @@ export function truckingUnplannedContractBacklogRowSelectSql(outstandingExpr: st
     c.product AS product,
     c.incoterm AS incoterm,
     c.group_name AS group_name,
+    c.source_type AS source_type,
     ${outstandingExpr} AS outstanding_quantity,
     NULL::numeric AS estimated_km,
     ${contractExtNoExpr} AS contract_ext_no,

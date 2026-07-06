@@ -2,9 +2,23 @@ import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import { toIsoDate10FromCell } from '../utils/planningSheetDate';
 import {
-  shippingPerfResolvedDeliveredQtySql,
-  shippingPerfResolvedFulfilledQtySql,
-} from '../utils/shipmentManualQtyResolveSql';
+  sapSpdDischargePortTextExpr,
+  sapSpdLoadingPortTextExpr,
+} from '../utils/portDisplaySql';
+import { mergePoMetricsFromRows } from '../utils/shippingPerformancePoMetrics';
+import {
+  buildShippingPerfStoMetricsCte,
+  SHIPPING_PERF_STO_GROUP_KEY_EXPR,
+} from '../utils/shippingPerformanceStoMetricsSql';
+import {
+  shippingPerfOperationalStoKeyExpr,
+  shippingPerfStoGroupKeyFromRow,
+} from '../utils/shippingPerformanceStoSql';
+import {
+  sqlSapVesselNameFromSpdJsonb,
+  sqlShipmentDisplayVesselName,
+} from '../utils/sapVesselFields';
+
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
 export interface ShippingPerformanceFilters {
@@ -56,23 +70,11 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const ROW_CACHE_KEY = 'shipping-performance-rows-v13';
+const ROW_CACHE_KEY = 'shipping-performance-rows-v26';
 
-const SP_RESOLVED_DELIVERED = shippingPerfResolvedDeliveredQtySql(
-  's.quantity_delivered',
-  'sa.quantity_delivered_sap',
-);
-const SP_RESOLVED_FULFILLED = shippingPerfResolvedFulfilledQtySql(
-  'c.incoterm',
-  'sa.quantity_receive',
-  'sa.quantity_delivered_sap',
-);
-
-function shippingPerfRowDedupeKey(row: Record<string, unknown>): string {
-  const sto = String(row.sto_number ?? '').trim();
-  const po = String(row.po_number ?? '').trim();
-  if (sto && po) return `sto-po:${sto}|${po}`;
-  return `id:${String(row.id ?? '')}`;
+/** One row per STO / shipment operation (not per PO). */
+export function shippingPerfStoGroupKey(row: Record<string, unknown>): string {
+  return shippingPerfStoGroupKeyFromRow(row);
 }
 
 function shippingPerfRowPriority(row: Record<string, unknown>): number {
@@ -82,23 +84,77 @@ function shippingPerfRowPriority(row: Record<string, unknown>): number {
   return 2;
 }
 
-/** One row per SAP PO+STO in All Shipments (prefer numeric SAP shipment_id). */
+function joinDistinctValues(rows: Record<string, unknown>[], field: string): string {
+  const values = new Set<string>();
+  for (const row of rows) {
+    const raw = String(row[field] ?? '').trim();
+    if (!raw) continue;
+    for (const part of raw.split(',')) {
+      const v = part.trim();
+      if (v) values.add(v);
+    }
+  }
+  return [...values].sort((a, b) => a.localeCompare(b)).join(', ');
+}
+
+function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<string, unknown> {
+  const pick = rows.reduce((best, row) =>
+    shippingPerfRowPriority(row) >= shippingPerfRowPriority(best) ? row : best,
+  );
+
+  const fromStoMetrics = pick.po_numbers != null || pick.contract_numbers != null;
+  const metrics = fromStoMetrics
+    ? {
+        contractQty: Number(pick.contract_qty ?? 0),
+        stoQty: Number(pick.sto_qty ?? 0),
+        receivedQty: Number(pick.received_qty ?? 0),
+        deliveredQty: Number(pick.delivered_qty ?? 0),
+        planningQty: Number(pick.planning_qty ?? 0),
+        outstandingQtyActual: Number(pick.outstanding_qty_actual ?? 0),
+        outstandingQtyPlanning: Number(pick.outstanding_qty_planning ?? 0),
+      }
+    : mergePoMetricsFromRows(rows);
+
+  return {
+    ...pick,
+    sto_key: pick.sto_key ?? shippingPerfStoGroupKey(pick).replace(/^(sto:|ship:|op:|id:)/, ''),
+    po_number:
+      (pick.po_numbers as string | undefined) ??
+      (joinDistinctValues(rows, 'po_number') || pick.po_number),
+    contract_number:
+      (pick.contract_numbers as string | undefined) ??
+      (joinDistinctValues(rows, 'contract_number') || pick.contract_number),
+    contract_ext_no: joinDistinctValues(rows, 'contract_ext_no') || pick.contract_ext_no,
+    contract_qty: metrics.contractQty,
+    sto_qty: metrics.stoQty,
+    received_qty: metrics.receivedQty,
+    delivered_qty: metrics.deliveredQty,
+    planning_qty: metrics.planningQty,
+    outstanding_qty_actual: metrics.outstandingQtyActual,
+    outstanding_qty_planning: metrics.outstandingQtyPlanning,
+    outstanding_qty: metrics.outstandingQtyActual,
+  };
+}
+
+/** Collapse raw shipment rows to one row per STO with STO-level contract / outstanding qty. */
+export function aggregateShippingPerformanceRowsBySto(
+  rows: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  const groups = new Map<string, Record<string, unknown>[]>();
+  for (const row of rows) {
+    const key = shippingPerfStoGroupKey(row);
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(row);
+    else groups.set(key, [row]);
+  }
+  return [...groups.values()].map(mergeShippingPerfStoGroup);
+}
+
+/** @deprecated Use aggregateShippingPerformanceRowsBySto */
 export function dedupeShippingPerformanceRows(
   rows: Record<string, unknown>[],
 ): Record<string, unknown>[] {
-  const byKey = new Map<string, Record<string, unknown>>();
-  for (const row of rows) {
-    const key = shippingPerfRowDedupeKey(row);
-    const existing = byKey.get(key);
-    if (!existing) {
-      byKey.set(key, row);
-      continue;
-    }
-    if (shippingPerfRowPriority(row) >= shippingPerfRowPriority(existing)) {
-      byKey.set(key, row);
-    }
-  }
-  return [...byKey.values()];
+  return aggregateShippingPerformanceRowsBySto(rows);
 }
 
 export function invalidateShippingPerformanceRowCache(): void {
@@ -109,7 +165,19 @@ const SHIPPING_PERFORMANCE_SQL = `
       WITH latest_spd_contract AS (
         SELECT DISTINCT ON (spd.contract_number)
           spd.contract_number,
-          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no
+          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no,
+          UPPER(TRIM(COALESCE(
+            spd.data->'contract'->>'contract_type',
+            spd.data->>'B2B Flag',
+            ''
+          ))) AS b2b_flag,
+          NULLIF(TRIM(COALESCE(
+            spd.data->'contract'->>'contract_reference_po',
+            spd.data->>'CONTRACT REFF PO',
+            spd.data->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'CONTRACT REFF PO'
+          )), '') AS contract_reference_po
         FROM sap_processed_data spd
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
@@ -118,12 +186,7 @@ const SHIPPING_PERFORMANCE_SQL = `
         SELECT
           s.id AS shipment_pk,
           c.contract_id,
-          COALESCE(
-            NULLIF(TRIM(s.shipment_id), ''),
-            NULLIF(TRIM(s.operation_id), ''),
-            NULLIF(TRIM(c.sto_number::text), ''),
-            s.id::text
-          ) AS sto_key
+          ${shippingPerfOperationalStoKeyExpr('c', 's')} AS sto_key
         FROM shipments s
         INNER JOIN contracts c ON s.contract_id = c.id
         WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
@@ -178,15 +241,9 @@ const SHIPPING_PERFORMANCE_SQL = `
             sk2.data->'raw'->>'Remark',
             sk2.data->>'Remark'
           )), '')) AS remark,
-          MAX(NULLIF(TRIM(COALESCE(
-            sk2.data->'raw'->>'Vessel Loading Port 1',
-            sk2.data->'raw'->>'Vessel Loading Port 1 ',
-            sk2.data->'shipment'->>'vessel_loading_port_1'
-          )), '')) AS sap_vessel_loading_port_1,
-          MAX(NULLIF(TRIM(COALESCE(
-            sk2.data->'raw'->>'Vessel Discharge Port',
-            sk2.data->'shipment'->>'vessel_discharge_port'
-          )), '')) AS sap_vessel_discharge_port
+          MAX(${sapSpdLoadingPortTextExpr('sk2')}) AS sap_vessel_loading_port_1,
+          MAX(${sapSpdDischargePortTextExpr('sk2')}) AS sap_vessel_discharge_port,
+          MAX(${sqlSapVesselNameFromSpdJsonb('sk2.data')}) AS vessel_name_sap
         FROM ship_keys sk
         LEFT JOIN spd_keyed sk2 ON sk2.shipment_pk = sk.shipment_pk
         GROUP BY sk.shipment_pk
@@ -216,21 +273,25 @@ const SHIPPING_PERFORMANCE_SQL = `
         FROM vessel_loading_ports vlp
         WHERE COALESCE(vlp.is_discharge_port, false) = true
         ORDER BY vlp.shipment_id, vlp.port_sequence NULLS LAST, vlp.id
-      )
+      ),
+      ${buildShippingPerfStoMetricsCte()}
       SELECT
         s.id,
         s.shipment_id,
         NULLIF(TRIM(s.operation_id), '') AS operation_id,
-        c.contract_id AS contract_number,
-        c.po_number,
+        ${SHIPPING_PERF_STO_GROUP_KEY_EXPR} AS sto_key,
+        COALESCE(sm.contract_numbers, c.contract_id::text) AS contract_number,
+        COALESCE(sm.po_numbers, c.po_number::text) AS po_number,
+        sm.po_numbers,
+        sm.contract_numbers,
         c.sto_number,
         l.contract_ext_no,
         c.contract_date::date AS contract_date,
         c.incoterm,
         c.product,
         c.supplier,
-        COALESCE(c.quantity_ordered, 0)::numeric AS contract_qty,
-        s.vessel_name,
+        COALESCE(sm.contract_qty, 0)::numeric AS contract_qty,
+        ${sqlShipmentDisplayVesselName('sa.vessel_name_sap', 's.vessel_name')} AS vessel_name,
         s.status,
         COALESCE(
           NULLIF(TRIM(pnc.group_plant), ''),
@@ -299,17 +360,17 @@ const SHIPPING_PERFORMANCE_SQL = `
           COALESCE((COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) - COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date)), 0)
         )::int AS ata_total_delta_days,
         sa.remark,
-        COALESCE(NULLIF(sa.sto_quantity, 0), c.sto_quantity, 0)::numeric AS sto_qty,
-        ${SP_RESOLVED_FULFILLED} AS received_qty,
-        ${SP_RESOLVED_DELIVERED} AS delivered_qty,
-        GREATEST(
-          COALESCE(NULLIF(sa.sto_quantity, 0), c.sto_quantity, 0)::numeric
-          - ${SP_RESOLVED_FULFILLED},
-          0
-        )::numeric AS outstanding_qty
+        COALESCE(sm.sto_qty, 0)::numeric AS sto_qty,
+        COALESCE(sm.received_qty, 0)::numeric AS received_qty,
+        COALESCE(sm.delivered_qty, 0)::numeric AS delivered_qty,
+        COALESCE(sm.planning_qty, 0)::numeric AS planning_qty,
+        COALESCE(sm.outstanding_qty_actual, 0)::numeric AS outstanding_qty_actual,
+        COALESCE(sm.outstanding_qty_planning, 0)::numeric AS outstanding_qty_planning,
+        COALESCE(sm.outstanding_qty_actual, 0)::numeric AS outstanding_qty
       FROM shipments s
       INNER JOIN contracts c ON s.contract_id = c.id
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key) = TRIM((${SHIPPING_PERF_STO_GROUP_KEY_EXPR}))
       LEFT JOIN sap_agg sa ON sa.shipment_pk = s.id
       LEFT JOIN loading_port lp ON lp.shipment_id = s.id
       LEFT JOIN discharge_port dp ON dp.shipment_id = s.id
@@ -333,6 +394,11 @@ const SHIPPING_PERFORMANCE_SQL = `
       ) pna ON TRUE
       WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
         AND COALESCE(s.status, '') <> 'CANCELLED'
+        AND NOT (
+          l.contract_number IS NOT NULL
+          AND COALESCE(l.b2b_flag, '') = 'B2B'
+          AND l.contract_reference_po IS NOT NULL
+        )
       ORDER BY s.created_at DESC`;
 
 function parseStringArray(value: unknown): string[] {
@@ -405,7 +471,7 @@ function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMod
       rowCount += 1;
       const contractNumber = String(row.contract_number || '').trim();
       if (contractNumber) contracts.add(contractNumber);
-      totalQty += Number(row.outstanding_qty ?? 0);
+      totalQty += Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0);
       sumLoadingEtaEtr += Number(row[deltaField(mode, 'loading_delta_eta_etr_days')] ?? 0);
       sumLoadingEtaEtb += Number(row[deltaField(mode, 'loading_delta_eta_etb_days')] ?? 0);
       sumLoadingEtbEtc += Number(row[deltaField(mode, 'loading_delta_etb_etc_days')] ?? 0);
@@ -432,7 +498,7 @@ function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMod
 
 function matchesPerfDrilldownRow(row: Record<string, unknown>): boolean {
   if (String(row.status || '').trim().toUpperCase() === 'COMPLETED') return false;
-  if (Number(row.outstanding_qty ?? 0) <= 0) return false;
+  if (Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0) <= 0) return false;
   return true;
 }
 
@@ -449,7 +515,7 @@ function buildPerfTree(rows: Record<string, unknown>[]): ShippingPerfTreeNode[] 
     const plant = String(row.plant_site || '').trim() || 'Blank';
     const inc = String(row.incoterm || '').trim() || 'Blank';
     const ves = String(row.vessel_name || '').trim() || 'Unknown';
-    const qty = Number(row.outstanding_qty ?? 0);
+    const qty = Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0);
 
     if (!root.has(prod)) root.set(prod, { count: 0, totalQty: 0, plants: new Map() });
     const pN = root.get(prod)!;
@@ -514,7 +580,7 @@ async function loadShippingPerformanceRows(): Promise<Record<string, unknown>[]>
   }
 
   const result = await query(SHIPPING_PERFORMANCE_SQL);
-  const rows = dedupeShippingPerformanceRows(result.rows as Record<string, unknown>[]);
+  const rows = aggregateShippingPerformanceRowsBySto(result.rows as Record<string, unknown>[]);
   ROW_CACHE.set(ROW_CACHE_KEY, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
   return rows;
 }

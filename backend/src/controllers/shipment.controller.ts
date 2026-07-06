@@ -4,7 +4,7 @@ import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
-import { runShippingPerformance } from '../services/shippingPerformance.service';
+import { runShippingPerformance, invalidateShippingPerformanceRowCache } from '../services/shippingPerformance.service';
 import {
   buildShipmentListCacheKey,
   buildShipmentListFilterCacheKey,
@@ -15,13 +15,17 @@ import {
   resolveShipmentsListForRequest,
 } from '../services/shipmentList.service';
 import {
+  buildShipmentUnplannedHybridListContext,
+  countUnplannedHybridBreakdown,
   isUnplannedHybridListRequest,
   resolveUnplannedHybridShipmentsList,
+  type UnplannedHybridBreakdown,
 } from '../services/shipmentUnplannedHybridList.service';
 import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
 import { syncVesselLoadingPortsFromLatestSap } from '../services/vesselLoadingPortsFromSap.service';
 import {
   attachPurchaseOrderToShipment,
+  batchSaveShipmentPoPlanQty,
   listAvailablePurchaseOrdersForShipmentEdit,
 } from '../services/shipmentPoAssignment.service';
 import { normalizeAndValidateShipmentDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/shipmentDailyDeliverables';
@@ -40,7 +44,6 @@ import {
 import {
   appendShipmentPipelineScopeStageFilter,
   appendShipmentPipelineStageFilter,
-  buildShipmentPageUnplannedOpenContractsCte,
   shipmentPagePipelineSummarySelectSql,
   shipmentPagePipelineUnplannedRowPredicate,
 } from '../utils/shipmentPagePipelineSql';
@@ -50,9 +53,13 @@ import {
 } from '../utils/shipmentUnplannedHybridSql';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
 import {
+  sqlShipmentListDischargePortsKlipAgg,
+  sqlShipmentListLoadingPortsKlipAgg,
+} from '../utils/shipmentListPortsSql';
+import {
   shipmentListQtyMoveCteFromPage,
-  shipmentListRowGlobalOutstandingSql,
 } from '../utils/shipmentOutstandingQtySql';
+import { shipmentListPageQtySelectSql } from '../utils/shipmentListQtySql';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
 import {
   allocateNextSyntheticSequenceDefault,
@@ -237,11 +244,25 @@ async function upsertPoQtyAssignment(
   }
 }
 
-function shipmentListSummaryPayload(totalCount: number, summaryRow: Record<string, unknown>) {
+function shipmentListSummaryPayload(
+  totalCount: number,
+  summaryRow: Record<string, unknown>,
+  unplannedBreakdown?: UnplannedHybridBreakdown | null,
+) {
+  const unplannedContractRows = unplannedBreakdown
+    ? unplannedBreakdown.contractRows
+    : Number(summaryRow.unplanned_contract_backlog_count || 0);
+  const unplannedShipmentRows = unplannedBreakdown
+    ? unplannedBreakdown.shipmentRows
+    : Number(summaryRow.unplanned_shipment_execution_count || 0);
+  const unplannedTableTotal = unplannedBreakdown
+    ? unplannedBreakdown.totalTableRows
+    : unplannedContractRows + unplannedShipmentRows;
   return {
     total: totalCount,
     status: {
-      unplanned: Number(summaryRow.unplanned_count || 0),
+      /** Matches hybrid Unplanned table row total (backlog + STO execution groups). */
+      unplanned: unplannedTableTotal,
       planned: Number(summaryRow.planned_count || 0),
       atLoadingPort: Number(summaryRow.at_loading_port_count || 0),
       sailed: Number(summaryRow.sailed_count || 0),
@@ -275,11 +296,9 @@ function shipmentListSummaryPayload(totalCount: number, summaryRow: Record<strin
       noEta: Number(summaryRow.eta_discharge_no_eta || 0),
     },
     unplannedTable: {
-      contractRows: Number(summaryRow.unplanned_contract_backlog_count || 0),
-      shipmentRows: Number(summaryRow.unplanned_shipment_execution_count || 0),
-      totalTableRows:
-        Number(summaryRow.unplanned_contract_backlog_count || 0) +
-        Number(summaryRow.unplanned_shipment_execution_count || 0),
+      contractRows: unplannedContractRows,
+      shipmentRows: unplannedShipmentRows,
+      totalTableRows: unplannedTableTotal,
     },
   };
 }
@@ -669,6 +688,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(c.delivery_start_date) as delivery_start_date,
           MAX(c.delivery_end_date) as delivery_end_date,
           BOOL_OR(${sqlIsContractSapClosedExpr('c')}) AS is_contract_sap_closed,
+          ${sqlShipmentListLoadingPortsKlipAgg()},
+          ${sqlShipmentListDischargePortsKlipAgg()},
 ${ataSelect}
 ${etaExtraSelect}
 ${contractMetaSelectCore}
@@ -680,6 +701,10 @@ ${contractMetaSelectCore}
           AND TRIM(cs_sto.sto_number::text) = TRIM((${listStoKeySql})::text)
         LEFT JOIN vlp_load_first vlp_l ON vlp_l.shipment_id = s.id
         LEFT JOIN vlp_disc_first vlp_d ON vlp_d.shipment_id = s.id
+        LEFT JOIN vessel_loading_ports vlp_load ON vlp_load.shipment_id = s.id
+          AND COALESCE(vlp_load.is_discharge_port, false) = false
+        LEFT JOIN vessel_loading_ports vlp_disc ON vlp_disc.shipment_id = s.id
+          AND COALESCE(vlp_disc.is_discharge_port, false) = true
         ${SHIPMENT_ATA_OVERRIDES_JOIN}
         WHERE 1=1
           AND (${coreWhereSql})
@@ -870,8 +895,22 @@ ${contractMetaSelectCore}
     const section1SummaryFilterSql = toolbarOuterSql;
     const section1SummaryFilterParams = toolbarCountParams;
 
-    const summaryCountQuery = `${shipmentBaseCteSqlSummary},
-      ${buildShipmentPageUnplannedOpenContractsCte(contractScopeSql).trim()}
+    /** Unplanned card + table share this hybrid breakdown (toolbar scope, backlog filters, execution predicate). */
+    const section1UnplannedHybridCtx = buildShipmentUnplannedHybridListContext({
+      shipmentBaseCteSql: shipmentBaseCteSqlSummary,
+      toolbarOuterSql,
+      innerParams,
+      toolbarOuterParams,
+      skipSapJoin: true,
+      filterCacheKey: shipmentListFilterCacheKey,
+      contractScope: { dateFrom, dateTo, contract, plants },
+      globalSearch,
+      colFilters,
+    });
+    const loadSection1UnplannedBreakdown = () =>
+      countUnplannedHybridBreakdown(section1UnplannedHybridCtx);
+
+    const summaryCountQuery = `${shipmentBaseCteSqlSummary}
       ${buildUnplannedContractBacklogTableCountCte(contractScopeSql)}
       , filtered_shipments AS (
         SELECT sb.*
@@ -965,11 +1004,14 @@ ${contractMetaSelectCore}
         scopeStatusParam,
       );
       const tSum0 = performance.now();
-      const { summaryRow: sr, totalCount: tc } = await loadShipmentListSummary(
-        summaryCountQuery,
-        [...section1SummaryFilterParams, ...summaryScopeParams],
-        summaryCacheKey,
-      );
+      const [{ summaryRow: sr, totalCount: tc }, unplannedBreakdownForSummary] = await Promise.all([
+        loadShipmentListSummary(
+          summaryCountQuery,
+          [...section1SummaryFilterParams, ...summaryScopeParams],
+          summaryCacheKey,
+        ),
+        loadSection1UnplannedBreakdown(),
+      ]);
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
@@ -983,7 +1025,7 @@ ${contractMetaSelectCore}
         success: true,
         data: {
           shipments: [],
-          summary: shipmentListSummaryPayload(tc, sr),
+          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary),
           pagination: {
             total: tc,
             page: Number(page),
@@ -1050,7 +1092,7 @@ ${contractMetaSelectCore}
             [...section1SummaryFilterParams, ...summaryScopeParams],
             summaryCacheKey,
           );
-          hybridSummary = shipmentListSummaryPayload(tc, sr);
+          hybridSummary = shipmentListSummaryPayload(tc, sr, hybrid.unplannedBreakdown);
         }
         timingsMs.total = performance.now() - tReq0;
         emitShipmentListTimings(res, timingsMs, {
@@ -1090,11 +1132,14 @@ ${contractMetaSelectCore}
           shipmentListFilterCacheKey,
           scopeStatusParam,
         );
-        const { summaryRow: sr, totalCount: tc } = await loadShipmentListSummary(
-          summaryCountQuery,
-          [...section1SummaryFilterParams, ...summaryScopeParams],
-          summaryCacheKey,
-        );
+        const [{ summaryRow: sr, totalCount: tc }, unplannedBreakdownForSummary] = await Promise.all([
+          loadShipmentListSummary(
+            summaryCountQuery,
+            [...section1SummaryFilterParams, ...summaryScopeParams],
+            summaryCacheKey,
+          ),
+          loadSection1UnplannedBreakdown(),
+        ]);
         timingsMs.total = performance.now() - tReq0;
         emitShipmentListTimings(res, timingsMs, {
           path: skipSapJoin ? 'list-page-shell-with-summary' : 'list-page-sap-with-summary',
@@ -1111,7 +1156,7 @@ ${contractMetaSelectCore}
           success: true,
           data: {
             ...data,
-            summary: shipmentListSummaryPayload(tc, sr),
+            summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary),
           },
         });
       }
@@ -1144,11 +1189,14 @@ ${contractMetaSelectCore}
         scopeStatusParam,
       );
       const tSum0 = performance.now();
-      const { summaryRow: sr, totalCount: tc } = await loadShipmentListSummary(
-        summaryCountQuery,
-        [...section1SummaryFilterParams, ...summaryScopeParams],
-        summaryCacheKey,
-      );
+      const [{ summaryRow: sr, totalCount: tc }, unplannedBreakdownForSummary] = await Promise.all([
+        loadShipmentListSummary(
+          summaryCountQuery,
+          [...section1SummaryFilterParams, ...summaryScopeParams],
+          summaryCacheKey,
+        ),
+        loadSection1UnplannedBreakdown(),
+      ]);
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
@@ -1164,7 +1212,7 @@ ${contractMetaSelectCore}
         success: true,
         data: {
           shipments: [],
-          summary: shipmentListSummaryPayload(tc, sr),
+          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary),
           pagination: {
             total: tc,
             page: Number(page),
@@ -1205,10 +1253,21 @@ ${contractMetaSelectCore}
       ${spdAggCtes}
       SELECT 
         sp.*,
-        COALESCE(sa.sto_quantity, 0) AS sto_quantity,
-        COALESCE(sa.quantity_receive, 0) AS quantity_receive,
-        COALESCE(sa.quantity_delivered_sap, 0) AS quantity_delivered_sap,
-        ${shipmentListRowGlobalOutstandingSql()} AS outstanding_quantity,
+        ${shipmentListPageQtySelectSql('sp')},
+        COALESCE(
+          NULLIF(TRIM(slpa.sap_loading_ports), ''),
+          NULLIF(TRIM(sp.loading_ports_klip), ''),
+          NULLIF(TRIM(sp.port_of_loading), '')
+        ) AS loading_ports,
+        COALESCE(
+          NULLIF(TRIM(sdpa.sap_discharge_ports), ''),
+          NULLIF(TRIM(sp.discharge_ports_klip), ''),
+          NULLIF(TRIM(sp.port_of_discharge), '')
+        ) AS discharge_ports,
+        slpa.sap_loading_ports,
+        sdpa.sap_discharge_ports,
+        NULLIF(TRIM(slpa.sap_loading_ports), '') AS sap_vessel_loading_port_1,
+        NULLIF(TRIM(sdpa.sap_discharge_ports), '') AS sap_vessel_discharge_port,
         COALESCE(sl.incoterm, sp.incoterm) AS incoterm,
         sl.b2b_flag AS b2b_flag,
         sl.source_type AS source_type,
@@ -1218,8 +1277,11 @@ ${contractMetaSelectCore}
         sl.vessel_code_sap,
         sl.vessel_owner_sap
       FROM shipment_page sp
+      LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)
+      LEFT JOIN sap_loading_ports_agg slpa ON TRIM(slpa.sto_key::text) = TRIM(sp.sto_key::text)
+      LEFT JOIN sap_discharge_ports_agg sdpa ON TRIM(sdpa.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN contract_ext_agg cex ON TRIM(cex.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN po_numbers_agg pna ON TRIM(pna.sto_key::text) = TRIM(sp.sto_key::text)`;
     const mainParams = [...innerParams, ...outerParams, Number(limit), offset];
@@ -1260,11 +1322,16 @@ ${contractMetaSelectCore}
     normalizeShipmentListRows(result.rows);
 
     let summaryRow: Record<string, unknown> = {};
+    let unplannedBreakdownForSummary: UnplannedHybridBreakdown | null = null;
     if (includeSummary) {
       const tSa0 = performance.now();
-      const summaryResult = await query(summaryCountQuery, [...section1SummaryFilterParams, ...summaryScopeParams]);
+      const [summaryResult, unplannedBd] = await Promise.all([
+        query(summaryCountQuery, [...section1SummaryFilterParams, ...summaryScopeParams]),
+        loadSection1UnplannedBreakdown(),
+      ]);
       timingsMs.dbSummaryAgg = performance.now() - tSa0;
       summaryRow = summaryResult.rows[0] || {};
+      unplannedBreakdownForSummary = unplannedBd;
     }
 
     timingsMs.total = performance.now() - tReq0;
@@ -1283,7 +1350,7 @@ ${contractMetaSelectCore}
       success: true,
       data: {
         shipments: result.rows,
-        summary: shipmentListSummaryPayload(totalCount, summaryRow),
+        summary: shipmentListSummaryPayload(totalCount, summaryRow, unplannedBreakdownForSummary),
         pagination: {
           total: totalCount,
           page: Number(page),
@@ -1481,12 +1548,20 @@ export const attachPurchaseOrderToShipmentHandler = async (req: AuthRequest, res
     }
 
     const contractRowId = String(req.body?.contractRowId ?? req.body?.contract_row_id ?? '').trim();
-    const stoQtyAssignedMt = Number(req.body?.stoQtyAssignedMt ?? req.body?.sto_qty_assigned_mt);
+    const stoQtyAssignedMt =
+      req.body?.stoQtyAssignedMt != null || req.body?.sto_qty_assigned_mt != null
+        ? Number(req.body?.stoQtyAssignedMt ?? req.body?.sto_qty_assigned_mt)
+        : undefined;
+    const stoQtyAssignedKg =
+      req.body?.stoQtyAssignedKg != null || req.body?.shipment_plan_qty_kg != null
+        ? Number(req.body?.stoQtyAssignedKg ?? req.body?.shipment_plan_qty_kg)
+        : undefined;
 
     const result = await attachPurchaseOrderToShipment({
       anchorShipmentUuid: id,
       contractRowId,
       stoQtyAssignedMt,
+      stoQtyAssignedKg,
     });
 
     if (!result.ok) {
@@ -1497,6 +1572,7 @@ export const attachPurchaseOrderToShipmentHandler = async (req: AuthRequest, res
     }
 
     invalidateShipmentsListCache();
+    invalidateShippingPerformanceRowCache();
 
     return res.json({
       success: true,
@@ -1512,6 +1588,53 @@ export const attachPurchaseOrderToShipmentHandler = async (req: AuthRequest, res
     return res.status(500).json({
       success: false,
       error: { message: 'Failed to add PO to shipment' },
+    });
+  }
+};
+
+/** Batch save Shipment Plan Qty (kg) for PO lines on Edit Shipment modal. */
+export const batchSaveShipmentPoPlanQtyHandler = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    if (!isUUID) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Shipment UUID is required' },
+      });
+    }
+
+    const rawRows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    const rows = rawRows.map((row: Record<string, unknown>) => ({
+      contractNumber: String(row.contractNumber ?? row.contract_number ?? '').trim(),
+      poNumber: row.poNumber ?? row.po_number ?? null,
+      shipmentPlanQtyKg: Number(row.shipmentPlanQtyKg ?? row.shipment_plan_qty_kg ?? row.sto_qty_assigned ?? 0),
+    }));
+
+    const result = await batchSaveShipmentPoPlanQty({
+      anchorShipmentUuid: id,
+      rows,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status).json({
+        success: false,
+        error: { message: result.message },
+      });
+    }
+
+    invalidateShipmentsListCache();
+    invalidateShippingPerformanceRowCache();
+
+    return res.json({
+      success: true,
+      message: 'Shipment Plan Qty saved successfully',
+    });
+  } catch (error) {
+    logger.error('Batch save shipment PO plan qty error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to save Shipment Plan Qty' },
     });
   }
 };

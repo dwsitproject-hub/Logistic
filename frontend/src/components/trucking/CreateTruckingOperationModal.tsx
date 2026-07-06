@@ -107,6 +107,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   /** Existing SAP trucking row — show Add UI but save planning via PUT (Unplanned rows). */
   plotOperationId,
   mode = 'add',
+  readOnly = false,
+  stacked = false,
 }: {
   open: boolean
   onClose: () => void
@@ -122,6 +124,10 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   plotOperationId?: string | null
   /** `edit` locks all fields except Start/End Date (Planning) */
   mode?: 'add' | 'edit'
+  /** Read-only view (e.g. opened from Contract Detail STO link). */
+  readOnly?: boolean
+  /** Raise z-index when opened above contract detail modal. */
+  stacked?: boolean
 }) {
   const isPlotMode = Boolean(plotOperationId?.trim())
   const isEditMode = mode === 'edit' && !isPlotMode
@@ -774,6 +780,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
 
   const cd = contractValidation.contractData
   const isContractClosedEditLocked = isEditMode && isContractRecordClosed(cd)
+  const isViewOnly = readOnly || isContractClosedEditLocked
 
   const planningDayCount =
     planning.start_date && planning.end_date && planning.end_date >= planning.start_date
@@ -820,7 +827,11 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     (cd?.cargo_readiness_date ? String(cd.cargo_readiness_date).slice(0, 10) : '')
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+    <div
+      className={`fixed inset-0 flex items-center justify-center bg-black/40 p-4 ${
+        stacked ? 'z-[80]' : 'z-[60]'
+      }`}
+    >
       <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-xl bg-white shadow-xl">
 
         {/* Header */}
@@ -832,12 +843,14 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
               </div>
               <div>
                 <h3 className="text-lg font-semibold text-gray-900">
-                  {isContractClosedEditLocked ? 'View Trucking' : isEditMode ? 'Edit Trucking' : 'Add New Trucking'}
+                  {isViewOnly ? 'View Trucking' : isEditMode ? 'Edit Trucking' : 'Add New Trucking'}
                 </h3>
                 <p className="text-xs text-gray-500">
                   {isContractClosedEditLocked
                     ? 'Contract is Close — read-only view'
-                    : isEditMode
+                    : readOnly
+                      ? 'Read-only view'
+                      : isEditMode
                     ? 'Only planning start and end dates can be changed'
                     : isPlotMode
                       ? 'Plot start/end dates and quantity per day for this STO'
@@ -1247,7 +1260,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                           minIso={truckingDateRange?.minIso}
                           maxIso={truckingDateRange?.maxIso}
                           fastEntryGroup={TRUCKING_PLANNING_FAST_ENTRY_GROUP}
-                          disabled={isContractClosedEditLocked}
+                          disabled={isViewOnly}
                           onChangeIso={(iso) => {
                             setPlanning((prev) => ({ ...prev, start_date: iso }))
                             if (
@@ -1271,7 +1284,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                               revalidatePlanningOutstandingOnDates(iso, planning.end_date)
                             }
                           }}
-                          className={`mt-1 ${formErrors.planning_start_date ? 'border-red-500' : ''} ${isContractClosedEditLocked ? READONLY_FIELD_CLASS : ''}`}
+                          className={`mt-1 ${formErrors.planning_start_date ? 'border-red-500' : ''} ${isViewOnly ? READONLY_FIELD_CLASS : ''}`}
                         />
                         {formErrors.planning_start_date && (
                           <p className="text-xs mt-0.5 text-red-600">{formErrors.planning_start_date}</p>
@@ -1286,7 +1299,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                           minIso={truckingDateRange?.minIso}
                           maxIso={truckingDateRange?.maxIso}
                           fastEntryGroup={TRUCKING_PLANNING_FAST_ENTRY_GROUP}
-                          disabled={isContractClosedEditLocked}
+                          disabled={isViewOnly}
                           onChangeIso={(iso) => {
                             setPlanning((prev) => ({ ...prev, end_date: iso }))
                             if (
@@ -1310,7 +1323,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                               revalidatePlanningOutstandingOnDates(planning.start_date, iso)
                             }
                           }}
-                          className={`mt-1 ${formErrors.planning_end_date ? 'border-red-500' : ''} ${isContractClosedEditLocked ? READONLY_FIELD_CLASS : ''}`}
+                          className={`mt-1 ${formErrors.planning_end_date ? 'border-red-500' : ''} ${isViewOnly ? READONLY_FIELD_CLASS : ''}`}
                         />
                         {formErrors.planning_end_date && (
                           <p className="text-xs mt-0.5 text-red-600">{formErrors.planning_end_date}</p>
@@ -1653,9 +1666,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <Button variant="outline" className="h-9" onClick={() => { resetForm(); onClose() }} disabled={creating || loadingEdit}>
-                    {isContractClosedEditLocked ? 'Close' : 'Cancel'}
+                    {isViewOnly ? 'Close' : 'Cancel'}
                   </Button>
-                  {!isContractClosedEditLocked && (
+                  {!isViewOnly && (
                     <Button
                       onClick={handleCreateOperation}
                       disabled={

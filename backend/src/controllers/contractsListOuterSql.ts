@@ -1,13 +1,11 @@
 import { groupPlantExpr } from '../utils/groupPlantSql';
-import { sqlContractOutstandingFromFields } from '../utils/sapIncotermMetrics';
+import { sqlContractOutstandingSignedExpr } from '../utils/sapIncotermMetrics';
 
-const CONTRACT_LIST_OUTSTANDING_SQL = sqlContractOutstandingFromFields({
+const CONTRACT_LIST_OUTSTANDING_SQL = sqlContractOutstandingSignedExpr({
   contractQtyExpr: 'base.quantity_ordered',
   incotermExpr: 'base.incoterm',
   receiveExpr: 'base.quantity_receive',
-  deliveryExpr: 'base.quantity_delivery',
-  stoQtyExpr: 'base.total_sto_quantity',
-  clampAtZero: false,
+  deliveryExpr: 'base.quantity_delivery_sap',
 });
 
 /**

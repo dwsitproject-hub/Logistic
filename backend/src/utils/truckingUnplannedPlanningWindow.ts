@@ -1,7 +1,8 @@
-import { toIsoDate10FromCell } from './planningSheetDate';
-
-export const UNPLANNED_PLANNING_START_BUFFER_DAYS = 15;
-export const UNPLANNED_PLANNING_END_BUFFER_DAYS = 30;
+export const UNPLANNED_PLANNING_FORWARD_DAYS = 60;
+/** @deprecated Unplanned window is now today … today + UNPLANNED_PLANNING_FORWARD_DAYS */
+export const UNPLANNED_PLANNING_START_BUFFER_DAYS = 0;
+/** @deprecated Unplanned window is now today … today + UNPLANNED_PLANNING_FORWARD_DAYS */
+export const UNPLANNED_PLANNING_END_BUFFER_DAYS = UNPLANNED_PLANNING_FORWARD_DAYS;
 
 function sliceIsoDate(value: unknown): string {
   if (value == null || String(value).trim() === '') return '';
@@ -26,27 +27,25 @@ export function todayIsoDate(reference = new Date()): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-/** Unplanned planning window: today −15 days … SAP due delivery end +30 days. */
+/** Unplanned planning window: today … today + 60 days (inclusive). */
 export function resolveUnplannedPlanningWindow(
-  deliveryEndRaw: unknown,
+  _deliveryEndRaw?: unknown,
   referenceToday?: string,
 ): { startIso: string; endIso: string } | null {
-  const endBase = toIsoDate10FromCell(deliveryEndRaw) ?? sliceIsoDate(deliveryEndRaw);
-  if (!endBase) return null;
   const today = sliceIsoDate(referenceToday ?? todayIsoDate());
   if (!today) return null;
-  const startIso = shiftIsoDate(today, -UNPLANNED_PLANNING_START_BUFFER_DAYS);
-  const endIso = shiftIsoDate(endBase, UNPLANNED_PLANNING_END_BUFFER_DAYS);
+  const startIso = today;
+  const endIso = shiftIsoDate(today, UNPLANNED_PLANNING_FORWARD_DAYS);
   if (startIso > endIso) return null;
   return { startIso, endIso };
 }
 
 export function isDateWithinUnplannedPlanningWindow(
   dateIso: string,
-  deliveryEndRaw: unknown,
+  _deliveryEndRaw?: unknown,
   referenceToday?: string,
 ): boolean {
-  const window = resolveUnplannedPlanningWindow(deliveryEndRaw, referenceToday);
+  const window = resolveUnplannedPlanningWindow(undefined, referenceToday);
   if (!window) return false;
   return dateIso >= window.startIso && dateIso <= window.endIso;
 }

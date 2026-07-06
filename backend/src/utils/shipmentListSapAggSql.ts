@@ -5,6 +5,11 @@ import {
   SAP_VESSEL_NAME_FROM_SK_SQL,
   SAP_VESSEL_OWNER_FROM_SK_SQL,
 } from './sapVesselFields';
+import { buildShipmentListStoMetricsCte } from './shippingPerformanceStoMetricsSql';
+import {
+  SHIPMENT_LIST_SAP_PORTS_AGG_CTES,
+  SHIPMENT_LIST_SAP_PORTS_AGG_STUB,
+} from './shipmentListPortsSql';
 
 export const SHIPMENT_LIST_SPD_AGG_CTES_STUB = `
       spd_keyed AS (
@@ -19,9 +24,9 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_STUB = `
       ),
       sap_agg AS (
         SELECT NULL::text AS sto_key,
-          0::numeric AS sto_quantity,
-          0::numeric AS quantity_receive,
-          0::numeric AS quantity_delivered_sap
+          NULL::numeric AS sto_quantity,
+          NULL::numeric AS quantity_receive,
+          NULL::numeric AS quantity_delivered_sap
         WHERE false
       ),
       sap_latest AS (
@@ -33,7 +38,21 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_STUB = `
           NULL::text AS vessel_code_sap,
           NULL::text AS vessel_owner_sap
         WHERE false
-      )`;
+      ),
+      sto_metrics AS (
+        SELECT NULL::text AS sto_key,
+          NULL::numeric AS contract_qty,
+          NULL::numeric AS sto_qty,
+          NULL::numeric AS received_qty,
+          NULL::numeric AS delivered_qty,
+          NULL::numeric AS planning_qty,
+          NULL::numeric AS outstanding_qty_actual,
+          NULL::numeric AS outstanding_qty_planning,
+          NULL::text AS po_numbers,
+          NULL::text AS contract_numbers
+        WHERE false
+      ),
+      ${SHIPMENT_LIST_SAP_PORTS_AGG_STUB}`;
 
 export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
       spd_keyed AS (
@@ -106,7 +125,7 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
       sap_agg AS (
         SELECT
           sk.sto_key,
-          COALESCE(SUM(
+          SUM(
             NULLIF(regexp_replace(COALESCE(
               NULLIF(TRIM(sk.data->'contract'->>'sto_quantity'), ''),
               NULLIF(TRIM(sk.data->'shipment'->>'sto_quantity'), ''),
@@ -114,21 +133,21 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
               NULLIF(TRIM(sk.data->'raw'->>'sto quantity'), '')
               , ''
             ), '[^0-9\\.-]', '', 'g'), '')::numeric
-          ), 0) AS sto_quantity,
-          COALESCE(SUM(
+          ) AS sto_quantity,
+          SUM(
             NULLIF(regexp_replace(COALESCE(
               NULLIF(TRIM(sk.data->'raw'->>'Quantity Receive'), ''),
               NULLIF(TRIM(sk.data->'raw'->>'Qty Receive'), '')
               , ''
             ), '[^0-9\\.-]', '', 'g'), '')::numeric
-          ), 0) AS quantity_receive,
-          COALESCE(SUM(
+          ) AS quantity_receive,
+          SUM(
             NULLIF(regexp_replace(COALESCE(
               NULLIF(TRIM(sk.data->'raw'->>'Quantity Delivered'), ''),
               NULLIF(TRIM(sk.data->'raw'->>'Quantity Delivery'), '')
               , ''
             ), '[^0-9\\.-]', '', 'g'), '')::numeric
-          ), 0) AS quantity_delivered_sap
+          ) AS quantity_delivered_sap
         FROM spd_keyed sk
         WHERE sk.sto_key IS NOT NULL
         GROUP BY sk.sto_key
@@ -165,5 +184,8 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
       )`;
 
 export function shipmentListSpdAggCtes(skipSapJoin: boolean): string {
-  return skipSapJoin ? SHIPMENT_LIST_SPD_AGG_CTES_STUB : SHIPMENT_LIST_SPD_AGG_CTES_FULL;
+  if (skipSapJoin) return SHIPMENT_LIST_SPD_AGG_CTES_STUB;
+  return `${SHIPMENT_LIST_SPD_AGG_CTES_FULL},
+      ${buildShipmentListStoMetricsCte()},
+      ${SHIPMENT_LIST_SAP_PORTS_AGG_CTES}`;
 }
