@@ -32,8 +32,12 @@ describe('formatOutstandingQtyMtFromKg', () => {
     expect(formatOutstandingQtyMtFromKg(-2500)).toBe('+2.5 MT');
   });
 
-  it('shows -MT for remaining outstanding (positive kg)', () => {
-    expect(formatOutstandingQtyMtFromKg(1500)).toBe('-1.5 MT');
+  it('shows MT without minus for remaining outstanding (positive kg)', () => {
+    expect(formatOutstandingQtyMtFromKg(1500)).toBe('1.5 MT');
+  });
+
+  it('shows zero MT for fully delivered', () => {
+    expect(formatOutstandingQtyMtFromKg(0)).toBe('0 MT');
   });
 });
 

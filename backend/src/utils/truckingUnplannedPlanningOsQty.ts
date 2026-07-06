@@ -27,6 +27,12 @@ export function formatPlanningQtyKgLabel(kg: number): string {
   return String(Math.round(kg * 100) / 100);
 }
 
+export function formatPlanningQtyMtLabel(kg: number): string {
+  if (!Number.isFinite(kg)) return '0';
+  const mt = kg / 1000;
+  return mt.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: false });
+}
+
 export function sumPlanningEntriesKg(entries: Array<{ qtyMt: number }>): number {
   let sum = 0;
   for (const entry of entries) {
@@ -57,7 +63,7 @@ export function validatePlanningTotalAgainstOutstandingKg(
   if (diff < 0) {
     return {
       ok: false,
-      reason: `Total daily planning qty (${formatPlanningQtyKgLabel(totalPlanningKg)} kg) is less than Outstanding Qty (${formatPlanningQtyKgLabel(outstandingKg)} kg)`,
+      reason: `Total daily planning qty (${formatPlanningQtyMtLabel(totalPlanningKg)} MT) is less than Outstanding Qty (${formatPlanningQtyMtLabel(outstandingKg)} MT)`,
       failureKind: 'less',
       totalPlanningKg,
       outstandingKg,
@@ -66,7 +72,7 @@ export function validatePlanningTotalAgainstOutstandingKg(
 
   return {
     ok: false,
-    reason: `Total daily planning qty (${formatPlanningQtyKgLabel(totalPlanningKg)} kg) exceeds Outstanding Qty (${formatPlanningQtyKgLabel(outstandingKg)} kg)`,
+    reason: `Total daily planning qty (${formatPlanningQtyMtLabel(totalPlanningKg)} MT) exceeds Outstanding Qty (${formatPlanningQtyMtLabel(outstandingKg)} MT)`,
     failureKind: 'greater',
     totalPlanningKg,
     outstandingKg,

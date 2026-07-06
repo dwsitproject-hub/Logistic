@@ -230,8 +230,12 @@ async function ensureMissingTruckingOperationIds(): Promise<void> {
 
 export const getTruckingOperations = async (req: AuthRequest, res: Response) => {
   try {
-    await ensureMissingTruckingOperationIdsIfNeeded();
-    void reconcileTruckingStatusesFromSapIfDue();
+    const summaryOnly =
+      String((req.query as { summaryOnly?: string }).summaryOnly || '').toLowerCase() === 'true';
+    if (!summaryOnly) {
+      await ensureMissingTruckingOperationIdsIfNeeded();
+      void reconcileTruckingStatusesFromSapIfDue();
+    }
     const data = await resolveTruckingListForRequest(req);
     return res.json({
       success: true,
@@ -1973,7 +1977,7 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
         success: false,
         error: {
           message:
-            'Invalid Unplanned template. Expected headers: Group, Supplier, Source, Contract Date, Contract Ext No, PO, OS Qty, Plan Qty, then date columns (today … +60 days).',
+            'Invalid Unplanned template. Expected headers: Group, Supplier, Source, Contract Date, Contract Ext No, PO, OS Qty (MT), Plan Qty (MT), then date columns (today … +60 days).',
         },
       });
     }
@@ -2321,7 +2325,7 @@ export const bulkUploadPlannedPlanning = async (req: AuthRequest, res: Response)
         success: false,
         error: {
           message:
-            'Invalid Planned template. Expected headers: Group, Supplier, Source, Contract Date, Contract Ext No, PO, OS Qty (kg), Plan Qty (kg), then date columns (today … +60 days).',
+            'Invalid Planned template. Expected headers: Group, Supplier, Source, Contract Date, Contract Ext No, PO, OS Qty (MT), Plan Qty (MT), then date columns (today … +60 days).',
         },
       });
     }

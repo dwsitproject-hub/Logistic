@@ -37,7 +37,9 @@ import {
   type ShippingPerfCardFilter,
   type ShippingSummaryMetricKey,
 } from '@/lib/shippingPerformanceLabels'
-import { formatSapDisplayValue, formatSapGroupDisplayLabel } from '@/lib/sapDisplayValue'
+import { resolveShippingPerfTotalDeltaDisplay } from '@/lib/shippingPerformanceTotalDelta'
+import { formatOperationalTableTextDisplay, formatSapGroupDisplayLabel, formatSapOutstandingQtyMtDisplay, formatVesselTableDisplay } from '@/lib/sapDisplayValue'
+import { outstandingQtyMtColorClass } from '@/lib/utils'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatShipmentStatusLabel, shipmentStatusBadgeClass } from '@/lib/shipmentStatusDisplay'
 import {
@@ -819,11 +821,11 @@ const SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS: Partial<Record<keyof ShippingPerforma
     'ETA Vessel Berthed at Discharge Port - ETA Vessel Complete Discharge',
   total_delta_days:
     'Total duration in days: sum of Loading (ETA−ETR), Loading (ETA−ETB), Loading (ETB−ETC), ' +
-    'Discharge (ETA−ETB), and Discharge (ETB−ETC). Each missing segment counts as 0.',
+    'Discharge (ETA−ETB), and Discharge (ETB−ETC). Shows "-" when all segments are missing.',
 }
 
 const COLUMN_DEFS: ColumnDef[] = [
-  { key: 'vessel_name', label: 'Vessel', type: 'text', defaultVisible: false },
+  { key: 'vessel_name', label: 'Vessel', type: 'text', defaultVisible: false, byVesselDefaultVisible: true },
   {
     key: 'by_vessel_qty_contract',
     label: 'Qty Contract (MT)',
@@ -1062,24 +1064,31 @@ function reorderColumnsInOrder(
 }
 
 function asDisplayValue(value: unknown): string {
-  return formatSapDisplayValue(value)
+  return formatOperationalTableTextDisplay(value)
 }
 
 /** Section 3 — null/empty/placeholder port values render as "-". */
 function formatPortColumnDisplay(value: unknown): string {
-  return formatSapDisplayValue(value)
+  return formatOperationalTableTextDisplay(value)
+}
+
+function isOutstandingQtyColumn(key: string): boolean {
+  return (
+    key === 'outstanding_qty_actual' ||
+    key === 'outstanding_qty_planning' ||
+    key === 'outstanding_qty'
+  )
 }
 
 function isMtQtyColumn(key: string): boolean {
   return (
-    isByVesselOnlyColumnKey(key as ShippingPerfColumnKey) ||
+    (isByVesselOnlyColumnKey(key as ShippingPerfColumnKey) ||
     key === 'sto_qty' ||
     key === 'received_qty' ||
     key === 'planning_qty' ||
-    key === 'outstanding_qty_actual' ||
-    key === 'outstanding_qty_planning' ||
     key === 'contract_qty' ||
-    key === 'delivered_qty'
+    key === 'delivered_qty') &&
+    !isOutstandingQtyColumn(key)
   )
 }
 
@@ -1103,12 +1112,12 @@ function NumberCell({
         ? (n === 0 ? (0).toFixed(decimalPlaces) : Math.abs(n).toFixed(decimalPlaces))
         : formatSignedDeltaDays(n)
     return (
-      <span className={`text-sm font-semibold tabular-nums ${signedCycleDaysClass(n)}`}>
+      <span className={`text-sm font-normal tabular-nums ${signedCycleDaysClass(n)}`}>
         {formatted} days
       </span>
     )
   }
-  return <span className="text-sm tabular-nums">{n}</span>
+  return <span className="text-sm font-normal tabular-nums">{n}</span>
 }
 
 export default function ShippingPerformancePage() {
@@ -2494,6 +2503,13 @@ function ShippingPerformancePageContent() {
                             const colKey = String(key)
                             const dataKey = resolveColumnDataKey(key, perfDashMode)
                             const rawValue = row[dataKey]
+                            const numericDisplayValue =
+                              colKey === 'total_delta_days'
+                                ? resolveShippingPerfTotalDeltaDisplay(
+                                    row as unknown as Record<string, unknown>,
+                                    perfDashMode,
+                                  )
+                                : rawValue
                             const layout = getShippingPerfTableColumnLayout(colKey, tableViewMode)
                             const opColClass = operationalTableColumnClass(layout)
                             const useTruncateTooltip =
@@ -2507,7 +2523,7 @@ function ShippingPerformancePageContent() {
 
                             let cellContent: ReactNode
                             if (key === 'vessel_name') {
-                              const vesselName = formatSapDisplayValue(rawValue)
+                              const vesselName = formatVesselTableDisplay(rawValue)
                               if (tableViewMode === 'by_vessel') {
                                 cellContent = (
                                   <button
@@ -2530,6 +2546,20 @@ function ShippingPerformancePageContent() {
                                   <span className="text-sm">{vesselName}</span>
                                 )
                               }
+                            } else if (isOutstandingQtyColumn(String(key))) {
+                              cellContent =
+                                rawValue === null || rawValue === undefined ? (
+                                  <span className="text-gray-400">-</span>
+                                ) : (
+                                  <span
+                                    className={cn(
+                                      'text-sm tabular-nums font-normal',
+                                      outstandingQtyMtColorClass(Number(rawValue)),
+                                    )}
+                                  >
+                                    {formatSapOutstandingQtyMtDisplay(rawValue as number)}
+                                  </span>
+                                )
                             } else if (isMtQtyColumn(String(key))) {
                               cellContent =
                                 rawValue === null || rawValue === undefined ? (
@@ -2572,7 +2602,7 @@ function ShippingPerformancePageContent() {
                             } else if (col.type === 'number') {
                               cellContent = (
                                 <NumberCell
-                                  value={rawValue}
+                                  value={numericDisplayValue}
                                   isDeltaDays={
                                     String(key).includes('delta') || String(dataKey).includes('delta')
                                   }

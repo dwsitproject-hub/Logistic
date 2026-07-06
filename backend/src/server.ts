@@ -14,6 +14,7 @@ import { errorHandler } from './middleware/errorHandler';
 import { notFoundHandler } from './middleware/notFoundHandler';
 import logger from './utils/logger';
 import { SchedulerService } from './services/scheduler.service';
+import { PipelineDailySummaryService, isPipelineDailySummaryFresh } from './services/pipelineDailySummary.service';
 import { ensureUserStoContractAssignmentsTable } from './database/ensureUserStoContractAssignments';
 
 // Import routes
@@ -158,6 +159,21 @@ if (process.env.NODE_ENV !== 'test') {
     } catch (error) {
       logger.error('Failed to initialize scheduler service:', error);
     }
+
+    setImmediate(async () => {
+      try {
+        const [truckingFresh, shipmentFresh] = await Promise.all([
+          isPipelineDailySummaryFresh('trucking'),
+          isPipelineDailySummaryFresh('shipment'),
+        ]);
+        if (!truckingFresh || !shipmentFresh) {
+          logger.info('Pipeline daily summaries stale — refreshing in background');
+          await PipelineDailySummaryService.refreshAll();
+        }
+      } catch (error) {
+        logger.warn('Pipeline daily summary startup refresh skipped', { error });
+      }
+    });
   });
 }
 

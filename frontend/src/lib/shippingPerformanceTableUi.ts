@@ -18,6 +18,8 @@ import {
   resolveShippingPerfLoadingPort,
   type ShippingPerformancePortSource,
 } from '@/lib/shippingPerformancePorts'
+import { formatVesselTableDisplay } from '@/lib/sapDisplayValue'
+import { formatOutstandingQtyMtFromKg } from '@/lib/utils'
 
 /** All Shipments view — default column order (On Going ETA / Close ATA share keys; headers follow label mode). */
 export const ALL_SHIPMENTS_PRESET_COLUMN_ORDER = [
@@ -208,7 +210,7 @@ export function shippingPerfCellTooltipText(
 ): string | null {
   switch (colKey) {
     case 'vessel_name':
-      return String(row.vessel_name ?? '').trim() || null
+      return formatVesselTableDisplay(row.vessel_name, '') || null
     case 'contract_ext_no':
       return String(row.contract_ext_no ?? '').trim() || null
     case 'contract_number':
@@ -234,10 +236,7 @@ export function shippingPerfCellTooltipText(
     case 'by_vessel_qty_receive':
     case 'sto_qty':
     case 'received_qty':
-    case 'planning_qty':
-    case 'outstanding_qty_actual':
-    case 'outstanding_qty_planning':
-    case 'outstanding_qty': {
+    case 'planning_qty': {
       let raw: number | null | undefined
       if (colKey === 'contract_qty' || colKey === 'by_vessel_qty_contract') {
         raw = row.contract_qty
@@ -249,16 +248,24 @@ export function shippingPerfCellTooltipText(
         raw = row.sto_qty
       } else if (colKey === 'planning_qty') {
         raw = row.planning_qty
-      } else if (colKey === 'outstanding_qty_planning') {
-        raw = row.outstanding_qty_planning
-      } else if (colKey === 'outstanding_qty_actual' || colKey === 'outstanding_qty') {
-        raw = row.outstanding_qty_actual ?? row.outstanding_qty
       } else {
-        raw = row.outstanding_qty_actual ?? row.outstanding_qty
+        raw = null
       }
       if (raw === null || raw === undefined) return null
       const mt = Number(raw) / 1000
       return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+    }
+    case 'outstanding_qty_actual':
+    case 'outstanding_qty_planning':
+    case 'outstanding_qty': {
+      let raw: number | null | undefined
+      if (colKey === 'outstanding_qty_planning') {
+        raw = row.outstanding_qty_planning
+      } else {
+        raw = row.outstanding_qty_actual ?? row.outstanding_qty
+      }
+      if (raw === null || raw === undefined) return null
+      return formatOutstandingQtyMtFromKg(raw)
     }
     default:
       return null

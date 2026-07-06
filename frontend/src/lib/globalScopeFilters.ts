@@ -3,6 +3,7 @@
 export type ToolbarMultiFilterState = {
   selectedIncoterms: string[]
   selectedProducts: string[]
+  selectedSuppliers?: string[]
   selectedGroupPlants: string[]
 }
 
@@ -30,6 +31,12 @@ export function appendToolbarMultiToColumnFilters(
     merged.product = { type: 'multi', values, includeBlank } satisfies MultiColumnFilter
   }
 
+  if (toolbar.selectedSuppliers && toolbar.selectedSuppliers.length > 0) {
+    const includeBlank = toolbar.selectedSuppliers.includes('Blank')
+    const values = toolbar.selectedSuppliers.filter((v) => v !== 'Blank')
+    merged.supplier = { type: 'multi', values, includeBlank } satisfies MultiColumnFilter
+  }
+
   return merged
 }
 
@@ -39,7 +46,7 @@ export function normalizeScopeGroupKey(value: unknown): string {
 }
 
 export function rowMatchesToolbarMultiFilters(
-  row: { incoterm?: unknown; product?: unknown; plant_site?: unknown; group_plant?: unknown },
+  row: { incoterm?: unknown; product?: unknown; supplier?: unknown; plant_site?: unknown; group_plant?: unknown },
   filters: Partial<ToolbarMultiFilterState>,
 ): boolean {
   if (filters.selectedIncoterms && filters.selectedIncoterms.length > 0) {
@@ -49,6 +56,10 @@ export function rowMatchesToolbarMultiFilters(
   if (filters.selectedProducts && filters.selectedProducts.length > 0) {
     const prod = normalizeScopeGroupKey(row.product)
     if (!filters.selectedProducts.includes(prod)) return false
+  }
+  if (filters.selectedSuppliers && filters.selectedSuppliers.length > 0) {
+    const sup = normalizeScopeGroupKey(row.supplier)
+    if (!filters.selectedSuppliers.includes(sup)) return false
   }
   if (filters.selectedGroupPlants && filters.selectedGroupPlants.length > 0) {
     const groupPlant = normalizeScopeGroupKey(row.group_plant ?? row.plant_site)
@@ -77,6 +88,7 @@ export function hasToolbarMultiSelection(filters: Partial<ToolbarMultiFilterStat
   return (
     (filters.selectedIncoterms?.length ?? 0) > 0 ||
     (filters.selectedProducts?.length ?? 0) > 0 ||
+    (filters.selectedSuppliers?.length ?? 0) > 0 ||
     (filters.selectedGroupPlants?.length ?? 0) > 0
   )
 }

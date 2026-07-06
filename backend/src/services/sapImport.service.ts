@@ -153,9 +153,12 @@ export class SapImportService {
       
       await client.query('COMMIT');
 
-      // Refresh finance materialized view in background (do not block import response).
+      // Refresh finance MV + pipeline daily summaries in background (do not block import response).
       setImmediate(() => {
         FinanceMaterializedViewService.refreshContractPaymentDates().catch(() => {});
+        import('./pipelineDailySummary.service')
+          .then(({ PipelineDailySummaryService }) => PipelineDailySummaryService.refreshAll())
+          .catch(() => {});
       });
       
       logger.info(`SAP import completed: ${importId}`, {

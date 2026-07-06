@@ -44,4 +44,13 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(sql).toContain('ANY($1');
     expect(params).toEqual([['CPO']]);
   });
+
+  it('applies supplier multi filter on contract scope', () => {
+    const { sql, params } = appendContractScopeToolbarFilters(
+      { supplier: { type: 'multi', values: ['PT ABC'] } },
+      1,
+    );
+    expect(sql).toContain('c.supplier');
+    expect(params).toEqual([['PT ABC']]);
+  });
 });

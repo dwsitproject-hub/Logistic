@@ -70,6 +70,7 @@ export type ContractPerformanceGlobalFilters = {
   dateTo: string
   sourceFilter: ContractPerfSourceFilter
   selectedIncoterms: string[]
+  selectedSuppliers: string[]
   selectedGroupPlants: string[]
   productTabQuery: string | undefined
   summaryCardStatus: 'All' | 'Open' | 'Close'
@@ -571,6 +572,7 @@ export function contractPerfDrilldownToTableColumnFilters(
 export function buildContractPerfTableColumnFilters(
   baseColumnFilters: Record<string, unknown>,
   globalIncoterms: string[],
+  globalSuppliers: string[],
   drilldown: ContractPerfDrilldownFilters,
 ): Record<string, unknown> {
   const merged: Record<string, unknown> = { ...baseColumnFilters }
@@ -596,6 +598,10 @@ export function buildContractPerfTableColumnFilters(
     } else {
       merged.supplier = { type: 'text', value: drilldown.supplier, exact: true }
     }
+  } else if (globalSuppliers.length > 0) {
+    const includeBlank = globalSuppliers.includes('Blank')
+    const values = globalSuppliers.filter((v) => v !== 'Blank')
+    merged.supplier = { type: 'multi', values, includeBlank }
   }
 
   return merged
@@ -610,6 +616,7 @@ export function buildContractPerfTableFetchScope(input: {
     columnFilters: buildContractPerfTableColumnFilters(
       input.columnFilters,
       scope.global.selectedIncoterms,
+      scope.global.selectedSuppliers,
       scope.drilldown,
     ),
     plants: scope.resolvedPlants,
@@ -789,6 +796,7 @@ export function buildContractPerfToolbarGlobal(input: {
   dateTo: string
   sourceFilter: ContractPerfSourceFilter
   selectedIncoterms: string[]
+  selectedSuppliers: string[]
   selectedGroupPlants: string[]
   productTabQuery: string | undefined
   lateOnTimeFilter: ContractPerformanceGlobalFilters['lateOnTimeFilter']

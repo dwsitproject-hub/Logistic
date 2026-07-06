@@ -148,6 +148,20 @@ function mergeActiveEtaFromMultiPort(
   }
 }
 
+export async function saveShipmentEditRemark(shipmentId: string, text: string): Promise<void> {
+  const remark = text.trim()
+  if (!remark) {
+    throw new Error('Remark is required when editing ETA or quantities.')
+  }
+  const res = await api.post(`/shipments/${shipmentId}/remarks`, {
+    text: remark,
+    category: 'EDIT_SHIPMENT',
+  })
+  if (!res.data?.success) {
+    throw new Error(res.data?.error?.message || 'Failed to save remark')
+  }
+}
+
 export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Promise<void> {
   const sums = sumVesselPortsQuantityEdits(input.qtyRows, input.qtyEdits)
   const qtyUserEdited = hasVesselPortsQuantityUserEdits(input.qtyRows, input.qtyEdits)

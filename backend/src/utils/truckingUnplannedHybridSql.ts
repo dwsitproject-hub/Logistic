@@ -301,4 +301,25 @@ export function buildTruckingUnplannedBacklogSummaryCountQuery(
   return buildTruckingUnplannedBacklogCountQuery(contractScopeSql, toolbarSql);
 }
 
+/** Daily refresh — open contract backlog grouped by group_plant + contract_date. */
+export function buildTruckingUnplannedBacklogDailySummarySql(): string {
+  const plant = groupPlantExpr('c.plant_code', 'c.company_name');
+  return `
+    INSERT INTO trucking_pipeline_daily_summary (group_plant, contract_date, unplanned_contract_backlog)
+    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    backlog AS (
+      SELECT
+        ${plant} AS group_plant,
+        COALESCE(c.contract_date, DATE '1970-01-01')::date AS contract_date,
+        COUNT(*)::bigint AS unplanned_contract_backlog
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}
+      GROUP BY 1, 2
+    )
+    SELECT group_plant, contract_date, unplanned_contract_backlog FROM backlog
+    ON CONFLICT (group_plant, contract_date) DO UPDATE SET
+      unplanned_contract_backlog = EXCLUDED.unplanned_contract_backlog`;
+}
+
 export { parseColumnFiltersQuery };

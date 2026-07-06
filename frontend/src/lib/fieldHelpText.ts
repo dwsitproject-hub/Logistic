@@ -28,18 +28,18 @@ export const FIELD_HELP = {
   dpCycle: `Requires SAP DP Date (no payments-table fallback). Closed: completion receive/discharge → DP Date. Open: DP Date → completion end (same Open ETA/today rules as Cash Cycle). Missing DP or completion → no value.`,
 
   /** Contract Performance — concise header tooltips (view table + contract detail modal). */
-  contractPerfOutstandingQty: `Contract Qty vs SAP Receive/Delivery by incoterm. Over-delivery: +MT (green). Remaining: -MT (red).`,
+  contractPerfOutstandingQty: `Contract Qty vs SAP Receive/Delivery by incoterm. Over-delivery: +MT (green). Remaining outstanding: MT (black).`,
   contractPerfTradeCycle: `Completion Date vs Due Date Delivery End`,
   contractPerfDpCycle: `Completion Date vs DP Date`,
   contractPerfCashCycle: `Completion Date vs Payoff Date`,
   contractPerfLogCycle: `Completion Date vs Cargo Readiness Date`,
 
-  outstandingQty: `Remaining quantity yet to be delivered. Green = Over Delivered; Red = Still Outstanding.`,
+  outstandingQty: `Remaining quantity yet to be delivered. Green = Over Delivered (+MT); black = Still Outstanding.`,
 
   receivedQty: `Actual quantity received based on contract data (quantity_receive). For sea shipments: received at destination. For land shipments: quantity delivered to plant/site.`,
 
-  outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (SAP). Over-delivery shows +MT (green); remaining outstanding shows -MT (red).`,
-  shipmentOutstandingQtyMt: `STO Qty minus fulfilled SAP quantity by incoterm (same rules as Contract page): CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery; others use receive or delivery. Green = Over Delivered; Red = Still Outstanding.`,
+  outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (SAP). Over-delivery shows +MT (green); remaining outstanding shows MT (black).`,
+  shipmentOutstandingQtyMt: `STO Qty minus fulfilled SAP quantity by incoterm (same rules as Contract page): CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery; others use receive or delivery. Green = Over Delivered (+MT); black = Still Outstanding.`,
   shipmentSfalQtyMt: `Ship Figure After Loading (SFAL) from shipment data, displayed in MT (stored as kg in the database).`,
   shipmentSfbdQtyMt: `Ship Figure Before Discharge (SFBD) from shipment data, displayed in MT (stored as kg in the database).`,
 
@@ -70,7 +70,7 @@ export const FIELD_HELP = {
   truckingStatusInProgress: `Trucking shipment (STO/Operation) with Daily Planning and a valid Trucking Start Receive Date (SAP AV). Last Receive Date is still empty.`,
   truckingStatusCompleted: `Trucking shipment (STO/Operation) with Trucking Last Receive Date populated (SAP AW) or contract/operation status Close.`,
   truckingStatusCancelled: `Operation was set to Cancelled manually and is excluded from active execution. Use the Status filter below to view cancelled operations only.`,
-  truckingOutstandingQtyMt: `Outstanding Qty by incoterm: FRC = Contract Qty − Received Qty; LCO = Contract Qty − Delivered Qty. Displayed in MT. Green = over delivered; red = still outstanding. Other incoterms show —.`,
+  truckingOutstandingQtyMt: `Outstanding Qty by incoterm: FRC = Contract Qty − Received Qty; LCO = Contract Qty − Delivered Qty. Displayed in MT. Green = over delivered (+MT); black = still outstanding. Other incoterms show —.`,
 
   // Oil Loss
   oilLossAmount: `Formula: Qty Receive − Qty Delivery (displayed in MT). Qty Delivery follows SAP UAT incoterm rules (Trucking for FRC/LCO; Vessel for FOB/CIF; MIX sums by transport). Negative values indicate oil loss.`,

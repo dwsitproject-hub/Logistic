@@ -4,7 +4,7 @@
  */
 
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
-import { sqlUserStoQtyAssignedToKgSql } from './userStoAssignmentQty';
+import { STO_QTY_KG_PER_MT, sqlUserStoQtyAssignedToKgSql } from './userStoAssignmentQty';
 
 const SPD_STO_QTY_KG = `NULLIF(regexp_replace(COALESCE(
   NULLIF(TRIM(spd.data->'contract'->>'sto_quantity'), ''),
@@ -13,6 +13,20 @@ const SPD_STO_QTY_KG = `NULLIF(regexp_replace(COALESCE(
   NULLIF(TRIM(spd.data->'raw'->>'sto quantity'), ''),
   ''
 ), '[^0-9\\.-]', '', 'g'), '')::numeric`;
+
+/** SAP STO qty raw → kg (MT-scale values when much smaller than contract qty). */
+export function sqlNormalizeSapStoQtyToKgSql(
+  sapStoQtyExpr: string,
+  contractQtyExpr: string,
+): string {
+  return `CASE
+    WHEN COALESCE(${contractQtyExpr}, 0) > 0
+      AND COALESCE(${sapStoQtyExpr}, 0) > 0
+      AND COALESCE(${sapStoQtyExpr}, 0) <= COALESCE(${contractQtyExpr}, 0) / 100
+    THEN COALESCE(${sapStoQtyExpr}, 0) * ${STO_QTY_KG_PER_MT}
+    ELSE COALESCE(${sapStoQtyExpr}, 0)
+  END`;
+}
 
 const SPD_PO_MATCH = (poExpr: string, spdAlias = 'spd') => `(
   ${poExpr} IS NULL

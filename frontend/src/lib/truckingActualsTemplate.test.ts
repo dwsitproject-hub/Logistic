@@ -7,6 +7,7 @@ import {
   buildTruckingActualsTemplateCsv,
   buildTruckingActualsTemplateXlsxBlob,
   formatTemplateOutstandingQtyMt,
+  formatTemplateQtyMtFromKg,
   isActualsTemplateDownloadEnabled,
   isActualsWideTemplateHeader,
   isActualsWideTemplateHeaderCells,
@@ -104,7 +105,7 @@ describe('truckingActualsTemplate', () => {
     ])
 
     expect(csv).toContain('Contract Ext No,PO,1-Jun,2-Jun')
-    expect(csv).toContain('EXT-001,PO-1,25000,25000')
+    expect(csv).toContain('EXT-001,PO-1,25,25')
   })
 
   it('builds XLSX blob with same matrix as CSV export', async () => {
@@ -122,7 +123,7 @@ describe('truckingActualsTemplate', () => {
     ]
     const matrix = buildActualsTemplateMatrix(rows)
     expect(matrix[0]).toEqual(['Contract Ext No', 'PO', '1-Jun', '2-Jun'])
-    expect(matrix[1]).toEqual(['EXT-001', 'PO-1', '25000', '25000'])
+    expect(matrix[1]).toEqual(['EXT-001', 'PO-1', '25', '25'])
 
     const blob = buildTruckingActualsTemplateXlsxBlob(rows)
     const buf = await blob.arrayBuffer()
@@ -130,7 +131,7 @@ describe('truckingActualsTemplate', () => {
     const sheet = wb.Sheets[wb.SheetNames[0]!]
     const readBack = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as string[][]
     expect(readBack[0]).toEqual(['Contract Ext No', 'PO', '1-Jun', '2-Jun'])
-    expect(readBack[1]).toEqual(['EXT-001', 'PO-1', '25000', '25000'])
+    expect(readBack[1]).toEqual(['EXT-001', 'PO-1', '25', '25'])
   })
 
   it('builds unplanned template with metadata columns sorted by supplier', () => {
@@ -170,8 +171,9 @@ describe('truckingActualsTemplate', () => {
     expect(matrix[1]?.[1]).toBe('Alpha Mills')
     expect(matrix[2]?.[1]).toBe('Beta Mills')
     expect(matrix[1]).toContain('EXT-A')
-    expect(matrix[1]?.[6]).toBe('125000')
-    expect(formatTemplateOutstandingQtyMt(125000)).toBe('125000')
+    expect(matrix[1]?.[6]).toBe('125')
+    expect(formatTemplateQtyMtFromKg(125000)).toBe('125')
+    expect(formatTemplateOutstandingQtyMt(125000)).toBe('125')
   })
 
   it('builds unplanned template with empty daily qty cells and OS Qty header', () => {
@@ -194,15 +196,15 @@ describe('truckingActualsTemplate', () => {
     const endIso = shiftIsoDate(REF_TODAY, UNPLANNED_PLANNING_FORWARD_DAYS)
     expect(csv).toContain(UNPLANNED_TEMPLATE_OS_QTY_HEADER)
     expect(csv).toContain('Vendor G,Sup A,3rd Party')
-    expect(csv).toContain('EXT-U1,PO-U1,125000')
+    expect(csv).toContain('EXT-U1,PO-U1,125')
     expect(csv).toContain(formatPlanningTemplateDateHeader(REF_TODAY))
     expect(csv).toContain(formatPlanningTemplateDateHeader(endIso))
   })
 
-  it('formats template outstanding qty in kg', () => {
-    expect(formatTemplateOutstandingQtyMt(25000)).toBe('25000')
-    expect(formatTemplateOutstandingQtyMt(0)).toBe('0')
-    expect(formatTemplateOutstandingQtyMt(null)).toBe('')
+  it('formats template qty in MT from kg', () => {
+    expect(formatTemplateQtyMtFromKg(25000)).toBe('25')
+    expect(formatTemplateQtyMtFromKg(0)).toBe('0')
+    expect(formatTemplateQtyMtFromKg(null)).toBe('')
   })
 
   it('spans date columns from earliest start to latest end across planned rows', () => {
@@ -221,24 +223,24 @@ describe('truckingActualsTemplate', () => {
 
   it('parses new unplanned template with metadata columns before date columns', () => {
     const csv =
-      'Group,Supplier,Source,Contract Date,Contract Ext No,PO,OS Qty,Plan Qty,1-Jun-2026,2-Jun-2026\nG1,Sup,3rd Party,1-May-2026,EXT-1,PO-1,100,,12.5,10\n'
+      'Group,Supplier,Source,Contract Date,Contract Ext No,PO,OS Qty (MT),Plan Qty (MT),1-Jun-2026,2-Jun-2026\nG1,Sup,3rd Party,1-May-2026,EXT-1,PO-1,100,,12.5,10\n'
     const parsed = parseTruckingWidePlanningTemplateCsv(csv)
     expect(parsed.rowParseFailures).toEqual([])
     expect(parsed.rows).toHaveLength(1)
     expect(parsed.rows[0].entries).toEqual([
-      { dateIso: '2026-06-01', qtyMt: 12.5, colIndex: 8 },
-      { dateIso: '2026-06-02', qtyMt: 10, colIndex: 9 },
+      { dateIso: '2026-06-01', qtyMt: 12500, colIndex: 8 },
+      { dateIso: '2026-06-02', qtyMt: 10000, colIndex: 9 },
     ])
   })
 
   it('parses legacy DD/MM/YYYY date headers on upload', () => {
     const csv =
-      'Group,Supplier,Source,Contract Date,Contract Ext No,PO,OS Qty,Plan Qty,01/06/2026,02/06/2026\nG1,Sup,3rd Party,01/05/2026,EXT-1,PO-1,100,,12.5,10\n'
+      'Group,Supplier,Source,Contract Date,Contract Ext No,PO,OS Qty (MT),Plan Qty (MT),01/06/2026,02/06/2026\nG1,Sup,3rd Party,01/05/2026,EXT-1,PO-1,100,,12.5,10\n'
     const parsed = parseTruckingWidePlanningTemplateCsv(csv)
     expect(parsed.rowParseFailures).toEqual([])
     expect(parsed.rows[0].entries).toEqual([
-      { dateIso: '2026-06-01', qtyMt: 12.5, colIndex: 8 },
-      { dateIso: '2026-06-02', qtyMt: 10, colIndex: 9 },
+      { dateIso: '2026-06-01', qtyMt: 12500, colIndex: 8 },
+      { dateIso: '2026-06-02', qtyMt: 10000, colIndex: 9 },
     ])
   })
 
@@ -249,8 +251,17 @@ describe('truckingActualsTemplate', () => {
     expect(parsed.rowParseFailures).toEqual([])
     expect(parsed.rows).toHaveLength(1)
     expect(parsed.rows[0].entries).toEqual([
-      { dateIso: '2026-06-01', qtyMt: 12.5, colIndex: 3 },
-      { dateIso: '2026-06-02', qtyMt: 10, colIndex: 4 },
+      { dateIso: '2026-06-01', qtyMt: 12500, colIndex: 3 },
+      { dateIso: '2026-06-02', qtyMt: 10000, colIndex: 4 },
+    ])
+  })
+
+  it('parses legacy kg template headers without converting daily qty', () => {
+    const csv =
+      'Group,Supplier,Source,Contract Date,Contract Ext No,PO,OS Qty (kg),Plan Qty (kg),1-Jun-2026\nG1,Sup,3rd Party,1-May-2026,EXT-1,PO-1,100000,,25000\n'
+    const parsed = parseTruckingWidePlanningTemplateCsv(csv)
+    expect(parsed.rows[0].entries).toEqual([
+      { dateIso: '2026-06-01', qtyMt: 25000, colIndex: 8 },
     ])
   })
 
@@ -260,8 +271,8 @@ describe('truckingActualsTemplate', () => {
     expect(parsed.rowParseFailures).toEqual([])
     expect(parsed.rows).toHaveLength(1)
     expect(parsed.rows[0].entries).toEqual([
-      { dateIso: '2026-06-01', qtyMt: 12.5, colIndex: 2 },
-      { dateIso: '2026-06-02', qtyMt: 10, colIndex: 3 },
+      { dateIso: '2026-06-01', qtyMt: 12500, colIndex: 2 },
+      { dateIso: '2026-06-02', qtyMt: 10000, colIndex: 3 },
     ])
   })
 
@@ -273,7 +284,7 @@ describe('truckingActualsTemplate', () => {
     expect(parsed.rowParseFailures).toEqual([])
     expect(parsed.rows).toHaveLength(1)
     expect(parsed.rows[0].entries[0]?.dateIso).toBe('2024-01-01')
-    expect(parsed.rows[0].entries[0]?.qtyMt).toBe(12.5)
+    expect(parsed.rows[0].entries[0]?.qtyMt).toBe(12500)
   })
 
   it('adds Plan Qty SUM formula in unplanned XLSX export', async () => {
@@ -286,7 +297,7 @@ describe('truckingActualsTemplate', () => {
           group_name: 'G1',
           source_type: '3rd Party',
           contract_date: '2026-05-20',
-          outstanding_quantity: 1000,
+          outstanding_quantity: 1000000,
           templateKind: 'unplanned',
         },
       ],
@@ -308,8 +319,8 @@ describe('truckingActualsTemplate', () => {
         'Contract Date',
         'Contract Ext No',
         'PO',
-        'OS Qty',
-        'Plan Qty',
+        'OS Qty (MT)',
+        'Plan Qty (MT)',
         '10/06/2026',
       ],
       failedRows: [

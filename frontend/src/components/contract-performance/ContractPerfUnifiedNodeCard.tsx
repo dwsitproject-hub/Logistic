@@ -43,39 +43,44 @@ const SEGMENT_UI: Record<
   }
 > = {
   ALL: {
-    label: 'ALL',
+    label: 'all',
     idle: 'bg-slate-50/80 border-slate-100 text-slate-800',
     active: 'bg-white border-blue-500 shadow-sm ring-1 ring-blue-100',
     count: 'text-slate-800',
   },
   ON_TIME: {
-    label: 'ON TIME',
+    label: 'on time',
     idle: 'bg-emerald-50/40 border-emerald-100/60 text-emerald-700',
     active: 'bg-white border-emerald-500 shadow-sm ring-1 ring-emerald-100',
     count: 'text-emerald-700',
   },
   LATE: {
-    label: 'LATE',
+    label: 'late',
     idle: 'bg-rose-50/40 border-rose-100/60 text-rose-700',
     active: 'bg-white border-rose-500 shadow-sm ring-1 ring-rose-100',
     count: 'text-rose-700',
   },
 }
 
-function formatCompactAvg(days: number | null): string {
-  if (days == null || Number.isNaN(days)) return 'Avg: —'
-  return `Avg: ${days.toFixed(1)}d`
+function formatCompactAvgValue(days: number | null): string {
+  if (days == null || Number.isNaN(days)) return '—'
+  return `${days.toFixed(1)}d`
 }
 
-/** Open → OS Qty; Close → Contract Qty; All → MT. */
-function formatCompactQty(
-  kg: number,
-  summaryCardStatus?: 'All' | 'Open' | 'Close',
-): string {
+/** Display MT with suffix (compact row). */
+function formatCompactQtyValue(kg: number): string {
   const mt = (kg / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 })
-  if (summaryCardStatus === 'Open') return `${mt} OS`
-  if (summaryCardStatus === 'Close') return `${mt} CT`
-  return `${mt} MT`
+  return `${mt}MT`
+}
+
+function segmentStatsTooltip(summaryCardStatus?: 'All' | 'Open' | 'Close'): string {
+  if (summaryCardStatus === 'Open') {
+    return 'Avg Trade (days) | Outstanding Qty (MT)'
+  }
+  if (summaryCardStatus === 'Close') {
+    return 'Avg Trade (days) | Contract Qty (MT)'
+  }
+  return 'Avg Trade (days) | Qty (MT)'
 }
 
 function SegmentBlock({
@@ -102,26 +107,30 @@ function SegmentBlock({
       onClick={onSelect}
       aria-pressed={isActive}
       className={cn(
-        'min-w-0 p-1.5 rounded-md border text-center transition-all duration-150',
+        'min-w-0 p-1 rounded-md border text-center transition-all duration-150',
         isActive ? ui.active : ui.idle,
         disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:brightness-[0.98]',
       )}
     >
-      <div className="leading-none pointer-events-none">
-        <span className="text-[10px] tracking-wide uppercase font-semibold text-slate-400">
-          {ui.label}
+      <div className="leading-none pointer-events-none whitespace-nowrap">
+        <span className="text-[8px] tracking-tight font-semibold text-slate-500 normal-case">{ui.label}</span>
+        <span className="text-[8px] font-normal text-slate-300 mx-px" aria-hidden>
+          -
         </span>
-        <span className={cn('text-sm font-extrabold ml-1.5 inline-block tabular-nums', ui.count)}>
+        <span className={cn('text-xs font-extrabold tabular-nums', ui.count)}>
           {metrics.count.toLocaleString('en-US')}
         </span>
-        <span className="text-[10px] font-normal text-slate-400 ml-0.5">Ctx</span>
+        <span className="text-[8px] font-normal text-slate-400 ml-0.5">Ctx</span>
       </div>
-      <div className="flex items-center justify-center space-x-1.5 mt-0.5 pt-1 border-t border-slate-100/60 text-[10px] font-medium text-slate-500 pointer-events-none">
-        <span className="tabular-nums whitespace-nowrap">{formatCompactAvg(metrics.avgTradeDays)}</span>
-        <span className="text-slate-200" aria-hidden>
+      <div
+        className="flex items-center justify-center gap-0.5 mt-0.5 pt-0.5 border-t border-slate-100/60 text-[9px] font-semibold text-gray-900 tabular-nums leading-none"
+        title={segmentStatsTooltip(summaryCardStatus)}
+      >
+        <span>{formatCompactAvgValue(metrics.avgTradeDays)}</span>
+        <span className="text-gray-300 shrink-0" aria-hidden>
           |
         </span>
-        <span className="tabular-nums whitespace-nowrap">{formatCompactQty(metrics.totalQtyKg, summaryCardStatus)}</span>
+        <span>{formatCompactQtyValue(metrics.totalQtyKg)}</span>
       </div>
     </button>
   )

@@ -7,6 +7,12 @@ import {
   appendTruckingLateIndicatorFilter,
   parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
+import {
+  appendTruckingUnplannedBacklogColumnFilters,
+  appendTruckingUnplannedBacklogGlobalSearch,
+  buildTruckingUnplannedBacklogCountQuery,
+  buildTruckingUnplannedContractToolbarScope,
+} from '../utils/truckingUnplannedHybridSql';
 import { deriveTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
 import { appendTruckingPipelineStageFilter, normalizeTruckingPagePipelineStageParam } from '../utils/truckingPagePipelineSql';
 import { truckingPageListScopeWhereSql } from '../utils/truckingIncotermScope';
@@ -16,6 +22,12 @@ import {
   buildTruckingListSelectClause,
   truckingListB2bExcludeSql,
 } from '../utils/truckingListSelectSql';
+import {
+  isPipelineDailySummaryEligible,
+  loadTruckingSummaryFromDaily,
+  markPipelineDailySummaryStale,
+  type PipelineDailySummaryFilterInput,
+} from './pipelineDailySummary.service';
 
 /**
  * Trucking list API:
@@ -74,8 +86,13 @@ const SUMMARY_CACHE = new Map<
   string,
   { summary: TruckingListResponseData['summary']; expiresAt: number }
 >();
+const MERGED_SUMMARY_CACHE = new Map<
+  string,
+  { summary: TruckingListResponseData['summary']; expiresAt: number }
+>();
+const UNPLANNED_BACKLOG_CACHE = new Map<string, { count: number; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v23';
+const CACHE_VERSION = 'trucking-list-v24';
 const MAX_CACHE_ENTRIES = 80;
 
 const SORT_FIELD_BY_KEY: Record<string, string> = {
@@ -186,10 +203,101 @@ export function buildTruckingSummaryCacheKey(filterCacheKey: string): string {
   return `${filterCacheKey}:summary`;
 }
 
+function buildTruckingMergedSummaryCacheKey(filterCacheKey: string): string {
+  return `${filterCacheKey}:summary-unplanned-merged`;
+}
+
+function buildTruckingUnplannedBacklogCacheKey(req: AuthRequest): string {
+  const { dateFrom, dateTo, contract, plant, search, columnFilters } = req.query as Record<
+    string,
+    unknown
+  >;
+  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  return `${CACHE_VERSION}:trucking-unplanned-backlog:${JSON.stringify({
+    dateFrom: dateFrom ?? null,
+    dateTo: dateTo ?? null,
+    contract: contract ?? null,
+    plants: [...plants].sort(),
+    search: typeof search === 'string' ? search.trim() : '',
+    columnFilters: columnFilters ?? null,
+  })}`;
+}
+
+async function countTruckingUnplannedContractBacklogForRequest(req: AuthRequest): Promise<number> {
+  const cacheKey = buildTruckingUnplannedBacklogCacheKey(req);
+  const cached = UNPLANNED_BACKLOG_CACHE.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.count;
+  }
+  if (cached) UNPLANNED_BACKLOG_CACHE.delete(cacheKey);
+
+  const { dateFrom, dateTo, contract, plant } = req.query;
+  const globalSearch =
+    typeof (req.query as { search?: string }).search === 'string'
+      ? (req.query as { search?: string }).search!.trim()
+      : '';
+  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
+  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  const scope = buildTruckingUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
+  let idx = scope.params.length + 1;
+  const g = appendTruckingUnplannedBacklogGlobalSearch(globalSearch, idx);
+  idx = g.nextIndex;
+  const c = appendTruckingUnplannedBacklogColumnFilters(colFilters, idx);
+  const res = await query(
+    buildTruckingUnplannedBacklogCountQuery(scope.sql, `${g.sql}${c.sql}`),
+    [...scope.params, ...g.params, ...c.params],
+  );
+  const count = parseInt(String(res.rows[0]?.c ?? '0'), 10) || 0;
+  UNPLANNED_BACKLOG_CACHE.set(cacheKey, { count, expiresAt: Date.now() + CACHE_TTL_MS });
+  evictMapIfNeeded(UNPLANNED_BACKLOG_CACHE, MAX_CACHE_ENTRIES);
+  return count;
+}
+
 export function invalidateTruckingListCache(): void {
   PAGE_CACHE.clear();
   COUNT_CACHE.clear();
   SUMMARY_CACHE.clear();
+  MERGED_SUMMARY_CACHE.clear();
+  UNPLANNED_BACKLOG_CACHE.clear();
+  markPipelineDailySummaryStale(['trucking']).catch(() => {});
+}
+
+function buildPipelineDailyFilterInput(req: AuthRequest): PipelineDailySummaryFilterInput {
+  const {
+    status,
+    location,
+    loadingLocation,
+    unloadingLocation,
+    dateFrom,
+    dateTo,
+    sto,
+    contract,
+    plant,
+  } = req.query;
+  const globalSearch =
+    typeof (req.query as { search?: string }).search === 'string'
+      ? (req.query as { search?: string }).search!.trim()
+      : '';
+  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
+  const lateIndicatorParam = (req.query as { lateIndicator?: string }).lateIndicator;
+  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  return {
+    dateFrom: dateFrom != null ? String(dateFrom) : undefined,
+    dateTo: dateTo != null ? String(dateTo) : undefined,
+    plants,
+    globalSearch,
+    colFilters,
+    lateIndicator: lateIndicatorParam != null ? String(lateIndicatorParam) : undefined,
+    status: status != null ? String(status) : undefined,
+    sto: sto != null ? String(sto) : undefined,
+    contract: contract != null ? String(contract) : undefined,
+    location: location != null ? String(location) : undefined,
+    loadingLocation: loadingLocation != null ? String(loadingLocation) : undefined,
+    unloadingLocation: unloadingLocation != null ? String(unloadingLocation) : undefined,
+  };
 }
 
 function evictMapIfNeeded(map: Map<string, { expiresAt: number }>, max: number): void {
@@ -662,6 +770,7 @@ function cacheFilteredTotal(filterCacheKey: string, total: number): void {
 
 export async function loadTruckingListSummary(
   built: TruckingListBuiltQuery,
+  req?: AuthRequest,
 ): Promise<TruckingListResponseData['summary']> {
   const summaryCacheKey = buildTruckingSummaryCacheKey(built.filterCacheKey);
   const cached = SUMMARY_CACHE.get(summaryCacheKey);
@@ -669,6 +778,25 @@ export async function loadTruckingListSummary(
     return cached.summary;
   }
   if (cached) SUMMARY_CACHE.delete(summaryCacheKey);
+
+  if (req) {
+    const filters = buildPipelineDailyFilterInput(req);
+    if (isPipelineDailySummaryEligible(filters)) {
+      const fromDaily = await loadTruckingSummaryFromDaily({
+        dateFrom: filters.dateFrom,
+        dateTo: filters.dateTo,
+        plants: filters.plants,
+      });
+      if (fromDaily) {
+        SUMMARY_CACHE.set(summaryCacheKey, {
+          summary: fromDaily,
+          expiresAt: Date.now() + CACHE_TTL_MS,
+        });
+        evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+        return fromDaily;
+      }
+    }
+  }
 
   const { text, params } = buildTruckingSummaryQuery(built);
   const summaryResult = await query(text, params);
@@ -682,24 +810,48 @@ export async function loadTruckingListSummaryWithBacklog(
   req: AuthRequest,
   built: TruckingListBuiltQuery,
 ): Promise<TruckingListResponseData['summary']> {
-  const base = await loadTruckingListSummary(built);
-  if (!base) return base;
-  try {
-    const {
-      buildTruckingUnplannedHybridContext,
-      countTruckingUnplannedHybridBreakdown,
-    } = await import('./truckingUnplannedHybridList.service');
-    const sortKey = String((req.query as { sortKey?: string }).sortKey || 'supplier');
-    const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'asc').toLowerCase();
-    const sortDir: 'ASC' | 'DESC' = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
-    const ctx = buildTruckingUnplannedHybridContext(req, sortKey, sortDir, {
-      executionBuilt: built,
-    });
-    const breakdown = await countTruckingUnplannedHybridBreakdown(ctx);
-    return mergeTruckingUnplannedBreakdownIntoSummary(base, breakdown);
-  } catch {
-    return base;
+  const mergedCacheKey = buildTruckingMergedSummaryCacheKey(built.filterCacheKey);
+  const cachedMerged = MERGED_SUMMARY_CACHE.get(mergedCacheKey);
+  if (cachedMerged && Date.now() < cachedMerged.expiresAt) {
+    return cachedMerged.summary;
   }
+  if (cachedMerged) MERGED_SUMMARY_CACHE.delete(mergedCacheKey);
+
+  const filters = buildPipelineDailyFilterInput(req);
+  if (isPipelineDailySummaryEligible(filters)) {
+    const fromDaily = await loadTruckingSummaryFromDaily({
+      dateFrom: filters.dateFrom,
+      dateTo: filters.dateTo,
+      plants: filters.plants,
+    });
+    if (fromDaily) {
+      MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
+        summary: fromDaily,
+        expiresAt: Date.now() + CACHE_TTL_MS,
+      });
+      evictMapIfNeeded(MERGED_SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+      return fromDaily;
+    }
+  }
+
+  const [base, contractRows] = await Promise.all([
+    loadTruckingListSummary(built, req),
+    countTruckingUnplannedContractBacklogForRequest(req),
+  ]);
+  if (!base) return base;
+
+  const executionRows = base.status?.unplanned ?? 0;
+  const merged = mergeTruckingUnplannedBreakdownIntoSummary(base, {
+    contractRows,
+    executionRows,
+    totalTableRows: contractRows + executionRows,
+  });
+  MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
+    summary: merged,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
+  evictMapIfNeeded(MERGED_SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+  return merged;
 }
 
 async function loadTruckingListPage(
@@ -784,7 +936,7 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
     const hybrid = await resolveTruckingUnplannedHybridList(req, ctx);
     let summary: TruckingListResponseData['summary'];
     if (includeSummary) {
-      summary = await loadTruckingListSummaryWithBacklog(req, summaryBuilt);
+      summary = await loadTruckingListSummary(summaryBuilt, req);
       summary = mergeTruckingUnplannedBreakdownIntoSummary(summary, hybrid.unplannedBreakdown);
     }
     return {

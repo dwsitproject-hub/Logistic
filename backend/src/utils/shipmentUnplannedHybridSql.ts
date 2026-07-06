@@ -118,13 +118,14 @@ export function appendContractScopeToolbarFilters(
   const params: unknown[] = [];
   let pi = startIndex;
 
-  for (const colId of ['product', 'incoterm'] as const) {
+  for (const colId of ['product', 'incoterm', 'supplier'] as const) {
     const raw = filters[colId];
     if (!raw || typeof raw !== 'object') continue;
     const f = raw as ColumnFilterPayload[string];
     if (f.type !== 'multi') continue;
 
-    const expr = colId === 'product' ? 'c.product' : 'c.incoterm';
+    const expr =
+      colId === 'product' ? 'c.product' : colId === 'incoterm' ? 'c.incoterm' : 'c.supplier';
     const vals = Array.isArray(f.values)
       ? f.values.filter((x) => x != null && String(x).trim() !== '')
       : [];

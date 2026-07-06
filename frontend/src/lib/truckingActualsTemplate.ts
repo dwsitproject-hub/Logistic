@@ -30,8 +30,8 @@ export type TruckingActualsTemplateRow = {
   templateKind?: 'default' | 'unplanned' | 'planned'
 }
 
-export const UNPLANNED_TEMPLATE_OS_QTY_HEADER = 'OS Qty (kg)'
-export const UNPLANNED_TEMPLATE_PLAN_QTY_HEADER = 'Plan Qty (kg)'
+export const UNPLANNED_TEMPLATE_OS_QTY_HEADER = 'OS Qty (MT)'
+export const UNPLANNED_TEMPLATE_PLAN_QTY_HEADER = 'Plan Qty (MT)'
 /** @deprecated Use UNPLANNED_TEMPLATE_OS_QTY_HEADER */
 export const UNPLANNED_TEMPLATE_OUTSTANDING_QTY_HEADER = UNPLANNED_TEMPLATE_OS_QTY_HEADER
 
@@ -140,18 +140,48 @@ function resolvePerDayMt(row: TruckingActualsTemplateRow, start: string, end: st
   return derivePerDayMtFromDailyDeliverables(daily, start, end)
 }
 
-/** API outstanding qty is kg; template displays kg (KLIP list shows MT). */
-export function formatTemplateOutstandingQtyKg(kg: unknown): string {
+/** API / DB quantities are kg; wide planning template displays MT. */
+export function formatTemplateQtyMtFromKg(kg: unknown, opts?: { maxFractionDigits?: number }): string {
   if (kg === null || kg === undefined || kg === '') return ''
   const n = typeof kg === 'string' ? Number(String(kg).replace(/,/g, '')) : Number(kg)
   if (!Number.isFinite(n)) return ''
-  if (Number.isInteger(n)) return String(n)
-  return String(Math.round(n * 100) / 100)
+  const mt = n / 1000
+  const maxFractionDigits = opts?.maxFractionDigits ?? 2
+  return mt.toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: maxFractionDigits,
+    useGrouping: false,
+  })
 }
 
-/** @deprecated Use formatTemplateOutstandingQtyKg */
+/** @deprecated Use formatTemplateQtyMtFromKg */
+export function formatTemplateOutstandingQtyKg(kg: unknown): string {
+  return formatTemplateQtyMtFromKg(kg)
+}
+
+/** @deprecated Use formatTemplateQtyMtFromKg */
 export function formatTemplateOutstandingQtyMt(kg: unknown): string {
-  return formatTemplateOutstandingQtyKg(kg)
+  return formatTemplateQtyMtFromKg(kg)
+}
+
+/** Detect qty unit from wide planning template metadata headers. */
+export function resolveWidePlanningTemplateQtyUnit(headerRow: unknown[]): 'kg' | 'mt' {
+  for (const cell of headerRow) {
+    const h = cellToString(cell).toLowerCase()
+    if (h.includes('(mt)') || h.includes('os qty') || h.includes('oq qty')) return 'mt'
+    if (h.includes('(kg)')) return 'kg'
+    if (h.includes('outstanding') && h.includes('mt')) return 'mt'
+  }
+  return 'mt'
+}
+
+function parseTemplateQtyToKg(raw: string, unit: 'kg' | 'mt'): number | null {
+  const s = raw.trim().replace(/,/g, '')
+  if (!s) return null
+  const n = Number(s)
+  if (!Number.isFinite(n) || n < 0) return null
+  const kg = unit === 'mt' ? n * 1000 : n
+  return Math.round(kg * 100) / 100
 }
 
 function isUnplannedTemplateRow(row: TruckingActualsTemplateRow): boolean {
@@ -186,8 +216,13 @@ function isWideTemplateMetadataHeader(header: string): boolean {
     h === 'po number' ||
     h === 'os qty' ||
     h === 'os qty (kg)' ||
+    h === 'os qty' ||
+    h === 'os qty (mt)' ||
+    h === 'oq qty' ||
+    h === 'oq qty (mt)' ||
     h === 'plan qty' ||
     h === 'plan qty (kg)' ||
+    h === 'plan qty (mt)' ||
     h === 'reason' ||
     h === 'failure reason' ||
     h.includes('outstanding')
@@ -197,14 +232,14 @@ function isWideTemplateMetadataHeader(header: string): boolean {
   return false
 }
 
-function computePlanQtyKgFromDeliverables(row: TruckingActualsTemplateRow): string {
+function computePlanQtyMtFromDeliverables(row: TruckingActualsTemplateRow): string {
   const daily = Array.isArray(row.daily_deliverables) ? row.daily_deliverables : []
   const kg = daily.reduce((sum, d) => sum + Number(d?.quantity_delivered ?? 0), 0)
   if (!Number.isFinite(kg) || kg <= 0) return ''
-  return formatTemplateOutstandingQtyKg(kg)
+  return formatTemplateQtyMtFromKg(kg)
 }
 
-function resolveDailyQtyKgForDate(
+function resolveDailyQtyMtForDate(
   row: TruckingActualsTemplateRow,
   dateIso: string,
 ): string {
@@ -212,7 +247,7 @@ function resolveDailyQtyKgForDate(
   const entry = daily.find((d) => sliceIsoDate(d?.date) === dateIso)
   const kg = Number(entry?.quantity_delivered ?? 0)
   if (!Number.isFinite(kg) || kg <= 0) return ''
-  return formatTemplateOutstandingQtyKg(kg)
+  return formatTemplateQtyMtFromKg(kg)
 }
 
 function formatContractDateForTemplate(value: unknown): string {
@@ -360,10 +395,10 @@ export function buildActualsTemplateMatrix(
     const qtyCells = dateColumns.map((iso) => {
       if (isWideTemplate) {
         if (!rowDates.has(iso)) return ''
-        return resolveDailyQtyKgForDate(row, iso)
+        return resolveDailyQtyMtForDate(row, iso)
       }
       if (!rowDates.has(iso) || perDayMt == null) return ''
-      return String(Math.round(perDayMt * 1000))
+      return formatTemplateQtyMtFromKg(perDayMt * 1000)
     })
 
     if (isWideTemplate) {
@@ -374,8 +409,8 @@ export function buildActualsTemplateMatrix(
         formatContractDateForTemplate(row.contract_date),
         ext,
         po,
-        formatTemplateOutstandingQtyKg(row.outstanding_quantity),
-        computePlanQtyKgFromDeliverables(row),
+        formatTemplateQtyMtFromKg(row.outstanding_quantity),
+        computePlanQtyMtFromDeliverables(row),
         ...qtyCells,
       ])
     } else {
@@ -596,12 +631,8 @@ function parseTemplateHeaderDateFromCell(raw: unknown): string | null {
   return null
 }
 
-function parseTemplateQtyKg(raw: string): number | null {
-  const s = raw.trim().replace(/,/g, '')
-  if (!s) return null
-  const n = Number(s)
-  if (!Number.isFinite(n) || n < 0) return null
-  return n
+function parseTemplateQtyKg(raw: string, unit: 'kg' | 'mt'): number | null {
+  return parseTemplateQtyToKg(raw, unit)
 }
 
 export type ParsedWidePlanningTemplateRow = {
@@ -623,6 +654,7 @@ export function parseTruckingWidePlanningTemplateMatrix(matrix: unknown[][]): {
   }
 
   const headerRow = matrix[0] ?? []
+  const qtyUnit = resolveWidePlanningTemplateQtyUnit(headerRow)
   const dateColumns = collectWideTemplateDateColumns(headerRow)
 
   if (dateColumns.length === 0) {
@@ -652,7 +684,7 @@ export function parseTruckingWidePlanningTemplateMatrix(matrix: unknown[][]): {
 
     const entries: ParsedWidePlanningTemplateRow['entries'] = []
     for (const { colIndex, dateIso } of dateColumns) {
-      const qtyKg = parseTemplateQtyKg(cellToString(cells[colIndex]))
+      const qtyKg = parseTemplateQtyKg(cellToString(cells[colIndex]), qtyUnit)
       if (qtyKg == null || qtyKg === 0) continue
       entries.push({ dateIso, qtyMt: qtyKg, colIndex })
     }

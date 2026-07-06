@@ -87,6 +87,7 @@ function buildPagePrefetchRequests(href: string): PrefetchRequest[] {
         dateTo,
         sourceFilter: 'All',
         selectedIncoterms: [],
+        selectedSuppliers: [],
         selectedGroupPlants: [],
         productTabQuery: undefined,
         lateOnTimeFilter: 'ALL',

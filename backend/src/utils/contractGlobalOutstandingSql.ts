@@ -3,12 +3,11 @@
  */
 
 import {
-  sqlIncotermOutstandingCase,
+  sqlContractOutstandingFromFields,
   sqlParseSapNumeric,
   sqlQtyMoveIncotermDelivery,
   sqlSapQtyTruckingFromSpd,
   sqlSapQtyVesselFromSpd,
-  sqlTransportModeFromContractAndJson,
 } from './sapIncotermMetrics';
 
 export type QtyMoveContractFilter =
@@ -192,22 +191,15 @@ export function sqlContractGlobalOutstandingExpr(opts: {
   contractNumberExpr: string;
 }): string {
   const { contractQtyExpr, incotermExpr, contractNumberExpr } = opts;
-  const transportExpr = `(SELECT ${sqlTransportModeFromContractAndJson('c.transport_mode', 'spd.data')}
-    FROM contracts c
-    LEFT JOIN LATERAL (
-      SELECT spd.data FROM sap_processed_data spd
-      WHERE spd.contract_number = c.contract_id
-      ORDER BY spd.created_at DESC NULLS LAST
-      LIMIT 1
-    ) spd ON true
-    WHERE c.contract_id = ${contractNumberExpr}
-    LIMIT 1)`;
-  return sqlIncotermOutstandingCase({
+  const qmReceive = `(SELECT qm.quantity_receive FROM qty_move qm WHERE qm.contract_number = ${contractNumberExpr})`;
+  const qmDelivery = `(SELECT qm.quantity_delivery FROM qty_move qm WHERE qm.contract_number = ${contractNumberExpr})`;
+  // Align with Contracts list: CIF/FRC/CFR → Quantity Receive; LCO/FOB → Quantity Delivery.
+  return sqlContractOutstandingFromFields({
     contractQtyExpr,
     incotermExpr,
-    truckingQtyExpr: `(SELECT qm.quantity_delivery_trucking FROM qty_move qm WHERE qm.contract_number = ${contractNumberExpr})`,
-    vesselQtyExpr: `(SELECT qm.quantity_delivery_vessel FROM qty_move qm WHERE qm.contract_number = ${contractNumberExpr})`,
-    transportExpr,
+    receiveExpr: qmReceive,
+    deliveryExpr: qmDelivery,
+    clampAtZero: true,
   });
 }
 

@@ -1,6 +1,7 @@
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
+import { markPipelineDailySummaryStale } from './pipelineDailySummary.service';
 import { resolveContractLogisticsStoNumber } from '../utils/contractLogisticsStoDisplay';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
 import {
@@ -184,6 +185,7 @@ export function invalidateShipmentsListCache(): void {
   PAGE_CACHE.clear();
   COUNT_CACHE.clear();
   SUMMARY_CACHE.clear();
+  markPipelineDailySummaryStale(['shipment']).catch(() => {});
 }
 
 export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentListRow[] {

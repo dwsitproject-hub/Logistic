@@ -22,16 +22,18 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('contract_candidates');
   });
 
-  it('sqlContractGlobalOutstandingExpr uses qty_move and incoterm', () => {
+  it('sqlContractGlobalOutstandingExpr uses qty_move receive/delivery per incoterm (Contracts list rules)', () => {
     const sql = sqlContractGlobalOutstandingExpr({
       contractQtyExpr: 'pl.contract_qty',
       incotermExpr: 'pl.incoterm',
       contractNumberExpr: 'pl.contract_number',
     });
     expect(sql).toContain('qty_move');
-    expect(sql).toContain('FRC');
-    expect(sql).toContain('FOB');
-    expect(sql).toContain('quantity_delivery_trucking');
+    expect(sql).toContain('quantity_receive');
+    expect(sql).toContain('quantity_delivery');
+    expect(sql).toContain("'FRC', 'CIF', 'CFR'");
+    expect(sql).toContain("'LCO', 'FOB'");
+    expect(sql).toContain('GREATEST');
   });
 
   it('qty_move quantity_delivery ignores zero vessel so trucking qty is not masked', () => {

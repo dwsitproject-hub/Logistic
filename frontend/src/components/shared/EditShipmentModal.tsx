@@ -26,6 +26,7 @@ import {
   History,
   Loader2,
   MapPin,
+  MessageSquare,
   Plus,
   Ship,
   Upload,
@@ -72,10 +73,17 @@ import {
 } from '@/lib/vesselModalUi'
 import {
   saveEditShipmentChanges,
+  saveShipmentEditRemark,
   type DischargeEtaFields,
   type EditEtaFields,
   type LoadingPortRef,
 } from '@/lib/editShipmentModalSave'
+import {
+  buildShipmentEtaBaseline,
+  hasShipmentEtaEdits,
+  type ShipmentEtaBaseline,
+  type ShipmentEtaBlockSnapshot,
+} from '@/lib/editShipmentRemarkGate'
 import {
   ataFieldsFromShipmentInfo,
   ataSapReferenceFromShipmentInfo,
@@ -302,12 +310,10 @@ function MtQtyInput({
   valueKg,
   disabled,
   onChange,
-  showKgHint = true,
 }: {
   valueKg: number | null
   disabled?: boolean
   onChange: (kg: number | null) => void
-  showKgHint?: boolean
 }) {
   if (disabled) {
     return (
@@ -315,9 +321,6 @@ function MtQtyInput({
         <div className={`flex min-h-8 items-center justify-end tabular-nums ${INFO_VALUE_CLASS}`}>
           {valueKg === null ? '—' : formatQtyMtFromKg(valueKg)}
         </div>
-        {showKgHint && valueKg != null && valueKg > 0 && (
-          <p className="mt-0.5 text-[10px] text-gray-500 tabular-nums">{formatNumber(valueKg)} kg</p>
-        )}
       </div>
     )
   }
@@ -345,11 +348,6 @@ function MtQtyInput({
           MT
         </span>
       </div>
-      {showKgHint && (
-        <p className="mt-0.5 text-[10px] text-gray-500">
-          {valueKg != null && valueKg > 0 ? `${formatNumber(valueKg)} kg` : 'Metric tons (×1,000 kg)'}
-        </p>
-      )}
     </div>
   )
 }
@@ -373,7 +371,6 @@ function MtQtyReadOnly({ valueKg }: { valueKg: number | null | undefined }) {
   return (
     <div className="text-right tabular-nums">
       <div>{formatQtyMtFromKg(kg)}</div>
-      {kg !== 0 && <p className="mt-0.5 text-[10px] text-gray-500">{formatNumber(kg)} kg</p>}
     </div>
   )
 }
@@ -538,6 +535,19 @@ type ActivityLogRow = {
   after_data?: Record<string, unknown> | null
 }
 
+type ShipmentRemarkRow = {
+  id: string
+  text: string
+  category?: string | null
+  created_at?: string | null
+  username?: string
+  full_name?: string
+}
+
+function formatShipmentRemarkAuthor(remark: ShipmentRemarkRow): string {
+  return remark.full_name?.trim() || remark.username?.trim() || '—'
+}
+
 function formatActivityLabel(log: ActivityLogRow): string {
   const user = log.full_name?.trim() || log.username?.trim() || 'Unknown User'
   const entity = log.entity_type?.replace(/_/g, ' ') ?? 'Record'
@@ -630,10 +640,14 @@ export function EditShipmentModal({
   const [ataIsEditing, setAtaIsEditing] = useState(false)
   const [activityLog, setActivityLog] = useState<ActivityLogRow[]>([])
   const [activityLoading, setActivityLoading] = useState(false)
+  const [shipmentRemarks, setShipmentRemarks] = useState<ShipmentRemarkRow[]>([])
+  const [shipmentRemarksLoading, setShipmentRemarksLoading] = useState(false)
 
   const [editContext, setEditContext] = useState<ShipmentEditContextData | null>(null)
   const [selectedAddPoOption, setSelectedAddPoOption] = useState<ShipmentPoOption | null>(null)
   const [addingPo, setAddingPo] = useState(false)
+  const [editRemark, setEditRemark] = useState('')
+  const [etaBaseline, setEtaBaseline] = useState<ShipmentEtaBaseline | null>(null)
 
   const initSessionRef = useRef<string | null>(null)
 
@@ -684,6 +698,35 @@ export function EditShipmentModal({
     [qtyTableRows, qtyEdits],
   )
 
+  const etaBlockSnapshots: ShipmentEtaBlockSnapshot[] = useMemo(
+    () =>
+      etaBlocks.map((block) => ({
+        portSequence: block.portSequence,
+        status: block.status,
+        isDraft: block.isDraft,
+        fields: block.fields,
+      })),
+    [etaBlocks],
+  )
+
+  const hasQtyEdits = useMemo(
+    () => hasVesselPortsQuantityUserEdits(qtyTableRows, qtyEdits),
+    [qtyTableRows, qtyEdits],
+  )
+
+  const hasEtaEdits = useMemo(
+    () =>
+      hasShipmentEtaEdits(etaBaseline, {
+        isMultiPortLoading,
+        dischargeEta: dischargeEtaFields,
+        etaBlocks: etaBlockSnapshots,
+      }),
+    [etaBaseline, isMultiPortLoading, dischargeEtaFields, etaBlockSnapshots],
+  )
+
+  const requiresEditRemark = hasEtaEdits || hasQtyEdits
+  const editRemarkMissing = requiresEditRemark && !editRemark.trim()
+
   const capacityPct =
     vesselCapacityMt != null && vesselCapacityMt > 0
       ? Math.min(100, (totalShipmentPlanKg / 1000 / vesselCapacityMt) * 100)
@@ -704,6 +747,8 @@ export function EditShipmentModal({
     setEtaSectionEditing(false)
     setIsMultiPortLoading(false)
     setActivityLog([])
+    setShipmentRemarks([])
+    setShipmentRemarksLoading(false)
     setShipmentInfo({})
     setAtaFields(emptyAtaFields())
     setOriginalAtaFields(emptyAtaFields())
@@ -717,6 +762,8 @@ export function EditShipmentModal({
     setEditContext(null)
     setSelectedAddPoOption(null)
     setAddingPo(false)
+    setEditRemark('')
+    setEtaBaseline(null)
     initSessionRef.current = null
   }, [])
 
@@ -773,6 +820,18 @@ export function EditShipmentModal({
       setActivityLog([])
     } finally {
       setActivityLoading(false)
+    }
+  }, [])
+
+  const loadShipmentRemarks = useCallback(async (sid: string) => {
+    setShipmentRemarksLoading(true)
+    try {
+      const res = await api.get(`/shipments/${sid}/remarks`)
+      setShipmentRemarks(Array.isArray(res.data?.data) ? res.data.data : [])
+    } catch {
+      setShipmentRemarks([])
+    } finally {
+      setShipmentRemarksLoading(false)
     }
   }, [])
 
@@ -954,17 +1013,23 @@ export function EditShipmentModal({
         setEtaSectionEditing(false)
 
         if (multiPort) {
-          setEtaBlocks(
-            loadingPortRows.map((portRow) => ({
-              id: portRow.id || `port-${portRow.port_sequence ?? 1}`,
-              portId: portRow.id,
-              portSequence: portRow.port_sequence ?? 1,
-              status: 'active',
-              loadingPort: resolveValidPortLabel(portRow.port_name) || `Loading Port ${portRow.port_sequence ?? 1}`,
-              contractLabels: poLabels,
-              fields: loadingEtaFromPortRow(portRow, info, row),
-              isEditing: false,
-            })),
+          const blocks: EtaBlock[] = loadingPortRows.map((portRow) => ({
+            id: portRow.id || `port-${portRow.port_sequence ?? 1}`,
+            portId: portRow.id,
+            portSequence: portRow.port_sequence ?? 1,
+            status: 'active' as const,
+            loadingPort: resolveValidPortLabel(portRow.port_name) || `Loading Port ${portRow.port_sequence ?? 1}`,
+            contractLabels: poLabels,
+            fields: loadingEtaFromPortRow(portRow, info, row),
+            isEditing: false,
+          }))
+          setEtaBlocks(blocks)
+          setEtaBaseline(
+            buildShipmentEtaBaseline({
+              isMultiPortLoading: true,
+              dischargeEta,
+              etaBlocks: blocks,
+            }),
           )
         } else {
           const loadingPortRow = loadingPortRows[0]
@@ -974,7 +1039,7 @@ export function EditShipmentModal({
             ...dischargeEta,
           }
 
-          setEtaBlocks([
+          const blocks: EtaBlock[] = [
             {
               id: `eta-active-${Date.now()}`,
               portId: loadingPortRow?.id,
@@ -985,8 +1050,17 @@ export function EditShipmentModal({
               fields: etaFields,
               isEditing: false,
             },
-          ])
+          ]
+          setEtaBlocks(blocks)
+          setEtaBaseline(
+            buildShipmentEtaBaseline({
+              isMultiPortLoading: false,
+              dischargeEta,
+              etaBlocks: blocks,
+            }),
+          )
         }
+        setEditRemark('')
 
         if (plantCode) {
           try {
@@ -1008,6 +1082,7 @@ export function EditShipmentModal({
             await hydrateQuantityDocs(sid)
           }
           void loadActivityLog(sid)
+          void loadShipmentRemarks(sid)
         })()
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : 'Failed to load shipment'
@@ -1016,7 +1091,7 @@ export function EditShipmentModal({
         setLoading(false)
       }
     },
-    [hydrateQuantityDocs, loadActivityLog, loadShipmentDocuments, editContractNumbers, readOnly],
+    [hydrateQuantityDocs, loadActivityLog, loadShipmentRemarks, loadShipmentDocuments, editContractNumbers, readOnly],
   )
 
   const handleAddPo = useCallback(async () => {
@@ -1150,6 +1225,14 @@ export function EditShipmentModal({
         }
       : activeBlock.fields
 
+    if (requiresEditRemark && !editRemark.trim()) {
+      setNotification({
+        type: 'error',
+        message: 'Remark is required when editing ETA, Quantity Delivered, or Quantity Receive.',
+      })
+      return
+    }
+
     setSaving(true)
     setNotification(null)
     try {
@@ -1202,6 +1285,10 @@ export function EditShipmentModal({
         ataFields,
         originalAtaFields,
       })
+
+      if (requiresEditRemark) {
+        await saveShipmentEditRemark(shipmentId, editRemark)
+      }
 
       await onSubmit({
         kind: 'update',
@@ -2124,13 +2211,58 @@ export function EditShipmentModal({
               </div>
             </div>
 
-            {/* Section 6: Activity History */}
+            {/* Section 6: Remarks */}
+            <div className={VESSEL_MODAL_SECTION_CLASS}>
+              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-amber-100">
+                  <MessageSquare className="h-3.5 w-3.5 text-amber-700" />
+                </div>
+                <h4 className="text-sm font-semibold text-gray-800">6. Remarks</h4>
+              </div>
+              <div className="p-4">
+                {shipmentRemarksLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-500">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading remarks…
+                  </div>
+                ) : shipmentRemarks.length === 0 ? (
+                  <p className="text-sm text-gray-500">
+                    {readOnly
+                      ? 'No remarks recorded for this shipment yet.'
+                      : 'No remarks yet. A remark is required when you change ETA, Quantity Delivered, or Quantity Receive.'}
+                  </p>
+                ) : (
+                  <ul className="space-y-3">
+                    {shipmentRemarks.map((remark) => (
+                      <li
+                        key={remark.id}
+                        className="rounded-md border border-amber-100 bg-amber-50/40 px-3 py-2.5"
+                      >
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                          <span className="text-sm font-medium text-gray-800">
+                            {formatShipmentRemarkAuthor(remark)}
+                          </span>
+                          <span className="text-xs text-gray-500 tabular-nums">
+                            {remark.created_at ? formatDateTimeDMY(remark.created_at) : '—'}
+                          </span>
+                        </div>
+                        <p className="mt-2 whitespace-pre-wrap break-words text-sm text-gray-800">
+                          {remark.text}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            {/* Section 7: Activity History */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
               <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
                 <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100">
                   <History className="h-3.5 w-3.5 text-slate-600" />
                 </div>
-                <h4 className="text-sm font-semibold text-gray-800">6. Activity History</h4>
+                <h4 className="text-sm font-semibold text-gray-800">7. Activity History</h4>
               </div>
               <div className="p-4">
                 {activityLoading ? (
@@ -2160,7 +2292,26 @@ export function EditShipmentModal({
           </div>
         </div>
 
-        <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4 flex justify-end gap-2 rounded-b-lg">
+        <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4 flex flex-col gap-3 rounded-b-lg">
+          {requiresEditRemark && canModifyShipment ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+              <label htmlFor="edit-shipment-remark" className="mb-1 block text-xs font-semibold text-amber-900">
+                Remark <span className="text-red-600">*</span>
+              </label>
+              <textarea
+                id="edit-shipment-remark"
+                rows={2}
+                value={editRemark}
+                onChange={(e) => setEditRemark(e.target.value)}
+                placeholder="Explain why ETA or quantities were changed…"
+                className="w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-amber-400 focus:outline-none focus:ring-1 focus:ring-amber-300"
+              />
+              <p className="mt-1 text-[11px] text-amber-800">
+                Required when changing ETA, Quantity Delivered, or Quantity Receive.
+              </p>
+            </div>
+          ) : null}
+          <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose} disabled={saving}>
             {readOnly ? 'Close' : 'Cancel'}
           </Button>
@@ -2168,7 +2319,12 @@ export function EditShipmentModal({
             <Button
               className="bg-blue-600 hover:bg-blue-700 text-white"
               onClick={() => void handleSave()}
-              disabled={saving || loading || !shipmentId || !canModifyShipment}
+              disabled={saving || loading || !shipmentId || !canModifyShipment || editRemarkMissing}
+              title={
+                editRemarkMissing
+                  ? 'Enter a remark before saving ETA or quantity changes'
+                  : undefined
+              }
             >
               {saving ? (
                 <>
@@ -2180,6 +2336,7 @@ export function EditShipmentModal({
               )}
             </Button>
           ) : null}
+          </div>
         </div>
       </div>
     </div>

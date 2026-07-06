@@ -21,6 +21,11 @@ import {
   resolveUnplannedHybridShipmentsList,
   type UnplannedHybridBreakdown,
 } from '../services/shipmentUnplannedHybridList.service';
+import {
+  isPipelineDailySummaryEligible,
+  loadShipmentSummaryFromDaily,
+  type PipelineDailySummaryFilterInput,
+} from '../services/pipelineDailySummary.service';
 import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
 import { syncVesselLoadingPortsFromLatestSap } from '../services/vesselLoadingPortsFromSap.service';
 import {
@@ -535,6 +540,33 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     }
     const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
     const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+    const pipelineDailyFilters: PipelineDailySummaryFilterInput = {
+      dateFrom: dateFrom != null ? String(dateFrom) : undefined,
+      dateTo: dateTo != null ? String(dateTo) : undefined,
+      plants,
+      globalSearch,
+      colFilters,
+      lateIndicator: lateIndicatorParam,
+      viewOption: viewOptionParam,
+      viewQuery: viewQueryParam,
+      status: typeof status === 'string' ? status : undefined,
+      scopeStatus: scopeStatusParam,
+      etaLoading: etaLoadingBucket ?? undefined,
+      etaDischarge: etaDischargeBucket ?? undefined,
+      vessel: vessel != null ? String(vessel) : undefined,
+      port: port != null ? String(port) : undefined,
+      sto: sto != null ? String(sto) : undefined,
+      contract: contract != null ? String(contract) : undefined,
+      delayed: delayed != null ? String(delayed) : undefined,
+    };
+    const pipelineDailyEligible = isPipelineDailySummaryEligible(pipelineDailyFilters);
+    const pipelineDailyScope = {
+      dateFrom: pipelineDailyFilters.dateFrom,
+      dateTo: pipelineDailyFilters.dateTo,
+      plants,
+    };
+    const tryPipelineDailyShipmentSummary = () =>
+      pipelineDailyEligible ? loadShipmentSummaryFromDaily(pipelineDailyScope) : Promise.resolve(null);
     const groupPlantFilter = appendGroupPlantFilter(
       plants,
       cp,
@@ -1004,18 +1036,31 @@ ${contractMetaSelectCore}
         scopeStatusParam,
       );
       const tSum0 = performance.now();
-      const [{ summaryRow: sr, totalCount: tc }, unplannedBreakdownForSummary] = await Promise.all([
-        loadShipmentListSummary(
-          summaryCountQuery,
-          [...section1SummaryFilterParams, ...summaryScopeParams],
-          summaryCacheKey,
-        ),
-        loadSection1UnplannedBreakdown(),
-      ]);
+      const fromDaily = await tryPipelineDailyShipmentSummary();
+      let sr: Record<string, unknown>;
+      let tc: number;
+      let unplannedBreakdownForSummary: UnplannedHybridBreakdown | null;
+      if (fromDaily) {
+        sr = fromDaily.summaryRow;
+        tc = fromDaily.totalCount;
+        unplannedBreakdownForSummary = fromDaily.unplannedBreakdown;
+      } else {
+        const [loaded, unplannedBd] = await Promise.all([
+          loadShipmentListSummary(
+            summaryCountQuery,
+            [...section1SummaryFilterParams, ...summaryScopeParams],
+            summaryCacheKey,
+          ),
+          loadSection1UnplannedBreakdown(),
+        ]);
+        sr = loaded.summaryRow;
+        tc = loaded.totalCount;
+        unplannedBreakdownForSummary = unplannedBd;
+      }
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
-        path: 'summaryOnly-compact-sql',
+        path: fromDaily ? 'summaryOnly-compact-daily' : 'summaryOnly-compact-sql',
         compact,
         page: Number(page),
         limit: Number(limit),
@@ -1325,13 +1370,19 @@ ${contractMetaSelectCore}
     let unplannedBreakdownForSummary: UnplannedHybridBreakdown | null = null;
     if (includeSummary) {
       const tSa0 = performance.now();
-      const [summaryResult, unplannedBd] = await Promise.all([
-        query(summaryCountQuery, [...section1SummaryFilterParams, ...summaryScopeParams]),
-        loadSection1UnplannedBreakdown(),
-      ]);
+      const fromDaily = await tryPipelineDailyShipmentSummary();
+      if (fromDaily) {
+        summaryRow = fromDaily.summaryRow;
+        unplannedBreakdownForSummary = fromDaily.unplannedBreakdown;
+      } else {
+        const [summaryResult, unplannedBd] = await Promise.all([
+          query(summaryCountQuery, [...section1SummaryFilterParams, ...summaryScopeParams]),
+          loadSection1UnplannedBreakdown(),
+        ]);
+        summaryRow = summaryResult.rows[0] || {};
+        unplannedBreakdownForSummary = unplannedBd;
+      }
       timingsMs.dbSummaryAgg = performance.now() - tSa0;
-      summaryRow = summaryResult.rows[0] || {};
-      unplannedBreakdownForSummary = unplannedBd;
     }
 
     timingsMs.total = performance.now() - tReq0;

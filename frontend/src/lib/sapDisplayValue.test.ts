@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  formatOperationalTableTextDisplay,
   formatSapDisplayNumber,
   formatSapDisplayValue,
   formatSapQtyMtDisplay,
+  formatVesselTableDisplay,
   isEmptySapDisplayValue,
   isEmptySapNumericValue,
+  shouldPreserveOperationalTableTextCasing,
 } from './sapDisplayValue'
 
 describe('sapDisplayValue', () => {
@@ -27,6 +30,24 @@ describe('sapDisplayValue', () => {
   it('preserves real SAP text', () => {
     expect(formatSapDisplayValue('PORT BONTANG')).toBe('PORT BONTANG')
     expect(formatSapDisplayValue('  WASTE OIL  ')).toBe('WASTE OIL')
+  })
+
+  it('uppercases vessel names for view tables', () => {
+    expect(formatVesselTableDisplay('Mv Pacific Star')).toBe('MV PACIFIC STAR')
+    expect(formatVesselTableDisplay(null)).toBe('-')
+    expect(formatVesselTableDisplay('Unknown')).toBe('-')
+  })
+
+  it('uppercases operational view-table text', () => {
+    expect(formatOperationalTableTextDisplay('Port Bontang')).toBe('PORT BONTANG')
+    expect(formatOperationalTableTextDisplay(null)).toBe('-')
+    expect(formatOperationalTableTextDisplay('Unknown')).toBe('-')
+  })
+
+  it('preserves casing for status and LT/SPOT columns', () => {
+    expect(shouldPreserveOperationalTableTextCasing('lt_spot')).toBe(true)
+    expect(shouldPreserveOperationalTableTextCasing('status')).toBe(true)
+    expect(shouldPreserveOperationalTableTextCasing('product')).toBe(false)
   })
 
   it('treats nullish numeric SAP values as empty', () => {

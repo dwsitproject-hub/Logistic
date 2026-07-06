@@ -4,7 +4,7 @@ import {
   compactTableHeaderMinWidthPx,
   longestHeaderWordLength,
 } from '@/lib/compactTableUi'
-import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
 
 export type OperationalColumnLayout = 'short' | 'token' | 'stack' | 'wrap' | 'truncate'
 
@@ -373,7 +373,7 @@ export function OperationalStackedCommaCell({
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
-    .map((part) => formatSapDisplayValue(part))
+    .map((part) => formatOperationalTableTextDisplay(part))
     .filter((part) => part !== '-')
   if (parts.length === 0) {
     return <span className={className}>-</span>
@@ -408,7 +408,7 @@ export function OperationalNowrapCell({
   title?: string
   fallback?: string
 }) {
-  const display = formatSapDisplayValue(value, fallback)
+  const display = formatOperationalTableTextDisplay(value, fallback)
   return (
     <span
       className={`${className} ${COMPACT_TABLE_NOWRAP_CLASS} block`}
@@ -433,7 +433,7 @@ export function OperationalTruncatedCell({
   fallback?: string
   maxWidthClass?: string
 }) {
-  const display = formatSapDisplayValue(value, fallback)
+  const display = formatOperationalTableTextDisplay(value, fallback)
   if (display === fallback) {
     return <span className={className}>{fallback}</span>
   }

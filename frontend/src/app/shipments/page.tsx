@@ -21,7 +21,7 @@ import {
   SHIPMENT_STATUS_DISPLAY_LABELS,
 } from '@/lib/shipmentStatusDisplay'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
-import { formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay } from '@/lib/sapDisplayValue'
+import { formatOperationalTableTextDisplay, formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay, formatVesselTableDisplay } from '@/lib/sapDisplayValue'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
 import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
@@ -79,7 +79,7 @@ import {
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
 } from '@/lib/compactTableUi'
-import { formatQtyMtFromKg, formatNumber, formatOutstandingQtyMtFromKg } from '@/lib/utils'
+import { formatQtyMtFromKg, formatNumber, formatOutstandingQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 import {
   SHIPMENT_COLUMN_LAYOUT_VERSION,
   SHIPMENT_COLUMN_LAYOUT_VERSION_KEY,
@@ -871,6 +871,8 @@ function ShipmentsPageContent() {
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
+  const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
+  const [availableSuppliers, setAvailableSuppliers] = useState<string[]>([])
   
   // Excel-like column filtering
   type ColumnFilter =
@@ -1094,6 +1096,7 @@ function ShipmentsPageContent() {
       searchTerm,
       selectedIncoterms,
       selectedProducts,
+      selectedSuppliers,
       selectedGroupPlants,
       lateIndicatorFilter,
       viewOption,
@@ -1102,6 +1105,7 @@ function ShipmentsPageContent() {
         appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
           selectedIncoterms,
           selectedProducts,
+          selectedSuppliers,
         }),
       ),
       urlDelayed: searchParams.get('delayed') === 'true',
@@ -1114,6 +1118,7 @@ function ShipmentsPageContent() {
       searchTerm,
       selectedIncoterms,
       selectedProducts,
+      selectedSuppliers,
       selectedGroupPlants,
       lateIndicatorFilter,
       viewOption,
@@ -1249,14 +1254,23 @@ function ShipmentsPageContent() {
     [resetPageForGlobalFilter, handleGroupPlantsChange],
   )
 
+  const onSuppliersChangeWithPageReset = useCallback(
+    (values: string[]) => {
+      resetPageForGlobalFilter()
+      setSelectedSuppliers(values)
+    },
+    [resetPageForGlobalFilter],
+  )
+
   useEffect(() => {
     let cancelled = false
     Promise.all([
       api.get('/contracts/filter-options/group-plants'),
       api.get('/contracts/filter-options/incoterms'),
       api.get('/dashboard/filter-options/products'),
+      api.get('/dashboard/filter-options/suppliers'),
     ])
-      .then(([plantRes, incRes, productRes]) => {
+      .then(([plantRes, incRes, productRes, supplierRes]) => {
         if (cancelled) return
         const plants = (plantRes.data?.data?.groupPlants || []) as string[]
         const incs = (incRes.data?.data?.incoterms || []) as string[]
@@ -1266,9 +1280,12 @@ function ShipmentsPageContent() {
           : productPayload && typeof productPayload === 'object' && 'products' in productPayload
             ? (productPayload as { products?: string[] }).products
             : []) as string[]
+        const supplierPayload = supplierRes.data?.data
+        const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
         setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
         setAvailableIncoterms(Array.isArray(incs) ? incs : [])
         setAvailableProducts(Array.isArray(products) ? products : [])
+        setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
       })
       .catch((e) => {
         if (cancelled) return
@@ -1276,6 +1293,7 @@ function ShipmentsPageContent() {
         setAvailableGroupPlants([])
         setAvailableIncoterms([])
         setAvailableProducts([])
+        setAvailableSuppliers([])
       })
     return () => {
       cancelled = true
@@ -1348,6 +1366,7 @@ function ShipmentsPageContent() {
       const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
         selectedIncoterms,
         selectedProducts,
+        selectedSuppliers,
       })
       const cfKeys = Object.keys(mergedColumnFilters)
       if (cfKeys.length > 0) {
@@ -2269,6 +2288,7 @@ function ShipmentsPageContent() {
     selectedGroupPlants.length > 0 ||
     selectedIncoterms.length > 0 ||
     selectedProducts.length > 0 ||
+    selectedSuppliers.length > 0 ||
     (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && etaLoadingFilter !== 'ALL') ||
     (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && etaDischargeFilter !== 'ALL') ||
     hasActiveShipmentColumnFilters(columnFilters)
@@ -2283,6 +2303,7 @@ function ShipmentsPageContent() {
     setViewFilterValue('')
     resetUserScopeFilters()
     setSelectedIncoterms([])
+    setSelectedSuppliers([])
     setDateFrom('')
     setDateTo('')
     setColumnFilters({})
@@ -2885,7 +2906,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => resolveShipmentListLoadingPorts(s),
       render: (s) => (
-        <span className="text-sm break-words">{formatSapDisplayValue(resolveShipmentListLoadingPorts(s))}</span>
+        <span className="text-sm break-words">{formatOperationalTableTextDisplay(resolveShipmentListLoadingPorts(s))}</span>
       ),
     },
     {
@@ -2895,7 +2916,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => resolveShipmentListDischargePorts(s),
       render: (s) => (
-        <span className="text-sm break-words">{formatSapDisplayValue(resolveShipmentListDischargePorts(s))}</span>
+        <span className="text-sm break-words">{formatOperationalTableTextDisplay(resolveShipmentListDischargePorts(s))}</span>
       ),
     },
     {
@@ -2945,7 +2966,7 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => s.vessel_name || '',
-      render: (s) => <span className="text-sm break-words">{formatSapDisplayValue(s.vessel_name)}</span>
+      render: (s) => <span className="text-sm break-words">{formatVesselTableDisplay(s.vessel_name)}</span>
     },
     {
       id: 'status',
@@ -2966,7 +2987,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.product || s.products || '',
       render: (s) => (
-        <span className="text-sm break-words">{formatSapDisplayValue(s.product || s.products)}</span>
+        <span className="text-sm break-words">{formatOperationalTableTextDisplay(s.product || s.products)}</span>
       ),
     },
     {
@@ -2975,7 +2996,7 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => s.incoterm || '',
-      render: (s) => <span className="text-sm break-words">{formatSapDisplayValue(s.incoterm)}</span>
+      render: (s) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(s.incoterm)}</span>
     },
     {
       id: 'contract_qty',
@@ -3034,13 +3055,9 @@ function ShipmentsPageContent() {
       getSortValue: (s) => shipmentStoredQtyKg(s.outstanding_quantity) ?? 0,
       render: (s) => {
         const kg = shipmentStoredQtyKg(s.outstanding_quantity)
-        const isOver = kg !== null && kg < 0
-        const isUnder = kg !== null && kg > 0
         return (
           <span
-            className={`text-sm break-words tabular-nums font-medium ${
-              isOver ? 'text-green-600' : isUnder ? 'text-red-600' : 'text-gray-500'
-            }`}
+            className={`text-sm break-words tabular-nums font-medium ${outstandingQtyMtColorClass(kg)}`}
           >
             {formatSapOutstandingQtyMtDisplay(s.outstanding_quantity)}
           </span>
@@ -3056,13 +3073,9 @@ function ShipmentsPageContent() {
       getSortValue: (s) => shipmentStoredQtyKg(s.outstanding_qty_planning) ?? 0,
       render: (s) => {
         const kg = shipmentStoredQtyKg(s.outstanding_qty_planning)
-        const isOver = kg !== null && kg < 0
-        const isUnder = kg !== null && kg > 0
         return (
           <span
-            className={`text-sm break-words tabular-nums font-medium ${
-              isOver ? 'text-green-600' : isUnder ? 'text-red-600' : 'text-gray-500'
-            }`}
+            className={`text-sm break-words tabular-nums font-medium ${outstandingQtyMtColorClass(kg)}`}
           >
             {formatSapOutstandingQtyMtDisplay(s.outstanding_qty_planning)}
           </span>
@@ -3119,7 +3132,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => s.operation_id || '',
       render: (s) => (
         <span className="text-sm break-words block" title={s.operation_id || ''}>
-          {formatSapDisplayValue(s.operation_id)}
+          {formatOperationalTableTextDisplay(s.operation_id)}
         </span>
       )
     },
@@ -3171,7 +3184,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.b2b_flag || '',
-      render: (s) => <span className="text-sm break-words">{formatSapDisplayValue(s.b2b_flag)}</span>
+      render: (s) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(s.b2b_flag)}</span>
     },
     {
       id: 'port_of_loading',
@@ -3179,7 +3192,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.port_of_loading || '',
-      render: (s) => <span className="text-sm break-words">{formatSapDisplayValue(s.port_of_loading)}</span>
+      render: (s) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(s.port_of_loading)}</span>
     },
     {
       id: 'port_of_discharge',
@@ -3187,7 +3200,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.port_of_discharge || s.plant_site || '',
-      render: (s) => <span className="text-sm break-words">{formatSapDisplayValue(s.port_of_discharge || s.plant_site)}</span>
+      render: (s) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(s.port_of_discharge || s.plant_site)}</span>
     },
     {
       id: 'vessel_code',
@@ -3195,7 +3208,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.vessel_code || '',
-      render: (s) => <span className="text-sm">{formatSapDisplayValue(s.vessel_code)}</span>
+      render: (s) => <span className="text-sm">{formatOperationalTableTextDisplay(s.vessel_code)}</span>
     },
     {
       id: 'estimated_nautical_miles',
@@ -3251,7 +3264,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.vessel_hull_type || '',
-      render: (s) => <span className="text-sm break-words">{formatSapDisplayValue(s.vessel_hull_type)}</span>
+      render: (s) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(s.vessel_hull_type)}</span>
     },
     {
       id: 'vessel_registration_year',
@@ -3259,7 +3272,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.vessel_registration_year || 0,
-      render: (s) => <span className="text-sm">{formatSapDisplayValue(s.vessel_registration_year)}</span>
+      render: (s) => <span className="text-sm">{formatOperationalTableTextDisplay(s.vessel_registration_year)}</span>
     },
     {
       id: 'average_vessel_speed',
@@ -4518,6 +4531,9 @@ function ShipmentsPageContent() {
           availableProducts={availableProducts}
           selectedProducts={selectedProducts}
           onProductsChange={onProductsChangeWithPageReset}
+          availableSuppliers={availableSuppliers}
+          selectedSuppliers={selectedSuppliers}
+          onSuppliersChange={onSuppliersChangeWithPageReset}
           availableGroupPlants={availableGroupPlants}
           selectedGroupPlants={selectedGroupPlants}
           onGroupPlantsChange={onGroupPlantsChangeWithPageReset}

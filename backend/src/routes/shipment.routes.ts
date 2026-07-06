@@ -38,6 +38,7 @@ import {
   suggestShipmentEta,
   suggestShipmentVessel,
 } from '../controllers/shipmentAiPlanner.controller';
+import { createShipmentRemark, getShipmentRemarks } from '../controllers/remarks.controller';
 
 const router = express.Router();
 
@@ -93,6 +94,8 @@ router.get('/', getShipments);
 
 // Edit Shipment modal — lightweight sibling PO/contract resolve (before /:id)
 router.get('/:id/edit-context', getShipmentEditContext);
+router.get('/:id/remarks', getShipmentRemarks);
+router.post('/:id/remarks', auditLog('CREATE', 'SHIPMENT'), createShipmentRemark);
 router.get('/:id/available-purchase-orders', getShipmentAvailablePurchaseOrders);
 router.post(
   '/:id/purchase-orders',

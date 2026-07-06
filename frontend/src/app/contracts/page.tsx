@@ -19,7 +19,7 @@ import { fetchContractPurchaseOrderOptions } from '@/components/shared/addNewShi
 import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { Checkbox } from '@/components/ui/checkbox'
-import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg } from '@/lib/utils'
+import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import {
@@ -35,7 +35,7 @@ import {
   signedCycleDaysClass,
 } from '@/lib/cycleDaysDisplay'
 import { formatDateDMY, toSortableTimestamp } from '@/lib/dateFormat'
-import { formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay } from '@/lib/sapDisplayValue'
+import { formatOperationalTableTextDisplay, formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay, formatVesselTableDisplay } from '@/lib/sapDisplayValue'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import {
@@ -1083,6 +1083,8 @@ function ContractsPageContent() {
     () => resolveStaffContractPerfProductTab(),
   )
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
+  const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
+  const [availableSuppliers, setAvailableSuppliers] = useState<string[]>([])
   const [transportModeFilter, setTransportModeFilter] = useState<string>('ALL')
   const [perfTransportMode, setPerfTransportMode] = useState<'ALL' | 'SEA' | 'LAND'>('ALL')
   const [lateOnTimeFilter, setLateOnTimeFilter] = useState<'ALL' | 'LATE' | 'ON_TIME'>('ALL')
@@ -1177,6 +1179,7 @@ function ContractsPageContent() {
         dateTo,
         sourceFilter,
         selectedIncoterms,
+        selectedSuppliers,
         selectedGroupPlants,
         productTabQuery: contractPerfProductQuery,
         lateOnTimeFilter,
@@ -1190,6 +1193,7 @@ function ContractsPageContent() {
       dateTo,
       sourceFilter,
       selectedIncoterms,
+      selectedSuppliers,
       selectedGroupPlants,
       contractPerfProductQuery,
       lateOnTimeFilter,
@@ -1226,6 +1230,7 @@ function ContractsPageContent() {
       dateTo,
       sourceFilter,
       selectedIncoterms,
+      selectedSuppliers,
       selectedGroupPlants,
       productTabQuery: contractPerfProductQuery,
       summaryCardStatus,
@@ -1240,6 +1245,7 @@ function ContractsPageContent() {
       dateTo,
       sourceFilter,
       selectedIncoterms,
+      selectedSuppliers,
       selectedGroupPlants,
       contractPerfProductQuery,
       summaryCardStatus,
@@ -1516,6 +1522,7 @@ function ContractsPageContent() {
     setSummaryCardStatus('All')
     setStatusFilter('All Status')
     setSelectedIncoterms([])
+    setSelectedSuppliers([])
     resetUserScopeFilters()
     setPerfTransportMode('ALL')
     setLateOnTimeFilter('ALL')
@@ -1721,6 +1728,7 @@ function ContractsPageContent() {
     statusFilter,
     b2bFlagFilter,
     selectedProducts,
+    selectedSuppliers,
     selectedGroupPlants,
     selectedIncoterms,
     dateFrom,
@@ -1843,9 +1851,10 @@ function ContractsPageContent() {
       const mergedColumnFilters: Record<string, any> = isContractPerformance
         ? (contractPerfTableColumnFilters as Record<string, any>)
         : appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
-            selectedIncoterms,
-            selectedProducts,
-          })
+        selectedIncoterms,
+        selectedProducts,
+        selectedSuppliers,
+      })
       if (!isContractPerformance) {
         const cfKeys = Object.keys(mergedColumnFilters)
         if (cfKeys.length > 0) {
@@ -2101,8 +2110,9 @@ function ContractsPageContent() {
       api.get('/contracts/filter-options/incoterms'),
       api.get('/contracts/filter-options/group-plants'),
       api.get('/dashboard/filter-options/products'),
+      api.get('/dashboard/filter-options/suppliers'),
     ])
-      .then(([incRes, plantRes, productRes]) => {
+      .then(([incRes, plantRes, productRes, supplierRes]) => {
         if (cancelled) return
         const incs = (incRes.data?.data?.incoterms || []) as string[]
         const plants = (plantRes.data?.data?.groupPlants || []) as string[]
@@ -2112,9 +2122,12 @@ function ContractsPageContent() {
           : productPayload && typeof productPayload === 'object' && 'products' in productPayload
             ? (productPayload as { products?: string[] }).products
             : []) as string[]
+        const supplierPayload = supplierRes.data?.data
+        const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
         setAvailableIncoterms(Array.isArray(incs) ? incs : [])
         setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
         setAvailableProducts(Array.isArray(products) ? products : [])
+        setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
       })
       .catch((e) => {
         if (cancelled) return
@@ -2122,6 +2135,7 @@ function ContractsPageContent() {
         setAvailableIncoterms([])
         setAvailableGroupPlants([])
         setAvailableProducts([])
+        setAvailableSuppliers([])
       })
     return () => {
       cancelled = true
@@ -2138,6 +2152,7 @@ function ContractsPageContent() {
       if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
       const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
         selectedProducts,
+        selectedSuppliers,
         selectedIncoterms,
       })
       const cfKeys = Object.keys(mergedColumnFilters)
@@ -2170,6 +2185,7 @@ function ContractsPageContent() {
     searchTerm,
     b2bFlagFilter,
     selectedProducts,
+    selectedSuppliers,
     selectedGroupPlants,
     selectedIncoterms,
     transportModeFilter,
@@ -2207,6 +2223,7 @@ function ContractsPageContent() {
     setTransportModeFilter('ALL')
     resetUserScopeFilters()
     setSelectedIncoterms([])
+    setSelectedSuppliers([])
     setB2bFlagFilter('ALL')
     setStatusFilter('All Status')
     setUnassignedFilter(null)
@@ -2220,6 +2237,7 @@ function ContractsPageContent() {
     searchTerm.trim().length > 0 ||
     transportModeFilter !== 'ALL' ||
     selectedProducts.length > 0 ||
+    selectedSuppliers.length > 0 ||
     selectedIncoterms.length > 0 ||
     selectedGroupPlants.length > 0 ||
     b2bFlagFilter !== 'ALL' ||
@@ -2676,7 +2694,7 @@ function ContractsPageContent() {
       render: (c) => {
         const val = c.po_numbers || c.po_number || ''
         if (isContractPerformance) {
-          return <span className="text-sm">{formatSapDisplayValue(val)}</span>
+          return <span className="text-sm">{formatOperationalTableTextDisplay(val)}</span>
         }
         return val.includes(',') ? (
           <OperationalStackedCommaCell value={val} title={val} />
@@ -2725,10 +2743,10 @@ function ContractsPageContent() {
       render: (c) => {
         const info = getContractAgingInfo(c)
         if (!info) {
-          return <span className="text-xs text-gray-500">-</span>
+          return <span className="text-sm text-gray-500">-</span>
         }
         return (
-          <span className={`text-xs font-semibold ${signedCycleDaysClass(info.days)}`}>
+          <span className={`text-sm ${signedCycleDaysClass(info.days)}`}>
             {formatContractAgingDays(info.days)}
           </span>
         )
@@ -2743,7 +2761,7 @@ function ContractsPageContent() {
       getSortValue: (c) => c.contract_ext_no || '',
       render: (c) =>
         isContractPerformance ? (
-          <span className="text-sm">{formatSapDisplayValue(c.contract_ext_no)}</span>
+          <span className="text-sm">{formatOperationalTableTextDisplay(c.contract_ext_no)}</span>
         ) : (
           <OperationalStackedCommaCell value={c.contract_ext_no} title={c.contract_ext_no || ''} />
         ),
@@ -2754,7 +2772,7 @@ function ContractsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.product || '',
-      render: (c) => <span className="text-sm">{formatSapDisplayValue(c.product)}</span>
+      render: (c) => <span className="text-sm">{formatOperationalTableTextDisplay(c.product)}</span>
     },
     {
       id: 'incoterm',
@@ -2762,7 +2780,7 @@ function ContractsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.incoterm || '',
-      render: (c) => <span className="text-sm">{formatSapDisplayValue(c.incoterm)}</span>
+      render: (c) => <span className="text-sm">{formatOperationalTableTextDisplay(c.incoterm)}</span>
     },
     ...(isContractPerformance
       ? ([
@@ -2772,11 +2790,13 @@ function ContractsPageContent() {
             defaultVisible: false,
             sortable: true,
             getSortValue: (c: Contract) => c.vessel_name || '',
-            render: (c: Contract) => (
-              <span className="text-sm truncate block" title={c.vessel_name || ''}>
-                {c.vessel_name?.trim() ? c.vessel_name : '-'}
+            render: (c: Contract) => {
+              const vesselDisplay = formatVesselTableDisplay(c.vessel_name)
+              return (
+              <span className="text-sm truncate block" title={vesselDisplay === '-' ? '' : vesselDisplay}>
+                {vesselDisplay}
               </span>
-            ),
+            )},
           },
           {
             id: 'eta_vessel_completed_loading',
@@ -2893,7 +2913,7 @@ function ContractsPageContent() {
       defaultVisible: !isContractPerformance,
       sortable: true,
       getSortValue: (c: Contract) => c.group_name || '',
-      render: (c: Contract) => <span className="text-sm truncate block">{formatSapDisplayValue(c.group_name)}</span>,
+      render: (c: Contract) => <span className="text-sm truncate block">{formatOperationalTableTextDisplay(c.group_name)}</span>,
     },
     {
       id: 'supplier',
@@ -2901,7 +2921,7 @@ function ContractsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.supplier || '',
-      render: (c) => <span className="text-sm">{formatSapDisplayValue(c.supplier)}</span>,
+      render: (c) => <span className="text-sm">{formatOperationalTableTextDisplay(c.supplier)}</span>,
     },
     {
       id: 'qty_delivery',
@@ -2926,11 +2946,10 @@ function ContractsPageContent() {
         if (c.outstanding_quantity == null) {
           return <span className="text-sm truncate text-gray-500">-</span>
         }
-        const oqMt = Number(c.outstanding_quantity) / 1000
-        const isOver = oqMt < 0
-        const isUnder = oqMt > 0
         return (
-          <span className={`text-sm truncate font-medium ${isOver ? 'text-green-600' : isUnder ? 'text-red-600' : 'text-gray-500'}`}>
+          <span
+            className={`text-sm truncate font-medium tabular-nums ${outstandingQtyMtColorClass(c.outstanding_quantity)}`}
+          >
             {formatSapOutstandingQtyMtDisplay(c.outstanding_quantity)}
           </span>
         )
@@ -2944,10 +2963,16 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => c.trade_cycle_days ?? 0,
       render: (c) => {
-        const cycleSizeClass = isContractPerformance ? 'text-sm' : 'text-xs'
+        const cycleSizeClass = isContractPerformance ? 'text-sm tabular-nums font-normal' : 'text-xs'
         if (c.trade_cycle_days == null) return <span className={cycleSizeClass}>-</span>
         return (
-          <span className={`${cycleSizeClass} font-semibold ${signedCycleDaysClass(c.trade_cycle_days)}`}>
+          <span
+            className={
+              isContractPerformance
+                ? `${cycleSizeClass} ${signedCycleDaysClass(c.trade_cycle_days)}`
+                : `${cycleSizeClass} font-semibold ${signedCycleDaysClass(c.trade_cycle_days)}`
+            }
+          >
             {isContractPerformance
               ? formatSignedCycleDaysCompact(c.trade_cycle_days)
               : formatSignedCycleDays(c.trade_cycle_days)}
@@ -2964,10 +2989,16 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => c.cash_cycle_days ?? 0,
       render: (c) => {
-        const cycleSizeClass = isContractPerformance ? 'text-sm' : 'text-xs'
+        const cycleSizeClass = isContractPerformance ? 'text-sm tabular-nums font-normal' : 'text-xs'
         if (c.cash_cycle_days == null) return <span className={cycleSizeClass}>-</span>
         return (
-          <span className={`${cycleSizeClass} font-semibold ${signedCycleDaysClass(c.cash_cycle_days)}`}>
+          <span
+            className={
+              isContractPerformance
+                ? `${cycleSizeClass} ${signedCycleDaysClass(c.cash_cycle_days)}`
+                : `${cycleSizeClass} font-semibold ${signedCycleDaysClass(c.cash_cycle_days)}`
+            }
+          >
             {isContractPerformance
               ? formatSignedCycleDaysCompact(c.cash_cycle_days)
               : formatSignedCycleDays(c.cash_cycle_days)}
@@ -2988,7 +3019,7 @@ function ContractsPageContent() {
             render: (c: Contract) => {
               if (c.dp_cycle_days == null) return <span className="text-sm">-</span>
               return (
-                <span className={`text-sm font-semibold ${signedCycleDaysClass(c.dp_cycle_days)}`}>
+                <span className={`text-sm tabular-nums font-normal ${signedCycleDaysClass(c.dp_cycle_days)}`}>
                   {formatSignedCycleDaysCompact(c.dp_cycle_days)}
                 </span>
               )
@@ -3005,10 +3036,16 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => c.log_cycle_days ?? 0,
       render: (c) => {
-        const cycleSizeClass = isContractPerformance ? 'text-sm' : 'text-xs'
+        const cycleSizeClass = isContractPerformance ? 'text-sm tabular-nums font-normal' : 'text-xs'
         if (c.log_cycle_days == null) return <span className={cycleSizeClass}>-</span>
         return (
-          <span className={`${cycleSizeClass} font-semibold ${logCycleDaysClass(c.log_cycle_days, c.trade_cycle_days)}`}>
+          <span
+            className={
+              isContractPerformance
+                ? `${cycleSizeClass} ${logCycleDaysClass(c.log_cycle_days, c.trade_cycle_days)}`
+                : `${cycleSizeClass} font-semibold ${logCycleDaysClass(c.log_cycle_days, c.trade_cycle_days)}`
+            }
+          >
             {isContractPerformance
               ? formatLogCycleDaysCompact(c.log_cycle_days)
               : formatLogCycleDays(c.log_cycle_days, c.trade_cycle_days)}
@@ -3038,7 +3075,7 @@ function ContractsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (c) => c.company_name || '',
-      render: (c) => <span className="text-sm truncate block">{formatSapDisplayValue(c.company_name)}</span>
+      render: (c) => <span className="text-sm truncate block">{formatOperationalTableTextDisplay(c.company_name)}</span>
     },
     {
       id: 'lt_spot',
@@ -3058,7 +3095,7 @@ function ContractsPageContent() {
         const val = c.sto_numbers || c.sto_number || ''
         return isContractPerformance ? (
           <span className="text-sm truncate block" title={val}>
-            {formatSapDisplayValue(val)}
+            {formatOperationalTableTextDisplay(val)}
           </span>
         ) : (
           <OperationalNowrapCell value={val} title={val} />
@@ -3128,7 +3165,7 @@ function ContractsPageContent() {
             getSortValue: (c: Contract) => c.source_type || '',
             render: (c: Contract) => (
               <span className="text-sm truncate block" title={c.source_type || ''}>
-                {formatSapDisplayValue(c.source_type)}
+                {formatOperationalTableTextDisplay(c.source_type)}
               </span>
             ),
           },
@@ -4189,6 +4226,13 @@ function ContractsPageContent() {
                     lockSection1FilterChange()
                     setSelectedIncoterms(selected)
                   }}
+                  showSupplierFilter
+                  supplierOptions={availableSuppliers}
+                  selectedSuppliers={selectedSuppliers}
+                  onSuppliersChange={(selected) => {
+                    lockSection1FilterChange()
+                    setSelectedSuppliers(selected)
+                  }}
                   groupPlantOptions={availableGroupPlants}
                   selectedGroupPlants={selectedGroupPlants}
                   onGroupPlantsChange={(selected) => {
@@ -4207,6 +4251,7 @@ function ContractsPageContent() {
                   }}
                   showDateRange={false}
                   incotermEmptyMessage="Loading incoterms..."
+                  supplierEmptyMessage="Loading suppliers..."
                   groupPlantPlaceholder="Select group plant(s)"
                   groupPlantEmptyMessage="No group plants"
                 />
@@ -4220,6 +4265,10 @@ function ContractsPageContent() {
                   productOptions={availableProducts}
                   selectedProducts={selectedProducts}
                   onProductsChange={handleProductsChange}
+                  showSupplierFilter
+                  supplierOptions={availableSuppliers}
+                  selectedSuppliers={selectedSuppliers}
+                  onSuppliersChange={setSelectedSuppliers}
                   groupPlantOptions={availableGroupPlants}
                   selectedGroupPlants={selectedGroupPlants}
                   onGroupPlantsChange={handleGroupPlantsChange}
@@ -4230,6 +4279,7 @@ function ContractsPageContent() {
                   showDateRange={false}
                   incotermEmptyMessage="Loading incoterms..."
                   productEmptyMessage="Loading products..."
+                  supplierEmptyMessage="Loading suppliers..."
                   groupPlantPlaceholder="Select group plant(s)"
                   groupPlantEmptyMessage="No group plants"
                 />
@@ -4274,6 +4324,7 @@ function ContractsPageContent() {
                         perfTransportMode !== 'ALL' ||
                         selectedProductTab !== 'All' ||
                         selectedIncoterms.length > 0 ||
+                        selectedSuppliers.length > 0 ||
                         selectedGroupPlants.length > 0 ||
                         Boolean(
                           hasContractPerfDrilldownSelection(appliedDrilldownSelection),
@@ -5215,7 +5266,7 @@ function ContractsPageContent() {
                               {contract.outstanding_quantity == null ? (
                                 <span className="text-gray-800">-</span>
                               ) : (
-                                <span className={contract.outstanding_quantity < 0 ? 'text-green-600 font-medium' : contract.outstanding_quantity > 0 ? 'text-red-600 font-medium' : 'text-gray-800'}>
+                                <span className={`font-medium ${outstandingQtyMtColorClass(contract.outstanding_quantity)}`}>
                                   {formatSapOutstandingQtyMtDisplay(contract.outstanding_quantity)}
                                 </span>
                               )}

@@ -33,6 +33,23 @@ function cellToString(value: unknown): string {
   return String(value).trim();
 }
 
+function resolveWidePlanningTemplateQtyUnit(headerRow: unknown[]): 'kg' | 'mt' {
+  for (const cell of headerRow) {
+    const h = cellToString(cell).toLowerCase();
+    if (h.includes('(mt)') || h.includes('os qty') || h.includes('oq qty')) return 'mt';
+    if (h.includes('(kg)')) return 'kg';
+    if (h.includes('outstanding') && h.includes('mt')) return 'mt';
+  }
+  return 'mt';
+}
+
+function parseTemplateQtyToKg(raw: unknown, unit: 'kg' | 'mt'): number | null {
+  const n = parseDailyDeliverableQuantity(raw);
+  if (n === null || n < 0) return null;
+  const kg = unit === 'mt' ? n * 1000 : n;
+  return Math.round(kg * 100) / 100;
+}
+
 export function unplannedUploadCellToString(value: unknown): string {
   return cellToString(value);
 }
@@ -50,8 +67,13 @@ function isWideTemplateMetadataHeader(header: string): boolean {
     h === 'po number' ||
     h === 'os qty' ||
     h === 'os qty (kg)' ||
+    h === 'os qty' ||
+    h === 'os qty (mt)' ||
+    h === 'oq qty' ||
+    h === 'oq qty (mt)' ||
     h === 'plan qty' ||
     h === 'plan qty (kg)' ||
+    h === 'plan qty (mt)' ||
     h === 'reason' ||
     h === 'failure reason' ||
     h.includes('outstanding')
@@ -65,10 +87,8 @@ function parseTemplateHeaderDateFromCell(raw: unknown): string | null {
   return toIsoDate10FromCell(raw);
 }
 
-function parseTemplateQtyKg(raw: unknown): number | null {
-  const n = parseDailyDeliverableQuantity(raw);
-  if (n === null || n < 0) return null;
-  return n;
+function parseTemplateQtyKg(raw: unknown, unit: 'kg' | 'mt'): number | null {
+  return parseTemplateQtyToKg(raw, unit);
 }
 
 function collectWideTemplateDateColumns(
@@ -131,6 +151,7 @@ export function parseUnplannedWidePlanningMatrix(matrix: unknown[][]): {
   }
 
   const headerRow = matrix[0] ?? [];
+  const qtyUnit = resolveWidePlanningTemplateQtyUnit(headerRow);
   const dateColumns = collectWideTemplateDateColumns(headerRow);
   if (dateColumns.length === 0) {
     rowParseFailures.push({
@@ -161,7 +182,7 @@ export function parseUnplannedWidePlanningMatrix(matrix: unknown[][]): {
     for (const { colIndex, dateIso } of dateColumns) {
       const qtyRaw = cells[colIndex];
       if (qtyRaw === undefined || qtyRaw === null || cellToString(qtyRaw) === '') continue;
-      const qtyKg = parseTemplateQtyKg(qtyRaw);
+      const qtyKg = parseTemplateQtyKg(qtyRaw, qtyUnit);
       if (qtyKg === null) {
         rowParseFailures.push({
           rowNumber,

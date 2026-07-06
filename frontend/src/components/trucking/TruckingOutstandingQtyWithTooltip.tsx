@@ -2,7 +2,7 @@
 
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { truckingOutstandingQtyFormulaTooltip } from '@/lib/fieldHelpText'
-import { formatOutstandingQtyMtFromKg } from '@/lib/utils'
+import { formatOutstandingQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 
 type Props = {
   outstandingKg: number | null | undefined
@@ -32,9 +32,7 @@ export function TruckingOutstandingQtyWithTooltip({
   }
 
   const n = Number(outstandingKg)
-  const isOver = n < 0
-  const isUnder = n > 0
-  const colorClass = isOver ? 'text-green-600' : isUnder ? 'text-red-600' : 'text-gray-500'
+  const colorClass = outstandingQtyMtColorClass(n)
 
   return (
     <Tooltip delayDuration={200}>

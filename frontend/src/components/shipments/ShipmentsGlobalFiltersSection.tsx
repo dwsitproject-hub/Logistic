@@ -26,6 +26,9 @@ export interface ShipmentsGlobalFiltersSectionProps {
   availableProducts: string[]
   selectedProducts: string[]
   onProductsChange: (values: string[]) => void
+  availableSuppliers: string[]
+  selectedSuppliers: string[]
+  onSuppliersChange: (values: string[]) => void
   availableGroupPlants: string[]
   selectedGroupPlants: string[]
   onGroupPlantsChange: (values: string[]) => void
@@ -51,6 +54,9 @@ export function ShipmentsGlobalFiltersSection({
   availableProducts,
   selectedProducts,
   onProductsChange,
+  availableSuppliers,
+  selectedSuppliers,
+  onSuppliersChange,
   availableGroupPlants,
   selectedGroupPlants,
   onGroupPlantsChange,
@@ -121,6 +127,10 @@ export function ShipmentsGlobalFiltersSection({
             productOptions={availableProducts}
             selectedProducts={selectedProducts}
             onProductsChange={onProductsChange}
+            showSupplierFilter
+            supplierOptions={availableSuppliers}
+            selectedSuppliers={selectedSuppliers}
+            onSuppliersChange={onSuppliersChange}
             groupPlantOptions={availableGroupPlants}
             selectedGroupPlants={selectedGroupPlants}
             onGroupPlantsChange={onGroupPlantsChange}
@@ -131,6 +141,7 @@ export function ShipmentsGlobalFiltersSection({
             showDateRange={false}
             incotermEmptyMessage="Loading incoterms..."
             productEmptyMessage="Loading products..."
+            supplierEmptyMessage="Loading suppliers..."
             groupPlantPlaceholder="Select group plant(s)"
             groupPlantEmptyMessage="No group plants"
           />

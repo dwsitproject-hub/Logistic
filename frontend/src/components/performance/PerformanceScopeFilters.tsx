@@ -60,6 +60,20 @@ export type PerformanceScopeFiltersProps = {
 
   productEmptyMessage?: string
 
+  showSupplierFilter?: boolean
+
+  supplierOptions?: string[]
+
+  selectedSuppliers?: string[]
+
+  onSuppliersChange?: (values: string[]) => void
+
+  supplierLabel?: string
+
+  supplierPlaceholder?: string
+
+  supplierEmptyMessage?: string
+
   showDateRange?: boolean
 
   showStatusFilter?: boolean
@@ -138,6 +152,20 @@ export function PerformanceScopeFilters({
 
   productEmptyMessage = 'No products',
 
+  showSupplierFilter = false,
+
+  supplierOptions = [],
+
+  selectedSuppliers = [],
+
+  onSuppliersChange,
+
+  supplierLabel = 'Supplier',
+
+  supplierPlaceholder = 'Select supplier(s)',
+
+  supplierEmptyMessage = 'No suppliers',
+
   showDateRange = true,
 
   showStatusFilter = false,
@@ -180,6 +208,8 @@ export function PerformanceScopeFilters({
 
     (showProductFilter ? 1 : 0) +
 
+    (showSupplierFilter ? 1 : 0) +
+
     (showGroupPlant ? 1 : 0) +
 
     (showVesselFilter ? 1 : 0) +
@@ -187,16 +217,17 @@ export function PerformanceScopeFilters({
     (showStatusFilter ? 1 : 0)
 
   const gridClass =
-
     selectorCount <= 1
-
       ? 'grid grid-cols-1 gap-4'
-
       : selectorCount === 2
-
         ? 'grid grid-cols-1 md:grid-cols-2 gap-4'
-
-        : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4'
+        : selectorCount === 3
+          ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4'
+          : selectorCount === 4
+            ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4'
+            : selectorCount === 5
+              ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4'
+              : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4'
 
 
 
@@ -205,6 +236,8 @@ export function PerformanceScopeFilters({
     selectedIncoterms.length > 0 ||
 
     selectedProducts.length > 0 ||
+
+    selectedSuppliers.length > 0 ||
 
     selectedGroupPlants.length > 0 ||
 
@@ -224,7 +257,7 @@ export function PerformanceScopeFilters({
 
       {selectorCount > 0 && (
 
-        <div className={gridClass}>
+        <div className={`${gridClass} [&>*]:min-w-0`}>
 
           {showIncoterm && (
 
@@ -261,6 +294,28 @@ export function PerformanceScopeFilters({
               placeholder={productPlaceholder}
 
               emptyMessage={productEmptyMessage}
+
+              pinSelectedToTop
+
+            />
+
+          )}
+
+          {showSupplierFilter && onSuppliersChange && (
+
+            <SearchableMultiSelect
+
+              label={supplierLabel}
+
+              options={supplierOptions}
+
+              selected={selectedSuppliers}
+
+              onChange={onSuppliersChange}
+
+              placeholder={supplierPlaceholder}
+
+              emptyMessage={supplierEmptyMessage}
 
               pinSelectedToTop
 

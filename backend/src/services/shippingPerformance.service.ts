@@ -340,25 +340,41 @@ const SHIPPING_PERFORMANCE_SQL = `
         (COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date))::int AS loading_delta_etb_etc_days,
         (COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) - COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date))::int AS discharge_delta_eta_etb_days,
         (COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date))::int AS discharge_delta_etb_etc_days,
-        (
-          COALESCE((COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - c.cargo_readiness_date::date), 0) +
-          COALESCE((COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - COALESCE(lp.load_eta_berthed, s.eta_berthed::date)), 0) +
-          COALESCE((COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date)), 0) +
-          COALESCE((COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) - COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date)), 0) +
-          COALESCE((COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date)), 0)
-        )::int AS total_delta_days,
+        CASE
+          WHEN (COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - c.cargo_readiness_date::date) IS NULL
+            AND (COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - COALESCE(lp.load_eta_berthed, s.eta_berthed::date)) IS NULL
+            AND (COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date)) IS NULL
+            AND (COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) - COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date)) IS NULL
+            AND (COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date)) IS NULL
+          THEN NULL
+          ELSE (
+            COALESCE((COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - c.cargo_readiness_date::date), 0) +
+            COALESCE((COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - COALESCE(lp.load_eta_berthed, s.eta_berthed::date)), 0) +
+            COALESCE((COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date)), 0) +
+            COALESCE((COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) - COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date)), 0) +
+            COALESCE((COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date)), 0)
+          )::int
+        END AS total_delta_days,
         (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - c.cargo_readiness_date::date)::int AS ata_loading_delta_eta_etr_days,
         (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - COALESCE(lp.load_ata_berthed, s.ata_berthed::date))::int AS ata_loading_delta_eta_etb_days,
         (COALESCE(lp.load_ata_berthed, s.ata_berthed::date) - COALESCE(lp.load_ata_completed, s.ata_loading_complete::date))::int AS ata_loading_delta_etb_etc_days,
         (COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) - COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date))::int AS ata_discharge_delta_eta_etb_days,
         (COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) - COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date))::int AS ata_discharge_delta_etb_etc_days,
-        (
-          COALESCE((COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - c.cargo_readiness_date::date), 0) +
-          COALESCE((COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - COALESCE(lp.load_ata_berthed, s.ata_berthed::date)), 0) +
-          COALESCE((COALESCE(lp.load_ata_berthed, s.ata_berthed::date) - COALESCE(lp.load_ata_completed, s.ata_loading_complete::date)), 0) +
-          COALESCE((COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) - COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date)), 0) +
-          COALESCE((COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) - COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date)), 0)
-        )::int AS ata_total_delta_days,
+        CASE
+          WHEN (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - c.cargo_readiness_date::date) IS NULL
+            AND (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - COALESCE(lp.load_ata_berthed, s.ata_berthed::date)) IS NULL
+            AND (COALESCE(lp.load_ata_berthed, s.ata_berthed::date) - COALESCE(lp.load_ata_completed, s.ata_loading_complete::date)) IS NULL
+            AND (COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) - COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date)) IS NULL
+            AND (COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) - COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date)) IS NULL
+          THEN NULL
+          ELSE (
+            COALESCE((COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - c.cargo_readiness_date::date), 0) +
+            COALESCE((COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - COALESCE(lp.load_ata_berthed, s.ata_berthed::date)), 0) +
+            COALESCE((COALESCE(lp.load_ata_berthed, s.ata_berthed::date) - COALESCE(lp.load_ata_completed, s.ata_loading_complete::date)), 0) +
+            COALESCE((COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) - COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date)), 0) +
+            COALESCE((COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) - COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date)), 0)
+          )::int
+        END AS ata_total_delta_days,
         sa.remark,
         COALESCE(sm.sto_qty, 0)::numeric AS sto_qty,
         COALESCE(sm.received_qty, 0)::numeric AS received_qty,

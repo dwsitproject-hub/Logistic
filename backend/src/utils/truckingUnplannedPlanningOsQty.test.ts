@@ -24,7 +24,7 @@ describe('truckingUnplannedPlanningOsQty', () => {
     if (!result.ok) {
       expect(result.failureKind).toBe('less');
       expect(result.reason).toContain('less than Outstanding Qty');
-      expect(result.reason).toContain('kg');
+      expect(result.reason).toContain('MT');
     }
   });
 

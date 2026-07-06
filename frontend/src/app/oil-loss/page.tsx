@@ -16,7 +16,7 @@ import { FieldHelp } from '@/components/FieldHelp'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY } from '@/lib/dateFormat'
-import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
 import {
   formatOilLossMtFromKg,
   formatOilLossPct,
@@ -321,7 +321,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.group_name || '',
-      render: (r) => <span className="text-sm break-words">{r.group_name || '—'}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(r.group_name, '—')}</span>,
     },
     {
       id: 'supplier',
@@ -329,7 +329,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.supplier || '',
-      render: (r) => <span className="text-sm break-words">{formatSapDisplayValue(r.supplier)}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(r.supplier, '—')}</span>,
     },
     {
       id: 'buyer',
@@ -337,7 +337,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.buyer || '',
-      render: (r) => <span className="text-sm break-words">{r.buyer || '—'}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(r.buyer, '—')}</span>,
     },
     {
       id: 'plant_site',
@@ -345,7 +345,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.plant_site || '',
-      render: (r) => <span className="text-sm break-words">{r.plant_site || '—'}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(r.plant_site, '—')}</span>,
     },
     {
       id: 'operation_id',
@@ -476,7 +476,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       getSortValue: (r) => ('loading_location' in r ? r.loading_location : '') || '',
       render: (r) => (
         <span className="text-sm break-words">
-          {('loading_location' in r && r.loading_location) || '—'}
+          {formatOperationalTableTextDisplay('loading_location' in r ? r.loading_location : null, '—')}
         </span>
       ),
     },
@@ -488,7 +488,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       getSortValue: (r) => ('unloading_location' in r ? r.unloading_location : '') || '',
       render: (r) => (
         <span className="text-sm break-words">
-          {('unloading_location' in r && r.unloading_location) || '—'}
+          {formatOperationalTableTextDisplay('unloading_location' in r ? r.unloading_location : null, '—')}
         </span>
       ),
     },
@@ -600,7 +600,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('group_name' in r ? r.group_name : '') || '',
-      render: (r) => <span className="text-sm break-words">{('group_name' in r && r.group_name) || '—'}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('group_name' in r ? r.group_name : null, '—')}</span>,
     },
     {
       id: 'supplier',
@@ -608,7 +608,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('supplier' in r ? r.supplier : '') || '',
-      render: (r) => <span className="text-sm break-words">{formatSapDisplayValue('supplier' in r && r.supplier)}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('supplier' in r ? r.supplier : null, '—')}</span>,
     },
     {
       id: 'buyer',
@@ -616,7 +616,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('buyer' in r ? r.buyer : '') || '',
-      render: (r) => <span className="text-sm break-words">{('buyer' in r && r.buyer) || '—'}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('buyer' in r ? r.buyer : null, '—')}</span>,
     },
     {
       id: 'plant_site',
@@ -624,7 +624,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('plant_site' in r ? r.plant_site : '') || '',
-      render: (r) => <span className="text-sm break-words">{('plant_site' in r && r.plant_site) || '—'}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('plant_site' in r ? r.plant_site : null, '—')}</span>,
     },
     {
       id: 'operation_id',
@@ -765,7 +765,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       getSortValue: (r) => ('loading_location' in r ? r.loading_location : '') || '',
       render: (r) => (
         <span className="text-sm break-words">
-          {('loading_location' in r && r.loading_location) || '—'}
+          {formatOperationalTableTextDisplay('loading_location' in r ? r.loading_location : null, '—')}
         </span>
       ),
     },
@@ -777,7 +777,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       getSortValue: (r) => ('unloading_location' in r ? r.unloading_location : '') || '',
       render: (r) => (
         <span className="text-sm break-words">
-          {('unloading_location' in r && r.unloading_location) || '—'}
+          {formatOperationalTableTextDisplay('unloading_location' in r ? r.unloading_location : null, '—')}
         </span>
       ),
     },
@@ -889,7 +889,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('group_name' in r ? r.group_name : '') || '',
-      render: (r) => <span className="text-sm break-words">{('group_name' in r && r.group_name) || '—'}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('group_name' in r ? r.group_name : null, '—')}</span>,
     },
     {
       id: 'transporter',
@@ -911,7 +911,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('buyer' in r ? r.buyer : '') || '',
-      render: (r) => <span className="text-sm break-words">{('buyer' in r && r.buyer) || '—'}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('buyer' in r ? r.buyer : null, '—')}</span>,
     },
     {
       id: 'plant_site',
@@ -919,7 +919,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('plant_site' in r ? r.plant_site : '') || '',
-      render: (r) => <span className="text-sm break-words">{('plant_site' in r && r.plant_site) || '—'}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('plant_site' in r ? r.plant_site : null, '—')}</span>,
     },
     {
       id: 'operation_id',
@@ -1550,7 +1550,7 @@ export default function OilLossPage() {
   const openTransporterModal = useCallback((row: OilLossByTransporterRow) => {
     setSelectedGroupData({
       kind: 'transporter',
-      entityName: formatSapDisplayValue(row.transporter),
+      entityName: formatOperationalTableTextDisplay(row.transporter),
       entityKey: row.id,
       loadingLocations: row.loading_location,
       unloadingLocations: row.unloading_location,
@@ -1561,7 +1561,7 @@ export default function OilLossPage() {
   const openSupplierModal = useCallback((row: OilLossBySupplierRow) => {
     setSelectedGroupData({
       kind: 'supplier',
-      entityName: formatSapDisplayValue(row.supplier),
+      entityName: formatOperationalTableTextDisplay(row.supplier),
       entityKey: row.id,
       loadingLocations: row.loading_location,
       unloadingLocations: row.unloading_location,
@@ -2301,7 +2301,7 @@ export default function OilLossPage() {
                                         {col.id === 'transporter' && viewMode === 'by_transporter' ? (
                                           (() => {
                                             const transporterRow = row as OilLossByTransporterRow
-                                            const name = formatSapDisplayValue(transporterRow.transporter)
+                                            const name = formatOperationalTableTextDisplay(transporterRow.transporter)
                                             return (
                                               <button
                                                 type="button"
@@ -2318,7 +2318,7 @@ export default function OilLossPage() {
                                         ) : col.id === 'supplier' && viewMode === 'by_supplier' ? (
                                           (() => {
                                             const supplierRow = row as OilLossBySupplierRow
-                                            const name = formatSapDisplayValue(supplierRow.supplier)
+                                            const name = formatOperationalTableTextDisplay(supplierRow.supplier)
                                             return (
                                               <button
                                                 type="button"

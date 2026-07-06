@@ -16,8 +16,8 @@ describe('truckingUnplannedPlanningUpload', () => {
           'Contract Date',
           'Contract Ext No',
           'PO',
-          'OS Qty',
-          'Plan Qty',
+          'OS Qty (MT)',
+          'Plan Qty (MT)',
           '1-Jun-2026',
         ],
       ]),
@@ -41,19 +41,20 @@ describe('truckingUnplannedPlanningUpload', () => {
         'Contract Date',
         'Contract Ext No',
         'PO',
-        'OS Qty',
-        'Plan Qty',
+        'OS Qty (MT)',
+        'Plan Qty (MT)',
         '1-Jun-2026',
         '2-Jun-2026',
       ],
-      ['G1', 'Sup A', '3rd Party', '1-May-2026', 'EXT-1', '1001029994', '500', '', '10', '20'],
+      ['G1', 'Sup A', '3rd Party', '1-May-2026', 'EXT-1', '1001029994', '0.5', '', '10', '20'],
     ]);
     expect(rowParseFailures).toHaveLength(0);
     expect(rows).toHaveLength(1);
     expect(rows[0].po_number).toBe('1001029994');
     expect(rows[0].contract_ext_no).toBe('EXT-1');
     expect(rows[0].entries).toHaveLength(2);
-    expect(rows[0].entries[0].qtyMt).toBe(10);
+    expect(rows[0].entries[0].qtyMt).toBe(10000);
+    expect(rows[0].entries[1].qtyMt).toBe(20000);
     expect(rows[0].rawCells.length).toBeGreaterThan(0);
   });
 
@@ -71,13 +72,33 @@ describe('truckingUnplannedPlanningUpload', () => {
   it('parses legacy PO row and skips outstanding metadata column', () => {
     const { rows, rowParseFailures } = parseUnplannedWidePlanningMatrix([
       ['Contract Ext No', 'PO', 'Outstanding Qty (MT)', '01/06/2026', '02/06/2026'],
-      ['EXT-1', '1001029994', '500', '10', '20'],
+      ['EXT-1', '1001029994', '0.5', '10', '20'],
     ]);
     expect(rowParseFailures).toHaveLength(0);
     expect(rows).toHaveLength(1);
     expect(rows[0].po_number).toBe('1001029994');
     expect(rows[0].entries).toHaveLength(2);
-    expect(rows[0].entries[0].qtyMt).toBe(10);
+    expect(rows[0].entries[0].qtyMt).toBe(10000);
+    expect(rows[0].entries[1].qtyMt).toBe(20000);
+  });
+
+  it('parses legacy kg template headers without MT conversion', () => {
+    const { rows, rowParseFailures } = parseUnplannedWidePlanningMatrix([
+      [
+        'Group',
+        'Supplier',
+        'Source',
+        'Contract Date',
+        'Contract Ext No',
+        'PO',
+        'OS Qty (kg)',
+        'Plan Qty (kg)',
+        '1-Jun-2026',
+      ],
+      ['G1', 'Sup A', '3rd Party', '1-May-2026', 'EXT-1', '1001029994', '500', '', '25000'],
+    ]);
+    expect(rowParseFailures).toHaveLength(0);
+    expect(rows[0].entries[0].qtyMt).toBe(25000);
   });
 
   it('converts template qty kg to daily_deliverables', () => {

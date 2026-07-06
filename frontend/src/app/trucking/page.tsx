@@ -16,7 +16,7 @@ import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
-import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { formatOperationalTableTextDisplay, formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { format } from 'date-fns'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -845,10 +845,10 @@ function CalendarDeliverablesTable({
           </thead>
           <tbody className="bg-white">
             {sortedRows.map((r) => {
-              const opLabel = formatSapDisplayValue(r.operation_id)
-              const contractExtLabel = formatSapDisplayValue(r.contract_ext_no || r.contract_number)
-              const stoLabel = formatSapDisplayValue(r.sto_number)
-              const supplierLabel = formatSapDisplayValue(r.supplier)
+              const opLabel = formatOperationalTableTextDisplay(r.operation_id)
+              const contractExtLabel = formatOperationalTableTextDisplay(r.contract_ext_no || r.contract_number)
+              const stoLabel = formatOperationalTableTextDisplay(r.sto_number)
+              const supplierLabel = formatOperationalTableTextDisplay(r.supplier)
               const dueStart = r.delivery_start_date
                 ? formatDateDMY(r.delivery_start_date || '')
                 : '-'
@@ -869,7 +869,7 @@ function CalendarDeliverablesTable({
                     >
                       <div className="font-semibold text-gray-900 truncate" title={opLabel}>{opLabel}</div>
                       <div className="text-[10px] text-gray-500 truncate" title={`${r.loading_location || ''} → ${r.unloading_location || ''}`}>
-                        {formatSapDisplayValue(r.loading_location)} → {formatSapDisplayValue(r.unloading_location)}
+                        {formatOperationalTableTextDisplay(r.loading_location)} → {formatOperationalTableTextDisplay(r.unloading_location)}
                       </div>
                     </td>
                   ) : null}
@@ -902,19 +902,19 @@ function CalendarDeliverablesTable({
                     const val = (() => {
                       switch (id) {
                         case 'owner':
-                          return formatSapDisplayValue(r.trucking_owner)
+                          return formatOperationalTableTextDisplay(r.trucking_owner)
                         case 'due_start':
                           return dueStart
                         case 'due_end':
                           return dueEnd
                         case 'source_type':
-                          return formatSapDisplayValue((r as any).source_type)
+                          return formatOperationalTableTextDisplay((r as any).source_type)
                         case 'lt_spot':
                           return formatSapDisplayValue((r as any).lt_spot)
                         case 'product':
-                          return formatSapDisplayValue(r.product)
+                          return formatOperationalTableTextDisplay(r.product)
                         case 'group_name':
-                          return formatSapDisplayValue(r.group_name)
+                          return formatOperationalTableTextDisplay(r.group_name)
                         case 'outstanding_quantity':
                           return (
                             <TruckingOutstandingQtyWithTooltip
@@ -1042,9 +1042,17 @@ function TruckingPageContent() {
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
+  const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
+  const [availableSuppliers, setAvailableSuppliers] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [templateDownloading, setTemplateDownloading] = useState(false)
+  const onSuppliersChange = useCallback((values: string[]) => {
+    setPage(1)
+    setHasMore(true)
+    setSelectedSuppliers(values)
+  }, [])
+
   const defaultContractDateRange = useMemo(() => {
     const now = new Date()
     const yyyy = now.getFullYear()
@@ -1309,6 +1317,7 @@ function TruckingPageContent() {
       const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
         selectedIncoterms,
         selectedProducts,
+        selectedSuppliers,
       })
       if (Object.keys(mergedColumnFilters).length > 0) {
         params.set('columnFilters', JSON.stringify(mergedColumnFilters))
@@ -1357,6 +1366,7 @@ function TruckingPageContent() {
     columnFilters,
     selectedIncoterms,
     selectedProducts,
+    selectedSuppliers,
     selectedGroupPlants,
     searchParams,
   ])
@@ -1380,6 +1390,7 @@ function TruckingPageContent() {
     columnFilters,
     selectedIncoterms,
     selectedProducts,
+    selectedSuppliers,
     selectedGroupPlants,
     searchParams,
   ])
@@ -1670,6 +1681,7 @@ function TruckingPageContent() {
       const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
         selectedIncoterms,
         selectedProducts,
+        selectedSuppliers,
       })
       const cfKeys = Object.keys(mergedColumnFilters)
       if (cfKeys.length > 0) {
@@ -1711,6 +1723,7 @@ function TruckingPageContent() {
       columnFilters,
       selectedIncoterms,
       selectedProducts,
+      selectedSuppliers,
       lateIndicatorFilter,
       searchParams,
       selectedGroupPlants,
@@ -1876,7 +1889,7 @@ function TruckingPageContent() {
     if (!userScopeReady) return
     fetchTruckingOperations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userScopeReady, page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir, selectedGroupPlants, selectedIncoterms, selectedProducts, dateFrom, dateTo, searchTerm, columnFilters])
+  }, [userScopeReady, page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir, selectedGroupPlants, selectedIncoterms, selectedProducts, selectedSuppliers, dateFrom, dateTo, searchTerm, columnFilters])
 
   useEffect(() => {
     let cancelled = false
@@ -1884,8 +1897,9 @@ function TruckingPageContent() {
       api.get('/contracts/filter-options/group-plants'),
       api.get('/contracts/filter-options/incoterms'),
       api.get('/dashboard/filter-options/products'),
+      api.get('/dashboard/filter-options/suppliers'),
     ])
-      .then(([plantRes, incRes, productRes]) => {
+      .then(([plantRes, incRes, productRes, supplierRes]) => {
         if (cancelled) return
         const plants = (plantRes.data?.data?.groupPlants || []) as string[]
         const incs = (incRes.data?.data?.incoterms || []) as string[]
@@ -1895,9 +1909,12 @@ function TruckingPageContent() {
           : productPayload && typeof productPayload === 'object' && 'products' in productPayload
             ? (productPayload as { products?: string[] }).products
             : []) as string[]
+        const supplierPayload = supplierRes.data?.data
+        const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
         setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
         setAvailableIncoterms(Array.isArray(incs) ? incs : [])
         setAvailableProducts(Array.isArray(products) ? products : [])
+        setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
       })
       .catch((e) => {
         if (cancelled) return
@@ -1905,6 +1922,7 @@ function TruckingPageContent() {
         setAvailableGroupPlants([])
         setAvailableIncoterms([])
         setAvailableProducts([])
+        setAvailableSuppliers([])
       })
     return () => {
       cancelled = true
@@ -2480,6 +2498,7 @@ function TruckingPageContent() {
       selectedGroupPlants.length > 0 ||
       selectedIncoterms.length > 0 ||
       selectedProducts.length > 0 ||
+      selectedSuppliers.length > 0 ||
       Object.keys(columnFilters).length > 0 ||
       dateFrom !== defaultContractDateRange.from ||
       dateTo !== defaultContractDateRange.to
@@ -2494,6 +2513,7 @@ function TruckingPageContent() {
     selectedGroupPlants,
     selectedIncoterms,
     selectedProducts,
+    selectedSuppliers,
     columnFilters,
     dateFrom,
     dateTo,
@@ -2510,6 +2530,7 @@ function TruckingPageContent() {
     setUnloadingLocationFilter('')
     resetUserScopeFilters()
     setSelectedIncoterms([])
+    setSelectedSuppliers([])
     setColumnFilters({})
     setDateFrom(defaultContractDateRange.from)
     setDateTo(defaultContractDateRange.to)
@@ -2546,6 +2567,11 @@ function TruckingPageContent() {
         `Product${selectedProducts.length > 1 ? 's' : ''}: ${selectedProducts.slice(0, 2).join(', ')}${selectedProducts.length > 2 ? '…' : ''}`,
       )
     }
+    if (selectedSuppliers.length > 0) {
+      parts.push(
+        `Supplier${selectedSuppliers.length > 1 ? 's' : ''}: ${selectedSuppliers.slice(0, 2).join(', ')}${selectedSuppliers.length > 2 ? '…' : ''}`,
+      )
+    }
     if (selectedGroupPlants.length > 0) {
       parts.push(
         `Plant${selectedGroupPlants.length > 1 ? 's' : ''}: ${selectedGroupPlants.slice(0, 2).join(', ')}${selectedGroupPlants.length > 2 ? '…' : ''}`,
@@ -2568,6 +2594,7 @@ function TruckingPageContent() {
     searchTerm,
     selectedIncoterms,
     selectedProducts,
+    selectedSuppliers,
     selectedGroupPlants,
     columnFilters,
     dateFrom,
@@ -2785,7 +2812,7 @@ function TruckingPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.supplier || '',
-      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.supplier)}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.supplier)}</span>
     },
     {
       id: 'status',
@@ -2805,7 +2832,7 @@ function TruckingPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.product || '',
-      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.product)}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.product)}</span>
     },
     {
       id: 'incoterm',
@@ -2813,7 +2840,7 @@ function TruckingPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.incoterm || '',
-      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.incoterm)}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.incoterm)}</span>
     },
     {
       id: 'contract_qty',
@@ -2901,7 +2928,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.operation_id || '',
       render: (o) => (
         <span className="text-sm break-words block" title={o.operation_id || ''}>
-          {formatSapDisplayValue(o.operation_id)}
+          {formatOperationalTableTextDisplay(o.operation_id)}
         </span>
       )
     },
@@ -2911,7 +2938,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.location || '',
-      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.location)}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.location)}</span>
     },
     {
       id: 'loading_location',
@@ -2919,7 +2946,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.loading_location || o.location || '',
-      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.loading_location || o.location)}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.loading_location || o.location)}</span>
     },
     {
       id: 'unloading_location',
@@ -2927,7 +2954,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.unloading_location || '',
-      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.unloading_location)}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.unloading_location)}</span>
     },
     {
       id: 'trucking_owner',
@@ -2935,7 +2962,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.trucking_owner || '',
-      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.trucking_owner)}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.trucking_owner)}</span>
     },
     {
       id: 'quantity_sent',
@@ -3045,7 +3072,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.buyer || '',
-      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.buyer)}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.buyer)}</span>
     },
     {
       id: 'group_name',
@@ -3053,7 +3080,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.group_name || '',
-      render: (o) => <span className="text-sm break-words">{formatSapDisplayValue(o.group_name)}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.group_name)}</span>
     }
   ], [])
 
@@ -3463,6 +3490,10 @@ function TruckingPageContent() {
                 productOptions={availableProducts}
                 selectedProducts={selectedProducts}
                 onProductsChange={handleProductsChange}
+                showSupplierFilter
+                supplierOptions={availableSuppliers}
+                selectedSuppliers={selectedSuppliers}
+                onSuppliersChange={onSuppliersChange}
                 groupPlantOptions={availableGroupPlants}
                 selectedGroupPlants={selectedGroupPlants}
                 onGroupPlantsChange={handleGroupPlantsChange}
@@ -3473,6 +3504,7 @@ function TruckingPageContent() {
                 showDateRange={false}
                 incotermEmptyMessage="Loading incoterms..."
                 productEmptyMessage="Loading products..."
+                supplierEmptyMessage="Loading suppliers..."
                 groupPlantPlaceholder="Select group plant(s)"
                 groupPlantEmptyMessage="No group plants"
               />
@@ -4053,8 +4085,8 @@ function TruckingPageContent() {
                       Outstanding Qty
                     </div>
                     <p className="text-xs text-red-800 mb-3">
-                      Download the corrected template with failure reasons, adjust daily qty (kg) so the row total
-                      matches OS Qty (kg), then upload the failed rows file again.
+                      Download the corrected template with failure reasons, adjust daily qty (MT) so the row total
+                      matches OS Qty (MT), then upload the failed rows file again.
                     </p>
                     <Button
                       type="button"

@@ -29,6 +29,44 @@ export function formatSapDisplayValue(value: unknown, fallback = '-'): string {
   return String(value).trim()
 }
 
+/** Column ids that keep SAP/master casing in view tables (status badges elsewhere; LT/SPOT suffix). */
+const OPERATIONAL_TABLE_PRESERVE_CASE_COLUMN_IDS = new Set([
+  'lt_spot',
+  'status',
+  'status_overall',
+  'delivery_status',
+  'late_indicator',
+  'unusual_status',
+  'over_under_delivery_status',
+])
+
+export function shouldPreserveOperationalTableTextCasing(columnId: string): boolean {
+  return OPERATIONAL_TABLE_PRESERVE_CASE_COLUMN_IDS.has(columnId)
+}
+
+/** Operational view-table text — sentence case from SAP/master → UPPERCASE; placeholders → fallback. */
+export function formatOperationalTableTextDisplay(value: unknown, fallback = '-'): string {
+  const base = formatSapDisplayValue(value, fallback)
+  if (base === fallback) return fallback
+  return base.toUpperCase()
+}
+
+export function formatOperationalTableTextDisplayForColumn(
+  columnId: string,
+  value: unknown,
+  fallback = '-',
+): string {
+  if (shouldPreserveOperationalTableTextCasing(columnId)) {
+    return formatSapDisplayValue(value, fallback)
+  }
+  return formatOperationalTableTextDisplay(value, fallback)
+}
+
+/** Vessel name in operational view tables — uppercase; missing SAP placeholders → "-". */
+export function formatVesselTableDisplay(value: unknown, fallback = '-'): string {
+  return formatOperationalTableTextDisplay(value, fallback)
+}
+
 /** Chart / drilldown row labels (maps internal "Blank" keys to "-"). */
 export function formatSapGroupDisplayLabel(key: string, fallback = '-'): string {
   return formatSapDisplayValue(key, fallback)
