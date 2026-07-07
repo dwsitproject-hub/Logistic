@@ -43,6 +43,10 @@ import {
   TableInitialLoadPlaceholderContent,
 } from '@/components/performance/TableInitialLoadPlaceholder'
 import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
+import {
+  CARGO_READINESS_UPLOAD_ACCEPT,
+  triggerCargoReadinessTemplateDownload,
+} from '@/lib/cargoReadinessTemplate'
 import { canViewContractPerformancePage, usePermissions } from '@/components/PermissionsContext'
 import {
   ContractDetailModal,
@@ -2454,18 +2458,7 @@ function ContractsPageContent() {
   }, [contracts])
 
   const downloadCargoReadinessTemplate = () => {
-    const rows = [
-      'po_number,cargo_readiness_date',
-      '# Example: 1001000001,05/15/2026',
-      '# cargo_readiness_date format: MM/DD/YYYY (leave blank to clear)',
-    ]
-    const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'cargo_readiness_template.csv'
-    a.click()
-    URL.revokeObjectURL(url)
+    triggerCargoReadinessTemplateDownload()
   }
 
   const handleCargoReadinessUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3605,7 +3598,7 @@ function ContractsPageContent() {
               <input
                 id="cargo-readiness-upload"
                 type="file"
-                accept=".csv"
+                accept={CARGO_READINESS_UPLOAD_ACCEPT}
                 onChange={handleCargoReadinessUpload}
                 className="hidden"
               />
@@ -3618,7 +3611,7 @@ function ContractsPageContent() {
                 {csvCargoUploading ? (
                   <><span className="h-4 w-4 mr-2 inline-block border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />Uploading...</>
                 ) : (
-                  <><Upload className="h-4 w-4 mr-2" />Upload CSV</>
+                  <><Upload className="h-4 w-4 mr-2" />Upload Excel</>
                 )}
               </Button>
             </div>

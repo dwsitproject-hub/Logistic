@@ -308,6 +308,43 @@ describe('truckingActualsTemplate', () => {
     const sheet = wb.Sheets[wb.SheetNames[0]!]
     const planQtyCell = sheet.H2
     expect(planQtyCell?.f).toMatch(/^SUM\(I2:/)
+    expect(planQtyCell?.t).toBe('n')
+    expect(planQtyCell?.v).toBe(0)
+  })
+
+  it('exports planned template daily qty as numbers so Plan Qty SUM works', async () => {
+    const blob = buildTruckingActualsTemplateXlsxBlob(
+      [
+        {
+          contract_ext_no: 'EXT-P1',
+          po_number: 'PO-P1',
+          supplier: 'Sup A',
+          group_name: 'G1',
+          source_type: '3rd Party',
+          contract_date: '2026-05-20',
+          outstanding_quantity: 100000,
+          templateKind: 'planned',
+          daily_deliverables: [
+            { date: REF_TODAY, quantity_delivered: 25000 },
+            { date: shiftIsoDate(REF_TODAY, 1), quantity_delivered: 15000 },
+          ],
+        },
+      ],
+      REF_TODAY,
+    )
+    const buf = await blob.arrayBuffer()
+    const wb = XLSX.read(buf, { type: 'array', cellFormula: true })
+    const sheet = wb.Sheets[wb.SheetNames[0]!]
+    const planQtyCell = sheet.H2
+    expect(planQtyCell?.f).toMatch(/^SUM\(I2:/)
+    expect(planQtyCell?.t).toBe('n')
+    expect(planQtyCell?.v).toBe(40)
+    expect(sheet.I2?.t).toBe('n')
+    expect(sheet.I2?.v).toBe(25)
+    expect(sheet.J2?.t).toBe('n')
+    expect(sheet.J2?.v).toBe(15)
+    expect(sheet.G2?.t).toBe('n')
+    expect(sheet.G2?.v).toBe(100)
   })
 
   it('builds failed upload re-template with Reason column at the end', async () => {

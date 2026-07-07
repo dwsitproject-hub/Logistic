@@ -430,24 +430,74 @@ export function buildTruckingActualsTemplateCsv(
   return `\ufeff${lines.join('\n')}\n`
 }
 
-function applyUnplannedPlanQtyFormulas(ws: XLSX.WorkSheet, matrix: string[][]): void {
-  if (matrix.length < 2) return
-  const header = matrix[0] ?? []
+function parseTemplateQtyMtCell(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const s = String(value).trim().replace(/,/g, '')
+  if (!s) return null
+  const n = Number(s)
+  if (!Number.isFinite(n)) return null
+  return n
+}
+
+function resolveWideTemplateLastDateColIdx(header: string[]): number {
   let lastDateColIdx = header.length - 1
   const trailingHeader = header[lastDateColIdx]?.trim().toLowerCase() ?? ''
   if (trailingHeader === 'reason' || trailingHeader === 'failure reason') {
     lastDateColIdx -= 1
   }
+  return lastDateColIdx
+}
+
+/** XLSX SUM ignores text cells — coerce qty columns to numeric after aoa_to_sheet. */
+function applyWideTemplateNumericQtyCells(ws: XLSX.WorkSheet, matrix: string[][]): void {
+  if (matrix.length < 2) return
+  const header = matrix[0] ?? []
+  const isWideMetadata =
+    header.length >= UNPLANNED_TEMPLATE_METADATA_HEADERS.length &&
+    header[0]?.trim().toLowerCase() === 'group'
+  if (!isWideMetadata) return
+
+  const lastDateColIdx = resolveWideTemplateLastDateColIdx(header)
+  if (lastDateColIdx < UNPLANNED_TEMPLATE_FIRST_DATE_COL_INDEX) return
+
+  const osQtyColIdx = UNPLANNED_TEMPLATE_PLAN_QTY_COL_INDEX - 1
+  for (let r = 1; r < matrix.length; r += 1) {
+    const row = matrix[r] ?? []
+
+    const osQty = parseTemplateQtyMtCell(row[osQtyColIdx])
+    if (osQty != null) {
+      ws[XLSX.utils.encode_cell({ r, c: osQtyColIdx })] = { t: 'n', v: osQty }
+    }
+
+    for (let c = UNPLANNED_TEMPLATE_FIRST_DATE_COL_INDEX; c <= lastDateColIdx; c += 1) {
+      const qtyMt = parseTemplateQtyMtCell(row[c])
+      if (qtyMt != null) {
+        ws[XLSX.utils.encode_cell({ r, c })] = { t: 'n', v: qtyMt }
+      }
+    }
+  }
+}
+
+function applyUnplannedPlanQtyFormulas(ws: XLSX.WorkSheet, matrix: string[][]): void {
+  if (matrix.length < 2) return
+  const header = matrix[0] ?? []
+  const lastDateColIdx = resolveWideTemplateLastDateColIdx(header)
   if (lastDateColIdx < UNPLANNED_TEMPLATE_FIRST_DATE_COL_INDEX) return
   const firstDateCol = XLSX.utils.encode_col(UNPLANNED_TEMPLATE_FIRST_DATE_COL_INDEX)
   const lastDateCol = XLSX.utils.encode_col(lastDateColIdx)
   for (let r = 1; r < matrix.length; r += 1) {
     const excelRow = r + 1
     const cellRef = XLSX.utils.encode_cell({ r, c: UNPLANNED_TEMPLATE_PLAN_QTY_COL_INDEX })
+    const row = matrix[r] ?? []
+    let cachedSum = 0
+    for (let c = UNPLANNED_TEMPLATE_FIRST_DATE_COL_INDEX; c <= lastDateColIdx; c += 1) {
+      const qtyMt = parseTemplateQtyMtCell(row[c])
+      if (qtyMt != null) cachedSum += qtyMt
+    }
     ws[cellRef] = {
       f: `SUM(${firstDateCol}${excelRow}:${lastDateCol}${excelRow})`,
       t: 'n',
-      v: 0,
+      v: cachedSum,
     }
   }
 }
@@ -459,6 +509,7 @@ export function buildTruckingActualsTemplateXlsxBlob(
   const matrix = buildActualsTemplateMatrix(rows, referenceToday)
   const ws = XLSX.utils.aoa_to_sheet(matrix)
   if (rows.some(isWidePlanningTemplateRow)) {
+    applyWideTemplateNumericQtyCells(ws, matrix)
     applyUnplannedPlanQtyFormulas(ws, matrix)
   }
   const wb = XLSX.utils.book_new()
@@ -504,6 +555,7 @@ export function buildFailedUnplannedUploadRetemplateXlsx(args: {
     baseHeader.length >= UNPLANNED_TEMPLATE_METADATA_HEADERS.length &&
     baseHeader[0]?.trim().toLowerCase() === 'group'
   if (isUnplannedMetadata) {
+    applyWideTemplateNumericQtyCells(ws, matrix)
     applyUnplannedPlanQtyFormulas(ws, matrix)
   }
 

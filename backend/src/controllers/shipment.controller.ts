@@ -27,6 +27,7 @@ import {
   type PipelineDailySummaryFilterInput,
 } from '../services/pipelineDailySummary.service';
 import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
+import { resolveShipmentEditPayload } from '../services/shipmentEditPayload.service';
 import { syncVesselLoadingPortsFromLatestSap } from '../services/vesselLoadingPortsFromSap.service';
 import {
   attachPurchaseOrderToShipment,
@@ -1720,6 +1721,36 @@ export const getShipmentEditContext = async (req: AuthRequest, res: Response) =>
   }
 };
 
+/** Combined modal payload — shipment + ports + contract details in one request (fast open). */
+export const getShipmentEditPayload = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    if (!isUUID) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Shipment UUID is required' },
+      });
+    }
+
+    const payload = await resolveShipmentEditPayload(id);
+    if (!payload) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Shipment not found' },
+      });
+    }
+
+    return res.json({ success: true, data: payload });
+  } catch (error) {
+    logger.error('Get shipment edit payload error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch shipment edit payload' },
+    });
+  }
+};
+
 export const updateShipment = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
@@ -2111,7 +2142,9 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
 export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => {
   try {
     const { shipmentId } = req.params;
-    logger.info('Getting vessel loading ports for:', { shipmentId });
+    const syncSap = String(req.query.syncSap ?? 'true').toLowerCase() !== 'false';
+    const hydrateAta = String(req.query.hydrateAta ?? 'true').toLowerCase() !== 'false';
+    logger.info('Getting vessel loading ports for:', { shipmentId, syncSap, hydrateAta });
     const hasCancelColumn = await vesselLoadingPortHasCancelColumn();
     const hasCancelledByColumn = await vesselLoadingPortHasCancelledByColumn();
     const activePortFilter = hasCancelColumn ? 'AND COALESCE(vlp.is_cancelled, false) = false' : '';
@@ -2246,8 +2279,9 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
       }
 
       try {
-        const synced = await syncVesselLoadingPortsFromLatestSap(shipmentId);
-        if (synced) {
+        if (syncSap) {
+          const synced = await syncVesselLoadingPortsFromLatestSap(shipmentId);
+          if (synced) {
           portsResult = await query(
             `SELECT 
               vlp.id,
@@ -2289,6 +2323,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
              ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
             [shipmentId],
           );
+          }
         }
       } catch (syncError) {
         logger.warn('Vessel loading port SAP sync skipped', { shipmentId, syncError });
@@ -2519,7 +2554,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
 
     let shipmentInfo = shipmentInfoResult.rows[0] || null;
 
-    if (shipmentInfo) {
+    if (shipmentInfo && hydrateAta) {
       await hydrateShipmentInfoAtaGaps(shipmentId, shipmentInfo);
     }
     logger.info('ShipmentInfo result:', {

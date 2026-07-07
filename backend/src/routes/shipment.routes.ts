@@ -6,6 +6,7 @@ import {
   getShipments,
   getShipmentById,
   getShipmentEditContext,
+  getShipmentEditPayload,
   getShipmentAvailablePurchaseOrders,
   attachPurchaseOrderToShipmentHandler,
   batchSaveShipmentPoPlanQtyHandler,
@@ -94,6 +95,7 @@ router.get('/', getShipments);
 
 // Edit Shipment modal — lightweight sibling PO/contract resolve (before /:id)
 router.get('/:id/edit-context', getShipmentEditContext);
+router.get('/:id/edit-payload', getShipmentEditPayload);
 router.get('/:id/remarks', getShipmentRemarks);
 router.post('/:id/remarks', auditLog('CREATE', 'SHIPMENT'), createShipmentRemark);
 router.get('/:id/available-purchase-orders', getShipmentAvailablePurchaseOrders);

@@ -464,7 +464,7 @@ async function buildContractDetailRows(
 
   const needsEnrichment = contractDetails
     .map((row, index) => ({ row, index }))
-    .filter(({ row }) => row.contract_number && (!row.supplier || !row.product))
+    .filter(({ row }) => row.contract_number && !row.supplier && !row.product)
 
   if (needsEnrichment.length > 0) {
     const enrichments = await Promise.all(
@@ -844,34 +844,31 @@ export function EditShipmentModal({
       setLoading(true)
       setShipmentId(null)
       try {
-        let row: Record<string, unknown>
-        let sid: string
-        let editContext: ShipmentEditContextData | null = null
-
-        if (directShipmentId?.trim()) {
-          sid = directShipmentId.trim()
-          const [detailRes, contextRes] = await Promise.all([
-            api.get(`/shipments/${sid}`),
-            api.get(`/shipments/${sid}/edit-context`).catch(() => null),
-          ])
-          row = (detailRes.data?.data ?? {}) as Record<string, unknown>
-          row.id = sid
-          editContext = contextRes?.data?.data ?? null
-        } else {
+        let sid = directShipmentId?.trim() || ''
+        if (!sid) {
           const listRes = await api.get('/shipments', {
             params: { contract: contractId, limit: 100, page: 1, compact: 'true' },
           })
           const shipments: Array<Record<string, unknown>> = listRes.data?.data?.shipments ?? []
-          row = shipments[0] ?? {}
-          if (!row?.id) throw new Error('No shipment found for this contract')
-          sid = String(row.id)
-          const [detailRes, contextRes] = await Promise.all([
-            api.get(`/shipments/${sid}`),
-            api.get(`/shipments/${sid}/edit-context`).catch(() => null),
-          ])
-          row = { ...row, ...(detailRes.data?.data ?? {}) }
-          editContext = contextRes?.data?.data ?? null
+          const first = shipments[0]
+          if (!first?.id) throw new Error('No shipment found for this contract')
+          sid = String(first.id)
         }
+
+        const payloadRes = await api.get(`/shipments/${sid}/edit-payload`)
+        const payload = payloadRes.data?.data as {
+          shipment?: Record<string, unknown>
+          editContext?: ShipmentEditContextData | null
+          ports?: LoadingPortRef[]
+          shipmentInfo?: Record<string, unknown> | null
+          contractDetails?: Array<Record<string, unknown>>
+        } | null
+        if (!payload?.shipment) throw new Error('Failed to load shipment')
+
+        const row = { ...payload.shipment, id: sid } as Record<string, unknown>
+        const editContext = payload.editContext ?? null
+        const ports: LoadingPortRef[] = payload.ports ?? []
+        const info: Record<string, unknown> = payload.shipmentInfo ?? {}
 
         setShipmentId(sid)
 
@@ -882,38 +879,7 @@ export function EditShipmentModal({
           row.contract_number as string | undefined,
           contractId,
         )
-        const apiLookupKey =
-          String(preferredStoNumber ?? '').trim() ||
-          String(editContext?.lookup_key ?? '').trim() ||
-          resolveShipmentApiLookupKey({
-            sto_key: row.sto_key as string | undefined,
-            sto_number: row.sto_number as string | undefined,
-            operation_id: row.operation_id as string | undefined,
-            shipment_id: row.shipment_id as string | undefined,
-            id: sid,
-          })
-        const plantCode = String(row.plant_site ?? row.plant_code ?? '').trim()
 
-        const [portsRes, detailsRes, plantsRes] = await Promise.all([
-          api.get(`/shipments/${sid}/loading-ports`),
-          apiLookupKey
-            ? api.get('/shipments/contracts/details', {
-                params: {
-                  sto: apiLookupKey,
-                  ...(contractNumbers.length > 0
-                    ? { contractNumbers: contractNumbers.join(',') }
-                    : {}),
-                },
-              })
-            : Promise.resolve(null),
-          plantCode
-            ? api.get('/master-plants', { params: { search: plantCode, limit: 20 } })
-            : Promise.resolve(null),
-        ])
-
-        const ports: LoadingPortRef[] = portsRes.data?.data?.ports ?? []
-        const info: Record<string, unknown> =
-          portsRes.data?.data?.shipmentInfo ?? portsRes.data?.data?.shipment_info ?? {}
         setShipmentStatus(String(row.status ?? info.status ?? '').trim() || null)
         setLoadingPorts(ports)
         setShipmentInfo(info)
@@ -930,10 +896,7 @@ export function EditShipmentModal({
           row.contract_sto_number ?? row.sto_number,
         )
 
-        const detailsData =
-          detailsRes?.data?.success && Array.isArray(detailsRes.data.data)
-            ? (detailsRes.data.data as Array<Record<string, unknown>>)
-            : []
+        const detailsData = Array.isArray(payload.contractDetails) ? payload.contractDetails : []
         let contractDetails = await buildContractDetailRows(
           detailsData,
           sid,
@@ -1062,17 +1025,20 @@ export function EditShipmentModal({
         }
         setEditRemark('')
 
+        const plantCode = String(row.plant_site ?? row.plant_code ?? '').trim()
         if (plantCode) {
-          try {
-            const items: Array<{ plant_code?: string; plant_name?: string }> =
-              plantsRes?.data?.data?.items ?? []
-            const match = items.find(
-              (p) => String(p.plant_code ?? '').trim().toUpperCase() === plantCode.toUpperCase(),
-            )
-            setPlantSiteName(match?.plant_name?.trim() || plantCode)
-          } catch {
-            setPlantSiteName(plantCode)
-          }
+          setPlantSiteName(plantCode)
+          void api
+            .get('/master-plants', { params: { search: plantCode, limit: 20 } })
+            .then((plantsRes) => {
+              const items: Array<{ plant_code?: string; plant_name?: string }> =
+                plantsRes?.data?.data?.items ?? []
+              const match = items.find(
+                (p) => String(p.plant_code ?? '').trim().toUpperCase() === plantCode.toUpperCase(),
+              )
+              if (match?.plant_name?.trim()) setPlantSiteName(match.plant_name.trim())
+            })
+            .catch(() => {})
         }
 
         void (async () => {

@@ -2894,7 +2894,7 @@ export const bulkUpdateCargoReadiness = async (req: AuthRequest & { file?: Expre
   const dateIdx = findCargoColumnIndex(headerRow, ['cargo_readiness_date', 'cargo readiness date', 'cargo readiness', 'date', 'tanggal']);
 
   if (poIdx === -1 || dateIdx === -1) {
-    return res.status(400).json({ success: false, error: { message: 'CSV must have columns: po_number, cargo_readiness_date' } });
+    return res.status(400).json({ success: false, error: { message: 'File must have columns: po_number, cargo_readiness_date' } });
   }
 
   let updated = 0;

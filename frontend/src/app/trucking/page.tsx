@@ -3398,6 +3398,28 @@ function TruckingPageContent() {
                 </>
               )}
             </Button>
+            {(isUnplannedPlanningTemplateMode(statusFilter) ||
+              isPlannedPlanningTemplateMode(statusFilter)) ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+                disabled={bulkCreateUploading || listFetching}
+              >
+                {bulkCreateUploading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-4 w-4 mr-2" />
+                    Upload Daily Planning
+                  </>
+                )}
+              </Button>
+            ) : null}
             {TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED ? (
               <>
                 {!isUnplannedPlanningTemplateMode(statusFilter) ? (
@@ -4225,22 +4247,6 @@ function TruckingPageContent() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               {truckingViewToggle}
               <div className="flex flex-wrap items-center gap-2 ml-auto">
-                {(isUnplannedPlanningTemplateMode(statusFilter) ||
-                  isPlannedPlanningTemplateMode(statusFilter)) ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
-                    onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
-                    disabled={bulkCreateUploading || listFetching}
-                  >
-                    {bulkCreateUploading ? (
-                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
-                    ) : (
-                      <><Upload className="h-4 w-4 mr-2" />Upload</>
-                    )}
-                  </Button>
-                ) : null}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex">
