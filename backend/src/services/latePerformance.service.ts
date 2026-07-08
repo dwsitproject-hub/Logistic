@@ -1025,12 +1025,53 @@ export function aggregateLatePerformanceRows(
 
     const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
     const transport = String(row.transport_mode || '').trim().toUpperCase();
-    // Section 1 + Section 2: skip contracts with no due date delivery end (DB or SAP).
     const deliveryEnd = resolveEffectiveDeliveryEnd(row);
+
+    // No due date delivery end — qty counts in Section 1 + unscheduled tree; not On Time/Late.
     if (!deliveryEnd) {
       if (includeSummary) {
         debugCounts.missingDeliveryEnd += 1;
         pushSample('missingDeliveryEnd', String(row.contract_id || ''));
+      }
+      if (!statusText) {
+        if (includeSummary) {
+          debugCounts.missingStatus += 1;
+          pushSample('missingStatus', String(row.contract_id || ''));
+        }
+        continue;
+      }
+      const isClosedNoDue =
+        statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED';
+      const isOpenNoDue = statusText === 'OPEN' || statusText === 'ACTIVE';
+      if (!isClosedNoDue && !isOpenNoDue) {
+        if (includeSummary) {
+          debugCounts.unknownStatus += 1;
+          pushSample('unknownStatus', `${String(row.contract_id || '')}:${statusText}`);
+        }
+        continue;
+      }
+      const _qtyOrderedNoDue = Number(row.quantity_ordered || 0);
+      const _subtractedNoDue = resolveContractActualQtySubtractedTs(
+        row.incoterm,
+        row.quantity_receive,
+        row.quantity_delivery_sap ?? row.quantity_delivery,
+      );
+      const _outstandingQtyNoDue = Math.max(0, _qtyOrderedNoDue - _subtractedNoDue);
+      const _qtyForPerfNoDue = isClosedNoDue ? _qtyOrderedNoDue : _outstandingQtyNoDue;
+      if (includeSummary) {
+        if (isOpenNoDue) openStatusOutstandingQty += _outstandingQtyNoDue;
+        else if (isClosedNoDue) closeStatusContractQty += _qtyOrderedNoDue;
+      }
+      if (includeTree) {
+        addContractRowToPerfTree(unscheduledRoot, row, 0, _qtyForPerfNoDue);
+      }
+      if (filters.debug && debugNoScheduleRows.length < 500) {
+        debugNoScheduleRows.push({
+          contract_id: String(row.contract_id || ''),
+          product: String(row.product || '').trim() || 'Blank',
+          outstanding_qty: _qtyForPerfNoDue,
+          transport_mode: transport,
+        });
       }
       continue;
     }
@@ -1112,7 +1153,7 @@ export function aggregateLatePerformanceRows(
     /** Open Section 1/2: outstanding qty. Close Section 1/2: total contract qty (quantity_ordered). */
     const _qtyForPerf = isClosed ? _qtyOrdered : _outstandingQty;
 
-    // Section 1 status cards — only contracts with a resolved due date delivery end (see skip above).
+    // Section 1 status cards — includes schedulable + unscheduled (no due end / no completion).
     if (includeSummary) {
       if (isOpen) openStatusOutstandingQty += _outstandingQty;
       else if (isClosed) closeStatusContractQty += _qtyOrdered;

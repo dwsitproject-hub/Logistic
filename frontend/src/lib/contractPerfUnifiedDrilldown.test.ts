@@ -43,4 +43,27 @@ describe('mergeUnifiedPerfBranchTrees', () => {
     expect(pk.onTime.count).toBe(0)
     expect(pk.late.count).toBe(1)
   })
+
+  it('All qty includes unscheduled; Avg Trade uses schedulable rows only (Option A)', () => {
+    const onRoot = branch({
+      label: 'Total',
+      children: [
+        branch({ label: 'CPO', count: 1, totalDays: 10, totalQtyDelivery: 1000, children: [] }),
+      ],
+    })
+    const lateRoot = branch({ label: 'Total', children: [] })
+    const unscheduledRoot = branch({
+      label: 'Total',
+      children: [
+        branch({ label: 'CPO', count: 2, totalDays: 0, totalQtyDelivery: 500, children: [] }),
+      ],
+    })
+
+    const merged = mergeUnifiedPerfBranchTrees(onRoot, lateRoot, unscheduledRoot)
+    const cpo = merged.find((n) => n.label === 'CPO')!
+    expect(cpo.all.totalQtyKg).toBe(1500)
+    expect(cpo.all.count).toBe(3)
+    expect(cpo.all.avgTradeDays).toBe(10)
+    expect(cpo.onTime.totalQtyKg).toBe(1000)
+  })
 })

@@ -56,6 +56,22 @@ function mergeSegmentPair(
   }
 }
 
+/**
+ * Option A — All qty = On Time + Late + Unscheduled; Avg Trade on All from schedulable rows only.
+ */
+function mergeAllSegment(
+  onSeg: UnifiedPerfSegment,
+  lateSeg: UnifiedPerfSegment,
+  unscheduledSeg: UnifiedPerfSegment,
+): UnifiedPerfSegment {
+  const schedulable = mergeSegmentPair(onSeg, lateSeg)
+  return {
+    count: schedulable.count + unscheduledSeg.count,
+    avgTradeDays: schedulable.avgTradeDays,
+    totalQtyKg: schedulable.totalQtyKg + unscheduledSeg.totalQtyKg,
+  }
+}
+
 function nextUnifiedLevel(level: UnifiedPerfNodeLevel): UnifiedPerfNodeLevel {
   if (level === 'product') return 'plant'
   if (level === 'plant') return 'incoterm'
@@ -65,27 +81,36 @@ function nextUnifiedLevel(level: UnifiedPerfNodeLevel): UnifiedPerfNodeLevel {
 function mergeChildren(
   onNodes: BranchNodeLike[],
   lateNodes: BranchNodeLike[],
+  unscheduledNodes: BranchNodeLike[],
   level: UnifiedPerfNodeLevel,
 ): UnifiedPerfNode[] {
   const labelSet = new Set<string>()
   for (const n of onNodes) labelSet.add(n.label)
   for (const n of lateNodes) labelSet.add(n.label)
+  for (const n of unscheduledNodes) labelSet.add(n.label)
 
   const merged: UnifiedPerfNode[] = []
   for (const label of labelSet) {
     const onNode = onNodes.find((n) => n.label === label)
     const lateNode = lateNodes.find((n) => n.label === label)
+    const unscheduledNode = unscheduledNodes.find((n) => n.label === label)
     const onTime = segmentFromBranchNode(onNode)
     const late = segmentFromBranchNode(lateNode)
-    const all = mergeSegmentPair(onTime, late)
+    const unscheduled = segmentFromBranchNode(unscheduledNode)
+    const all = mergeAllSegment(onTime, late, unscheduled)
     merged.push({
-      id: onNode?.id ?? lateNode?.id ?? `${level}__${label}`,
+      id: onNode?.id ?? lateNode?.id ?? unscheduledNode?.id ?? `${level}__${label}`,
       label,
       level,
       all,
       onTime,
       late,
-      children: mergeChildren(onNode?.children ?? [], lateNode?.children ?? [], nextUnifiedLevel(level)),
+      children: mergeChildren(
+        onNode?.children ?? [],
+        lateNode?.children ?? [],
+        unscheduledNode?.children ?? [],
+        nextUnifiedLevel(level),
+      ),
     })
   }
 
@@ -98,12 +123,27 @@ function mergeChildren(
   return merged
 }
 
-/** Merge On Time and Late branch trees into unified segment nodes (Product → … → Supplier). */
+/** Merge On Time, Late, and Unscheduled branch trees into unified segment nodes. */
 export function mergeUnifiedPerfBranchTrees(
   onTrackRoot: BranchNodeLike,
   lateRoot: BranchNodeLike,
+  unscheduledRoot?: BranchNodeLike,
 ): UnifiedPerfNode[] {
-  return mergeChildren(onTrackRoot.children, lateRoot.children, 'product')
+  const unscheduled = unscheduledRoot ?? {
+    id: 'unscheduled',
+    label: 'Unscheduled',
+    level: 'total',
+    count: 0,
+    totalDays: 0,
+    totalQtyDelivery: 0,
+    children: [],
+  }
+  return mergeChildren(
+    onTrackRoot.children,
+    lateRoot.children,
+    unscheduled.children,
+    'product',
+  )
 }
 
 export function findUnifiedPerfNode(

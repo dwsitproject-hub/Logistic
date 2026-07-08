@@ -1,6 +1,7 @@
 'use client'
 
 import { cn } from '@/lib/utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   type UnifiedPerfNode,
   type UnifiedPerfNodeLevel,
@@ -43,44 +44,38 @@ const SEGMENT_UI: Record<
   }
 > = {
   ALL: {
-    label: 'all',
+    label: 'All',
     idle: 'bg-slate-50/80 border-slate-100 text-slate-800',
     active: 'bg-white border-blue-500 shadow-sm ring-1 ring-blue-100',
     count: 'text-slate-800',
   },
   ON_TIME: {
-    label: 'on time',
+    label: 'On Time',
     idle: 'bg-emerald-50/40 border-emerald-100/60 text-emerald-700',
     active: 'bg-white border-emerald-500 shadow-sm ring-1 ring-emerald-100',
     count: 'text-emerald-700',
   },
   LATE: {
-    label: 'late',
+    label: 'Late',
     idle: 'bg-rose-50/40 border-rose-100/60 text-rose-700',
     active: 'bg-white border-rose-500 shadow-sm ring-1 ring-rose-100',
     count: 'text-rose-700',
   },
 }
 
-function formatCompactAvgValue(days: number | null): string {
-  if (days == null || Number.isNaN(days)) return '—'
-  return `${days.toFixed(1)}d`
-}
-
-/** Display MT with suffix (compact row). */
-function formatCompactQtyValue(kg: number): string {
+/** Display MT with suffix (segment card primary value). */
+export function formatSegmentCardQtyMt(kg: number): string {
   const mt = (kg / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 })
-  return `${mt}MT`
+  return `${mt} MT`
 }
 
-function segmentStatsTooltip(summaryCardStatus?: 'All' | 'Open' | 'Close'): string {
-  if (summaryCardStatus === 'Open') {
-    return 'Avg Trade (days) | Outstanding Qty (MT)'
-  }
-  if (summaryCardStatus === 'Close') {
-    return 'Avg Trade (days) | Contract Qty (MT)'
-  }
-  return 'Avg Trade (days) | Qty (MT)'
+export function formatSegmentCardAvgTrade(days: number | null): string {
+  if (days == null || Number.isNaN(days)) return '—'
+  return `${days.toFixed(1)} days`
+}
+
+export function buildSegmentCardTooltip(metrics: UnifiedPerfSegment): string {
+  return `Total Contract: ${metrics.count.toLocaleString('en-US')}\nAvg Trade: ${formatSegmentCardAvgTrade(metrics.avgTradeDays)}`
 }
 
 function SegmentBlock({
@@ -88,51 +83,42 @@ function SegmentBlock({
   metrics,
   isActive,
   disabled,
-  summaryCardStatus,
   onSelect,
 }: {
   segment: PerfSegmentFilter
   metrics: UnifiedPerfSegment
   isActive: boolean
   disabled?: boolean
-  summaryCardStatus?: 'All' | 'Open' | 'Close'
   onSelect: () => void
 }) {
   const ui = SEGMENT_UI[segment]
 
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onSelect}
-      aria-pressed={isActive}
-      className={cn(
-        'min-w-0 p-1 rounded-md border text-center transition-all duration-150',
-        isActive ? ui.active : ui.idle,
-        disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:brightness-[0.98]',
-      )}
-    >
-      <div className="leading-none pointer-events-none whitespace-nowrap">
-        <span className="text-[8px] tracking-tight font-semibold text-slate-500 normal-case">{ui.label}</span>
-        <span className="text-[8px] font-normal text-slate-300 mx-px" aria-hidden>
-          -
-        </span>
-        <span className={cn('text-xs font-extrabold tabular-nums', ui.count)}>
-          {metrics.count.toLocaleString('en-US')}
-        </span>
-        <span className="text-[8px] font-normal text-slate-400 ml-0.5">Ctx</span>
-      </div>
-      <div
-        className="flex items-center justify-center gap-0.5 mt-0.5 pt-0.5 border-t border-slate-100/60 text-[9px] font-semibold text-gray-900 tabular-nums leading-none"
-        title={segmentStatsTooltip(summaryCardStatus)}
-      >
-        <span>{formatCompactAvgValue(metrics.avgTradeDays)}</span>
-        <span className="text-gray-300 shrink-0" aria-hidden>
-          |
-        </span>
-        <span>{formatCompactQtyValue(metrics.totalQtyKg)}</span>
-      </div>
-    </button>
+    <Tooltip delayDuration={200}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onSelect}
+          aria-pressed={isActive}
+          className={cn(
+            'min-w-0 w-full px-1 py-1 rounded-md border text-center transition-all duration-150',
+            isActive ? ui.active : ui.idle,
+            disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:brightness-[0.98]',
+          )}
+        >
+          <div className="flex flex-col items-center gap-0 pointer-events-none min-w-0 w-full">
+            <span className={cn('text-[10px] leading-none', ui.count)}>{ui.label}</span>
+            <span className={cn('text-[11px] tabular-nums leading-tight mt-0.5', ui.count)}>
+              {formatSegmentCardQtyMt(metrics.totalQtyKg)}
+            </span>
+          </div>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs whitespace-pre-line">
+        {buildSegmentCardTooltip(metrics)}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -159,7 +145,7 @@ export function ContractPerfUnifiedNodeCard({
   return (
     <div
       className={cn(
-        'w-full rounded-lg border bg-white px-3 py-2 transition-colors',
+        'w-full rounded-lg border bg-white px-3 py-1.5 transition-colors',
         selected ? levelBorder.selected : levelBorder.idle,
       )}
     >
@@ -174,7 +160,7 @@ export function ContractPerfUnifiedNodeCard({
       >
         {node.label}
       </button>
-      <div className="grid grid-cols-3 gap-1.5 mt-1.5">
+      <div className="grid grid-cols-3 gap-1 mt-1">
         {SEGMENTS.map((segment) => (
           <SegmentBlock
             key={segment}
@@ -182,7 +168,6 @@ export function ContractPerfUnifiedNodeCard({
             metrics={segment === 'ALL' ? node.all : segment === 'ON_TIME' ? node.onTime : node.late}
             isActive={selected && activeSegment === segment}
             disabled={disabled}
-            summaryCardStatus={summaryCardStatus}
             onSelect={() => onSegmentSelect(segment)}
           />
         ))}

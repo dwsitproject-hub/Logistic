@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { X, Upload, Pencil, Eye, Download, Loader2 } from 'lucide-react'
+import { X, Upload, Eye, Download, Loader2 } from 'lucide-react'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { FieldHelp } from '@/components/FieldHelp'
@@ -130,7 +130,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
       form.append('contract_ext_no', row.contract_ext_no)
       form.append('document_type', type)
       form.append('po_number', row.po_number || row.contract_id || 'UNKNOWN')
-      form.append('supplier_name', row.supplier || '')
+      form.append('buyer_name', row.buyer || '')
       form.append('contract_date', row.contract_date || '')
       form.append('file', file)
       await api.post('/commercial-documents/upload', form, {
@@ -366,21 +366,13 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                                     }
                                     document.getElementById(inputId)?.click()
                                   }}
-                                  className={
-                                    versions.length > 0
-                                      ? 'border-blue-200 text-blue-700 hover:bg-blue-50'
-                                      : 'border-green-200 text-green-700 hover:bg-green-50'
-                                  }
+                                  className="border-green-200 text-green-700 hover:bg-green-50"
                                 >
                                   {uploadingType === type ? (
                                     <Loader2 className="h-4 w-4 animate-spin" />
-                                  ) : versions.length > 0 ? (
-                                    <>
-                                      <Pencil className="h-4 w-4 mr-1" /> Add Version
-                                    </>
                                   ) : (
                                     <>
-                                      <Upload className="h-4 w-4 mr-1" /> Add
+                                      <Upload className="h-4 w-4 mr-1" /> Upload
                                     </>
                                   )}
                                 </Button>

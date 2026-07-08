@@ -89,6 +89,7 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
       documentStatus: parseDocumentStatus(q.documentStatus),
       incoterm: q.incoterm || null,
       product: q.product || null,
+      supplier: q.supplier || null,
       plant: q.plant || null,
       page,
       limit,
@@ -246,8 +247,8 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
     const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
     const contractExtNo = String(req.body?.contract_ext_no || '').trim();
     const documentType = String(req.body?.document_type || '').trim();
+    const buyerName = String(req.body?.buyer_name || req.body?.supplier_name || '').trim();
     const poNumber = String(req.body?.po_number || '').trim();
-    const supplierName = String(req.body?.supplier_name || '').trim();
 
     if (!file) {
       return res.status(400).json({ success: false, error: { message: 'File is required' } });
@@ -283,11 +284,11 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
 
     const existingFileNames = await loadExistingFileNames(contractExtNo, documentType);
     const storedName = buildCommercialDocumentStoredName({
-      supplierName,
+      buyerName,
       documentType,
-      poNumber,
+      referenceNumber: poNumber || 'UNKNOWN',
       originalName: file.originalname,
-      existingFileNames,
+      existingFileCount: existingFileNames.length,
     });
 
     const uploadDir = path.dirname(file.path);

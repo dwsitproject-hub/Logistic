@@ -1,5 +1,7 @@
 /**
  * Global contract outstanding qty — same rules as Contracts list (`qty_move` CTE).
+ * LAND FRC/LCO: when trucking WB daily actuals exist, delivery/receive qty prefer
+ * SUM(trucking_operations.quantity_delivered) synced from WB upload (aligns with Trucking list).
  */
 
 import {
@@ -29,20 +31,15 @@ function scopeWhere(filter: QtyMoveContractFilter, spdAlias = 'spd'): string {
 }
 
 function contractOrderedCte(filter: QtyMoveContractFilter): string {
-  if (filter.kind === 'join_scope') {
-    return `
-        contract_ordered AS (
-          SELECT c.contract_id AS contract_number, MAX(c.quantity_ordered) AS quantity_ordered
-          FROM contracts c
-          INNER JOIN ${filter.scopeCteName} cs ON cs.contract_id = c.contract_id
-          GROUP BY c.contract_id
-        )`;
-  }
+  const scope = contractScopeSql(filter);
+  const whereClause = filter.kind === 'in_subquery' ? scope.replace(/^WHERE /, 'WHERE ') : '';
+  const joinClause = filter.kind === 'join_scope' ? scope : '';
   return `
         contract_ordered AS (
           SELECT c.contract_id AS contract_number, MAX(c.quantity_ordered) AS quantity_ordered
           FROM contracts c
-          WHERE c.contract_id IN (${filter.subquery})
+          ${joinClause}
+          ${whereClause}
           GROUP BY c.contract_id
         )`;
 }
@@ -55,6 +52,47 @@ function aggregateQtyField(fieldName: 'quantity_delivery_trucking' | 'quantity_d
               WHEN sto_count > 1 AND ${sumField} > quantity_ordered * 1.2 THEN ${maxField}
               ELSE ${sumField}
             END AS ${col}`;
+}
+
+/** Scope filter for contracts table inside qty_move CTEs. */
+function contractScopeSql(filter: QtyMoveContractFilter, contractAlias = 'c'): string {
+  if (filter.kind === 'join_scope') {
+    return `INNER JOIN ${filter.scopeCteName} cs ON cs.contract_id = ${contractAlias}.contract_id`;
+  }
+  return `WHERE ${contractAlias}.contract_id IN (${filter.subquery})`;
+}
+
+/**
+ * LAND FRC/LCO contracts with WB daily actuals — aggregate trucking_operations.quantity_delivered
+ * (synced from trucking_daily_actuals on upload). Mirrors trucking list WB preference at contract level.
+ */
+function truckingWbOverlayCte(filter: QtyMoveContractFilter): string {
+  const joinScope =
+    filter.kind === 'join_scope'
+      ? `INNER JOIN ${filter.scopeCteName} cs ON cs.contract_id = c.contract_id`
+      : '';
+  const contractFilter =
+    filter.kind === 'in_subquery' ? `AND c.contract_id IN (${filter.subquery})` : '';
+
+  return `
+        trucking_wb_overlay AS (
+          SELECT
+            c.contract_id AS contract_number,
+            COALESCE(SUM(COALESCE(t.quantity_delivered, 0)), 0)::numeric AS wb_resolved_qty_kg
+          FROM contracts c
+          ${joinScope}
+          INNER JOIN trucking_operations t ON t.contract_id = c.id
+          WHERE UPPER(TRIM(COALESCE(c.transport_mode, ''))) LIKE 'LAND%'
+            AND UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'LCO')
+            ${contractFilter}
+          GROUP BY c.contract_id
+          HAVING BOOL_OR(
+            EXISTS (
+              SELECT 1 FROM trucking_daily_actuals da
+              WHERE da.trucking_operation_id = t.id
+            )
+          )
+        )`;
 }
 
 export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
@@ -162,24 +200,50 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
               ELSE sum_receive_adj
             END AS quantity_receive
           FROM deduped
-        )
+        ),
+        qty_move_sap AS (
+          SELECT
+            COALESCE(sr.contract_number, ns.contract_number) AS contract_number,
+            CASE WHEN sr.contract_number IS NOT NULL THEN sr.quantity_delivery_trucking ELSE ns.quantity_delivery_trucking END AS quantity_delivery_trucking,
+            CASE WHEN sr.contract_number IS NOT NULL THEN sr.quantity_delivery_vessel ELSE ns.quantity_delivery_vessel END AS quantity_delivery_vessel,
+            CASE WHEN sr.contract_number IS NOT NULL THEN sr.quantity_receive ELSE ns.quantity_receive END AS quantity_receive,
+            COALESCE(
+              NULLIF(
+                CASE WHEN sr.contract_number IS NOT NULL THEN sr.quantity_delivery_vessel ELSE ns.quantity_delivery_vessel END,
+                0
+              ),
+              NULLIF(
+                CASE WHEN sr.contract_number IS NOT NULL THEN sr.quantity_delivery_trucking ELSE ns.quantity_delivery_trucking END,
+                0
+              )
+            ) AS quantity_delivery
+          FROM sto_result sr
+          FULL OUTER JOIN latest_no_sto ns ON ns.contract_number = sr.contract_number
+        ),
+        ${truckingWbOverlayCte(filter)}
         SELECT
-          COALESCE(sr.contract_number, ns.contract_number) AS contract_number,
-          CASE WHEN sr.contract_number IS NOT NULL THEN sr.quantity_delivery_trucking ELSE ns.quantity_delivery_trucking END AS quantity_delivery_trucking,
-          CASE WHEN sr.contract_number IS NOT NULL THEN sr.quantity_delivery_vessel ELSE ns.quantity_delivery_vessel END AS quantity_delivery_vessel,
-          CASE WHEN sr.contract_number IS NOT NULL THEN sr.quantity_receive ELSE ns.quantity_receive END AS quantity_receive,
+          COALESCE(s.contract_number, w.contract_number) AS contract_number,
+          CASE
+            WHEN w.contract_number IS NOT NULL THEN w.wb_resolved_qty_kg
+            ELSE s.quantity_delivery_trucking
+          END AS quantity_delivery_trucking,
+          s.quantity_delivery_vessel,
+          CASE
+            WHEN w.contract_number IS NOT NULL THEN w.wb_resolved_qty_kg
+            ELSE s.quantity_receive
+          END AS quantity_receive,
           COALESCE(
+            NULLIF(s.quantity_delivery_vessel, 0),
             NULLIF(
-              CASE WHEN sr.contract_number IS NOT NULL THEN sr.quantity_delivery_vessel ELSE ns.quantity_delivery_vessel END,
-              0
-            ),
-            NULLIF(
-              CASE WHEN sr.contract_number IS NOT NULL THEN sr.quantity_delivery_trucking ELSE ns.quantity_delivery_trucking END,
+              CASE
+                WHEN w.contract_number IS NOT NULL THEN w.wb_resolved_qty_kg
+                ELSE s.quantity_delivery_trucking
+              END,
               0
             )
           ) AS quantity_delivery
-        FROM sto_result sr
-        FULL OUTER JOIN latest_no_sto ns ON ns.contract_number = sr.contract_number
+        FROM qty_move_sap s
+        FULL OUTER JOIN trucking_wb_overlay w ON w.contract_number = s.contract_number
       )`;
 }
 

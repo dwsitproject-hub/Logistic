@@ -42,4 +42,14 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('quantity_delivery_vessel');
     expect(sql).toContain('quantity_delivery_trucking');
   });
+
+  it('buildQtyMoveCte overlays LAND FRC/LCO qty from trucking WB daily actuals', () => {
+    const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
+    expect(sql).toContain('trucking_wb_overlay');
+    expect(sql).toContain('trucking_daily_actuals');
+    expect(sql).toContain('qty_move_sap');
+    expect(sql).toContain('wb_resolved_qty_kg');
+    expect(sql).toContain("IN ('FRC', 'LCO')");
+    expect(sql).toContain("LIKE 'LAND%'");
+  });
 });

@@ -25,6 +25,7 @@ import {
   isContractPerfSection3FilterApplied,
   contractMatchesSummaryCardStatus,
   contractPerfProductQueryValue,
+  contractPerfGroupPlantsQueryValue,
   isBlankFilterSentinel,
   matchesContractPerfSourceFilter,
   matchesPerformanceDimensionFilter,
@@ -268,6 +269,11 @@ describe('AC2 — Global Filter Propagation', () => {
     expect(result.map((r) => r.contract_id)).toEqual(['SP-1'])
   })
 
+  it('contractPerfGroupPlantsQueryValue maps All to empty plant list', () => {
+    expect(contractPerfGroupPlantsQueryValue('All')).toEqual([])
+    expect(contractPerfGroupPlantsQueryValue('PLANT-A')).toEqual(['PLANT-A'])
+  })
+
   it('Section 3 table is re-filtered when global incoterm changes', () => {
     const contracts = [
       tableContract({ contract_id: 'A1', incoterm: 'CIF', plant_site: 'PLANT-A', supplier: 'SUPP-1' }),
@@ -436,13 +442,25 @@ describe('AC2 — Global Filter Propagation', () => {
     })
     expect(params.get('status')).toBe('Open')
     expect(params.get('lateOnTimeFilter')).toBe('ALL')
-    expect(params.get('excludeUnscheduled')).toBe('true')
+    expect(params.get('excludeUnscheduled')).toBe('false')
     expect(params.get('sourceType')).toBe('3rd Party')
     expect(params.get('product')).toBe('CPO')
     expect(params.get('supplier')).toBe('SUPP-1')
     expect(params.getAll('plant')).toEqual(['PLANT-A'])
     const cf = JSON.parse(params.get('columnFilters') || '{}')
     expect(cf.incoterm).toEqual({ type: 'multi', values: ['CIF'], includeBlank: false })
+  })
+
+  it('buildContractPerfTableListParams excludes unscheduled when Late/On Time segment selected', () => {
+    const { scope } = resolveSection3Scope(BASE_GLOBAL, EMPTY_CONTRACT_PERF_DRILLDOWN)
+    const params = buildContractPerfTableListParams({
+      scope,
+      section3Mode: 'global',
+      columnFilters: {},
+      lateOnTimeFilter: 'LATE',
+      perfDashMode: 'late',
+    })
+    expect(params.get('excludeUnscheduled')).toBe('true')
   })
 })
 

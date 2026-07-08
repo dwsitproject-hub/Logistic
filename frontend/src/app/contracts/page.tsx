@@ -73,6 +73,7 @@ import {
   contractPerfDrilldownSelectionsEqual,
   contractPerfDrilldownToTableColumnFilters,
   contractPerfProductQueryValue,
+  contractPerfGroupPlantsQueryValue,
   stableContractPerfApiParamsKey,
   flattenLatePerfApiTreeToHotspots,
   hasContractPerfDrilldownSelection,
@@ -948,17 +949,13 @@ function ContractPerfQtyReconciliationTooltip({
             value={formatContractPerfOutstandingMt(reconciliation.lateKg)}
             valueClassName="text-red-700"
           />
-          {(reconciliation.status === 'Close' || reconciliation.status === 'All') &&
-          reconciliation.unscheduledKg > 0 ? (
-            <ReconciliationTooltipRow
-              label="Unscheduled:"
-              value={formatContractPerfOutstandingMt(reconciliation.unscheduledKg)}
-              valueClassName="text-slate-600"
-            />
-          ) : null}
           <ReconciliationTooltipRow
-            label="On Time + Late:"
-            value={formatContractPerfOutstandingMt(onTimePlusLateKg)}
+            label={reconciliation.status === 'All' ? 'All (On Time + Late + Unscheduled):' : 'On Time + Late:'}
+            value={formatContractPerfOutstandingMt(
+              reconciliation.status === 'All'
+                ? onTimePlusLateKg + (reconciliation.unscheduledKg ?? 0)
+                : onTimePlusLateKg,
+            )}
           />
           <ReconciliationTooltipRow
             label="Drilldown total:"
@@ -1007,8 +1004,8 @@ function ContractPerfDrilldownSectionHelp({
         <p>
           Each drilldown card shows <span className="font-medium">All</span>,{' '}
           <span className="font-medium">On Time</span> (Trade Cycle ≤ 0), and{' '}
-          <span className="font-medium">Late</span> (Trade Cycle &gt; 0) side by side. Click a segment to
-          filter Section 3 instantly.
+          <span className="font-medium">Late</span> (Trade Cycle &gt; 0) as qty (MT). Hover a segment for
+          total contracts and avg trade days. Click a segment to filter Section 3 instantly.
         </p>
         {summaryCardStatus === 'Open' ? (
           <p className="text-gray-500">
@@ -1089,6 +1086,8 @@ function ContractsPageContent() {
   const [selectedProductTab, setSelectedProductTab] = useState<(typeof CONTRACT_PERF_PRODUCT_TABS)[number]>(
     () => resolveStaffContractPerfProductTab(),
   )
+  /** Contract Performance Section 1 only — isolated from /contracts list group-plant scope. */
+  const [contractPerfPlantFilter, setContractPerfPlantFilter] = useState<string>('All')
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
   const [availableSuppliers, setAvailableSuppliers] = useState<string[]>([])
@@ -1178,6 +1177,16 @@ function ContractsPageContent() {
     [selectedProductTab],
   )
 
+  const contractPerfGroupPlantsForApi = useMemo(
+    () => contractPerfGroupPlantsQueryValue(contractPerfPlantFilter),
+    [contractPerfPlantFilter],
+  )
+
+  const sortedContractPerfGroupPlants = useMemo(
+    () => [...availableGroupPlants].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })),
+    [availableGroupPlants],
+  )
+
   /** Section 1 card totals — toolbar only; never tied to Open/Close tab selection. */
   const contractPerfToolbarGlobal = useMemo(
     () =>
@@ -1187,7 +1196,7 @@ function ContractsPageContent() {
         sourceFilter,
         selectedIncoterms,
         selectedSuppliers,
-        selectedGroupPlants,
+        selectedGroupPlants: contractPerfGroupPlantsForApi,
         productTabQuery: contractPerfProductQuery,
         lateOnTimeFilter,
         perfDashMode,
@@ -1201,7 +1210,7 @@ function ContractsPageContent() {
       sourceFilter,
       selectedIncoterms,
       selectedSuppliers,
-      selectedGroupPlants,
+      contractPerfGroupPlantsForApi,
       contractPerfProductQuery,
       lateOnTimeFilter,
       perfDashMode,
@@ -1238,7 +1247,7 @@ function ContractsPageContent() {
       sourceFilter,
       selectedIncoterms,
       selectedSuppliers,
-      selectedGroupPlants,
+      selectedGroupPlants: contractPerfGroupPlantsForApi,
       productTabQuery: contractPerfProductQuery,
       summaryCardStatus,
       lateOnTimeFilter,
@@ -1253,7 +1262,7 @@ function ContractsPageContent() {
       sourceFilter,
       selectedIncoterms,
       selectedSuppliers,
-      selectedGroupPlants,
+      contractPerfGroupPlantsForApi,
       contractPerfProductQuery,
       summaryCardStatus,
       lateOnTimeFilter,
@@ -1329,7 +1338,6 @@ function ContractsPageContent() {
   const section3FilterMode = contractPerfPipeline.section3Mode
   const section2DrilldownContractCount = contractPerfPipeline.section2TreeContractCount
   const section2ActiveNodeContractCount = contractPerfPipeline.section2ActiveNodeContractCount
-  const section2UnscheduledCount = contractPerfPipeline.unscheduledNodeContractCount
 
   const displayTotalContracts = totalContracts
 
@@ -1410,7 +1418,7 @@ function ContractsPageContent() {
     if (summaryCardStatus === 'All') {
       const section1Kg =
         statusCardSummary.openOutstandingQty + statusCardSummary.closeContractQty
-      const drilldownTotalKg = onTimeKg + lateKg
+      const drilldownTotalKg = onTimeKg + lateKg + unscheduledKg
       return {
         status: 'All' as const,
         productKey,
@@ -1455,9 +1463,14 @@ function ContractsPageContent() {
     [contractPerfPipeline.lateBranchHotspotsGlobal],
   )
 
+  const unscheduledBranchTree = useMemo(
+    () => buildLatePerfBranchTreeFromHotspots(contractPerfPipeline.unscheduledBranchHotspotsGlobal),
+    [contractPerfPipeline.unscheduledBranchHotspotsGlobal],
+  )
+
   const unifiedProductNodes = useMemo(
-    () => mergeUnifiedPerfBranchTrees(onTrackBranchTree, lateBranchTree),
-    [onTrackBranchTree, lateBranchTree],
+    () => mergeUnifiedPerfBranchTrees(onTrackBranchTree, lateBranchTree, unscheduledBranchTree),
+    [onTrackBranchTree, lateBranchTree, unscheduledBranchTree],
   )
 
   const unifiedSelectedProdNode = findUnifiedPerfNode(unifiedProductNodes, appliedDrilldownSelection.product)
@@ -1526,6 +1539,7 @@ function ContractsPageContent() {
     const { dateFrom: ytdFrom, dateTo: ytdTo } = defaultContractPerfYtdDateRange()
     setSourceFilter('All')
     setSelectedProductTab('All')
+    setContractPerfPlantFilter('All')
     setSummaryCardStatus('All')
     setStatusFilter('All Status')
     setSelectedIncoterms([])
@@ -1750,6 +1764,7 @@ function ContractsPageContent() {
     isContractPerformance,
     sourceFilter,
     selectedProductTab,
+    contractPerfPlantFilter,
     appliedDrilldownSelection,
     searchTerm,
     summaryCardStatus,
@@ -1771,8 +1786,8 @@ function ContractsPageContent() {
   }, [
     sourceFilter,
     selectedProductTab,
+    contractPerfPlantFilter,
     selectedIncoterms,
-    selectedGroupPlants,
     dateFrom,
     dateTo,
     perfTransportMode,
@@ -3736,6 +3751,27 @@ function ContractsPageContent() {
                     ))}
                   </div>
                 </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium text-gray-700 shrink-0">Select Plant:</span>
+                  <div className="inline-flex items-center rounded-lg border bg-white p-1">
+                    <select
+                      value={contractPerfPlantFilter}
+                      onChange={(e) => {
+                        lockSection1FilterChange()
+                        setContractPerfPlantFilter(e.target.value)
+                      }}
+                      className="min-w-[10rem] max-w-[14rem] h-8 px-3 rounded-md border-0 bg-transparent text-sm font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-200 cursor-pointer"
+                      aria-label="Select group plant"
+                    >
+                      <option value="All">All</option>
+                      {sortedContractPerfGroupPlants.map((plant) => (
+                        <option key={plant} value={plant}>
+                          {plant}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
               </div>
               <button
                 type="button"
@@ -3924,20 +3960,6 @@ function ContractsPageContent() {
                             <span className="ml-1 text-gray-600">· Section 3 uses global filters only</span>
                           )}
                         </div>
-                        {isContractPerformance && section2UnscheduledCount > 0 && (
-                          <div className="mt-1 text-xs text-amber-700 flex items-center gap-1">
-                            <span>⚠</span>
-                            <span>
-                              {section2UnscheduledCount.toLocaleString('en-US')} contract
-                              {section2UnscheduledCount > 1 ? 's are' : ' is'} not counted in the drilldown tree
-                              because {section2UnscheduledCount > 1 ? 'they lack' : 'it lacks'} a delivery end date or
-                              completion date
-                              {section3FilterMode === 'linked' ? ' at this node' : ''}.{' '}
-                              {section2UnscheduledCount > 1 ? 'They' : 'It'} still appear
-                              {section2UnscheduledCount > 1 ? '' : 's'} in View Table (Section 3).
-                            </span>
-                          </div>
-                        )}
                       </div>
                     </div>
 
@@ -3974,46 +3996,6 @@ function ContractsPageContent() {
                         const visibleNodes = col.nodes.slice(0, 30)
 
                         const renderUnifiedColumnBody = () => {
-                          if (col.level === 'product') {
-                            const unscheduledProductKg =
-                              selectedProductTab === 'All'
-                                ? flattenLatePerfApiTreeToHotspots(
-                                    unscheduledPerformanceTree as LatePerfApiTreeNode[],
-                                  ).reduce((s, r) => s + r.totalQtyDelivery, 0)
-                                : sumProductOutstandingKgFromPerfTrees(
-                                    [unscheduledPerformanceTree as LatePerfApiTreeNode[]],
-                                    selectedProductTab,
-                                  )
-                            return (
-                              <div className="space-y-2">
-                                {visibleNodes.map((n) => (
-                                  <ContractPerfUnifiedNodeCard
-                                    key={n.id}
-                                    node={n}
-                                    level={col.level}
-                                    summaryCardStatus={summaryCardStatus}
-                                    selected={isSelectedAtLevel(n.label)}
-                                    activeSegment={lateOnTimeFilter as PerfSegmentFilter}
-                                    disabled={isSection2TreeLoading}
-                                    onSegmentSelect={(segment) =>
-                                      applyUnifiedDrilldownSegment(col.level, n.label, segment)
-                                    }
-                                  />
-                                ))}
-                                {unscheduledProductKg > 0 ? (
-                                  <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                                    <span className="font-semibold text-gray-800">Unscheduled</span>
-                                    <span className="ml-2 tabular-nums">
-                                      {formatContractPerfOutstandingMt(unscheduledProductKg)}
-                                    </span>
-                                    <span className="ml-1">
-                                      — Close without completion date; Open excluded when due end or trade cycle cannot be computed
-                                    </span>
-                                  </div>
-                                ) : null}
-                              </div>
-                            )
-                          }
                           if (col.level === 'plant') {
                             if (!appliedDrilldownSelection.product) {
                               return <div className="text-sm text-gray-500">Select a product to see plants.</div>
@@ -4276,7 +4258,7 @@ function ContractsPageContent() {
 
               {isContractPerformance ? (
                 <PerformanceScopeFilters
-                  hideGroupPlantFilter={false}
+                  hideGroupPlantFilter
                   incotermOptions={availableIncoterms}
                   selectedIncoterms={selectedIncoterms}
                   onIncotermsChange={(selected) => {
@@ -4380,9 +4362,9 @@ function ContractsPageContent() {
                       (lateOnTimeFilter !== 'ALL' ||
                         perfTransportMode !== 'ALL' ||
                         selectedProductTab !== 'All' ||
+                        contractPerfPlantFilter !== 'All' ||
                         selectedIncoterms.length > 0 ||
                         selectedSuppliers.length > 0 ||
-                        selectedGroupPlants.length > 0 ||
                         Boolean(
                           hasContractPerfDrilldownSelection(appliedDrilldownSelection),
                         )))) && (

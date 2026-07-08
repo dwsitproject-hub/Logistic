@@ -1364,6 +1364,9 @@ function ShipmentsPageContent() {
       const isUnplannedHybridList = statusFilter === 'UNPLANNED'
       if (isUnplannedHybridList) {
         params.append('includeSummary', 'true')
+      } else {
+        // Section 1 summary comes from parallel summaryOnly request — skip duplicate SQL on list shell.
+        params.append('includeSummary', 'false')
       }
       if (statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)

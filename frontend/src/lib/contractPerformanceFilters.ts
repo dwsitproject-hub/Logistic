@@ -120,6 +120,13 @@ export function contractPerfProductQueryValue(tab: ContractPerfProductTab): stri
   return CONTRACT_PERF_PRODUCT_TAB_API_VALUE[tab]
 }
 
+/** Section 1 plant dropdown — single group plant or none (All). */
+export function contractPerfGroupPlantsQueryValue(plantTab: string): string[] {
+  const trimmed = String(plantTab ?? '').trim()
+  if (!trimmed || trimmed === 'All') return []
+  return [trimmed]
+}
+
 /**
  * First step in the Contract Performance pipeline — `contracts.source_type` from API/DB.
  * DB values are typically `3rd Party` or `Inhouse`; UI "Interco" matches Inhouse/Interco variants.
@@ -396,6 +403,16 @@ export function contractMatchesLateOnTimeFilter(
 /**
  * Section 3 — mirror Section 2 tree inclusion (due date delivery end + schedulable, not unscheduled).
  */
+export function isContractPerfUnscheduledRow(c: PerformanceTableContract): boolean {
+  if (!String(c.delivery_end_date || '').trim()) return true
+  const status = String(c.import_status || c.status || '').trim().toUpperCase()
+  const isClosed = status === 'CLOSE' || status === 'CLOSED' || status === 'COMPLETED'
+  if (isClosed && (c.trade_cycle_days == null || Number.isNaN(Number(c.trade_cycle_days)))) {
+    return true
+  }
+  return false
+}
+
 export function contractMeetsPerformanceTreeInclusion(
   c: PerformanceTableContract,
   lateOnTimeFilter: 'ALL' | 'LATE' | 'ON_TIME',
@@ -450,10 +467,13 @@ export function filterContractsForPerformanceTable(
     let backendTreeInclusionApplied = false
     if (applyTreeInclusionGuard) {
       if (typeof c.contract_perf_in_tree === 'boolean') {
-        if (!c.contract_perf_in_tree) return false
-        backendTreeInclusionApplied = true
+        if (!c.contract_perf_in_tree) {
+          if (lateOnTimeFilter !== 'ALL' || !isContractPerfUnscheduledRow(c)) return false
+        } else {
+          backendTreeInclusionApplied = true
+        }
       } else if (!contractMeetsPerformanceTreeInclusion(c, lateOnTimeFilter)) {
-        return false
+        if (lateOnTimeFilter !== 'ALL' || !isContractPerfUnscheduledRow(c)) return false
       }
     }
 
@@ -479,6 +499,13 @@ export function filterContractsForPerformanceTable(
     }
 
     // When backend set contract_perf_in_tree (excludeUnscheduled=true), late/on-time is already applied.
+    if (
+      !backendTreeInclusionApplied &&
+      isContractPerfUnscheduledRow(c) &&
+      lateOnTimeFilter === 'ALL'
+    ) {
+      return true
+    }
     if (
       !backendTreeInclusionApplied &&
       !contractMatchesLateOnTimeFilter(
@@ -663,7 +690,11 @@ export function buildContractPerfTableListParams(input: {
     'lateOnTimeFilter',
     resolveEffectiveLateOnTimeFilter(input.lateOnTimeFilter, input.perfDashMode),
   )
-  params.append('excludeUnscheduled', 'true')
+  const effectiveLate = resolveEffectiveLateOnTimeFilter(
+    input.lateOnTimeFilter,
+    input.perfDashMode,
+  )
+  params.append('excludeUnscheduled', effectiveLate === 'ALL' ? 'false' : 'true')
   return params
 }
 

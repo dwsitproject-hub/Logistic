@@ -106,7 +106,7 @@ export function SettlementInvoiceUploadModal({
       form.append('contract_ext_no', row.contract_ext_no)
       form.append('document_type', 'invoice_fp_full')
       form.append('po_number', row.po_number || row.contract_id || 'UNKNOWN')
-      form.append('supplier_name', row.supplier || '')
+      form.append('buyer_name', row.buyer || '')
       form.append('contract_date', row.contract_date || '')
       form.append('file', selectedFile)
 

@@ -100,13 +100,18 @@ export function commercialDocumentTypeLabel(value: string): string {
   return value;
 }
 
-/** First 3 uppercase letters from supplier name (e.g. EOP from "EOP Supplier"). */
-export function supplierFilenamePrefix(supplierName: string): string {
-  const letters = String(supplierName || '')
+/** First 3 uppercase letters from buyer name (e.g. EOP from "EOP Trading"). */
+export function buyerFilenamePrefix(buyerName: string): string {
+  const letters = String(buyerName || '')
     .replace(/[^a-zA-Z]/g, '')
     .toUpperCase();
   if (letters.length >= 3) return letters.slice(0, 3);
   return (letters + 'XXX').slice(0, 3);
+}
+
+/** @deprecated Use buyerFilenamePrefix */
+export function supplierFilenamePrefix(supplierName: string): string {
+  return buyerFilenamePrefix(supplierName);
 }
 
 export function sanitizePoForFilename(poNumber: string): string {
@@ -126,46 +131,31 @@ function safeFileExtension(originalName?: string): string {
   return ['pdf', 'png', 'jpg', 'jpeg', 'webp'].includes(ext) ? ext : 'pdf';
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 /**
- * Build stored filename: [SUP]_[DocCode]_[PO].ext
- * Re-uploads append (2), (3), … before the extension when the base name already exists.
+ * Build stored filename: [BUY]_[DocCode]_[PO].ext
+ * Re-uploads append (2), (3), … based on how many files already exist for the category.
  */
 export function buildCommercialDocumentStoredName(input: {
-  supplierName: string;
+  buyerName: string;
   documentType: CommercialDocumentType;
-  poNumber: string;
+  referenceNumber: string;
   originalName?: string;
+  /** Number of existing files for this document category (drives version suffix). */
+  existingFileCount?: number;
+  /** @deprecated Prefer existingFileCount — still accepted for backward compatibility. */
   existingFileNames?: string[];
 }): string {
-  const prefix = supplierFilenamePrefix(input.supplierName);
+  const prefix = buyerFilenamePrefix(input.buyerName);
   const code = COMMERCIAL_DOCUMENT_FILENAME_CODES[input.documentType];
-  const po = sanitizePoForFilename(input.poNumber);
+  const ref = sanitizePoForFilename(input.referenceNumber);
   const ext = safeFileExtension(input.originalName);
-  const baseStem = `${prefix}_${code}_${po}`;
-  const existing = (input.existingFileNames ?? []).map((n) => String(n || '').trim()).filter(Boolean);
+  const baseStem = `${prefix}_${code}_${ref}`;
+  const existingCount =
+    input.existingFileCount ??
+    (input.existingFileNames ?? []).map((n) => String(n || '').trim()).filter(Boolean).length;
 
-  let maxVersion = 0;
-  const exactBase = `${baseStem}.${ext}`;
-  const versionRe = new RegExp(`^${escapeRegExp(baseStem)}\\((\\d+)\\)\\.${escapeRegExp(ext)}$`, 'i');
-
-  for (const name of existing) {
-    if (name.toLowerCase() === exactBase.toLowerCase()) {
-      maxVersion = Math.max(maxVersion, 1);
-      continue;
-    }
-    const match = name.match(versionRe);
-    if (match) {
-      const n = Number(match[1]);
-      if (Number.isFinite(n)) maxVersion = Math.max(maxVersion, n);
-    }
-  }
-
-  if (maxVersion === 0) return exactBase;
-  return `${baseStem}(${maxVersion + 1}).${ext}`;
+  if (existingCount <= 0) return `${baseStem}.${ext}`;
+  return `${baseStem}(${existingCount + 1}).${ext}`;
 }
 
 /** @deprecated Use buildCommercialDocumentStoredName with supplier + documentType. */

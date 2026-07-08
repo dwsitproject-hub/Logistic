@@ -59,17 +59,18 @@ export type UseContractPerformanceFiltersResult = {
   /** Contracts matching the applied drilldown node (deepest applied path). */
   section2ActiveNodeContractCount: number
   /**
-   * Unscheduled contracts (Closed with no completion date, or no delivery_end) that match
-   * the current scope. These are excluded from section2TreeContractCount but still appear in
-   * Section 3's contract table. Surfaced in Section 2 so users understand the gap.
+   * Unscheduled contracts in scope (no delivery end or Close without completion).
+   * Included in All segment qty; kept for debug/reconciliation.
    */
   unscheduledNodeContractCount: number
-  /** Global scope only — Section 1 reconciliation (On Time + Late, no drilldown path). */
+  /** Global scope only — Section 1 reconciliation (On Time + Late + Unscheduled). */
   section1Hotspots: ContractPerfHotspot[]
   /** On Time branch under global scope — unified card merge source. */
   onTrackBranchHotspotsGlobal: ContractPerfHotspot[]
   /** Late branch under global scope — unified card merge source. */
   lateBranchHotspotsGlobal: ContractPerfHotspot[]
+  /** Unscheduled branch under global scope — merged into All segment qty. */
+  unscheduledBranchHotspotsGlobal: ContractPerfHotspot[]
   /** Active branch hotspots after global scope (before drilldown path). */
   activeBranchHotspots: ContractPerfHotspot[]
   /** Active branch after global + optional applied drilldown — Section 3 linked scope only. */
@@ -128,21 +129,23 @@ export function useContractPerformanceFilters(
     [unscheduledTree],
   )
 
-  /** Section 1: On Time + Late under global scope (no drilldown path). */
+  /** Section 1: On Time + Late + Unscheduled under global scope (no drilldown path). */
   const section1Hotspots = useMemo(() => {
-    const combined = [...onTrackHotspots, ...lateHotspots]
+    const combined = [...onTrackHotspots, ...lateHotspots, ...unscheduledHotspots]
     return filterPerformanceHotspots(combined, globalScopeNoDrilldown, { applyDrilldown: false })
-  }, [onTrackHotspots, lateHotspots, globalScopeNoDrilldown])
+  }, [onTrackHotspots, lateHotspots, unscheduledHotspots, globalScopeNoDrilldown])
+
+  const schedulableHotspotsForBranch = useMemo(() => {
+    if (global.lateOnTimeFilter === 'ON_TIME') return onTrackHotspots
+    if (global.lateOnTimeFilter === 'LATE') return lateHotspots
+    return [...onTrackHotspots, ...lateHotspots, ...unscheduledHotspots]
+  }, [global.lateOnTimeFilter, onTrackHotspots, lateHotspots, unscheduledHotspots])
 
   const activeBranchHotspots = useMemo(() => {
-    const branchRows =
-      global.lateOnTimeFilter === 'ON_TIME'
-        ? onTrackHotspots
-        : global.lateOnTimeFilter === 'LATE'
-          ? lateHotspots
-          : [...onTrackHotspots, ...lateHotspots]
-    return filterPerformanceHotspots(branchRows, globalScopeNoDrilldown, { applyDrilldown: false })
-  }, [global.lateOnTimeFilter, onTrackHotspots, lateHotspots, globalScopeNoDrilldown])
+    return filterPerformanceHotspots(schedulableHotspotsForBranch, globalScopeNoDrilldown, {
+      applyDrilldown: false,
+    })
+  }, [schedulableHotspotsForBranch, globalScopeNoDrilldown])
 
   const onTrackBranchHotspotsGlobal = useMemo(
     () => filterPerformanceHotspots(onTrackHotspots, globalScopeNoDrilldown, { applyDrilldown: false }),
@@ -154,18 +157,17 @@ export function useContractPerformanceFilters(
     [lateHotspots, globalScopeNoDrilldown],
   )
 
+  const unscheduledBranchHotspotsGlobal = useMemo(
+    () => filterPerformanceHotspots(unscheduledHotspots, globalScopeNoDrilldown, { applyDrilldown: false }),
+    [unscheduledHotspots, globalScopeNoDrilldown],
+  )
+
   const unifiedFilteredHotspots = useMemo(() => {
-    const branchRows =
-      global.lateOnTimeFilter === 'ON_TIME'
-        ? onTrackHotspots
-        : global.lateOnTimeFilter === 'LATE'
-          ? lateHotspots
-          : [...onTrackHotspots, ...lateHotspots]
     const treeScope = section3Mode === 'linked' ? scope : globalScopeNoDrilldown
-    return filterPerformanceHotspots(branchRows, treeScope, {
+    return filterPerformanceHotspots(schedulableHotspotsForBranch, treeScope, {
       applyDrilldown: section3Mode === 'linked',
     })
-  }, [global.lateOnTimeFilter, onTrackHotspots, lateHotspots, scope, globalScopeNoDrilldown, section3Mode])
+  }, [schedulableHotspotsForBranch, scope, globalScopeNoDrilldown, section3Mode])
 
   const appliedDrilldownNodeHotspots = useMemo(() => {
     if (section3Mode !== 'linked') return unifiedFilteredHotspots
@@ -268,9 +270,7 @@ export function useContractPerformanceFilters(
     [appliedDrilldownNodeHotspots],
   )
 
-  // Closed contracts with no completion date — excluded from late/ontrack tree but visible
-  // in the contract table. Scoped to the active drilldown path when Apply is active, otherwise
-  // global scope. Displayed in Section 2 so users understand the S2 vs S3 count gap.
+  // Closed contracts with no completion date / no delivery end — in unscheduled tree; included in All segment.
   const unscheduledNodeContractCount = useMemo(() => {
     const filteredScope = section3Mode === 'linked' ? scope : globalScopeNoDrilldown
     const applyDD = section3Mode === 'linked'
@@ -318,6 +318,7 @@ export function useContractPerformanceFilters(
     section1Hotspots,
     onTrackBranchHotspotsGlobal,
     lateBranchHotspotsGlobal,
+    unscheduledBranchHotspotsGlobal,
     activeBranchHotspots,
     unifiedFilteredHotspots,
     appliedDrilldownNodeHotspots,

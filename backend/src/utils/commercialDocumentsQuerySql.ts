@@ -18,6 +18,7 @@ export type CommercialDocumentsListParams = {
   documentStatus?: 'checked' | 'unchecked' | null;
   incoterm?: string | null;
   product?: string | null;
+  supplier?: string | null;
   plant?: string | null;
   page?: number;
   limit?: number;
@@ -197,6 +198,10 @@ export function buildCommercialDocumentsListQuery(params: CommercialDocumentsLis
   if (params.product?.trim()) {
     where.push(`TRIM(COALESCE(e.product, '')) = $${idx++}`);
     values.push(params.product.trim());
+  }
+  if (params.supplier?.trim()) {
+    where.push(`TRIM(COALESCE(e.supplier, '')) = $${idx++}`);
+    values.push(params.supplier.trim());
   }
   if (params.plant?.trim()) {
     where.push(`TRIM(COALESCE(e.plant_site, '')) = $${idx++}`);

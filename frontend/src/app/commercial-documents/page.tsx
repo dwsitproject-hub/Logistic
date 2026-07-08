@@ -121,7 +121,9 @@ function CommercialDocumentsPageContent() {
 
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
+  const [availableSuppliers, setAvailableSuppliers] = useState<string[]>([])
   const [availablePlants, setAvailablePlants] = useState<string[]>([])
+  const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
 
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [visibleColumnIds, setVisibleColumnIds] = useState<CommercialDocsColumnId[]>(() => {
@@ -196,6 +198,7 @@ function CommercialDocumentsPageContent() {
       if (documentStatusFilter) params.set('documentStatus', documentStatusFilter)
       if (selectedIncoterms.length === 1) params.set('incoterm', selectedIncoterms[0])
       if (selectedProducts.length === 1) params.set('product', selectedProducts[0])
+      if (selectedSuppliers.length === 1) params.set('supplier', selectedSuppliers[0])
       if (selectedPlants.length === 1) params.set('plant', selectedPlants[0])
 
       const url = `/commercial-documents?${params.toString()}`
@@ -219,6 +222,7 @@ function CommercialDocumentsPageContent() {
     documentStatusFilter,
     selectedIncoterms,
     selectedProducts,
+    selectedSuppliers,
     selectedPlants,
   ])
 
@@ -230,6 +234,7 @@ function CommercialDocumentsPageContent() {
         documentStatusFilter,
         selectedIncoterms,
         selectedProducts,
+        selectedSuppliers,
         selectedPlants,
         dateFrom,
         dateTo,
@@ -240,6 +245,7 @@ function CommercialDocumentsPageContent() {
       documentStatusFilter,
       selectedIncoterms,
       selectedProducts,
+      selectedSuppliers,
       selectedPlants,
       dateFrom,
       dateTo,
@@ -269,8 +275,9 @@ function CommercialDocumentsPageContent() {
       api.get('/contracts/filter-options/group-plants'),
       api.get('/contracts/filter-options/incoterms'),
       api.get('/dashboard/filter-options/products'),
+      api.get('/dashboard/filter-options/suppliers'),
     ])
-      .then(([plantRes, incRes, productRes]) => {
+      .then(([plantRes, incRes, productRes, supplierRes]) => {
         if (cancelled) return
         const plants = (plantRes.data?.data?.groupPlants || []) as string[]
         const incs = (incRes.data?.data?.incoterms || []) as string[]
@@ -280,15 +287,19 @@ function CommercialDocumentsPageContent() {
           : productPayload && typeof productPayload === 'object' && 'products' in productPayload
             ? (productPayload as { products?: string[] }).products
             : []) as string[]
+        const supplierPayload = supplierRes.data?.data
+        const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
         setAvailablePlants(Array.isArray(plants) ? plants : [])
         setAvailableIncoterms(Array.isArray(incs) ? incs : [])
         setAvailableProducts(Array.isArray(products) ? products : [])
+        setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
       })
       .catch(() => {
         if (cancelled) return
         setAvailablePlants([])
         setAvailableIncoterms([])
         setAvailableProducts([])
+        setAvailableSuppliers([])
       })
     return () => {
       cancelled = true
@@ -332,6 +343,7 @@ function CommercialDocumentsPageContent() {
     documentStatusFilter !== '' ||
     selectedIncoterms.length > 0 ||
     selectedProducts.length > 0 ||
+    selectedSuppliers.length > 0 ||
     selectedPlants.length > 0 ||
     dateFrom !== ytdDefault.dateFrom ||
     dateTo !== ytdDefault.dateTo
@@ -342,6 +354,7 @@ function CommercialDocumentsPageContent() {
     setDocumentTypeFilter('')
     setDocumentStatusFilter('')
     setSelectedIncoterms([])
+    setSelectedSuppliers([])
     resetUserScopeFilters()
     setDateFrom(ytdDefault.dateFrom)
     setDateTo(ytdDefault.dateTo)
@@ -451,7 +464,7 @@ function CommercialDocumentsPageContent() {
               <option value="unchecked">Unchecked</option>
             </select>
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
             <SearchableMultiSelect
               label="Incoterm"
               placeholder="All incoterms"
@@ -465,6 +478,14 @@ function CommercialDocumentsPageContent() {
               options={availableProducts}
               selected={selectedProducts}
               onChange={handleProductsChange}
+              pinSelectedToTop
+            />
+            <SearchableMultiSelect
+              label="Supplier"
+              placeholder="All suppliers"
+              options={availableSuppliers}
+              selected={selectedSuppliers}
+              onChange={setSelectedSuppliers}
               pinSelectedToTop
             />
             <SearchableMultiSelect
