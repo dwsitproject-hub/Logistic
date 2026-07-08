@@ -44,7 +44,7 @@ import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { hasVesselPortsQuantityUserEdits } from '@/lib/vesselPortsQuantityEdits'
 import {
   mergeShipmentQtyOverridesOnContractRows,
-  sapDeliveredOrReceiveMtToKg,
+  sapContractDetailQtyToKg,
   shipmentStoredQtyKg,
 } from '@/lib/shipmentQuantityUnits'
 import {
@@ -111,6 +111,7 @@ interface ShipmentDocumentItem {
 }
 const ETA_INFO_VALUE_CLASS = 'text-sm font-medium text-gray-900 tabular-nums'
 const INFO_VALUE_CLASS = 'text-sm font-medium text-gray-900'
+const VESSEL_MODAL_TABLE_QTY_VALUE_CLASS = 'text-xs font-normal tabular-nums text-gray-900'
 
 const LOADING_ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
   { key: 'etaVesselArrivalAtLoadingPort', label: 'ETA Vessel Arrival at Loading Port' },
@@ -144,22 +145,17 @@ const ATA_FIELD_ROWS: { key: ShipmentAtaApiField; label: string }[] = [
   { key: 'ata_vessel_complete_discharge', label: 'Complete Discharge' },
 ]
 
-const QUALITY_LOADING_FIELDS: { key: string; label: string }[] = [
-  { key: 'quality_at_loading_loc_1_ffa', label: 'FFA' },
-  { key: 'quality_at_loading_loc_1_mi', label: 'M&I' },
-  { key: 'quality_at_loading_loc_1_dobi', label: 'DOBI' },
-  { key: 'quality_at_loading_loc_1_red', label: 'Color' },
-  { key: 'quality_at_loading_loc_1_ds', label: 'D&S' },
-  { key: 'quality_at_loading_loc_1_stone', label: 'Stone' },
-]
+const LOADING_ATA_FIELD_ROWS = ATA_FIELD_ROWS.filter((row) => !row.key.includes('discharge'))
 
-const QUALITY_DISCHARGE_FIELDS: { key: string; label: string }[] = [
-  { key: 'quality_at_discharge_loc_1_ffa', label: 'FFA' },
-  { key: 'quality_at_discharge_loc_1_mi', label: 'M&I' },
-  { key: 'quality_at_discharge_loc_1_dobi', label: 'DOBI' },
-  { key: 'quality_at_discharge_loc_1_red', label: 'Color' },
-  { key: 'quality_at_discharge_loc_1_ds', label: 'D&S' },
-  { key: 'quality_at_discharge_loc_1_stone', label: 'Stone' },
+const DISCHARGE_ATA_FIELD_ROWS = ATA_FIELD_ROWS.filter((row) => row.key.includes('discharge'))
+
+const QUALITY_METRICS: { portKey: string; label: string }[] = [
+  { portKey: 'quality_ffa', label: 'FFA' },
+  { portKey: 'quality_mi', label: 'M&I' },
+  { portKey: 'quality_dobi', label: 'DOBI' },
+  { portKey: 'quality_red', label: 'Color' },
+  { portKey: 'quality_ds', label: 'D&S' },
+  { portKey: 'quality_stone', label: 'Stone' },
 ]
 
 function emptyDischargeEtaFields(): DischargeEtaFields {
@@ -202,6 +198,36 @@ function dischargeEtaFromInfo(
   }
 }
 
+function loadingAtaFromPortRow(
+  portRow: LoadingPortRef | undefined,
+  info: Record<string, unknown>,
+): Pick<
+  ShipmentAtaFields,
+  | 'ata_vessel_arrival_at_loading_port'
+  | 'ata_vessel_berthed_at_loading_port'
+  | 'ata_vessel_start_loading'
+  | 'ata_vessel_completed_loading'
+  | 'ata_vessel_sailed_from_loading_port'
+> {
+  return {
+    ata_vessel_arrival_at_loading_port:
+      sliceIsoDate(portRow?.ata_vessel_arrival as string) ||
+      sliceIsoDate(info.ata_vessel_arrival_at_loading_port as string),
+    ata_vessel_berthed_at_loading_port:
+      sliceIsoDate(portRow?.ata_vessel_berthed as string) ||
+      sliceIsoDate(info.ata_vessel_berthed_at_loading_port as string),
+    ata_vessel_start_loading:
+      sliceIsoDate(portRow?.ata_loading_start as string) ||
+      sliceIsoDate(info.ata_vessel_start_loading as string),
+    ata_vessel_completed_loading:
+      sliceIsoDate(portRow?.ata_loading_completed as string) ||
+      sliceIsoDate(info.ata_vessel_completed_loading as string),
+    ata_vessel_sailed_from_loading_port:
+      sliceIsoDate(portRow?.ata_vessel_sailed as string) ||
+      sliceIsoDate(info.ata_vessel_sailed_from_loading_port as string),
+  }
+}
+
 function loadingEtaFromPortRow(
   portRow: LoadingPortRef | undefined,
   info: Record<string, unknown>,
@@ -230,6 +256,17 @@ function loadingEtaFromPortRow(
       sliceIsoDate(row.eta_sailed as string),
     ...emptyDischargeEtaFields(),
   }
+}
+
+function qualityMetricFromPort(
+  portRow: Record<string, unknown> | LoadingPortRef | undefined,
+  portKey: string,
+  info: Record<string, unknown>,
+  infoKey: string,
+): number | null {
+  const fromPort = parseApiNumber(portRow?.[portKey as keyof LoadingPortRef])
+  if (fromPort != null) return fromPort
+  return parseApiNumber(info[infoKey])
 }
 
 function sliceIsoDate(value: string | null | undefined): string {
@@ -318,7 +355,9 @@ function MtQtyInput({
   if (disabled) {
     return (
       <div className="text-right">
-        <div className={`flex min-h-8 items-center justify-end tabular-nums ${INFO_VALUE_CLASS}`}>
+        <div
+          className={`flex min-h-0 items-center justify-end ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}
+        >
           {valueKg === null ? '—' : formatQtyMtFromKg(valueKg)}
         </div>
       </div>
@@ -328,7 +367,7 @@ function MtQtyInput({
   const mtDisplay = valueKg === null ? '' : String(valueKg / 1000)
   return (
     <div className="text-right">
-      <div className="relative w-full min-w-[6.5rem]">
+      <div className="relative w-full min-w-[5.5rem]">
         <Input
           type="number"
           step="0.01"
@@ -342,9 +381,9 @@ function MtQtyInput({
             const mt = parseFloat(raw)
             onChange(Number.isNaN(mt) ? 0 : mt * 1000)
           }}
-          className="h-8 text-xs pr-10 text-right tabular-nums"
+          className={`h-7 px-2 py-1 pr-9 text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}
         />
-        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-medium text-gray-600">
+        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-normal text-gray-500">
           MT
         </span>
       </div>
@@ -355,7 +394,7 @@ function MtQtyInput({
 function MtQtyReadOnly({ valueKg }: { valueKg: number | null | undefined }) {
   if (valueKg === null || valueKg === undefined) {
     return (
-      <div className="text-right tabular-nums">
+      <div className={`text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}>
         <div>—</div>
       </div>
     )
@@ -363,13 +402,13 @@ function MtQtyReadOnly({ valueKg }: { valueKg: number | null | undefined }) {
   const kg = typeof valueKg === 'number' ? valueKg : Number(String(valueKg).replace(/,/g, '').trim())
   if (!Number.isFinite(kg)) {
     return (
-      <div className="text-right tabular-nums">
+      <div className={`text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}>
         <div>—</div>
       </div>
     )
   }
   return (
-    <div className="text-right tabular-nums">
+    <div className={`text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}>
       <div>{formatQtyMtFromKg(kg)}</div>
     </div>
   )
@@ -432,6 +471,7 @@ function contractDetailRowFromApi(
   const cn = String(d.contract_number ?? '').trim()
   const po = String(d.po_number ?? '').trim()
   const shipmentPlanQty = parseApiNumber(d.shipment_plan_qty ?? d.sto_qty_assigned) ?? 0
+  const contractQty = parseApiNumber(d.contract_qty) ?? 0
   const osActual = parseApiNumber(d.outstanding_qty_actual ?? d.outstanding_qty) ?? 0
   const osPlan = parseApiNumber(d.outstanding_qty_planning) ?? 0
   const osPlanBudget = parseApiNumber(d.outstanding_qty_planning_budget) ?? osPlan
@@ -441,7 +481,7 @@ function contractDetailRowFromApi(
     po_number: po,
     supplier: String(d.supplier ?? '').trim(),
     product: String(d.product ?? '').trim(),
-    contract_qty: parseApiNumber(d.contract_qty) ?? 0,
+    contract_qty: contractQty,
     outstanding_qty_actual: osActual,
     outstanding_qty_planning: osPlan,
     outstanding_qty_planning_budget: osPlanBudget,
@@ -449,8 +489,8 @@ function contractDetailRowFromApi(
     shipment_plan_qty: shipmentPlanQty,
     sto_qty_assigned: shipmentPlanQty,
     outstanding_qty: osActual,
-    quantity_delivered: sapDeliveredOrReceiveMtToKg(parseApiNumber(d.quantity_delivered)),
-    quantity_receive: sapDeliveredOrReceiveMtToKg(parseApiNumber(d.quantity_receive)),
+    quantity_delivered: sapContractDetailQtyToKg(parseApiNumber(d.quantity_delivered), contractQty),
+    quantity_receive: sapContractDetailQtyToKg(parseApiNumber(d.quantity_receive), contractQty),
   }
 }
 
@@ -548,6 +588,13 @@ function formatShipmentRemarkAuthor(remark: ShipmentRemarkRow): string {
   return remark.full_name?.trim() || remark.username?.trim() || '—'
 }
 
+function formatShipmentRemarkCategory(category?: string | null): string | null {
+  const key = String(category ?? '').trim().toUpperCase()
+  if (key === 'CANCEL_SHIPMENT') return 'Shipment cancellation'
+  if (key === 'EDIT_SHIPMENT') return 'Edit shipment'
+  return null
+}
+
 function formatActivityLabel(log: ActivityLogRow): string {
   const user = log.full_name?.trim() || log.username?.trim() || 'Unknown User'
   const entity = log.entity_type?.replace(/_/g, ' ') ?? 'Record'
@@ -556,6 +603,7 @@ function formatActivityLabel(log: ActivityLogRow): string {
   if (action === 'CREATE' && log.entity_type === 'LOADING_PORT') return `Added Loading Port — ${user}`
   if (action === 'UPDATE' && log.entity_type === 'LOADING_PORT') return `Updated ETA / Port — ${user}`
   if (action === 'CANCEL' && log.entity_type === 'LOADING_PORT') return `Cancelled Port Activity — ${user}`
+  if (action === 'CANCEL' && log.entity_type === 'SHIPMENT') return `Cancelled Shipment — ${user}`
   return `${action} ${entity} — ${user}`
 }
 
@@ -685,17 +733,37 @@ export function EditShipmentModal({
     return sum
   }, [detailRows, planQtyEdits])
 
-  const footerOsPlanKg = useMemo(() => {
-    let budget = 0
+  const poTableQtyTotals = useMemo(() => {
+    let contractQty = 0
+    let stoQty = 0
+    let osQty = 0
+    let osPlanQty = 0
     for (const row of detailRows) {
-      budget += row.outstanding_qty_planning_budget ?? row.outstanding_qty_planning ?? 0
+      contractQty += row.contract_qty ?? 0
+      stoQty += row.sap_sto_qty ?? 0
+      osQty += row.outstanding_qty_actual ?? 0
+      osPlanQty += row.outstanding_qty_planning ?? 0
     }
-    return Math.max(budget - totalShipmentPlanKg, 0)
-  }, [detailRows, totalShipmentPlanKg])
+    return { contractQty, stoQty, osQty, osPlanQty }
+  }, [detailRows])
 
   const qtyTotals = useMemo(
     () => sumVesselPortsQuantityEdits(qtyTableRows, qtyEdits),
     [qtyTableRows, qtyEdits],
+  )
+
+  const loadingPortRows = useMemo(
+    () =>
+      loadingPorts
+        .filter((p) => !p.is_discharge_port)
+        .slice()
+        .sort((a, b) => (a.port_sequence ?? 0) - (b.port_sequence ?? 0)),
+    [loadingPorts],
+  )
+
+  const dischargePortRow = useMemo(
+    () => loadingPorts.find((p) => p.is_discharge_port),
+    [loadingPorts],
   )
 
   const etaBlockSnapshots: ShipmentEtaBlockSnapshot[] = useMemo(
@@ -764,6 +832,7 @@ export function EditShipmentModal({
     setAddingPo(false)
     setEditRemark('')
     setEtaBaseline(null)
+    setPlantSiteName('')
     initSessionRef.current = null
   }, [])
 
@@ -1025,20 +1094,27 @@ export function EditShipmentModal({
         }
         setEditRemark('')
 
-        const plantCode = String(row.plant_site ?? row.plant_code ?? '').trim()
-        if (plantCode) {
+        const plantCode = String(row.plant_code ?? '').trim()
+        const groupPlant = String(row.plant_site ?? '').trim()
+        if (groupPlant && groupPlant !== 'Blank') {
+          setPlantSiteName(groupPlant)
+        } else if (plantCode) {
           setPlantSiteName(plantCode)
           void api
             .get('/master-plants', { params: { search: plantCode, limit: 20 } })
             .then((plantsRes) => {
-              const items: Array<{ plant_code?: string; plant_name?: string }> =
+              const items: Array<{ plant_code?: string; plant_name?: string; group_plant?: string }> =
                 plantsRes?.data?.data?.items ?? []
               const match = items.find(
                 (p) => String(p.plant_code ?? '').trim().toUpperCase() === plantCode.toUpperCase(),
               )
-              if (match?.plant_name?.trim()) setPlantSiteName(match.plant_name.trim())
+              const resolved =
+                match?.group_plant?.trim() || match?.plant_name?.trim() || ''
+              if (resolved) setPlantSiteName(resolved)
             })
             .catch(() => {})
+        } else {
+          setPlantSiteName('')
         }
 
         void (async () => {
@@ -1794,16 +1870,30 @@ export function EditShipmentModal({
                     </TableBody>
                     <TableFooter>
                       <TableRow className={VESSEL_MODAL_TABLE_FOOTER_CLASS}>
-                        <TableCell colSpan={6} className={VESSEL_MODAL_COMPACT_TD}>
+                        <TableCell colSpan={3} className={VESSEL_MODAL_COMPACT_TD}>
                           Grand Total
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
-                          <MtQtyReadOnly valueKg={footerOsPlanKg} />
+                          <MtQtyReadOnly valueKg={poTableQtyTotals.contractQty} />
+                        </TableCell>
+                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
+                          <MtQtyReadOnly valueKg={poTableQtyTotals.stoQty} />
+                        </TableCell>
+                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
+                          <MtQtyReadOnly valueKg={poTableQtyTotals.osQty} />
+                        </TableCell>
+                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
+                          <MtQtyReadOnly valueKg={poTableQtyTotals.osPlanQty} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
                           <MtQtyReadOnly valueKg={totalShipmentPlanKg} />
                         </TableCell>
-                        <TableCell colSpan={2} />
+                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
+                          <MtQtyReadOnly valueKg={qtyTotals.quantity_delivered} />
+                        </TableCell>
+                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
+                          <MtQtyReadOnly valueKg={qtyTotals.quantity_receive} />
+                        </TableCell>
                       </TableRow>
                     </TableFooter>
                   </Table>
@@ -1819,8 +1909,8 @@ export function EditShipmentModal({
                     </div>
                     <div className="h-2 overflow-hidden rounded-full bg-gray-200">
                       <div
-                        className={`h-full rounded-full ${capacityPct > 100 ? 'bg-red-500' : 'bg-blue-600'}`}
-                        style={{ width: `${capacityPct}%` }}
+                        className="h-full rounded-full bg-blue-600"
+                        style={{ width: `${Math.min(100, capacityPct)}%` }}
                       />
                     </div>
                   </div>
@@ -2095,43 +2185,121 @@ export function EditShipmentModal({
                   </Button>
                 )}
               </div>
-              <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 lg:grid-cols-3">
-                {ATA_FIELD_ROWS.map(({ key, label }) => {
-                  const sapRef = ataSapReference[key]
-                  const hasOverride = Boolean(ataFields[key] && sapRef && ataFields[key] !== sapRef)
-                  return (
-                    <div key={key}>
-                      {ataIsEditing && canModifyShipment ? (
-                        <>
-                          <label className="mb-1 block text-[10px] font-medium text-gray-600">
-                            ATA {label}
-                          </label>
-                          <DateInputDdMmYyyy
-                            valueIso={ataFields[key]}
-                            onChangeIso={(iso) =>
-                              setAtaFields((prev) => ({ ...prev, [key]: iso }))
-                            }
-                            className="h-8 text-xs"
-                          />
-                        </>
-                      ) : (
-                        <ReadOnlyInfoField
-                          compact
-                          label={`ATA ${label}`}
-                          value={formatDateDMY(ataFields[key])}
-                        />
-                      )}
-                      {sapRef ? (
-                        <div className="mt-1 text-[10px] text-gray-400">
-                          SAP: {formatDateDMY(sapRef)}
-                          {hasOverride ? (
-                            <span className="ml-1 font-medium text-emerald-600">(manual)</span>
+              <div className="space-y-4 p-4">
+                {isMultiPortLoading ? (
+                  <>
+                    {loadingPortRows.map((portRow) => {
+                      const portAta = loadingAtaFromPortRow(portRow, shipmentInfo)
+                      return (
+                        <div
+                          key={portRow.id || `ata-port-${portRow.port_sequence ?? 1}`}
+                          className="rounded-lg border border-emerald-100 bg-white p-3"
+                        >
+                          <div className="mb-3 flex flex-wrap items-center gap-2">
+                            <Badge className="bg-emerald-600 text-white text-[10px]">
+                              Loading Port {portRow.port_sequence ?? 1}
+                            </Badge>
+                            <span className="text-xs text-gray-600">{portRow.port_name || '—'}</span>
+                          </div>
+                          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                            {LOADING_ATA_FIELD_ROWS.map(({ key, label }) => (
+                              <ReadOnlyInfoField
+                                key={`${portRow.id ?? portRow.port_sequence}-${key}`}
+                                compact
+                                label={`ATA ${label}`}
+                                value={formatDateDMY(
+                                  portAta[key as keyof ReturnType<typeof loadingAtaFromPortRow>],
+                                )}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
+                    <div className="rounded-lg border border-emerald-100 bg-white p-3">
+                      <p className="mb-3 text-[10px] font-medium text-gray-600">Discharge Port</p>
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                        {DISCHARGE_ATA_FIELD_ROWS.map(({ key, label }) => {
+                          const sapRef = ataSapReference[key]
+                          const hasOverride = Boolean(
+                            ataFields[key] && sapRef && ataFields[key] !== sapRef,
+                          )
+                          return (
+                            <div key={key}>
+                              {ataIsEditing && canModifyShipment ? (
+                                <>
+                                  <label className="mb-1 block text-[10px] font-medium text-gray-600">
+                                    ATA {label}
+                                  </label>
+                                  <DateInputDdMmYyyy
+                                    valueIso={ataFields[key]}
+                                    onChangeIso={(iso) =>
+                                      setAtaFields((prev) => ({ ...prev, [key]: iso }))
+                                    }
+                                    className="h-8 text-xs"
+                                  />
+                                </>
+                              ) : (
+                                <ReadOnlyInfoField
+                                  compact
+                                  label={`ATA ${label}`}
+                                  value={formatDateDMY(ataFields[key])}
+                                />
+                              )}
+                              {sapRef ? (
+                                <div className="mt-1 text-[10px] text-gray-400">
+                                  SAP: {formatDateDMY(sapRef)}
+                                  {hasOverride ? (
+                                    <span className="ml-1 font-medium text-emerald-600">(manual)</span>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                    {ATA_FIELD_ROWS.map(({ key, label }) => {
+                      const sapRef = ataSapReference[key]
+                      const hasOverride = Boolean(ataFields[key] && sapRef && ataFields[key] !== sapRef)
+                      return (
+                        <div key={key}>
+                          {ataIsEditing && canModifyShipment ? (
+                            <>
+                              <label className="mb-1 block text-[10px] font-medium text-gray-600">
+                                ATA {label}
+                              </label>
+                              <DateInputDdMmYyyy
+                                valueIso={ataFields[key]}
+                                onChangeIso={(iso) =>
+                                  setAtaFields((prev) => ({ ...prev, [key]: iso }))
+                                }
+                                className="h-8 text-xs"
+                              />
+                            </>
+                          ) : (
+                            <ReadOnlyInfoField
+                              compact
+                              label={`ATA ${label}`}
+                              value={formatDateDMY(ataFields[key])}
+                            />
+                          )}
+                          {sapRef ? (
+                            <div className="mt-1 text-[10px] text-gray-400">
+                              SAP: {formatDateDMY(sapRef)}
+                              {hasOverride ? (
+                                <span className="ml-1 font-medium text-emerald-600">(manual)</span>
+                              ) : null}
+                            </div>
                           ) : null}
                         </div>
-                      ) : null}
-                    </div>
-                  )
-                })}
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2144,33 +2312,58 @@ export function EditShipmentModal({
                 <h4 className="text-sm font-semibold text-gray-800">5. Quality Vessel Information</h4>
               </div>
               <div className="space-y-4 p-4">
-                <div>
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-                    Quality at Loading Loc 1
-                  </p>
-                  <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-                    {QUALITY_LOADING_FIELDS.map(({ key, label }) => (
-                      <div key={key}>
-                        <div className="text-xs text-gray-500">{label}</div>
-                        <div className="text-sm font-medium">
-                          {formatNumber(parseApiNumber(shipmentInfo[key]))}
-                        </div>
-                      </div>
-                    ))}
+                {loadingPortRows.map((portRow) => (
+                  <div
+                    key={portRow.id || `quality-loading-${portRow.port_sequence ?? 1}`}
+                    className="rounded-lg border border-violet-100 bg-white p-3"
+                  >
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
+                      {isMultiPortLoading ? (
+                        <Badge className="bg-violet-600 text-white text-[10px]">
+                          Loading Port {portRow.port_sequence ?? 1}
+                        </Badge>
+                      ) : null}
+                      <span className="text-[10px] font-medium text-gray-600">Quality at Loading</span>
+                      {isMultiPortLoading ? (
+                        <span className="text-xs text-gray-600">{portRow.port_name || '—'}</span>
+                      ) : null}
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                      {QUALITY_METRICS.map(({ portKey, label }) => (
+                        <ReadOnlyInfoField
+                          key={`${portRow.id ?? portRow.port_sequence}-${portKey}`}
+                          compact
+                          label={label}
+                          value={formatNumber(
+                            qualityMetricFromPort(
+                              portRow,
+                              portKey,
+                              shipmentInfo,
+                              `quality_at_loading_loc_${portRow.port_sequence ?? 1}_${portKey.replace('quality_', '')}`,
+                            ),
+                          )}
+                        />
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-                    Quality at Discharge Loc 1
-                  </p>
-                  <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-                    {QUALITY_DISCHARGE_FIELDS.map(({ key, label }) => (
-                      <div key={key}>
-                        <div className="text-xs text-gray-500">{label}</div>
-                        <div className="text-sm font-medium">
-                          {formatNumber(parseApiNumber(shipmentInfo[key]))}
-                        </div>
-                      </div>
+                ))}
+                <div className="rounded-lg border border-violet-100 bg-white p-3">
+                  <p className="mb-3 text-[10px] font-medium text-gray-600">Quality at Discharge</p>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                    {QUALITY_METRICS.map(({ portKey, label }) => (
+                      <ReadOnlyInfoField
+                        key={`discharge-${portKey}`}
+                        compact
+                        label={label}
+                        value={formatNumber(
+                          qualityMetricFromPort(
+                            dischargePortRow,
+                            portKey,
+                            shipmentInfo,
+                            `quality_at_discharge_loc_1_${portKey.replace('quality_', '')}`,
+                          ),
+                        )}
+                      />
                     ))}
                   </div>
                 </div>
@@ -2205,9 +2398,16 @@ export function EditShipmentModal({
                         className="rounded-md border border-amber-100 bg-amber-50/40 px-3 py-2.5"
                       >
                         <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                          <span className="text-sm font-medium text-gray-800">
-                            {formatShipmentRemarkAuthor(remark)}
-                          </span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-gray-800">
+                              {formatShipmentRemarkAuthor(remark)}
+                            </span>
+                            {formatShipmentRemarkCategory(remark.category) ? (
+                              <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
+                                {formatShipmentRemarkCategory(remark.category)}
+                              </span>
+                            ) : null}
+                          </div>
                           <span className="text-xs text-gray-500 tabular-nums">
                             {remark.created_at ? formatDateTimeDMY(remark.created_at) : '—'}
                           </span>

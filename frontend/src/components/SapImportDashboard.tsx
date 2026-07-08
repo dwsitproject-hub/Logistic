@@ -83,11 +83,12 @@ const IMPORT_POLL_MS = 2000;
 
 function computeProcessingProgress(imp: SapImport): number {
   const total = Number(imp.total_records) || 0;
-  if (total <= 0) {
-    return imp.status === 'processing' || imp.status === 'pending' ? 5 : 0;
-  }
   const done = (Number(imp.processed_records) || 0) + (Number(imp.failed_records) || 0);
-  return Math.min(100, Math.max(5, Math.round((done / total) * 100)));
+  if (total <= 0) {
+    return imp.status === 'processing' || imp.status === 'pending' ? 0 : 100;
+  }
+  if (done <= 0) return 0;
+  return Math.min(100, Math.round((done / total) * 100));
 }
 
 const SapImportDashboard: React.FC = () => {
@@ -394,6 +395,15 @@ const SapImportDashboard: React.FC = () => {
                   {(Number(activeImport.processed_records) || 0).toLocaleString()}
                   {' / '}
                   {(Number(activeImport.total_records) || 0).toLocaleString()} records processed
+                  {processingProgress === 0 &&
+                    (activeImport.status === 'processing' || activeImport.status === 'pending') && (
+                    <>
+                      {' · '}
+                      <span className="text-amber-800">
+                        Waiting for server — if this stays at 0% for several minutes, refresh or re-upload.
+                      </span>
+                    </>
+                  )}
                   {(Number(activeImport.failed_records) || 0) > 0 && (
                     <>
                       {' · '}

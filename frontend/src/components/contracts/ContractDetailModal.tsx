@@ -18,6 +18,7 @@ import {
 import { formatDateDMY } from '@/lib/dateFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { formatContractDeliveryStatusLabel } from '@/lib/contractDeliveryStatus'
+import { formatShipmentStatusLabel, shipmentStatusBadgeClass } from '@/lib/shipmentStatusDisplay'
 import { canViewPermission, usePermissions } from '@/components/PermissionsContext'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
 import { ViewTruckingOperationModal } from '@/components/trucking/ViewTruckingOperationModal'
@@ -960,7 +961,11 @@ export function ContractDetailModal({
                                 {row.late_indicator}
                               </Badge>
                             </td>
-                            <td className="p-2">{row.status}</td>
+                            <td className="p-2">
+                              <Badge className={shipmentStatusBadgeClass(row.status)}>
+                                {formatShipmentStatusLabel(row.status)}
+                              </Badge>
+                            </td>
                             <td className="p-2">{formatQtyMtFromKg(row.sto_quantity)}</td>
                             <td className="p-2">{formatQtyMtFromKg(row.quantity_delivered)}</td>
                             <td className="p-2">{formatQtyMtFromKg(row.quantity_receive)}</td>

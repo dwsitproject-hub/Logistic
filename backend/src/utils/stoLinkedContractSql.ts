@@ -105,3 +105,25 @@ export function buildStoLinkedContractCountSql(
           ELSE ${elseBranch}
         END`;
 }
+
+export function buildStoLinkedSuppliersSql(
+  groupedStoExpr: string,
+  contractAlias = 'c',
+  elseExpr?: string,
+): string {
+  const elseBranch =
+    elseExpr ??
+    `STRING_AGG(DISTINCT ${contractAlias}.supplier, ', ' ORDER BY ${contractAlias}.supplier)
+            FILTER (WHERE ${contractAlias}.supplier IS NOT NULL AND TRIM(${contractAlias}.supplier) != '')`;
+  return `CASE
+          WHEN ${groupedStoExpr} IS NOT NULL THEN
+            COALESCE(
+              (SELECT STRING_AGG(DISTINCT cc.supplier, ', ' ORDER BY cc.supplier)
+               FROM contracts cc
+               WHERE cc.contract_id IN (${contractsOnStoSubquery(groupedStoExpr)})
+                 AND cc.supplier IS NOT NULL AND TRIM(cc.supplier) != ''),
+              ${elseBranch}
+            )
+          ELSE ${elseBranch}
+        END`;
+}

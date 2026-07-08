@@ -26,6 +26,8 @@ import {
   sqlSapAtaStartDischarge,
   sqlSapAtaStartLoading,
 } from '../utils/shipmentAtaOverrideSql';
+import { groupPlantExpr } from '../utils/groupPlantSql';
+import { resolvedPlantCodeSql } from '../utils/portDisplaySql';
 import { resolveShipmentEditContext, type ShipmentEditContext } from './shipmentEditContext.service';
 
 const SHIPMENT_BY_ID_SQL = `
@@ -39,6 +41,11 @@ const SHIPMENT_BY_ID_SQL = `
     c.group_name,
     c.quantity_ordered,
     c.unit,
+    ${resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code')} AS plant_code,
+    ${groupPlantExpr(
+      resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'),
+      'c.company_name',
+    )} AS plant_site,
     COALESCE(
       NULLIF(TRIM(c.sto_number::text), ''),
       sap_sto.effective_sto,

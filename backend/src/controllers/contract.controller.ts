@@ -43,6 +43,7 @@ import {
   SHIPMENT_SAP_STO_DETAIL_SQL,
   SPD_EFFECTIVE_STO_SQL,
   TRUCKING_SAP_STO_DETAIL_SQL,
+  sqlSapQtyDeliveredKgFromSpd,
 } from '../utils/contractLogisticsStoDetailSql';
 import {
   resolveContractLogisticsOperationId,
@@ -2019,11 +2020,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         ), 0) AS sto_quantity,
         -- Quantities: if shipment row is synthetic (OP-SEA-*), pull from SAP by contract_number; otherwise from SAP by STO.
         COALESCE((
-          SELECT SUM(NULLIF(regexp_replace(COALESCE(
-            NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered'), ''),
-            NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery'), ''),
-            ''
-          ), '[^0-9\\.-]', '', 'g'), '')::numeric)
+          SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', '(SELECT quantity_ordered FROM contracts WHERE id = $1)')})
           FROM sap_processed_data spd
           WHERE (
             (TRIM(sb.sto_key::text) ~ '^OP-' AND spd.contract_number = (SELECT contract_id FROM contracts WHERE id = $1))
@@ -2114,11 +2111,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
             )) = sk.sto_key
         ), 0) AS quantity_receive_sap,
         COALESCE((
-          SELECT SUM(NULLIF(regexp_replace(COALESCE(
-            NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered'), ''),
-            NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery'), ''),
-            ''
-          ), '[^0-9\\.-]', '', 'g'), '')::numeric)
+          SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', 'c.quantity_ordered')})
           FROM sap_processed_data spd
           WHERE spd.contract_number = c.contract_id
             AND TRIM(COALESCE(

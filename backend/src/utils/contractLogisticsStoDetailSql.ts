@@ -1,5 +1,8 @@
 /** Shared SQL helpers for contract logistics STO detail (SAP fallback + matching). */
 
+import { sqlNormalizeSapStoQtyToKgSql } from './contractPoGlobalMetricsSql';
+import { sqlSapQtyTruckingFromSpd, sqlSapQtyVesselFromSpd } from './sapIncotermMetrics';
+
 export const SPD_EFFECTIVE_STO_SQL = `NULLIF(TRIM(COALESCE(
   spd.sto_number::text,
   spd.data->'raw'->>'STO No.',
@@ -42,6 +45,20 @@ function sqlLatestSapDateField(rawKeys: string[]): string {
 const QTY_NUM = (fields: string[]) =>
   `NULLIF(regexp_replace(COALESCE(${fields.map((f) => `NULLIF(TRIM(spd.data->'raw'->>'${f.replace(/'/g, "''")}'), '')`).join(', ')}, ''), '[^0-9\\.-]', '', 'g'), '')::numeric`;
 
+/** SAP delivery qty (kg): trucking fields first, then vessel — MT-scale values normalized via contract qty. */
+export function sqlSapQtyDeliveredAnyFromSpd(spdAlias = 'spd'): string {
+  const trucking = sqlSapQtyTruckingFromSpd(spdAlias);
+  const vessel = sqlSapQtyVesselFromSpd(spdAlias);
+  return `COALESCE(NULLIF((${trucking}), 0), (${vessel}))`;
+}
+
+export function sqlSapQtyDeliveredKgFromSpd(
+  spdAlias: string,
+  contractQtyExpr: string,
+): string {
+  return sqlNormalizeSapStoQtyToKgSql(sqlSapQtyDeliveredAnyFromSpd(spdAlias), contractQtyExpr);
+}
+
 /** Detail payload built purely from sap_processed_data when no shipment row exists. */
 export const SHIPMENT_SAP_STO_DETAIL_SQL = `
   SELECT
@@ -73,7 +90,7 @@ export const SHIPMENT_SAP_STO_DETAIL_SQL = `
       spd.data->'shipment'->>'vessel_discharge_port'
     )), '')) AS port_of_discharge,
     SUM(${QTY_NUM(['STO Quantity', 'sto quantity'])}) AS sto_quantity,
-    SUM(${QTY_NUM(['Quantity Delivered', 'Quantity Delivery'])}) AS quantity_delivered,
+    SUM(${sqlSapQtyDeliveredKgFromSpd('spd', 'MAX(c.quantity_ordered)')}) AS quantity_delivered,
     SUM(${QTY_NUM(['Quantity Receive', 'Qty Receive'])}) AS quantity_receive,
     c.delivery_start_date,
     c.delivery_end_date,
@@ -122,7 +139,7 @@ export const TRUCKING_SAP_STO_DETAIL_SQL = `
       spd.data->'trucking'->0->'data'->>'unloading_location'
     )), '')) AS unloading_location,
     MAX(c.quantity_ordered) AS contract_qty,
-    SUM(${QTY_NUM(['Quantity Delivered', 'Quantity Delivery'])}) AS quantity_delivered,
+    SUM(${sqlSapQtyDeliveredKgFromSpd('spd', 'MAX(c.quantity_ordered)')}) AS quantity_delivered,
     SUM(${QTY_NUM(['Quantity Receive', 'Qty Receive'])}) AS quantity_receive,
     c.delivery_start_date,
     c.delivery_end_date,
@@ -200,11 +217,7 @@ export const CONTRACT_SAP_ONLY_STOS_SQL = `
         )), '') = s.effective_sto
     ), 0) AS sto_quantity,
     COALESCE((
-      SELECT SUM(NULLIF(regexp_replace(COALESCE(
-        NULLIF(TRIM(spd2.data->'raw'->>'Quantity Delivered'), ''),
-        NULLIF(TRIM(spd2.data->'raw'->>'Quantity Delivery'), ''),
-        ''
-      ), '[^0-9\\.-]', '', 'g'), '')::numeric)
+      SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd2', `(SELECT MAX(c2.quantity_ordered) FROM contracts c2 WHERE c2.contract_id = s.contract_number)`)})
       FROM sap_processed_data spd2
       WHERE spd2.contract_number = s.contract_number
         AND NULLIF(TRIM(COALESCE(

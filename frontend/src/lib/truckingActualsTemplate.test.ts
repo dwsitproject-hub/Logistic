@@ -6,6 +6,7 @@ import {
   buildFailedUnplannedUploadRetemplateXlsx,
   buildTruckingActualsTemplateCsv,
   buildTruckingActualsTemplateXlsxBlob,
+  compareTruckingActualsTemplateRows,
   formatTemplateOutstandingQtyMt,
   formatTemplateQtyMtFromKg,
   isActualsTemplateDownloadEnabled,
@@ -19,6 +20,7 @@ import {
   resolveUnplannedPlanningWindow,
   shiftIsoDate,
   todayIsoDate,
+  truckingTemplateSourceSortRank,
   UNPLANNED_PLANNING_FORWARD_DAYS,
   UNPLANNED_TEMPLATE_METADATA_HEADERS,
   UNPLANNED_TEMPLATE_OS_QTY_HEADER,
@@ -134,12 +136,44 @@ describe('truckingActualsTemplate', () => {
     expect(readBack[1]).toEqual(['EXT-001', 'PO-1', '25', '25'])
   })
 
-  it('builds unplanned template with metadata columns sorted by supplier', () => {
+  it('truckingTemplateSourceSortRank orders 3rd Party before Interco/Inhouse', () => {
+    expect(truckingTemplateSourceSortRank('3rd Party')).toBeLessThan(truckingTemplateSourceSortRank('Interco'))
+    expect(truckingTemplateSourceSortRank('Interco')).toBe(truckingTemplateSourceSortRank('Inhouse'))
+    expect(truckingTemplateSourceSortRank('3rd Party')).toBeLessThan(truckingTemplateSourceSortRank('Other'))
+  })
+
+  it('compareTruckingActualsTemplateRows sorts source then supplier then PO', () => {
+    const rows = [
+      {
+        source_type: 'Interco',
+        supplier: 'Alpha',
+        po_number: '100',
+      },
+      {
+        source_type: '3rd Party',
+        supplier: 'Beta',
+        po_number: '200',
+      },
+      {
+        source_type: '3rd Party',
+        supplier: 'Alpha',
+        po_number: '50',
+      },
+    ]
+    const sorted = [...rows].sort(compareTruckingActualsTemplateRows)
+    expect(sorted.map((r) => `${r.source_type}|${r.supplier}|${r.po_number}`)).toEqual([
+      '3rd Party|Alpha|50',
+      '3rd Party|Beta|200',
+      'Interco|Alpha|100',
+    ])
+  })
+
+  it('builds unplanned template sorted by source then supplier then PO', () => {
     const matrix = buildActualsTemplateMatrix(
       [
         {
           contract_ext_no: 'EXT-B',
-          po_number: 'PO-B',
+          po_number: 'PO-200',
           supplier: 'Beta Mills',
           group_name: 'G2',
           source_type: 'Interco',
@@ -149,7 +183,7 @@ describe('truckingActualsTemplate', () => {
         },
         {
           contract_ext_no: 'EXT-A',
-          po_number: 'PO-A',
+          po_number: 'PO-100',
           supplier: 'Alpha Mills',
           group_name: 'G1',
           source_type: '3rd Party',
@@ -157,23 +191,27 @@ describe('truckingActualsTemplate', () => {
           outstanding_quantity: 125000,
           templateKind: 'unplanned',
         },
+        {
+          contract_ext_no: 'EXT-C',
+          po_number: 'PO-050',
+          supplier: 'Alpha Mills',
+          group_name: 'G1',
+          source_type: '3rd Party',
+          contract_date: '2026-04-10',
+          outstanding_quantity: 80000,
+          templateKind: 'unplanned',
+        },
       ],
       REF_TODAY,
     )
 
-    expect(matrix[0]).toEqual([
-      ...UNPLANNED_TEMPLATE_METADATA_HEADERS,
-      ...buildActualsTemplateDateColumns(
-        [{ templateKind: 'unplanned' as const }],
-        REF_TODAY,
-      ).map((iso) => formatPlanningTemplateDateHeader(iso)),
-    ])
+    expect(matrix[1]?.[2]).toBe('3rd Party')
     expect(matrix[1]?.[1]).toBe('Alpha Mills')
-    expect(matrix[2]?.[1]).toBe('Beta Mills')
-    expect(matrix[1]).toContain('EXT-A')
-    expect(matrix[1]?.[6]).toBe('125')
-    expect(formatTemplateQtyMtFromKg(125000)).toBe('125')
-    expect(formatTemplateOutstandingQtyMt(125000)).toBe('125')
+    expect(matrix[1]?.[5]).toBe('PO-050')
+    expect(matrix[2]?.[2]).toBe('3rd Party')
+    expect(matrix[2]?.[5]).toBe('PO-100')
+    expect(matrix[3]?.[2]).toBe('Interco')
+    expect(matrix[3]?.[1]).toBe('Beta Mills')
   })
 
   it('builds unplanned template with empty daily qty cells and OS Qty header', () => {

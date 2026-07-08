@@ -63,6 +63,16 @@ describe('truckingList.service', () => {
     expect(sorted.slice(1, 3).map((r) => r.operation_id)).toEqual(['B', 'C']);
   });
 
+  it('sortTruckingListRows prioritizes STO rows when requested', () => {
+    const rows: TruckingListRow[] = [
+      { created_at: '2025-01-01', operation_id: 'A', sto_number: '' },
+      { created_at: '2025-01-03', operation_id: 'C', sto_number: '1006018900' },
+      { created_at: '2025-01-02', operation_id: 'B', sto_number: '' },
+    ];
+    const sorted = sortTruckingListRows(rows, 'created_at', 'ASC', { prioritizeSapSto: true });
+    expect(sorted[0].operation_id).toBe('C');
+  });
+
   it('invalidateTruckingListCache clears cached rows without throwing', () => {
     expect(() => invalidateTruckingListCache()).not.toThrow();
   });

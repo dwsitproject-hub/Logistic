@@ -31,13 +31,113 @@ export function extractLoadingPortNamesFromSapData(parsedData: Record<string, un
   const raw = (parsedData.raw ?? {}) as Record<string, unknown>;
   const shipment = (parsedData.shipment ?? {}) as Record<string, unknown>;
   add(raw['Vessel Loading Port']);
+  add(raw['Vessel Loading Port ']);
   add(raw['Vessel Loading Port 1']);
+  add(shipment.vessel_loading_port);
+  add(shipment.vessel_loading_port_1);
   add(raw['Vessel Loading Port 2']);
   add(raw['Vessel Loading Port 3']);
-  add(shipment.vessel_loading_port_1);
   add(shipment.vessel_loading_port_2);
   add(shipment.vessel_loading_port_3);
   return names;
+}
+
+function isValidHumanPortName(value: unknown): boolean {
+  const text = trimText(value);
+  if (!text) return false;
+  if (/^\d+(\.\d+)?$/.test(text)) return false;
+  return true;
+}
+
+/** Primary SAP loading port text for denormalizing onto shipments.port_of_loading. */
+export function resolvePrimarySapLoadingPortText(parsedData: Record<string, unknown>): string | null {
+  for (const name of extractLoadingPortNamesFromSapData(parsedData)) {
+    if (isValidHumanPortName(name)) return name;
+  }
+  return null;
+}
+
+/** Primary SAP discharge port text for denormalizing onto shipments.port_of_discharge. */
+export function resolvePrimarySapDischargePortText(parsedData: Record<string, unknown>): string | null {
+  const shipment = (parsedData.shipment ?? {}) as Record<string, unknown>;
+  const raw = (parsedData.raw ?? {}) as Record<string, unknown>;
+  const candidates = [
+    shipment.vessel_discharge_port,
+    shipment.port_of_discharge,
+    shipment.discharge_port,
+    raw['Vessel Discharge Port'],
+    raw['Vessel Discharge Port '],
+    raw['Port of Discharge'],
+  ];
+  for (const candidate of candidates) {
+    if (isValidHumanPortName(candidate)) return trimText(candidate);
+  }
+  return null;
+}
+
+/**
+ * Copy SAP / VLP port names onto shipment shell columns so list shell rows
+ * can display ports without waiting for SAP agg hydration (same pattern as discharge).
+ */
+export async function denormalizeShipmentPortsFromSap(
+  client: PoolClient,
+  shipmentId: string,
+  parsedData: Record<string, unknown>,
+  options?: { protectKlip?: boolean },
+): Promise<void> {
+  if (!shipmentId?.trim()) return;
+
+  let loadingPort = resolvePrimarySapLoadingPortText(parsedData);
+  const dischargePort = resolvePrimarySapDischargePortText(parsedData);
+
+  if (!loadingPort) {
+    const vlpRes = await client.query<{ port_name: string | null }>(
+      `SELECT port_name
+       FROM vessel_loading_ports
+       WHERE shipment_id = $1::uuid
+         AND COALESCE(is_discharge_port, false) = false
+       ORDER BY port_sequence ASC NULLS LAST
+       LIMIT 1`,
+      [shipmentId],
+    );
+    loadingPort = trimText(vlpRes.rows[0]?.port_name);
+  }
+
+  if (!loadingPort && !dischargePort) return;
+
+  const protectKlip = options?.protectKlip === true;
+  if (protectKlip) {
+    await client.query(
+      `UPDATE shipments SET
+        port_of_loading = COALESCE(
+          NULLIF(NULLIF(TRIM(port_of_loading), ''), '0.00'),
+          $2
+        ),
+        port_of_discharge = COALESCE(
+          NULLIF(NULLIF(TRIM(port_of_discharge), ''), '0.00'),
+          $3
+        ),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1::uuid`,
+      [shipmentId, loadingPort, dischargePort],
+    );
+    return;
+  }
+
+  await client.query(
+    `UPDATE shipments SET
+      port_of_loading = COALESCE(
+        $2,
+        NULLIF(NULLIF(TRIM(port_of_loading), ''), '0.00')
+      ),
+      port_of_discharge = COALESCE(
+        $3,
+        NULLIF(NULLIF(TRIM(port_of_discharge), ''), '0.00')
+      ),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = $1::uuid`,
+    [shipmentId, loadingPort, dischargePort],
+  );
 }
 
 function parseNumber(value: unknown): number | null {

@@ -97,12 +97,15 @@ import {
   CONTRACT_PERF_COLUMN_LAYOUT_VERSION_KEY,
   CONTRACT_PERF_DEFAULT_VISIBLE_COLUMN_IDS,
   CONTRACT_PERF_LEGACY_STORAGE_KEYS,
+  CONTRACTS_COLUMN_LAYOUT_VERSION,
+  CONTRACTS_COLUMN_LAYOUT_VERSION_KEY,
   CONTRACT_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS,
   buildContractPerfVisibleColumns,
   contractPerfCellTooltipText,
   contractPerfCompactColumnFallbackOrder,
   contractPerfDefaultVisibleColumnIds,
   contractPerfTableColumnWidthPx,
+  migrateContractColumnLayout,
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
   COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
@@ -2878,7 +2881,7 @@ function ContractsPageContent() {
     {
       id: 'contract_qty',
       label: isContractPerformance ? 'Contract Qty' : 'Contract Qty (MT)',
-      defaultVisible: isContractPerformance,
+      defaultVisible: true,
       sortable: true,
       getSortValue: (c) => typeof c.quantity_ordered === 'number' ? c.quantity_ordered : 0,
       render: (c) => (
@@ -2915,18 +2918,6 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => c.supplier || '',
       render: (c) => <span className="text-sm">{formatOperationalTableTextDisplay(c.supplier)}</span>,
-    },
-    {
-      id: 'qty_delivery',
-      label: isContractPerformance ? 'Contract Qty' : 'Contract Qty (MT)',
-      defaultVisible: !isContractPerformance,
-      sortable: true,
-      getSortValue: (c) => Number(c.quantity_ordered) || 0,
-      render: (c) => (
-        <span className="text-sm truncate">
-          {formatSapQtyMtDisplay(c.quantity_ordered)}
-        </span>
-      )
     },
     {
       id: 'outstanding_qty_mt',
@@ -3208,6 +3199,8 @@ function ContractsPageContent() {
           for (const legacyKey of CONTRACT_PERF_LEGACY_STORAGE_KEYS) {
             localStorage.removeItem(legacyKey)
           }
+        } else {
+          localStorage.setItem(CONTRACTS_COLUMN_LAYOUT_VERSION_KEY, CONTRACTS_COLUMN_LAYOUT_VERSION)
         }
       } catch {
         // ignore
@@ -3294,10 +3287,25 @@ function ContractsPageContent() {
         if (cancelled) return
         const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
         const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
+        const ensureVisibleIds = isContractPerformance
+          ? contractPerfDefaultVisibleColumnIds(compactColumns.map((c) => c.id))
+          : defaultCompactVisibleColumnIds(isContractPerformance)
         if (Array.isArray(cols) && cols.length > 0 && !hadSavedVisibleAtOpen) {
-          setVisibleColumnIds(new Set(cols.map((x: any) => String(x))))
+          const migrated = migrateContractColumnLayout(
+            cols.map((x: unknown) => String(x)),
+            Array.isArray(order) ? order.map((x: unknown) => String(x)) : [],
+            ensureVisibleIds,
+          )
+          setVisibleColumnIds(new Set(migrated.visibleColumnIds))
+          if (migrated.columnOrderIds.length > 0) {
+            setColumnOrderIds(
+              isContractPerformance
+                ? mergeContractPerfColumnOrder(migrated.columnOrderIds, compactColumns.map((c) => c.id))
+                : migrated.columnOrderIds,
+            )
+          }
         }
-        if (Array.isArray(order) && order.length > 0 && !hadSavedOrderAtOpen) {
+        if (Array.isArray(order) && order.length > 0 && !hadSavedOrderAtOpen && !(Array.isArray(cols) && cols.length > 0)) {
           const ids = order.map((x: any) => String(x))
           setColumnOrderIds(
             isContractPerformance
@@ -3372,6 +3380,98 @@ function ContractsPageContent() {
 
   useEffect(() => {
     const allIds = compactColumns.map((c) => c.id)
+    const layoutVersionKey = isContractPerformance
+      ? CONTRACT_PERF_COLUMN_LAYOUT_VERSION_KEY
+      : CONTRACTS_COLUMN_LAYOUT_VERSION_KEY
+    const layoutVersion = isContractPerformance
+      ? CONTRACT_PERF_COLUMN_LAYOUT_VERSION
+      : CONTRACTS_COLUMN_LAYOUT_VERSION
+    const ensureVisibleIds = isContractPerformance
+      ? contractPerfDefaultVisibleColumnIds(allIds)
+      : defaultVisibleColumnIds
+
+    const applyMigratedLayout = (visible: string[], order: string[]) => {
+      const migrated = migrateContractColumnLayout(visible, order, ensureVisibleIds)
+      const canonical = isContractPerformance
+        ? contractPerfCompactColumnFallbackOrder(allIds)
+        : compactColumnFallbackOrder(false, allIds)
+      const nextOrder = isContractPerformance
+        ? mergeContractPerfColumnOrder(migrated.columnOrderIds, allIds)
+        : (() => {
+            const base = migrated.columnOrderIds.length > 0 ? migrated.columnOrderIds : canonical
+            const deduped = Array.from(new Set(base))
+            const missing = allIds.filter((id) => !deduped.includes(id))
+            return [...deduped, ...missing].filter((id) => allIds.includes(id))
+          })()
+      setVisibleColumnIds(new Set(migrated.visibleColumnIds))
+      setColumnOrderIds(nextOrder)
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(columnStorageKey, JSON.stringify(migrated.visibleColumnIds))
+          localStorage.setItem(columnOrderStorageKey, JSON.stringify(nextOrder))
+          localStorage.setItem(layoutVersionKey, layoutVersion)
+          if (isContractPerformance) {
+            for (const legacyKey of CONTRACT_PERF_LEGACY_STORAGE_KEYS) {
+              localStorage.removeItem(legacyKey)
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+      void api
+        .post('/user-preferences/me', {
+          key: userViewPrefKey,
+          value: {
+            visibleColumnIds: migrated.visibleColumnIds,
+            columnOrderIds: nextOrder,
+          },
+        })
+        .catch(() => {
+          /* localStorage already updated */
+        })
+    }
+
+    let needsLayoutMigration = false
+    if (typeof window !== 'undefined') {
+      try {
+        needsLayoutMigration = localStorage.getItem(layoutVersionKey) !== layoutVersion
+      } catch {
+        needsLayoutMigration = true
+      }
+    }
+
+    if (needsLayoutMigration) {
+      let savedVisible: string[] = []
+      let savedOrder: string[] = []
+      if (typeof window !== 'undefined') {
+        try {
+          const rawVis = localStorage.getItem(columnStorageKey)
+          if (rawVis) {
+            const parsed = JSON.parse(rawVis) as unknown
+            if (Array.isArray(parsed)) savedVisible = parsed.map(String)
+          }
+          const rawOrder = localStorage.getItem(columnOrderStorageKey)
+          if (rawOrder) {
+            const parsed = JSON.parse(rawOrder) as unknown
+            if (Array.isArray(parsed)) savedOrder = parsed.map(String)
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (savedVisible.length === 0) {
+        const defaultVis = ensureVisibleIds
+        const canonical = isContractPerformance
+          ? contractPerfCompactColumnFallbackOrder(allIds)
+          : compactColumnFallbackOrder(false, allIds)
+        applyMigratedLayout(defaultVis, canonical)
+      } else {
+        applyMigratedLayout(savedVisible, savedOrder)
+      }
+      return
+    }
+
     if (!isContractPerformance) {
       setColumnOrderIds((prev) => {
         const base = prev.length > 0 ? prev : compactColumnFallbackOrder(false, allIds)
@@ -3381,42 +3481,6 @@ function ContractsPageContent() {
         if (prev.length === next.length && prev.every((v, i) => v === next[i])) return prev
         return next
       })
-      return
-    }
-
-    const canonical = contractPerfCompactColumnFallbackOrder(allIds)
-    let forceLayoutReset = false
-    if (typeof window !== 'undefined') {
-      try {
-        if (localStorage.getItem(CONTRACT_PERF_COLUMN_LAYOUT_VERSION_KEY) !== CONTRACT_PERF_COLUMN_LAYOUT_VERSION) {
-          forceLayoutReset = true
-          localStorage.setItem(CONTRACT_PERF_COLUMN_LAYOUT_VERSION_KEY, CONTRACT_PERF_COLUMN_LAYOUT_VERSION)
-          for (const legacyKey of CONTRACT_PERF_LEGACY_STORAGE_KEYS) {
-            localStorage.removeItem(legacyKey)
-          }
-          localStorage.setItem(columnOrderStorageKey, JSON.stringify(canonical))
-          localStorage.setItem(columnStorageKey, JSON.stringify(contractPerfDefaultVisibleColumnIds(allIds)))
-        }
-      } catch {
-        forceLayoutReset = true
-      }
-    }
-
-    if (forceLayoutReset) {
-      const defaultVis = contractPerfDefaultVisibleColumnIds(allIds)
-      setVisibleColumnIds(new Set(defaultVis))
-      setColumnOrderIds(canonical)
-      void api
-        .post('/user-preferences/me', {
-          key: userViewPrefKey,
-          value: {
-            visibleColumnIds: defaultVis,
-            columnOrderIds: canonical,
-          },
-        })
-        .catch(() => {
-          /* localStorage already updated */
-        })
       return
     }
 

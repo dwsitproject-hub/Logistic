@@ -1,8 +1,11 @@
-import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { SPD_EFFECTIVE_STO_SQL } from './contractLogisticsStoDetailSql';
 import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
 import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql';
 import { TRUCKING_REALIZATIONS_JOIN } from './truckingRealizationSql';
+import {
+  sqlTruckingOutstandingQtyByIncoterm,
+  sqlTruckingPreferWbResolvedQty,
+} from './truckingQuantitySql';
 
 const SPD_EFFECTIVE_STO = SPD_EFFECTIVE_STO_SQL;
 
@@ -52,19 +55,6 @@ function buildContractStoLinesCte(skipSapJoin: boolean): string {
       )`;
 }
 
-function buildQtyMoveSection(skipSapJoin: boolean): string {
-  if (skipSapJoin) {
-    return '';
-  }
-  return `
-      list_contracts AS (
-        SELECT DISTINCT contract_number
-        FROM expanded
-        WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
-      ),
-      ${buildQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_number FROM list_contracts' })}`;
-}
-
 function buildQuantitySelects(skipSapJoin: boolean): {
   qtyDelivered: string;
   qtyReceive: string;
@@ -78,7 +68,7 @@ function buildQuantitySelects(skipSapJoin: boolean): {
     };
   }
 
-  const qtyDeliveredPerSto = `COALESCE((
+  const qtyDeliveredPerStoSap = `(
     SELECT SUM(NULLIF(regexp_replace(COALESCE(
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered'), ''),
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery'), ''),
@@ -91,9 +81,9 @@ function buildQuantitySelects(skipSapJoin: boolean): {
         spd.data->'raw'->>'Quantity Delivered',
         spd.data->'raw'->>'Quantity Delivery'
       )), '') IS NOT NULL
-  ), e.quantity_delivered, 0)`;
+  )`;
 
-  const qtyReceivePerSto = `COALESCE((
+  const qtyReceivePerStoSap = `(
     SELECT SUM(NULLIF(regexp_replace(COALESCE(
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
       NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
@@ -106,24 +96,31 @@ function buildQuantitySelects(skipSapJoin: boolean): {
         spd.data->'raw'->>'Quantity Receive',
         spd.data->'raw'->>'Qty Receive'
       )), '') IS NOT NULL
-  ), e.quantity_receive, 0)`;
+  )`;
 
-  const globalOutstanding = sqlContractGlobalOutstandingExpr({
-    contractQtyExpr: 'e.contract_qty',
-    incotermExpr: 'e.incoterm',
-    contractNumberExpr: 'e.contract_number',
-  });
+  const qtyDelivered = sqlTruckingPreferWbResolvedQty(
+    'e.quantity_delivered',
+    qtyDeliveredPerStoSap,
+  );
+  const qtyReceive = sqlTruckingPreferWbResolvedQty('e.quantity_receive', qtyReceivePerStoSap);
+  const outstanding = sqlTruckingOutstandingQtyByIncoterm(
+    qtyDelivered,
+    qtyReceive,
+    'e.contract_qty',
+    'e.incoterm',
+  );
 
   return {
-    qtyDelivered: qtyDeliveredPerSto,
-    qtyReceive: qtyReceivePerSto,
-    outstanding: globalOutstanding,
+    qtyDelivered,
+    qtyReceive,
+    outstanding,
   };
 }
 
 /**
  * Expand trucking list rows — one row per contract STO (contract_stos + SAP FRC/LCO).
- * Recomputes global contract outstanding and per-STO deliver/receive for the display STO.
+ * Delivery/receive prefer WB daily actuals when uploaded; else SAP per-STO. Outstanding
+ * follows the same resolved qty (contract − delivered/receive by incoterm).
  */
 export function buildTruckingListExpansionSql(
   innerSql: string,
@@ -132,7 +129,6 @@ export function buildTruckingListExpansionSql(
   const skipSapJoin = opts?.skipSapJoin === true;
   const selectOutstanding = opts?.selectOutstanding !== false;
   const qty = buildQuantitySelects(skipSapJoin);
-  const qtyMoveSection = buildQtyMoveSection(skipSapJoin);
 
   return `
       WITH trucking_source AS (
@@ -145,7 +141,7 @@ export function buildTruckingListExpansionSql(
           COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')) AS sto_line_resolved
         FROM trucking_source ts
         LEFT JOIN contract_sto_lines csl ON csl.contract_uuid = ts.contract_id
-      )${qtyMoveSection ? `,${qtyMoveSection}` : ''}
+      )
       SELECT
         e.id,
         e.operation_id,

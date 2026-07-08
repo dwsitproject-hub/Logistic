@@ -65,6 +65,17 @@ describe('shipmentList.service', () => {
     expect(text).toContain('LIMIT $3 OFFSET $4');
   });
 
+  it('buildShipmentListPageQuery prioritizes STO rows for PLANNED', () => {
+    const { text } = buildShipmentListPageQuery(
+      { ...baseCtx, tableStatusFilter: 'PLANNED' },
+      20,
+      0,
+    );
+    expect(text).toContain('fs.sto_number');
+    expect(text).toContain('THEN 0');
+    expect(text).toContain('fs.created_at DESC');
+  });
+
   it('buildShipmentListPageQuery uses ranked_sto total when STO paging (A)', () => {
     const { text, params } = buildShipmentListPageQuery(
       { ...baseCtx, usesStoKeyPaging: true, shipmentBaseCteSql: 'WITH ranked_sto AS (SELECT 1), paged_sto AS (SELECT 1)' },

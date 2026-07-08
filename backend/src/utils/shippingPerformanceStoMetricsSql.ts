@@ -7,6 +7,8 @@ import { SHIPPING_PERF_STO_GROUP_KEY_EXPR } from './shippingPerformanceStoSql';
 import {
   sqlShipmentListOutstandingKgExpr,
 } from './shipmentListQtySql';
+import { sqlNormalizeSapStoQtyToKgSql } from './contractPoGlobalMetricsSql';
+import { sqlSapQtyDeliveredKgFromSpd } from './contractLogisticsStoDetailSql';
 
 const SPD_STO_EXPR = (spdAlias = 'spd') => `NULLIF(TRIM(COALESCE(
   ${spdAlias}.sto_number::text,
@@ -16,17 +18,15 @@ const SPD_STO_EXPR = (spdAlias = 'spd') => `NULLIF(TRIM(COALESCE(
   ${spdAlias}.data->'contract'->>'sto_no'
 )), '')`;
 
-const SPD_RECEIVE_KG = `NULLIF(regexp_replace(COALESCE(
+const SPD_CONTRACT_QTY = `(SELECT cc.quantity_ordered::numeric FROM contracts cc WHERE TRIM(cc.contract_id) = TRIM(spd.contract_number) LIMIT 1)`;
+
+const SPD_RECEIVE_KG = sqlNormalizeSapStoQtyToKgSql(`NULLIF(regexp_replace(COALESCE(
   NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
   NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
   ''
-), '[^0-9\\.-]', '', 'g'), '')::numeric`;
+), '[^0-9\\.-]', '', 'g'), '')::numeric`, SPD_CONTRACT_QTY);
 
-const SPD_DELIVER_KG = `NULLIF(regexp_replace(COALESCE(
-  NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered'), ''),
-  NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery'), ''),
-  ''
-), '[^0-9\\.-]', '', 'g'), '')::numeric`;
+const SPD_DELIVER_KG = sqlSapQtyDeliveredKgFromSpd('spd', SPD_CONTRACT_QTY);
 
 const SPD_STO_QTY_KG = `NULLIF(regexp_replace(COALESCE(
   NULLIF(TRIM(spd.data->'contract'->>'sto_quantity'), ''),

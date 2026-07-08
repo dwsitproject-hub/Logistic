@@ -202,6 +202,34 @@ function isWidePlanningTemplateRow(row: TruckingActualsTemplateRow): boolean {
   return isUnplannedTemplateRow(row) || isPlannedTemplateRow(row)
 }
 
+/** Download template sort: Source (3rd Party → Interco) → Supplier → PO. */
+export function truckingTemplateSourceSortRank(sourceType: unknown): number {
+  const upper = String(sourceType ?? '').trim().toUpperCase()
+  if (upper.includes('3RD') && upper.includes('PARTY')) return 0
+  if (upper.includes('INTERCO') || upper.includes('INHOUSE') || upper.includes('IN-HOUSE')) return 1
+  return 2
+}
+
+export function compareTruckingActualsTemplateRows(
+  a: TruckingActualsTemplateRow,
+  b: TruckingActualsTemplateRow,
+): number {
+  const sourceCmp =
+    truckingTemplateSourceSortRank(a.source_type) - truckingTemplateSourceSortRank(b.source_type)
+  if (sourceCmp !== 0) return sourceCmp
+
+  const supplierCmp = String(a.supplier ?? '').localeCompare(String(b.supplier ?? ''), undefined, {
+    sensitivity: 'base',
+    numeric: true,
+  })
+  if (supplierCmp !== 0) return supplierCmp
+
+  return String(a.po_number ?? '').localeCompare(String(b.po_number ?? ''), undefined, {
+    sensitivity: 'base',
+    numeric: true,
+  })
+}
+
 function isWideTemplateMetadataHeader(header: string): boolean {
   const h = header.trim().toLowerCase()
   if (parseDdMmYyyyToIso(header.trim())) return false
@@ -369,13 +397,7 @@ export function buildActualsTemplateMatrix(
 
   const isWideTemplate = eligible.some(isWidePlanningTemplateRow)
   const sortedEligible = isWideTemplate
-    ? [...eligible].sort((a, b) =>
-        String(a.supplier ?? '')
-          .localeCompare(String(b.supplier ?? ''), undefined, {
-            sensitivity: 'base',
-            numeric: true,
-          }),
-      )
+    ? [...eligible].sort(compareTruckingActualsTemplateRows)
     : eligible
 
   const dateColumns = buildActualsTemplateDateColumns(sortedEligible, referenceToday)

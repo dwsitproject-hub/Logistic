@@ -38,6 +38,16 @@ export async function hasKlipShipmentActivity(
   shipmentUuid: string,
   contractUuid?: string,
 ): Promise<boolean> {
+  const shipmentId = String(shipmentUuid ?? '').trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(shipmentId)) {
+    return false;
+  }
+  const contractId = String(contractUuid ?? '').trim();
+  const contractIdParam =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(contractId)
+      ? contractId
+      : undefined;
+
   const rowRes = await runQuery<{
     shipment_id: string | null;
     operation_id: string | null;
@@ -46,7 +56,7 @@ export async function hasKlipShipmentActivity(
     db,
     `SELECT shipment_id, operation_id, daily_deliverables
      FROM shipments WHERE id = $1::uuid LIMIT 1`,
-    [shipmentUuid],
+    [shipmentId],
   );
   const row = rowRes.rows[0];
   if (!row) return false;
@@ -65,18 +75,18 @@ export async function hasKlipShipmentActivity(
     `SELECT 1 FROM audit_logs
      WHERE entity_type = 'SHIPMENT' AND entity_id = $1::uuid AND action = 'UPDATE'
      LIMIT 1`,
-    [shipmentUuid],
+    [shipmentId],
   );
   if (auditRes.rows.length > 0) return true;
 
   const docRes = await runQuery(
     db,
     `SELECT 1 FROM documents WHERE shipment_id = $1::uuid LIMIT 1`,
-    [shipmentUuid],
+    [shipmentId],
   );
   if (docRes.rows.length > 0) return true;
 
-  if (contractUuid && row.shipment_id) {
+  if (contractIdParam && row.shipment_id) {
     const assignRes = await runQuery(
       db,
       `SELECT 1 FROM user_sto_contract_assignments u
@@ -84,7 +94,7 @@ export async function hasKlipShipmentActivity(
        WHERE c.id = $1::uuid
          AND TRIM(u.sto_number::text) = TRIM($2::text)
        LIMIT 1`,
-      [contractUuid, row.shipment_id],
+      [contractIdParam, row.shipment_id],
     );
     if (assignRes.rows.length > 0) return true;
   }

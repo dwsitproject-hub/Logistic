@@ -95,6 +95,11 @@ import {
   sumDailyDeliverablesKg,
 } from '@/lib/truckingPlanningDeliverables'
 import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
+import {
+  ContractDetailModal,
+  fetchContractForDetailModalByPo,
+  type ContractDetailModalContract,
+} from '@/components/contracts/ContractDetailModal'
 
 export const CreateTruckingOperationModal = memo(function CreateTruckingOperationModal({
   open,
@@ -134,6 +139,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   const [creating, setCreating] = useState(false)
   const [loadingEdit, setLoadingEdit] = useState(false)
   const [editOperationId, setEditOperationId] = useState<string | null>(null)
+  const [contractDetailTarget, setContractDetailTarget] =
+    useState<ContractDetailModalContract | null>(null)
+  const [contractDetailLoading, setContractDetailLoading] = useState(false)
   const [activityLog, setActivityLog] = useState<
     Array<{
       id: string
@@ -822,11 +830,32 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   const step2Done = Boolean(newOperation.location || newOperation.loading_location || newOperation.unloading_location)
   const step3Done = Boolean(cd?.delivery_start_date)
   const poDisplay = (cd?.po_number || initialPoNumber || '').trim() || '—'
+  const poIsClickable = poDisplay !== '—' && Boolean(cd?.contract_id || cd?.po_number)
+
+  const openContractDetailFromPo = async () => {
+    if (!cd) return
+    const po = String(cd.po_number ?? initialPoNumber ?? '').trim()
+    const contractNumber = String(cd.contract_id ?? '').trim()
+    if (!po && !contractNumber) return
+    setContractDetailLoading(true)
+    try {
+      const contract = await fetchContractForDetailModalByPo(po || contractNumber, contractNumber)
+      if (contract) {
+        setContractDetailTarget(contract)
+      } else {
+        showNotification('error', 'Contract details not found for this PO.')
+      }
+    } finally {
+      setContractDetailLoading(false)
+    }
+  }
+
   const cargoReadinessDisplay =
     newOperation.cargo_readiness_date ||
     (cd?.cargo_readiness_date ? String(cd.cargo_readiness_date).slice(0, 10) : '')
 
   return (
+    <>
     <div
       className={`fixed inset-0 flex items-center justify-center bg-black/40 p-4 ${
         stacked ? 'z-[80]' : 'z-[60]'
@@ -1043,13 +1072,28 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       {[
                         { label: 'Contract Ext No', value: cd.contract_ext_no || cd.contract_id },
                         { label: 'Contract ID', value: cd.contract_id || '—' },
-                        { label: 'PO', value: poDisplay },
                       ].map((f) => (
                         <div key={f.label} className="px-3 py-2">
                           <div className="text-[10px] font-medium uppercase tracking-wide text-green-600">{f.label}</div>
                           <div className="text-xs font-semibold text-gray-800 mt-0.5 truncate">{f.value}</div>
                         </div>
                       ))}
+                      <div className="px-3 py-2">
+                        <div className="text-[10px] font-medium uppercase tracking-wide text-green-600">PO</div>
+                        {poIsClickable ? (
+                          <button
+                            type="button"
+                            className="text-xs font-semibold text-blue-600 hover:underline mt-0.5 truncate max-w-full text-left disabled:cursor-not-allowed disabled:opacity-50"
+                            title="View contract details"
+                            disabled={contractDetailLoading}
+                            onClick={() => void openContractDetailFromPo()}
+                          >
+                            {poDisplay}
+                          </button>
+                        ) : (
+                          <div className="text-xs font-semibold text-gray-800 mt-0.5 truncate">{poDisplay}</div>
+                        )}
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 md:grid-cols-3 divide-x divide-green-100 px-0">
                       {[
@@ -1700,5 +1744,12 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         </div>
       </div>
     </div>
+
+    <ContractDetailModal
+      contract={contractDetailTarget}
+      onClose={() => setContractDetailTarget(null)}
+      stacked
+    />
+    </>
   )
 })

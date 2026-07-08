@@ -11,6 +11,7 @@ describe('buildContractDetailsForStoSql', () => {
     expect(sql).toContain('po_lines');
     expect(sql).toContain('pl.po_number');
     expect(sql).toContain('pl.incoterm');
+    expect(sql).toContain('Quantity Delivery Vessel');
     expect(sql).toContain('po_number::text');
     expect(sql).toContain('UNION ALL');
     expect(sql).toContain("IN ('SEA', 'MIXED', 'MIX')");

@@ -14,7 +14,12 @@ import {
 import { resolveSapVesselIdentity } from '../utils/sapVesselFields';
 import { resolveSapTruckingQuantityDelivered } from '../utils/sapMasterV2UatFormat';
 import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
-import { upsertVesselLoadingPortsFromSapData } from './vesselLoadingPortsFromSap.service';
+import {
+  denormalizeShipmentPortsFromSap,
+  resolvePrimarySapDischargePortText,
+  resolvePrimarySapLoadingPortText,
+  upsertVesselLoadingPortsFromSapData,
+} from './vesselLoadingPortsFromSap.service';
 import {
   upsertTruckingRealization,
 } from './truckingRealization.service';
@@ -285,18 +290,37 @@ export class SapDataDistributionService {
           const shipmentPayload = { ...(parsedData.shipment || {}) };
           this.enrichShipmentSfalSfbdFromRaw(shipmentPayload, parsedData.raw);
 
-          result.shipmentId = await this.upsertShipment(
+          const shipmentId = await this.upsertShipment(
             client,
             shipmentPayload,
             result.contractId, // ensure we link shipment to whatever contract id we resolved
             vesselData,
-            userId
+            userId,
+            parsedData,
           );
-          logger.info('Shipment upserted successfully:', result.shipmentId);
-          
-          // Create or update vessel loading ports
-          await this.upsertVesselLoadingPorts(client, result.shipmentId, parsedData);
-          logger.info('Vessel loading ports processed for shipment:', result.shipmentId);
+          const shipmentUuid = this.toUuid(shipmentId);
+          if (!shipmentUuid) {
+            result.shipmentId = undefined;
+            logger.warn('Shipment upsert returned no UUID; skipping port sync and KLIP activity checks', {
+              contractId: result.contractId,
+              sto_no: parsedData.shipment?.sto_no,
+            });
+          } else {
+            result.shipmentId = shipmentUuid;
+            logger.info('Shipment upserted successfully:', result.shipmentId);
+
+            // Create or update vessel loading ports
+            await this.upsertVesselLoadingPorts(client, result.shipmentId, parsedData);
+            const klipProtectPorts = await hasKlipShipmentActivity(
+              client,
+              result.shipmentId,
+              result.contractId ?? undefined,
+            );
+            await denormalizeShipmentPortsFromSap(client, result.shipmentId, parsedData, {
+              protectKlip: klipProtectPorts,
+            });
+            logger.info('Vessel loading ports processed for shipment:', result.shipmentId);
+          }
         } catch (shipmentError) {
           logger.error('Failed to upsert shipment:', shipmentError);
           logger.error('Shipment data:', JSON.stringify(parsedData.shipment, null, 2));
@@ -631,8 +655,9 @@ export class SapDataDistributionService {
     shipmentData: any,
     contractId: string | undefined,
     vesselData: any,
-    _userId?: string
-  ): Promise<string> {
+    _userId?: string,
+    parsedData?: Record<string, unknown>,
+  ): Promise<string | null> {
     const contractUuid = this.toUuid(contractId);
     const shipmentIdFromSap = shipmentData.shipment_id || shipmentData.sto_no;
 
@@ -656,13 +681,35 @@ export class SapDataDistributionService {
     const loadingMethod = shipmentData.loading_method || null;
     const dischargeMethod = shipmentData.discharge_method || null;
 
-    // Prioritize vessel_loading_port_1 from SAP data, ensuring we don't use invalid values like '0.00'
-    let portOfLoading = shipmentData.vessel_loading_port_1 || shipmentData.port_of_loading || shipmentData.loading_port || shipmentData.loading_port_1 || null;
+    // Denormalize SAP Vessel Loading/Discharge Port onto shipment shell (list fast-path).
+    const sapPortContext =
+      parsedData ??
+      ({
+        shipment: shipmentData,
+        raw: (shipmentData as { raw?: Record<string, unknown> })?.raw ?? {},
+      } as Record<string, unknown>);
+    let portOfLoading = resolvePrimarySapLoadingPortText(sapPortContext);
+    if (!portOfLoading) {
+      portOfLoading =
+        shipmentData.vessel_loading_port_1 ||
+        shipmentData.vessel_loading_port ||
+        shipmentData.port_of_loading ||
+        shipmentData.loading_port ||
+        shipmentData.loading_port_1 ||
+        null;
+    }
     if (portOfLoading && (portOfLoading === '0.00' || portOfLoading.trim() === '')) {
       portOfLoading = null;
     }
-    
-    let portOfDischarge = shipmentData.vessel_discharge_port || shipmentData.port_of_discharge || shipmentData.discharge_port || null;
+
+    let portOfDischarge = resolvePrimarySapDischargePortText(sapPortContext);
+    if (!portOfDischarge) {
+      portOfDischarge =
+        shipmentData.vessel_discharge_port ||
+        shipmentData.port_of_discharge ||
+        shipmentData.discharge_port ||
+        null;
+    }
     if (portOfDischarge && (portOfDischarge === '0.00' || portOfDischarge.trim() === '')) {
       portOfDischarge = null;
     }
@@ -1163,7 +1210,7 @@ export class SapDataDistributionService {
       contractId,
       vesselName
     });
-    return '';
+    return null;
   }
   
   /**
@@ -1411,7 +1458,7 @@ export class SapDataDistributionService {
       // Status is re-derived from SAP start/last receive when not CANCELLED.
       await client.query(
         `UPDATE trucking_operations SET
-          shipment_id = COALESCE($1::uuid, shipment_id),
+          shipment_id = COALESCE(NULLIF($1::text, '')::uuid, shipment_id),
           location_sequence = COALESCE($2, location_sequence),
           cargo_readiness_date = COALESCE($3::date, cargo_readiness_date),
           ${truckingProtectedSql},

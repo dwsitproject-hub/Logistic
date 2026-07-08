@@ -28,6 +28,11 @@ import {
 } from '../services/pipelineDailySummary.service';
 import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
 import { resolveShipmentEditPayload } from '../services/shipmentEditPayload.service';
+import { fetchStoSapPreview } from '../services/stoSapPreview.service';
+import {
+  cancelKlipShipmentGroup,
+  KlipShipmentCancelError,
+} from '../services/cancelKlipShipment.service';
 import { syncVesselLoadingPortsFromLatestSap } from '../services/vesselLoadingPortsFromSap.service';
 import {
   attachPurchaseOrderToShipment,
@@ -115,8 +120,13 @@ import {
   buildStoLinkedContractCountSql,
   buildStoLinkedContractNumbersSql,
   buildStoLinkedPoNumbersSql,
+  buildStoLinkedSuppliersSql,
   contractsOnStoSubquery,
 } from '../utils/stoLinkedContractSql';
+import {
+  isOfficialSapStoNumber,
+  officialSapStoHasRegisteredPlanning,
+} from '../utils/sapStoShipmentPlanning';
 
 /** Normalize date-like fields for shipments / loading ports (YYYY-MM-DD or null). */
 function toShipmentDateOrNull(v: unknown): string | null {
@@ -435,6 +445,11 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       'c',
       'g.contract_count_from_join',
     );
+    const stoLinkedSuppliersSql = buildStoLinkedSuppliersSql(
+      groupedStoFromRow,
+      'c',
+      'g.suppliers',
+    );
 
     const contractMetaSelectCore = `
           MAX(NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '')) AS contract_reference_po,
@@ -480,19 +495,21 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           ${stoLinkedContractNumbersSql} AS contract_numbers,
           ${stoLinkedPoNumbersSql} AS po_numbers,
           ${stoLinkedContractCountSql} AS contract_count,
+          ${stoLinkedSuppliersSql} AS suppliers_linked,
           ${contractExtNoEnrichedSql}
         FROM shipment_base_core g
       )`;
 
-    /** Fast path for compact shell rows — join aggregates only, no per-STO subqueries. */
+    /** Fast path for compact shell rows — STO-linked contract/PO expansion without SAP agg CTEs. */
     const shipmentBaseShellEnrichCte = `,
       shipment_base AS (
         SELECT
           g.*,
-          g.contract_numbers_from_join AS contract_numbers,
-          g.po_numbers_from_join AS po_numbers,
-          g.contract_count_from_join AS contract_count,
-          g.contract_ext_no_from_join AS contract_ext_no
+          ${stoLinkedContractNumbersSql} AS contract_numbers,
+          ${stoLinkedPoNumbersSql} AS po_numbers,
+          ${stoLinkedContractCountSql} AS contract_count,
+          g.contract_ext_no_from_join AS contract_ext_no,
+          ${stoLinkedSuppliersSql} AS suppliers_linked
         FROM shipment_base_core g
       )`;
 
@@ -1117,6 +1134,7 @@ ${contractMetaSelectCore}
             cacheKey: `${cacheKey}:hybrid`,
             filterCacheKey,
             usesStoKeyPaging: effectiveListStoPaging,
+            tableStatusFilter: typeof status === 'string' ? status : undefined,
           },
           contractScope: {
             dateFrom,
@@ -1163,29 +1181,50 @@ ${contractMetaSelectCore}
         });
       }
 
-      const data = await resolveShipmentsListForRequest(req, {
-        shipmentBaseCteSql: shipmentBaseCteForList,
-        outerSql,
-        innerParams,
-        outerParams,
-        skipSapJoin,
-        cacheKey,
-        filterCacheKey,
-        usesStoKeyPaging: effectiveListStoPaging,
-      });
       if (includeSummary) {
         const summaryCacheKey = buildShipmentSummaryCacheKey(
           shipmentListFilterCacheKey,
           scopeStatusParam,
         );
-        const [{ summaryRow: sr, totalCount: tc }, unplannedBreakdownForSummary] = await Promise.all([
-          loadShipmentListSummary(
-            summaryCountQuery,
-            [...section1SummaryFilterParams, ...summaryScopeParams],
-            summaryCacheKey,
-          ),
-          loadSection1UnplannedBreakdown(),
+        const loadSummaryBundle = async () => {
+          const fromDaily = await tryPipelineDailyShipmentSummary();
+          if (fromDaily) {
+            return {
+              summaryRow: fromDaily.summaryRow,
+              totalCount: fromDaily.totalCount,
+              unplannedBreakdownForSummary: fromDaily.unplannedBreakdown,
+            };
+          }
+          const [loaded, unplannedBd] = await Promise.all([
+            loadShipmentListSummary(
+              summaryCountQuery,
+              [...section1SummaryFilterParams, ...summaryScopeParams],
+              summaryCacheKey,
+            ),
+            loadSection1UnplannedBreakdown(),
+          ]);
+          return {
+            summaryRow: loaded.summaryRow,
+            totalCount: loaded.totalCount,
+            unplannedBreakdownForSummary: unplannedBd,
+          };
+        };
+
+        const [data, summaryBundle] = await Promise.all([
+          resolveShipmentsListForRequest(req, {
+            shipmentBaseCteSql: shipmentBaseCteForList,
+            outerSql,
+            innerParams,
+            outerParams,
+            skipSapJoin,
+            cacheKey,
+            filterCacheKey,
+            usesStoKeyPaging: effectiveListStoPaging,
+            tableStatusFilter: typeof status === 'string' ? status : undefined,
+          }),
+          loadSummaryBundle(),
         ]);
+        const { summaryRow: sr, totalCount: tc, unplannedBreakdownForSummary } = summaryBundle;
         timingsMs.total = performance.now() - tReq0;
         emitShipmentListTimings(res, timingsMs, {
           path: skipSapJoin ? 'list-page-shell-with-summary' : 'list-page-sap-with-summary',
@@ -1206,6 +1245,18 @@ ${contractMetaSelectCore}
           },
         });
       }
+
+      const data = await resolveShipmentsListForRequest(req, {
+        shipmentBaseCteSql: shipmentBaseCteForList,
+        outerSql,
+        innerParams,
+        outerParams,
+        skipSapJoin,
+        cacheKey,
+        filterCacheKey,
+        usesStoKeyPaging: effectiveListStoPaging,
+        tableStatusFilter: typeof status === 'string' ? status : undefined,
+      });
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
         path: skipSapJoin
@@ -3732,6 +3783,27 @@ export const checkStoExists = async (req: AuthRequest, res: Response) => {
   }
 };
 
+/** SAP vessel / discharge preview for Add Shipment when STO already exists in SAP. */
+export const getStoSapPreview = async (req: AuthRequest, res: Response) => {
+  try {
+    const sto = String(req.query.sto ?? '').trim();
+    if (!sto) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'STO number is required' },
+      });
+    }
+    const data = await fetchStoSapPreview(sto);
+    return res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Get STO SAP preview error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch SAP STO preview' },
+    });
+  }
+};
+
 // Create new shipment
 // Get contract details with STO quantity assigned for a specific STO
 export const getContractDetailsForSto = async (req: AuthRequest, res: Response) => {
@@ -3867,15 +3939,27 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
     // Only check STO if it's explicitly provided and not empty
     const hasStoNumber = stoNumber && stoNumber.trim() !== ''
     if (hasStoNumber) {
-      const stoCheck = await query(`
-        SELECT sto_number FROM contracts WHERE sto_number = $1 LIMIT 1
-      `, [stoNumber]);
+      const stoTrim = String(stoNumber).trim();
+      if (isOfficialSapStoNumber(stoTrim)) {
+        if (await officialSapStoHasRegisteredPlanning(stoTrim)) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              message: `STO Number ${stoTrim} already has shipment planning. Please update the existing shipment instead of creating a new one.`,
+            },
+          });
+        }
+      } else {
+        const stoCheck = await query(`
+          SELECT sto_number FROM contracts WHERE sto_number = $1 LIMIT 1
+        `, [stoTrim]);
 
-      if (stoCheck.rows.length > 0) {
-        return res.status(400).json({
-          success: false,
-          error: { message: `STO Number ${stoNumber} already exists. Please update the existing shipment instead of creating a new one.` },
-        });
+        if (stoCheck.rows.length > 0) {
+          return res.status(400).json({
+            success: false,
+            error: { message: `STO Number ${stoTrim} already exists. Please update the existing shipment instead of creating a new one.` },
+          });
+        }
       }
     }
 
@@ -3900,27 +3984,7 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
     const shipmentIds = [];
     const timestamp = Date.now().toString()
     
-    // Validate assigned qty sum <= vessel capacity (if provided)
-    const qtyForCapacity =
-      poQtyAssigned && typeof poQtyAssigned === 'object' && Object.keys(poQtyAssigned as object).length > 0
-        ? poQtyAssigned
-        : contractQtyAssigned;
-    if (vesselCapacity != null && qtyForCapacity && typeof qtyForCapacity === 'object') {
-      const cap = parseFloat(String(vesselCapacity))
-      if (!Number.isNaN(cap)) {
-        const sumAssigned = Object.values(qtyForCapacity as Record<string, any>).reduce((sum: number, v: any) => {
-          const n = parseFloat(String(v))
-          return sum + (Number.isNaN(n) ? 0 : n)
-        }, 0)
-        if (sumAssigned > cap) {
-          return res.status(400).json({
-            success: false,
-            error: { message: `Sum of assigned PO quantities (${sumAssigned} MT) cannot exceed Vessel Capacity (${cap} MT).` },
-          });
-        }
-      }
-    }
-
+    // Vessel capacity vs plan qty validation temporarily disabled (incomplete master vessel data).
     let resolvedOperationId: string | null =
       operationId != null && String(operationId).trim() !== ''
         ? String(operationId).trim()
@@ -4165,15 +4229,20 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
           );
         }
       } else if (hasContractAssignments) {
-        for (const [contractNumber, qty] of Object.entries(contractQtyAssigned as Record<string, any>)) {
-          if (!contractNumber) continue;
+        for (const [rawKey, qty] of Object.entries(contractQtyAssigned as Record<string, any>)) {
+          if (!rawKey) continue;
           const n = parseFloat(String(qty));
-          await upsertPoQtyAssignment(
-            assignmentKey,
-            String(contractNumber).trim(),
-            null,
-            Number.isNaN(n) ? 0 : n,
-          );
+          if (Number.isNaN(n) || n <= 0) continue;
+          const key = String(rawKey).trim();
+          let contractNumber = key;
+          let poNumber: string | null = null;
+          if (key.includes('::')) {
+            const [cn, po] = key.split('::');
+            contractNumber = String(cn ?? '').trim();
+            poNumber = String(po ?? '').trim() || null;
+          }
+          if (!contractNumber) continue;
+          await upsertPoQtyAssignment(assignmentKey, contractNumber, poNumber, n);
         }
       }
     }
@@ -4255,5 +4324,50 @@ export const getShipmentActivityLog = async (req: AuthRequest, res: Response) =>
   } catch (error) {
     logger.error('Get shipment activity log error:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to load shipment activity log' } });
+  }
+};
+
+/** Cancel KLIP-created shipment group (no official SAP STO) + clear plan qty assignments. */
+export const cancelKlipShipment = async (req: AuthRequest, res: Response) => {
+  try {
+    const shipmentId = String(req.params.id ?? '').trim();
+    if (!shipmentId) {
+      return res.status(400).json({ success: false, error: { message: 'Shipment ID is required' } });
+    }
+
+    const remark = String(req.body?.remark ?? '').trim();
+    if (!remark) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Cancellation remark is required' },
+      });
+    }
+
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: { message: 'Unauthorized' } });
+    }
+
+    const result = await cancelKlipShipmentGroup(shipmentId, remark, userId);
+    return res.json({
+      success: true,
+      message: 'Shipment cancelled successfully',
+      data: {
+        id: shipmentId,
+        ...result,
+      },
+    });
+  } catch (error) {
+    if (error instanceof KlipShipmentCancelError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        error: { message: error.message },
+      });
+    }
+    logger.error('Cancel KLIP shipment error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to cancel shipment' },
+    });
   }
 };

@@ -2,12 +2,16 @@
 
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { FileText, Pencil, Ship } from 'lucide-react'
-import { resolveShipmentTablePrimaryAction } from '@/lib/shipmentViewTableActions'
+import { FileText, Pencil, Ship, Ban } from 'lucide-react'
+import { canCancelKlipShipment, resolveShipmentTablePrimaryAction } from '@/lib/shipmentViewTableActions'
 
 export interface ShipmentViewTableRowActionsShipment {
   id: string
   status?: string | null
+  row_kind?: string | null
+  sto_number?: string | null
+  sto_key?: string | null
+  operation_id?: string | null
 }
 
 export interface ShipmentViewTableRowActionsProps {
@@ -15,6 +19,8 @@ export interface ShipmentViewTableRowActionsProps {
   onAddShipment: () => void
   onEditShipment: () => void
   onViewShipment: () => void
+  onCancelShipment?: () => void
+  cancelShipmentLoading?: boolean
   onViewDocs: () => void
 }
 
@@ -27,9 +33,12 @@ export function ShipmentViewTableRowActions({
   onAddShipment,
   onEditShipment,
   onViewShipment,
+  onCancelShipment,
+  cancelShipmentLoading = false,
   onViewDocs,
 }: ShipmentViewTableRowActionsProps) {
   const primary = resolveShipmentTablePrimaryAction(shipment.status)
+  const showCancel = canCancelKlipShipment(shipment) && typeof onCancelShipment === 'function'
 
   const primaryButton = (() => {
     if (primary === 'add') {
@@ -94,6 +103,27 @@ export function ShipmentViewTableRowActions({
   return (
     <div className="flex items-center justify-end gap-2 min-h-[40px]">
       {primaryButton}
+      {showCancel ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={onCancelShipment}
+              disabled={cancelShipmentLoading}
+              className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
+              aria-label="Cancel shipment"
+            >
+              {cancelShipmentLoading ? (
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-red-300 border-t-red-700" />
+              ) : (
+                <Ban className="h-4 w-4" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">Cancel shipment (KLIP only)</TooltipContent>
+        </Tooltip>
+      ) : null}
       <Tooltip>
         <TooltipTrigger asChild>
           <Button

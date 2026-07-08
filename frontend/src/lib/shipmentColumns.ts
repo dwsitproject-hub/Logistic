@@ -3,6 +3,7 @@
  * Matches Contract Performance compact header sizing behavior.
  */
 
+import { migrateSavedColumnLayout } from '@/lib/columnLayoutMigration'
 import {
   buildCompactTableColumnWidthTracks,
   resolveCompactColumnWidthPx,
@@ -29,8 +30,11 @@ export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
   'ata_vessel_complete_discharge',
 ] as const
 
-/** Bump when default column order/visibility changes — resets users without matching saved layout. */
-export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v6'
+/** Removed from column picker — use loading_port / discharge_port (SAP-resolved). */
+export const SHIPMENT_OBSOLETE_COLUMN_IDS = ['port_of_loading', 'port_of_discharge'] as const
+
+/** Bump when default column order/visibility changes — triggers one-time layout migration. */
+export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v7'
 
 export const SHIPMENT_COLUMN_LAYOUT_VERSION_KEY = 'shipments.compact.columnLayoutVersion'
 
@@ -64,8 +68,6 @@ export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   delivery_start: 108,
   delivery_end: 108,
   b2b_flag: 80,
-  port_of_loading: 100,
-  port_of_discharge: 100,
   vessel_code: 88,
   estimated_nautical_miles: 96,
   vessel_draft: 88,
@@ -163,4 +165,24 @@ export function buildShipmentColumnWidthTracks(
       hasSort: true,
     }),
   )
+}
+
+/** Migrate saved shipment column prefs: drop raw port columns, ensure SAP port columns visible. */
+export function migrateShipmentColumnLayout(
+  visibleColumnIds: readonly string[],
+  columnOrderIds: readonly string[],
+): { visibleColumnIds: string[]; columnOrderIds: string[] } {
+  const migrated = migrateSavedColumnLayout({
+    visibleColumnIds,
+    columnOrderIds,
+    obsoleteColumnIds: SHIPMENT_OBSOLETE_COLUMN_IDS,
+    ensureVisibleIds: ['loading_port', 'discharge_port'],
+  })
+  return {
+    visibleColumnIds: migrated.visibleColumnIds,
+    columnOrderIds: mergeShipmentColumnOrder(migrated.columnOrderIds, [
+      ...migrated.visibleColumnIds,
+      ...migrated.columnOrderIds,
+    ]),
+  }
 }

@@ -3,11 +3,13 @@ import { wrapTruckingListQueryWithStoExpansion } from './truckingListStoExpandSq
 import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql';
 
 describe('truckingListStoExpandSql', () => {
-  it('wrapTruckingListQueryWithStoExpansion expands by contract_stos and qty_move', () => {
+  it('wrapTruckingListQueryWithStoExpansion expands by contract_stos with WB-prefer qty', () => {
     const sql = wrapTruckingListQueryWithStoExpansion('SELECT 1 AS id');
     expect(sql).toContain('contract_stos');
-    expect(sql).toContain('qty_move');
     expect(sql).toContain('expanded');
+    expect(sql).toContain('trucking_daily_actuals');
+    expect(sql).toContain("= 'FRC'");
+    expect(sql).toContain("= 'LCO'");
   });
 
   it('recomputes pipeline status per expanded STO line (not passthrough)', () => {

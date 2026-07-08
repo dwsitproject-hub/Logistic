@@ -25,11 +25,13 @@ import {
   checkStoExists,
   createShipment,
   getContractDetailsForSto,
+  getStoSapPreview,
   getShippingPerformance,
   getShippingPerformanceSummary,
   getShippingPerformanceTree,
   updateStoQtyAssigned,
   getShipmentActivityLog,
+  cancelKlipShipment,
 } from '../controllers/shipment.controller';
 import {
   getShipmentAtaOverride,
@@ -67,11 +69,13 @@ router.get('/contracts/suggestions', getContractSuggestions);
 router.get('/contracts/validate', validateContractNumber);
 router.get('/contracts/:contractId/purchase-orders', getContractPurchaseOrders);
 router.get('/contracts/details', getContractDetailsForSto);
+router.get('/sto-sap-preview', getStoSapPreview);
 router.put('/contracts/sto-qty', auditLog('UPDATE', 'STO_QTY_ASSIGNED'), updateStoQtyAssigned);
 router.get('/check-sto/:stoNumber', checkStoExists);
 router.post('/suggest-vessel', suggestShipmentVessel);
 router.post('/suggest-eta', suggestShipmentEta);
 router.post('/', auditLog('CREATE', 'SHIPMENT'), createShipment);
+router.post('/:id/cancel', auditLog('CANCEL', 'SHIPMENT'), cancelKlipShipment);
 
 // Bulk update shipments from template CSV
 router.post('/bulk-update', shipmentPlanningUpload.single('file'), auditLog('UPDATE', 'SHIPMENT'), bulkUpdateShipments);

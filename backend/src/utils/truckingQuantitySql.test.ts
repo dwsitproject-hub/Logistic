@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   sqlNormalizeSapTruckingQtyToKg,
   sqlTruckingOutstandingQtyByIncoterm,
+  sqlTruckingPreferWbResolvedQty,
   sqlTruckingQuantityDeliveredCoalesce,
 } from './truckingQuantitySql';
 
@@ -24,5 +25,12 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('qty_recv');
     expect(sql).toContain("= 'LCO'");
     expect(sql).toContain('qty_del');
+  });
+
+  it('sqlTruckingPreferWbResolvedQty checks trucking_daily_actuals before SAP per-STO', () => {
+    const sql = sqlTruckingPreferWbResolvedQty('e.quantity_delivered', 'sap_per_sto');
+    expect(sql).toContain('trucking_daily_actuals');
+    expect(sql).toContain('e.quantity_delivered');
+    expect(sql).toContain('sap_per_sto');
   });
 });

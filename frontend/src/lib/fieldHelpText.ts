@@ -59,7 +59,7 @@ export const FIELD_HELP = {
   dashboardKpiFinance: `Payment totals and overdue amounts aggregate payments linked to contracts in filter scope.`,
 
   // Trucking
-  lateIndicator: `On Time / Late is calculated by comparing actual dates vs ETA/Due Date (when available). If required dates are missing, this shows "-".`,
+  lateIndicator: `On Time / Late compares Due Date Delivery End vs ATA/ETA Trucking Last Receive Date (actual first, then ETA; same calendar day = On Time). Shows "-" if Due Date Delivery End is missing.`,
   gainLossPct: `Calculated as (Delivered - Sent) / Sent × 100%. Positive means gain, negative means loss.`,
   gainLossAmount: `Calculated as Delivered - Sent (in Kg). Positive means gain, negative means loss.`,
   truckingOaBudget: `OA Budget is the planned operational allowance (budget) for the trucking leg.`,
@@ -88,7 +88,7 @@ export const FIELD_HELP = {
   shipmentOutstandingQty: `SAP STO Qty minus Qty Receive/Delivered (per incoterm) for this shipment/STO. Same for Open and Close; Close = status COMPLETED.`,
 
   // Shipments
-  shipmentLateIndicator: `On Time / Late is based on SLA days and actual vessel milestone dates. If key dates are missing, this shows "-".`,
+  shipmentLateIndicator: `On Time / Late compares Due Date Delivery End vs ATA/ETA Vessel Complete Discharge (actual first, then ETA; same calendar day = On Time). Shows "-" if Due Date Delivery End is missing.`,
   shipmentSlaDays: `SLA Days is the target duration for the shipment/leg. Used to flag delayed shipments when actual duration exceeds SLA.`,
   vesselOaBudget: `Vessel OA Budget is the planned operational allowance (budget) for the vessel/shipment leg.`,
   vesselOaActual: `Vessel OA Actual is the realized operational allowance (actual cost) for the vessel/shipment leg.`,

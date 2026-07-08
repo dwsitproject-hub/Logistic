@@ -1,15 +1,35 @@
 /**
  * Quantity units in KLIP:
  * - shipments.quantity_delivered / actual_vessel_qty_receive: kg (DB)
- * - GET /shipments/contracts/details quantity_delivered|quantity_receive: MT (SAP raw)
+ * - GET /shipments/contracts/details quantity_delivered|quantity_receive: kg (SAP-normalized)
  * - UI edit grid (MtQtyInput): kg internally, MT display
  */
 
+/** Legacy: unconditional MT → kg (prefer sapContractDetailQtyToKg for contract-detail API). */
 export function sapDeliveredOrReceiveMtToKg(mt: number | null | undefined): number | null {
   if (mt === null || mt === undefined) return null
   const n = Number(mt)
   if (!Number.isFinite(n)) return null
   return n * 1000
+}
+
+/** SAP contract-detail qty → kg (MT-scale when value is much smaller than contract qty). */
+export function sapContractDetailQtyToKg(
+  value: number | null | undefined,
+  contractQtyKg?: number | null,
+): number | null {
+  if (value === null || value === undefined) return null
+  const n = Number(value)
+  if (!Number.isFinite(n)) return null
+  const contractKg = contractQtyKg ?? 0
+  if (contractKg > 0 && n > 0 && n <= contractKg / 100) {
+    return n * 1000
+  }
+  return n
+}
+
+function isMeaningfulManualShipmentQtyKg(kg: number | null): boolean {
+  return kg !== null && kg > 0
 }
 
 export function shipmentStoredQtyKg(value: number | string | null | undefined): number | null {
@@ -27,11 +47,11 @@ export function mergeShipmentQtyOverridesOnContractRows<
   const sumDelivered = rows.reduce((s, r) => s + (r.quantity_delivered ?? 0), 0)
   const sumReceive = rows.reduce((s, r) => s + (r.quantity_receive ?? 0), 0)
   const deliveredDiffers =
-    shipmentDeliveredKg !== null
-    && Math.abs(sumDelivered - shipmentDeliveredKg) > 0.5
+    isMeaningfulManualShipmentQtyKg(shipmentDeliveredKg)
+    && Math.abs(sumDelivered - shipmentDeliveredKg!) > 0.5
   const receiveDiffers =
-    shipmentReceiveKg !== null
-    && Math.abs(sumReceive - shipmentReceiveKg) > 0.5
+    isMeaningfulManualShipmentQtyKg(shipmentReceiveKg)
+    && Math.abs(sumReceive - shipmentReceiveKg!) > 0.5
 
   if (rows.length === 1) {
     const row = rows[0]
@@ -46,20 +66,30 @@ export function mergeShipmentQtyOverridesOnContractRows<
 
   if (!deliveredDiffers && !receiveDiffers) return rows
 
-  // Multi-contract: keep SAP split; adjust the largest delivered row so the total matches shipment (kg).
-  if (deliveredDiffers && shipmentDeliveredKg !== null) {
+  // Multi-PO: per-row SAP delivered/receive is authoritative when the shipment shell
+  // stores a partial total (often one PO line). Only redistribute when the user
+  // raised the shipment header above the SAP row sum.
+  if (rows.length > 1) {
     const copy = rows.map((r) => ({ ...r }))
-    let idx = 0
-    for (let i = 1; i < copy.length; i += 1) {
-      if ((copy[i].quantity_delivered ?? 0) > (copy[idx].quantity_delivered ?? 0)) idx = i
+    if (deliveredDiffers && shipmentDeliveredKg !== null && shipmentDeliveredKg > sumDelivered + 0.5) {
+      let idx = 0
+      for (let i = 1; i < copy.length; i += 1) {
+        if ((copy[i].quantity_delivered ?? 0) > (copy[idx].quantity_delivered ?? 0)) idx = i
+      }
+      copy[idx] = {
+        ...copy[idx],
+        quantity_delivered: shipmentDeliveredKg - sumDelivered + (copy[idx].quantity_delivered ?? 0),
+      }
     }
-    const otherSum = copy.reduce(
-      (s, r, i) => (i === idx ? s : s + (r.quantity_delivered ?? 0)),
-      0,
-    )
-    copy[idx] = {
-      ...copy[idx],
-      quantity_delivered: Math.max(0, shipmentDeliveredKg - otherSum),
+    if (receiveDiffers && shipmentReceiveKg !== null && shipmentReceiveKg > sumReceive + 0.5) {
+      let idx = 0
+      for (let i = 1; i < copy.length; i += 1) {
+        if ((copy[i].quantity_receive ?? 0) > (copy[idx].quantity_receive ?? 0)) idx = i
+      }
+      copy[idx] = {
+        ...copy[idx],
+        quantity_receive: shipmentReceiveKg - sumReceive + (copy[idx].quantity_receive ?? 0),
+      }
     }
     return copy
   }
@@ -77,7 +107,13 @@ export function resolveShipmentListDeliveredKg(shipment: {
     shipmentStoredQtyKg(shipment.quantity_delivered)
     ?? shipmentStoredQtyKg(shipment.total_quantity_delivered)
   const sap = shipmentStoredQtyKg(shipment.quantity_delivered_sap)
-  if (manual !== null && sap !== null && Math.abs(manual - sap) > 0.5) return manual
+  if (
+    isMeaningfulManualShipmentQtyKg(manual)
+    && sap !== null
+    && Math.abs(manual! - sap) > 0.5
+  ) {
+    return manual
+  }
   if (sap !== null) return sap
   return manual
 }
@@ -88,7 +124,13 @@ export function resolveShipmentListReceiveKg(shipment: {
 }): number | null {
   const manual = shipmentStoredQtyKg(shipment.actual_vessel_qty_receive)
   const sap = shipmentStoredQtyKg(shipment.quantity_receive)
-  if (manual !== null && sap !== null && Math.abs(manual - sap) > 0.5) return manual
+  if (
+    isMeaningfulManualShipmentQtyKg(manual)
+    && sap !== null
+    && Math.abs(manual! - sap) > 0.5
+  ) {
+    return manual
+  }
   if (sap !== null) return sap
   return manual
 }

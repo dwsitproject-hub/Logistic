@@ -120,10 +120,14 @@ export function mapStoContractDetailToPoOption(detail: Record<string, unknown>):
       po_number: poNumber || null,
       quantity_ordered: detail.contract_qty,
       outstanding_quantity: detail.outstanding_qty,
+      outstanding_quantity_planning: detail.outstanding_qty_planning,
+      outstanding_quantity_planning_budget: detail.outstanding_qty_planning_budget,
       delivery_start_date: detail.delivery_start_date,
       delivery_end_date: detail.delivery_end_date,
       contract_ext_no: detail.contract_ext_no,
       sto_qty_assigned: detail.sto_qty_assigned,
+      sap_sto_qty: detail.sap_sto_qty,
+      shipment_plan_qty: detail.shipment_plan_qty,
       locked_from_sap: detail.locked_from_sap,
     },
   }
@@ -228,6 +232,27 @@ export type ShipmentEditContextData = {
   has_sap_sto?: boolean
   can_add_po?: boolean
   add_po_blocked_reason?: string | null
+}
+
+export type StoSapPreview = {
+  has_sap_sto: boolean
+  vessel_name: string | null
+  port_of_discharge: string | null
+}
+
+export async function fetchStoSapPreview(stoNumber: string): Promise<StoSapPreview> {
+  const sto = String(stoNumber ?? '').trim()
+  if (!sto) {
+    return { has_sap_sto: false, vessel_name: null, port_of_discharge: null }
+  }
+  const api = (await import('@/lib/api')).default
+  const res = await api.get('/shipments/sto-sap-preview', { params: { sto } })
+  const data = res.data?.data ?? {}
+  return {
+    has_sap_sto: Boolean(data.has_sap_sto),
+    vessel_name: data.vessel_name != null ? String(data.vessel_name) : null,
+    port_of_discharge: data.port_of_discharge != null ? String(data.port_of_discharge) : null,
+  }
 }
 
 export async function attachPurchaseOrderToShipment(args: {

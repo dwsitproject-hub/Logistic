@@ -258,18 +258,6 @@ export async function attachPurchaseOrderToShipment(args: {
     };
   }
 
-  const vesselCapacity = anchor.vessel_capacity != null ? Number(anchor.vessel_capacity) : null;
-  if (vesselCapacity != null && Number.isFinite(vesselCapacity) && vesselCapacity > 0 && qtyKg > 0) {
-    const qtyMt = qtyKg / 1000;
-    if (qtyMt > vesselCapacity + 1e-9) {
-      return {
-        ok: false,
-        status: 400,
-        message: `Shipment Plan Qty (${qtyMt} MT) exceeds vessel capacity (${vesselCapacity} MT)`,
-      };
-    }
-  }
-
   const existingKeys = await fetchExistingPoKeys(context.lookup_key, context.contract_numbers);
   if (existingKeys.has(poLineKey(contractNumber, poNumber))) {
     return { ok: false, status: 409, message: 'This PO is already linked to this shipment group' };

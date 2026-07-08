@@ -245,6 +245,19 @@ export class SapMasterV2ImportService {
         truckingOperationsCreated: 0,
         paymentsCreated: 0
       };
+
+      const maybeRefreshImportProgress = async () => {
+        const rowsDone = processedRecords + failedRecords + skippedRecords;
+        if (rowsDone === 1 || rowsDone % 25 === 0) {
+          if (rowsDone % 100 === 0) {
+            logger.info(`Progress: ${rowsDone}/${validDataRows.length} records processed`);
+          }
+          await pool.query(
+            `UPDATE sap_data_imports SET processed_records = $1, failed_records = $2 WHERE id = $3`,
+            [processedRecords + skippedRecords, failedRecords, importId],
+          );
+        }
+      };
       
       for (let i = 0; i < validDataRows.length; i++) {
         const savepointName = `sp_mv2_${i}`;
@@ -334,6 +347,7 @@ export class SapMasterV2ImportService {
 
               await client.query(`RELEASE SAVEPOINT ${savepointName}`);
               processedRecords++;
+              await maybeRefreshImportProgress();
               continue;
             }
           }
@@ -360,15 +374,7 @@ export class SapMasterV2ImportService {
           await client.query(`RELEASE SAVEPOINT ${savepointName}`);
 
           processedRecords++;
-
-          // Log progress every 100 records
-          if ((i + 1) % 100 === 0) {
-            logger.info(`Progress: ${i + 1}/${validDataRows.length} records processed`);
-            await pool.query(
-              `UPDATE sap_data_imports SET processed_records = $1, failed_records = $2 WHERE id = $3`,
-              [processedRecords, failedRecords, importId]
-            );
-          }
+          await maybeRefreshImportProgress();
 
         } catch (error) {
           // Rollback only this row's changes and continue
@@ -397,6 +403,7 @@ export class SapMasterV2ImportService {
               logger.error('Failed to record row error to sap_raw_data', { rawDataId, updateErr });
             }
           }
+          await maybeRefreshImportProgress();
         }
       }
       

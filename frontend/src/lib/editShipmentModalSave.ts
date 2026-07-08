@@ -97,6 +97,11 @@ export type LoadingPortRef = {
   eta_loading_start?: string | null
   eta_loading_completed?: string | null
   eta_vessel_sailed?: string | null
+  ata_vessel_arrival?: string | null
+  ata_vessel_berthed?: string | null
+  ata_loading_start?: string | null
+  ata_loading_completed?: string | null
+  ata_vessel_sailed?: string | null
 }
 
 export type SaveEditShipmentInput = {

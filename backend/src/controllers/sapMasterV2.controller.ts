@@ -174,12 +174,37 @@ export const getImportStatus = async (req: Request, res: Response): Promise<void
 export const getAllImports = async (_req: Request, res: Response): Promise<void> => {
   try {
     const pool = (await import('../database/connection')).default;
+
+    // Mark imports stuck after server restart (processing but no rows ever written).
+    await pool.query(
+      `UPDATE sap_data_imports
+       SET status = 'failed',
+           error_log = COALESCE(error_log, $1)
+       WHERE status IN ('processing', 'pending')
+         AND import_timestamp < NOW() - INTERVAL '30 minutes'
+         AND NOT EXISTS (SELECT 1 FROM sap_raw_data srd WHERE srd.import_id = sap_data_imports.id)`,
+      [JSON.stringify(['Import interrupted — no rows were processed. Please upload the file again.'])],
+    );
+
     const result = await pool.query(
-      `SELECT id, import_date, import_timestamp, status, total_records, 
-              processed_records, failed_records 
-       FROM sap_data_imports 
-       ORDER BY import_timestamp DESC 
-       LIMIT 50`
+      `SELECT
+         i.id,
+         i.import_date,
+         i.import_timestamp,
+         i.status,
+         i.total_records,
+         COALESCE(rc.processed, 0)::int AS processed_records,
+         COALESCE(rc.failed, 0)::int AS failed_records
+       FROM sap_data_imports i
+       LEFT JOIN LATERAL (
+         SELECT
+           COUNT(*) FILTER (WHERE status IN ('processed', 'skipped')) AS processed,
+           COUNT(*) FILTER (WHERE status = 'failed') AS failed
+         FROM sap_raw_data
+         WHERE import_id = i.id
+       ) rc ON TRUE
+       ORDER BY i.import_timestamp DESC
+       LIMIT 50`,
     );
     
     res.json({

@@ -1,6 +1,8 @@
 import {
   buildVesselLoadingPortsFromSapParsedData,
   extractLoadingPortNamesFromSapData,
+  resolvePrimarySapDischargePortText,
+  resolvePrimarySapLoadingPortText,
   sapParsedDataHasMultipleLoadingPorts,
 } from './vesselLoadingPortsFromSap.service';
 
@@ -47,5 +49,30 @@ describe('vesselLoadingPortsFromSap.service', () => {
       combined.add(name.toUpperCase());
     }
     expect(combined.size).toBe(2);
+  });
+
+  it('resolves primary loading port from raw when normalized field is placeholder', () => {
+    expect(
+      resolvePrimarySapLoadingPortText({
+        raw: { 'Vessel Loading Port': 'PORT DUMAI' },
+        shipment: { vessel_loading_port_1: '0.00' },
+      }),
+    ).toBe('PORT DUMAI');
+  });
+
+  it('skips numeric SAP port codes for shell denormalization', () => {
+    expect(
+      resolvePrimarySapLoadingPortText({
+        shipment: { vessel_loading_port_1: '22.03' },
+      }),
+    ).toBeNull();
+  });
+
+  it('resolves discharge port from SAP shipment fields', () => {
+    expect(
+      resolvePrimarySapDischargePortText({
+        shipment: { vessel_discharge_port: 'PORT TANJUNG PRIOK' },
+      }),
+    ).toBe('PORT TANJUNG PRIOK');
   });
 });

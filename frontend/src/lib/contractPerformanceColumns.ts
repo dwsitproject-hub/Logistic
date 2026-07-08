@@ -3,6 +3,7 @@
  * Isolated from `/contracts` and other pages; do not import from shared table configs elsewhere.
  */
 
+import { migrateSavedColumnLayout } from '@/lib/columnLayoutMigration'
 import {
   buildCompactTableColumnWidthTracks,
   resolveCompactColumnWidthPx,
@@ -49,7 +50,15 @@ export const CONTRACT_PERF_COLUMN_ORDER: readonly string[] = [
 export const CONTRACT_PERF_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = CONTRACT_PERF_COLUMN_ORDER
 
 /** Bump when default column order/visibility changes — triggers one-time local reset on the CP page. */
-export const CONTRACT_PERF_COLUMN_LAYOUT_VERSION = 'cp-columns-v4'
+export const CONTRACT_PERF_COLUMN_LAYOUT_VERSION = 'cp-columns-v5'
+
+/** Contracts list (/contracts) — separate from Contract Performance layout version. */
+export const CONTRACTS_COLUMN_LAYOUT_VERSION = 'contracts-columns-v1'
+
+export const CONTRACTS_COLUMN_LAYOUT_VERSION_KEY = 'contracts.compact.columnLayoutVersion'
+
+/** Duplicate of contract_qty — removed from column picker. */
+export const CONTRACT_OBSOLETE_COLUMN_IDS = ['qty_delivery'] as const
 
 export const CONTRACT_PERF_COLUMN_LAYOUT_VERSION_KEY =
   'contract-performance.compact.columnLayoutVersion'
@@ -182,7 +191,6 @@ export const CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   status_overall: 88,
   unusual_status: 88,
   received_qty: 120,
-  qty_delivery: 120,
   outstanding_qty: 120,
   over_under_delivery_status: 140,
   company_name: 150,
@@ -291,6 +299,21 @@ export function contractPerfCellTooltipText(
     default:
       return null
   }
+}
+
+/** Migrate saved contract column prefs: drop qty_delivery duplicate, keep contract_qty. */
+export function migrateContractColumnLayout(
+  visibleColumnIds: readonly string[],
+  columnOrderIds: readonly string[],
+  ensureVisibleIds: readonly string[],
+): { visibleColumnIds: string[]; columnOrderIds: string[] } {
+  return migrateSavedColumnLayout({
+    visibleColumnIds,
+    columnOrderIds,
+    obsoleteColumnIds: CONTRACT_OBSOLETE_COLUMN_IDS,
+    idRemap: { qty_delivery: 'contract_qty' },
+    ensureVisibleIds,
+  })
 }
 
 export function orderContractPerformanceColumns<T extends { id: string }>(columns: T[]): T[] {

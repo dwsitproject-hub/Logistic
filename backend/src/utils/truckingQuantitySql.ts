@@ -71,6 +71,24 @@ export function sqlTruckingQuantityReceiveCoalesce(): string {
 }
 
 /**
+ * Prefer KLIP-resolved qty (WB daily actuals synced to trucking_operations) over SAP per-STO
+ * when trucking_daily_actuals exist for the operation.
+ */
+export function sqlTruckingPreferWbResolvedQty(
+  innerQtyExpr: string,
+  sapPerStoQtyExpr: string,
+  operationIdExpr = 'e.id',
+): string {
+  return `CASE
+    WHEN EXISTS (
+      SELECT 1 FROM trucking_daily_actuals da
+      WHERE da.trucking_operation_id = ${operationIdExpr}
+    ) THEN COALESCE(${innerQtyExpr}, 0)
+    ELSE COALESCE(${sapPerStoQtyExpr}, ${innerQtyExpr}, 0)
+  END`;
+}
+
+/**
  * Outstanding qty (kg) for trucking list — FRC: contract − receive; LCO: contract − delivered.
  * Other incoterms return NULL.
  */

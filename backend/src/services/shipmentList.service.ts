@@ -8,6 +8,7 @@ import {
   shipmentListQtyMoveCteFromPage,
 } from '../utils/shipmentOutstandingQtySql';
 import { shipmentListPageQtySelectSql } from '../utils/shipmentListQtySql';
+import { buildListOrderByWithSapStoPriority } from '../utils/listSapStoPrioritySql';
 import {
   mergeShipmentVesselFromSapRow,
   queueShipmentVesselSapBackfill,
@@ -37,6 +38,8 @@ export interface ShipmentListQueryContext {
   filterCacheKey: string;
   /** When true, `paged_sto` limits keys in base CTE; total from `ranked_sto`. */
   usesStoKeyPaging?: boolean;
+  /** Active pipeline stage filter for table ordering (UNPLANNED / PLANNED STO priority). */
+  tableStatusFilter?: string;
 }
 
 export interface ShipmentListResponseData {
@@ -56,7 +59,7 @@ const SUMMARY_CACHE = new Map<
   { summaryRow: Record<string, unknown>; totalCount: number; expiresAt: number }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'shipment-list-v24';
+const CACHE_VERSION = 'shipment-list-v25';
 const MAX_CACHE_ENTRIES = 80;
 
 function stableColumnFiltersKey(colFilters: Record<string, unknown>): string {
@@ -207,6 +210,11 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
       row.po_numbers = row.po_numbers_merged as string | null;
       delete (row as { po_numbers_merged?: unknown }).po_numbers_merged;
     }
+    if (Object.prototype.hasOwnProperty.call(row, 'suppliers_linked')) {
+      const linked = String(row.suppliers_linked ?? '').trim();
+      if (linked) row.suppliers = linked;
+      delete (row as { suppliers_linked?: unknown }).suppliers_linked;
+    }
 
     if (mergeShipmentVesselFromSapRow(row)) {
       queueShipmentVesselSapBackfill(row);
@@ -292,6 +300,11 @@ export function buildShipmentListPageQuery(
   const limitIdx = baseParams.length + 1;
   const offsetIdx = baseParams.length + 2;
   const spdAggCtes = shipmentListSpdAggCtes(ctx.skipSapJoin);
+  const pageOrderBy = buildListOrderByWithSapStoPriority(
+    'fs.sto_number',
+    'fs.created_at DESC',
+    ctx.tableStatusFilter,
+  );
 
   const shipmentPageCte = ctx.usesStoKeyPaging
     ? `shipment_page AS (
@@ -299,14 +312,14 @@ export function buildShipmentListPageQuery(
           fs.*,
           (SELECT COUNT(*)::bigint FROM ranked_sto) AS __filter_total
         FROM filtered_shipments fs
-        ORDER BY fs.created_at DESC
+        ORDER BY ${pageOrderBy}
       )`
     : `shipment_page AS (
         SELECT
           fs.*,
           (SELECT COUNT(*)::bigint FROM filtered_shipments) AS __filter_total
         FROM filtered_shipments fs
-        ORDER BY fs.created_at DESC
+        ORDER BY ${pageOrderBy}
         LIMIT $${limitIdx} OFFSET $${offsetIdx}
       )`;
 
@@ -334,6 +347,11 @@ export function buildShipmentListEnrichedPageQuery(
   const limitIdx = baseParams.length + 1;
   const offsetIdx = baseParams.length + 2;
   const spdAggCtes = shipmentListSpdAggCtes(ctx.skipSapJoin);
+  const pageOrderBy = buildListOrderByWithSapStoPriority(
+    'fs.sto_number',
+    'fs.created_at DESC',
+    ctx.tableStatusFilter,
+  );
 
   const text = `${ctx.shipmentBaseCteSql},
       filtered_shipments AS (
@@ -344,7 +362,7 @@ export function buildShipmentListEnrichedPageQuery(
       shipment_page AS (
         SELECT fs.*
         FROM filtered_shipments fs
-        ORDER BY fs.created_at DESC
+        ORDER BY ${pageOrderBy}
         LIMIT $${limitIdx} OFFSET $${offsetIdx}
       ),
       ${shipmentListQtyMoveCteFromPage()},

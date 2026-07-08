@@ -29,6 +29,10 @@ import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
+  compareSapStoListRowPriority,
+  shouldPrioritizeSapStoRows,
+} from '@/lib/listSapStoPriority'
+import {
   TableInitialLoadPlaceholder,
   TableInitialLoadPlaceholderContent,
 } from '@/components/performance/TableInitialLoadPlaceholder'
@@ -186,6 +190,21 @@ function isTruckingContractBacklogRow(
   operation: Pick<TruckingOperation, 'row_kind'>,
 ): boolean {
   return String(operation.row_kind ?? '').trim() === 'contract_backlog'
+}
+
+function resolveTruckingDocumentContractId(
+  operation: Pick<TruckingOperation, 'contract_id'>,
+): string {
+  return String(operation.contract_id ?? '').trim()
+}
+
+function truckingDocumentScopeLabel(operation: TruckingOperation): string {
+  if (isTruckingContractBacklogRow(operation)) {
+    const po = String(operation.po_number ?? '').trim()
+    const contractNo = String(operation.contract_number ?? '').trim()
+    return po ? `PO ${po}` : contractNo || 'Contract'
+  }
+  return String(operation.operation_id ?? '').trim() || 'Operation'
 }
 
 function TruckTableAddTruckingButton({ onAdd }: { onAdd: () => void }) {
@@ -2365,6 +2384,48 @@ function TruckingPageContent() {
   }
 
   // Document functions
+  const fetchOperationDocuments = async (operation: TruckingOperation) => {
+    try {
+      setDocsLoading(true)
+      const merged: DocumentItem[] = []
+      const seen = new Set<string>()
+
+      const appendDocs = (rows: DocumentItem[] | undefined) => {
+        for (const doc of rows ?? []) {
+          const docId = String(doc.id ?? '').trim()
+          if (!docId || seen.has(docId)) continue
+          seen.add(docId)
+          merged.push(doc)
+        }
+      }
+
+      if (isTruckingContractBacklogRow(operation)) {
+        const contractId = resolveTruckingDocumentContractId(operation)
+        if (!contractId) {
+          setOperationDocs([])
+          return
+        }
+        const res = await api.get('/documents', { params: { contractId } })
+        appendDocs(res.data?.data)
+      } else {
+        const res = await api.get('/documents', { params: { truckingOperationId: operation.id } })
+        appendDocs(res.data?.data)
+        const contractId = resolveTruckingDocumentContractId(operation)
+        if (contractId) {
+          const contractRes = await api.get('/documents', { params: { contractId } })
+          appendDocs(contractRes.data?.data)
+        }
+      }
+
+      setOperationDocs(merged)
+    } catch (err) {
+      console.error('Fetch documents error:', err)
+      setOperationDocs([])
+    } finally {
+      setDocsLoading(false)
+    }
+  }
+
   const handleUploadFileChange = async (operation: TruckingOperation, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -2376,12 +2437,24 @@ function TruckingPageContent() {
       return
     }
 
+    const backlogRow = isTruckingContractBacklogRow(operation)
+    const contractId = resolveTruckingDocumentContractId(operation)
+    if (backlogRow && !contractId) {
+      alert('Contract reference is missing; cannot upload document.')
+      e.target.value = ''
+      return
+    }
+
     setUploadingId(operation.id)
     try {
       const form = new FormData()
       form.append('file', file)
       form.append('document_type', 'OTHER')
-      form.append('trucking_operation_id', operation.id)
+      if (backlogRow) {
+        form.append('contract_id', contractId)
+      } else {
+        form.append('trucking_operation_id', operation.id)
+      }
 
       const res = await api.post('/documents/upload', form, {
         headers: { 'Content-Type': 'multipart/form-data' }
@@ -2389,7 +2462,7 @@ function TruckingPageContent() {
       if (res.data?.success) {
         alert('Document uploaded successfully!')
         if (selectedOperation && selectedOperation.id === operation.id) {
-          await fetchOperationDocuments(operation.id)
+          await fetchOperationDocuments(operation)
         }
       } else {
         alert(res.data?.error?.message || 'Failed to upload document')
@@ -2400,22 +2473,6 @@ function TruckingPageContent() {
     } finally {
       setUploadingId('')
       e.target.value = ''
-    }
-  }
-
-  const fetchOperationDocuments = async (operationInternalId: string) => {
-    try {
-      setDocsLoading(true)
-      const params = new URLSearchParams()
-      params.append('truckingOperationId', operationInternalId)
-      const res = await api.get(`/documents?${params.toString()}`)
-      const docs: DocumentItem[] = res.data?.data || []
-      setOperationDocs(docs)
-    } catch (err) {
-      console.error('Fetch documents error:', err)
-      setOperationDocs([])
-    } finally {
-      setDocsLoading(false)
     }
   }
 
@@ -2443,7 +2500,7 @@ function TruckingPageContent() {
   const handleViewDocuments = async (operation: TruckingOperation) => {
     setSelectedOperation(operation)
     setShowDocs(true)
-    await fetchOperationDocuments(operation.id)
+    await fetchOperationDocuments(operation)
   }
 
   const formatNumber = (num: number | string) => {
@@ -3241,9 +3298,17 @@ function TruckingPageContent() {
 
   const sortedOperations = useMemo(() => {
     const col = compactColumns.find(c => c.id === sortKey)
-    if (!col?.sortable || !col.getSortValue) return filteredOperations
+    const prioritizeSapSto = shouldPrioritizeSapStoRows(statusFilter)
+    if (!col?.sortable || !col.getSortValue) {
+      if (!prioritizeSapSto) return filteredOperations
+      return [...filteredOperations].sort((a, b) => compareSapStoListRowPriority(a, b))
+    }
 
     const sorted = [...filteredOperations].sort((a, b) => {
+      if (prioritizeSapSto) {
+        const stoCmp = compareSapStoListRowPriority(a, b)
+        if (stoCmp !== 0) return stoCmp
+      }
       const aVal = col.getSortValue!(a)
       const bVal = col.getSortValue!(b)
       const dirMul = sortDir === 'asc' ? 1 : -1
@@ -3255,7 +3320,7 @@ function TruckingPageContent() {
     })
 
     return sorted
-  }, [compactColumns, filteredOperations, sortDir, sortKey])
+  }, [compactColumns, filteredOperations, sortDir, sortKey, statusFilter])
 
   const onSortHeaderClick = (col: CompactColumn) => {
     if (!col.sortable) return
@@ -4607,40 +4672,44 @@ function TruckingPageContent() {
                                             tooltip={truckingEditTooltip(operation)}
                                           />
                                         )}
-                                        {!isTruckingContractBacklogRow(operation) ? (
-                                          <>
-                                            <Button
-                                              variant="outline"
-                                              size="icon"
-                                              onClick={() => handleViewDocuments(operation)}
-                                              title="Documents"
-                                              className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
-                                            >
-                                              <FileText className="h-4 w-4" />
-                                            </Button>
-                                            <input
-                                              id={`trucking-file-${operation.id}`}
-                                              type="file"
-                                              accept="application/pdf,image/png,image/jpeg"
-                                              className="hidden"
-                                              onChange={(e) => handleUploadFileChange(operation, e)}
-                                            />
-                                            <Button
-                                              variant="outline"
-                                              size="icon"
-                                              onClick={() => document.getElementById(`trucking-file-${operation.id}`)?.click()}
-                                              disabled={uploadingId === operation.id}
-                                              title="Upload"
-                                              className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
-                                            >
-                                              {uploadingId === operation.id ? (
-                                                <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
-                                              ) : (
-                                                <Upload className="h-4 w-4" />
-                                              )}
-                                            </Button>
-                                          </>
-                                        ) : null}
+                                        <Button
+                                          variant="outline"
+                                          size="icon"
+                                          onClick={() => handleViewDocuments(operation)}
+                                          title={
+                                            isTruckingContractBacklogRow(operation)
+                                              ? 'Contract documents'
+                                              : 'Documents'
+                                          }
+                                          className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
+                                        >
+                                          <FileText className="h-4 w-4" />
+                                        </Button>
+                                        <input
+                                          id={`trucking-file-${operation.id}`}
+                                          type="file"
+                                          accept="application/pdf,image/png,image/jpeg"
+                                          className="hidden"
+                                          onChange={(e) => handleUploadFileChange(operation, e)}
+                                        />
+                                        <Button
+                                          variant="outline"
+                                          size="icon"
+                                          onClick={() => document.getElementById(`trucking-file-${operation.id}`)?.click()}
+                                          disabled={uploadingId === operation.id}
+                                          title={
+                                            isTruckingContractBacklogRow(operation)
+                                              ? 'Upload contract document'
+                                              : 'Upload'
+                                          }
+                                          className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
+                                        >
+                                          {uploadingId === operation.id ? (
+                                            <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
+                                          ) : (
+                                            <Upload className="h-4 w-4" />
+                                          )}
+                                        </Button>
                                       </>
                                     )}
                                   </div>
@@ -4743,40 +4812,44 @@ function TruckingPageContent() {
                                     tooltip={truckingEditTooltip(operation)}
                                   />
                                 )}
-                                {!isTruckingContractBacklogRow(operation) ? (
-                                  <>
-                                    <Button
-                                      variant="outline"
-                                      size="icon"
-                                      onClick={() => handleViewDocuments(operation)}
-                                      title="Documents"
-                                      className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
-                                    >
-                                      <FileText className="h-4 w-4" />
-                                    </Button>
-                                    <input
-                                      id={`trucking-file-mobile-${operation.id}`}
-                                      type="file"
-                                      accept="application/pdf,image/png,image/jpeg"
-                                      className="hidden"
-                                      onChange={(e) => handleUploadFileChange(operation, e)}
-                                    />
-                                    <Button
-                                      variant="outline"
-                                      size="icon"
-                                      onClick={() => document.getElementById(`trucking-file-mobile-${operation.id}`)?.click()}
-                                      disabled={uploadingId === operation.id}
-                                      title="Upload"
-                                      className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
-                                    >
-                                      {uploadingId === operation.id ? (
-                                        <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
-                                      ) : (
-                                        <Upload className="h-4 w-4" />
-                                      )}
-                                    </Button>
-                                  </>
-                                ) : null}
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  onClick={() => handleViewDocuments(operation)}
+                                  title={
+                                    isTruckingContractBacklogRow(operation)
+                                      ? 'Contract documents'
+                                      : 'Documents'
+                                  }
+                                  className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
+                                >
+                                  <FileText className="h-4 w-4" />
+                                </Button>
+                                <input
+                                  id={`trucking-file-mobile-${operation.id}`}
+                                  type="file"
+                                  accept="application/pdf,image/png,image/jpeg"
+                                  className="hidden"
+                                  onChange={(e) => handleUploadFileChange(operation, e)}
+                                />
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  onClick={() => document.getElementById(`trucking-file-mobile-${operation.id}`)?.click()}
+                                  disabled={uploadingId === operation.id}
+                                  title={
+                                    isTruckingContractBacklogRow(operation)
+                                      ? 'Upload contract document'
+                                      : 'Upload'
+                                  }
+                                  className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
+                                >
+                                  {uploadingId === operation.id ? (
+                                    <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
+                                  ) : (
+                                    <Upload className="h-4 w-4" />
+                                  )}
+                                </Button>
                               </>
                             )}
                           </div>
@@ -5023,7 +5096,9 @@ function TruckingPageContent() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg max-h-[80vh] flex flex-col overflow-hidden">
             <div className="flex shrink-0 items-center justify-between border-b px-6 py-4">
-              <h3 className="text-xl font-semibold">Documents — {selectedOperation.operation_id}</h3>
+              <h3 className="text-xl font-semibold">
+                Documents — {truckingDocumentScopeLabel(selectedOperation)}
+              </h3>
               <Button variant="ghost" size="icon" className="shrink-0" aria-label="Close" onClick={() => setShowDocs(false)}>
                 <X className="h-5 w-5" />
               </Button>
@@ -5033,7 +5108,11 @@ function TruckingPageContent() {
             {docsLoading ? (
               <div className="text-sm text-gray-500 py-8 text-center">Loading documents...</div>
             ) : operationDocs.length === 0 ? (
-              <div className="text-sm text-gray-500 py-8 text-center">No documents uploaded for this operation.</div>
+              <div className="text-sm text-gray-500 py-8 text-center">
+                {isTruckingContractBacklogRow(selectedOperation)
+                  ? 'No documents uploaded for this contract yet.'
+                  : 'No documents uploaded for this operation.'}
+              </div>
             ) : (
               <div className="space-y-2">
                 {operationDocs.map((doc) => (

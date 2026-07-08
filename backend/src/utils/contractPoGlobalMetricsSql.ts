@@ -39,6 +39,40 @@ const SPD_PO_MATCH = (poExpr: string, spdAlias = 'spd') => `(
   )), '') = NULLIF(TRIM(${poExpr}::text), '')
 )`;
 
+function sqlSpdStoKeyMatch(stoKeyExpr: string, spdAlias = 'spd'): string {
+  return `(
+    TRIM(COALESCE(${spdAlias}.sto_number::text, '')) = TRIM(${stoKeyExpr}::text)
+    OR NULLIF(TRIM(COALESCE(
+      ${spdAlias}.sto_number::text,
+      ${spdAlias}.data->'raw'->>'STO No.',
+      ${spdAlias}.data->'raw'->>'STO Number',
+      ${spdAlias}.data->'shipment'->>'sto_no',
+      ${spdAlias}.data->'contract'->>'sto_no'
+    )), '') = TRIM(${stoKeyExpr}::text)
+  )`;
+}
+
+/** SAP STO qty (kg) for one contract / PO on a specific STO key (edit modal row). */
+export function sqlPoStoSapQtyKg(opts: {
+  contractNumberExpr: string;
+  poNumberExpr: string;
+  contractQtyExpr: string;
+  stoKeyExpr: string;
+}): string {
+  const { contractNumberExpr, poNumberExpr, contractQtyExpr, stoKeyExpr } = opts;
+  const stoQtyKg = sqlNormalizeSapStoQtyToKgSql(SPD_STO_QTY_KG, contractQtyExpr);
+  return `COALESCE((
+    SELECT ${stoQtyKg}
+    FROM sap_processed_data spd
+    WHERE TRIM(spd.contract_number) = TRIM(${contractNumberExpr}::text)
+      AND ${SPD_PO_MATCH(poNumberExpr)}
+      AND ${sqlSpdStoKeyMatch(stoKeyExpr)}
+      AND ${SPD_STO_QTY_KG} IS NOT NULL
+    ORDER BY spd.created_at DESC NULLS LAST
+    LIMIT 1
+  ), 0)::numeric`;
+}
+
 /** Sum of SAP STO qty (kg) across distinct SAP STO numbers for a contract / PO line. */
 export function sqlPoGlobalSapStoQtyKg(opts: {
   contractNumberExpr: string;

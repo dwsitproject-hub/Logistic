@@ -3,6 +3,7 @@ import {
   buildGroupedStoTrimExpr,
   buildStoLinkedContractNumbersSql,
   buildStoLinkedPoNumbersSql,
+  buildStoLinkedSuppliersSql,
   contractsOnStoSubquery,
 } from './stoLinkedContractSql';
 
@@ -31,5 +32,13 @@ describe('stoLinkedContractSql', () => {
     const sql = buildStoLinkedPoNumbersSql(grouped, 'c', 'g.po_numbers_from_join');
     expect(sql).toContain('COALESCE');
     expect(sql).toContain('g.po_numbers_from_join');
+  });
+
+  it('buildStoLinkedSuppliersSql aggregates suppliers from STO-linked contracts', () => {
+    const grouped = buildGroupedStoTrimExpr('sb.sto_key');
+    const sql = buildStoLinkedSuppliersSql(grouped, 'c', 'g.suppliers');
+    expect(sql).toContain('STRING_AGG(DISTINCT cc.supplier');
+    expect(sql).toContain('contract_stos');
+    expect(sql).toContain('g.suppliers');
   });
 });

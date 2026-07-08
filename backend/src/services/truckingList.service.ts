@@ -16,6 +16,7 @@ import {
 import { deriveTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
 import { appendTruckingPipelineStageFilter, normalizeTruckingPagePipelineStageParam } from '../utils/truckingPagePipelineSql';
 import { truckingPageListScopeWhereSql } from '../utils/truckingIncotermScope';
+import { buildListOrderByWithSapStoPriority } from '../utils/listSapStoPrioritySql';
 import { wrapTruckingListQueryWithStoExpansion } from '../utils/truckingListStoExpandSql';
 import {
   buildTruckingListFromClause,
@@ -92,7 +93,7 @@ const MERGED_SUMMARY_CACHE = new Map<
 >();
 const UNPLANNED_BACKLOG_CACHE = new Map<string, { count: number; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v24';
+const CACHE_VERSION = 'trucking-list-v26';
 const MAX_CACHE_ENTRIES = 80;
 
 const SORT_FIELD_BY_KEY: Record<string, string> = {
@@ -346,9 +347,24 @@ export function sortTruckingListRows(
   rows: TruckingListRow[],
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
+  options?: { prioritizeSapSto?: boolean },
 ): TruckingListRow[] {
   const field = SORT_FIELD_BY_KEY[sortKey] || 'created_at';
+  const prioritizeSapSto = options?.prioritizeSapSto === true;
   return [...rows].sort((a, b) => {
+    if (prioritizeSapSto) {
+      const aHasSto =
+        String((a as TruckingListRow & { row_kind?: string }).row_kind ?? '').trim() !==
+          'contract_backlog' &&
+        Boolean(String(a.sto_number ?? '').trim()) &&
+        String(a.sto_number ?? '').trim() !== '-';
+      const bHasSto =
+        String((b as TruckingListRow & { row_kind?: string }).row_kind ?? '').trim() !==
+          'contract_backlog' &&
+        Boolean(String(b.sto_number ?? '').trim()) &&
+        String(b.sto_number ?? '').trim() !== '-';
+      if (aHasSto !== bHasSto) return aHasSto ? -1 : 1;
+    }
     const primary = compareSortValues(a[field], b[field], sortDir);
     if (primary !== 0) return primary;
     return compareSortValues(b.created_at, a.created_at, 'DESC');
@@ -703,6 +719,11 @@ export function buildPaginatedListQuery(
   const limitIdx = listParams.length + 1;
   const offsetIdx = listParams.length + 2;
   const expanded = buildTruckingFilteredExpansionSql(built);
+  const orderBy = buildListOrderByWithSapStoPriority(
+    'tf.sto_number',
+    `${field} ${sortDir} NULLS LAST, created_at DESC`,
+    normalizedStage ?? stageFilter,
+  );
   const text = `
       WITH trucking_filtered AS (
         SELECT * FROM (
@@ -718,7 +739,7 @@ export function buildPaginatedListQuery(
           tf.*,
           (SELECT COUNT(*)::bigint FROM trucking_status_scoped) AS __filter_total
         FROM trucking_status_scoped tf
-        ORDER BY ${field} ${sortDir} NULLS LAST, created_at DESC
+        ORDER BY ${orderBy}
         LIMIT $${limitIdx} OFFSET $${offsetIdx}
       )
       SELECT * FROM trucking_page`;

@@ -1,10 +1,12 @@
 
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlSapQtyDeliveredKgFromSpd } from './contractLogisticsStoDetailSql';
 import {
+  sqlNormalizeSapStoQtyToKgSql,
   sqlPoGlobalOutstandingPlanningKg,
-  sqlPoGlobalSapStoQtyKg,
   sqlPoOutstandingPlanningRowBudgetKgExpr,
   sqlPoStoAssignedKg,
+  sqlPoStoSapQtyKg,
 } from './contractPoGlobalMetricsSql';
 
 function spdEffectiveSto(alias: string): string {
@@ -157,9 +159,11 @@ export function buildContractDetailsForStoSql(): string {
           poNumberExpr: `COALESCE(pl.po_number, '')`,
           stoKeyExpr: '$1::text',
         })} AS outstanding_qty_planning_budget,
-        ${sqlPoGlobalSapStoQtyKg({
+        ${sqlPoStoSapQtyKg({
           contractNumberExpr: 'pl.contract_number',
           poNumberExpr: `COALESCE(pl.po_number, '')`,
+          contractQtyExpr: 'pl.contract_qty',
+          stoKeyExpr: '$1::text',
         })} AS sap_sto_qty,
         ${sqlPoStoAssignedKg({
           stoKeyExpr: '$1::text',
@@ -174,15 +178,14 @@ export function buildContractDetailsForStoSql(): string {
           contractQtyExpr: 'pl.contract_qty',
         })} AS sto_qty_assigned,
         COALESCE((
-          SELECT SUM(${QTY_DELIVERED_NUM})
+          SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', 'pl.contract_qty')})
           FROM sap_processed_data spd
           WHERE spd.contract_number = pl.contract_number
             AND ${stoMatch('spd')}
-            AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
             AND ${poMatch('spd')}
         ), 0) AS quantity_delivered,
         COALESCE((
-          SELECT SUM(${QTY_RECEIVE_NUM})
+          SELECT SUM(${sqlNormalizeSapStoQtyToKgSql(QTY_RECEIVE_NUM, 'pl.contract_qty')})
           FROM sap_processed_data spd
           WHERE spd.contract_number = pl.contract_number
             AND ${stoMatch('spd')}
@@ -257,7 +260,7 @@ export function buildContractDetailsForStoSql(): string {
          LIMIT 1)`,
           stoKeyExpr: '$1::text',
         })} AS outstanding_qty_planning_budget,
-        ${sqlPoGlobalSapStoQtyKg({
+        ${sqlPoStoSapQtyKg({
           contractNumberExpr: 'soc.contract_number',
           poNumberExpr: `(SELECT ${spdPoNumber('spd')}
          FROM sap_processed_data spd
@@ -265,6 +268,12 @@ export function buildContractDetailsForStoSql(): string {
            AND ${stoMatch('spd')}
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1)`,
+          contractQtyExpr: `COALESCE((
+          SELECT MAX(CAST(REPLACE(REPLACE(spd.data->'contract'->>'contract_quantity', ',', ''), ' ', '') AS NUMERIC))
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = soc.contract_number
+        ), 0)`,
+          stoKeyExpr: '$1::text',
         })} AS sap_sto_qty,
         ${sqlPoStoAssignedKg({
           stoKeyExpr: '$1::text',

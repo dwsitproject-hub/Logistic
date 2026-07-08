@@ -4,12 +4,13 @@ import {
   SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS,
   buildShipmentVisibleColumns,
   mergeShipmentColumnOrder,
+  migrateShipmentColumnLayout,
   shipmentCompactColumnFallbackOrder,
 } from './shipmentColumns'
 
 describe('shipmentColumns', () => {
-  it('uses v6 default visible order', () => {
-    expect(SHIPMENT_COLUMN_LAYOUT_VERSION).toBe('shipments-columns-v6')
+  it('uses v7 default visible order', () => {
+    expect(SHIPMENT_COLUMN_LAYOUT_VERSION).toBe('shipments-columns-v7')
     expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS.slice(0, 5)).toEqual([
       'late_indicator',
       'vessel_name',
@@ -55,5 +56,17 @@ describe('shipmentColumns', () => {
       'loading_port',
       'contract_date',
     ])
+  })
+
+  it('migrateShipmentColumnLayout drops raw port columns and ensures SAP port columns', () => {
+    const result = migrateShipmentColumnLayout(
+      ['vessel_name', 'port_of_loading'],
+      ['vessel_name', 'port_of_loading', 'port_of_discharge'],
+    )
+    expect(result.visibleColumnIds).toContain('loading_port')
+    expect(result.visibleColumnIds).toContain('discharge_port')
+    expect(result.visibleColumnIds).not.toContain('port_of_loading')
+    expect(result.columnOrderIds).not.toContain('port_of_loading')
+    expect(result.columnOrderIds).not.toContain('port_of_discharge')
   })
 })

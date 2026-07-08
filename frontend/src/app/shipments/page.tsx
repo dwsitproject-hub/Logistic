@@ -25,7 +25,6 @@ import { formatOperationalTableTextDisplay, formatSapDisplayValue, formatSapOuts
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
 import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
-import { fetchContractPurchaseOrderOptions, fetchStoLinkedPurchaseOrderOptions } from '@/components/shared/addNewShipmentTypes'
 import { ShipmentViewTableRowActions } from '@/components/shipments/ShipmentViewTableRowActions'
 import {
   buildVesselPortsQuantityRows,
@@ -44,12 +43,13 @@ import {
   VESSEL_MODAL_SUBSECTION_LABEL_CLASS,
 } from '@/lib/vesselModalUi'
 import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
+import { shipmentRowHasRegisteredPlanning } from '@/lib/shipmentViewTableActions'
 import {
   mergeShipmentQtyOverridesOnContractRows,
   resolveShipmentListDeliveredKg,
   resolveShipmentListReceiveKg,
   resolveShipmentListStoKg,
-  sapDeliveredOrReceiveMtToKg,
+  sapContractDetailQtyToKg,
   shipmentStoredQtyKg,
 } from '@/lib/shipmentQuantityUnits'
 import {
@@ -62,6 +62,10 @@ import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
+import {
+  compareSapStoListRowPriority,
+  shouldPrioritizeSapStoRows,
+} from '@/lib/listSapStoPriority'
 import {
   TableInitialLoadPlaceholder,
   TableInitialLoadPlaceholderContent,
@@ -85,6 +89,7 @@ import {
   SHIPMENT_COLUMN_LAYOUT_VERSION_KEY,
   buildShipmentVisibleColumns,
   mergeShipmentColumnOrder,
+  migrateShipmentColumnLayout,
   shipmentCompactColumnFallbackOrder,
   shipmentDefaultVisibleColumnIds,
 } from '@/lib/shipmentColumns'
@@ -92,6 +97,7 @@ import {
   resolveShipmentListDischargePorts,
   resolveShipmentListLoadingPorts,
 } from '@/lib/shipmentListPorts'
+import { resolveShipmentListSuppliers } from '@/lib/shipmentListSuppliers'
 import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
 import {
   resolveShipmentApiLookupKey,
@@ -608,16 +614,17 @@ type PortsModalContractDetail = {
 }
 
 function mapContractDetailFromApi(detail: Record<string, unknown>): PortsModalContractDetail {
+  const contractQty = parseApiNumber(detail.contract_qty) ?? 0
   return {
     contract_number: String(detail.contract_number ?? '').trim(),
-    contract_qty: parseApiNumber(detail.contract_qty) ?? 0,
+    contract_qty: contractQty,
     outstanding_qty: parseApiNumber(detail.outstanding_qty) ?? 0,
     sto_qty_assigned: parseApiNumber(detail.sto_qty_assigned) ?? 0,
     po_number: detail.po_number != null ? String(detail.po_number) : '',
     delivery_start_date: (detail.delivery_start_date as string | null | undefined) ?? null,
     delivery_end_date: (detail.delivery_end_date as string | null | undefined) ?? null,
-    quantity_delivered: sapDeliveredOrReceiveMtToKg(parseApiNumber(detail.quantity_delivered)),
-    quantity_receive: sapDeliveredOrReceiveMtToKg(parseApiNumber(detail.quantity_receive)),
+    quantity_delivered: sapContractDetailQtyToKg(parseApiNumber(detail.quantity_delivered), contractQty),
+    quantity_receive: sapContractDetailQtyToKg(parseApiNumber(detail.quantity_receive), contractQty),
     contract_ext_no: detail.contract_ext_no != null ? String(detail.contract_ext_no) : null,
     locked_from_sap: Boolean(detail.locked_from_sap),
   }
@@ -1064,12 +1071,18 @@ function ShipmentsPageContent() {
   const [showAddShipment, setShowAddShipment] = useState(false)
   const [addShipmentPrefilledPOs, setAddShipmentPrefilledPOs] = useState<ShipmentPoOption[] | null>(null)
   const [addShipmentPrefilledSto, setAddShipmentPrefilledSto] = useState<string | null>(null)
+  const [addShipmentPrefilledContractNumbers, setAddShipmentPrefilledContractNumbers] = useState<string[] | null>(null)
   const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
     shipmentId: string
     editContractId: string | null
     editStoNumber: string
     editContractNumbers: string
     readOnly?: boolean
+  } | null>(null)
+  const [plotShipmentFromTable, setPlotShipmentFromTable] = useState<{
+    shipmentId: string
+    editStoNumber: string
+    editContractNumbers: string
   } | null>(null)
 
   // Master Vessel / Master Loading Port suggestions (inline edit row + AddShipmentModal has its own)
@@ -1180,6 +1193,9 @@ function ShipmentsPageContent() {
   const [cancelPortTarget, setCancelPortTarget] = useState<{ id: string; portName: string; portSequence: number } | null>(null)
   const [cancelPortRemark, setCancelPortRemark] = useState('')
   const [cancelPortSubmitting, setCancelPortSubmitting] = useState(false)
+  const [cancelShipmentTarget, setCancelShipmentTarget] = useState<Shipment | null>(null)
+  const [cancelShipmentRemark, setCancelShipmentRemark] = useState('')
+  const [cancelShipmentSubmitting, setCancelShipmentSubmitting] = useState(false)
 
   // ---- Section 1 / 2 summaries from API (toolbar + scoped ETA); Section 3 from paginated list ----
 
@@ -1345,7 +1361,10 @@ function ShipmentsPageContent() {
       params.append('skipSapJoin', 'true')
       params.append('limit', String(pageSize))
       params.append('page', String(effectivePage))
-      params.append('includeSummary', 'true')
+      const isUnplannedHybridList = statusFilter === 'UNPLANNED'
+      if (isUnplannedHybridList) {
+        params.append('includeSummary', 'true')
+      }
       if (statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
       }
@@ -1400,6 +1419,68 @@ function ShipmentsPageContent() {
 
       const listUrl = `/shipments?${params.toString()}`
       const listCacheKey = buildCacheKey('GET', listUrl)
+
+      /** Section 1 cards — toolbar scope only; parallel with table shell query. */
+      const summaryParams = new URLSearchParams(params.toString())
+      summaryParams.delete('status')
+      summaryParams.delete('etaLoading')
+      summaryParams.delete('etaDischarge')
+      summaryParams.delete('includeSummary')
+      summaryParams.set('summaryOnly', 'true')
+      summaryParams.set('page', '1')
+      summaryParams.set('limit', '1')
+      const summaryUrl = `/shipments?${summaryParams.toString()}`
+      const summaryCacheKey = buildCacheKey('GET', summaryUrl)
+      const summaryForce = options?.force || section1SummaryForceNextFetchRef.current
+
+      const applySummaryEnvelope = (envelope: {
+        data?: {
+          summary?: typeof shipmentsSection1Summary & {
+            unplannedTable?: {
+              contractRows?: number
+              shipmentRows?: number
+              totalTableRows?: number
+            }
+          }
+          unplannedBreakdown?: {
+            contractRows?: number
+            shipmentRows?: number
+            totalTableRows?: number
+          }
+        }
+      }) => {
+        if (envelope?.data?.summary) {
+          setShipmentsSection1Summary(envelope.data.summary)
+        }
+        setSummaryFetching(false)
+        const breakdown =
+          envelope?.data?.unplannedBreakdown ??
+          envelope?.data?.summary?.unplannedTable
+        if (breakdown) {
+          setUnplannedBreakdown({
+            contractRows: Number(breakdown.contractRows ?? 0),
+            shipmentRows: Number(breakdown.shipmentRows ?? 0),
+            totalTableRows: Number(breakdown.totalTableRows ?? 0),
+          })
+        }
+      }
+
+      const summaryFetchPromise = isUnplannedHybridList
+        ? null
+        : cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+            force: summaryForce,
+            onRevalidate: (fresh) => {
+              if (listGen !== listFetchGenRef.current) return
+              applySummaryEnvelope(fresh)
+            },
+          })
+            .then(({ data }) => {
+              if (listGen !== listFetchGenRef.current) return
+              applySummaryEnvelope(data)
+            })
+            .catch(() => {
+              if (listGen === listFetchGenRef.current) setSummaryFetching(false)
+            })
 
       if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && statusFilter !== 'ALL') {
         const section2Params = new URLSearchParams(params.toString())
@@ -1480,7 +1561,7 @@ function ShipmentsPageContent() {
         listCacheKey,
         () => api.get(listUrl).then((r) => r.data),
         {
-          force: options?.force || section1SummaryForceNextFetchRef.current,
+          force: options?.force,
           onRevalidate: (fresh) => {
             if (listGen !== listFetchGenRef.current) return
             applyListEnvelope(fresh)
@@ -1493,8 +1574,12 @@ function ShipmentsPageContent() {
       applyListEnvelope(listEnvelope)
       if (!listRevalidating) {
         setListFetching(false)
-        if (!listEnvelope?.data?.summary) setSummaryFetching(false)
       }
+      if (isUnplannedHybridList && !listEnvelope?.data?.summary) {
+        setSummaryFetching(false)
+      }
+
+      void summaryFetchPromise
 
       // SAP hydrate after table paint — avoids competing with shell query on DB/CPU.
       const scheduleHydrate = () => {
@@ -1661,8 +1746,10 @@ function ShipmentsPageContent() {
   const handleCloseShipmentModal = () => {
     setShowAddShipment(false)
     setEditShipmentFromTable(null)
+    setPlotShipmentFromTable(null)
     setAddShipmentPrefilledPOs(null)
     setAddShipmentPrefilledSto(null)
+    setAddShipmentPrefilledContractNumbers(null)
   }
 
   const isContractBacklogRow = (shipment: Shipment): boolean =>
@@ -1681,40 +1768,50 @@ function ShipmentsPageContent() {
     return { key, contractId, poNumber, plantCode, label }
   }
 
-  const handleOpenAddShipmentForContractRow = async (shipment: Shipment) => {
+  const handleOpenAddShipmentForContractRow = (shipment: Shipment) => {
     if (perms.loaded && !canOpenAddShipmentModal) {
       alert('You need permission to create shipments. Ask an admin to update your role.')
       return
     }
+
+    if (shipmentRowHasRegisteredPlanning(shipment.status)) {
+      handleOpenEditShipmentModal(shipment)
+      return
+    }
+
     const contractNumbers = resolveShipmentContractNumbers(shipment)
-    const contractId = String(
-      shipment.contract_number ||
-        shipment.contract_numbers ||
-        contractNumbers[0] ||
-        '',
-    ).trim()
     const stoDisplay = shipmentModalStoDisplay(shipment)
     const stoLookup = resolveShipmentApiLookupKey(shipment)
+    const hasSapStoRow = stoDisplay !== '-' && stoLookup.trim()
 
-    try {
-      let poOptions: Awaited<ReturnType<typeof fetchContractPurchaseOrderOptions>> = []
-      if (stoDisplay !== '-' && stoLookup.trim()) {
-        poOptions = await fetchStoLinkedPurchaseOrderOptions(stoLookup.trim(), contractNumbers)
-      } else if (contractId) {
-        poOptions = await fetchContractPurchaseOrderOptions(contractId)
-      } else {
-        poOptions = [contractBacklogRowToPoOption(shipment)]
-      }
-      setAddShipmentPrefilledPOs(
-        poOptions.length > 0 ? poOptions : [contractBacklogRowToPoOption(shipment)],
-      )
-      setAddShipmentPrefilledSto(stoDisplay !== '-' && stoLookup.trim() ? stoLookup.trim() : null)
-      setShowAddShipment(true)
-    } catch {
+    setEditShipmentFromTable(null)
+    setPlotShipmentFromTable(null)
+
+    if (isContractBacklogRow(shipment)) {
       setAddShipmentPrefilledPOs([contractBacklogRowToPoOption(shipment)])
-      setAddShipmentPrefilledSto(stoDisplay !== '-' && stoLookup.trim() ? stoLookup.trim() : null)
+      setAddShipmentPrefilledSto(null)
+      setAddShipmentPrefilledContractNumbers(contractNumbers.length > 0 ? contractNumbers : null)
       setShowAddShipment(true)
+      return
     }
+
+    if (hasSapStoRow && shipment.id) {
+      setPlotShipmentFromTable({
+        shipmentId: shipment.id,
+        editStoNumber: stoLookup.trim(),
+        editContractNumbers: contractNumbers.join(', '),
+      })
+      setAddShipmentPrefilledPOs(null)
+      setAddShipmentPrefilledSto(stoLookup.trim())
+      setAddShipmentPrefilledContractNumbers(contractNumbers.length > 0 ? contractNumbers : null)
+      setShowAddShipment(true)
+      return
+    }
+
+    setAddShipmentPrefilledPOs(hasSapStoRow ? null : [contractBacklogRowToPoOption(shipment)])
+    setAddShipmentPrefilledSto(hasSapStoRow ? stoLookup.trim() : null)
+    setAddShipmentPrefilledContractNumbers(contractNumbers.length > 0 ? contractNumbers : null)
+    setShowAddShipment(true)
   }
 
   const handleCancelEdit = () => {
@@ -2489,7 +2586,7 @@ function ShipmentsPageContent() {
       case 'loading_port': return resolveShipmentListLoadingPorts(s)
       case 'discharge_port': return resolveShipmentListDischargePorts(s)
       case 'plant_site': return s.plant_site || ''
-      case 'supplier': return s.supplier || ''
+      case 'supplier': return resolveShipmentListSuppliers(s)
       case 'buyers': return s.buyers || ''
       case 'buyer': return s.buyer || ''
       case 'product': return s.product || ''
@@ -2792,6 +2889,16 @@ function ShipmentsPageContent() {
   // Load per-user saved view (columns + order). Falls back to localStorage/defaults.
   useEffect(() => {
     let cancelled = false
+    const hadSavedVisibleAtOpen = (() => {
+      try {
+        const raw = localStorage.getItem(columnStorageKey)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as unknown
+        return Array.isArray(parsed) && parsed.length > 0
+      } catch {
+        return Boolean(localStorage.getItem(columnStorageKey))
+      }
+    })()
     ;(async () => {
       try {
         const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(userViewPrefKey)}`)
@@ -2799,8 +2906,20 @@ function ShipmentsPageContent() {
         if (cancelled) return
         const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
         const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
-        if (Array.isArray(cols) && cols.length > 0) setVisibleColumnIds(new Set(cols.map((x: any) => String(x))))
-        if (Array.isArray(order) && order.length > 0) setColumnOrderIds(order.map((x: any) => String(x)))
+        if (Array.isArray(cols) && cols.length > 0) {
+          const migrated = migrateShipmentColumnLayout(
+            cols.map((x: unknown) => String(x)),
+            Array.isArray(order) ? order.map((x: unknown) => String(x)) : [],
+          )
+          if (!hadSavedVisibleAtOpen) {
+            setVisibleColumnIds(new Set(migrated.visibleColumnIds))
+          }
+          if (!hadSavedVisibleAtOpen && migrated.columnOrderIds.length > 0) {
+            setColumnOrderIds(migrated.columnOrderIds)
+          }
+        } else if (Array.isArray(order) && order.length > 0 && !hadSavedVisibleAtOpen) {
+          setColumnOrderIds(order.map((x: unknown) => String(x)))
+        }
       } catch {
         // ignore
       }
@@ -2952,11 +3071,11 @@ function ShipmentsPageContent() {
       label: 'Supplier',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => s.supplier || s.suppliers || '',
+      getSortValue: (s) => resolveShipmentListSuppliers(s),
       render: (s) => (
         <OperationalStackedCommaCell
-          value={s.supplier || s.suppliers}
-          title={s.supplier || s.suppliers || ''}
+          value={resolveShipmentListSuppliers(s)}
+          title={resolveShipmentListSuppliers(s) || ''}
         />
       ),
     },
@@ -3187,22 +3306,6 @@ function ShipmentsPageContent() {
       render: (s) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(s.b2b_flag)}</span>
     },
     {
-      id: 'port_of_loading',
-      label: 'Port of Loading',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (s) => s.port_of_loading || '',
-      render: (s) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(s.port_of_loading)}</span>
-    },
-    {
-      id: 'port_of_discharge',
-      label: 'Port of Discharge',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (s) => s.port_of_discharge || s.plant_site || '',
-      render: (s) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(s.port_of_discharge || s.plant_site)}</span>
-    },
-    {
       id: 'vessel_code',
       label: 'Vessel Code',
       defaultVisible: false,
@@ -3428,39 +3531,71 @@ function ShipmentsPageContent() {
     }
   }, [defaultVisibleColumnIds, visibleColumnIds])
 
-  // Initialize / heal column order; apply layout version migration for users without saved prefs.
+  // Initialize / heal column order; apply layout version migration for all users.
   useEffect(() => {
     const allIds = compactColumns.map((c) => c.id)
     const canonical = shipmentCompactColumnFallbackOrder(allIds)
-    let forceLayoutReset = false
+    let needsLayoutMigration = false
     if (typeof window !== 'undefined') {
       try {
-        if (localStorage.getItem(SHIPMENT_COLUMN_LAYOUT_VERSION_KEY) !== SHIPMENT_COLUMN_LAYOUT_VERSION) {
-          forceLayoutReset = true
-          localStorage.setItem(SHIPMENT_COLUMN_LAYOUT_VERSION_KEY, SHIPMENT_COLUMN_LAYOUT_VERSION)
-          localStorage.setItem(columnOrderStorageKey, JSON.stringify(canonical))
-          localStorage.setItem(columnStorageKey, JSON.stringify(shipmentDefaultVisibleColumnIds(allIds)))
-        }
+        needsLayoutMigration =
+          localStorage.getItem(SHIPMENT_COLUMN_LAYOUT_VERSION_KEY) !== SHIPMENT_COLUMN_LAYOUT_VERSION
       } catch {
-        forceLayoutReset = true
+        needsLayoutMigration = true
       }
     }
 
-    if (forceLayoutReset) {
-      const defaultVis = shipmentDefaultVisibleColumnIds(allIds)
-      setVisibleColumnIds(new Set(defaultVis))
-      setColumnOrderIds(canonical)
+    const applyMigratedLayout = (visible: string[], order: string[]) => {
+      const migrated = migrateShipmentColumnLayout(visible, order)
+      const nextOrder = mergeShipmentColumnOrder(migrated.columnOrderIds, allIds)
+      setVisibleColumnIds(new Set(migrated.visibleColumnIds))
+      setColumnOrderIds(nextOrder)
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(SHIPMENT_COLUMN_LAYOUT_VERSION_KEY, SHIPMENT_COLUMN_LAYOUT_VERSION)
+          localStorage.setItem(columnOrderStorageKey, JSON.stringify(nextOrder))
+          localStorage.setItem(columnStorageKey, JSON.stringify(migrated.visibleColumnIds))
+        } catch {
+          // ignore
+        }
+      }
       void api
         .post('/user-preferences/me', {
           key: userViewPrefKey,
           value: {
-            visibleColumnIds: defaultVis,
-            columnOrderIds: canonical,
+            visibleColumnIds: migrated.visibleColumnIds,
+            columnOrderIds: nextOrder,
           },
         })
         .catch(() => {
           /* localStorage already updated */
         })
+    }
+
+    if (needsLayoutMigration) {
+      let savedVisible: string[] = []
+      let savedOrder: string[] = []
+      if (typeof window !== 'undefined') {
+        try {
+          const rawVis = localStorage.getItem(columnStorageKey)
+          if (rawVis) {
+            const parsed = JSON.parse(rawVis) as unknown
+            if (Array.isArray(parsed)) savedVisible = parsed.map(String)
+          }
+          const rawOrder = localStorage.getItem(columnOrderStorageKey)
+          if (rawOrder) {
+            const parsed = JSON.parse(rawOrder) as unknown
+            if (Array.isArray(parsed)) savedOrder = parsed.map(String)
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (savedVisible.length === 0) {
+        applyMigratedLayout(shipmentDefaultVisibleColumnIds(allIds), canonical)
+      } else {
+        applyMigratedLayout(savedVisible, savedOrder)
+      }
       return
     }
 
@@ -3507,9 +3642,17 @@ function ShipmentsPageContent() {
   const sortedShipments = useMemo(() => {
     const col = compactColumns.find(c => c.id === sortKey)
     const base = shipments
-    if (!col?.sortable || !col.getSortValue) return base
+    const prioritizeSapSto = shouldPrioritizeSapStoRows(statusFilter)
+    if (!col?.sortable || !col.getSortValue) {
+      if (!prioritizeSapSto) return base
+      return [...base].sort((a, b) => compareSapStoListRowPriority(a, b))
+    }
 
     const sorted = [...base].sort((a, b) => {
+      if (prioritizeSapSto) {
+        const stoCmp = compareSapStoListRowPriority(a, b)
+        if (stoCmp !== 0) return stoCmp
+      }
       const aVal = col.getSortValue!(a)
       const bVal = col.getSortValue!(b)
       const dirMul = sortDir === 'asc' ? 1 : -1
@@ -3521,7 +3664,7 @@ function ShipmentsPageContent() {
     })
 
     return sorted
-  }, [compactColumns, shipments, sortDir, sortKey])
+  }, [compactColumns, shipments, sortDir, sortKey, statusFilter])
 
   const paginatedShipments = sortedShipments
 
@@ -4344,6 +4487,48 @@ function ShipmentsPageContent() {
     await fetchShipmentDocuments(shipment)
   }
 
+  const openCancelShipmentDialog = (shipment: Shipment) => {
+    setCancelShipmentTarget(shipment)
+    setCancelShipmentRemark('')
+  }
+
+  const closeCancelShipmentDialog = () => {
+    if (cancelShipmentSubmitting) return
+    setCancelShipmentTarget(null)
+    setCancelShipmentRemark('')
+  }
+
+  const handleConfirmCancelShipment = async () => {
+    if (!cancelShipmentTarget) return
+
+    const remark = cancelShipmentRemark.trim()
+    if (!remark) {
+      alert('Cancellation remark is required.')
+      return
+    }
+
+    setCancelShipmentSubmitting(true)
+    try {
+      const res = await api.post(`/shipments/${cancelShipmentTarget.id}/cancel`, { remark })
+      if (!res.data?.success) {
+        throw new Error(res.data?.error?.message || 'Failed to cancel shipment')
+      }
+      setCancelShipmentTarget(null)
+      setCancelShipmentRemark('')
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      await fetchShipments(undefined, undefined, { force: true })
+      alert('Shipment cancelled successfully.')
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ||
+        (err instanceof Error ? err.message : 'Failed to cancel shipment')
+      alert(message)
+    } finally {
+      setCancelShipmentSubmitting(false)
+    }
+  }
+
   const handleDownloadDocument = async (docId: string, fileName: string) => {
     try {
       const response = await api.get(`/documents/${docId}/download`, {
@@ -4947,7 +5132,7 @@ function ShipmentsPageContent() {
                             </td>
                             <td className="sticky left-[220px] z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[260px] align-top">
                               <div className="font-medium text-gray-900 whitespace-normal break-words" title={r.contract_ext_no || ''}>{r.contract_ext_no || '—'}</div>
-                              <div className="text-[10px] text-gray-500 whitespace-normal break-words" title={r.supplier || ''}>{r.supplier || '—'}</div>
+                              <div className="text-[10px] text-gray-500 whitespace-normal break-words" title={resolveShipmentListSuppliers(r) || ''}>{resolveShipmentListSuppliers(r) || '—'}</div>
                             </td>
                             {shipCalendarMetaOrderIds.map((id) => {
                               if (id === 'due_start') return <td key={id} className="px-3 py-2 border-b border-gray-100 tabular-nums">{dueStart}</td>
@@ -5638,6 +5823,10 @@ function ShipmentsPageContent() {
                                         onAddShipment={() => void handleOpenAddShipmentForContractRow(shipment)}
                                         onEditShipment={() => handleOpenEditShipmentModal(shipment)}
                                         onViewShipment={() => handleOpenViewShipmentModal(shipment)}
+                                        onCancelShipment={() => openCancelShipmentDialog(shipment)}
+                                        cancelShipmentLoading={
+                                          cancelShipmentSubmitting && cancelShipmentTarget?.id === shipment.id
+                                        }
                                         onViewDocs={() => void handleViewDocuments(shipment)}
                                       />
                                     )}
@@ -5875,6 +6064,10 @@ function ShipmentsPageContent() {
                                   onAddShipment={() => void handleOpenAddShipmentForContractRow(shipment)}
                                   onEditShipment={() => handleOpenEditShipmentModal(shipment)}
                                   onViewShipment={() => handleOpenViewShipmentModal(shipment)}
+                                  onCancelShipment={() => openCancelShipmentDialog(shipment)}
+                                  cancelShipmentLoading={
+                                    cancelShipmentSubmitting && cancelShipmentTarget?.id === shipment.id
+                                  }
                                   onViewDocs={() => void handleViewDocuments(shipment)}
                                 />
                               )}
@@ -7317,6 +7510,48 @@ function ShipmentsPageContent() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={!!cancelShipmentTarget} onOpenChange={(open) => { if (!open) closeCancelShipmentDialog() }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cancel Shipment</DialogTitle>
+            <DialogDescription>
+              {cancelShipmentTarget
+                ? `${formatVesselTableDisplay(cancelShipmentTarget.vessel_name)} • ${formatSapDisplayValue(cancelShipmentTarget.contract_number)}`
+                : 'Provide a reason before cancelling this KLIP shipment.'}
+            </DialogDescription>
+          </DialogHeader>
+          <p className="text-sm text-gray-600">
+            Status will become <span className="font-medium">Cancelled</span> and Shipment Plan Qty / OS Qty (Plan)
+            assignments will be cleared.
+          </p>
+          <div className="space-y-2">
+            <label htmlFor="cancel-shipment-remark" className="text-sm font-medium text-gray-700">
+              Cancellation Reason <span className="text-red-600">*</span>
+            </label>
+            <textarea
+              id="cancel-shipment-remark"
+              className="w-full min-h-[96px] border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200"
+              placeholder="Enter reason for cancelling this shipment..."
+              value={cancelShipmentRemark}
+              onChange={(e) => setCancelShipmentRemark(e.target.value)}
+              disabled={cancelShipmentSubmitting}
+            />
+          </div>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={closeCancelShipmentDialog} disabled={cancelShipmentSubmitting}>
+              Close
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => void handleConfirmCancelShipment()}
+              disabled={cancelShipmentSubmitting || !cancelShipmentRemark.trim()}
+            >
+              {cancelShipmentSubmitting ? 'Cancelling...' : 'Confirm Cancel'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Documents Modal */}
       {showDocs && selectedShipment && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -7361,15 +7596,21 @@ function ShipmentsPageContent() {
       )}
 
       <AddNewShipmentModal
-        open={showAddShipment || editShipmentFromTable != null}
+        open={showAddShipment || editShipmentFromTable != null || plotShipmentFromTable != null}
         mode={editShipmentFromTable ? 'edit' : 'add'}
         readOnly={editShipmentFromTable?.readOnly === true}
         editContractId={editShipmentFromTable?.editContractId ?? null}
         editShipmentId={editShipmentFromTable?.shipmentId ?? null}
-        editStoNumber={editShipmentFromTable?.editStoNumber ?? null}
-        editContractNumbers={editShipmentFromTable?.editContractNumbers ?? null}
+        plotShipmentId={plotShipmentFromTable?.shipmentId ?? null}
+        editStoNumber={
+          editShipmentFromTable?.editStoNumber ?? plotShipmentFromTable?.editStoNumber ?? null
+        }
+        editContractNumbers={
+          editShipmentFromTable?.editContractNumbers ?? plotShipmentFromTable?.editContractNumbers ?? null
+        }
         prefilledPOs={addShipmentPrefilledPOs}
         prefilledStoNumber={addShipmentPrefilledSto}
+        prefilledContractNumbers={addShipmentPrefilledContractNumbers}
         onClose={handleCloseShipmentModal}
         onShipmentChanged={() => {
           invalidateLogisticsListCaches()

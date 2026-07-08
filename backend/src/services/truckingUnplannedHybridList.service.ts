@@ -9,6 +9,7 @@ import {
   buildTruckingUnplannedBacklogPageQuery,
   buildTruckingUnplannedContractToolbarScope,
 } from '../utils/truckingUnplannedHybridSql';
+import { computeHybridListPageSlices } from '../utils/hybridListPageSlices';
 import {
   buildPaginatedListQuery,
   buildTruckingListQuery,
@@ -126,26 +127,17 @@ export async function resolveTruckingUnplannedHybridList(
   const offset = (pageNum - 1) * limitNum;
 
   const breakdown = await countTruckingUnplannedHybridBreakdown(ctx);
-  const { contractRows } = breakdown;
+  const { executionRows } = breakdown;
 
-  let contractLimit = 0;
-  let contractOffset = 0;
-  let executionLimit = 0;
-  let executionOffset = 0;
-
-  if (offset < contractRows) {
-    contractOffset = offset;
-    contractLimit = Math.min(limitNum, contractRows - offset);
-    executionLimit = limitNum - contractLimit;
-    executionOffset = 0;
-  } else {
-    executionOffset = offset - contractRows;
-    executionLimit = limitNum;
-  }
+  const slices = computeHybridListPageSlices({
+    offset,
+    limit: limitNum,
+    executionRows,
+  });
 
   const [contractPage, executionPage] = await Promise.all([
-    fetchContractBacklogPage(ctx, contractLimit, contractOffset),
-    fetchExecutionPage(ctx, executionLimit, executionOffset),
+    fetchContractBacklogPage(ctx, slices.contractLimit, slices.contractOffset),
+    fetchExecutionPage(ctx, slices.executionLimit, slices.executionOffset),
   ]);
 
   for (const row of contractPage) {
@@ -153,7 +145,7 @@ export async function resolveTruckingUnplannedHybridList(
     row.row_kind = 'contract_backlog';
   }
 
-  const truckingOperations = [...contractPage, ...executionPage];
+  const truckingOperations = [...executionPage, ...contractPage];
 
   return {
     truckingOperations,
