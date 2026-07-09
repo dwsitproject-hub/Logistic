@@ -1603,34 +1603,93 @@ export function AddNewShipmentModal({
       setLoadingEdit(true)
       setEditShipmentId(null)
       try {
-        const detailRes = await api.get(`/shipments/${shipmentId}`)
+        const stoHint = String(prefilledStoNumber ?? '').trim()
+        const [detailRes, portsRes] = await Promise.all([
+          api.get(`/shipments/${shipmentId}`),
+          api.get(`/shipments/${shipmentId}/loading-ports`).catch(() => null),
+        ])
         const shipment = (detailRes.data?.data ?? {}) as Record<string, unknown>
         if (!shipment?.id && !detailRes.data?.success) {
           showNotification('error', 'Shipment not found')
           return
         }
-        const contractIdFallback =
-          String(shipment.contract_number ?? prefilledContractNumbers?.[0] ?? '').trim() || shipmentId
-        const row = { ...shipment, id: shipmentId }
-        const { qtyAssigned, assignmentKey } = await hydrateShipmentEditForm(
-          shipmentId,
-          row,
-          contractIdFallback,
-        )
+        const row = { ...shipment, id: shipmentId } as Record<string, unknown>
         const sto =
-          assignmentKey ||
-          String(shipment.sto_number ?? prefilledStoNumber ?? '').trim() ||
+          String(shipment.sto_number ?? stoHint ?? '').trim() ||
           String(shipment.operation_id ?? '').trim()
-        if (sto) {
-          const allPos = await fetchStoLinkedPurchaseOrderOptions(sto, [])
-          if (allPos.length > 0) {
-            applyStoLinkedPoOptionsToForm(allPos, {
-              existingQtyByKey: qtyAssigned,
-              preserveOperationId: true,
-              markSapPrefillUntouched: true,
-            })
+
+        const [allPos, preview] = await Promise.all([
+          sto ? fetchStoLinkedPurchaseOrderOptions(sto, []) : Promise.resolve([]),
+          sto ? fetchStoSapPreview(sto) : Promise.resolve({ has_sap_sto: false, vessel_name: null, port_of_discharge: null }),
+        ])
+
+        if (preview.has_sap_sto) {
+          setSapStoPreview(preview)
+        }
+
+        const qtyAssigned: Record<string, string> = {}
+        for (const po of allPos) {
+          const cn = po.contractId
+          const planKg = Number(po.contractData?.shipment_plan_qty ?? po.contractData?.sto_qty_assigned ?? 0)
+          const sapKg = Number(po.contractData?.sap_sto_qty ?? 0)
+          const qtyKg = planKg > 0 ? planKg : sapKg > 0 ? sapKg : 0
+          if (qtyKg > 0) {
+            const qtyMt = String(qtyKg / 1000)
+            qtyAssigned[po.key] = qtyMt
+            qtyAssigned[cn] = qtyMt
           }
         }
+
+        let loadingPortRow: VesselLoadingPortRow | null = null
+        if (portsRes?.data?.data?.ports) {
+          const ports: VesselLoadingPortRow[] = portsRes.data.data.ports ?? []
+          loadingPortRow =
+            ports.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
+            ports.find((p) => !p.is_discharge_port) ||
+            null
+        }
+
+        if (allPos.length > 0) {
+          applyStoLinkedPoOptionsToForm(allPos, {
+            existingQtyByKey: qtyAssigned,
+            preserveOperationId: true,
+            markSapPrefillUntouched: true,
+          })
+        } else {
+          const contractIdFallback =
+            String(shipment.contract_number ?? prefilledContractNumbers?.[0] ?? '').trim() || shipmentId
+          await hydrateShipmentEditForm(shipmentId, row, contractIdFallback)
+          setEditShipmentId(null)
+          return
+        }
+
+        setNewShipment((prev) => ({
+          ...prev,
+          operationId: String(shipment.operation_id ?? row.operation_id ?? prev.operationId),
+          stoNumber: sto || prev.stoNumber,
+          vesselName:
+            String(shipment.vessel_name ?? row.vessel_name ?? '').trim() ||
+            prev.vesselName.trim() ||
+            preview.vessel_name ||
+            '',
+          vesselCode: String(shipment.vessel_code ?? row.vessel_code ?? prev.vesselCode),
+          vesselOwner: String(shipment.vessel_owner ?? row.vessel_owner ?? prev.vesselOwner),
+          vesselDraft: String(shipment.vessel_draft ?? row.vessel_draft ?? prev.vesselDraft),
+          vesselCapacity: String(shipment.vessel_capacity ?? row.vessel_capacity ?? prev.vesselCapacity),
+          vesselHullType: String(shipment.vessel_hull_type ?? row.vessel_hull_type ?? prev.vesselHullType),
+          charterType: String(shipment.charter_type ?? row.charter_type ?? prev.charterType),
+          portOfLoading: String(shipment.port_of_loading ?? row.port_of_loading ?? prev.portOfLoading),
+          portOfDischarge:
+            String(shipment.port_of_discharge ?? row.port_of_discharge ?? '').trim() ||
+            prev.portOfDischarge.trim() ||
+            preview.port_of_discharge ||
+            '',
+        }))
+
+        const contractKeys = allPos.map((po) => po.key)
+        const etaBlock = createShipmentEtaDetail([...contractKeys])
+        applyShipmentEtaToBlock(etaBlock, shipment, row, loadingPortRow)
+        setEtaDetails([etaBlock])
         setEditShipmentId(null)
       } catch (error) {
         console.error('Failed to load shipment for plot:', error)
@@ -1652,9 +1711,9 @@ export function AddNewShipmentModal({
     setAiAppliedPatternContext(null)
   }, [newShipment.contractNumbers])
 
-  /** Load STO-linked PO lines + SAP vessel/discharge when parent opens modal before fetch completes. */
+  /** Load STO-linked PO lines + SAP vessel/discharge when parent opens modal (add mode only). */
   useEffect(() => {
-    if (!open || isEditMode) return
+    if (!open || isEditMode || isPlotMode) return
     const sto = String(prefilledStoNumber ?? '').trim()
     if (!sto) return
     if (prefilledPOs?.length) return
@@ -1702,6 +1761,7 @@ export function AddNewShipmentModal({
     prefilledPOs,
     prefilledContractNumbers,
     showNotification,
+    isPlotMode,
   ])
 
   useEffect(() => {
@@ -2252,16 +2312,20 @@ export function AddNewShipmentModal({
         </div>
 
         <div className="relative min-h-0 flex-1 overflow-y-auto px-6 py-4" {...{ [FAST_ENTRY_ROOT_ATTR]: 'true' }}>
-        {loadingInitialData && (
+        {((loadingInitialData && !isPlotMode) || (isPlotMode && loadingEdit)) && (
           <div className="absolute inset-0 z-[70] flex items-center justify-center rounded-b-lg bg-white/75 backdrop-blur-[1px]">
             <div className="flex flex-col items-center gap-2 rounded-lg border border-gray-200 bg-white px-6 py-4 shadow-sm">
               <Loader2 className="h-7 w-7 animate-spin text-blue-600" />
               <p className="text-sm font-medium text-gray-700">Loading shipment data…</p>
-              <p className="text-xs text-gray-500">Fetching SAP STO, PO lines, and vessel details</p>
+              <p className="text-xs text-gray-500">
+                {isPlotMode
+                  ? 'Fetching STO-linked PO lines and vessel details'
+                  : 'Fetching SAP STO, PO lines, and vessel details'}
+              </p>
             </div>
           </div>
         )}
-        {loadingEdit && (
+        {loadingEdit && !isPlotMode && (
           <div className="mb-4 flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
             <Loader2 className="h-4 w-4 animate-spin" />
             Loading shipment details…
@@ -2444,7 +2508,10 @@ export function AddNewShipmentModal({
                   </>
                 )}
 
-                {Boolean(prefilledStoNumber?.trim()) && loadingInitialData && newShipment.contractNumbers.length === 0 && (
+                {Boolean(prefilledStoNumber?.trim()) &&
+                  !isPlotMode &&
+                  loadingInitialData &&
+                  newShipment.contractNumbers.length === 0 && (
                   <div className="flex items-center gap-2 text-xs text-gray-500 py-2">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     Loading SAP STO &amp; PO lines…

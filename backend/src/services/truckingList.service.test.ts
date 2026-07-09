@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildTruckingListQuery,
   buildTruckingListSummaryFromRows,
+  buildPaginatedListQuery,
+  getCachedFilteredTotal,
   invalidateTruckingListCache,
   sortTruckingListRows,
   type TruckingListRow,
@@ -75,5 +77,31 @@ describe('truckingList.service', () => {
 
   it('invalidateTruckingListCache clears cached rows without throwing', () => {
     expect(() => invalidateTruckingListCache()).not.toThrow();
+  });
+
+  it('getCachedFilteredTotal returns null when cache is empty', () => {
+    invalidateTruckingListCache();
+    expect(getCachedFilteredTotal('missing-filter-key')).toBeNull();
+  });
+
+  it('buildPaginatedListQuery with sto key paging skips row LIMIT', () => {
+    const req = {
+      query: { page: '1', limit: '20', skipSapJoin: 'true' },
+    } as Parameters<typeof buildTruckingListQuery>[0];
+    const built = buildTruckingListQuery(req, { omitStatusFilter: true });
+    const pagingBuilt = {
+      ...built,
+      usesStoKeyPaging: true,
+      expansionPaging: {
+        limit: 20,
+        offset: 0,
+        orderBySql: 'ts.created_at DESC',
+      },
+    };
+    const { text, params } = buildPaginatedListQuery(pagingBuilt, 'created_at', 'DESC', 20, 0);
+    expect(text).toContain('expansion_keys AS');
+    expect(text).toContain('paged_expansion AS');
+    expect(text).not.toMatch(/trucking_page AS[\s\S]*LIMIT \$\d+/);
+    expect(params).toHaveLength(built.innerParams.length + built.outerParams.length);
   });
 });

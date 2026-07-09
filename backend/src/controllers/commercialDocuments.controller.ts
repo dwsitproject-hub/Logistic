@@ -22,6 +22,12 @@ import {
   toRelativeUploadPath,
 } from '../utils/fileUpload';
 import { scanFileWithClamdIfConfigured } from '../services/clamScan.service';
+import {
+  buildTandaTerimaPdf,
+  tandaTerimaDownloadFilename,
+  type TandaTerimaContractLine,
+} from '../services/tandaTerimaPdf.service';
+import { buildTandaTerimaContractsByExtNoSql } from '../utils/tandaTerimaQuerySql';
 
 function defaultYtdRange(): { dateFrom: string; dateTo: string } {
   const d = new Date();
@@ -95,14 +101,18 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
       limit,
     };
 
+    const includeSummary = String(q.includeSummary ?? 'true').toLowerCase() !== 'false';
+
     const { sql, countSql, values } = buildCommercialDocumentsListQuery(listParams);
+    const summaryQuery = includeSummary
+      ? buildCommercialDocumentsSummaryQuery({ dateFrom, dateTo })
+      : null;
     const [rowsResult, countResult, summaryResult] = await Promise.all([
       query(sql, values),
       query(countSql, values.slice(0, values.length - 2)),
-      query(
-        buildCommercialDocumentsSummaryQuery({ dateFrom, dateTo }).sql,
-        buildCommercialDocumentsSummaryQuery({ dateFrom, dateTo }).values,
-      ),
+      summaryQuery
+        ? query(summaryQuery.sql, summaryQuery.values)
+        : Promise.resolve({ rows: [] as Record<string, unknown>[] }),
     ]);
 
     const total = Number(countResult.rows[0]?.total ?? 0);
@@ -125,13 +135,17 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
           limit,
           totalPages: Math.max(1, Math.ceil(total / limit)),
         },
-        summary: {
-          contract: buildCard('checked_contract'),
-          addendum_contract: buildCard('checked_addendum_contract'),
-          invoice_fp_dp: buildCard('checked_invoice_fp_dp'),
-          invoice_fp_payoff: buildCard('checked_invoice_fp_payoff'),
-          invoice_fp_full: buildCard('checked_invoice_fp_full'),
-        },
+        ...(includeSummary
+          ? {
+              summary: {
+                contract: buildCard('checked_contract'),
+                addendum_contract: buildCard('checked_addendum_contract'),
+                invoice_fp_dp: buildCard('checked_invoice_fp_dp'),
+                invoice_fp_payoff: buildCard('checked_invoice_fp_payoff'),
+                invoice_fp_full: buildCard('checked_invoice_fp_full'),
+              },
+            }
+          : {}),
         filters: { dateFrom, dateTo },
       },
     });
@@ -366,3 +380,87 @@ export const viewCommercialDocument = (req: AuthRequest, res: Response) =>
 
 export const downloadCommercialDocument = (req: AuthRequest, res: Response) =>
   streamCommercialFile(req, res, 'attachment');
+
+function parseIsoSendDate(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const d = new Date(`${raw}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  return raw;
+}
+
+export const downloadTandaTerima = async (req: AuthRequest, res: Response) => {
+  try {
+    const body = req.body as { contractExtNos?: unknown; sendDate?: unknown };
+    const contractExtNos = Array.isArray(body.contractExtNos)
+      ? [...new Set(body.contractExtNos.map((v) => String(v ?? '').trim()).filter(Boolean))]
+      : [];
+    const sendDateIso = parseIsoSendDate(body.sendDate);
+
+    if (contractExtNos.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Select at least one contract' },
+      });
+    }
+    if (!sendDateIso) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Send Date is required (YYYY-MM-DD)' },
+      });
+    }
+
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: { message: 'Unauthorized' } });
+    }
+
+    const [contractsRes, userRes] = await Promise.all([
+      query(buildTandaTerimaContractsByExtNoSql(), [contractExtNos]),
+      query(`SELECT email, full_name FROM users WHERE id = $1`, [userId]),
+    ]);
+
+    const found = contractsRes.rows as { contract_ext_no: string; supplier: string | null }[];
+    if (found.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'No matching contracts found for the selected contract ext numbers' },
+      });
+    }
+
+    const foundSet = new Set(found.map((r) => r.contract_ext_no));
+    const missing = contractExtNos.filter((ext) => !foundSet.has(ext));
+    if (missing.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: `Contract ext no not found: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? '…' : ''}`,
+        },
+      });
+    }
+
+    const orderMap = new Map(contractExtNos.map((ext, i) => [ext, i]));
+    const lines: TandaTerimaContractLine[] = [...found].sort(
+      (a, b) => (orderMap.get(a.contract_ext_no) ?? 0) - (orderMap.get(b.contract_ext_no) ?? 0),
+    ).map((r) => ({
+      contractExtNo: r.contract_ext_no,
+      supplier: r.supplier,
+    }));
+
+    const userRow = userRes.rows[0] as { email?: string; full_name?: string } | undefined;
+    const pdfBytes = await buildTandaTerimaPdf({
+      lines,
+      sendDateIso,
+      senderEmail: String(userRow?.email ?? req.user?.email ?? '').trim(),
+      senderFullName: String(userRow?.full_name ?? req.user?.username ?? '').trim(),
+    });
+
+    const filename = tandaTerimaDownloadFilename(sendDateIso);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(Buffer.from(pdfBytes));
+  } catch (err) {
+    logger.error('downloadTandaTerima error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to generate Tanda Terima PDF' } });
+  }
+};

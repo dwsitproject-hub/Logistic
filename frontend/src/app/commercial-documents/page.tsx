@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   FileCheck,
+  FileDown,
   FileText,
   Loader2,
   Pencil,
@@ -33,7 +34,7 @@ import { cn } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
 import { DocumentCheckingModal } from '@/components/commercial-documents/DocumentCheckingModal'
-import { CommercialDocumentsSummaryCards } from '@/components/commercial-documents/CommercialDocumentsSummaryCards'
+import { TandaTerimaDownloadModal } from '@/components/commercial-documents/TandaTerimaDownloadModal'
 import {
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
@@ -62,10 +63,10 @@ import {
   COMMERCIAL_DOCUMENT_TYPES,
   COMMERCIAL_DOCUMENTS_DATA_PERMISSION,
   COMMERCIAL_DOCUMENTS_PAGE_PERMISSION,
+  COMMERCIAL_DOCUMENTS_SHOW_SUMMARY_SECTION,
   defaultCommercialDocsYtdRange,
   type CommercialDocumentRow,
   type CommercialDocumentType,
-  type CommercialDocumentsSummary,
 } from '@/lib/commercialDocumentsTypes'
 
 const VISIBLE_COLUMNS_KEY = 'commercial-documents.visibleColumns.v2'
@@ -104,7 +105,6 @@ function CommercialDocumentsPageContent() {
 
   const ytdDefault = useMemo(() => defaultCommercialDocsYtdRange(), [])
   const [rows, setRows] = useState<CommercialDocumentRow[]>([])
-  const [summary, setSummary] = useState<CommercialDocumentsSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [fetching, setFetching] = useState(false)
   const [totalRows, setTotalRows] = useState(0)
@@ -142,6 +142,8 @@ function CommercialDocumentsPageContent() {
   const [sortKey, setSortKey] = useState<CommercialDocsColumnId>('contract_date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [modalRow, setModalRow] = useState<CommercialDocumentRow | null>(null)
+  const [selectedContractExtNos, setSelectedContractExtNos] = useState<Set<string>>(() => new Set())
+  const [tandaTerimaModalOpen, setTandaTerimaModalOpen] = useState(false)
 
   const topScrollRef = useRef<HTMLDivElement>(null)
   const bottomScrollRef = useRef<HTMLDivElement>(null)
@@ -193,6 +195,7 @@ function CommercialDocumentsPageContent() {
       params.set('limit', String(PAGE_SIZE))
       params.set('dateFrom', dateFrom)
       params.set('dateTo', dateTo)
+      params.set('includeSummary', COMMERCIAL_DOCUMENTS_SHOW_SUMMARY_SECTION ? 'true' : 'false')
       if (debouncedSearch) params.set('search', debouncedSearch)
       if (documentTypeFilter) params.set('documentType', documentTypeFilter)
       if (documentStatusFilter) params.set('documentStatus', documentStatusFilter)
@@ -206,7 +209,6 @@ function CommercialDocumentsPageContent() {
       const { data } = await cachedGet(cacheKey, () => api.get(url).then((r) => r.data))
       const payload = data?.data
       setRows(payload?.rows || [])
-      setSummary(payload?.summary || null)
       setTotalRows(payload?.pagination?.total ?? 0)
       setTotalPages(payload?.pagination?.totalPages ?? 1)
     } finally {
@@ -361,18 +363,6 @@ function CommercialDocumentsPageContent() {
     setCurrentPage(1)
   }
 
-  const applySummaryFilter = (type: CommercialDocumentType, status: 'checked' | 'unchecked') => {
-    setDocumentTypeFilter(type)
-    setDocumentStatusFilter(status)
-    setCurrentPage(1)
-  }
-
-  const resetSummarySelection = () => {
-    setDocumentTypeFilter('')
-    setDocumentStatusFilter('')
-    setCurrentPage(1)
-  }
-
   const toggleColumn = (colId: CommercialDocsColumnId) => {
     setVisibleColumnIds((prev) =>
       prev.includes(colId) ? prev.filter((id) => id !== colId) : [...prev, colId],
@@ -400,6 +390,39 @@ function CommercialDocumentsPageContent() {
     }
   }
 
+  const selectedCount = selectedContractExtNos.size
+  const selectedExtNoList = useMemo(
+    () => [...selectedContractExtNos],
+    [selectedContractExtNos],
+  )
+
+  const allPageRowsSelected =
+    sortedRows.length > 0 &&
+    sortedRows.every((row) => selectedContractExtNos.has(row.contract_ext_no))
+  const somePageRowsSelected =
+    sortedRows.some((row) => selectedContractExtNos.has(row.contract_ext_no)) && !allPageRowsSelected
+
+  const toggleRowSelected = (row: CommercialDocumentRow, checked: boolean) => {
+    setSelectedContractExtNos((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(row.contract_ext_no)
+      else next.delete(row.contract_ext_no)
+      return next
+    })
+  }
+
+  const toggleAllPageRows = (checked: boolean) => {
+    setSelectedContractExtNos((prev) => {
+      const next = new Set(prev)
+      if (checked) {
+        sortedRows.forEach((row) => next.add(row.contract_ext_no))
+      } else {
+        sortedRows.forEach((row) => next.delete(row.contract_ext_no))
+      }
+      return next
+    })
+  }
+
   if (!perms.loaded) {
     return (
       <div className="flex items-center justify-center h-64 text-gray-500">Loading...</div>
@@ -416,15 +439,6 @@ function CommercialDocumentsPageContent() {
         <h1 className="text-2xl font-bold text-gray-900">Commercial Documents</h1>
         <p className="text-sm text-gray-600 mt-1">Document completeness checking for commercial contracts</p>
       </div>
-
-      {/* Section 1 */}
-      <CommercialDocumentsSummaryCards
-        summary={summary}
-        documentTypeFilter={documentTypeFilter}
-        documentStatusFilter={documentStatusFilter}
-        onFilter={applySummaryFilter}
-        onResetSelection={resetSummarySelection}
-      />
 
       {/* Section 2 */}
       <Card>
@@ -546,6 +560,16 @@ function CommercialDocumentsPageContent() {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={selectedCount === 0 || fetching || section3TableLoading}
+                onClick={() => setTandaTerimaModalOpen(true)}
+              >
+                <FileDown className="h-4 w-4 mr-2" />
+                Download Tanda Terima
+                {selectedCount > 0 ? ` (${selectedCount})` : ''}
+              </Button>
               <div className="relative">
                 <Button
                   variant="outline"
@@ -692,7 +716,7 @@ function CommercialDocumentsPageContent() {
                 requestAnimationFrame(() => { isSyncingScroll.current = false })
               }}
             >
-              <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS}`}>
+              <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--commercial-docs`}>
                 <thead>
                   <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
                     {visibleColumns.map((col) => {
@@ -738,7 +762,15 @@ function CommercialDocumentsPageContent() {
                       scope="col"
                       className={cn(COMPACT_TABLE_ACTIONS_HEADER_CLASS, CONTRACT_PERF_TABLE_CELL_PAD)}
                     >
-                      <span className={COMPACT_TABLE_HEADER_LABEL_CLASS}>Actions</span>
+                      <div className="klip-commercial-docs-actions-inner">
+                        <Checkbox
+                          checked={allPageRowsSelected ? true : somePageRowsSelected ? 'indeterminate' : false}
+                          onCheckedChange={(v) => toggleAllPageRows(v === true)}
+                          disabled={sortedRows.length === 0 || section3TableLoading}
+                          aria-label="Select all contracts on this page"
+                        />
+                        <span className={cn(COMPACT_TABLE_HEADER_LABEL_CLASS, 'whitespace-nowrap')}>Actions</span>
+                      </div>
                     </th>
                   </tr>
                 </thead>
@@ -792,7 +824,12 @@ function CommercialDocumentsPageContent() {
                             )
                           })}
                           <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripe)}>
-                            <div className="flex items-center justify-center">
+                            <div className="klip-commercial-docs-actions-inner">
+                              <Checkbox
+                                checked={selectedContractExtNos.has(row.contract_ext_no)}
+                                onCheckedChange={(v) => toggleRowSelected(row, v === true)}
+                                aria-label={`Select contract ${row.contract_ext_no}`}
+                              />
                               <Button
                                 variant="outline"
                                 size="icon"
@@ -835,6 +872,13 @@ function CommercialDocumentsPageContent() {
           </div>
         </CardContent>
       </Card>
+
+      <TandaTerimaDownloadModal
+        open={tandaTerimaModalOpen}
+        selectedCount={selectedCount}
+        contractExtNos={selectedExtNoList}
+        onClose={() => setTandaTerimaModalOpen(false)}
+      />
 
       <DocumentCheckingModal
         row={modalRow}

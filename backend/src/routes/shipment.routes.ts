@@ -29,6 +29,7 @@ import {
   getShippingPerformance,
   getShippingPerformanceSummary,
   getShippingPerformanceTree,
+  getVesselIdle,
   updateStoQtyAssigned,
   getShipmentActivityLog,
   cancelKlipShipment,
@@ -94,6 +95,7 @@ router.put('/:id/daily-planning-deliverables', auditLog('UPDATE', 'SHIPMENT'), u
 router.get('/performance/summary', getShippingPerformanceSummary);
 router.get('/performance/tree', getShippingPerformanceTree);
 router.get('/performance', getShippingPerformance);
+router.get('/vessel-idle', getVesselIdle);
 // Get all shipments
 router.get('/', getShipments);
 

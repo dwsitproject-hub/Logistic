@@ -302,6 +302,27 @@
     overflow: hidden;
   }
 
+  .klip-compact-table--commercial-docs th.klip-op-col--actions,
+  .klip-compact-table--commercial-docs td.klip-op-col--actions {
+    width: 148px;
+    min-width: 148px;
+    max-width: 148px;
+    padding-left: 0.625rem;
+    padding-right: 0.625rem;
+  }
+
+  .klip-compact-table--commercial-docs .klip-commercial-docs-actions-inner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.625rem;
+    min-width: 0;
+  }
+
+  .klip-compact-table--commercial-docs .klip-commercial-docs-actions-inner > * {
+    flex-shrink: 0;
+  }
+
   /*
    * Sticky Actions column — header + body freeze on horizontal scroll.
    * Perf tables put sticky-top on each th (not tr) so corner cell sticks correctly.

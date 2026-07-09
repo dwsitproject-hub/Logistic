@@ -109,7 +109,7 @@ function SegmentBlock({
         >
           <div className="flex flex-col items-center gap-0 pointer-events-none min-w-0 w-full">
             <span className={cn('text-[10px] leading-none', ui.count)}>{ui.label}</span>
-            <span className={cn('text-[11px] tabular-nums leading-tight mt-0.5', ui.count)}>
+            <span className={cn('text-xs tabular-nums leading-tight mt-0.5 font-medium', ui.count)}>
               {formatSegmentCardQtyMt(metrics.totalQtyKg)}
             </span>
           </div>

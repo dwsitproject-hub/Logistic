@@ -3,6 +3,8 @@ import {
   buildShipmentListCacheKey,
   buildShipmentListEmptyCountQuery,
   buildShipmentListPageQuery,
+  buildShipmentListPageQueryWithoutInlineCount,
+  getCachedFilteredTotal,
   invalidateShipmentsListCache,
 } from './shipmentList.service';
 
@@ -95,5 +97,27 @@ describe('shipmentList.service', () => {
     });
     expect(text).toContain('FROM ranked_sto');
     expect(text).not.toContain('paged_sto');
+  });
+
+  it('buildShipmentListPageQueryWithoutInlineCount omits __filter_total', () => {
+    const { text } = buildShipmentListPageQueryWithoutInlineCount(baseCtx, 20, 0);
+    expect(text).not.toContain('__filter_total');
+    expect(text).toContain('LIMIT $3 OFFSET $4');
+  });
+
+  it('buildShipmentListPageQueryWithoutInlineCount omits LIMIT when STO paging', () => {
+    const { text, params } = buildShipmentListPageQueryWithoutInlineCount(
+      { ...baseCtx, usesStoKeyPaging: true, shipmentBaseCteSql: 'WITH ranked_sto AS (SELECT 1)' },
+      20,
+      0,
+    );
+    expect(text).not.toContain('__filter_total');
+    expect(text).not.toMatch(/shipment_page AS[\s\S]*LIMIT \$/);
+    expect(params).toEqual([...baseCtx.innerParams]);
+  });
+
+  it('getCachedFilteredTotal returns null when cache is empty', () => {
+    invalidateShipmentsListCache();
+    expect(getCachedFilteredTotal('missing-filter-key')).toBeNull();
   });
 });

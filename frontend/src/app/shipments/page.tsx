@@ -116,6 +116,12 @@ import {
   type ShipmentPagePipelineStatusCounts,
 } from '@/lib/shipmentPagePipeline'
 import { ShipmentStatusDistribution } from '@/components/shipments/ShipmentStatusDistribution'
+import { VesselIdleModal, type VesselIdleListRow } from '@/components/shipments/VesselIdleModal'
+import VesselHistoryModal, {
+  type VesselHistoryModalSelection,
+  type VesselHistoryShipmentRow,
+} from '@/components/shipping-performance/VesselHistoryModal'
+import { mapShippingPerformanceToVesselHistoryRows } from '@/lib/shippingPerfVesselHistoryRows'
 import { ShipmentsGlobalFiltersSection } from '@/components/shipments/ShipmentsGlobalFiltersSection'
 import {
   buildShipmentsListQueryKey,
@@ -816,6 +822,8 @@ function ShipmentsPageContent() {
   const [loading, setLoading] = useState(true)
   /** Stale-while-revalidate: in-flight list fetch without clearing visible rows. */
   const [listFetching, setListFetching] = useState(false)
+  /** Immediate table skeleton when status / ETA scope changes (not pagination). */
+  const [tableScopeLoading, setTableScopeLoading] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize] = useState(20)
   const [totalCount, setTotalCount] = useState(0)
@@ -845,6 +853,17 @@ function ShipmentsPageContent() {
     etaDischarge?: Record<string, number>
   } | null>(null)
   const [summaryFetching, setSummaryFetching] = useState(false)
+  const [vesselIdleCount, setVesselIdleCount] = useState(0)
+  const [vesselIdleList, setVesselIdleList] = useState<VesselIdleListRow[]>([])
+  const [vesselIdleLoading, setVesselIdleLoading] = useState(false)
+  const [vesselIdleModalOpen, setVesselIdleModalOpen] = useState(false)
+  const [vesselHistoryModalOpen, setVesselHistoryModalOpen] = useState(false)
+  const [selectedVesselForHistory, setSelectedVesselForHistory] =
+    useState<VesselHistoryModalSelection | null>(null)
+  const [vesselHistorySourceRows, setVesselHistorySourceRows] = useState<VesselHistoryShipmentRow[]>(
+    [],
+  )
+  const vesselHistoryRowsLoadingRef = useRef(false)
   const shipmentsSummaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const summaryFetchGenRef = useRef(0)
   const section1SummaryForceNextFetchRef = useRef(true)
@@ -1218,6 +1237,60 @@ function ShipmentsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userScopeReady, listQueryKey])
 
+  const fetchVesselIdle = useCallback(async () => {
+    setVesselIdleLoading(true)
+    try {
+      const res = await api.get('/shipments/vessel-idle')
+      const vessels = (res.data?.data?.vessels ?? []) as VesselIdleListRow[]
+      setVesselIdleList(vessels)
+      setVesselIdleCount(Number(res.data?.data?.count ?? vessels.length))
+    } catch (error) {
+      console.error('Failed to fetch vessel idle list:', error)
+    } finally {
+      setVesselIdleLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!userScopeReady) return
+    void fetchVesselIdle()
+  }, [userScopeReady, fetchVesselIdle])
+
+  const ensureVesselHistoryRows = useCallback(async () => {
+    if (vesselHistorySourceRows.length > 0 || vesselHistoryRowsLoadingRef.current) return
+    vesselHistoryRowsLoadingRef.current = true
+    try {
+      const res = await api.get('/shipments/performance', {
+        params: { scope: 'ytd' },
+        timeout: 120000,
+      })
+      const raw = Array.isArray(res.data?.data) ? res.data.data : []
+      setVesselHistorySourceRows(mapShippingPerformanceToVesselHistoryRows(raw))
+    } catch (error) {
+      console.error('Failed to load vessel history rows for detail modal:', error)
+    } finally {
+      vesselHistoryRowsLoadingRef.current = false
+    }
+  }, [vesselHistorySourceRows.length])
+
+  const handleVesselIdleClick = useCallback(() => {
+    setVesselIdleModalOpen(true)
+    if (!vesselIdleLoading && vesselIdleList.length === 0) {
+      void fetchVesselIdle()
+    }
+  }, [fetchVesselIdle, vesselIdleList.length, vesselIdleLoading])
+
+  const handleVesselIdleNameClick = useCallback(
+    (vesselName: string) => {
+      const normalized = vesselName.trim() || 'Unknown'
+      void ensureVesselHistoryRows().then(() => {
+        setSelectedVesselForHistory({ vesselName: normalized, vesselKey: normalized })
+        setVesselHistoryModalOpen(true)
+      })
+    },
+    [ensureVesselHistoryRows],
+  )
+
   const resetPageForGlobalFilter = useCallback(() => {
     setPage(1)
   }, [])
@@ -1325,7 +1398,17 @@ function ShipmentsPageContent() {
     setPage(1)
   }, [])
 
+  /** Reset visible rows so Section 3 shows loading when table scope filters change. */
+  const beginTableScopeRefresh = useCallback(() => {
+    setShipments([])
+    setLoading(true)
+    setTableScopeLoading(true)
+    setTotalCount(0)
+    setTotalPages(1)
+  }, [])
+
   const handlePipelineStageChange = useCallback((stage: ShipmentsPipelineStageFilter) => {
+    beginTableScopeRefresh()
     setPage(1)
     if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
       setSection2EtaSummary(null)
@@ -1333,7 +1416,7 @@ function ShipmentsPageContent() {
       setEtaDischargeFilter('ALL')
     }
     setStatusFilter(stage)
-  }, [])
+  }, [beginTableScopeRefresh])
 
   const handleStatusCardClick = useCallback(
     (stage: ShipmentPagePipelineStage) => {
@@ -1468,64 +1551,6 @@ function ShipmentsPageContent() {
         }
       }
 
-      const summaryFetchPromise = isUnplannedHybridList
-        ? null
-        : cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
-            force: summaryForce,
-            onRevalidate: (fresh) => {
-              if (listGen !== listFetchGenRef.current) return
-              applySummaryEnvelope(fresh)
-            },
-          })
-            .then(({ data }) => {
-              if (listGen !== listFetchGenRef.current) return
-              applySummaryEnvelope(data)
-            })
-            .catch(() => {
-              if (listGen === listFetchGenRef.current) setSummaryFetching(false)
-            })
-
-      if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && statusFilter !== 'ALL') {
-        const section2Params = new URLSearchParams(params.toString())
-        section2Params.delete('status')
-        section2Params.delete('etaLoading')
-        section2Params.delete('etaDischarge')
-        section2Params.delete('includeSummary')
-        section2Params.set('summaryOnly', 'true')
-        section2Params.set('page', '1')
-        section2Params.set('limit', '1')
-        section2Params.set('scopeStatus', statusFilter)
-        const section2Url = `/shipments?${section2Params.toString()}`
-        const section2CacheKey = buildCacheKey('GET', section2Url)
-        const summaryGen = ++summaryFetchGenRef.current
-        void cachedGet(section2CacheKey, () => api.get(section2Url).then((r) => r.data), {
-          force: true,
-          onRevalidate: (fresh) => {
-            if (summaryGen !== summaryFetchGenRef.current) return
-            if (fresh?.data?.summary) {
-              setSection2EtaSummary({
-                etaLoading: fresh.data.summary.etaLoading,
-                etaDischarge: fresh.data.summary.etaDischarge,
-              })
-            }
-          },
-        })
-          .then(({ data }) => {
-            if (summaryGen !== summaryFetchGenRef.current) return
-            if (data?.data?.summary) {
-              setSection2EtaSummary({
-                etaLoading: data.data.summary.etaLoading,
-                etaDischarge: data.data.summary.etaDischarge,
-              })
-            }
-          })
-          .catch(() => {
-            if (summaryGen === summaryFetchGenRef.current) setSection2EtaSummary(null)
-          })
-      } else {
-        setSection2EtaSummary(null)
-      }
-
       const applyListEnvelope = (envelope: {
         data?: {
           shipments?: Shipment[]
@@ -1544,6 +1569,7 @@ function ShipmentsPageContent() {
         const pages = Number(envelope?.data?.pagination?.totalPages || 1)
         setTotalCount(total)
         setTotalPages(Math.max(1, pages))
+        setTableScopeLoading(false)
         if (envelope?.data?.summary) {
           setShipmentsSection1Summary(envelope.data.summary)
           setSummaryFetching(false)
@@ -1582,7 +1608,68 @@ function ShipmentsPageContent() {
         setSummaryFetching(false)
       }
 
-      void summaryFetchPromise
+      /** Summary cards after table shell — avoids competing with list query on DB/CPU. */
+      const scheduleSummaryFetches = () => {
+        if (listGen !== listFetchGenRef.current) return
+
+        if (!isUnplannedHybridList) {
+          void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+            force: summaryForce,
+            onRevalidate: (fresh) => {
+              if (listGen !== listFetchGenRef.current) return
+              applySummaryEnvelope(fresh)
+            },
+          })
+            .then(({ data }) => {
+              if (listGen !== listFetchGenRef.current) return
+              applySummaryEnvelope(data)
+            })
+            .catch(() => {
+              if (listGen === listFetchGenRef.current) setSummaryFetching(false)
+            })
+        }
+
+        if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && statusFilter !== 'ALL') {
+          const section2Params = new URLSearchParams(params.toString())
+          section2Params.delete('status')
+          section2Params.delete('etaLoading')
+          section2Params.delete('etaDischarge')
+          section2Params.delete('includeSummary')
+          section2Params.set('summaryOnly', 'true')
+          section2Params.set('page', '1')
+          section2Params.set('limit', '1')
+          section2Params.set('scopeStatus', statusFilter)
+          const section2Url = `/shipments?${section2Params.toString()}`
+          const section2CacheKey = buildCacheKey('GET', section2Url)
+          const summaryGen = ++summaryFetchGenRef.current
+          void cachedGet(section2CacheKey, () => api.get(section2Url).then((r) => r.data), {
+            force: true,
+            onRevalidate: (fresh) => {
+              if (summaryGen !== summaryFetchGenRef.current) return
+              if (fresh?.data?.summary) {
+                setSection2EtaSummary({
+                  etaLoading: fresh.data.summary.etaLoading,
+                  etaDischarge: fresh.data.summary.etaDischarge,
+                })
+              }
+            },
+          })
+            .then(({ data }) => {
+              if (summaryGen !== summaryFetchGenRef.current) return
+              if (data?.data?.summary) {
+                setSection2EtaSummary({
+                  etaLoading: data.data.summary.etaLoading,
+                  etaDischarge: data.data.summary.etaDischarge,
+                })
+              }
+            })
+            .catch(() => {
+              if (summaryGen === summaryFetchGenRef.current) setSection2EtaSummary(null)
+            })
+        } else {
+          setSection2EtaSummary(null)
+        }
+      }
 
       // SAP hydrate after table paint — avoids competing with shell query on DB/CPU.
       const scheduleHydrate = () => {
@@ -1613,10 +1700,14 @@ function ShipmentsPageContent() {
             console.warn('Shipment SAP hydrate failed (table shows shell data):', err)
           })
       }
+      const runDeferredFetches = () => {
+        scheduleSummaryFetches()
+        scheduleHydrate()
+      }
       if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
-        window.requestIdleCallback(() => scheduleHydrate(), { timeout: 2000 })
+        window.requestIdleCallback(() => runDeferredFetches(), { timeout: 2000 })
       } else {
-        setTimeout(scheduleHydrate, 250)
+        setTimeout(runDeferredFetches, 250)
       }
     } catch (error: any) {
       if (listGen !== listFetchGenRef.current) return
@@ -1639,8 +1730,10 @@ function ShipmentsPageContent() {
       }
       setListFetching(false)
       setSummaryFetching(false)
+      setTableScopeLoading(false)
     } finally {
       setLoading(false)
+      setTableScopeLoading(false)
     }
   }
 
@@ -2463,19 +2556,21 @@ function ShipmentsPageContent() {
 
   const handleEtaLoadingCardClick = useCallback((key: EtaBucketFilterKey) => {
     if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) return
+    beginTableScopeRefresh()
     setPage(1)
     setEtaLoadingFilter((prev) => (prev === key ? 'ALL' : key))
     setStatusFilter('ALL')
     setEtaDischargeFilter('ALL')
-  }, [])
+  }, [beginTableScopeRefresh])
 
   const handleEtaDischargeCardClick = useCallback((key: EtaBucketFilterKey) => {
     if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) return
+    beginTableScopeRefresh()
     setPage(1)
     setEtaDischargeFilter((prev) => (prev === key ? 'ALL' : key))
     setStatusFilter('ALL')
     setEtaLoadingFilter('ALL')
-  }, [])
+  }, [beginTableScopeRefresh])
 
   const section2EtaLoadingCounts = useMemo(() => {
     if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) return { ...EMPTY_ETA_BUCKET_COUNTS }
@@ -2538,7 +2633,8 @@ function ShipmentsPageContent() {
     tableShipmentCount,
   ])
 
-  const section3TableLoading = loading && shipments.length === 0
+  const section3TableLoading =
+    tableScopeLoading || (loading && shipments.length === 0)
   const section1DataLoading =
     summaryFetching || (userScopeReady && shipmentsSection1Summary == null)
 
@@ -4740,6 +4836,9 @@ function ShipmentsPageContent() {
           loadingPortBreakdown={loadingPortBreakdown}
           dischargePortBreakdown={dischargePortBreakdown}
           onStageClick={handleStatusCardClick}
+          vesselIdleCount={vesselIdleCount}
+          vesselIdleLoading={vesselIdleLoading}
+          onVesselIdleClick={handleVesselIdleClick}
         />
 
         {/* Section 2 — ETA Loading / Discharge (hidden while SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED is false) */}
@@ -5284,7 +5383,7 @@ function ShipmentsPageContent() {
               <div>
                 <CardTitle className="flex items-center gap-2">
                   <span>All Shipments</span>
-                  {listFetching ? (
+                  {listFetching || tableScopeLoading ? (
                     <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                   ) : null}
                 </CardTitle>
@@ -5547,12 +5646,12 @@ function ShipmentsPageContent() {
                         >
 
                       {/* Rows */}
-                        {listFetching && shipments.length === 0 ? (
+                        {section3TableLoading || (listFetching && shipments.length === 0) ? (
                           <TableInitialLoadPlaceholder
                             colSpan={visibleColumns.length + 2}
                             icon={Package}
                           />
-                        ) : !listFetching && sortedShipments.length === 0 ? (
+                        ) : !(listFetching || tableScopeLoading) && sortedShipments.length === 0 ? (
                           <tr>
                             <td colSpan={visibleColumns.length + 2} className="px-4 py-10 text-center text-gray-500 bg-white">
                               <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />
@@ -5966,11 +6065,11 @@ function ShipmentsPageContent() {
 
                 {/* Mobile/tablet cards */}
                 <div className="lg:hidden space-y-2">
-                  {listFetching && shipments.length === 0 ? (
+                  {section3TableLoading || (listFetching && shipments.length === 0) ? (
                     <div className="rounded-lg border bg-white">
                       <TableInitialLoadPlaceholderContent icon={Package} />
                     </div>
-                  ) : !listFetching && sortedShipments.length === 0 ? (
+                  ) : !(listFetching || tableScopeLoading) && sortedShipments.length === 0 ? (
                     <div className="rounded-lg border bg-white px-4 py-10 text-center text-sm text-gray-500">
                       No shipments found
                     </div>
@@ -7618,6 +7717,7 @@ function ShipmentsPageContent() {
         onShipmentChanged={() => {
           invalidateLogisticsListCaches()
           section1SummaryForceNextFetchRef.current = true
+          void fetchVesselIdle()
           void fetchShipments(1, undefined, { force: true })
         }}
         onSubmit={async (payload) => {
@@ -7626,8 +7726,27 @@ function ShipmentsPageContent() {
           handleCloseShipmentModal()
           invalidateLogisticsListCaches()
           section1SummaryForceNextFetchRef.current = true
+          void fetchVesselIdle()
           void fetchShipments(1, undefined, { force: true })
         }}
+      />
+
+      <VesselIdleModal
+        open={vesselIdleModalOpen}
+        loading={vesselIdleLoading}
+        vessels={vesselIdleList}
+        onClose={() => setVesselIdleModalOpen(false)}
+        onVesselNameClick={handleVesselIdleNameClick}
+      />
+
+      <VesselHistoryModal
+        open={vesselHistoryModalOpen}
+        onClose={() => {
+          setVesselHistoryModalOpen(false)
+          setSelectedVesselForHistory(null)
+        }}
+        selection={selectedVesselForHistory}
+        sourceRows={vesselHistorySourceRows}
       />
 
     </Layout>

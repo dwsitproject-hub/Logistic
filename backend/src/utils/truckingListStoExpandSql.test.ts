@@ -28,4 +28,13 @@ describe('truckingListStoExpandSql', () => {
     expect(sql).toContain('e.quantity_delivered');
     expect(sql).not.toMatch(/FROM sap_processed_data spd\s+WHERE spd\.contract_number = e\.contract_number/);
   });
+
+  it('expansion paging restricts expanded rows to paged keys', () => {
+    const sql = wrapTruckingListQueryWithStoExpansion('SELECT 1 AS id', {
+      skipSapJoin: true,
+      expansionPaging: { limit: 10, offset: 20, orderBySql: 'ts.created_at DESC' },
+    });
+    expect(sql).toContain('WHERE rn > 20 AND rn <= 30');
+    expect(sql).toContain('INNER JOIN paged_expansion pe');
+  });
 });

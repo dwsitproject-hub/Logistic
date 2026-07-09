@@ -85,15 +85,10 @@ export function appendTruckingGlobalSearch(
   const contractExtExpr = `(SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1)`
   const sql = `
     AND (
-      COALESCE(t.operation_id::text, '') ILIKE ${likeExpr}
+      COALESCE(${contractExtExpr}, '') ILIKE ${likeExpr}
       OR COALESCE(c.contract_id::text, '') ILIKE ${likeExpr}
-      OR COALESCE(${contractExtExpr}, '') ILIKE ${likeExpr}
-      OR COALESCE(c.sto_number::text, '') ILIKE ${likeExpr}
       OR COALESCE(c.po_number::text, '') ILIKE ${likeExpr}
-      OR COALESCE(t.loading_location::text, '') ILIKE ${likeExpr}
-      OR COALESCE(t.unloading_location::text, '') ILIKE ${likeExpr}
-      OR COALESCE(t.trucking_owner::text, '') ILIKE ${likeExpr}
-      OR COALESCE(c.supplier::text, '') ILIKE ${likeExpr}
+      OR COALESCE(c.sto_number::text, '') ILIKE ${likeExpr}
     )`
   return { sql, params: [`%${searchTrim}%`], nextIndex: startIndex + 1 }
 }

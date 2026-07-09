@@ -16,6 +16,9 @@ export const COMMERCIAL_DOCUMENT_TYPES: CommercialDocumentType[] = [
 export const COMMERCIAL_DOCUMENTS_PAGE_PERMISSION = 'page.commercial_documents'
 export const COMMERCIAL_DOCUMENTS_DATA_PERMISSION = 'data.commercial_documents'
 
+/** Section 1 summary cards (Contract → Invoice + FP Full Receive). Set false to hide UI and skip summary SQL. */
+export const COMMERCIAL_DOCUMENTS_SHOW_SUMMARY_SECTION = false
+
 export const COMMERCIAL_DOCUMENT_LABELS: Record<CommercialDocumentType, string> = {
   contract: 'Contract',
   addendum_contract: 'Addendum Contract',

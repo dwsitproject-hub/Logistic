@@ -106,7 +106,7 @@ function buildPagePrefetchRequests(href: string): PrefetchRequest[] {
       const y = ytd.getFullYear()
       const m = String(ytd.getMonth() + 1).padStart(2, '0')
       const d = String(ytd.getDate()).padStart(2, '0')
-      return [prefetchFromUrl(`/commercial-documents?dateFrom=${y}-01-01&dateTo=${y}-${m}-${d}&page=1&limit=50`)]
+      return [prefetchFromUrl(`/commercial-documents?dateFrom=${y}-01-01&dateTo=${y}-${m}-${d}&page=1&limit=50&includeSummary=false`)]
     }
     case '/shipping-performance':
       return [prefetchFromUrl('/shipments/performance?scope=ytd')]

@@ -1,0 +1,128 @@
+import type { ColumnFilterPayload } from './contractListFilters';
+
+export const SHIPMENT_BASE_CORE_GROUP_BY_MARKER = '/* SHIPMENT_BASE_CORE_GROUP_BY */';
+
+export type ShipmentStoPagingFilterInput = {
+  summaryOnly: boolean;
+  stoIsSet: boolean;
+  status?: string;
+  etaLoading?: string | null;
+  etaDischarge?: string | null;
+  lateIndicator?: string;
+  globalSearch?: string;
+  colFilters?: ColumnFilterPayload;
+  viewOption?: string;
+  viewQuery?: string;
+  unplannedHybrid?: boolean;
+};
+
+function hasColumnFilters(colFilters?: ColumnFilterPayload): boolean {
+  if (!colFilters) return false;
+  return Object.keys(colFilters).length > 0;
+}
+
+/**
+ * STO-key paging is only safe when card/status filters are off — otherwise page keys
+ * before status derivation would skew rows and totals.
+ */
+export function canUseShipmentStoKeyPaging(input: ShipmentStoPagingFilterInput): boolean {
+  if (input.summaryOnly || input.unplannedHybrid || input.stoIsSet) return false;
+  if (String(input.globalSearch ?? '').trim().length >= 2) return false;
+  if (hasColumnFilters(input.colFilters)) return false;
+  if (input.lateIndicator && String(input.lateIndicator).toUpperCase() !== 'ALL') return false;
+  const viewOpt = String(input.viewOption ?? 'all').toLowerCase();
+  if (viewOpt !== 'all' && String(input.viewQuery ?? '').trim().length > 0) return false;
+  const status = String(input.status ?? 'ALL').trim().toUpperCase();
+  if (status && status !== 'ALL') return false;
+  if (input.etaLoading) return false;
+  if (input.etaDischarge) return false;
+  return true;
+}
+
+export function buildRankedStoCtes(
+  stoKeyExpr: string,
+  coreWhereSql: string,
+  excludeStoTypeTCond: string,
+): string {
+  return `
+      ranked_sto AS (
+        SELECT ${stoKeyExpr} AS sto_key,
+          MAX(s.created_at) AS mx
+        FROM shipments s
+        LEFT JOIN contracts c ON s.contract_id = c.id
+        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+        WHERE 1=1
+          AND (${coreWhereSql})
+          AND (${excludeStoTypeTCond})
+          AND NOT (
+            l.contract_number IS NOT NULL
+            AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
+            AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
+          )
+        GROUP BY 1
+      ),
+      paged_sto AS (
+        SELECT sto_key FROM ranked_sto
+        ORDER BY mx DESC
+        LIMIT __STO_PAGE_LIMIT__ OFFSET __STO_PAGE_OFFSET__
+      ),
+      sto_link_agg AS (
+        SELECT
+          m.sto_key,
+          STRING_AGG(DISTINCT m.contract_id, ', ' ORDER BY m.contract_id) AS contract_numbers,
+          STRING_AGG(DISTINCT m.po_number, ', ' ORDER BY m.po_number)
+            FILTER (WHERE m.po_number IS NOT NULL AND TRIM(m.po_number) <> '') AS po_numbers,
+          COUNT(DISTINCT m.contract_id)::int AS contract_count,
+          STRING_AGG(DISTINCT m.supplier, ', ' ORDER BY m.supplier)
+            FILTER (WHERE m.supplier IS NOT NULL AND TRIM(m.supplier) <> '') AS suppliers_linked
+        FROM (
+          SELECT TRIM(cs.sto_number::text) AS sto_key, c.contract_id, c.po_number, c.supplier
+          FROM paged_sto ps
+          JOIN contract_stos cs ON TRIM(cs.sto_number::text) = TRIM(ps.sto_key::text)
+          JOIN contracts c ON c.id = cs.contract_id
+          WHERE c.contract_id IS NOT NULL AND TRIM(c.contract_id) <> ''
+          UNION
+          SELECT TRIM(c.sto_number::text), c.contract_id, c.po_number, c.supplier
+          FROM paged_sto ps
+          JOIN contracts c ON TRIM(c.sto_number::text) = TRIM(ps.sto_key::text)
+          WHERE c.contract_id IS NOT NULL AND TRIM(c.contract_id) <> ''
+            AND NULLIF(TRIM(c.sto_number::text), '') IS NOT NULL
+        ) m
+        GROUP BY m.sto_key
+      ),`;
+}
+
+export function injectShipmentStoKeyPaging(
+  baseCteSql: string,
+  stoKeyExpr: string,
+  rankedStoBlock: string,
+): string | null {
+  const anchor = 'shipment_base_core AS (';
+  const idx = baseCteSql.indexOf(anchor);
+  if (idx < 0) return null;
+  if (!baseCteSql.includes(SHIPMENT_BASE_CORE_GROUP_BY_MARKER)) return null;
+
+  const pagedFilter = `AND TRIM((${stoKeyExpr})::text) IN (SELECT TRIM(sto_key::text) FROM paged_sto)`;
+  const pagingSuffix = `${pagedFilter}\n        ${SHIPMENT_BASE_CORE_GROUP_BY_MARKER}`;
+  return (
+    baseCteSql.slice(0, idx) +
+    rankedStoBlock +
+    baseCteSql.slice(idx).replace(SHIPMENT_BASE_CORE_GROUP_BY_MARKER, () => pagingSuffix)
+  );
+}
+
+/** Shell enrich — join pre-aggregated STO links (no per-row subqueries). */
+export function buildShipmentShellEnrichWithStoLinkAgg(): string {
+  return `,
+      shipment_base AS (
+        SELECT
+          g.*,
+          COALESCE(sla.contract_numbers, g.contract_numbers_from_join) AS contract_numbers,
+          COALESCE(sla.po_numbers, g.po_numbers_from_join) AS po_numbers,
+          COALESCE(sla.contract_count, g.contract_count_from_join) AS contract_count,
+          g.contract_ext_no_from_join AS contract_ext_no,
+          COALESCE(sla.suppliers_linked, g.suppliers) AS suppliers_linked
+        FROM shipment_base_core g
+        LEFT JOIN sto_link_agg sla ON TRIM(sla.sto_key::text) = TRIM(g.sto_key::text)
+      )`;
+}

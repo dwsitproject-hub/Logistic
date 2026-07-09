@@ -78,7 +78,7 @@ export function ShipmentsGlobalFiltersSection({
             <div className="relative min-w-[12rem] flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
               <Input
-                placeholder="Search by Shipment ID, Contract Ext No, Contract Numbers, PO No, or Vessel Name..."
+                placeholder="Search by Contract Ext No, Contract No, PO No, STO No, or Vessel Name..."
                 value={searchDraft}
                 onChange={(e) => onSearchDraftChange(e.target.value)}
                 onKeyDown={(e) => {

@@ -3,6 +3,7 @@ import { authenticateToken } from '../middleware/auth';
 import {
   commercialDocumentUpload,
   downloadCommercialDocument,
+  downloadTandaTerima,
   getCommercialDocumentFiles,
   getCommercialDocumentHistory,
   getCommercialDocuments,
@@ -32,5 +33,6 @@ router.get('/settlement-invoice/:contractExtNo', authenticateToken, getSettlemen
 router.put('/settlement-invoice', authenticateToken, upsertSettlementInvoiceSummary);
 router.get('/file/:id/view', authenticateToken, viewCommercialDocument);
 router.get('/file/:id/download', authenticateToken, downloadCommercialDocument);
+router.post('/tanda-terima/download', authenticateToken, downloadTandaTerima);
 
 export default router;

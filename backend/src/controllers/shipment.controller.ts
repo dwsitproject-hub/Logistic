@@ -21,11 +21,6 @@ import {
   resolveUnplannedHybridShipmentsList,
   type UnplannedHybridBreakdown,
 } from '../services/shipmentUnplannedHybridList.service';
-import {
-  isPipelineDailySummaryEligible,
-  loadShipmentSummaryFromDaily,
-  type PipelineDailySummaryFilterInput,
-} from '../services/pipelineDailySummary.service';
 import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
 import { resolveShipmentEditPayload } from '../services/shipmentEditPayload.service';
 import { fetchStoSapPreview } from '../services/stoSapPreview.service';
@@ -34,6 +29,7 @@ import {
   KlipShipmentCancelError,
 } from '../services/cancelKlipShipment.service';
 import { syncVesselLoadingPortsFromLatestSap } from '../services/vesselLoadingPortsFromSap.service';
+import { loadVesselIdleList } from '../services/vesselIdle.service';
 import {
   attachPurchaseOrderToShipment,
   batchSaveShipmentPoPlanQty,
@@ -52,6 +48,13 @@ import {
   parseColumnFiltersQuery,
   shipmentEffectiveStatusExpr,
 } from '../utils/shipmentListFilters';
+import {
+  SHIPMENT_BASE_CORE_GROUP_BY_MARKER,
+  buildRankedStoCtes,
+  buildShipmentShellEnrichWithStoLinkAgg,
+  canUseShipmentStoKeyPaging,
+  injectShipmentStoKeyPaging,
+} from '../utils/shipmentListStoPaging';
 import {
   appendShipmentPipelineScopeStageFilter,
   appendShipmentPipelineStageFilter,
@@ -558,33 +561,6 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     }
     const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
     const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-    const pipelineDailyFilters: PipelineDailySummaryFilterInput = {
-      dateFrom: dateFrom != null ? String(dateFrom) : undefined,
-      dateTo: dateTo != null ? String(dateTo) : undefined,
-      plants,
-      globalSearch,
-      colFilters,
-      lateIndicator: lateIndicatorParam,
-      viewOption: viewOptionParam,
-      viewQuery: viewQueryParam,
-      status: typeof status === 'string' ? status : undefined,
-      scopeStatus: scopeStatusParam,
-      etaLoading: etaLoadingBucket ?? undefined,
-      etaDischarge: etaDischargeBucket ?? undefined,
-      vessel: vessel != null ? String(vessel) : undefined,
-      port: port != null ? String(port) : undefined,
-      sto: sto != null ? String(sto) : undefined,
-      contract: contract != null ? String(contract) : undefined,
-      delayed: delayed != null ? String(delayed) : undefined,
-    };
-    const pipelineDailyEligible = isPipelineDailySummaryEligible(pipelineDailyFilters);
-    const pipelineDailyScope = {
-      dateFrom: pipelineDailyFilters.dateFrom,
-      dateTo: pipelineDailyFilters.dateTo,
-      plants,
-    };
-    const tryPipelineDailyShipmentSummary = () =>
-      pipelineDailyEligible ? loadShipmentSummaryFromDaily(pipelineDailyScope) : Promise.resolve(null);
     const groupPlantFilter = appendGroupPlantFilter(
       plants,
       cp,
@@ -787,7 +763,7 @@ ${contractMetaSelectCore}
     // Those are extremely slow when sap_processed_data is large, causing the shipments page to hang.
 
     queryText += `
-        GROUP BY ${listStoKeySql}
+        ${SHIPMENT_BASE_CORE_GROUP_BY_MARKER} GROUP BY ${listStoKeySql}
       )${shipmentBaseEnrichCte}`;
 
     /** Full grouped dataset (expensive on large YTD). Used for summary aggregates. */
@@ -801,8 +777,6 @@ ${contractMetaSelectCore}
       shipmentBaseEnrichCte,
       shipmentBaseShellEnrichCte,
     );
-
-    const stoKeyExpr = listStoKeySql;
 
     let fp = outerFilterStartIndex;
     const gSearch = appendShipmentGlobalSearch(globalSearch, fp);
@@ -852,60 +826,42 @@ ${contractMetaSelectCore}
       etaDischarge: etaDischargeBucket ?? 'ALL',
     });
 
-    /**
-     * STO-key paging disabled — ranked_sto + sto_key regex (`~ '^[0-9]+$'`) still breaks PG parse
-     * when injected into the base CTE. Shell enrich (skipSapJoin) is the safe win for now.
-     */
-    const listUsesStoPaging = false;
+    const isUnplannedHybridList = isUnplannedHybridListRequest(status);
+    const listUsesStoPaging =
+      compact &&
+      !summaryOnly &&
+      canUseShipmentStoKeyPaging({
+        summaryOnly,
+        stoIsSet,
+        status: typeof status === 'string' ? status : 'ALL',
+        etaLoading: etaLoadingBucket,
+        etaDischarge: etaDischargeBucket,
+        lateIndicator: lateIndicatorParam,
+        globalSearch,
+        colFilters,
+        viewOption: viewOptionParam,
+        viewQuery: viewQueryParam,
+        unplannedHybrid: isUnplannedHybridList,
+      });
     const { limit: listLimit, offset: listOffset } = shipmentListLimitOffset(limit, page);
 
-    const rankedStoCte = `
-      ranked_sto AS (
-        SELECT ${stoKeyExpr} AS sto_key,
-          MAX(s.created_at) AS mx
-        FROM shipments s
-        LEFT JOIN contracts c ON s.contract_id = c.id
-        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-        WHERE 1=1
-          AND (${coreWhereSql})
-          AND (${excludeStoTypeTCond})
-          AND NOT (
-            l.contract_number IS NOT NULL
-            AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
-            AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
-          )
-        GROUP BY 1
-      ),`;
+    const rankedStoBlock = buildRankedStoCtes(listStoKeySql, coreWhereSql, excludeStoTypeTCond)
+      .replace('__STO_PAGE_LIMIT__', String(listLimit))
+      .replace('__STO_PAGE_OFFSET__', String(listOffset));
 
+    const shellEnrichWithStoLink = buildShipmentShellEnrichWithStoLinkAgg();
     let shipmentBaseCteSqlList = compact
       ? shipmentBaseCteSqlShell
       : skipSapJoin
         ? shipmentBaseCteSqlShell
         : shipmentBaseCteSqlFull;
+
     if (listUsesStoPaging) {
-      const pagedStoCte = `
-      paged_sto AS (
-        SELECT sto_key FROM ranked_sto
-        ORDER BY mx DESC
-        LIMIT ${listLimit} OFFSET ${listOffset}
-      ),`;
-      shipmentBaseCteSqlList = shipmentBaseCteSqlFull.replace(
-        ',\n      shipment_base_core AS (',
-        `,${rankedStoCte}${pagedStoCte}
-      shipment_base_core AS (`,
-      );
-      if (shipmentBaseCteSqlList === shipmentBaseCteSqlFull) {
-        shipmentBaseCteSqlList = shipmentBaseCteSqlFull.replace(
-          ',      shipment_base_core AS (',
-          `,${rankedStoCte}${pagedStoCte}
-      shipment_base_core AS (`,
-        );
+      const pagingBase = skipSapJoin ? shipmentBaseCteSqlShell : shipmentBaseCteSqlFull;
+      const injected = injectShipmentStoKeyPaging(pagingBase, listStoKeySql, rankedStoBlock);
+      if (injected) {
+        shipmentBaseCteSqlList = injected.replace(shipmentBaseShellEnrichCte, shellEnrichWithStoLink);
       }
-      shipmentBaseCteSqlList = shipmentBaseCteSqlList.replace(
-        `        GROUP BY ${listStoKeySql}`,
-        `          AND (${stoKeyExpr}) IN (SELECT sto_key FROM paged_sto)
-        GROUP BY ${listStoKeySql}`,
-      );
     }
 
     /** If string replace failed, fall back to full scan (correctness over fast path). */
@@ -1054,31 +1010,21 @@ ${contractMetaSelectCore}
         scopeStatusParam,
       );
       const tSum0 = performance.now();
-      const fromDaily = await tryPipelineDailyShipmentSummary();
-      let sr: Record<string, unknown>;
-      let tc: number;
-      let unplannedBreakdownForSummary: UnplannedHybridBreakdown | null;
-      if (fromDaily) {
-        sr = fromDaily.summaryRow;
-        tc = fromDaily.totalCount;
-        unplannedBreakdownForSummary = fromDaily.unplannedBreakdown;
-      } else {
-        const [loaded, unplannedBd] = await Promise.all([
-          loadShipmentListSummary(
-            summaryCountQuery,
-            [...section1SummaryFilterParams, ...summaryScopeParams],
-            summaryCacheKey,
-          ),
-          loadSection1UnplannedBreakdown(),
-        ]);
-        sr = loaded.summaryRow;
-        tc = loaded.totalCount;
-        unplannedBreakdownForSummary = unplannedBd;
-      }
+      const [loaded, unplannedBd] = await Promise.all([
+        loadShipmentListSummary(
+          summaryCountQuery,
+          [...section1SummaryFilterParams, ...summaryScopeParams],
+          summaryCacheKey,
+        ),
+        loadSection1UnplannedBreakdown(),
+      ]);
+      const sr = loaded.summaryRow;
+      const tc = loaded.totalCount;
+      const unplannedBreakdownForSummary = unplannedBd;
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
-        path: fromDaily ? 'summaryOnly-compact-daily' : 'summaryOnly-compact-sql',
+        path: 'summaryOnly-compact-sql',
         compact,
         page: Number(page),
         limit: Number(limit),
@@ -1187,14 +1133,6 @@ ${contractMetaSelectCore}
           scopeStatusParam,
         );
         const loadSummaryBundle = async () => {
-          const fromDaily = await tryPipelineDailyShipmentSummary();
-          if (fromDaily) {
-            return {
-              summaryRow: fromDaily.summaryRow,
-              totalCount: fromDaily.totalCount,
-              unplannedBreakdownForSummary: fromDaily.unplannedBreakdown,
-            };
-          }
           const [loaded, unplannedBd] = await Promise.all([
             loadShipmentListSummary(
               summaryCountQuery,
@@ -1422,18 +1360,12 @@ ${contractMetaSelectCore}
     let unplannedBreakdownForSummary: UnplannedHybridBreakdown | null = null;
     if (includeSummary) {
       const tSa0 = performance.now();
-      const fromDaily = await tryPipelineDailyShipmentSummary();
-      if (fromDaily) {
-        summaryRow = fromDaily.summaryRow;
-        unplannedBreakdownForSummary = fromDaily.unplannedBreakdown;
-      } else {
-        const [summaryResult, unplannedBd] = await Promise.all([
-          query(summaryCountQuery, [...section1SummaryFilterParams, ...summaryScopeParams]),
-          loadSection1UnplannedBreakdown(),
-        ]);
-        summaryRow = summaryResult.rows[0] || {};
-        unplannedBreakdownForSummary = unplannedBd;
-      }
+      const [summaryResult, unplannedBd] = await Promise.all([
+        query(summaryCountQuery, [...section1SummaryFilterParams, ...summaryScopeParams]),
+        loadSection1UnplannedBreakdown(),
+      ]);
+      summaryRow = summaryResult.rows[0] || {};
+      unplannedBreakdownForSummary = unplannedBd;
       timingsMs.dbSummaryAgg = performance.now() - tSa0;
     }
 
@@ -1489,6 +1421,19 @@ ${contractMetaSelectCore}
         message: errorMessage,
         detail: process.env.NODE_ENV === 'development' ? errorDetail : undefined
       },
+    });
+  }
+};
+
+export const getVesselIdle = async (_req: AuthRequest, res: Response) => {
+  try {
+    const data = await loadVesselIdleList();
+    return res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Get vessel idle list error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch vessel idle list' },
     });
   }
 };

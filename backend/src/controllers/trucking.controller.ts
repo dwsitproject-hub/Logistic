@@ -233,7 +233,7 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
     const summaryOnly =
       String((req.query as { summaryOnly?: string }).summaryOnly || '').toLowerCase() === 'true';
     if (!summaryOnly) {
-      await ensureMissingTruckingOperationIdsIfNeeded();
+      void ensureMissingTruckingOperationIdsIfNeeded();
       void reconcileTruckingStatusesFromSapIfDue();
     }
     const data = await resolveTruckingListForRequest(req);

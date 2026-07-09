@@ -149,16 +149,11 @@ export function appendShipmentGlobalSearch(
   const likeExpr = `$${p}::text`
   const sql = `
     AND (
-      COALESCE(sb.sto_number::text, '') ILIKE ${likeExpr}
-      OR COALESCE(sb.shipment_id::text, '') ILIKE ${likeExpr}
-      OR COALESCE(sb.operation_id::text, '') ILIKE ${likeExpr}
+      COALESCE(sb.contract_ext_no::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.contract_numbers::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.po_numbers::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.sto_number::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.vessel_name::text, '') ILIKE ${likeExpr}
-      OR COALESCE(sb.supplier::text, '') ILIKE ${likeExpr}
-      OR COALESCE(sb.port_of_discharge::text, '') ILIKE ${likeExpr}
-      OR COALESCE(sb.plant_site::text, '') ILIKE ${likeExpr}
-      OR COALESCE(sb.contract_ext_no::text, '') ILIKE ${likeExpr}
     )`
   return { sql, params: [`%${searchTrim}%`], nextIndex: startIndex + 1 }
 }

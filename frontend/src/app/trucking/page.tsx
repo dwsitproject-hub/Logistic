@@ -1029,6 +1029,8 @@ function TruckingPageContent() {
   const [truckingOperations, setTruckingOperations] = useState<TruckingOperation[]>([])
   /** Stale-while-revalidate: true while list API is in flight; never clears existing rows. */
   const [listFetching, setListFetching] = useState(false)
+  /** True while table scope filters change — shows loading shell without stale rows. */
+  const [tableScopeLoading, setTableScopeLoading] = useState(false)
   // Search should apply only on Enter / Apply (not per keystroke)
   const [searchDraft, setSearchDraft] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
@@ -1969,6 +1971,15 @@ function TruckingPageContent() {
 
   // Column header filters apply only when user presses Enter inside the filter popover.
 
+  /** Reset visible rows so Section 3 shows loading when table scope filters change. */
+  const beginTableScopeRefresh = useCallback(() => {
+    setTruckingOperations([])
+    setTableScopeLoading(true)
+    setStatusCardTotalFromList(null)
+    setTotalCount(0)
+    setTotalPages(1)
+  }, [])
+
   const fetchTruckingOperations = async (
     forcedPage?: number,
     searchOverride?: string,
@@ -1978,10 +1989,6 @@ function TruckingPageContent() {
     const fetchStatusFilter = statusFilter
     setListFetching(true)
     setSummaryFetching(true)
-    if (fetchStatusFilter !== 'ALL') {
-      setTruckingOperations([])
-      setStatusCardTotalFromList(null)
-    }
     try {
       const effectivePage = forcedPage ?? page
       const params = buildTruckingListSearchParams({
@@ -2002,27 +2009,18 @@ function TruckingPageContent() {
       summaryParams.set('limit', '1')
       const summaryUrl = `/trucking?${summaryParams.toString()}`
       const summaryCacheKey = buildCacheKey('GET', summaryUrl)
-      const summaryGen = ++summaryFetchGenRef.current
-      void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
-        force: options?.force || section1SummaryForceNextFetchRef.current,
-        onRevalidate: (fresh) => {
-          if (summaryGen !== summaryFetchGenRef.current) return
-          if (fresh?.data?.summary) {
-            setTruckingSection1Summary(fresh.data.summary)
-            setSummaryFetching(false)
-          }
-        },
-      })
-        .then(({ data }) => {
-          if (summaryGen !== summaryFetchGenRef.current) return
-          if (data?.data?.summary) {
-            setTruckingSection1Summary(data.data.summary)
-            setSummaryFetching(false)
-          }
-        })
-        .catch(() => {
-          if (summaryGen === summaryFetchGenRef.current) setSummaryFetching(false)
-        })
+      const summaryForce = options?.force || section1SummaryForceNextFetchRef.current
+
+      const applySummaryEnvelope = (envelope: {
+        data?: {
+          summary?: typeof truckingSection1Summary
+        }
+      }) => {
+        if (envelope?.data?.summary) {
+          setTruckingSection1Summary(envelope.data.summary)
+        }
+        setSummaryFetching(false)
+      }
 
       const applyListEnvelope = (envelope: {
         data?: {
@@ -2050,6 +2048,7 @@ function TruckingPageContent() {
         setTotalCount(total)
         setTotalPages(pages)
         setHasMore(effectivePage < pages)
+        setTableScopeLoading(false)
         const breakdown = envelope?.data?.unplannedBreakdown
         if (breakdown) {
           setUnplannedBreakdown({
@@ -2088,6 +2087,31 @@ function TruckingPageContent() {
       if (listGen !== listFetchGenRef.current) return
       applyListEnvelope(listEnvelope)
       if (!listRevalidating) setListFetching(false)
+
+      /** Section 1 summary after table shell — avoids competing with list query on DB/CPU. */
+      const scheduleSummaryFetches = () => {
+        if (listGen !== listFetchGenRef.current) return
+        const summaryGen = ++summaryFetchGenRef.current
+        void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+          force: summaryForce,
+          onRevalidate: (fresh) => {
+            if (summaryGen !== summaryFetchGenRef.current) return
+            applySummaryEnvelope(fresh)
+          },
+        })
+          .then(({ data }) => {
+            if (summaryGen !== summaryFetchGenRef.current) return
+            applySummaryEnvelope(data)
+          })
+          .catch(() => {
+            if (summaryGen === summaryFetchGenRef.current) setSummaryFetching(false)
+          })
+      }
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => scheduleSummaryFetches(), { timeout: 2000 })
+      } else {
+        setTimeout(scheduleSummaryFetches, 250)
+      }
 
       // SAP hydrate after table paint — avoids competing with shell query on DB/CPU.
       const scheduleHydrate = () => {
@@ -2597,10 +2621,11 @@ function TruckingPageContent() {
 
   /** Section 1 status circles — toggles Section 2 dropdown + Section 3 API `status` param. */
   const handleStatusCardClick = useCallback((status: string) => {
+    beginTableScopeRefresh()
     setPage(1)
     setHasMore(true)
     setStatusFilter((prev) => (prev === status ? 'ALL' : status))
-  }, [])
+  }, [beginTableScopeRefresh])
 
   const truckingActiveFilterScopeLabel = useMemo(() => {
     const parts: string[] = []
@@ -3297,30 +3322,13 @@ function TruckingPageContent() {
   }, [columnOrderIds, visibleColumnIds])
 
   const sortedOperations = useMemo(() => {
-    const col = compactColumns.find(c => c.id === sortKey)
     const prioritizeSapSto = shouldPrioritizeSapStoRows(statusFilter)
-    if (!col?.sortable || !col.getSortValue) {
-      if (!prioritizeSapSto) return filteredOperations
-      return [...filteredOperations].sort((a, b) => compareSapStoListRowPriority(a, b))
-    }
+    if (!prioritizeSapSto) return filteredOperations
+    return [...filteredOperations].sort((a, b) => compareSapStoListRowPriority(a, b))
+  }, [filteredOperations, statusFilter])
 
-    const sorted = [...filteredOperations].sort((a, b) => {
-      if (prioritizeSapSto) {
-        const stoCmp = compareSapStoListRowPriority(a, b)
-        if (stoCmp !== 0) return stoCmp
-      }
-      const aVal = col.getSortValue!(a)
-      const bVal = col.getSortValue!(b)
-      const dirMul = sortDir === 'asc' ? 1 : -1
-
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        return (aVal - bVal) * dirMul
-      }
-      return String(aVal).localeCompare(String(bVal)) * dirMul
-    })
-
-    return sorted
-  }, [compactColumns, filteredOperations, sortDir, sortKey, statusFilter])
+  const section3TableLoading =
+    tableScopeLoading || (listFetching && truckingOperations.length === 0)
 
   const onSortHeaderClick = (col: CompactColumn) => {
     if (!col.sortable) return
@@ -3528,7 +3536,7 @@ function TruckingPageContent() {
                 <div className="relative min-w-[12rem] flex-1">
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
                   <Input
-                    placeholder="Search by Operation ID, Contract Numbers, PO No, or Supplier..."
+                    placeholder="Search by Contract Ext No, Contract No, PO No, or STO No..."
                     value={searchDraft}
                     onChange={(e) => setSearchDraft(e.target.value)}
                     onKeyDown={(e) => {
@@ -3543,6 +3551,7 @@ function TruckingPageContent() {
                 <select
                   value={statusFilter}
                   onChange={(e) => {
+                    beginTableScopeRefresh()
                     setPage(1)
                     setHasMore(true)
                     setStatusFilter(e.target.value)
@@ -4570,15 +4579,15 @@ function TruckingPageContent() {
 
                       <tbody
                         className={`divide-y divide-gray-200 transition-opacity duration-200 ${
-                          listFetching && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
+                          (listFetching || tableScopeLoading) && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
                         }`}
                       >
-                        {listFetching && truckingOperations.length === 0 ? (
+                        {section3TableLoading ? (
                           <TableInitialLoadPlaceholder
                             colSpan={visibleColumns.length + 1}
                             icon={Truck}
                           />
-                        ) : !listFetching && sortedOperations.length === 0 ? (
+                        ) : !section3TableLoading && sortedOperations.length === 0 ? (
                           <tr className="bg-white">
                             <td colSpan={visibleColumns.length + 1} className="px-4 py-10 text-center text-gray-500">
                               <Truck className="h-16 w-16 text-gray-400 mx-auto mb-4" />
@@ -4725,14 +4734,14 @@ function TruckingPageContent() {
                 {/* Mobile card view */}
                 <div
                   className={`lg:hidden space-y-4 min-h-[480px] transition-opacity duration-200 ${
-                    listFetching && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
+                    (listFetching || tableScopeLoading) && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
                   }`}
                 >
-                  {listFetching && truckingOperations.length === 0 ? (
+                  {section3TableLoading ? (
                     <div className="border rounded-lg bg-white">
                       <TableInitialLoadPlaceholderContent icon={Truck} />
                     </div>
-                  ) : !listFetching && sortedOperations.length === 0 ? (
+                  ) : !section3TableLoading && sortedOperations.length === 0 ? (
                     <div className="text-center py-10 text-gray-500 border rounded-lg bg-white">
                       <Truck className="h-12 w-12 text-gray-400 mx-auto mb-3" />
                       <p>No trucking operations found</p>

@@ -10,6 +10,7 @@ import {
   resolveSapMasterV2QualityLocation,
 } from '../utils/sapMasterV2UatFormat';
 import { SapDataDistributionService } from './sapDataDistribution.service';
+import { invalidateShipmentsListCache } from './shipmentList.service';
 
 export interface MasterV2Config {
   filePath: string;
@@ -422,6 +423,10 @@ export class SapMasterV2ImportService {
       );
       
       await client.query('COMMIT');
+
+      if (processedRecords > 0) {
+        invalidateShipmentsListCache();
+      }
       
       logger.info('SAP MASTER v2 import completed', {
         importId,
