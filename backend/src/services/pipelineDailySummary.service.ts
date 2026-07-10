@@ -12,6 +12,7 @@ import {
 import {
   buildShipmentBacklogDailySummaryUpsertSql,
   buildShipmentExecutionDailySummaryInsertSql,
+  buildShipmentVesselStageDailyInsertSql,
 } from '../utils/shipmentPipelineDailySummarySql';
 import logger from '../utils/logger';
 
@@ -250,10 +251,12 @@ export class PipelineDailySummaryService {
   static async refreshShipmentPipelineDailySummary(): Promise<number> {
     const start = Date.now();
     await query('TRUNCATE shipment_pipeline_daily_summary');
+    await query('TRUNCATE shipment_pipeline_vessel_stage_daily');
     const execRes = await query(buildShipmentExecutionDailySummaryInsertSql());
     const backlogRes = await query(buildShipmentBacklogDailySummaryUpsertSql());
+    const vesselRes = await query(buildShipmentVesselStageDailyInsertSql());
     const rowCount =
-      (execRes.rowCount ?? 0) + (backlogRes.rowCount ?? 0);
+      (execRes.rowCount ?? 0) + (backlogRes.rowCount ?? 0) + (vesselRes.rowCount ?? 0);
     const durationMs = Date.now() - start;
     await upsertRefreshMeta('shipment', rowCount, durationMs);
     logger.info('Pipeline daily summary refreshed: shipment', { rowCount, durationMs });
@@ -381,11 +384,29 @@ export async function loadShipmentSummaryFromDaily(
   const row = res.rows[0] as Record<string, unknown> | undefined;
   if (!row) return null;
 
+  // Distinct vessel names per stage from the companion fact table (same scope filters).
+  // Distinct sets are not additive across days/plants, so they are aggregated at read
+  // time from the stored (dims, stage, vessel) facts instead of summed from a rollup.
+  const vesselRes = await query(
+    `SELECT
+      ARRAY_AGG(DISTINCT vessel_key) FILTER (WHERE stage = 'UNPLANNED') AS unplanned_vessel_names,
+      ARRAY_AGG(DISTINCT vessel_key) FILTER (WHERE stage = 'PLANNED') AS planned_vessel_names,
+      ARRAY_AGG(DISTINCT vessel_key) FILTER (WHERE stage = 'AT_LOADING_PORT') AS at_loading_port_vessel_names,
+      ARRAY_AGG(DISTINCT vessel_key) FILTER (WHERE stage = 'SAILED') AS sailed_vessel_names,
+      ARRAY_AGG(DISTINCT vessel_key) FILTER (WHERE stage = 'AT_DISCHARGE_PORT') AS at_discharge_port_vessel_names,
+      ARRAY_AGG(DISTINCT vessel_key) FILTER (WHERE stage = 'COMPLETED') AS completed_vessel_names,
+      ARRAY_AGG(DISTINCT vessel_key) FILTER (WHERE stage = 'CANCELLED') AS cancelled_vessel_names
+    FROM shipment_pipeline_vessel_stage_daily
+    ${sql}`,
+    params,
+  );
+  const vesselRow = (vesselRes.rows[0] ?? {}) as Record<string, unknown>;
+
   const contractRows = Number(row.unplanned_contract_backlog_count || 0);
   const shipmentRows = Number(row.unplanned_shipment_execution_count || 0);
 
   return {
-    summaryRow: row,
+    summaryRow: { ...row, ...vesselRow },
     totalCount: Number(row.total_count || 0),
     unplannedBreakdown: {
       contractRows,

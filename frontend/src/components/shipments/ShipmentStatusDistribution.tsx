@@ -2,22 +2,26 @@
 
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Ship } from 'lucide-react'
 import {
   formatDischargePortBreakdownTooltip,
   formatLoadingPortBreakdownTooltip,
   pipelineCountForStage,
+  pipelineVesselNamesForStage,
+  splitVesselNamesForCard,
   SHIPMENT_PAGE_PIPELINE_CARDS,
   type DischargePortBreakdown,
   type LoadingPortBreakdown,
   type ShipmentPagePipelineStage,
   type ShipmentPagePipelineStatusCounts,
+  type ShipmentPagePipelineVesselNames,
 } from '@/lib/shipmentPagePipeline'
 
 export interface ShipmentStatusDistributionProps {
   loading: boolean
   statusFilter: string
   counts: ShipmentPagePipelineStatusCounts
+  vesselNames?: ShipmentPagePipelineVesselNames
   loadingPortBreakdown: LoadingPortBreakdown
   dischargePortBreakdown: DischargePortBreakdown
   onStageClick: (stage: ShipmentPagePipelineStage) => void
@@ -27,6 +31,7 @@ export function ShipmentStatusDistribution({
   loading,
   statusFilter,
   counts,
+  vesselNames,
   loadingPortBreakdown,
   dischargePortBreakdown,
   onStageClick,
@@ -34,50 +39,74 @@ export function ShipmentStatusDistribution({
   const renderPipelineCard = (card: (typeof SHIPMENT_PAGE_PIPELINE_CARDS)[number]) => {
     const isActive = statusFilter === card.status
     const count = pipelineCountForStage(card.status, counts)
+    const stageVessels = pipelineVesselNamesForStage(card.status, vesselNames) ?? []
+    const { preview, moreCount } = splitVesselNamesForCard(stageVessels)
     const breakdownTooltip =
       card.breakdown === 'loading'
         ? formatLoadingPortBreakdownTooltip(loadingPortBreakdown)
         : card.breakdown === 'discharge'
           ? formatDischargePortBreakdownTooltip(dischargePortBreakdown)
           : null
-    const title = breakdownTooltip ? `${card.tooltip}\n\n${breakdownTooltip}` : card.tooltip
+    const vesselListTooltip =
+      stageVessels.length > 0
+        ? `Vessels (${stageVessels.length}):\n${stageVessels.join('\n')}`
+        : null
+    const tooltipBody = [card.tooltip, breakdownTooltip, vesselListTooltip]
+      .filter(Boolean)
+      .join('\n\n')
 
     const button = (
       <button
         type="button"
-        title={breakdownTooltip ? undefined : card.tooltip}
         onClick={() => onStageClick(card.status)}
-        className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full border-2 border-white shadow-lg transition-all cursor-pointer hover:shadow-xl hover:scale-[1.02] ${card.color} flex items-center justify-center ${
-          isActive ? 'ring-4 ring-blue-400 ring-offset-2' : ''
+        className={`relative flex min-h-[10rem] w-40 flex-col md:w-44 rounded-xl border border-black/5 px-4 py-3 text-left shadow-sm transition-all cursor-pointer hover:shadow-md hover:-translate-y-0.5 ${card.color} ${
+          isActive ? 'ring-2 ring-blue-500 ring-offset-2 shadow-md' : ''
         }`}
       >
         <div
-          className={`absolute -top-3 -right-3 text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10 ${card.badgeColor}`}
-        >
-          {count}
-        </div>
-        <span
-          className={`text-xs md:text-sm font-semibold px-2 leading-tight ${card.textColor} text-center ${
+          className={`text-xs md:text-sm font-semibold leading-tight ${card.textColor} ${
             isActive ? 'font-bold' : ''
           }`}
         >
           {card.label}
-        </span>
+        </div>
+        <div className={`mt-1 text-2xl font-bold tabular-nums ${card.textColor}`}>
+          {count.toLocaleString('en-US')}
+        </div>
+        <div
+          className={`mt-1.5 border-t border-black/10 pt-1.5 text-[11px] font-medium ${card.textColor}`}
+        >
+          <div className="flex items-center gap-1 opacity-80">
+            <Ship className="h-3 w-3 shrink-0" aria-hidden />
+            <span>{stageVessels.length === 0 ? 'No vessels' : 'Vessels'}</span>
+          </div>
+          {preview.length > 0 ? (
+            <ul className="mt-1 space-y-0.5 opacity-90">
+              {preview.map((name) => (
+                <li key={name} className="truncate leading-tight" title={name}>
+                  {name}
+                </li>
+              ))}
+              {moreCount > 0 ? (
+                <li className="font-semibold opacity-80">+{moreCount.toLocaleString('en-US')} more</li>
+              ) : null}
+            </ul>
+          ) : null}
+        </div>
       </button>
     )
 
     return (
       <div className="relative">
-        {breakdownTooltip ? (
-          <Tooltip delayDuration={200}>
-            <TooltipTrigger asChild>{button}</TooltipTrigger>
-            <TooltipContent side="bottom" className="max-w-xs whitespace-pre-wrap text-xs leading-relaxed">
-              {title}
-            </TooltipContent>
-          </Tooltip>
-        ) : (
-          button
-        )}
+        <Tooltip delayDuration={200}>
+          <TooltipTrigger asChild>{button}</TooltipTrigger>
+          <TooltipContent
+            side="bottom"
+            className="max-h-72 max-w-xs overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed"
+          >
+            {tooltipBody}
+          </TooltipContent>
+        </Tooltip>
       </div>
     )
   }

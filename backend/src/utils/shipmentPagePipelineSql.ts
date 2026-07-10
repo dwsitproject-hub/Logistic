@@ -222,6 +222,29 @@ export function shipmentPagePipelineSummarySelectSql(): string {
         COUNT(*) FILTER (WHERE ${eff} = 'UNLOADING')::bigint AS discharge_port_unloading_count`;
 }
 
+/** Normalized non-blank vessel identity used for distinct-vessel counts. */
+export function shipmentPipelineVesselKeyExpr(vesselNameExpr = 'vessel_name'): string {
+  return `NULLIF(UPPER(TRIM(COALESCE(${vesselNameExpr}, ''))), '')`;
+}
+
+/**
+ * Summary SELECT — sorted distinct vessel names per pipeline card (blank names excluded).
+ * Unplanned is added separately by callers because its predicate needs a row alias.
+ */
+export function shipmentPagePipelineVesselNamesSelectSql(): string {
+  const eff = 'effective_status';
+  const vessel = shipmentPipelineVesselKeyExpr();
+  const loadingGroup = `${eff} IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING')`;
+  const dischargeGroup = `${eff} IN ('ARRIVED_DP', 'BERTHED_DP', 'UNLOADING')`;
+  return `
+        ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'PLANNED' AND ${vessel} IS NOT NULL) AS planned_vessel_names,
+        ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${loadingGroup} AND ${vessel} IS NOT NULL) AS at_loading_port_vessel_names,
+        ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'SAILED' AND ${vessel} IS NOT NULL) AS sailed_vessel_names,
+        ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${dischargeGroup} AND ${vessel} IS NOT NULL) AS at_discharge_port_vessel_names,
+        ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'COMPLETED' AND ${vessel} IS NOT NULL) AS completed_vessel_names,
+        ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'CANCELLED' AND ${vessel} IS NOT NULL) AS cancelled_vessel_names`;
+}
+
 /** Filter list rows by pipeline card — maps grouped cards to detail effective statuses. */
 export function appendShipmentPipelineStageFilter(
   statusParam: string | undefined,

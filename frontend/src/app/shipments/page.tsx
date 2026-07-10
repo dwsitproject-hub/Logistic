@@ -114,6 +114,7 @@ import {
   type LoadingPortBreakdown,
   type ShipmentPagePipelineStage,
   type ShipmentPagePipelineStatusCounts,
+  type ShipmentPagePipelineVesselNames,
 } from '@/lib/shipmentPagePipeline'
 import { ShipmentStatusDistribution } from '@/components/shipments/ShipmentStatusDistribution'
 import { VesselIdleInsightChip } from '@/components/shipments/VesselIdleInsightChip'
@@ -833,6 +834,7 @@ function ShipmentsPageContent() {
   const [shipmentsSection1Summary, setShipmentsSection1Summary] = useState<{
     total?: number
     status?: Partial<ShipmentPagePipelineStatusCounts>
+    statusVesselNames?: Partial<ShipmentPagePipelineVesselNames>
     loadingPortBreakdown?: Partial<LoadingPortBreakdown>
     dischargePortBreakdown?: Partial<DischargePortBreakdown>
     unplannedTable?: {
@@ -2535,6 +2537,21 @@ function ShipmentsPageContent() {
       total: Number(shipmentsSection1Summary?.total ?? 0),
     }
   }, [shipmentsSection1Summary, unplannedTableBreakdown?.totalTableRows])
+
+  const section1VesselNames = useMemo((): ShipmentPagePipelineVesselNames | undefined => {
+    const v = shipmentsSection1Summary?.statusVesselNames
+    if (!v) return undefined
+    const list = (x: unknown): string[] => (Array.isArray(x) ? x.map(String) : [])
+    return {
+      unplanned: list(v.unplanned),
+      planned: list(v.planned),
+      atLoadingPort: list(v.atLoadingPort),
+      sailed: list(v.sailed),
+      atDischargePort: list(v.atDischargePort),
+      completed: list(v.completed),
+      cancelled: list(v.cancelled),
+    }
+  }, [shipmentsSection1Summary?.statusVesselNames])
 
   const loadingPortBreakdown = useMemo((): LoadingPortBreakdown => {
     const b = shipmentsSection1Summary?.loadingPortBreakdown
@@ -4839,6 +4856,7 @@ function ShipmentsPageContent() {
           loading={section1DataLoading}
           statusFilter={statusFilter}
           counts={section1StatusCounts}
+          vesselNames={section1VesselNames}
           loadingPortBreakdown={loadingPortBreakdown}
           dischargePortBreakdown={dischargePortBreakdown}
           onStageClick={handleStatusCardClick}

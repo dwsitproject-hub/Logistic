@@ -60,6 +60,8 @@ import {
   appendShipmentPipelineStageFilter,
   shipmentPagePipelineSummarySelectSql,
   shipmentPagePipelineUnplannedRowPredicate,
+  shipmentPagePipelineVesselNamesSelectSql,
+  shipmentPipelineVesselKeyExpr,
 } from '../utils/shipmentPagePipelineSql';
 import {
   buildUnplannedContractBacklogTableCountCte,
@@ -263,6 +265,13 @@ async function upsertPoQtyAssignment(
   }
 }
 
+/** pg text[] (or pre-parsed array) → sorted distinct display list. */
+function normalizeVesselNameList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const names = [...new Set(raw.map((v) => String(v ?? '').trim()).filter(Boolean))];
+  return names.sort((a, b) => a.localeCompare(b));
+}
+
 function shipmentListSummaryPayload(
   totalCount: number,
   summaryRow: Record<string, unknown>,
@@ -288,6 +297,16 @@ function shipmentListSummaryPayload(
       atDischargePort: Number(summaryRow.at_discharge_port_count || 0),
       completed: Number(summaryRow.completed_count || 0),
       cancelled: Number(summaryRow.cancelled_count || 0),
+    },
+    /** Sorted distinct non-blank vessel names per pipeline card (Section 1 rectangles). */
+    statusVesselNames: {
+      unplanned: normalizeVesselNameList(summaryRow.unplanned_vessel_names),
+      planned: normalizeVesselNameList(summaryRow.planned_vessel_names),
+      atLoadingPort: normalizeVesselNameList(summaryRow.at_loading_port_vessel_names),
+      sailed: normalizeVesselNameList(summaryRow.sailed_vessel_names),
+      atDischargePort: normalizeVesselNameList(summaryRow.at_discharge_port_vessel_names),
+      completed: normalizeVesselNameList(summaryRow.completed_vessel_names),
+      cancelled: normalizeVesselNameList(summaryRow.cancelled_vessel_names),
     },
     loadingPortBreakdown: {
       arrived: Number(summaryRow.loading_port_arrived_count || 0),
@@ -990,6 +1009,8 @@ ${contractMetaSelectCore}
       SELECT
         COUNT(*)::bigint AS total_count,
         ${shipmentPagePipelineSummarySelectSql()},
+        ${shipmentPagePipelineVesselNamesSelectSql()},
+        ARRAY_AGG(DISTINCT ${shipmentPipelineVesselKeyExpr('e.vessel_name')}) FILTER (WHERE ${shipmentPagePipelineUnplannedRowPredicate('e')} AND ${shipmentPipelineVesselKeyExpr('e.vessel_name')} IS NOT NULL) AS unplanned_vessel_names,
         (SELECT backlog_count FROM unplanned_contract_backlog_table)::bigint AS unplanned_contract_backlog_count,
         COUNT(*) FILTER (WHERE ${shipmentPagePipelineUnplannedRowPredicate('e')})::bigint AS unplanned_shipment_execution_count,
         COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND loading_no_eta)::bigint AS eta_loading_no_eta,

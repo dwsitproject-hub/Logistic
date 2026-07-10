@@ -15,6 +15,7 @@ import {
   shipmentPagePipelineSummarySelectSql,
   shipmentPagePipelineUnplannedRowPredicate,
   shipmentPageExcludeB2bChildCond,
+  shipmentPipelineVesselKeyExpr,
 } from './shipmentPagePipelineSql';
 import {
   buildUnplannedContractBacklogLatestSpdCte,
@@ -98,6 +99,7 @@ function buildShipmentDailyBaseCteSql(): string {
           ${listStoKeySql} AS sto_key,
           ${sqlShipmentListPrimaryIdAgg(listStoKeySql, 'c', 'l', 's', 'cs_sto')} AS id,
           MAX(s.status) AS status,
+          MAX(NULLIF(TRIM(s.vessel_name), '')) AS vessel_name,
           MAX(${plantSite}) AS plant_site,
           MAX(s.eta_arrival) AS eta_arrival,
           MAX(s.eta_berthed) AS eta_berthed,
@@ -270,6 +272,62 @@ export function buildShipmentExecutionDailySummaryInsertSql(): string {
       COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND discharge_no_eta)::bigint
     FROM enriched e
     GROUP BY group_plant, contract_date_key, product_key, incoterm_key`;
+}
+
+/**
+ * INSERT distinct (dims, stage, vessel) facts for per-stage distinct-vessel counts.
+ * Stage keys are the grouped pipeline cards; blank vessel names are excluded.
+ */
+export function buildShipmentVesselStageDailyInsertSql(): string {
+  const base = buildShipmentDailyBaseCteSql();
+  const eff = shipmentEffectiveStatusExpr('f');
+  const unplannedPred = shipmentPagePipelineUnplannedRowPredicate('e');
+  const vessel = shipmentPipelineVesselKeyExpr('e.vessel_name');
+  return `
+    INSERT INTO shipment_pipeline_vessel_stage_daily (
+      group_plant, contract_date, product, incoterm, stage, vessel_key
+    )
+    ${base},
+    enriched AS (
+      SELECT
+        f.*,
+        ${eff} AS effective_status,
+        COALESCE(f.plant_site, 'Blank') AS group_plant,
+        COALESCE(f.contract_date, ${NULL_CONTRACT_DATE})::date AS contract_date_key,
+        ${sqlPipelineProductKey('f.product')} AS product_key,
+        ${sqlPipelineIncotermKey('f.incoterm')} AS incoterm_key
+      FROM shipment_base f
+    )
+    SELECT DISTINCT
+      e.group_plant,
+      e.contract_date_key,
+      e.product_key,
+      e.incoterm_key,
+      CASE
+        WHEN ${unplannedPred} THEN 'UNPLANNED'
+        WHEN e.effective_status = 'PLANNED' THEN 'PLANNED'
+        WHEN e.effective_status IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') THEN 'AT_LOADING_PORT'
+        WHEN e.effective_status = 'SAILED' THEN 'SAILED'
+        WHEN e.effective_status IN ('ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') THEN 'AT_DISCHARGE_PORT'
+        WHEN e.effective_status = 'COMPLETED' THEN 'COMPLETED'
+        WHEN e.effective_status = 'CANCELLED' THEN 'CANCELLED'
+        ELSE NULL
+      END AS stage,
+      ${vessel} AS vessel_key
+    FROM enriched e
+    WHERE ${vessel} IS NOT NULL
+      AND (
+        CASE
+          WHEN ${unplannedPred} THEN 'UNPLANNED'
+          WHEN e.effective_status = 'PLANNED' THEN 'PLANNED'
+          WHEN e.effective_status IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') THEN 'AT_LOADING_PORT'
+          WHEN e.effective_status = 'SAILED' THEN 'SAILED'
+          WHEN e.effective_status IN ('ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') THEN 'AT_DISCHARGE_PORT'
+          WHEN e.effective_status = 'COMPLETED' THEN 'COMPLETED'
+          WHEN e.effective_status = 'CANCELLED' THEN 'CANCELLED'
+          ELSE NULL
+        END
+      ) IS NOT NULL`;
 }
 
 /** UPSERT open contract backlog grouped by group_plant + contract_date. */

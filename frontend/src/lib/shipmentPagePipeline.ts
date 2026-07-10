@@ -36,8 +36,20 @@ export type DischargePortBreakdown = {
   unloading: number
 }
 
+/** Sorted distinct non-blank vessel names per pipeline stage (Section 1 cards). */
+export type ShipmentPagePipelineVesselNames = {
+  unplanned: string[]
+  planned: string[]
+  atLoadingPort: string[]
+  sailed: string[]
+  atDischargePort: string[]
+  completed: string[]
+  cancelled: string[]
+}
+
 export type ShipmentPagePipelineSummary = {
   status: ShipmentPagePipelineStatusCounts
+  statusVesselNames?: ShipmentPagePipelineVesselNames
   loadingPortBreakdown?: LoadingPortBreakdown
   dischargePortBreakdown?: DischargePortBreakdown
   unplannedTable?: {
@@ -142,6 +154,44 @@ export function pipelineCountForStage(
       return counts.cancelled
     default:
       return 0
+  }
+}
+
+export function pipelineVesselNamesForStage(
+  stage: ShipmentPagePipelineStage,
+  vessels: ShipmentPagePipelineVesselNames | undefined,
+): string[] | null {
+  if (!vessels) return null
+  switch (stage) {
+    case 'UNPLANNED':
+      return vessels.unplanned
+    case 'PLANNED':
+      return vessels.planned
+    case 'AT_LOADING_PORT':
+      return vessels.atLoadingPort
+    case 'SAILED':
+      return vessels.sailed
+    case 'AT_DISCHARGE_PORT':
+      return vessels.atDischargePort
+    case 'COMPLETED':
+      return vessels.completed
+    case 'CANCELLED':
+      return vessels.cancelled
+    default:
+      return null
+  }
+}
+
+/** How many vessel names are shown directly on a card before "+N more". */
+export const PIPELINE_CARD_VESSEL_PREVIEW_LIMIT = 3
+
+export function splitVesselNamesForCard(names: string[]): {
+  preview: string[]
+  moreCount: number
+} {
+  return {
+    preview: names.slice(0, PIPELINE_CARD_VESSEL_PREVIEW_LIMIT),
+    moreCount: Math.max(0, names.length - PIPELINE_CARD_VESSEL_PREVIEW_LIMIT),
   }
 }
 
