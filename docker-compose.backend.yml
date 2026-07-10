@@ -16,6 +16,11 @@ services:
   postgres:
     image: postgres:14-alpine
     container_name: klip-postgres
+    # The staging host is a small shared box (~3.4G) running containers from several
+    # projects. Cap memory so a heavy query burst degrades klip only, instead of
+    # taking the whole instance down (observed 2026-07-10: instance hit ~95% memory
+    # and became unreachable). Normal usage observed: ~340M.
+    mem_limit: 1g
     environment:
       POSTGRES_DB: ${DB_NAME:-klip_db}
       POSTGRES_USER: ${DB_USER:-postgres}
@@ -39,6 +44,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: klip-backend
+    # See postgres note: cap memory on the shared staging host. Normal usage ~180M.
+    mem_limit: 768m
     env_file:
       - ./backend/.env
     environment:
