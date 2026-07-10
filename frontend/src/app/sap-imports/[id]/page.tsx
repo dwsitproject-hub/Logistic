@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import api from '@/lib/api';
 import { formatDateDMY, formatDateTimeDMY, formatTimeHMS } from '@/lib/dateFormat';
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue';
 
 interface ImportDetail {
   id: string;
@@ -468,19 +469,19 @@ export default function ImportDetailPage() {
                     >
                       <td className="p-3 text-sm font-mono">{record.row_number}</td>
                       <td className="p-3">
-                        <div className="font-medium">{(record as any).display_contract_po || '-'}</div>
+                        <div className="font-medium">{formatSapDisplayValue((record as any).display_contract_po)}</div>
                       </td>
                       <td className="p-3">
-                        <div className="font-medium">{(record as any).display_shipment_sto || '-'}</div>
+                        <div className="font-medium">{formatSapDisplayValue((record as any).display_shipment_sto)}</div>
                       </td>
                       <td className="p-3">
-                        <div className="text-sm">{(record as any).display_supplier_name || '-'}</div>
+                        <div className="text-sm">{formatSapDisplayValue((record as any).display_supplier_name)}</div>
                       </td>
                       <td className="p-3">
-                        <div className="text-sm">{(record as any).display_product || '-'}</div>
+                        <div className="text-sm">{formatSapDisplayValue((record as any).display_product)}</div>
                       </td>
                       <td className="p-3">
-                        <div className="text-sm">{(record as any).display_vessel_name || '-'}</div>
+                        <div className="text-sm">{formatSapDisplayValue((record as any).display_vessel_name)}</div>
                       </td>
                       <td className="p-3">
                         {record.record_status === 'processed' ? (

@@ -1,22 +1,142 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, Suspense, useCallback } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, Suspense, useCallback, type ReactNode } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, ChevronDown, ChevronUp, ChevronRight, ArrowDown, ArrowUp, Minus, SlidersHorizontal, ArrowLeft, ArrowRight } from 'lucide-react'
+import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor } from 'lucide-react'
 import api from '@/lib/api'
+import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
-import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
-import { AddShipmentModal } from '@/components/shipments/AddShipmentModal'
+import {
+  formatShipmentStatusLabel,
+  normalizeShipmentStatusKey,
+  SHIPMENT_STATUS_DISPLAY_LABELS,
+} from '@/lib/shipmentStatusDisplay'
+import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
+import { formatOperationalTableTextDisplay, formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay, formatVesselTableDisplay } from '@/lib/sapDisplayValue'
+import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
+import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
+import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
+import { ShipmentViewTableRowActions } from '@/components/shipments/ShipmentViewTableRowActions'
+import {
+  buildVesselPortsQuantityRows,
+  sumVesselPortsQuantityEdits,
+  VesselPortsQuantitiesTable,
+  type VesselPortsQuantityEdits,
+} from '@/components/shipments/VesselPortsQuantitiesTable'
+import { hasVesselPortsQuantityUserEdits } from '@/lib/vesselPortsQuantityEdits'
+import {
+  VESSEL_MODAL_BODY_CLASS,
+  VESSEL_MODAL_HEADER_CLASS,
+  VESSEL_MODAL_OVERLAY_CLASS,
+  VESSEL_MODAL_PANEL_CLASS,
+  VESSEL_MODAL_SECTION_CLASS,
+  VESSEL_MODAL_SECTION_HEADER_CLASS,
+  VESSEL_MODAL_SUBSECTION_LABEL_CLASS,
+} from '@/lib/vesselModalUi'
+import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
+import { shipmentRowHasRegisteredPlanning } from '@/lib/shipmentViewTableActions'
+import {
+  mergeShipmentQtyOverridesOnContractRows,
+  resolveShipmentListDeliveredKg,
+  resolveShipmentListReceiveKg,
+  resolveShipmentListStoKg,
+  sapContractDetailQtyToKg,
+  shipmentStoredQtyKg,
+} from '@/lib/shipmentQuantityUnits'
+import {
+  BulkUploadStatusModal,
+  type BulkUploadStatusResult,
+} from '@/components/BulkUploadStatusModal'
+import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
+import { MasterLoadingPortCombobox } from '@/components/MasterLoadingPortCombobox'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
+import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
+import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
+import {
+  compareSapStoListRowPriority,
+  shouldPrioritizeSapStoRows,
+} from '@/lib/listSapStoPriority'
+import {
+  TableInitialLoadPlaceholder,
+  TableInitialLoadPlaceholderContent,
+} from '@/components/performance/TableInitialLoadPlaceholder'
+import {
+  COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
+  CONTRACT_PERF_TABLE_CELL_PAD,
+  CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS,
+  CONTRACT_PERF_TABLE_ROW_MIN_H,
+} from '@/lib/contractPerformanceColumns'
+import {
+  COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
+  COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+} from '@/lib/compactTableUi'
+import { formatQtyMtFromKg, formatNumber, formatOutstandingQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
+import {
+  SHIPMENT_COLUMN_LAYOUT_VERSION,
+  SHIPMENT_COLUMN_LAYOUT_VERSION_KEY,
+  buildShipmentVisibleColumns,
+  mergeShipmentColumnOrder,
+  migrateShipmentColumnLayout,
+  shipmentCompactColumnFallbackOrder,
+  shipmentDefaultVisibleColumnIds,
+} from '@/lib/shipmentColumns'
+import {
+  resolveShipmentListDischargePorts,
+  resolveShipmentListLoadingPorts,
+} from '@/lib/shipmentListPorts'
+import { resolveShipmentListSuppliers } from '@/lib/shipmentListSuppliers'
+import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
+import {
+  resolveShipmentApiLookupKey,
+  resolveShipmentDisplayStoNumber,
+} from '@/lib/shipmentStoDisplay'
+import {
+  type EtaBucketFilterKey,
+} from '@/lib/shipmentsPageDerivedData'
+import {
+  pipelineCountForStage,
+  SHIPMENT_PAGE_PIPELINE_CARDS,
+  SHIPMENT_PAGE_PIPELINE_LABELS,
+  type DischargePortBreakdown,
+  type LoadingPortBreakdown,
+  type ShipmentPagePipelineStage,
+  type ShipmentPagePipelineStatusCounts,
+} from '@/lib/shipmentPagePipeline'
+import { ShipmentStatusDistribution } from '@/components/shipments/ShipmentStatusDistribution'
+import { VesselIdleInsightChip } from '@/components/shipments/VesselIdleInsightChip'
+import { VesselIdleModal, type VesselIdleListRow } from '@/components/shipments/VesselIdleModal'
+import VesselHistoryModal, {
+  type VesselHistoryModalSelection,
+  type VesselHistoryShipmentRow,
+} from '@/components/shipping-performance/VesselHistoryModal'
+import { mapShippingPerformanceToVesselHistoryRows } from '@/lib/shippingPerfVesselHistoryRows'
+import { ShipmentsGlobalFiltersSection } from '@/components/shipments/ShipmentsGlobalFiltersSection'
+import {
+  buildShipmentsListQueryKey,
+  normalizePipelineStageFilter,
+  togglePipelineStageFilter,
+  type ShipmentsPipelineStageFilter,
+} from '@/lib/shipmentsPageFilterState'
+import {
+  OperationalStackedCommaCell,
+  getOperationalColumnLayout,
+  operationalTableColumnClass,
+} from '@/lib/operationalTableLayout'
+import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { format } from 'date-fns'
 import {
   usePermissions,
@@ -26,8 +146,52 @@ import {
 } from '@/components/PermissionsContext'
 // import * as XLSX from 'xlsx' // Temporarily disabled
 
+/**
+ * Section 2 — ETA Loading Status + ETA Discharge Status cards (Shipments page only).
+ * When false: cards hidden, no scoped ETA summary fetch, no etaLoading/etaDischarge list filters.
+ * Set true to restore UI and interactive ETA bucket filtering.
+ */
+const SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED = false
+
+const ETA_LOADING_FILTER_LABELS: Record<EtaBucketFilterKey, string> = {
+  MORE_THAN_7D: 'ETA Loading > 7D',
+  D_MINUS_2: 'ETA Loading D-2',
+  D: 'ETA Loading D',
+  DELAY: 'ETA Loading Delay',
+  NO_ETA: 'No ETA (Loading)',
+}
+
+const ETA_DISCHARGE_FILTER_LABELS: Record<EtaBucketFilterKey, string> = {
+  MORE_THAN_7D: 'ETA Discharge > 7D',
+  D_MINUS_2: 'ETA Discharge D-2',
+  D: 'ETA Discharge D',
+  DELAY: 'ETA Discharge Delay',
+  NO_ETA: 'No ETA (Discharge)',
+}
+
+const EMPTY_ETA_BUCKET_COUNTS = {
+  moreThan7D: 0,
+  dMinus2: 0,
+  d: 0,
+  delay: 0,
+  noEta: 0,
+} as const
+
+function etaLoadingCardHelp(specific: string): string {
+  return `${FIELD_HELP.shipmentEtaLoadingScope}\n\n${FIELD_HELP.shipmentEtaDayDiff}\n\n${specific}`
+}
+
+function etaDischargeCardHelp(specific: string): string {
+  return `${FIELD_HELP.shipmentEtaDischargeScope}\n\n${FIELD_HELP.shipmentEtaDayDiff}\n\n${specific}`
+}
+
+const SHIPMENT_STATUS_LABELS = SHIPMENT_STATUS_DISPLAY_LABELS
+
 interface Shipment {
   id: string
+  /** contract_backlog = PO without shipment; shipment_execution = grouped STO row */
+  row_kind?: 'contract_backlog' | 'shipment_execution' | string
+  contract_row_id?: string | null
   shipment_id: string
   operation_id?: string
   contract_id: string
@@ -45,7 +209,7 @@ interface Shipment {
   arrival_date: string
   port_of_loading: string
   port_of_discharge: string
-  plant_site: string // Vessel Discharge Port = Plant/Site
+  plant_site: string // Group Plant (resolved from master_plants via contract plant_code)
   quantity_shipped: number
   quantity_delivered: number
   inbound_weight: number
@@ -69,6 +233,7 @@ interface Shipment {
   buyer: string
   product: string
   group_name: string
+  sto_key?: string
   // STO-based aggregation fields
   sto_number: string
   total_quantity_shipped: number
@@ -85,6 +250,7 @@ interface Shipment {
   contract_count: number
   // Additional fields for display
   po_numbers?: string
+  contract_date?: string
   delivery_start_date?: string
   delivery_end_date?: string
   sto_quantity?: number
@@ -97,7 +263,22 @@ interface Shipment {
   ata_vessel_complete_discharge?: string
   eta_vessel_complete_discharge?: string
   quantity_receive?: number
+  outstanding_quantity?: number
+  outstanding_qty_planning?: number
+  contract_qty?: number
+  loading_ports?: string
+  discharge_ports?: string
+  loading_ports_klip?: string
+  discharge_ports_klip?: string
+  sap_loading_ports?: string
+  sap_discharge_ports?: string
+  sap_vessel_loading_port_1?: string
+  sap_vessel_discharge_port?: string
+  vlp_loading_port_name?: string
+  vlp_discharge_port_name?: string
   quantity_delivered_sap?: number
+  sfal_qty?: number | null
+  sfbd_qty?: number | null
   // Basic ETA loading dates at shipment level
   eta_arrival?: string
   eta_berthed?: string
@@ -109,6 +290,13 @@ interface Shipment {
   eta_discharge_berthed?: string
   eta_discharge_start?: string
   eta_discharge_complete?: string
+  ata_vessel_arrival_at_loading_port?: string
+  ata_vessel_berthed_at_loading_port?: string
+  ata_vessel_start_loading?: string
+  ata_vessel_sailed_from_loading_port?: string
+  ata_vessel_arrive_at_discharge_port?: string
+  ata_vessel_berthed_at_discharge_port?: string
+  ata_vessel_start_discharging?: string
   // Contract details (for expanded view)
   contract_details?: Array<{
     contract_number: string
@@ -150,8 +338,99 @@ interface VesselLoadingPort {
   quality_ds?: number | null
   quality_stone?: number | null
   is_discharge_port?: boolean
+  is_cancelled?: boolean
+  cancel_remark?: string | null
+  cancelled_at?: string | null
+  cancelled_by_name?: string | null
   created_at?: string
   updated_at?: string
+}
+
+function apiErrorMessage(error: unknown, fallback: string): string {
+  const err = error as { response?: { data?: { error?: { message?: string } } }; message?: string }
+  return err?.response?.data?.error?.message || err?.message || fallback
+}
+
+function dateInputFromUnknown(v: unknown): string | Date | null | undefined {
+  if (v == null) return v as null | undefined
+  if (v instanceof Date) return v
+  if (typeof v === 'string') return v
+  return undefined
+}
+
+/** Payload for PUT /shipments/:id/loading-ports/:portId (only fields the API accepts). */
+function buildLoadingPortUpdatePayload(
+  source: Record<string, unknown>,
+  portId: string,
+): Record<string, unknown> {
+  const berthedLoading = toApiDateOnly(
+    dateInputFromUnknown(source.eta_vessel_berthed_at_loading_port ?? source.eta_vessel_berthed),
+  )
+  return {
+    id: portId,
+    port_name: source.port_name,
+    port_sequence: source.port_sequence ?? 1,
+    quantity_at_loading_port: source.quantity_at_loading_port ?? 0,
+    is_discharge_port: Boolean(source.is_discharge_port),
+    quality_ffa: source.quality_ffa ?? null,
+    quality_mi: source.quality_mi ?? null,
+    quality_dobi: source.quality_dobi ?? null,
+    quality_red: source.quality_red ?? null,
+    quality_ds: source.quality_ds ?? null,
+    quality_stone: source.quality_stone ?? null,
+    eta_vessel_arrival: toApiDateOnly(dateInputFromUnknown(source.eta_vessel_arrival)),
+    ata_vessel_arrival: toApiDateOnly(dateInputFromUnknown(source.ata_vessel_arrival)),
+    eta_vessel_berthed: berthedLoading,
+    ata_vessel_berthed: toApiDateOnly(dateInputFromUnknown(source.ata_vessel_berthed)),
+    eta_vessel_berthed_at_loading_port: berthedLoading,
+    eta_loading_start: toApiDateOnly(dateInputFromUnknown(source.eta_loading_start)),
+    ata_loading_start: toApiDateOnly(dateInputFromUnknown(source.ata_loading_start)),
+    eta_loading_completed: toApiDateOnly(dateInputFromUnknown(source.eta_loading_completed)),
+    ata_loading_completed: toApiDateOnly(dateInputFromUnknown(source.ata_loading_completed)),
+    eta_vessel_sailed: toApiDateOnly(dateInputFromUnknown(source.eta_vessel_sailed)),
+    ata_vessel_sailed: toApiDateOnly(dateInputFromUnknown(source.ata_vessel_sailed)),
+    eta_vessel_arrive_at_discharge_port: toApiDateOnly(dateInputFromUnknown(source.eta_vessel_arrive_at_discharge_port)),
+    eta_vessel_berthed_at_discharge_port: toApiDateOnly(dateInputFromUnknown(source.eta_vessel_berthed_at_discharge_port)),
+    eta_vessel_start_discharging: toApiDateOnly(dateInputFromUnknown(source.eta_vessel_start_discharging)),
+    eta_vessel_complete_discharge: toApiDateOnly(dateInputFromUnknown(source.eta_vessel_complete_discharge)),
+  }
+}
+
+/** Payload for POST /shipments/:id/loading-ports (API-accepted fields only). */
+function buildLoadingPortCreatePayload(source: Record<string, unknown>): Record<string, unknown> {
+  const payload = buildLoadingPortUpdatePayload(source, 'create')
+  const { id: _id, ...createPayload } = payload
+  return createPayload
+}
+
+function nextAddLoadingPortSequence(loadingPorts: VesselLoadingPort[]): number {
+  const loadingCount = loadingPorts.filter((p) => !p.is_discharge_port).length
+  return loadingCount + 1
+}
+
+function createEmptyNewLoadingPort(portSequence: number): Partial<VesselLoadingPort> {
+  return {
+    port_name: '',
+    port_sequence: portSequence,
+    quantity_at_loading_port: 0,
+    eta_vessel_arrival: '',
+    ata_vessel_arrival: '',
+    eta_vessel_berthed: '',
+    ata_vessel_berthed: '',
+    eta_loading_start: '',
+    ata_loading_start: '',
+    eta_loading_completed: '',
+    ata_loading_completed: '',
+    eta_vessel_sailed: '',
+    ata_vessel_sailed: '',
+    eta_vessel_berthed_at_loading_port: '',
+    eta_vessel_arrive_at_discharge_port: '',
+    eta_vessel_berthed_at_discharge_port: '',
+    eta_vessel_start_discharging: '',
+    eta_vessel_complete_discharge: '',
+    loading_rate: 0,
+    is_discharge_port: false,
+  }
 }
 
 interface DocumentItem {
@@ -165,35 +444,462 @@ interface DocumentItem {
   created_at?: string
 }
 
+/** Document types for SLD/SDD uploads that unlock quantity delivery/receive edits in the vessel modal. */
+const SHIPMENT_SLD_DOC_TYPE = 'SLD'
+const SHIPMENT_SDD_DOC_TYPE = 'SDD'
+/** Legacy type — still unlocks quantities when present on a shipment. */
+const SHIPMENT_LEGACY_QUANTITY_UNLOCK_DOC_TYPE = 'QUANTITY_ADJUSTMENT'
+
+function shipmentQuantityValuesEqual(a: unknown, b: unknown): boolean {
+  const toNum = (v: unknown) => {
+    if (v === null || v === undefined || v === '') return null
+    const n = typeof v === 'number' ? v : Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  const na = toNum(a)
+  const nb = toNum(b)
+  if (na === null && nb === null) return true
+  if (na === null || nb === null) return false
+  return na === nb
+}
+
+function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipment[] {
+  if (!hydrated.length) return base
+  const byId = new Map<string, Shipment>()
+  for (const row of hydrated) {
+    if (row.id) byId.set(String(row.id), row)
+    const stoKey = row.sto_key ?? row.sto_number
+    if (stoKey) byId.set(String(stoKey), row)
+  }
+  return base.map((row) => {
+    const match =
+      (row.id ? byId.get(String(row.id)) : undefined) ??
+      (row.sto_key ? byId.get(String(row.sto_key)) : undefined) ??
+      (row.sto_number ? byId.get(String(row.sto_number)) : undefined)
+    if (!match) return row
+    return {
+      ...row,
+      contract_numbers: match.contract_numbers ?? row.contract_numbers,
+      contract_ext_no: match.contract_ext_no ?? row.contract_ext_no,
+      po_numbers: match.po_numbers ?? row.po_numbers,
+      sto_quantity: match.sto_quantity ?? row.sto_quantity,
+      quantity_receive: match.quantity_receive ?? row.quantity_receive,
+      quantity_delivered_sap: match.quantity_delivered_sap ?? row.quantity_delivered_sap,
+      outstanding_quantity: match.outstanding_quantity ?? row.outstanding_quantity,
+      outstanding_qty_planning: match.outstanding_qty_planning ?? row.outstanding_qty_planning,
+      contract_qty: match.contract_qty ?? row.contract_qty,
+      loading_ports: match.loading_ports ?? row.loading_ports,
+      discharge_ports: match.discharge_ports ?? row.discharge_ports,
+      sap_loading_ports: match.sap_loading_ports ?? row.sap_loading_ports,
+      sap_discharge_ports: match.sap_discharge_ports ?? row.sap_discharge_ports,
+      sap_vessel_loading_port_1: match.sap_vessel_loading_port_1 ?? row.sap_vessel_loading_port_1,
+      sap_vessel_discharge_port: match.sap_vessel_discharge_port ?? row.sap_vessel_discharge_port,
+      loading_ports_klip: match.loading_ports_klip ?? row.loading_ports_klip,
+      discharge_ports_klip: match.discharge_ports_klip ?? row.discharge_ports_klip,
+      incoterm: match.incoterm ?? row.incoterm,
+      b2b_flag: match.b2b_flag ?? row.b2b_flag,
+      source_type: match.source_type ?? row.source_type,
+      vessel_name: match.vessel_name?.trim() ? match.vessel_name : row.vessel_name,
+      vessel_code: match.vessel_code?.trim() ? match.vessel_code : row.vessel_code,
+      vessel_owner: match.vessel_owner?.trim() ? match.vessel_owner : row.vessel_owner,
+    }
+  }  )
+}
+
+/** Legacy inline table edit (pencil row edit). Hidden — use Edit Shipment modal instead. */
+const SHIPMENTS_TABLE_LEGACY_INLINE_EDIT_ENABLED = false
+/** Hide header CSV template/upload — set true to restore bulk import UI. */
+const SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED = false
+
+function resolveShipmentEditContractId(shipment: Shipment): string {
+  const fromList = (shipment.contract_numbers || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)[0]
+  return (
+    fromList ||
+    (shipment as { contract_number?: string }).contract_number?.trim() ||
+    ''
+  )
+}
+
+function ShipmentRowEditButton({
+  visible,
+  hasShipmentEditData,
+  onEdit,
+}: {
+  visible: boolean
+  hasShipmentEditData: boolean
+  onEdit: () => void
+}) {
+  if (!visible) return null
+
+  const button = (
+    <Button
+      variant="outline"
+      size="icon"
+      disabled={!hasShipmentEditData}
+      onClick={() => {
+        if (!hasShipmentEditData) return
+        onEdit()
+      }}
+      aria-disabled={!hasShipmentEditData}
+      className={
+        hasShipmentEditData
+          ? undefined
+          : 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-300 opacity-60 shadow-none hover:bg-gray-100 hover:text-gray-300'
+      }
+    >
+      <Pencil className="h-4 w-4" />
+    </Button>
+  )
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex">{button}</span>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {hasShipmentEditData ? 'Edit' : 'Shipment data is not available'}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function parseApiNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  const normalized = String(value).replace(/,/g, '').trim()
+  if (!normalized) return null
+  const parsed = parseFloat(normalized)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function joinUniqueCommaSeparated(values: (string | null | undefined)[]): string {
+  const seen = new Set<string>()
+  const parts: string[] = []
+  for (const value of values) {
+    const raw = String(value ?? '').trim()
+    if (!raw) continue
+    for (const piece of raw.split(/,\s*/)) {
+      const trimmed = piece.trim()
+      if (trimmed && !seen.has(trimmed)) {
+        seen.add(trimmed)
+        parts.push(trimmed)
+      }
+    }
+  }
+  return parts.length > 0 ? parts.join(', ') : '-'
+}
+
+function resolveShipmentContractNumbers(shipment: Shipment | null): string[] {
+  if (!shipment) return []
+  const raw =
+    shipment.contract_numbers ||
+    (shipment as { contract_number?: string }).contract_number ||
+    ''
+  return raw.split(/,\s*/).map((c) => c.trim()).filter(Boolean)
+}
+
+function shipmentModalStoDisplay(shipment: Shipment | null): string {
+  if (!shipment) return '-'
+  return resolveShipmentDisplayStoNumber(shipment.sto_number)
+}
+
+type PortsModalContractDetail = {
+  contract_number: string
+  contract_qty: number
+  outstanding_qty: number
+  sto_qty_assigned: number
+  po_number?: string
+  delivery_start_date?: string | null
+  delivery_end_date?: string | null
+  quantity_delivered?: number | null
+  quantity_receive?: number | null
+  contract_ext_no?: string | null
+  locked_from_sap?: boolean
+}
+
+function mapContractDetailFromApi(detail: Record<string, unknown>): PortsModalContractDetail {
+  const contractQty = parseApiNumber(detail.contract_qty) ?? 0
+  return {
+    contract_number: String(detail.contract_number ?? '').trim(),
+    contract_qty: contractQty,
+    outstanding_qty: parseApiNumber(detail.outstanding_qty) ?? 0,
+    sto_qty_assigned: parseApiNumber(detail.sto_qty_assigned) ?? 0,
+    po_number: detail.po_number != null ? String(detail.po_number) : '',
+    delivery_start_date: (detail.delivery_start_date as string | null | undefined) ?? null,
+    delivery_end_date: (detail.delivery_end_date as string | null | undefined) ?? null,
+    quantity_delivered: sapContractDetailQtyToKg(parseApiNumber(detail.quantity_delivered), contractQty),
+    quantity_receive: sapContractDetailQtyToKg(parseApiNumber(detail.quantity_receive), contractQty),
+    contract_ext_no: detail.contract_ext_no != null ? String(detail.contract_ext_no) : null,
+    locked_from_sap: Boolean(detail.locked_from_sap),
+  }
+}
+
+function shipmentModalPoDisplay(
+  info: Record<string, unknown> | null | undefined,
+  shipment: Shipment | null,
+  contractDetails?: PortsModalContractDetail[],
+): string {
+  const fromDetails = contractDetails?.map((d) => d.po_number).filter(Boolean) ?? []
+  return joinUniqueCommaSeparated([
+    ...fromDetails,
+    info?.po_number as string | undefined,
+    info?.po_numbers as string | undefined,
+    shipment?.po_numbers,
+  ])
+}
+
+function shipmentModalContractExtNoDisplay(
+  info: Record<string, unknown> | null | undefined,
+  shipment: Shipment | null,
+  contractDetails?: PortsModalContractDetail[],
+): string {
+  const fromDetails = contractDetails?.map((d) => d.contract_ext_no).filter(Boolean) ?? []
+  return joinUniqueCommaSeparated([
+    ...fromDetails,
+    info?.contract_ext_no as string | undefined,
+    info?.contract_ext_nos as string | undefined,
+    shipment?.contract_ext_no,
+  ])
+}
+
+function sumContractDetailQuantities(
+  contractDetails: PortsModalContractDetail[] | undefined,
+  field: 'quantity_delivered' | 'quantity_receive' | 'contract_qty' | 'sto_qty_assigned' | 'outstanding_qty',
+): number | null {
+  if (!contractDetails?.length) return null
+  let sum = 0
+  let hasAny = false
+  for (const detail of contractDetails) {
+    const qty = parseApiNumber(detail[field])
+    if (qty !== null) {
+      sum += qty
+      hasAny = true
+    }
+  }
+  return hasAny ? sum : null
+}
+
+function resolvePortsModalQuantityDeliveredKg(
+  shipmentInfo: Record<string, unknown> | null | undefined,
+  shipment: Shipment | null,
+  contractDetails?: PortsModalContractDetail[],
+): number | null {
+  const fromContracts = sumContractDetailQuantities(contractDetails, 'quantity_delivered')
+  if (fromContracts !== null) return fromContracts
+  const fromShipmentSap = parseApiNumber(shipment?.quantity_delivered_sap)
+  if (fromShipmentSap !== null) return fromShipmentSap
+  const fromShipmentTotal = parseApiNumber(shipment?.total_quantity_delivered)
+  if (fromShipmentTotal !== null) return fromShipmentTotal
+  return parseApiNumber(shipmentInfo?.quantity_delivered)
+}
+
+function resolvePortsModalQuantityReceiveKg(
+  shipmentInfo: Record<string, unknown> | null | undefined,
+  shipment: Shipment | null,
+  contractDetails?: PortsModalContractDetail[],
+): number | null {
+  const fromContracts = sumContractDetailQuantities(contractDetails, 'quantity_receive')
+  if (fromContracts !== null) return fromContracts
+  const fromShipmentSap = parseApiNumber(shipment?.quantity_receive)
+  if (fromShipmentSap !== null) return fromShipmentSap
+  const fromShipmentRow = parseApiNumber(shipment?.actual_vessel_qty_receive)
+  if (fromShipmentRow !== null) return fromShipmentRow
+  return parseApiNumber(shipmentInfo?.actual_vessel_qty_receive)
+}
+
+function formatQuantityKgDisplay(value: unknown): string {
+  const parsed = parseApiNumber(value)
+  return parsed !== null ? `${formatNumber(parsed)} Kg` : '—'
+}
+
+function resolvePortsModalQuantityDelivered(
+  shipmentInfo: Record<string, unknown> | null | undefined,
+  shipment: Shipment | null,
+  contractDetails?: PortsModalContractDetail[],
+): string {
+  const kg = resolvePortsModalQuantityDeliveredKg(shipmentInfo, shipment, contractDetails)
+  return kg !== null ? formatQuantityKgDisplay(kg) : '—'
+}
+
+function resolvePortsModalQuantityReceive(
+  shipmentInfo: Record<string, unknown> | null | undefined,
+  shipment: Shipment | null,
+  contractDetails?: PortsModalContractDetail[],
+): string {
+  const kg = resolvePortsModalQuantityReceiveKg(shipmentInfo, shipment, contractDetails)
+  return kg !== null ? formatQuantityKgDisplay(kg) : '—'
+}
+
+function ShipmentDetailReadOnlyField({
+  label,
+  value,
+  locked,
+}: {
+  label: string
+  value: string
+  locked?: boolean
+}) {
+  return (
+    <div>
+      <div className="text-gray-500">{label}</div>
+      <div
+        className={
+          locked
+            ? 'mt-1 rounded border border-gray-200 bg-gray-100 px-2 py-1.5 text-sm font-medium text-gray-500'
+            : 'font-medium mt-1'
+        }
+        aria-readonly="true"
+      >
+        {value}
+      </div>
+    </div>
+  )
+}
+
+/** DB/API value is Kg; UI shows and edits in MT. */
+function ShipmentMtQuantityField({
+  label,
+  value,
+  editing,
+  disabled,
+  onChange,
+}: {
+  label: string
+  /** Quantity in kilograms (stored in DB). */
+  value: number | null | undefined
+  editing?: boolean
+  disabled?: boolean
+  /** Called with kilograms. */
+  onChange?: (nextKg: number | null) => void
+}) {
+  const kg = value === null || value === undefined || Number.isNaN(Number(value)) ? null : Number(value)
+  const mtDisplay = kg === null ? '' : String(kg / 1000)
+
+  return (
+    <div>
+      <div className="text-gray-500">{label}</div>
+      {editing ? (
+        <div className="relative mt-1">
+          <Input
+            type="number"
+            step="0.01"
+            disabled={disabled}
+            value={mtDisplay}
+            onChange={(e) => {
+              const raw = e.target.value
+              if (raw === '') {
+                onChange?.(null)
+                return
+              }
+              const mt = parseFloat(raw)
+              onChange?.(Number.isNaN(mt) ? null : mt * 1000)
+            }}
+            className={`h-8 text-sm pr-10 ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+          />
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-500">
+            MT
+          </span>
+        </div>
+      ) : (
+        <div className="font-medium">{formatQtyMtFromKg(kg)}</div>
+      )}
+    </div>
+  )
+}
+
 function ShipmentsPageContent() {
   const searchParams = useSearchParams()
   const perms = usePermissions()
   const canAddShipment = canCreatePermission(perms, 'data.shipments')
   const canEditShipment = canEditPermission(perms, 'data.shipments')
-  // Permissions load async. For UX, fail-open on button visibility and enforce on click.
-  const canShowEditShipmentButton = !perms.loaded || canEditShipment
   const canOpenAddShipmentModal = canAddShipment || canEditShipment
   const canExportShipments = canViewPermission(perms, 'action.export_data')
-  const canBulkShipments = canCreatePermission(perms, 'action.bulk_operations')
+  const canBulkShipments = canCreatePermission(perms, 'data.shipments') || canCreatePermission(perms, 'action.bulk_operations')
   const canImportShipments = canViewPermission(perms, 'action.import_excel')
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [loading, setLoading] = useState(true)
+  /** Stale-while-revalidate: in-flight list fetch without clearing visible rows. */
+  const [listFetching, setListFetching] = useState(false)
+  /** Immediate table skeleton when status / ETA scope changes (not pagination). */
+  const [tableScopeLoading, setTableScopeLoading] = useState(false)
   const [page, setPage] = useState(1)
-  const [pageSize] = useState(50)
+  const [pageSize] = useState(20)
   const [totalCount, setTotalCount] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
+  /** Section 1 status circles — toolbar scope only (excludes status / ETA card filters). */
+  const [shipmentsSection1Summary, setShipmentsSection1Summary] = useState<{
+    total?: number
+    status?: Partial<ShipmentPagePipelineStatusCounts>
+    loadingPortBreakdown?: Partial<LoadingPortBreakdown>
+    dischargePortBreakdown?: Partial<DischargePortBreakdown>
+    unplannedTable?: {
+      contractRows?: number
+      shipmentRows?: number
+      totalTableRows?: number
+    }
+    etaLoading?: Record<string, number>
+    etaDischarge?: Record<string, number>
+  } | null>(null)
+  const [unplannedBreakdown, setUnplannedBreakdown] = useState<{
+    contractRows: number
+    shipmentRows: number
+    totalTableRows: number
+  } | null>(null)
+  /** Section 2 ETA cards when a status circle is active (scoped via scopeStatus). */
+  const [section2EtaSummary, setSection2EtaSummary] = useState<{
+    etaLoading?: Record<string, number>
+    etaDischarge?: Record<string, number>
+  } | null>(null)
+  const [summaryFetching, setSummaryFetching] = useState(false)
+  const [vesselIdleCount, setVesselIdleCount] = useState(0)
+  const [vesselIdleList, setVesselIdleList] = useState<VesselIdleListRow[]>([])
+  const [vesselIdleLoading, setVesselIdleLoading] = useState(false)
+  const [vesselIdleModalOpen, setVesselIdleModalOpen] = useState(false)
+  const [vesselHistoryModalOpen, setVesselHistoryModalOpen] = useState(false)
+  const [selectedVesselForHistory, setSelectedVesselForHistory] =
+    useState<VesselHistoryModalSelection | null>(null)
+  const [vesselHistorySourceRows, setVesselHistorySourceRows] = useState<VesselHistoryShipmentRow[]>(
+    [],
+  )
+  const vesselHistoryRowsLoadingRef = useRef(false)
+  const shipmentsSummaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const summaryFetchGenRef = useRef(0)
+  const section1SummaryForceNextFetchRef = useRef(true)
   // Search should apply only on Enter / Apply (not per keystroke)
   const [searchDraft, setSearchDraft] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editedData, setEditedData] = useState<Partial<Shipment>>({})
-  const [statusFilter, setStatusFilter] = useState<string>('ALL')
+  const [statusFilter, setStatusFilter] = useState<ShipmentsPipelineStageFilter>('ALL')
   const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
   const [etaLoadingFilter, setEtaLoadingFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
   const [etaDischargeFilter, setEtaDischargeFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
   const [vesselFilter, setVesselFilter] = useState('')
   const [saving, setSaving] = useState(false)
-  const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
-  const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
+  const {
+    selectedProducts,
+    setSelectedProducts,
+    selectedGroupPlants,
+    setSelectedGroupPlants,
+    userScopeReady,
+    resetUserScopeFilters,
+    handleProductsChange,
+    handleGroupPlantsChange,
+  } = useUserScopeFilterDefaults('shipments')
+  const scopeSummaryRequestKey = useMemo(
+    () => JSON.stringify({ p: [...selectedProducts].sort(), g: [...selectedGroupPlants].sort() }),
+    [selectedProducts, selectedGroupPlants],
+  )
+
+  const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
+  const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
+  const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
+  const [availableProducts, setAvailableProducts] = useState<string[]>([])
+  const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
+  const [availableSuppliers, setAvailableSuppliers] = useState<string[]>([])
   
   // Excel-like column filtering
   type ColumnFilter =
@@ -205,7 +911,9 @@ function ShipmentsPageContent() {
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
   const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
 
-  const [viewOption, setViewOption] = useState<'all' | 'sto' | 'contract' | 'vessel' | 'port_loading' | 'port_discharge' | 'daily_planning'>('all')
+  const [viewOption, setViewOption] = useState<
+    'all' | 'sto' | 'contract' | 'contract_ext' | 'vessel' | 'port_loading' | 'port_discharge'
+  >('all')
   const [viewFilterValue, setViewFilterValue] = useState('')
 
   // Daily Planning Deliverables (Shipments) calendar state
@@ -329,6 +1037,7 @@ function ShipmentsPageContent() {
     return () => window.removeEventListener('mousedown', onMouseDown)
   }, [openHeaderFilterId])
   const [uploading, setUploading] = useState(false)
+  const [bulkUploadResult, setBulkUploadResult] = useState<BulkUploadStatusResult | null>(null)
   const [dateFrom, setDateFrom] = useState(() => {
     const now = new Date()
     const yyyy = now.getFullYear()
@@ -340,13 +1049,15 @@ function ShipmentsPageContent() {
     return `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   })
   const [uploadingId, setUploadingId] = useState<string>('')
-  const [shipmentsSummary, setShipmentsSummary] = useState<any>(null)
-  const shipmentsSummaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const listFetchGenRef = useRef(0)
 
   // Vessel loading ports state
   const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null)
   const [loadingPorts, setLoadingPorts] = useState<VesselLoadingPort[]>([])
+  const [cancelledLoadingPorts, setCancelledLoadingPorts] = useState<VesselLoadingPort[]>([])
   const [shipmentInfo, setShipmentInfo] = useState<any>(null)
+  const [shipmentInfoLoading, setShipmentInfoLoading] = useState(false)
+  const [shipmentInfoError, setShipmentInfoError] = useState<string | null>(null)
   const [showLoadingPorts, setShowLoadingPorts] = useState(false)
   const [editingPort, setEditingPort] = useState<VesselLoadingPort | null>(null)
   const [newPort, setNewPort] = useState<Partial<VesselLoadingPort>>({
@@ -378,6 +1089,21 @@ function ShipmentsPageContent() {
   const [showDocs, setShowDocs] = useState(false)
 
   const [showAddShipment, setShowAddShipment] = useState(false)
+  const [addShipmentPrefilledPOs, setAddShipmentPrefilledPOs] = useState<ShipmentPoOption[] | null>(null)
+  const [addShipmentPrefilledSto, setAddShipmentPrefilledSto] = useState<string | null>(null)
+  const [addShipmentPrefilledContractNumbers, setAddShipmentPrefilledContractNumbers] = useState<string[] | null>(null)
+  const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
+    shipmentId: string
+    editContractId: string | null
+    editStoNumber: string
+    editContractNumbers: string
+    readOnly?: boolean
+  } | null>(null)
+  const [plotShipmentFromTable, setPlotShipmentFromTable] = useState<{
+    shipmentId: string
+    editStoNumber: string
+    editContractNumbers: string
+  } | null>(null)
 
   // Master Vessel / Master Loading Port suggestions (inline edit row + AddShipmentModal has its own)
   const [vesselSuggestions, setVesselSuggestions] = useState<Array<{ vessel_code: string; vessel_name: string; vessel_capacity_mt: number | null; vessel_owner: string | null; hull_type: string | null }>>([])
@@ -389,10 +1115,63 @@ function ShipmentsPageContent() {
 
   // Compact/Expand view state
   const [expandedShipmentIds, setExpandedShipmentIds] = useState<Set<string>>(() => new Set())
+  /** Section 3 — STO group headers collapsed (empty = all expanded). */
+  const [collapsedStoGroupKeys, setCollapsedStoGroupKeys] = useState<Set<string>>(() => new Set())
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [dragColId, setDragColId] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<string>('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
+  const globalFilterScope = useMemo(
+    () => ({
+      dateFrom,
+      dateTo,
+      searchTerm,
+      selectedIncoterms,
+      selectedProducts,
+      selectedSuppliers,
+      selectedGroupPlants,
+      lateIndicatorFilter,
+      viewOption,
+      viewFilterValue,
+      columnFiltersJson: JSON.stringify(
+        appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+          selectedIncoterms,
+          selectedProducts,
+          selectedSuppliers,
+        }),
+      ),
+      urlDelayed: searchParams.get('delayed') === 'true',
+      urlSto: searchParams.get('sto'),
+      urlContract: searchParams.get('contract'),
+    }),
+    [
+      dateFrom,
+      dateTo,
+      searchTerm,
+      selectedIncoterms,
+      selectedProducts,
+      selectedSuppliers,
+      selectedGroupPlants,
+      lateIndicatorFilter,
+      viewOption,
+      viewFilterValue,
+      columnFilters,
+      searchParams,
+    ],
+  )
+
+  const listQueryKey = useMemo(
+    () =>
+      buildShipmentsListQueryKey({
+        ...globalFilterScope,
+        pipelineStage: statusFilter,
+        page,
+        sortKey: '',
+        sortDir: '',
+      }),
+    [globalFilterScope, statusFilter, page],
+  )
 
   // Desktop table horizontal scroll sync (top + bottom)
   const topScrollRef = useRef<HTMLDivElement | null>(null)
@@ -401,298 +1180,288 @@ function ShipmentsPageContent() {
   const isSyncingScroll = useRef(false)
 
   // Contract details state for expanded view
-  const [contractDetailsMap, setContractDetailsMap] = useState<{ [shipmentId: string]: Array<{
-    contract_number: string
-    contract_qty: number
-    outstanding_qty: number
-    sto_qty_assigned: number
-    po_number?: string
-    delivery_start_date?: string | null
-    delivery_end_date?: string | null
-    quantity_delivered?: number
-    quantity_receive?: number
-    contract_ext_no?: string | null
-    locked_from_sap?: boolean
-  }> }>({})
+  const [contractDetailsMap, setContractDetailsMap] = useState<{ [shipmentId: string]: PortsModalContractDetail[] }>({})
   const [loadingContractDetails, setLoadingContractDetails] = useState<{ [shipmentId: string]: boolean }>({})
   const [savingStoQty, setSavingStoQty] = useState<{ [key: string]: boolean }>({})
   const [editedContractDetails, setEditedContractDetails] = useState<{ [key: string]: number }>({})
+  const [editingPortsQtyRowKey, setEditingPortsQtyRowKey] = useState<string | null>(null)
+  const [editedPortsContractQty, setEditedPortsContractQty] = useState<VesselPortsQuantityEdits>({})
   
   // Loading ports modal state for shrink/expand
   const [portsListExpanded, setPortsListExpanded] = useState(true)
   const [addPortExpanded, setAddPortExpanded] = useState(true)
   const [editingShipmentInfo, setEditingShipmentInfo] = useState(false)
+  const [savingShipmentInfo, setSavingShipmentInfo] = useState(false)
   const [editedShipmentInfo, setEditedShipmentInfo] = useState<any>(null)
+  const editedShipmentInfoRef = useRef<any>(null)
+  editedShipmentInfoRef.current = editedShipmentInfo
+  const [hasUploadedSld, setHasUploadedSld] = useState(false)
+  const [hasUploadedSdd, setHasUploadedSdd] = useState(false)
+  const [sldDocId, setSldDocId] = useState<string | null>(null)
+  const [sddDocId, setSddDocId] = useState<string | null>(null)
+  const [sldDocUploading, setSldDocUploading] = useState(false)
+  const [sddDocUploading, setSddDocUploading] = useState(false)
+  const isQuantityUnlocked = hasUploadedSld || hasUploadedSdd
+  const isQuantityUnlockedRef = useRef(false)
+  isQuantityUnlockedRef.current = isQuantityUnlocked
+  const sldDocIdRef = useRef<string | null>(null)
+  sldDocIdRef.current = sldDocId
+  const sddDocIdRef = useRef<string | null>(null)
+  sddDocIdRef.current = sddDocId
   const [editingPortId, setEditingPortId] = useState<string | null>(null)
   const [editedPortData, setEditedPortData] = useState<Partial<VesselLoadingPort> | null>(null)
+  const [cancelPortTarget, setCancelPortTarget] = useState<{ id: string; portName: string; portSequence: number } | null>(null)
+  const [cancelPortRemark, setCancelPortRemark] = useState('')
+  const [cancelPortSubmitting, setCancelPortSubmitting] = useState(false)
+  const [cancelShipmentTarget, setCancelShipmentTarget] = useState<Shipment | null>(null)
+  const [cancelShipmentRemark, setCancelShipmentRemark] = useState('')
+  const [cancelShipmentSubmitting, setCancelShipmentSubmitting] = useState(false)
 
-  // ---- ETA Loading Status buckets (counts for toolbar chips; scoped to current result page only) ----
-  const etaLoadingBuckets = useMemo(() => {
-    const buckets = {
-      MORE_THAN_7D: new Set<string>(),
-      D_MINUS_2: new Set<string>(),
-      D: new Set<string>(),
-      DELAY: new Set<string>(),
-      NO_ETA: new Set<string>(),
-    }
-
-    const today = new Date()
-    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-    const msPerDay = 24 * 60 * 60 * 1000
-
-    const toDayDiff = (value: any): number | null => {
-      if (!value) return null
-      const d = new Date(value)
-      if (Number.isNaN(d.getTime())) return null
-      const dMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate())
-      return Math.floor((dMidnight.getTime() - todayMidnight.getTime()) / msPerDay)
-    }
-
-    const groupDiffs: Map<string, number[]> = new Map()
-
-    for (const s of shipments) {
-      if (s.status === 'COMPLETED') continue
-      const rawSto = (s as any).sto_number
-      const rawOp = (s as any).operation_id
-      const sto = rawSto && String(rawSto).trim()
-      const opId = rawOp && String(rawOp).trim()
-      const key = sto || opId || s.shipment_id || s.id
-      if (!key) continue
-
-      const diffs: number[] = groupDiffs.get(key) ?? []
-
-      const etaCandidates = [
-        s.eta_arrival,
-        s.eta_berthed,
-        s.eta_loading_start,
-        s.eta_loading_complete,
-        s.eta_sailed,
-      ]
-
-      for (const v of etaCandidates) {
-        const diff = toDayDiff(v)
-        if (diff !== null) diffs.push(diff)
-      }
-
-      if (diffs.length > 0) {
-        groupDiffs.set(key, diffs)
-      } else if (!groupDiffs.has(key)) {
-        // Track groups that currently have no ETA values at all
-        groupDiffs.set(key, [])
-      }
-    }
-
-    for (const [key, diffs] of groupDiffs.entries()) {
-      if (diffs.length === 0) {
-        buckets.NO_ETA.add(key)
-        continue
-      }
-      const hasDelay = diffs.some((d) => d < 0)
-      const hasToday = diffs.some((d) => d === 0)
-      const hasDMinus2 = diffs.some((d) => d > 0 && d <= 2)
-      const hasMoreThan7 = diffs.some((d) => d > 7)
-
-      if (hasDelay) {
-        buckets.DELAY.add(key)
-      } else if (hasToday) {
-        buckets.D.add(key)
-      } else if (hasDMinus2) {
-        buckets.D_MINUS_2.add(key)
-      } else if (hasMoreThan7) {
-        buckets.MORE_THAN_7D.add(key)
-      }
-    }
-
-    return {
-      counts: {
-        moreThan7D: buckets.MORE_THAN_7D.size,
-        dMinus2: buckets.D_MINUS_2.size,
-        d: buckets.D.size,
-        delay: buckets.DELAY.size,
-        noEta: buckets.NO_ETA.size,
-      },
-      keysByFilter: buckets,
-    }
-  }, [shipments])
-
-  // ---- ETA Discharge Status buckets (counts for toolbar chips; scoped to current result page only) ----
-  const etaDischargeBuckets = useMemo(() => {
-    const buckets = {
-      MORE_THAN_7D: new Set<string>(),
-      D_MINUS_2: new Set<string>(),
-      D: new Set<string>(),
-      DELAY: new Set<string>(),
-      NO_ETA: new Set<string>(),
-    }
-
-    const today = new Date()
-    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-    const msPerDay = 24 * 60 * 60 * 1000
-
-    const toDayDiff = (value: any): number | null => {
-      if (!value) return null
-      const d = new Date(value)
-      if (Number.isNaN(d.getTime())) return null
-      const dMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate())
-      return Math.floor((dMidnight.getTime() - todayMidnight.getTime()) / msPerDay)
-    }
-
-    const groupDiffs: Map<string, number[]> = new Map()
-
-    for (const s of shipments) {
-      if (s.status === 'COMPLETED') continue
-      const rawSto = (s as any).sto_number
-      const rawOp = (s as any).operation_id
-      const sto = rawSto && String(rawSto).trim()
-      const opId = rawOp && String(rawOp).trim()
-      const key = sto || opId || s.shipment_id || s.id
-      if (!key) continue
-
-      const diffs: number[] = groupDiffs.get(key) ?? []
-
-      const etaCandidates = [
-        s.eta_discharge_arrival,
-        s.eta_discharge_berthed,
-        s.eta_discharge_start,
-        s.eta_discharge_complete,
-      ]
-
-      for (const v of etaCandidates) {
-        const diff = toDayDiff(v)
-        if (diff !== null) diffs.push(diff)
-      }
-
-      if (diffs.length > 0) {
-        groupDiffs.set(key, diffs)
-      } else if (!groupDiffs.has(key)) {
-        groupDiffs.set(key, [])
-      }
-    }
-
-    for (const [key, diffs] of groupDiffs.entries()) {
-      if (diffs.length === 0) {
-        buckets.NO_ETA.add(key)
-        continue
-      }
-      const hasDelay = diffs.some((d) => d < 0)
-      const hasToday = diffs.some((d) => d === 0)
-      const hasDMinus2 = diffs.some((d) => d > 0 && d <= 2)
-      const hasMoreThan7 = diffs.some((d) => d > 7)
-
-      if (hasDelay) {
-        buckets.DELAY.add(key)
-      } else if (hasToday) {
-        buckets.D.add(key)
-      } else if (hasDMinus2) {
-        buckets.D_MINUS_2.add(key)
-      } else if (hasMoreThan7) {
-        buckets.MORE_THAN_7D.add(key)
-      }
-    }
-
-    return {
-      counts: {
-        moreThan7D: buckets.MORE_THAN_7D.size,
-        dMinus2: buckets.D_MINUS_2.size,
-        d: buckets.D.size,
-        delay: buckets.DELAY.size,
-        noEta: buckets.NO_ETA.size,
-      },
-      keysByFilter: buckets,
-    }
-  }, [shipments])
+  // ---- Section 1 / 2 summaries from API (toolbar + scoped ETA); Section 3 from paginated list ----
 
   // Sync URL params -> local filter state
   useEffect(() => {
     const statusParam = searchParams.get('status')
-    if (statusParam) setStatusFilter(statusParam)
+    if (statusParam) setStatusFilter(normalizePipelineStageFilter(statusParam))
     setPage(1)
   }, [searchParams])
 
   useEffect(() => {
+    if (!userScopeReady) return
+    section1SummaryForceNextFetchRef.current = true
+  }, [userScopeReady, scopeSummaryRequestKey])
+
+  /** Single consolidated fetch — global scope + pipeline stage + pagination/sort. */
+  useEffect(() => {
+    if (!userScopeReady) return
     fetchShipments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, dateFrom, dateTo, page, selectedPlantSites])
+  }, [userScopeReady, listQueryKey])
+
+  const fetchVesselIdle = useCallback(async () => {
+    setVesselIdleLoading(true)
+    try {
+      const res = await api.get('/shipments/vessel-idle')
+      const vessels = (res.data?.data?.vessels ?? []) as VesselIdleListRow[]
+      setVesselIdleList(vessels)
+      setVesselIdleCount(Number(res.data?.data?.count ?? vessels.length))
+    } catch (error) {
+      console.error('Failed to fetch vessel idle list:', error)
+    } finally {
+      setVesselIdleLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!userScopeReady) return
+    void fetchVesselIdle()
+  }, [userScopeReady, fetchVesselIdle])
+
+  const ensureVesselHistoryRows = useCallback(async () => {
+    if (vesselHistorySourceRows.length > 0 || vesselHistoryRowsLoadingRef.current) return
+    vesselHistoryRowsLoadingRef.current = true
+    try {
+      const res = await api.get('/shipments/performance', {
+        params: { scope: 'ytd' },
+        timeout: 120000,
+      })
+      const raw = Array.isArray(res.data?.data) ? res.data.data : []
+      setVesselHistorySourceRows(mapShippingPerformanceToVesselHistoryRows(raw))
+    } catch (error) {
+      console.error('Failed to load vessel history rows for detail modal:', error)
+    } finally {
+      vesselHistoryRowsLoadingRef.current = false
+    }
+  }, [vesselHistorySourceRows.length])
+
+  const handleVesselIdleClick = useCallback(() => {
+    setVesselIdleModalOpen(true)
+    if (!vesselIdleLoading && vesselIdleList.length === 0) {
+      void fetchVesselIdle()
+    }
+  }, [fetchVesselIdle, vesselIdleList.length, vesselIdleLoading])
+
+  const handleVesselIdleNameClick = useCallback(
+    (vesselName: string) => {
+      const normalized = vesselName.trim() || 'Unknown'
+      void ensureVesselHistoryRows().then(() => {
+        setSelectedVesselForHistory({ vesselName: normalized, vesselKey: normalized })
+        setVesselHistoryModalOpen(true)
+      })
+    },
+    [ensureVesselHistoryRows],
+  )
+
+  const resetPageForGlobalFilter = useCallback(() => {
+    setPage(1)
+  }, [])
+
+  const onGlobalDateFromChange = useCallback(
+    (iso: string) => {
+      resetPageForGlobalFilter()
+      setDateFrom(iso)
+    },
+    [resetPageForGlobalFilter],
+  )
+
+  const onGlobalDateToChange = useCallback(
+    (iso: string) => {
+      resetPageForGlobalFilter()
+      setDateTo(iso)
+    },
+    [resetPageForGlobalFilter],
+  )
+
+  const onIncotermsChange = useCallback(
+    (values: string[]) => {
+      resetPageForGlobalFilter()
+      setSelectedIncoterms(values)
+    },
+    [resetPageForGlobalFilter],
+  )
+
+  const onLateIndicatorChange = useCallback(
+    (value: string) => {
+      resetPageForGlobalFilter()
+      setLateIndicatorFilter(value)
+    },
+    [resetPageForGlobalFilter],
+  )
+
+  const onProductsChangeWithPageReset = useCallback(
+    (values: string[]) => {
+      resetPageForGlobalFilter()
+      handleProductsChange(values)
+    },
+    [resetPageForGlobalFilter, handleProductsChange],
+  )
+
+  const onGroupPlantsChangeWithPageReset = useCallback(
+    (values: string[]) => {
+      resetPageForGlobalFilter()
+      handleGroupPlantsChange(values)
+    },
+    [resetPageForGlobalFilter, handleGroupPlantsChange],
+  )
+
+  const onSuppliersChangeWithPageReset = useCallback(
+    (values: string[]) => {
+      resetPageForGlobalFilter()
+      setSelectedSuppliers(values)
+    },
+    [resetPageForGlobalFilter],
+  )
 
   useEffect(() => {
     let cancelled = false
-    api
-      .get('/dashboard/filter-options/plants')
-      .then((res) => {
+    Promise.all([
+      api.get('/contracts/filter-options/group-plants'),
+      api.get('/contracts/filter-options/incoterms'),
+      api.get('/dashboard/filter-options/products'),
+      api.get('/dashboard/filter-options/suppliers'),
+    ])
+      .then(([plantRes, incRes, productRes, supplierRes]) => {
         if (cancelled) return
-        const plantPayload = res.data?.data
-        const plants = (Array.isArray(plantPayload)
-          ? plantPayload
-          : plantPayload && typeof plantPayload === 'object' && 'plants' in plantPayload
-            ? (plantPayload as { plants?: string[] }).plants
+        const plants = (plantRes.data?.data?.groupPlants || []) as string[]
+        const incs = (incRes.data?.data?.incoterms || []) as string[]
+        const productPayload = productRes.data?.data
+        const products = (Array.isArray(productPayload)
+          ? productPayload
+          : productPayload && typeof productPayload === 'object' && 'products' in productPayload
+            ? (productPayload as { products?: string[] }).products
             : []) as string[]
-        setAvailablePlantSites(Array.isArray(plants) ? plants : [])
+        const supplierPayload = supplierRes.data?.data
+        const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
+        setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
+        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
+        setAvailableProducts(Array.isArray(products) ? products : [])
+        setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
       })
       .catch((e) => {
         if (cancelled) return
-        console.error('Failed to fetch plant/site options:', e)
-        setAvailablePlantSites([])
+        console.error('Failed to fetch filter options:', e)
+        setAvailableGroupPlants([])
+        setAvailableIncoterms([])
+        setAvailableProducts([])
+        setAvailableSuppliers([])
       })
     return () => {
       cancelled = true
     }
   }, [])
 
-  const isFirstLateIndicatorEffect = useRef(true)
-  useEffect(() => {
-    if (isFirstLateIndicatorEffect.current) {
-      isFirstLateIndicatorEffect.current = false
-      return
-    }
-    setPage(1)
-    fetchShipments(1)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lateIndicatorFilter])
-
   const applySearch = useCallback(() => {
     setPage(1)
     setSearchTerm(searchDraft)
-    fetchShipments(1, searchDraft)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchDraft])
+
+  const applyViewFilter = useCallback(() => {
+    setPage(1)
+  }, [])
+
+  /** Reset visible rows so Section 3 shows loading when table scope filters change. */
+  const beginTableScopeRefresh = useCallback(() => {
+    setShipments([])
+    setLoading(true)
+    setTableScopeLoading(true)
+    setTotalCount(0)
+    setTotalPages(1)
+  }, [])
+
+  const handlePipelineStageChange = useCallback((stage: ShipmentsPipelineStageFilter) => {
+    beginTableScopeRefresh()
+    setPage(1)
+    if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
+      setSection2EtaSummary(null)
+      setEtaLoadingFilter('ALL')
+      setEtaDischargeFilter('ALL')
+    }
+    setStatusFilter(stage)
+  }, [beginTableScopeRefresh])
+
+  const handleStatusCardClick = useCallback(
+    (stage: ShipmentPagePipelineStage) => {
+      handlePipelineStageChange(togglePipelineStageFilter(statusFilter, stage))
+    },
+    [handlePipelineStageChange, statusFilter],
+  )
 
   // Column header filters apply only when user presses Enter inside the filter popover.
 
-  const isFirstViewFilterRender = useRef(true)
-  useEffect(() => {
-    if (isFirstViewFilterRender.current) {
-      isFirstViewFilterRender.current = false
-      return
-    }
-    const t = setTimeout(() => {
-      setPage(1)
-      fetchShipments(1)
-    }, 500)
-    return () => clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewOption, viewFilterValue])
-
-  const isFirstEtaBucketEffect = useRef(true)
-  useEffect(() => {
-    if (isFirstEtaBucketEffect.current) {
-      isFirstEtaBucketEffect.current = false
-      return
-    }
-    setPage(1)
-    fetchShipments(1)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [etaLoadingFilter, etaDischargeFilter])
-
-  const fetchShipments = async (forcedPage?: number, searchOverride?: string) => {
-    setLoading(true)
+  const fetchShipments = async (
+    forcedPage?: number,
+    searchOverride?: string,
+    options?: { force?: boolean },
+  ) => {
+    const listGen = ++listFetchGenRef.current
+    const hadRows = shipments.length > 0
+    if (!hadRows) setLoading(true)
+    setListFetching(true)
+    setSummaryFetching(true)
     try {
       const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
+      params.append('compact', 'true')
+      params.append('skipSapJoin', 'true')
       params.append('limit', String(pageSize))
       params.append('page', String(effectivePage))
-      params.append('compact', 'true')
+      const isUnplannedHybridList = statusFilter === 'UNPLANNED'
+      if (isUnplannedHybridList) {
+        params.append('includeSummary', 'true')
+      } else {
+        // Section 1 summary comes from parallel summaryOnly request — skip duplicate SQL on list shell.
+        params.append('includeSummary', 'false')
+      }
       if (statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
+      }
+      if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
+        if (etaLoadingFilter !== 'ALL') {
+          params.append('etaLoading', etaLoadingFilter)
+        }
+        if (etaDischargeFilter !== 'ALL') {
+          params.append('etaDischarge', etaDischargeFilter)
+        }
       }
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
@@ -700,9 +1469,14 @@ function ShipmentsPageContent() {
       if (searchTrim.length >= 2) {
         params.append('search', searchTrim)
       }
-      const cfKeys = Object.keys(columnFilters)
+      const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+        selectedIncoterms,
+        selectedProducts,
+        selectedSuppliers,
+      })
+      const cfKeys = Object.keys(mergedColumnFilters)
       if (cfKeys.length > 0) {
-        params.append('columnFilters', JSON.stringify(columnFilters))
+        params.append('columnFilters', JSON.stringify(mergedColumnFilters))
       }
       if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
         params.append('lateIndicator', lateIndicatorFilter)
@@ -711,81 +1485,233 @@ function ShipmentsPageContent() {
         params.append('viewOption', viewOption)
         params.append('viewQuery', viewFilterValue.trim())
       }
-      if (etaLoadingFilter !== 'ALL') {
-        params.append('etaLoading', etaLoadingFilter)
-      }
-      if (etaDischargeFilter !== 'ALL') {
-        params.append('etaDischarge', etaDischargeFilter)
-      }
-      
-      // Check for delayed parameter from URL
+
       const delayedParam = searchParams.get('delayed')
       if (delayedParam === 'true') {
         params.append('delayed', 'true')
       }
-      
-      // Check for STO parameter from URL
+
       const stoParam = searchParams.get('sto')
       if (stoParam) {
         params.append('sto', stoParam)
       }
-      
-      // Check for contract parameter from URL
+
       const contractParam = searchParams.get('contract')
       if (contractParam) {
         params.append('contract', contractParam)
       }
-      if (selectedPlantSites.length > 0) {
-        selectedPlantSites.forEach((p) => params.append('plant', p))
+      if (selectedGroupPlants.length > 0) {
+        selectedGroupPlants.forEach((p) => params.append('plant', p))
       }
 
-      // List path: skip heavy enriched summary SQL on the same round-trip; load summary after (debounced).
-      params.append('includeSummary', 'false')
-      // First paint: skip joining sap_processed_data (often the slowest part); hydrate rows right after.
-      params.append('skipSapJoin', 'true')
+      const listUrl = `/shipments?${params.toString()}`
+      const listCacheKey = buildCacheKey('GET', listUrl)
 
-      const response = await api.get(`/shipments?${params.toString()}`)
+      /** Section 1 cards — toolbar scope only; parallel with table shell query. */
+      const summaryParams = new URLSearchParams(params.toString())
+      summaryParams.delete('status')
+      summaryParams.delete('etaLoading')
+      summaryParams.delete('etaDischarge')
+      summaryParams.delete('includeSummary')
+      summaryParams.set('summaryOnly', 'true')
+      summaryParams.set('page', '1')
+      summaryParams.set('limit', '1')
+      const summaryUrl = `/shipments?${summaryParams.toString()}`
+      const summaryCacheKey = buildCacheKey('GET', summaryUrl)
+      const summaryForce = options?.force || section1SummaryForceNextFetchRef.current
 
-      // Check if response structure is correct
-      if (response.data && response.data.success && response.data.data && response.data.data.shipments) {
-        setShipments(response.data.data.shipments)
-        setTotalCount(Number(response.data.data.pagination?.total || 0))
-        setShipmentsSummary(response.data.data.summary || null)
-
-        const hydrateParams = new URLSearchParams(params.toString())
-        hydrateParams.delete('skipSapJoin')
-        void api
-          .get(`/shipments?${hydrateParams.toString()}`)
-          .then((res) => {
-            const rows = res.data?.data?.shipments
-            if (Array.isArray(rows) && rows.length > 0) setShipments(rows)
+      const applySummaryEnvelope = (envelope: {
+        data?: {
+          summary?: typeof shipmentsSection1Summary & {
+            unplannedTable?: {
+              contractRows?: number
+              shipmentRows?: number
+              totalTableRows?: number
+            }
+          }
+          unplannedBreakdown?: {
+            contractRows?: number
+            shipmentRows?: number
+            totalTableRows?: number
+          }
+        }
+      }) => {
+        if (envelope?.data?.summary) {
+          setShipmentsSection1Summary(envelope.data.summary)
+        }
+        setSummaryFetching(false)
+        const breakdown =
+          envelope?.data?.unplannedBreakdown ??
+          envelope?.data?.summary?.unplannedTable
+        if (breakdown) {
+          setUnplannedBreakdown({
+            contractRows: Number(breakdown.contractRows ?? 0),
+            shipmentRows: Number(breakdown.shipmentRows ?? 0),
+            totalTableRows: Number(breakdown.totalTableRows ?? 0),
           })
-          .catch(() => {
-            /* keep first-paint rows */
-          })
+        }
+      }
 
-        if (shipmentsSummaryTimerRef.current) clearTimeout(shipmentsSummaryTimerRef.current)
-        const summaryParams = new URLSearchParams(params.toString())
-        summaryParams.set('summaryOnly', 'true')
-        summaryParams.delete('includeSummary')
-        summaryParams.delete('skipSapJoin')
-        shipmentsSummaryTimerRef.current = setTimeout(() => {
-          void api
-            .get(`/shipments?${summaryParams.toString()}`)
-            .then((res) => {
-              if (res.data?.data?.summary) setShipmentsSummary(res.data.data.summary)
+      const applyListEnvelope = (envelope: {
+        data?: {
+          shipments?: Shipment[]
+          pagination?: { total?: number; totalPages?: number }
+          summary?: typeof shipmentsSection1Summary
+          unplannedBreakdown?: {
+            contractRows?: number
+            shipmentRows?: number
+            totalTableRows?: number
+          }
+        }
+      }) => {
+        const items = envelope?.data?.shipments || []
+        setShipments(items)
+        const total = Number(envelope?.data?.pagination?.total ?? 0)
+        const pages = Number(envelope?.data?.pagination?.totalPages || 1)
+        setTotalCount(total)
+        setTotalPages(Math.max(1, pages))
+        setTableScopeLoading(false)
+        if (envelope?.data?.summary) {
+          setShipmentsSection1Summary(envelope.data.summary)
+          setSummaryFetching(false)
+        }
+        const breakdown = envelope?.data?.unplannedBreakdown
+        if (breakdown) {
+          setUnplannedBreakdown({
+            contractRows: Number(breakdown.contractRows ?? 0),
+            shipmentRows: Number(breakdown.shipmentRows ?? 0),
+            totalTableRows: Number(breakdown.totalTableRows ?? 0),
+          })
+        } else {
+          setUnplannedBreakdown(null)
+        }
+      }
+
+      const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
+        listCacheKey,
+        () => api.get(listUrl).then((r) => r.data),
+        {
+          force: options?.force,
+          onRevalidate: (fresh) => {
+            if (listGen !== listFetchGenRef.current) return
+            applyListEnvelope(fresh)
+            setListFetching(false)
+          },
+        },
+      )
+      section1SummaryForceNextFetchRef.current = false
+      if (listGen !== listFetchGenRef.current) return
+      applyListEnvelope(listEnvelope)
+      if (!listRevalidating) {
+        setListFetching(false)
+      }
+      if (isUnplannedHybridList && !listEnvelope?.data?.summary) {
+        setSummaryFetching(false)
+      }
+
+      /** Summary cards after table shell — avoids competing with list query on DB/CPU. */
+      const scheduleSummaryFetches = () => {
+        if (listGen !== listFetchGenRef.current) return
+
+        if (!isUnplannedHybridList) {
+          void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+            force: summaryForce,
+            onRevalidate: (fresh) => {
+              if (listGen !== listFetchGenRef.current) return
+              applySummaryEnvelope(fresh)
+            },
+          })
+            .then(({ data }) => {
+              if (listGen !== listFetchGenRef.current) return
+              applySummaryEnvelope(data)
             })
             .catch(() => {
-              /* keep zeros / prior summary */
+              if (listGen === listFetchGenRef.current) setSummaryFetching(false)
             })
-        }, 450)
+        }
+
+        if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && statusFilter !== 'ALL') {
+          const section2Params = new URLSearchParams(params.toString())
+          section2Params.delete('status')
+          section2Params.delete('etaLoading')
+          section2Params.delete('etaDischarge')
+          section2Params.delete('includeSummary')
+          section2Params.set('summaryOnly', 'true')
+          section2Params.set('page', '1')
+          section2Params.set('limit', '1')
+          section2Params.set('scopeStatus', statusFilter)
+          const section2Url = `/shipments?${section2Params.toString()}`
+          const section2CacheKey = buildCacheKey('GET', section2Url)
+          const summaryGen = ++summaryFetchGenRef.current
+          void cachedGet(section2CacheKey, () => api.get(section2Url).then((r) => r.data), {
+            force: true,
+            onRevalidate: (fresh) => {
+              if (summaryGen !== summaryFetchGenRef.current) return
+              if (fresh?.data?.summary) {
+                setSection2EtaSummary({
+                  etaLoading: fresh.data.summary.etaLoading,
+                  etaDischarge: fresh.data.summary.etaDischarge,
+                })
+              }
+            },
+          })
+            .then(({ data }) => {
+              if (summaryGen !== summaryFetchGenRef.current) return
+              if (data?.data?.summary) {
+                setSection2EtaSummary({
+                  etaLoading: data.data.summary.etaLoading,
+                  etaDischarge: data.data.summary.etaDischarge,
+                })
+              }
+            })
+            .catch(() => {
+              if (summaryGen === summaryFetchGenRef.current) setSection2EtaSummary(null)
+            })
+        } else {
+          setSection2EtaSummary(null)
+        }
+      }
+
+      // SAP hydrate after table paint — avoids competing with shell query on DB/CPU.
+      const scheduleHydrate = () => {
+        const hydrateParams = new URLSearchParams(params.toString())
+        hydrateParams.set('skipSapJoin', 'false')
+        hydrateParams.set('includeSummary', 'false')
+        hydrateParams.delete('summaryOnly')
+        const hydrateUrl = `/shipments?${hydrateParams.toString()}`
+        const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
+        void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
+          force: options?.force,
+          onRevalidate: (fresh) => {
+            if (listGen !== listFetchGenRef.current) return
+            const hydrated = fresh?.data?.shipments || []
+            if (hydrated.length) {
+              setShipments((prev) => mergeShipmentSapFields(prev, hydrated))
+            }
+          },
+        })
+          .then(({ data }) => {
+            if (listGen !== listFetchGenRef.current) return
+            const hydrated = data?.data?.shipments || []
+            if (hydrated.length) {
+              setShipments((prev) => mergeShipmentSapFields(prev, hydrated))
+            }
+          })
+          .catch((err) => {
+            console.warn('Shipment SAP hydrate failed (table shows shell data):', err)
+          })
+      }
+      const runDeferredFetches = () => {
+        scheduleSummaryFetches()
+        scheduleHydrate()
+      }
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => runDeferredFetches(), { timeout: 2000 })
       } else {
-        console.error('Unexpected response structure:', response.data)
-        setShipments([])
-        setShipmentsSummary(null)
-        alert('Received unexpected response format from server. Please check console for details.')
+        setTimeout(runDeferredFetches, 250)
       }
     } catch (error: any) {
+      if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch shipments:', error)
       console.error('Error details:', {
         message: error.message,
@@ -793,18 +1719,22 @@ function ShipmentsPageContent() {
         status: error.response?.status,
         url: error.config?.url
       })
-      
-      // Show more detailed error message
-      const errorMessage = error.response?.data?.error?.message 
-        || error.response?.data?.message 
-        || error.message 
+
+      const errorMessage = error.response?.data?.error?.message
+        || error.response?.data?.message
+        || error.message
         || 'Unknown error occurred'
-      
+
       alert(`Failed to load shipments: ${errorMessage}\n\nPlease check the console for more details.`)
-      setShipments([])
-      setShipmentsSummary(null)
+      if (!hadRows) {
+        setShipments([])
+      }
+      setListFetching(false)
+      setSummaryFetching(false)
+      setTableScopeLoading(false)
     } finally {
       setLoading(false)
+      setTableScopeLoading(false)
     }
   }
 
@@ -816,7 +1746,6 @@ function ShipmentsPageContent() {
   }
 
   const fetchShipmentCalendarRows = useCallback(async () => {
-    if (viewOption !== 'daily_planning') return
     setShipCalendarLoading(true)
     try {
       const from = new Date(shipCalendarMonth.getFullYear(), shipCalendarMonth.getMonth(), 1)
@@ -832,12 +1761,7 @@ function ShipmentsPageContent() {
     } finally {
       setShipCalendarLoading(false)
     }
-  }, [shipCalendarMonth, viewOption])
-
-  useEffect(() => {
-    if (viewOption !== 'daily_planning') return
-    fetchShipmentCalendarRows()
-  }, [viewOption, shipCalendarMonth, fetchShipmentCalendarRows])
+  }, [shipCalendarMonth])
 
   const downloadShipmentPlanningTemplate = async () => {
     try {
@@ -892,6 +1816,101 @@ function ShipmentsPageContent() {
     }
   }
 
+  const handleOpenEditShipmentModal = (shipment: Shipment, options?: { readOnly?: boolean }) => {
+    const readOnly = options?.readOnly === true
+    if (!readOnly && perms.loaded && !canEditShipment) {
+      alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
+      return
+    }
+    const editContractId = resolveShipmentEditContractId(shipment)
+    if (!editContractId && !shipment.id) {
+      alert('Contract ID is required to open this shipment.')
+      return
+    }
+    setEditShipmentFromTable({
+      shipmentId: shipment.id,
+      editContractId: editContractId || null,
+      editStoNumber: resolveShipmentApiLookupKey(shipment),
+      editContractNumbers: shipment.contract_numbers ?? '',
+      readOnly,
+    })
+  }
+
+  const handleOpenViewShipmentModal = (shipment: Shipment) => {
+    handleOpenEditShipmentModal(shipment, { readOnly: true })
+  }
+
+  const handleCloseShipmentModal = () => {
+    setShowAddShipment(false)
+    setEditShipmentFromTable(null)
+    setPlotShipmentFromTable(null)
+    setAddShipmentPrefilledPOs(null)
+    setAddShipmentPrefilledSto(null)
+    setAddShipmentPrefilledContractNumbers(null)
+  }
+
+  const isContractBacklogRow = (shipment: Shipment): boolean =>
+    String(shipment.row_kind ?? '').trim() === 'contract_backlog'
+
+  const contractBacklogRowToPoOption = (shipment: Shipment): ShipmentPoOption => {
+    const contractId = String(shipment.contract_number || shipment.contract_numbers || '').trim()
+    const poNumber = String(shipment.po_numbers ?? '').split(',')[0]?.trim() || null
+    const plantCode = shipment.plant_site ? String(shipment.plant_site).trim() : null
+    const key = String(shipment.contract_row_id || shipment.id || `${contractId}::${poNumber ?? ''}`).trim()
+    const label = poNumber
+      ? plantCode
+        ? `${poNumber} - ${plantCode}`
+        : poNumber
+      : contractId
+    return { key, contractId, poNumber, plantCode, label }
+  }
+
+  const handleOpenAddShipmentForContractRow = (shipment: Shipment) => {
+    if (perms.loaded && !canOpenAddShipmentModal) {
+      alert('You need permission to create shipments. Ask an admin to update your role.')
+      return
+    }
+
+    if (shipmentRowHasRegisteredPlanning(shipment.status)) {
+      handleOpenEditShipmentModal(shipment)
+      return
+    }
+
+    const contractNumbers = resolveShipmentContractNumbers(shipment)
+    const stoDisplay = shipmentModalStoDisplay(shipment)
+    const stoLookup = resolveShipmentApiLookupKey(shipment)
+    const hasSapStoRow = stoDisplay !== '-' && stoLookup.trim()
+
+    setEditShipmentFromTable(null)
+    setPlotShipmentFromTable(null)
+
+    if (isContractBacklogRow(shipment)) {
+      setAddShipmentPrefilledPOs([contractBacklogRowToPoOption(shipment)])
+      setAddShipmentPrefilledSto(null)
+      setAddShipmentPrefilledContractNumbers(contractNumbers.length > 0 ? contractNumbers : null)
+      setShowAddShipment(true)
+      return
+    }
+
+    if (hasSapStoRow && shipment.id) {
+      setPlotShipmentFromTable({
+        shipmentId: shipment.id,
+        editStoNumber: stoLookup.trim(),
+        editContractNumbers: contractNumbers.join(', '),
+      })
+      setAddShipmentPrefilledPOs(null)
+      setAddShipmentPrefilledSto(stoLookup.trim())
+      setAddShipmentPrefilledContractNumbers(contractNumbers.length > 0 ? contractNumbers : null)
+      setShowAddShipment(true)
+      return
+    }
+
+    setAddShipmentPrefilledPOs(hasSapStoRow ? null : [contractBacklogRowToPoOption(shipment)])
+    setAddShipmentPrefilledSto(hasSapStoRow ? stoLookup.trim() : null)
+    setAddShipmentPrefilledContractNumbers(contractNumbers.length > 0 ? contractNumbers : null)
+    setShowAddShipment(true)
+  }
+
   const handleCancelEdit = () => {
     setEditingId(null)
     setEditedData({})
@@ -906,6 +1925,13 @@ function ShipmentsPageContent() {
 
       // Prepare shipment payload
       const payload: Partial<Shipment> = { ...editedData }
+
+      // Status is derived from ETA/ATA; only manual override allowed is CANCELLED.
+      if (String(payload.status || '').trim().toUpperCase() === 'CANCELLED') {
+        payload.status = 'CANCELLED'
+      } else {
+        delete payload.status
+      }
       
       // Validate: sum of "Contract Qty assign to STO" <= Vessel Capacity (MT)
       const capacityForCheck =
@@ -925,7 +1951,7 @@ function ShipmentsPageContent() {
             return sum + n
           }, 0)
           if (sumAssigned > capacityForCheck) {
-            alert(`Sum of "Contract Qty assign to STO" (${formatNumber(sumAssigned)} Kg) cannot exceed Vessel Capacity (${formatNumber(capacityForCheck)} Kg).`)
+            alert(`Sum of "Contract Qty assign to STO" (${formatNumber(sumAssigned)} MT) cannot exceed Vessel Capacity (${formatNumber(capacityForCheck)} MT).`)
             setSaving(false)
             return
           }
@@ -984,21 +2010,38 @@ function ShipmentsPageContent() {
   }
 
   const downloadTemplate = () => {
-    // Build CSV template with headers only (no data, just a clean template for import)
     const headers = [
-      'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Vessel Owner','Vessel Draft (m)','Vessel LOA (m)','Vessel Capacity (MT)','Hull Type','Charter Type','Vessel OA Budget','Vessel OA Actual','Estimated KM','Estimated NM','Average Vessel Speed','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','B/L Quantity (MT)','Actual Vessel Qty Receive (MT)','Difference Final Qty BL QTY','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID',
-      // Loading port groups (1..3)
-      'LP1 Port Name','LP1 Quantity (MT)','LP1 ETA Arrival','LP1 ATA Arrival','LP1 ETA Berthed','LP1 ATA Berthed','LP1 ETA Load Start','LP1 ATA Load Start','LP1 ETA Load Completed','LP1 ATA Load Completed','LP1 ETA Sailed','LP1 ATA Sailed','LP1 Loading Rate (MT/day)',
-      'LP2 Port Name','LP2 Quantity (MT)','LP2 ETA Arrival','LP2 ATA Arrival','LP2 ETA Berthed','LP2 ATA Berthed','LP2 ETA Load Start','LP2 ATA Load Start','LP2 ETA Load Completed','LP2 ATA Load Completed','LP2 ETA Sailed','LP2 ATA Sailed','LP2 Loading Rate (MT/day)',
-      'LP3 Port Name','LP3 Quantity (MT)','LP3 ETA Arrival','LP3 ATA Arrival','LP3 ETA Berthed','LP3 ATA Berthed','LP3 ETA Load Start','LP3 ATA Load Start','LP3 ETA Load Completed','LP3 ATA Load Completed','LP3 ETA Sailed','LP3 ATA Sailed','LP3 Loading Rate (MT/day)'
+      'PO Number',
+      'Vessel Name',
+      'Loading Port',
+      'Discharge Port',
+      'Qty Delivery',
+      'ETA Vessel Arrival at Loading Port',
+      'ETA Vessel Berthed at Loading Port',
+      'ETA Vessel Start Loading',
+      'ETA Vessel Completed Loading',
+      'ETA Vessel Sailed from Loading Port',
+      'ETA Vessel Arrive at Discharge Port',
+      'ETA Vessel Berthed at Discharge Port',
+      'ETA Vessel Start Discharging',
+      'ETA Vessel Complete Discharge',
     ]
 
-    // Sample row with STO Number and Contract Numbers
     const sampleRow = [
-      '2587817452','2313586719, 2313586720','PLANNED','MV Example','VES001','Example Shipping Co','12.5','210','50000','Single Hull','Time Charter','75000','72000','1200','650','12.5','Jakarta','Singapore','1000','950','940','930','-10','1000','980','0','0','2025-01-01','2025-01-05','5','FALSE','SAP001',
-      'Loading Port 1','500','2025-01-01T08:00','','2025-01-01T10:00','','2025-01-01T11:00','','2025-01-01T18:00','','2025-01-01T20:00','','71.43',
-      '','','','','','','','','','','','','',
-      '','','','','','','','','','','',''
+      'PO-2025-001',
+      'MV Example',
+      'Jakarta',
+      'Singapore',
+      '5000',
+      '2025-01-01',
+      '2025-01-02',
+      '2025-01-03',
+      '2025-01-04',
+      '2025-01-05',
+      '2025-01-08',
+      '2025-01-09',
+      '2025-01-10',
+      '2025-01-11',
     ].join(',')
 
     const csvContent = [headers.join(','), sampleRow].join('\n')
@@ -1036,7 +2079,7 @@ function ShipmentsPageContent() {
 
     // Use the shipments that are currently displayed on the page (filtered by search and other filters)
     const rows: string[] = []
-    const data = filteredShipments // Use the filtered shipments that are actually displayed on the page
+    const data = sortedShipments
     
     if (data.length === 0) {
       alert('No shipments to export. Please adjust your filters.')
@@ -1125,26 +2168,23 @@ function ShipmentsPageContent() {
     document.body.removeChild(link)
   }
 
-  const parseCsvLine = (line: string): string[] => {
+  const parseCsvLine = (line: string, delimiter = ','): string[] => {
     const result: string[] = []
     let current = ''
     let inQuotes = false
-    
+
     for (let i = 0; i < line.length; i++) {
       const char = line[i]
       const nextChar = line[i + 1]
-      
+
       if (char === '"') {
         if (inQuotes && nextChar === '"') {
-          // Escaped quote ("")
           current += '"'
-          i++ // Skip next quote
+          i++
         } else {
-          // Toggle quote mode
           inQuotes = !inQuotes
         }
-      } else if (char === ',' && !inQuotes) {
-        // Field delimiter
+      } else if (char === delimiter && !inQuotes) {
         result.push(current.trim())
         current = ''
       } else {
@@ -1163,112 +2203,199 @@ function ShipmentsPageContent() {
 
     setUploading(true)
     try {
+      // Pre-fetch all reference data in parallel
+      let masterPorts: Array<{ port: string; region: string | null }> = []
+      let allContracts: Array<{ contract_id: string; po_numbers: string }> = []
+      let allShipmentsForLookup: Shipment[] = []
+      try {
+        const [pRes, cRes, sRes] = await Promise.all([
+          api.get('/master-loading-ports', { params: { limit: 9999 } }),
+          api.get('/contracts', { params: { limit: 9999 } }),
+          api.get('/shipments', { params: { limit: 9999, compact: true, includeSummary: false } }),
+        ])
+        masterPorts = pRes.data?.data?.items ?? []
+        allContracts = cRes.data?.data?.contracts ?? []
+        allShipmentsForLookup = sRes.data?.data?.shipments ?? []
+      } catch {
+        alert('Failed to load reference data. Please try again.')
+        setUploading(false)
+        e.target.value = ''
+        return
+      }
+
+      // Build lookup maps
+      const portSet = new Set(masterPorts.map(p => p.port.toLowerCase()))
+
+      // po_number → contract (business contract_id)
+      // API returns po_numbers (plural, comma-separated STRING_AGG), not po_number
+      const contractByPo = new Map<string, { contract_id: string; po_numbers: string }>()
+      for (const c of allContracts) {
+        if (!(c as any).po_numbers) continue
+        for (const po of (c as any).po_numbers.split(',').map((p: string) => p.trim())) {
+          if (po) contractByPo.set(po, c)
+        }
+      }
+
+      // contract_id (business key) → existing shipment
+      const shipmentByContractId = new Map<string, Shipment>()
+      for (const s of allShipmentsForLookup) {
+        if (!s.contract_numbers) continue
+        for (const cid of s.contract_numbers.split(',').map((c: string) => c.trim())) {
+          if (cid) shipmentByContractId.set(cid, s)
+        }
+      }
+
       const text = await file.text()
       const lines = text.split('\n').filter(line => line.trim())
-      const headers = parseCsvLine(lines[0])
-      
-      // Debug: Log headers to help identify the issue
-      console.log('CSV Headers found:', headers)
-      
+      const firstLine = lines[0] ?? ''
+      const delimiter = (firstLine.split(';').length > firstLine.split(',').length) ? ';' : ','
+      const headers = parseCsvLine(firstLine, delimiter)
+
       let createCount = 0
       let updateCount = 0
       let errorCount = 0
       const errors: string[] = []
 
       for (let i = 1; i < lines.length; i++) {
-        const values = parseCsvLine(lines[i])
-        if (values.length < 2) continue // At least need STO Number and one more field
+        const values = parseCsvLine(lines[i], delimiter)
+        if (values.length < 1) continue
 
         const row: any = {}
         headers.forEach((header, index) => {
           row[header.trim()] = values[index]?.trim() || ''
         })
 
-        // Support both old and new column names
-        const stoNumber = row['STO Number'] || row['Shipment ID']
-        const contractNumbers = row['Contract Numbers'] || row['Contract Number']
-        
-        // Debug: Log the first row to see what data we're getting
-        if (i === 1) {
-          console.log('First row data:', row)
-          console.log('STO Number value:', stoNumber)
-          console.log('Contract Numbers value:', contractNumbers)
-        }
-        
-        if (!stoNumber) {
-          errors.push(`Row ${i + 1}: Missing STO Number (found headers: ${headers.join(', ')})`)
-          console.log(`Row ${i + 1} data:`, row)
-          console.log(`Row ${i + 1} STO Number:`, stoNumber)
-          console.log(`Row ${i + 1} Contract Numbers:`, contractNumbers)
+        const poNumber = row['PO Number']
+        if (!poNumber) {
+          errors.push(`Row ${i + 1}: PO Number wajib diisi`)
           errorCount++
           continue
         }
 
-        // Check if STO exists
-        const existingShipment = shipments.find(s => s.sto_number === stoNumber)
+        // Validate PO exists in contracts
+        const contract = contractByPo.get(poNumber)
+        if (!contract) {
+          errors.push(`Row ${i + 1}: PO Number "${poNumber}" not found in contracts database`)
+          errorCount++
+          continue
+        }
 
-        // Prepare shipment data
-        const shipmentData = {
-          stoNumber: stoNumber,
-          contractNumbers: contractNumbers ? contractNumbers.split(',').map((c: string) => c.trim()).filter((c: string) => c) : [],
-          vesselName: row['Vessel Name'] || '',
-          vesselCode: row['Vessel Code'] || '',
-          vesselOwner: row['Vessel Owner'] || '',
-          vesselDraft: row['Vessel Draft (m)'] || '',
-          vesselCapacity: row['Vessel Capacity (MT)'] || '',
-          vesselHullType: row['Hull Type'] || '',
-          charterType: row['Charter Type'] || '',
-          portOfLoading: row['Port of Loading'] || '',
-          portOfDischarge: row['Port of Discharge'] || '',
-          quantityShipped: row['Quantity Shipped (MT)'] || '',
-          shipmentDate: row['Shipment Date (YYYY-MM-DD)'] || '',
-          arrivalDate: row['Arrival Date (YYYY-MM-DD)'] || ''
+        // Validate port against master data (Vessel Name & Loading Port validation temporarily disabled)
+        const rowErrors: string[] = []
+        if (row['Discharge Port'] && !portSet.has(row['Discharge Port'].toLowerCase())) {
+          rowErrors.push(`discharge port "${row['Discharge Port']}" not found in Master Port`)
+        }
+        if (rowErrors.length > 0) {
+          errors.push(`Row ${i + 1} (PO ${poNumber}): ${rowErrors.join('; ')}`)
+          errorCount++
+          continue
+        }
+
+        const contractId = contract.contract_id
+        const existingShipment = shipmentByContractId.get(contractId)
+        const toDate = (v: string): string | null => {
+          if (!v) return null
+          const s = v.trim()
+          const iso = /^(\d{4}-\d{2}-\d{2})/.exec(s)
+          if (iso) return iso[1]
+          // DD/MM/YYYY format (Indonesian locale standard)
+          const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s)
+          if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`
+          return s.substring(0, 10) || null
         }
 
         try {
           if (existingShipment) {
-            // UPDATE existing shipment
-            const updateData: any = {
-              shipment_id: existingShipment.shipment_id // Add required shipment_id field
-            }
-        if (row['Status']) updateData.status = row['Status']
-        if (row['Vessel Name']) updateData.vessel_name = row['Vessel Name']
-        if (row['Vessel Code']) updateData.vessel_code = row['Vessel Code']
-            if (row['Vessel Owner']) updateData.vessel_owner = row['Vessel Owner']
-            if (row['Vessel Draft (m)']) updateData.vessel_draft = parseFloat(row['Vessel Draft (m)'])
-            if (row['Vessel Capacity (MT)']) updateData.vessel_capacity = parseFloat(row['Vessel Capacity (MT)'])
-            if (row['Hull Type']) updateData.vessel_hull_type = row['Hull Type']
-            if (row['Charter Type']) updateData.charter_type = row['Charter Type']
-        if (row['Port of Loading']) updateData.port_of_loading = row['Port of Loading']
-        if (row['Port of Discharge']) updateData.port_of_discharge = row['Port of Discharge']
-        if (row['Quantity Shipped (MT)']) updateData.quantity_shipped = parseFloat(row['Quantity Shipped (MT)'])
-        if (row['Quantity Delivered (MT)']) updateData.quantity_delivered = parseFloat(row['Quantity Delivered (MT)'])
-        if (row['Shipment Date (YYYY-MM-DD)']) updateData.shipment_date = row['Shipment Date (YYYY-MM-DD)']
-        if (row['Arrival Date (YYYY-MM-DD)']) updateData.arrival_date = row['Arrival Date (YYYY-MM-DD)']
+            // UPDATE — shipment already exists for this contract
+            const updateData: any = { shipment_id: existingShipment.shipment_id }
+            if (row['Vessel Name']) updateData.vessel_name = row['Vessel Name']
+            if (row['Loading Port']) updateData.port_of_loading = row['Loading Port']
+            if (row['Discharge Port']) updateData.port_of_discharge = row['Discharge Port']
+            if (row['Qty Delivery']) updateData.quantity_delivered = parseFloat(row['Qty Delivery'])
 
-            console.log(`Updating shipment ${existingShipment.id} with data:`, updateData)
-            const response = await api.put(`/shipments/${existingShipment.id}`, updateData)
-          if (response.data.success) {
-              updateCount++
-          } else {
-              const errorMsg = response.data.error?.message || 'Update failed'
-              errors.push(`Row ${i + 1}: ${errorMsg} for STO ${stoNumber}`)
-              console.error(`Update failed for STO ${stoNumber}:`, response.data)
-            errorCount++
-          }
-          } else {
-            // CREATE new shipment
-            if (!contractNumbers || shipmentData.contractNumbers.length === 0) {
-              errors.push(`Row ${i + 1}: Missing Contract Numbers for new STO ${stoNumber}`)
-          errorCount++
+            const shipRes = await api.put(`/shipments/${existingShipment.id}`, updateData)
+            if (!shipRes.data.success) {
+              errors.push(`Row ${i + 1}: Failed to update shipment for PO ${poNumber}`)
+              errorCount++
               continue
             }
 
-            const response = await api.post('/shipments', shipmentData)
-            if (response.data.success) {
+            // Update ETA on loading port record
+            const etaPayload: Record<string, string | null> = {}
+            if (row['ETA Vessel Arrival at Loading Port']) etaPayload.eta_vessel_arrival = toDate(row['ETA Vessel Arrival at Loading Port'])
+            if (row['ETA Vessel Berthed at Loading Port']) {
+              const d = toDate(row['ETA Vessel Berthed at Loading Port'])
+              etaPayload.eta_vessel_berthed = d
+              etaPayload.eta_vessel_berthed_at_loading_port = d
+            }
+            if (row['ETA Vessel Start Loading']) etaPayload.eta_loading_start = toDate(row['ETA Vessel Start Loading'])
+            if (row['ETA Vessel Completed Loading']) etaPayload.eta_loading_completed = toDate(row['ETA Vessel Completed Loading'])
+            if (row['ETA Vessel Sailed from Loading Port']) etaPayload.eta_vessel_sailed = toDate(row['ETA Vessel Sailed from Loading Port'])
+            if (row['ETA Vessel Arrive at Discharge Port']) etaPayload.eta_vessel_arrive_at_discharge_port = toDate(row['ETA Vessel Arrive at Discharge Port'])
+            if (row['ETA Vessel Berthed at Discharge Port']) etaPayload.eta_vessel_berthed_at_discharge_port = toDate(row['ETA Vessel Berthed at Discharge Port'])
+            if (row['ETA Vessel Start Discharging']) etaPayload.eta_vessel_start_discharging = toDate(row['ETA Vessel Start Discharging'])
+            if (row['ETA Vessel Complete Discharge']) etaPayload.eta_vessel_complete_discharge = toDate(row['ETA Vessel Complete Discharge'])
+
+            if (Object.keys(etaPayload).length > 0) {
+              const portsRes = await api.get(`/shipments/${existingShipment.id}/loading-ports`)
+              const ports: VesselLoadingPort[] = portsRes.data.success ? (portsRes.data.data?.ports ?? []) : []
+              const lp1 = ports.find(p => !p.is_discharge_port && p.port_sequence === 1)
+              if (lp1?.id) {
+                await api.put(`/shipments/${existingShipment.id}/loading-ports/${lp1.id}`, {
+                  id: lp1.id,
+                  port_name: lp1.port_name,
+                  port_sequence: lp1.port_sequence,
+                  is_discharge_port: lp1.is_discharge_port,
+                  ...etaPayload,
+                })
+              } else {
+                await api.post(`/shipments/${existingShipment.id}/loading-ports`, {
+                  port_sequence: 1,
+                  port_name: row['Loading Port'] || '',
+                  quantity_at_loading_port: 0,
+                  is_discharge_port: false,
+                  ...etaPayload,
+                })
+              }
+            }
+            updateCount++
+          } else {
+            // CREATE — no shipment yet for this contract; mirror AddShipmentModal payload
+            const etaByContract = {
+              [contractId]: {
+                eta_arrival: toDate(row['ETA Vessel Arrival at Loading Port']),
+                eta_berthed: toDate(row['ETA Vessel Berthed at Loading Port']),
+                eta_loading_start: toDate(row['ETA Vessel Start Loading']),
+                eta_loading_complete: toDate(row['ETA Vessel Completed Loading']),
+                eta_sailed: toDate(row['ETA Vessel Sailed from Loading Port']),
+                eta_discharge_arrival: toDate(row['ETA Vessel Arrive at Discharge Port']),
+                eta_discharge_berthed: toDate(row['ETA Vessel Berthed at Discharge Port']),
+                eta_discharge_start: toDate(row['ETA Vessel Start Discharging']),
+                eta_discharge_complete: toDate(row['ETA Vessel Complete Discharge']),
+              },
+            }
+            const shipmentData = {
+              operationId: `OP-${contractId}-${Date.now().toString().slice(-8)}`,
+              stoNumber: '',
+              contractNumbers: [contractId],
+              contractQtyAssigned: { [contractId]: row['Qty Delivery'] || '0' },
+              etaByContract,
+              vesselName: row['Vessel Name'] || '',
+              vesselCode: '',
+              vesselOwner: '',
+              vesselDraft: '',
+              vesselCapacity: '',
+              vesselHullType: '',
+              charterType: '',
+              portOfLoading: row['Loading Port'] || '',
+              portOfDischarge: row['Discharge Port'] || '',
+              quantityDelivered: row['Qty Delivery'] ? parseFloat(row['Qty Delivery']) : undefined,
+            }
+            const createRes = await api.post('/shipments', shipmentData)
+            if (createRes.data.success) {
               createCount++
             } else {
-              errors.push(`Row ${i + 1}: ${response.data.error?.message || 'Create failed for STO ' + stoNumber}`)
+              errors.push(`Row ${i + 1}: Failed to create shipment for PO ${poNumber}: ${createRes.data.error?.message || ''}`)
               errorCount++
             }
           }
@@ -1279,23 +2406,11 @@ function ShipmentsPageContent() {
         }
       }
 
-      // Show detailed results
-      let message = `Bulk operation completed!\n\n`
-      message += `✅ Created: ${createCount}\n`
-      message += `✅ Updated: ${updateCount}\n`
-      message += `❌ Failed: ${errorCount}`
-      
-      if (errors.length > 0 && errors.length <= 10) {
-        message += `\n\nErrors:\n${errors.join('\n')}`
-      } else if (errors.length > 10) {
-        message += `\n\nShowing first 10 errors:\n${errors.slice(0, 10).join('\n')}`
-      }
-
-      alert(message)
-      await fetchShipments() // Refresh the list
+      setBulkUploadResult({ created: createCount, updated: updateCount, failed: errorCount, errors })
+      await fetchShipments(undefined, undefined, { force: true })
     } catch (error) {
       console.error('Bulk upload error:', error)
-      alert('Failed to process bulk upload. Please check your CSV file format.')
+      alert('Failed to process CSV file. Check the file format and try again.')
     } finally {
       setUploading(false)
       e.target.value = ''
@@ -1303,11 +2418,17 @@ function ShipmentsPageContent() {
   }
 
   const getStatusColor = (status: string) => {
-    switch (status) {
+    switch (normalizeShipmentStatusKey(status)) {
+      case 'UNPLANNED': return 'bg-slate-100 text-slate-800'
       case 'PLANNED': return 'bg-blue-100 text-blue-800'
-      case 'IN_TRANSIT': return 'bg-yellow-100 text-yellow-800'
-      case 'ARRIVED': return 'bg-purple-100 text-purple-800'
-      case 'UNLOADING': return 'bg-orange-100 text-orange-800'
+      case 'ARRIVED_LP': return 'bg-yellow-100 text-yellow-800'
+      case 'BERTHED_LP': return 'bg-amber-100 text-amber-800'
+      case 'LOADING': return 'bg-orange-100 text-orange-800'
+      case 'COMPLETED_LOADING': return 'bg-orange-200 text-orange-900'
+      case 'SAILED': return 'bg-purple-100 text-purple-800'
+      case 'ARRIVED_DP': return 'bg-indigo-100 text-indigo-800'
+      case 'BERTHED_DP': return 'bg-cyan-100 text-cyan-800'
+      case 'UNLOADING': return 'bg-teal-100 text-teal-800'
       case 'COMPLETED': return 'bg-green-100 text-green-800'
       case 'CANCELLED': return 'bg-red-100 text-red-800'
       default: return 'bg-gray-100 text-gray-800'
@@ -1338,49 +2459,211 @@ function ShipmentsPageContent() {
 
   const formatDate = (dateStr: string) => formatDateDMY(dateStr)
 
-  const handleFilterChange = () => {
+  const hasActiveShipmentColumnFilters = useCallback((filters: Record<string, ColumnFilter>): boolean => {
+    for (const f of Object.values(filters)) {
+      if (f.emptyOnly || f.notBlankOnly) return true
+      if (f.type === 'text' && (f.value || '').trim().length > 0) return true
+      if (f.type === 'number') {
+        if ((f.min !== undefined && String(f.min).trim() !== '') || (f.max !== undefined && String(f.max).trim() !== '')) {
+          return true
+        }
+      }
+      if (f.type === 'date' && ((f.from && String(f.from).trim()) || (f.to && String(f.to).trim()))) return true
+    }
+    return false
+  }, [])
+
+  const hasActiveShipmentFilters =
+    Boolean(dateFrom || dateTo || searchDraft || searchTerm) ||
+    statusFilter !== 'ALL' ||
+    lateIndicatorFilter !== 'ALL' ||
+    viewFilterValue !== '' ||
+    viewOption !== 'all' ||
+    selectedGroupPlants.length > 0 ||
+    selectedIncoterms.length > 0 ||
+    selectedProducts.length > 0 ||
+    selectedSuppliers.length > 0 ||
+    (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && etaLoadingFilter !== 'ALL') ||
+    (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && etaDischargeFilter !== 'ALL') ||
+    hasActiveShipmentColumnFilters(columnFilters)
+
+  const clearShipmentFilters = useCallback(() => {
+    markUserScopeFiltersCleared('shipments')
+    setSearchDraft('')
+    setSearchTerm('')
+    setStatusFilter('ALL')
+    setLateIndicatorFilter('ALL')
+    setViewOption('all')
+    setViewFilterValue('')
+    resetUserScopeFilters()
+    setSelectedIncoterms([])
+    setSelectedSuppliers([])
+    setDateFrom('')
+    setDateTo('')
+    setColumnFilters({})
+    if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
+      setEtaLoadingFilter('ALL')
+      setEtaDischargeFilter('ALL')
+    }
     setPage(1)
-    fetchShipments(1)
-  }
+  }, [resetUserScopeFilters])
+
+  const unplannedTableBreakdown = useMemo(() => {
+    if (unplannedBreakdown) return unplannedBreakdown
+    const fromSummary = shipmentsSection1Summary?.unplannedTable
+    if (!fromSummary) return null
+    return {
+      contractRows: Number(fromSummary.contractRows ?? 0),
+      shipmentRows: Number(fromSummary.shipmentRows ?? 0),
+      totalTableRows: Number(fromSummary.totalTableRows ?? 0),
+    }
+  }, [unplannedBreakdown, shipmentsSection1Summary?.unplannedTable])
+
+  const section1StatusCounts = useMemo((): ShipmentPagePipelineStatusCounts => {
+    const s = shipmentsSection1Summary?.status
+    const unplannedFromTable =
+      unplannedTableBreakdown?.totalTableRows ??
+      shipmentsSection1Summary?.unplannedTable?.totalTableRows
+    return {
+      unplanned: Number(unplannedFromTable ?? s?.unplanned ?? 0),
+      planned: Number(s?.planned ?? 0),
+      atLoadingPort: Number(s?.atLoadingPort ?? 0),
+      sailed: Number(s?.sailed ?? 0),
+      atDischargePort: Number(s?.atDischargePort ?? 0),
+      completed: Number(s?.completed ?? 0),
+      cancelled: Number(s?.cancelled ?? 0),
+      total: Number(shipmentsSection1Summary?.total ?? 0),
+    }
+  }, [shipmentsSection1Summary, unplannedTableBreakdown?.totalTableRows])
+
+  const loadingPortBreakdown = useMemo((): LoadingPortBreakdown => {
+    const b = shipmentsSection1Summary?.loadingPortBreakdown
+    return {
+      arrived: Number(b?.arrived ?? 0),
+      berthed: Number(b?.berthed ?? 0),
+      loading: Number(b?.loading ?? 0),
+      completedLoading: Number(b?.completedLoading ?? 0),
+    }
+  }, [shipmentsSection1Summary])
+
+  const dischargePortBreakdown = useMemo((): DischargePortBreakdown => {
+    const b = shipmentsSection1Summary?.dischargePortBreakdown
+    return {
+      arrived: Number(b?.arrived ?? 0),
+      berthed: Number(b?.berthed ?? 0),
+      unloading: Number(b?.unloading ?? 0),
+    }
+  }, [shipmentsSection1Summary])
+
+  const handleEtaLoadingCardClick = useCallback((key: EtaBucketFilterKey) => {
+    if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) return
+    beginTableScopeRefresh()
+    setPage(1)
+    setEtaLoadingFilter((prev) => (prev === key ? 'ALL' : key))
+    setStatusFilter('ALL')
+    setEtaDischargeFilter('ALL')
+  }, [beginTableScopeRefresh])
+
+  const handleEtaDischargeCardClick = useCallback((key: EtaBucketFilterKey) => {
+    if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) return
+    beginTableScopeRefresh()
+    setPage(1)
+    setEtaDischargeFilter((prev) => (prev === key ? 'ALL' : key))
+    setStatusFilter('ALL')
+    setEtaLoadingFilter('ALL')
+  }, [beginTableScopeRefresh])
+
+  const section2EtaLoadingCounts = useMemo(() => {
+    if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) return { ...EMPTY_ETA_BUCKET_COUNTS }
+    const src =
+      statusFilter !== 'ALL'
+        ? section2EtaSummary?.etaLoading ?? (summaryFetching ? EMPTY_ETA_BUCKET_COUNTS : null)
+        : shipmentsSection1Summary?.etaLoading
+    if (!src) return { ...EMPTY_ETA_BUCKET_COUNTS }
+    return {
+      moreThan7D: Number(src.moreThan7D ?? 0),
+      dMinus2: Number(src.dMinus2 ?? 0),
+      d: Number(src.d ?? 0),
+      delay: Number(src.delay ?? 0),
+      noEta: Number(src.noEta ?? 0),
+    }
+  }, [statusFilter, section2EtaSummary, shipmentsSection1Summary, summaryFetching])
+
+  const section2EtaDischargeCounts = useMemo(() => {
+    if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) return { ...EMPTY_ETA_BUCKET_COUNTS }
+    const src =
+      statusFilter !== 'ALL'
+        ? section2EtaSummary?.etaDischarge ?? (summaryFetching ? EMPTY_ETA_BUCKET_COUNTS : null)
+        : shipmentsSection1Summary?.etaDischarge
+    if (!src) return { ...EMPTY_ETA_BUCKET_COUNTS }
+    return {
+      moreThan7D: Number(src.moreThan7D ?? 0),
+      dMinus2: Number(src.dMinus2 ?? 0),
+      d: Number(src.d ?? 0),
+      delay: Number(src.delay ?? 0),
+      noEta: Number(src.noEta ?? 0),
+    }
+  }, [statusFilter, section2EtaSummary, shipmentsSection1Summary, summaryFetching])
+
+  const section2EtaScopeLabel = useMemo(() => {
+    if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED || statusFilter === 'ALL') return null
+    return SHIPMENT_PAGE_PIPELINE_LABELS[statusFilter as ShipmentPagePipelineStage] ?? statusFilter
+  }, [statusFilter])
+  const tableShipmentCount = useMemo(() => totalCount, [totalCount])
+
+  /** Unplanned: headline and Section 1 card both use hybrid table row total. */
+  const tableHeaderCount = useMemo(() => {
+    if (statusFilter === 'UNPLANNED') {
+      const rowTotal =
+        unplannedTableBreakdown?.totalTableRows ??
+        section1StatusCounts.unplanned ??
+        tableShipmentCount
+      return {
+        value: rowTotal,
+        noun: 'rows' as const,
+      }
+    }
+    return {
+      value: tableShipmentCount,
+      noun: 'shipments' as const,
+    }
+  }, [
+    statusFilter,
+    unplannedTableBreakdown?.totalTableRows,
+    section1StatusCounts.unplanned,
+    tableShipmentCount,
+  ])
+
+  const section3TableLoading =
+    tableScopeLoading || (loading && shipments.length === 0)
+  const section1DataLoading =
+    summaryFetching || (userScopeReady && shipmentsSection1Summary == null)
+
+  const shipmentsTableScopeLabel = useMemo(() => {
+    if (statusFilter !== 'ALL') {
+      return SHIPMENT_PAGE_PIPELINE_LABELS[statusFilter as ShipmentPagePipelineStage] ?? statusFilter
+    }
+    if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && etaLoadingFilter !== 'ALL') {
+      return ETA_LOADING_FILTER_LABELS[etaLoadingFilter]
+    }
+    if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && etaDischargeFilter !== 'ALL') {
+      return ETA_DISCHARGE_FILTER_LABELS[etaDischargeFilter]
+    }
+    return null
+  }, [statusFilter, etaLoadingFilter, etaDischargeFilter])
 
   // Helper function to calculate late indicator for shipments
-  const getLateIndicator = (shipment: Shipment): { color: string; text: string } => {
-    if (!shipment.delivery_end_date) {
-      return { color: 'bg-gray-100 text-gray-800', text: '-' }
-    }
-    
-    const deliveryEnd = new Date(shipment.delivery_end_date).getTime()
-    const today = new Date().setHours(0, 0, 0, 0)
-    const ataDischarge = shipment.ata_vessel_complete_discharge ? new Date(shipment.ata_vessel_complete_discharge).getTime() : null
-    const etaDischarge = shipment.eta_vessel_complete_discharge ? new Date(shipment.eta_vessel_complete_discharge).getTime() : null
-    
-    // Red if delivery_end < Today
-    if (deliveryEnd < today) {
-      return { color: 'bg-red-100 text-red-800', text: 'Late' }
-    }
-    
-    // If both discharge dates are null, cannot determine (but check if past due date)
-    if (ataDischarge === null && etaDischarge === null) {
-      return { color: 'bg-gray-100 text-gray-800', text: '-' }
-    }
-    
-    // Red if delivery_end < ata_discharge OR delivery_end < eta_discharge
-    // Green if delivery_end >= ata_discharge OR delivery_end >= eta_discharge
-    const isLate = 
-      (ataDischarge !== null && deliveryEnd < ataDischarge) ||
-      (etaDischarge !== null && deliveryEnd < etaDischarge)
-    
-    if (isLate) {
-      return { color: 'bg-red-100 text-red-800', text: 'Late' }
-    } else {
-      return { color: 'bg-green-100 text-green-800', text: 'On Time' }
-    }
-  }
+  const getLateIndicator = (shipment: Shipment): { color: string; text: string } =>
+    computeLateIndicatorDisplay(
+      shipment.delivery_end_date,
+      shipment.ata_vessel_complete_discharge,
+      shipment.eta_vessel_complete_discharge,
+    )
 
   // Excel-like filtering helpers
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
-    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days') return 'number'
-    if (colId === 'shipment_date' || colId === 'arrival_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'ata_vessel_completed_loading' || colId === 'ata_vessel_complete_discharge' || colId === 'eta_vessel_complete_discharge' || colId === 'created_at') return 'date'
+    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'contract_qty' || colId === 'outstanding_qty_planning' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days' || colId === 'sfal_qty' || colId === 'sfbd_qty' || colId === 'outstanding_quantity') return 'number'
+    if (colId === 'shipment_date' || colId === 'arrival_date' || colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'ata_vessel_completed_loading' || colId === 'ata_vessel_complete_discharge' || colId === 'eta_vessel_complete_discharge' || colId === 'created_at' || colId === 'eta_arrival' || colId === 'eta_berthed' || colId === 'eta_loading_start' || colId === 'eta_loading_complete' || colId === 'eta_sailed' || colId === 'eta_discharge_arrival' || colId === 'eta_discharge_berthed' || colId === 'eta_discharge_start' || colId === 'eta_discharge_complete' || colId === 'ata_vessel_arrival_at_loading_port' || colId === 'ata_vessel_berthed_at_loading_port' || colId === 'ata_vessel_start_loading' || colId === 'ata_vessel_sailed_from_loading_port' || colId === 'ata_vessel_arrive_at_discharge_port' || colId === 'ata_vessel_berthed_at_discharge_port' || colId === 'ata_vessel_start_discharging') return 'date'
     return 'text'
   }
 
@@ -1400,8 +2683,10 @@ function ShipmentsPageContent() {
       case 'vessel_owner': return s.vessel_owner || ''
       case 'port_of_loading': return s.port_of_loading || ''
       case 'port_of_discharge': return s.port_of_discharge || ''
+      case 'loading_port': return resolveShipmentListLoadingPorts(s)
+      case 'discharge_port': return resolveShipmentListDischargePorts(s)
       case 'plant_site': return s.plant_site || ''
-      case 'supplier': return s.supplier || ''
+      case 'supplier': return resolveShipmentListSuppliers(s)
       case 'buyers': return s.buyers || ''
       case 'buyer': return s.buyer || ''
       case 'product': return s.product || ''
@@ -1414,6 +2699,11 @@ function ShipmentsPageContent() {
       case 'quantity_shipped': return typeof s.quantity_shipped === 'number' ? s.quantity_shipped : null
       case 'quantity_delivered': return typeof s.quantity_delivered === 'number' ? s.quantity_delivered : null
       case 'sto_quantity': return typeof s.sto_quantity === 'number' ? s.sto_quantity : null
+      case 'contract_qty': return typeof s.contract_qty === 'number' ? s.contract_qty : null
+      case 'outstanding_qty_planning': return typeof s.outstanding_qty_planning === 'number' ? s.outstanding_qty_planning : null
+      case 'outstanding_quantity': return typeof s.outstanding_quantity === 'number' ? s.outstanding_quantity : null
+      case 'sfal_qty': return typeof s.sfal_qty === 'number' ? s.sfal_qty : null
+      case 'sfbd_qty': return typeof s.sfbd_qty === 'number' ? s.sfbd_qty : null
       case 'inbound_weight': return typeof s.inbound_weight === 'number' ? s.inbound_weight : null
       case 'outbound_weight': return typeof s.outbound_weight === 'number' ? s.outbound_weight : null
       case 'gain_loss_percentage': return typeof s.gain_loss_percentage === 'number' ? s.gain_loss_percentage : null
@@ -1433,13 +2723,30 @@ function ShipmentsPageContent() {
       case 'sla_days': return typeof s.sla_days === 'number' ? s.sla_days : null
       case 'shipment_date': return s.shipment_date || ''
       case 'arrival_date': return s.arrival_date || ''
+      case 'contract_date': return s.contract_date || ''
       case 'delivery_start': return s.delivery_start_date || ''
       case 'delivery_end': return s.delivery_end_date || ''
       case 'delivery_start_date': return s.delivery_start_date || ''
       case 'delivery_end_date': return s.delivery_end_date || ''
       case 'ata_vessel_completed_loading': return s.ata_vessel_completed_loading || ''
       case 'ata_vessel_complete_discharge': return s.ata_vessel_complete_discharge || ''
-      case 'eta_vessel_complete_discharge': return s.eta_vessel_complete_discharge || ''
+      case 'eta_vessel_complete_discharge': return s.eta_vessel_complete_discharge || s.eta_discharge_complete || ''
+      case 'eta_arrival': return s.eta_arrival || ''
+      case 'eta_berthed': return s.eta_berthed || ''
+      case 'eta_loading_start': return s.eta_loading_start || ''
+      case 'eta_loading_complete': return s.eta_loading_complete || ''
+      case 'eta_sailed': return s.eta_sailed || ''
+      case 'eta_discharge_arrival': return s.eta_discharge_arrival || ''
+      case 'eta_discharge_berthed': return s.eta_discharge_berthed || ''
+      case 'eta_discharge_start': return s.eta_discharge_start || ''
+      case 'eta_discharge_complete': return s.eta_discharge_complete || ''
+      case 'ata_vessel_arrival_at_loading_port': return s.ata_vessel_arrival_at_loading_port || ''
+      case 'ata_vessel_berthed_at_loading_port': return s.ata_vessel_berthed_at_loading_port || ''
+      case 'ata_vessel_start_loading': return s.ata_vessel_start_loading || ''
+      case 'ata_vessel_sailed_from_loading_port': return s.ata_vessel_sailed_from_loading_port || ''
+      case 'ata_vessel_arrive_at_discharge_port': return s.ata_vessel_arrive_at_discharge_port || ''
+      case 'ata_vessel_berthed_at_discharge_port': return s.ata_vessel_berthed_at_discharge_port || ''
+      case 'ata_vessel_start_discharging': return s.ata_vessel_start_discharging || ''
       case 'created_at': return s.created_at || ''
       default: return (s as any)[colId] ?? ''
     }
@@ -1456,6 +2763,7 @@ function ShipmentsPageContent() {
   }
 
   const clearColumnFilter = (colId: string) => {
+    resetPageForGlobalFilter()
     setColumnFilters(prev => {
       const next = { ...prev }
       delete next[colId]
@@ -1470,6 +2778,7 @@ function ShipmentsPageContent() {
       (next.type === 'number' && Boolean((next.min && next.min !== '') || (next.max && next.max !== ''))) ||
       (next.type === 'date' && Boolean((next.from && next.from !== '') || (next.to && next.to !== '')))
 
+    resetPageForGlobalFilter()
     setColumnFilters(prev => {
       const copy = { ...prev }
       if (!active) {
@@ -1481,86 +2790,85 @@ function ShipmentsPageContent() {
     })
   }
 
-  // Search, columns, view-by, late indicator, and ETA toolbar buckets are applied on the server (full DB).
-  const filteredShipments = shipments
-
   // Fetch contract details for a shipment
   const fetchContractDetails = async (shipment: Shipment) => {
-    if (!shipment.contract_numbers) return
-    // Always fetch to get latest data, but skip if already loading
+    const contractNumbers = resolveShipmentContractNumbers(shipment)
+    const stoForDetails = resolveShipmentApiLookupKey(shipment)
+    const hasSto = Boolean(stoForDetails && String(stoForDetails).trim() !== '')
+
+    if (!hasSto && contractNumbers.length === 0) return
     if (loadingContractDetails[shipment.id]) return
 
     setLoadingContractDetails(prev => ({ ...prev, [shipment.id]: true }))
     try {
-      const contractNumbers = shipment.contract_numbers.split(/,\s*/).filter(c => c.trim())
-      const stoForDetails = (shipment.sto_number && String(shipment.sto_number).trim()) || (shipment as any).sto_key || shipment.shipment_id
-      const hasSto = Boolean(stoForDetails && String(stoForDetails).trim() !== '')
-      
       if (hasSto) {
-        // Use STO-specific endpoint when a real STO number exists (backend fills sto_number from sto_key when needed)
-        const stoNumber = String(stoForDetails)
-        const response = await api.get(`/shipments/contracts/details?sto=${encodeURIComponent(stoNumber)}&contractNumbers=${contractNumbers.join(',')}`)
-      
-        if (response.data.success && response.data.data.length > 0) {
-          const details = response.data.data.map((detail: any) => ({
-            contract_number: detail.contract_number,
-            contract_qty: detail.contract_qty || 0,
-            outstanding_qty: detail.outstanding_qty || 0,
-            sto_qty_assigned: detail.sto_qty_assigned || 0,
-            po_number: detail.po_number || '',
-            delivery_start_date: detail.delivery_start_date || null,
-            delivery_end_date: detail.delivery_end_date || null,
-            quantity_delivered: detail.quantity_delivered || 0,
-            quantity_receive: detail.quantity_receive || 0,
-            contract_ext_no: detail.contract_ext_no || null,
-            locked_from_sap: Boolean(detail.locked_from_sap)
-          }))
+        const stoNumber = String(stoForDetails).trim()
+        const contractNumbersParam =
+          contractNumbers.length > 0
+            ? `&contractNumbers=${encodeURIComponent(contractNumbers.join(','))}`
+            : ''
+        const response = await api.get(
+          `/shipments/contracts/details?sto=${encodeURIComponent(stoNumber)}${contractNumbersParam}`,
+        )
+
+        if (response.data.success && Array.isArray(response.data.data) && response.data.data.length > 0) {
+          const details = response.data.data.map((detail: Record<string, unknown>) =>
+            mapContractDetailFromApi(detail),
+          )
           setContractDetailsMap(prev => ({ ...prev, [shipment.id]: details }))
           return
         }
       }
 
-      // No STO, or STO-based API returned no data: use aggregated Contracts API so numbers match Contracts page
+      if (contractNumbers.length === 0) {
+        setContractDetailsMap(prev => ({ ...prev, [shipment.id]: [] }))
+        return
+      }
+
       const fallbackDetails = await Promise.all(
-          contractNumbers.map(async (contractNumber) => {
+        contractNumbers.map(async (contractNumber) => {
           const trimmed = contractNumber.trim()
-            try {
-            const contractResponse = await api.get(`/contracts?contract_id=${encodeURIComponent(trimmed)}&limit=1`)
-              if (contractResponse.data.success && contractResponse.data.data.contracts.length > 0) {
-                const contract = contractResponse.data.data.contracts[0]
-                return {
-                  contract_number: trimmed,
-                  contract_qty: contract.quantity_ordered || 0,
-                  outstanding_qty: contract.outstanding_quantity || 0,
-                  sto_qty_assigned: 0,
-                  po_number: contract.po_numbers || contract.po_number || '',
-                  delivery_start_date: contract.delivery_start_date || null,
-                  delivery_end_date: contract.delivery_end_date || null,
-                  contract_ext_no: contract.contract_ext_no || null,
-                  locked_from_sap: false
-                }
+          try {
+            const contractResponse = await api.get(
+              `/contracts?contract_id=${encodeURIComponent(trimmed)}&limit=1`,
+            )
+            if (contractResponse.data.success && contractResponse.data.data.contracts.length > 0) {
+              const contract = contractResponse.data.data.contracts[0]
+              return {
+                contract_number: trimmed,
+                contract_qty: parseApiNumber(contract.quantity_ordered) ?? 0,
+                outstanding_qty: parseApiNumber(contract.outstanding_quantity) ?? 0,
+                sto_qty_assigned: 0,
+                po_number: contract.po_numbers || contract.po_number || '',
+                delivery_start_date: contract.delivery_start_date || null,
+                delivery_end_date: contract.delivery_end_date || null,
+                quantity_delivered: parseApiNumber(contract.quantity_delivered),
+                quantity_receive: parseApiNumber(contract.quantity_receive),
+                contract_ext_no: contract.contract_ext_no || null,
+                locked_from_sap: false,
               }
-            } catch (err) {
+            }
+          } catch (err) {
             console.error(`Error fetching contract ${trimmed}:`, err)
-            }
-            return {
-              contract_number: trimmed,
-              contract_qty: 0,
-              outstanding_qty: 0,
-              sto_qty_assigned: 0,
-              po_number: '',
-              delivery_start_date: null,
-              delivery_end_date: null,
-              contract_ext_no: null,
-              locked_from_sap: false
-            }
-          })
-        )
+          }
+          return {
+            contract_number: trimmed,
+            contract_qty: 0,
+            outstanding_qty: 0,
+            sto_qty_assigned: 0,
+            po_number: '',
+            delivery_start_date: null,
+            delivery_end_date: null,
+            quantity_delivered: null,
+            quantity_receive: null,
+            contract_ext_no: null,
+            locked_from_sap: false,
+          }
+        }),
+      )
       setContractDetailsMap(prev => ({ ...prev, [shipment.id]: fallbackDetails }))
     } catch (error) {
       console.error('Error fetching contract details:', error)
-      // Fallback on error
-      const contractNumbers = shipment.contract_numbers.split(/,\s*/).filter(c => c.trim())
       const details = contractNumbers.map((contractNumber) => ({
         contract_number: contractNumber.trim(),
         contract_qty: 0,
@@ -1569,8 +2877,10 @@ function ShipmentsPageContent() {
         po_number: '',
         delivery_start_date: null,
         delivery_end_date: null,
+        quantity_delivered: null,
+        quantity_receive: null,
         contract_ext_no: null,
-        locked_from_sap: false
+        locked_from_sap: false,
       }))
       setContractDetailsMap(prev => ({ ...prev, [shipment.id]: details }))
     } finally {
@@ -1618,7 +2928,10 @@ function ShipmentsPageContent() {
         next.add(id)
         // Fetch contract details when expanding (for both single and multiple contracts)
         const shipment = sortedShipments.find(s => s.id === id)
-        if (shipment && shipment.contract_numbers) {
+        if (
+          shipment &&
+          (resolveShipmentContractNumbers(shipment).length > 0 || shipmentModalStoDisplay(shipment) !== '-')
+        ) {
           fetchContractDetails(shipment)
         }
       }
@@ -1635,7 +2948,7 @@ function ShipmentsPageContent() {
   const columnStorageKey = 'shipments.compact.visibleColumns'
   const columnOrderStorageKey = 'shipments.compact.columnOrder'
   const sortStorageKey = 'shipments.compact.sort'
-  const userViewPrefKey = 'shipments.compact.view.v1'
+  const userViewPrefKey = 'shipments.compact.view.v2'
 
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => {
     if (typeof window === 'undefined') return new Set()
@@ -1676,6 +2989,16 @@ function ShipmentsPageContent() {
   // Load per-user saved view (columns + order). Falls back to localStorage/defaults.
   useEffect(() => {
     let cancelled = false
+    const hadSavedVisibleAtOpen = (() => {
+      try {
+        const raw = localStorage.getItem(columnStorageKey)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as unknown
+        return Array.isArray(parsed) && parsed.length > 0
+      } catch {
+        return Boolean(localStorage.getItem(columnStorageKey))
+      }
+    })()
     ;(async () => {
       try {
         const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(userViewPrefKey)}`)
@@ -1683,8 +3006,20 @@ function ShipmentsPageContent() {
         if (cancelled) return
         const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
         const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
-        if (Array.isArray(cols) && cols.length > 0) setVisibleColumnIds(new Set(cols.map((x: any) => String(x))))
-        if (Array.isArray(order) && order.length > 0) setColumnOrderIds(order.map((x: any) => String(x)))
+        if (Array.isArray(cols) && cols.length > 0) {
+          const migrated = migrateShipmentColumnLayout(
+            cols.map((x: unknown) => String(x)),
+            Array.isArray(order) ? order.map((x: unknown) => String(x)) : [],
+          )
+          if (!hadSavedVisibleAtOpen) {
+            setVisibleColumnIds(new Set(migrated.visibleColumnIds))
+          }
+          if (!hadSavedVisibleAtOpen && migrated.columnOrderIds.length > 0) {
+            setColumnOrderIds(migrated.columnOrderIds)
+          }
+        } else if (Array.isArray(order) && order.length > 0 && !hadSavedVisibleAtOpen) {
+          setColumnOrderIds(order.map((x: unknown) => String(x)))
+        }
       } catch {
         // ignore
       }
@@ -1734,7 +3069,6 @@ function ShipmentsPageContent() {
   }, [sortKey, sortDir])
 
   const toggleColumn = (colId: string) => {
-    if (colId === 'late_indicator' || colId === 'operation_id' || colId === 'shipment_id' || colId === 'status') return // Always visible
     setVisibleColumnIds(prev => {
       const next = new Set(prev)
       if (next.has(colId)) {
@@ -1761,7 +3095,7 @@ function ShipmentsPageContent() {
   const compactColumns: CompactColumn[] = useMemo(() => [
     {
       id: 'late_indicator',
-      label: 'Late Indicator',
+      label: 'Late Indicators',
       formulaHelp: FIELD_HELP.shipmentLateIndicator,
       defaultVisible: true,
       sortable: true,
@@ -1775,91 +3109,278 @@ function ShipmentsPageContent() {
       }
     },
     {
-      id: 'operation_id',
-      label: 'Operation ID',
+      id: 'shipment_id',
+      label: 'STO',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => s.operation_id || '',
+      getSortValue: (s) => (s.row_kind === 'contract_backlog' ? '' : resolveShipmentDisplayStoNumber(s.sto_number)),
       render: (s) => (
-        <span className="text-sm break-words block" title={s.operation_id || ''}>
-          {s.operation_id || '-'}
-        </span>
+        <span className="text-sm">{resolveShipmentDisplayStoNumber(s.sto_number)}</span>
+      ),
+    },
+    {
+      id: 'loading_port',
+      label: 'Loading Port',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => resolveShipmentListLoadingPorts(s),
+      render: (s) => (
+        <span className="text-sm break-words">{formatOperationalTableTextDisplay(resolveShipmentListLoadingPorts(s))}</span>
+      ),
+    },
+    {
+      id: 'discharge_port',
+      label: 'Discharge Port',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => resolveShipmentListDischargePorts(s),
+      render: (s) => (
+        <span className="text-sm break-words">{formatOperationalTableTextDisplay(resolveShipmentListDischargePorts(s))}</span>
+      ),
+    },
+    {
+      id: 'contract_date',
+      label: 'Contract Date',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.contract_date || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.contract_date || '')}</span>
+    },
+    {
+      id: 'contract_ext_no',
+      label: 'Contract Ext No',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.contract_ext_no || '',
+      render: (s) => (
+        <OperationalStackedCommaCell value={s.contract_ext_no} title={s.contract_ext_no || ''} />
       )
     },
     {
-      id: 'shipment_id',
-      label: 'STO No',
+      id: 'po_numbers',
+      label: 'PO',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.po_numbers || '',
+      render: (s) => (
+        <OperationalStackedCommaCell value={s.po_numbers} title={s.po_numbers || ''} />
+      )
+    },
+    {
+      id: 'supplier',
+      label: 'Supplier',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => s.sto_number || '',
+      getSortValue: (s) => resolveShipmentListSuppliers(s),
       render: (s) => (
-        <span className="text-sm font-semibold break-words block">
-          {s.sto_number || ''}
-        </span>
-      )
+        <OperationalStackedCommaCell
+          value={resolveShipmentListSuppliers(s)}
+          title={resolveShipmentListSuppliers(s) || ''}
+        />
+      ),
+    },
+    {
+      id: 'vessel_name',
+      label: 'Vessel',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.vessel_name || '',
+      render: (s) => <span className="text-sm break-words">{formatVesselTableDisplay(s.vessel_name)}</span>
     },
     {
       id: 'status',
-      label: 'Status',
+      label: 'Status Shipment',
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => s.status || '',
       render: (s) => (
         <Badge className={getStatusColor(s.status)}>
-          {s.status}
+          {formatShipmentStatusLabel(s.status)}
         </Badge>
+      )
+    },
+    {
+      id: 'product',
+      label: 'Product',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.product || s.products || '',
+      render: (s) => (
+        <span className="text-sm break-words">{formatOperationalTableTextDisplay(s.product || s.products)}</span>
+      ),
+    },
+    {
+      id: 'incoterm',
+      label: 'Incoterm',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.incoterm || '',
+      render: (s) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(s.incoterm)}</span>
+    },
+    {
+      id: 'contract_qty',
+      label: 'Contract Qty',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => shipmentStoredQtyKg(s.contract_qty) ?? 0,
+      render: (s) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatSapQtyMtDisplay(s.contract_qty)}
+        </span>
+      ),
+    },
+    {
+      id: 'sto_quantity',
+      label: 'STO Qty (MT)',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => resolveShipmentListStoKg(s) ?? 0,
+      render: (s) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatSapQtyMtDisplay(resolveShipmentListStoKg(s))}
+        </span>
+      )
+    },
+    {
+      id: 'quantity_delivered',
+      label: 'Delivery Qty (MT)',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => resolveShipmentListDeliveredKg(s) ?? 0,
+      render: (s) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatSapQtyMtDisplay(resolveShipmentListDeliveredKg(s))}
+        </span>
+      )
+    },
+    {
+      id: 'quantity_receive',
+      label: 'Received Qty (MT)',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => resolveShipmentListReceiveKg(s) ?? 0,
+      render: (s) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatSapQtyMtDisplay(resolveShipmentListReceiveKg(s))}
+        </span>
+      )
+    },
+    {
+      id: 'outstanding_quantity',
+      label: 'Outstanding Qty',
+      formulaHelp: FIELD_HELP.shipmentOutstandingQtyMt,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => shipmentStoredQtyKg(s.outstanding_quantity) ?? 0,
+      render: (s) => {
+        const kg = shipmentStoredQtyKg(s.outstanding_quantity)
+        return (
+          <span
+            className={`text-sm break-words tabular-nums font-medium ${outstandingQtyMtColorClass(kg)}`}
+          >
+            {formatSapOutstandingQtyMtDisplay(s.outstanding_quantity)}
+          </span>
+        )
+      }
+    },
+    {
+      id: 'outstanding_qty_planning',
+      label: 'Outstanding Qty (Plan)',
+      formulaHelp: FIELD_HELP.shipmentOutstandingQtyPlanning,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => shipmentStoredQtyKg(s.outstanding_qty_planning) ?? 0,
+      render: (s) => {
+        const kg = shipmentStoredQtyKg(s.outstanding_qty_planning)
+        return (
+          <span
+            className={`text-sm break-words tabular-nums font-medium ${outstandingQtyMtColorClass(kg)}`}
+          >
+            {formatSapOutstandingQtyMtDisplay(s.outstanding_qty_planning)}
+          </span>
+        )
+      },
+    },
+    {
+      id: 'sfal_qty',
+      label: 'SFAL Qty',
+      formulaHelp: FIELD_HELP.shipmentSfalQtyMt,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => shipmentStoredQtyKg(s.sfal_qty) ?? 0,
+      render: (s) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatSapQtyMtDisplay(s.sfal_qty)}
+        </span>
+      )
+    },
+    {
+      id: 'sfbd_qty',
+      label: 'SFBD Qty',
+      formulaHelp: FIELD_HELP.shipmentSfbdQtyMt,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => shipmentStoredQtyKg(s.sfbd_qty) ?? 0,
+      render: (s) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatSapQtyMtDisplay(s.sfbd_qty)}
+        </span>
+      )
+    },
+    {
+      id: 'ata_vessel_completed_loading',
+      label: 'ATA Load Complete',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_completed_loading || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_completed_loading || '')}</span>
+    },
+    {
+      id: 'ata_vessel_complete_discharge',
+      label: 'ATA Discharge Complete',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_complete_discharge || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_complete_discharge || '')}</span>
+    },
+    {
+      id: 'operation_id',
+      label: 'Operation ID',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.operation_id || '',
+      render: (s) => (
+        <span className="text-sm break-words block" title={s.operation_id || ''}>
+          {formatOperationalTableTextDisplay(s.operation_id)}
+        </span>
       )
     },
     {
       id: 'contract_numbers',
       label: 'Contract Numbers',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.contract_numbers || s.contract_number || '',
       render: (s) => (
-        <span className="text-sm break-words block" title={s.contract_numbers || s.contract_number || ''}>
-          {s.contract_numbers || s.contract_number || '-'}
-        </span>
-      )
-    },
-    {
-      id: 'po_numbers',
-      label: 'PO No',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.po_numbers || '',
-      render: (s) => (
-        <span className="text-sm break-words block" title={s.po_numbers || ''}>
-          {s.po_numbers || '-'}
-        </span>
+        <OperationalStackedCommaCell
+          value={s.contract_numbers || s.contract_number}
+          title={s.contract_numbers || s.contract_number || ''}
+        />
       )
     },
     {
       id: 'contract_reference_po',
-      label: 'CONTRACT REFF PO',
-      defaultVisible: true,
+      label: 'Contract Reff PO',
+      defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.contract_reference_po || '',
       render: (s) => (
-        <span className="text-sm break-words block" title={s.contract_reference_po || ''}>
-          {s.contract_reference_po || '-'}
-        </span>
+        <OperationalStackedCommaCell
+          value={s.contract_reference_po}
+          title={s.contract_reference_po || ''}
+        />
       )
     },
-    {
-      id: 'contract_ext_no',
-      label: 'Contract Ext No',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.contract_ext_no || '',
-      render: (s) => (
-        <span className="text-sm break-words block" title={s.contract_ext_no || ''}>
-          {s.contract_ext_no || '-'}
-        </span>
-      )
-    },
-    // Due Date Delivery Start/End are shown in the Contract Details section,
-    // so they are hidden from the compact view by default.
     {
       id: 'delivery_start',
       label: 'Due Date Delivery Start',
@@ -1877,84 +3398,12 @@ function ShipmentsPageContent() {
       render: (s) => <span className="text-sm">{formatShortDate(s.delivery_end_date || '')}</span>
     },
     {
-      id: 'ata_vessel_completed_loading',
-      label: 'ATA Vessel Completed Loading',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.ata_vessel_completed_loading || '',
-      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_completed_loading || '')}</span>
-    },
-    {
-      id: 'ata_vessel_complete_discharge',
-      label: 'ATA Vessel Complete Discharge',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.ata_vessel_complete_discharge || '',
-      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_complete_discharge || '')}</span>
-    },
-    {
-      id: 'vessel_name',
-      label: 'Vessel Name',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.vessel_name || '',
-      render: (s) => <span className="text-sm break-words">{s.vessel_name || '-'}</span>
-    },
-    {
-      id: 'sto_quantity',
-      label: 'STO Quantity',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.sto_quantity || s.total_quantity_shipped || s.quantity_shipped || 0,
-      render: (s) => (
-        <span className="text-sm break-words">
-          {formatNumber(s.sto_quantity || s.total_quantity_shipped || s.quantity_shipped || '-')} Kg
-        </span>
-      )
-    },
-    {
-      id: 'quantity_receive',
-      label: 'Quantity Received (Kg)',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => (s.quantity_receive ?? 0),
-      render: (s) => (
-        <span className="text-sm break-words">
-          {formatNumber(s.quantity_receive ?? '-')} Kg
-        </span>
-      )
-    },
-    {
-      id: 'incoterm',
-      label: 'Incoterm',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.incoterm || '',
-      render: (s) => <span className="text-sm break-words">{s.incoterm || '-'}</span>
-    },
-    {
       id: 'b2b_flag',
       label: 'B2B Flag',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.b2b_flag || '',
-      render: (s) => <span className="text-sm break-words">{s.b2b_flag || '-'}</span>
-    },
-    {
-      id: 'port_of_loading',
-      label: 'Port of Loading',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (s) => s.port_of_loading || '',
-      render: (s) => <span className="text-sm break-words">{s.port_of_loading || '-'}</span>
-    },
-    {
-      id: 'port_of_discharge',
-      label: 'Port of Discharge',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (s) => s.port_of_discharge || s.plant_site || '',
-      render: (s) => <span className="text-sm break-words">{s.port_of_discharge || s.plant_site || '-'}</span>
+      render: (s) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(s.b2b_flag)}</span>
     },
     {
       id: 'vessel_code',
@@ -1962,19 +3411,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.vessel_code || '',
-      render: (s) => <span className="text-sm">{s.vessel_code || '-'}</span>
-    },
-    {
-      id: 'quantity_delivered',
-      label: 'Quantity Delivered',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (s) => s.quantity_delivered_sap || s.total_quantity_delivered || s.quantity_delivered || 0,
-      render: (s) => (
-        <span className="text-sm break-words">
-          {formatNumber(s.quantity_delivered_sap ?? s.total_quantity_delivered ?? s.quantity_delivered ?? '-')} Kg
-        </span>
-      )
+      render: (s) => <span className="text-sm">{formatOperationalTableTextDisplay(s.vessel_code)}</span>
     },
     {
       id: 'estimated_nautical_miles',
@@ -2030,7 +3467,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.vessel_hull_type || '',
-      render: (s) => <span className="text-sm break-words">{s.vessel_hull_type || '-'}</span>
+      render: (s) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(s.vessel_hull_type)}</span>
     },
     {
       id: 'vessel_registration_year',
@@ -2038,7 +3475,7 @@ function ShipmentsPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.vessel_registration_year || 0,
-      render: (s) => <span className="text-sm">{s.vessel_registration_year || '-'}</span>
+      render: (s) => <span className="text-sm">{formatOperationalTableTextDisplay(s.vessel_registration_year)}</span>
     },
     {
       id: 'average_vessel_speed',
@@ -2051,76 +3488,238 @@ function ShipmentsPageContent() {
           {s.average_vessel_speed ? `${formatNumber(s.average_vessel_speed)} knots` : '-'}
         </span>
       )
-    }
+    },
+    {
+      id: 'eta_arrival',
+      label: 'ETA Arrival at Loading Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_arrival || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_arrival || '')}</span>,
+    },
+    {
+      id: 'eta_berthed',
+      label: 'ETA Berthed at Loading Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_berthed || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_berthed || '')}</span>,
+    },
+    {
+      id: 'eta_loading_start',
+      label: 'ETA Start Loading',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_loading_start || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_loading_start || '')}</span>,
+    },
+    {
+      id: 'eta_loading_complete',
+      label: 'ETA Loading Complete',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_loading_complete || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_loading_complete || '')}</span>,
+    },
+    {
+      id: 'eta_sailed',
+      label: 'ETA Sailed from Loading Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_sailed || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_sailed || '')}</span>,
+    },
+    {
+      id: 'eta_discharge_arrival',
+      label: 'ETA Arrival at Discharge Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_discharge_arrival || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_discharge_arrival || '')}</span>,
+    },
+    {
+      id: 'eta_discharge_berthed',
+      label: 'ETA Berthed at Discharge Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_discharge_berthed || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_discharge_berthed || '')}</span>,
+    },
+    {
+      id: 'eta_discharge_start',
+      label: 'ETA Start Discharging',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_discharge_start || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_discharge_start || '')}</span>,
+    },
+    {
+      id: 'eta_discharge_complete',
+      label: 'ETA Discharge Complete',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.eta_discharge_complete || s.eta_vessel_complete_discharge || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.eta_discharge_complete || s.eta_vessel_complete_discharge || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_arrival_at_loading_port',
+      label: 'ATA Arrival at Loading Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_arrival_at_loading_port || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_arrival_at_loading_port || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_berthed_at_loading_port',
+      label: 'ATA Berthed at Loading Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_berthed_at_loading_port || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_berthed_at_loading_port || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_start_loading',
+      label: 'ATA Start Loading',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_start_loading || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_start_loading || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_sailed_from_loading_port',
+      label: 'ATA Sailed from Loading Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_sailed_from_loading_port || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_sailed_from_loading_port || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_arrive_at_discharge_port',
+      label: 'ATA Arrival at Discharge Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_arrive_at_discharge_port || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_arrive_at_discharge_port || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_berthed_at_discharge_port',
+      label: 'ATA Berthed at Discharge Port',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_berthed_at_discharge_port || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_berthed_at_discharge_port || '')}</span>,
+    },
+    {
+      id: 'ata_vessel_start_discharging',
+      label: 'ATA Start Discharging',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.ata_vessel_start_discharging || '',
+      render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_start_discharging || '')}</span>,
+    },
   ], [])
 
   const defaultVisibleColumnIds = useMemo(() => {
     return compactColumns.filter(c => c.defaultVisible).map(c => c.id)
   }, [compactColumns])
 
+  const compactColumnIdsKey = useMemo(() => compactColumns.map((c) => c.id).join('|'), [compactColumns])
+
   useEffect(() => {
     if (visibleColumnIds.size === 0) {
       setVisibleColumnIds(new Set(defaultVisibleColumnIds))
-    } else {
-      // Ensure required columns are always included
-      const required = [
-        'late_indicator',
-        'operation_id',
-        'shipment_id',
-        'status',
-        // Key operational quantities should never "disappear" due to stored user preferences
-        'sto_quantity',
-        'quantity_receive',
-        'quantity_delivered',
-      ]
-      const current = Array.from(visibleColumnIds)
-      const missing = required.filter(id => !current.includes(id))
-      if (missing.length > 0) {
-        setVisibleColumnIds(new Set([...current, ...missing]))
-      }
     }
   }, [defaultVisibleColumnIds, visibleColumnIds])
 
-  // Initialize / heal column order whenever column definitions change.
+  // Initialize / heal column order; apply layout version migration for all users.
   useEffect(() => {
     const allIds = compactColumns.map((c) => c.id)
+    const canonical = shipmentCompactColumnFallbackOrder(allIds)
+    let needsLayoutMigration = false
+    if (typeof window !== 'undefined') {
+      try {
+        needsLayoutMigration =
+          localStorage.getItem(SHIPMENT_COLUMN_LAYOUT_VERSION_KEY) !== SHIPMENT_COLUMN_LAYOUT_VERSION
+      } catch {
+        needsLayoutMigration = true
+      }
+    }
+
+    const applyMigratedLayout = (visible: string[], order: string[]) => {
+      const migrated = migrateShipmentColumnLayout(visible, order)
+      const nextOrder = mergeShipmentColumnOrder(migrated.columnOrderIds, allIds)
+      setVisibleColumnIds(new Set(migrated.visibleColumnIds))
+      setColumnOrderIds(nextOrder)
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(SHIPMENT_COLUMN_LAYOUT_VERSION_KEY, SHIPMENT_COLUMN_LAYOUT_VERSION)
+          localStorage.setItem(columnOrderStorageKey, JSON.stringify(nextOrder))
+          localStorage.setItem(columnStorageKey, JSON.stringify(migrated.visibleColumnIds))
+        } catch {
+          // ignore
+        }
+      }
+      void api
+        .post('/user-preferences/me', {
+          key: userViewPrefKey,
+          value: {
+            visibleColumnIds: migrated.visibleColumnIds,
+            columnOrderIds: nextOrder,
+          },
+        })
+        .catch(() => {
+          /* localStorage already updated */
+        })
+    }
+
+    if (needsLayoutMigration) {
+      let savedVisible: string[] = []
+      let savedOrder: string[] = []
+      if (typeof window !== 'undefined') {
+        try {
+          const rawVis = localStorage.getItem(columnStorageKey)
+          if (rawVis) {
+            const parsed = JSON.parse(rawVis) as unknown
+            if (Array.isArray(parsed)) savedVisible = parsed.map(String)
+          }
+          const rawOrder = localStorage.getItem(columnOrderStorageKey)
+          if (rawOrder) {
+            const parsed = JSON.parse(rawOrder) as unknown
+            if (Array.isArray(parsed)) savedOrder = parsed.map(String)
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (savedVisible.length === 0) {
+        applyMigratedLayout(shipmentDefaultVisibleColumnIds(allIds), canonical)
+      } else {
+        applyMigratedLayout(savedVisible, savedOrder)
+      }
+      return
+    }
+
     setColumnOrderIds((prev) => {
-      const base = prev.length > 0 ? prev : allIds
-      const deduped = Array.from(new Set(base))
-      const missing = allIds.filter((id) => !deduped.includes(id))
-      return [...deduped, ...missing].filter((id) => allIds.includes(id))
+      const next = mergeShipmentColumnOrder(prev, allIds)
+      if (prev.length === next.length && prev.every((v, i) => v === next[i])) return prev
+      return next
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compactColumns])
+  }, [compactColumnIdsKey])
 
-  const visibleColumns = useMemo(() => {
-    const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
-    const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : compactColumns.map((c) => c.id))
-      .filter((id) => byId.has(id))
-    const orderedAll = orderedIds.map((id) => byId.get(id)!).filter(Boolean)
-    const visible = orderedAll.filter((c) => visibleColumnIds.has(c.id))
-
-    // Keep required columns always visible (order is controlled by drag & drop).
-    const required = ['late_indicator', 'operation_id', 'shipment_id', 'status']
-    const visibleIds = new Set(visible.map((c) => c.id))
-    const missingRequired = required
-      .map((id) => byId.get(id))
-      .filter((c): c is CompactColumn => Boolean(c))
-      .filter((c) => !visibleIds.has(c.id))
-
-    return [...visible, ...missingRequired]
-  }, [compactColumns, visibleColumnIds, editingId, columnOrderIds])
+  const visibleColumns = useMemo(
+    () => buildShipmentVisibleColumns(compactColumns, visibleColumnIds, columnOrderIds),
+    [compactColumns, visibleColumnIds, columnOrderIds],
+  )
 
   const moveColumnOrder = (id: string, direction: 'up' | 'down') => {
-    const pinned = new Set(['late_indicator', 'operation_id', 'shipment_id', 'status'])
-    if (pinned.has(id)) return
     setColumnOrderIds((prev) => {
-      const ids = prev.length > 0 ? [...prev] : compactColumns.map((c) => c.id)
+      const allIds = compactColumns.map((c) => c.id)
+      const ids = prev.length > 0 ? [...mergeShipmentColumnOrder(prev, allIds)] : [...shipmentCompactColumnFallbackOrder(allIds)]
       const idx = ids.indexOf(id)
       if (idx < 0) return ids
       const swapWith = direction === 'up' ? idx - 1 : idx + 1
       if (swapWith < 0 || swapWith >= ids.length) return ids
-      if (pinned.has(ids[swapWith])) return ids
       ;[ids[idx], ids[swapWith]] = [ids[swapWith], ids[idx]]
       return ids
     })
@@ -2129,7 +3728,8 @@ function ShipmentsPageContent() {
   const reorderColumnByDrag = (dragId: string, dropId: string) => {
     if (dragId === dropId) return
     setColumnOrderIds((prev) => {
-      const ids = prev.length > 0 ? [...prev] : compactColumns.map((c) => c.id)
+      const allIds = compactColumns.map((c) => c.id)
+      const ids = prev.length > 0 ? [...prev] : shipmentCompactColumnFallbackOrder(allIds)
       const from = ids.indexOf(dragId)
       const to = ids.indexOf(dropId)
       if (from < 0 || to < 0) return ids
@@ -2141,9 +3741,18 @@ function ShipmentsPageContent() {
 
   const sortedShipments = useMemo(() => {
     const col = compactColumns.find(c => c.id === sortKey)
-    if (!col?.sortable || !col.getSortValue) return filteredShipments
+    const base = shipments
+    const prioritizeSapSto = shouldPrioritizeSapStoRows(statusFilter)
+    if (!col?.sortable || !col.getSortValue) {
+      if (!prioritizeSapSto) return base
+      return [...base].sort((a, b) => compareSapStoListRowPriority(a, b))
+    }
 
-    const sorted = [...filteredShipments].sort((a, b) => {
+    const sorted = [...base].sort((a, b) => {
+      if (prioritizeSapSto) {
+        const stoCmp = compareSapStoListRowPriority(a, b)
+        if (stoCmp !== 0) return stoCmp
+      }
       const aVal = col.getSortValue!(a)
       const bVal = col.getSortValue!(b)
       const dirMul = sortDir === 'asc' ? 1 : -1
@@ -2155,7 +3764,50 @@ function ShipmentsPageContent() {
     })
 
     return sorted
-  }, [compactColumns, filteredShipments, sortDir, sortKey])
+  }, [compactColumns, shipments, sortDir, sortKey, statusFilter])
+
+  const paginatedShipments = sortedShipments
+
+  const stoGroupedShipments = useMemo(
+    () => groupShipmentsBySto(paginatedShipments),
+    [paginatedShipments],
+  )
+
+  const toggleStoGroupCollapse = useCallback((stoKey: string) => {
+    setCollapsedStoGroupKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(stoKey)) next.delete(stoKey)
+      else next.add(stoKey)
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages)
+  }, [page, totalPages])
+
+  const handlePageChange = useCallback((nextPage: number) => {
+    if (nextPage >= 1 && nextPage <= totalPages) {
+      setPage(nextPage)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }, [totalPages])
+
+  const resetCompactColumnView = useCallback(() => {
+    const allIds = compactColumns.map((c) => c.id)
+    const vis = new Set(shipmentDefaultVisibleColumnIds(allIds))
+    const order = shipmentCompactColumnFallbackOrder(allIds)
+    setVisibleColumnIds(vis)
+    setColumnOrderIds(order)
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(columnStorageKey, JSON.stringify(Array.from(vis)))
+        localStorage.setItem(columnOrderStorageKey, JSON.stringify(order))
+      } catch {
+        // ignore
+      }
+    }
+  }, [compactColumns, columnStorageKey, columnOrderStorageKey])
 
   const allVisibleIds = useMemo(() => sortedShipments.map(s => s.id), [sortedShipments])
   const expandedCount = expandedShipmentIds.size
@@ -2196,10 +3848,46 @@ function ShipmentsPageContent() {
     if (bottomEl) {
       setTableScrollWidth(bottomEl.scrollWidth)
     }
-  }, [visibleColumns, sortedShipments.length])
+  }, [visibleColumns, sortedShipments.length, editingId])
 
   // Vessel loading port functions
+  const buildShipmentInfoFromShipment = (s: Record<string, unknown>) => ({
+    quantity_delivered: s.quantity_delivered,
+    actual_vessel_qty_receive: s.actual_vessel_qty_receive,
+    sfal_qty: s.sfal_qty,
+    sfbd_qty: s.sfbd_qty,
+    vessel_oa_actual: s.vessel_oa_actual,
+    vessel_oa_budget: s.vessel_oa_budget,
+    bl_quantity: s.bl_quantity,
+    vessel_loading_port_1: s.port_of_loading,
+    vessel_discharge_port_1: s.port_of_discharge,
+    ata_vessel_arrival_at_loading_port: s.ata_arrival,
+    ata_vessel_berthed_at_loading_port: s.ata_berthed,
+    ata_vessel_start_loading: s.ata_loading_start,
+    ata_vessel_completed_loading: s.ata_loading_complete,
+    ata_vessel_sailed_from_loading_port: s.ata_sailed,
+    ata_vessel_arrive_at_discharge_port: s.ata_discharge_arrival,
+    ata_vessel_berthed_at_discharge_port: s.ata_discharge_berthed,
+    ata_vessel_start_discharging: s.ata_discharge_start,
+    ata_vessel_complete_discharge: s.ata_discharge_complete,
+  })
+
+  const fetchShipmentInfoFallback = async (shipmentId: string) => {
+    try {
+      const shipmentResponse = await api.get(`/shipments/${shipmentId}`)
+      if (shipmentResponse.data.success && shipmentResponse.data.data) {
+        setShipmentInfo(buildShipmentInfoFromShipment(shipmentResponse.data.data))
+        return
+      }
+    } catch (err) {
+      console.error('Error fetching shipment data:', err)
+    }
+    setShipmentInfo({})
+  }
+
   const fetchLoadingPorts = async (shipmentId: string, skipCache = false) => {
+    setShipmentInfoLoading(true)
+    setShipmentInfoError(null)
     try {
       const url = skipCache
         ? `/shipments/${shipmentId}/loading-ports?_t=${Date.now()}`
@@ -2210,100 +3898,71 @@ function ShipmentsPageContent() {
         // Handle new response structure: { ports: [], shipmentInfo: {} }
         if (response.data.data && typeof response.data.data === 'object' && 'ports' in response.data.data) {
           setLoadingPorts(response.data.data.ports || [])
-          // Always set shipmentInfo, even if null - we'll fetch it separately if needed
+          setCancelledLoadingPorts(response.data.data.cancelledPorts || [])
           const info = response.data.data.shipmentInfo
           console.log('ShipmentInfo from response:', info)
-          if (info) {
+          if (info && typeof info === 'object') {
             setShipmentInfo(info)
           } else {
-            // Fallback: fetch shipment data directly if shipmentInfo is not in response
             console.log('ShipmentInfo not in response, fetching directly...')
-            try {
-              // Try with the same identifier first
-              const shipmentResponse = await api.get(`/shipments/${shipmentId}`)
-              if (shipmentResponse.data.success && shipmentResponse.data.data) {
-                const s = shipmentResponse.data.data
-                console.log('Fetched shipment data:', s)
-                setShipmentInfo({
-                  quantity_delivered: s.quantity_delivered,
-                  actual_vessel_qty_receive: s.actual_vessel_qty_receive,
-                  vessel_oa_actual: s.vessel_oa_actual,
-                  vessel_oa_budget: s.vessel_oa_budget,
-                  bl_quantity: s.bl_quantity,
-                  vessel_loading_port_1: s.port_of_loading,
-                  ata_vessel_arrival_at_loading_port: s.ata_arrival,
-                  ata_vessel_berthed_at_loading_port: s.ata_berthed,
-                  ata_vessel_start_loading: s.ata_loading_start,
-                  ata_vessel_completed_loading: s.ata_loading_complete,
-                  ata_vessel_sailed_from_loading_port: s.ata_sailed,
-                  ata_vessel_arrive_at_discharge_port: s.ata_discharge_arrival,
-                  ata_vessel_berthed_at_discharge_port: s.ata_discharge_berthed,
-                  ata_vessel_start_discharging: s.ata_discharge_start,
-                  ata_vessel_complete_discharge: s.ata_discharge_complete
-                })
-              } else {
-                console.warn('Shipment data fetch returned no data')
-                setShipmentInfo(null)
-              }
-            } catch (err) {
-              console.error('Error fetching shipment data:', err)
-              setShipmentInfo(null)
-            }
+            await fetchShipmentInfoFallback(shipmentId)
           }
         } else {
           // Fallback for old response structure (array)
           console.warn('Unexpected response structure:', response.data.data)
           setLoadingPorts(Array.isArray(response.data.data) ? response.data.data : [])
-          setShipmentInfo(null)
+          setCancelledLoadingPorts([])
+          await fetchShipmentInfoFallback(shipmentId)
         }
       } else {
         console.error('API returned success: false', response.data)
+        setLoadingPorts([])
+        setCancelledLoadingPorts([])
+        setShipmentInfo({})
+        setShipmentInfoError(response.data?.error?.message || 'Failed to load shipment information')
       }
     } catch (error) {
       console.error('Error fetching loading ports:', error)
       setLoadingPorts([])
-      setShipmentInfo(null)
+      setCancelledLoadingPorts([])
+      setShipmentInfo({})
+      setShipmentInfoError(apiErrorMessage(error, 'Failed to load shipment information'))
+    } finally {
+      setShipmentInfoLoading(false)
     }
   }
 
   const handleViewLoadingPorts = async (shipment: Shipment) => {
     setSelectedShipment(shipment)
     setShowLoadingPorts(true)
+    setShipmentInfo(null)
+    setLoadingPorts([])
+    setCancelledLoadingPorts([])
+    setShipmentInfoError(null)
     // For editing/saving we always work per specific shipment (UUID)
     await fetchLoadingPorts(shipment.id)
+    void fetchContractDetails(shipment)
   }
 
   const handleSaveLoadingPort = async () => {
     if (!selectedShipment) return
 
+    const portName = String(newPort.port_name ?? '').trim()
+    if (!portName) {
+      alert('Port is required. Select a port from Master Port.')
+      return
+    }
+
     try {
-      const portData = newPort
+      const portData = buildLoadingPortCreatePayload({
+        ...newPort,
+        port_sequence: nextAddLoadingPortSequence(loadingPorts),
+      } as Record<string, unknown>)
       const response = await api.post(`/shipments/${selectedShipment.id}/loading-ports`, portData)
       
       if (response.data.success) {
         await fetchLoadingPorts(selectedShipment.id)
-        setNewPort({
-          port_name: '',
-          port_sequence: loadingPorts.length + 1,
-          quantity_at_loading_port: 0,
-          eta_vessel_arrival: '',
-          ata_vessel_arrival: '',
-          eta_vessel_berthed: '',
-          ata_vessel_berthed: '',
-          eta_loading_start: '',
-          ata_loading_start: '',
-          eta_loading_completed: '',
-          ata_loading_completed: '',
-          eta_vessel_sailed: '',
-          ata_vessel_sailed: '',
-          eta_vessel_berthed_at_loading_port: '',
-          eta_vessel_arrive_at_discharge_port: '',
-          eta_vessel_berthed_at_discharge_port: '',
-          eta_vessel_start_discharging: '',
-          eta_vessel_complete_discharge: '',
-          loading_rate: 0,
-          is_discharge_port: false
-        })
+        setNewPort(createEmptyNewLoadingPort(nextAddLoadingPortSequence(loadingPorts) + 1))
         alert('Loading port added successfully!')
       }
     } catch (error) {
@@ -2312,18 +3971,49 @@ function ShipmentsPageContent() {
     }
   }
 
-  const handleDeleteLoadingPort = async (portId: string) => {
-    if (!selectedShipment) return
+  const openCancelLoadingPortDialog = (port: VesselLoadingPort) => {
+    if (!port.id || port.is_discharge_port) return
+    setCancelPortTarget({
+      id: port.id,
+      portName: port.port_name || '',
+      portSequence: port.port_sequence || 1,
+    })
+    setCancelPortRemark('')
+  }
 
+  const closeCancelLoadingPortDialog = () => {
+    if (cancelPortSubmitting) return
+    setCancelPortTarget(null)
+    setCancelPortRemark('')
+  }
+
+  const handleConfirmCancelLoadingPort = async () => {
+    if (!selectedShipment || !cancelPortTarget) return
+
+    const remark = cancelPortRemark.trim()
+    if (!remark) {
+      alert('Cancellation remark is required.')
+      return
+    }
+
+    setCancelPortSubmitting(true)
     try {
-      const response = await api.delete(`/shipments/${selectedShipment.id}/loading-ports/${portId}`)
+      const response = await api.delete(
+        `/shipments/${selectedShipment.id}/loading-ports/${cancelPortTarget.id}`,
+        { data: { action: 'cancel', remark } },
+      )
+
       if (response.data.success) {
+        setCancelPortTarget(null)
+        setCancelPortRemark('')
         await fetchLoadingPorts(selectedShipment.id)
-        alert('Loading port deleted successfully!')
+        alert('Loading port cancelled successfully!')
       }
     } catch (error) {
-      console.error('Error deleting loading port:', error)
-      alert('Failed to delete loading port')
+      console.error('Error cancelling loading port:', error)
+      alert(apiErrorMessage(error, 'Failed to cancel loading port'))
+    } finally {
+      setCancelPortSubmitting(false)
     }
   }
 
@@ -2343,43 +4033,157 @@ function ShipmentsPageContent() {
     if (!selectedShipment || !editedPortData) return
 
     try {
-      const portData = { ...editedPortData, id: portId }
-      // Use PUT for updates
+      const portData = buildLoadingPortUpdatePayload(editedPortData as Record<string, unknown>, portId)
+      console.log('[Shipments] handleSavePort PUT loading-port payload', {
+        shipmentId: selectedShipment.id,
+        portId,
+        portData,
+      })
       const response = await api.put(`/shipments/${selectedShipment.id}/loading-ports/${portId}`, portData)
       
       if (response.data.success) {
-        await fetchLoadingPorts(selectedShipment.id)
+        await fetchLoadingPorts(selectedShipment.id, true)
         setEditingPortId(null)
         setEditedPortData(null)
         alert('Loading port updated successfully!')
       }
     } catch (error) {
       console.error('Error saving loading port:', error)
-      alert('Failed to save loading port')
+      alert(apiErrorMessage(error, 'Failed to save loading port'))
     }
+  }
+
+  const resetQuantityUnlockState = () => {
+    setHasUploadedSld(false)
+    setHasUploadedSdd(false)
+    setSldDocId(null)
+    setSddDocId(null)
+    setSldDocUploading(false)
+    setSddDocUploading(false)
+  }
+
+  const hydrateQuantityUnlockDocs = async (shipmentInternalId: string) => {
+    try {
+      const params = new URLSearchParams()
+      params.append('shipmentId', shipmentInternalId)
+      const res = await api.get(`/documents?${params.toString()}`)
+      const docs: DocumentItem[] = res.data?.data || []
+      const sldDoc = docs.find((d) => d.document_type === SHIPMENT_SLD_DOC_TYPE)
+      const sddDoc = docs.find((d) => d.document_type === SHIPMENT_SDD_DOC_TYPE)
+      const legacyDoc = docs.find((d) => d.document_type === SHIPMENT_LEGACY_QUANTITY_UNLOCK_DOC_TYPE)
+
+      if (sldDoc?.id) {
+        setHasUploadedSld(true)
+        setSldDocId(String(sldDoc.id))
+      }
+      if (sddDoc?.id) {
+        setHasUploadedSdd(true)
+        setSddDocId(String(sddDoc.id))
+      }
+      if (legacyDoc?.id && !sldDoc && !sddDoc) {
+        setHasUploadedSld(true)
+        setSldDocId(String(legacyDoc.id))
+      }
+    } catch (err) {
+      console.error('Hydrate quantity unlock documents error:', err)
+    }
+  }
+
+  const resetPortsQuantityRowEdit = () => {
+    setEditingPortsQtyRowKey(null)
+    setEditedPortsContractQty({})
+  }
+
+  const syncEditedShipmentInfoFromPortsQtyRows = useCallback(
+    (edits: VesselPortsQuantityEdits) => {
+      if (!selectedShipment) return
+      const details = contractDetailsMap[selectedShipment.id]
+      const rows = buildVesselPortsQuantityRows(
+        selectedShipment.id,
+        details,
+        details?.length
+          ? null
+          : {
+              contract_ext_no: shipmentModalContractExtNoDisplay(
+                shipmentInfo,
+                selectedShipment,
+                details,
+              ),
+              po_number: shipmentModalPoDisplay(shipmentInfo, selectedShipment, details),
+              contract_qty: parseApiNumber(shipmentInfo?.contract_qty),
+              sto_qty: parseApiNumber(
+                shipmentInfo?.sto_quantity ?? selectedShipment.sto_quantity ?? selectedShipment.total_quantity_shipped,
+              ),
+              quantity_delivered: resolvePortsModalQuantityDeliveredKg(
+                shipmentInfo,
+                selectedShipment,
+                details,
+              ),
+              quantity_receive: resolvePortsModalQuantityReceiveKg(
+                shipmentInfo,
+                selectedShipment,
+                details,
+              ),
+            },
+      )
+      if (rows.length === 0) return
+      const sums = sumVesselPortsQuantityEdits(rows, edits)
+      setEditedShipmentInfo((prev: Record<string, unknown> | null) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          ...(sums.quantity_delivered !== null ? { quantity_delivered: sums.quantity_delivered } : {}),
+          ...(sums.quantity_receive !== null
+            ? { actual_vessel_qty_receive: sums.quantity_receive }
+            : {}),
+        }
+      })
+    },
+    [contractDetailsMap, selectedShipment, shipmentInfo],
+  )
+
+  const handleChangePortsQtyRow = (
+    rowKey: string,
+    field: 'quantity_delivered' | 'quantity_receive',
+    kg: number | null,
+  ) => {
+    setEditedPortsContractQty((prev) => ({
+      ...prev,
+      [rowKey]: { ...prev[rowKey], [field]: kg },
+    }))
+  }
+
+  const handleConfirmPortsQtyRowEdit = () => {
+    setEditingPortsQtyRowKey(null)
+    syncEditedShipmentInfoFromPortsQtyRows(editedPortsContractQty)
   }
 
   const handleCancelEditAll = () => {
     handleCancelEditShipmentInfo()
     handleCancelEditPort()
+    resetQuantityUnlockState()
+    resetPortsQuantityRowEdit()
+  }
+
+  const closeLoadingPortsModal = () => {
+    setShowLoadingPorts(false)
+    handleCancelEditAll()
   }
 
   const handleSaveAll = async () => {
-    // Save overall shipment info (includes first loading + first discharge port ETA)
-    await handleSaveShipmentInfo()
-
-    // Also save the edited port row (including first loading/discharge) so edits made in the table
-    // are not silently dropped when user presses "Save All".
-    if (editingPortId) {
-      await handleSavePort(editingPortId)
+    if (savingShipmentInfo) return
+    setSavingShipmentInfo(true)
+    try {
+      // Persists Detail Fields (incl. all ETA dates) via first loading + discharge port APIs.
+      await handleSaveShipmentInfo()
+    } finally {
+      setSavingShipmentInfo(false)
     }
-
-    setEditingPortId(null)
-    setEditedPortData(null)
   }
 
   const handleEditShipmentInfo = () => {
     if (shipmentInfo) {
+      resetQuantityUnlockState()
       // Initialize with all fields including ETA
       setEditedShipmentInfo({ 
         ...shipmentInfo,
@@ -2410,188 +4214,311 @@ function ShipmentsPageContent() {
         quality_at_discharge_loc_1_stone: shipmentInfo.quality_at_discharge_loc_1_stone ?? null,
       })
       setEditingShipmentInfo(true)
+      if (selectedShipment?.id) {
+        void hydrateQuantityUnlockDocs(selectedShipment.id)
+      }
     }
   }
 
   const handleCancelEditShipmentInfo = () => {
     setEditingShipmentInfo(false)
     setEditedShipmentInfo(null)
+    resetQuantityUnlockState()
+    resetPortsQuantityRowEdit()
+  }
+
+  const handleShipmentQuantityDocChange = async (
+    kind: typeof SHIPMENT_SLD_DOC_TYPE | typeof SHIPMENT_SDD_DOC_TYPE,
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0]
+    if (!file || !selectedShipment) return
+
+    const isPdf =
+      file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+    if (!isPdf) {
+      alert('Only PDF files are allowed.')
+      e.target.value = ''
+      return
+    }
+
+    const isSld = kind === SHIPMENT_SLD_DOC_TYPE
+    const alreadyUploaded = isSld ? hasUploadedSld : hasUploadedSdd
+    if (alreadyUploaded) return
+
+    const setUploading = isSld ? setSldDocUploading : setSddDocUploading
+    const setUploaded = isSld ? setHasUploadedSld : setHasUploadedSdd
+    const setDocId = isSld ? setSldDocId : setSddDocId
+
+    setUploading(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      form.append('document_type', kind)
+      form.append('shipment_id', selectedShipment.id)
+      form.append('description', `${kind} document for quantity delivery/receive edit`)
+
+      const res = await api.post('/documents/upload', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      if (res.data?.success) {
+        const docId = res.data?.data?.id ? String(res.data.data.id) : null
+        setDocId(docId)
+        setUploaded(true)
+        if (showDocs && selectedShipment) {
+          await fetchShipmentDocuments(selectedShipment)
+        }
+      } else {
+        alert(res.data?.error?.message || 'Failed to upload document')
+      }
+    } catch (err: any) {
+      console.error(`${kind} document upload error:`, err)
+      const msg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.error?.detail ||
+        err?.message ||
+        'Failed to upload document. Please try again.'
+      alert(msg)
+    } finally {
+      setUploading(false)
+      e.target.value = ''
+    }
   }
 
   const handleSaveShipmentInfo = async () => {
-    if (!selectedShipment || !editedShipmentInfo) return
+    if (!selectedShipment || !editedShipmentInfoRef.current) return
 
     try {
-      // Always work with specific shipment UUID for loading ports
+      const activeEl = document.activeElement
+      if (activeEl instanceof HTMLElement) {
+        activeEl.blur()
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      }
+
       const identifier = selectedShipment.id
-      
-      // Map the edited fields to the update format
-      const updateData: any = {
-        shipment_id: selectedShipment.shipment_id
+      let info = { ...editedShipmentInfoRef.current }
+
+      const portsQtyRows = buildVesselPortsQuantityRows(
+        selectedShipment.id,
+        contractDetailsMap[selectedShipment.id],
+        contractDetailsMap[selectedShipment.id]?.length
+          ? null
+          : {
+              contract_ext_no: shipmentModalContractExtNoDisplay(
+                shipmentInfo,
+                selectedShipment,
+                contractDetailsMap[selectedShipment.id],
+              ),
+              po_number: shipmentModalPoDisplay(
+                shipmentInfo,
+                selectedShipment,
+                contractDetailsMap[selectedShipment.id],
+              ),
+              contract_qty: parseApiNumber(shipmentInfo?.contract_qty),
+              sto_qty: parseApiNumber(
+                shipmentInfo?.sto_quantity ?? selectedShipment.sto_quantity ?? selectedShipment.total_quantity_shipped,
+              ),
+              quantity_delivered: resolvePortsModalQuantityDeliveredKg(
+                shipmentInfo,
+                selectedShipment,
+                contractDetailsMap[selectedShipment.id],
+              ),
+              quantity_receive: resolvePortsModalQuantityReceiveKg(
+                shipmentInfo,
+                selectedShipment,
+                contractDetailsMap[selectedShipment.id],
+              ),
+            },
+      )
+      const qtyUserEdited = hasVesselPortsQuantityUserEdits(portsQtyRows, editedPortsContractQty)
+      if (qtyUserEdited && portsQtyRows.length > 0) {
+        const sums = sumVesselPortsQuantityEdits(portsQtyRows, editedPortsContractQty)
+        if (sums.quantity_delivered !== null) info.quantity_delivered = sums.quantity_delivered
+        if (sums.quantity_receive !== null) info.actual_vessel_qty_receive = sums.quantity_receive
       }
 
-      // Add fields that can be updated in shipments table
-      if (editedShipmentInfo.quantity_delivered !== undefined) {
-        updateData.quantity_delivered = editedShipmentInfo.quantity_delivered
+      if (qtyUserEdited && !isQuantityUnlockedRef.current) {
+        alert('Please upload an SLD or SDD document before editing Quantity Delivery or Quantity Receive.')
+        return
       }
-      if (editedShipmentInfo.actual_vessel_qty_receive !== undefined) {
-        updateData.actual_vessel_qty_receive = editedShipmentInfo.actual_vessel_qty_receive
-      }
-      if (editedShipmentInfo.vessel_oa_actual !== undefined) {
-        updateData.vessel_oa_actual = editedShipmentInfo.vessel_oa_actual
-      }
-      if (editedShipmentInfo.vessel_oa_budget !== undefined) {
-        updateData.vessel_oa_budget = editedShipmentInfo.vessel_oa_budget
-      }
-      if (editedShipmentInfo.bl_quantity !== undefined) {
-        updateData.bl_quantity = editedShipmentInfo.bl_quantity
-      }
-      if (editedShipmentInfo.vessel_loading_port_1 !== undefined && editedShipmentInfo.vessel_loading_port_1 !== '' && editedShipmentInfo.vessel_loading_port_1 !== '0.00') {
-        updateData.port_of_loading = editedShipmentInfo.vessel_loading_port_1
-      }
-      if (editedShipmentInfo.vessel_discharge_port_1 !== undefined && editedShipmentInfo.vessel_discharge_port_1 !== '' && editedShipmentInfo.vessel_discharge_port_1 !== '0.00') {
-        updateData.port_of_discharge = editedShipmentInfo.vessel_discharge_port_1
+      if (qtyUserEdited && !(sldDocIdRef.current || sddDocIdRef.current)) {
+        alert('An SLD or SDD document must be attached before saving quantity changes.')
+        return
       }
 
-      // Save shipment data
-      const response = await api.put(`/shipments/${selectedShipment.id}`, updateData)
-      
-      if (response.data.success) {
-        // Refresh loading ports to get the latest data before saving ETA fields
-        const refreshedPortsResponse = await api.get(`/shipments/${identifier}/loading-ports`)
-        let refreshedPorts: any[] = []
-        if (refreshedPortsResponse.data.success && refreshedPortsResponse.data.data.ports) {
-          refreshedPorts = refreshedPortsResponse.data.data.ports
+      const updateData: Record<string, unknown> = {}
+      if (qtyUserEdited && info.quantity_delivered !== undefined && info.quantity_delivered !== null) {
+        updateData.quantity_delivered = info.quantity_delivered
+      }
+      if (qtyUserEdited && info.actual_vessel_qty_receive !== undefined && info.actual_vessel_qty_receive !== null) {
+        updateData.actual_vessel_qty_receive = info.actual_vessel_qty_receive
+      }
+      if (info.sfal_qty !== undefined) {
+        updateData.sfal_qty = info.sfal_qty
+      }
+      if (info.sfbd_qty !== undefined) {
+        updateData.sfbd_qty = info.sfbd_qty
+      }
+      if (info.vessel_oa_actual !== undefined && info.vessel_oa_actual !== null) {
+        updateData.vessel_oa_actual = info.vessel_oa_actual
+      }
+      if (info.vessel_oa_budget !== undefined && info.vessel_oa_budget !== null) {
+        updateData.vessel_oa_budget = info.vessel_oa_budget
+      }
+      if (info.bl_quantity !== undefined && info.bl_quantity !== null) {
+        updateData.bl_quantity = info.bl_quantity
+      }
+      const pol = String(info.vessel_loading_port_1 ?? '').trim()
+      if (pol && pol !== '0.00') updateData.port_of_loading = pol
+      const pod = String(info.vessel_discharge_port_1 ?? '').trim()
+      if (pod && pod !== '0.00') updateData.port_of_discharge = pod
+
+      if (Object.keys(updateData).length > 0) {
+        console.log('[Shipments] handleSaveShipmentInfo PUT /shipments/:id payload', {
+          shipmentId: identifier,
+          updateData,
+        })
+        const response = await api.put(`/shipments/${identifier}`, updateData)
+        if (!response.data?.success) {
+          throw new Error(response.data?.error?.message || 'Failed to update shipment')
         }
-        
-        // Now save ETA fields to the first loading port
-        // Find ANY existing loading port (prefer port_sequence 1, but use any if available)
-        let firstPort = refreshedPorts.find((p: any) => !p.is_discharge_port && p.port_sequence === 1) 
-                     || refreshedPorts.find((p: any) => !p.is_discharge_port)
-                     || loadingPorts.find(p => !p.is_discharge_port && p.port_sequence === 1)
-                     || loadingPorts.find(p => !p.is_discharge_port)
+      }
 
-        // Detect if shipment already has any loading port at all
-        const hasAnyLoadingPort =
-          refreshedPorts.some((p: any) => !p.is_discharge_port) ||
-          loadingPorts.some(p => !p.is_discharge_port)
+      const refreshedPortsResponse = await api.get(`/shipments/${identifier}/loading-ports`)
+      let refreshedPorts: VesselLoadingPort[] = []
+      if (refreshedPortsResponse.data.success && refreshedPortsResponse.data.data.ports) {
+        refreshedPorts = refreshedPortsResponse.data.data.ports
+      }
 
-        if (firstPort && firstPort.id) {
-          // Update existing loading port: merge existing port data so backend does not overwrite with null
-          const toDateStr = (v: unknown) => (v != null && v !== '' ? String(v).split('T')[0] : null)
-          const loadingPortUpdateData: any = {
-            port_name: editedShipmentInfo.vessel_loading_port_1 || firstPort.port_name || 'Loading Port 1',
+      const firstPort =
+        refreshedPorts.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
+        refreshedPorts.find((p) => !p.is_discharge_port) ||
+        loadingPorts.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
+        loadingPorts.find((p) => !p.is_discharge_port)
+
+      const hasAnyLoadingPort =
+        refreshedPorts.some((p) => !p.is_discharge_port) || loadingPorts.some((p) => !p.is_discharge_port)
+
+      if (firstPort?.id) {
+        const loadingPortUpdateData = buildLoadingPortUpdatePayload(
+          {
+            ...(firstPort as unknown as Record<string, unknown>),
+            port_name: info.vessel_loading_port_1 || firstPort.port_name || 'Loading Port 1',
             port_sequence: firstPort.port_sequence ?? 1,
-            quantity_at_loading_port: editedShipmentInfo.actual_vessel_qty_receive ?? firstPort.quantity_at_loading_port ?? 0,
+            quantity_at_loading_port: info.actual_vessel_qty_receive ?? firstPort.quantity_at_loading_port ?? 0,
             is_discharge_port: false,
-            // Quality (editable; may be overwritten by SAP later if SAP value is meaningful)
-            quality_ffa: editedShipmentInfo.quality_at_loading_loc_1_ffa ?? firstPort.quality_ffa ?? null,
-            quality_mi: editedShipmentInfo.quality_at_loading_loc_1_mi ?? firstPort.quality_mi ?? null,
-            quality_dobi: editedShipmentInfo.quality_at_loading_loc_1_dobi ?? firstPort.quality_dobi ?? null,
-            quality_red: editedShipmentInfo.quality_at_loading_loc_1_red ?? firstPort.quality_red ?? null,
-            quality_ds: editedShipmentInfo.quality_at_loading_loc_1_ds ?? firstPort.quality_ds ?? null,
-            quality_stone: editedShipmentInfo.quality_at_loading_loc_1_stone ?? firstPort.quality_stone ?? null,
-            // ETA from form (override); use existing firstPort values as fallback so we don't clear other fields
-            eta_vessel_arrival: toDateStr(editedShipmentInfo.eta_vessel_arrival_at_loading_port) ?? toDateStr(firstPort.eta_vessel_arrival),
-            eta_vessel_berthed_at_loading_port: toDateStr(editedShipmentInfo.eta_vessel_berthed_at_loading_port) ?? toDateStr(firstPort.eta_vessel_berthed_at_loading_port),
-            eta_loading_start: toDateStr(editedShipmentInfo.eta_vessel_start_loading) ?? toDateStr(firstPort.eta_loading_start),
-            eta_loading_completed: toDateStr(editedShipmentInfo.eta_vessel_completed_loading) ?? toDateStr(firstPort.eta_loading_completed),
-            eta_vessel_sailed: toDateStr(editedShipmentInfo.eta_vessel_sailed_from_loading_port) ?? toDateStr(firstPort.eta_vessel_sailed),
-            // Preserve existing ATA so backend UPDATE does not overwrite with null
-            ata_vessel_arrival: toDateStr(firstPort.ata_vessel_arrival),
-            ata_vessel_berthed: toDateStr(firstPort.ata_vessel_berthed),
-            ata_loading_start: toDateStr(firstPort.ata_loading_start),
-            ata_loading_completed: toDateStr(firstPort.ata_loading_completed),
-            ata_vessel_sailed: toDateStr(firstPort.ata_vessel_sailed),
+            quality_ffa: info.quality_at_loading_loc_1_ffa ?? firstPort.quality_ffa ?? null,
+            quality_mi: info.quality_at_loading_loc_1_mi ?? firstPort.quality_mi ?? null,
+            quality_dobi: info.quality_at_loading_loc_1_dobi ?? firstPort.quality_dobi ?? null,
+            quality_red: info.quality_at_loading_loc_1_red ?? firstPort.quality_red ?? null,
+            quality_ds: info.quality_at_loading_loc_1_ds ?? firstPort.quality_ds ?? null,
+            quality_stone: info.quality_at_loading_loc_1_stone ?? firstPort.quality_stone ?? null,
+            eta_vessel_arrival: info.eta_vessel_arrival_at_loading_port,
+            eta_vessel_berthed_at_loading_port: info.eta_vessel_berthed_at_loading_port,
+            eta_vessel_berthed: info.eta_vessel_berthed_at_loading_port,
+            eta_loading_start: info.eta_vessel_start_loading,
+            eta_loading_completed: info.eta_vessel_completed_loading,
+            eta_vessel_sailed: info.eta_vessel_sailed_from_loading_port,
             eta_vessel_arrive_at_discharge_port: null,
             eta_vessel_berthed_at_discharge_port: null,
             eta_vessel_start_discharging: null,
-            eta_vessel_complete_discharge: null
-          }
-          
-          await api.put(`/shipments/${identifier}/loading-ports/${firstPort.id}`, loadingPortUpdateData)
-        } else if (
-          !hasAnyLoadingPort &&
-          (
-            editedShipmentInfo.eta_vessel_arrival_at_loading_port ||
-            editedShipmentInfo.eta_vessel_berthed_at_loading_port ||
-            editedShipmentInfo.eta_vessel_start_loading ||
-            editedShipmentInfo.eta_vessel_completed_loading ||
-            editedShipmentInfo.eta_vessel_sailed_from_loading_port ||
-            editedShipmentInfo.vessel_loading_port_1
-          )
-        ) {
-          // Create a first loading port ONLY if none exists yet and user entered ETA/port data
-          const newPortData: any = {
-            port_name: editedShipmentInfo.vessel_loading_port_1 || 'Loading Port 1',
+            eta_vessel_complete_discharge: null,
+          },
+          firstPort.id,
+        )
+        console.log('[Shipments] handleSaveShipmentInfo PUT loading-port payload', {
+          shipmentId: identifier,
+          portId: firstPort.id,
+          loadingPortUpdateData,
+        })
+        await api.put(`/shipments/${identifier}/loading-ports/${firstPort.id}`, loadingPortUpdateData)
+      } else if (
+        !hasAnyLoadingPort &&
+        (info.eta_vessel_arrival_at_loading_port ||
+          info.eta_vessel_berthed_at_loading_port ||
+          info.eta_vessel_start_loading ||
+          info.eta_vessel_completed_loading ||
+          info.eta_vessel_sailed_from_loading_port ||
+          info.vessel_loading_port_1)
+      ) {
+        const newPortData = buildLoadingPortUpdatePayload(
+          {
+            port_name: info.vessel_loading_port_1 || 'Loading Port 1',
             port_sequence: 1,
-            quantity_at_loading_port: editedShipmentInfo.actual_vessel_qty_receive || 0,
+            quantity_at_loading_port: info.actual_vessel_qty_receive || 0,
             is_discharge_port: false,
-            quality_ffa: editedShipmentInfo.quality_at_loading_loc_1_ffa ?? null,
-            quality_mi: editedShipmentInfo.quality_at_loading_loc_1_mi ?? null,
-            quality_dobi: editedShipmentInfo.quality_at_loading_loc_1_dobi ?? null,
-            quality_red: editedShipmentInfo.quality_at_loading_loc_1_red ?? null,
-            quality_ds: editedShipmentInfo.quality_at_loading_loc_1_ds ?? null,
-            quality_stone: editedShipmentInfo.quality_at_loading_loc_1_stone ?? null,
-            eta_vessel_arrival: editedShipmentInfo.eta_vessel_arrival_at_loading_port || null,
-            eta_vessel_berthed_at_loading_port: editedShipmentInfo.eta_vessel_berthed_at_loading_port || null,
-            eta_loading_start: editedShipmentInfo.eta_vessel_start_loading || null,
-            eta_loading_completed: editedShipmentInfo.eta_vessel_completed_loading || null,
-            eta_vessel_sailed: editedShipmentInfo.eta_vessel_sailed_from_loading_port || null,
-          }
+            quality_ffa: info.quality_at_loading_loc_1_ffa ?? null,
+            quality_mi: info.quality_at_loading_loc_1_mi ?? null,
+            quality_dobi: info.quality_at_loading_loc_1_dobi ?? null,
+            quality_red: info.quality_at_loading_loc_1_red ?? null,
+            quality_ds: info.quality_at_loading_loc_1_ds ?? null,
+            quality_stone: info.quality_at_loading_loc_1_stone ?? null,
+            eta_vessel_arrival: info.eta_vessel_arrival_at_loading_port,
+            eta_vessel_berthed_at_loading_port: info.eta_vessel_berthed_at_loading_port,
+            eta_vessel_berthed: info.eta_vessel_berthed_at_loading_port,
+            eta_loading_start: info.eta_vessel_start_loading,
+            eta_loading_completed: info.eta_vessel_completed_loading,
+            eta_vessel_sailed: info.eta_vessel_sailed_from_loading_port,
+          },
+          '',
+        )
+        delete newPortData.id
+        console.log('[Shipments] handleSaveShipmentInfo POST loading-port payload', {
+          shipmentId: identifier,
+          newPortData,
+        })
+        await api.post(`/shipments/${identifier}/loading-ports`, newPortData)
+      }
 
-          await api.post(`/shipments/${identifier}/loading-ports`, newPortData)
-        }
-        
-        // Handle discharge port ETA fields separately
-        // Use refreshed ports list - refresh again after loading port operations
-        const finalPortsResponse = await api.get(`/shipments/${identifier}/loading-ports`)
-        let finalPorts: any[] = []
-        if (finalPortsResponse.data.success && finalPortsResponse.data.data.ports) {
-          finalPorts = finalPortsResponse.data.data.ports
-        }
-        let dischargePort = finalPorts.find((p: any) => p.is_discharge_port) || refreshedPorts.find((p: any) => p.is_discharge_port) || loadingPorts.find(p => p.is_discharge_port)
-        if (dischargePort && dischargePort.id) {
-          const toDateStrD = (v: unknown) => (v != null && v !== '' ? String(v).split('T')[0] : null)
-          const dischargePortUpdateData: any = {
-            port_name: editedShipmentInfo.vessel_discharge_port_1 || dischargePort.port_name || 'Discharge Port',
+      const finalPortsResponse = await api.get(`/shipments/${identifier}/loading-ports`)
+      let finalPorts: VesselLoadingPort[] = []
+      if (finalPortsResponse.data.success && finalPortsResponse.data.data.ports) {
+        finalPorts = finalPortsResponse.data.data.ports
+      }
+      const dischargePort =
+        finalPorts.find((p) => p.is_discharge_port) ||
+        refreshedPorts.find((p) => p.is_discharge_port) ||
+        loadingPorts.find((p) => p.is_discharge_port)
+
+      if (dischargePort?.id) {
+        const dischargePortUpdateData = buildLoadingPortUpdatePayload(
+          {
+            ...(dischargePort as unknown as Record<string, unknown>),
+            port_name: info.vessel_discharge_port_1 || dischargePort.port_name || 'Discharge Port',
             port_sequence: dischargePort.port_sequence ?? 999,
-            quantity_at_loading_port: dischargePort.quantity_at_loading_port ?? 0,
             is_discharge_port: true,
-            // Discharge quality is view-only (SAP-owned); preserve DB values.
-            quality_ffa: dischargePort.quality_ffa ?? null,
-            quality_mi: dischargePort.quality_mi ?? null,
-            quality_dobi: dischargePort.quality_dobi ?? null,
-            quality_red: dischargePort.quality_red ?? null,
-            quality_ds: dischargePort.quality_ds ?? null,
-            quality_stone: dischargePort.quality_stone ?? null,
-            eta_vessel_arrive_at_discharge_port: toDateStrD(editedShipmentInfo.eta_vessel_arrive_at_discharge_port) ?? toDateStrD(dischargePort.eta_vessel_arrive_at_discharge_port),
-            eta_vessel_berthed_at_discharge_port: toDateStrD(editedShipmentInfo.eta_vessel_berthed_at_discharge_port) ?? toDateStrD(dischargePort.eta_vessel_berthed_at_discharge_port),
-            eta_vessel_start_discharging: toDateStrD(editedShipmentInfo.eta_vessel_start_discharging) ?? toDateStrD(dischargePort.eta_vessel_start_discharging),
-            eta_vessel_complete_discharge: toDateStrD(editedShipmentInfo.eta_vessel_complete_discharge) ?? toDateStrD(dischargePort.eta_vessel_complete_discharge),
+            eta_vessel_arrive_at_discharge_port: info.eta_vessel_arrive_at_discharge_port,
+            eta_vessel_berthed_at_discharge_port: info.eta_vessel_berthed_at_discharge_port,
+            eta_vessel_start_discharging: info.eta_vessel_start_discharging,
+            eta_vessel_complete_discharge: info.eta_vessel_complete_discharge,
             eta_vessel_arrival: null,
             eta_vessel_berthed_at_loading_port: null,
             eta_loading_start: null,
             eta_loading_completed: null,
             eta_vessel_sailed: null,
-            ata_vessel_arrival: toDateStrD(dischargePort.ata_vessel_arrival),
-            ata_vessel_berthed: toDateStrD(dischargePort.ata_vessel_berthed),
-            ata_loading_start: toDateStrD(dischargePort.ata_loading_start),
-            ata_loading_completed: toDateStrD(dischargePort.ata_loading_completed),
-            ata_vessel_sailed: toDateStrD(dischargePort.ata_vessel_sailed)
-          }
-          await api.put(`/shipments/${identifier}/loading-ports/${dischargePort.id}`, dischargePortUpdateData)
-        }
-        
-        // Refetch so Shipment Information (including ETA) shows saved data (skipCache to avoid stale response)
-        await fetchLoadingPorts(identifier, true)
-        setEditingShipmentInfo(false)
-        setEditedShipmentInfo(null)
-        alert('Shipment information updated successfully!')
+          },
+          dischargePort.id,
+        )
+        console.log('[Shipments] handleSaveShipmentInfo PUT discharge-port payload', {
+          shipmentId: identifier,
+          portId: dischargePort.id,
+          dischargePortUpdateData,
+        })
+        await api.put(`/shipments/${identifier}/loading-ports/${dischargePort.id}`, dischargePortUpdateData)
       }
+
+      await fetchLoadingPorts(identifier, true)
+      setEditingPortId(null)
+      setEditedPortData(null)
+      setEditingShipmentInfo(false)
+      setEditedShipmentInfo(null)
+      await fetchShipments(page, undefined, { force: true })
+      resetQuantityUnlockState()
+      resetPortsQuantityRowEdit()
+      alert('Shipment information updated successfully!')
     } catch (error) {
       console.error('Error saving shipment info:', error)
-      alert('Failed to save shipment information')
+      alert(apiErrorMessage(error, 'Failed to save shipment information'))
     }
   }
 
@@ -2620,7 +4547,7 @@ function ShipmentsPageContent() {
       if (res.data?.success) {
         alert('Document uploaded successfully!')
         if (selectedShipment && selectedShipment.id === shipment.id) {
-          await fetchShipmentDocuments(shipment.id)
+          await fetchShipmentDocuments(shipment)
         }
       } else {
         alert(res.data?.error?.message || 'Failed to upload document')
@@ -2634,11 +4561,15 @@ function ShipmentsPageContent() {
     }
   }
 
-  const fetchShipmentDocuments = async (shipmentInternalId: string) => {
+  const fetchShipmentDocuments = async (shipment: Shipment) => {
     try {
       setDocsLoading(true)
       const params = new URLSearchParams()
-      params.append('shipmentId', shipmentInternalId)
+      if (isContractBacklogRow(shipment)) {
+        params.append('contractId', shipment.id)
+      } else {
+        params.append('shipmentId', shipment.id)
+      }
       const res = await api.get(`/documents?${params.toString()}`)
       const docs: DocumentItem[] = res.data?.data || []
       setShipmentDocs(docs)
@@ -2647,6 +4578,54 @@ function ShipmentsPageContent() {
       setShipmentDocs([])
     } finally {
       setDocsLoading(false)
+    }
+  }
+
+  const handleViewDocuments = async (shipment: Shipment) => {
+    setSelectedShipment(shipment)
+    setShowDocs(true)
+    await fetchShipmentDocuments(shipment)
+  }
+
+  const openCancelShipmentDialog = (shipment: Shipment) => {
+    setCancelShipmentTarget(shipment)
+    setCancelShipmentRemark('')
+  }
+
+  const closeCancelShipmentDialog = () => {
+    if (cancelShipmentSubmitting) return
+    setCancelShipmentTarget(null)
+    setCancelShipmentRemark('')
+  }
+
+  const handleConfirmCancelShipment = async () => {
+    if (!cancelShipmentTarget) return
+
+    const remark = cancelShipmentRemark.trim()
+    if (!remark) {
+      alert('Cancellation remark is required.')
+      return
+    }
+
+    setCancelShipmentSubmitting(true)
+    try {
+      const res = await api.post(`/shipments/${cancelShipmentTarget.id}/cancel`, { remark })
+      if (!res.data?.success) {
+        throw new Error(res.data?.error?.message || 'Failed to cancel shipment')
+      }
+      setCancelShipmentTarget(null)
+      setCancelShipmentRemark('')
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      await fetchShipments(undefined, undefined, { force: true })
+      alert('Shipment cancelled successfully.')
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ||
+        (err instanceof Error ? err.message : 'Failed to cancel shipment')
+      alert(message)
+    } finally {
+      setCancelShipmentSubmitting(false)
     }
   }
 
@@ -2669,12 +4648,6 @@ function ShipmentsPageContent() {
       console.error('Download document error:', err)
       alert('Failed to download document. Please try again.')
     }
-  }
-
-  const handleViewDocuments = async (shipment: Shipment) => {
-    setSelectedShipment(shipment)
-    setShowDocs(true)
-    await fetchShipmentDocuments(shipment.id)
   }
 
   const fetchVesselSuggestions = async (search: string) => {
@@ -2741,56 +4714,82 @@ function ShipmentsPageContent() {
 
   const formatDateTime = (dateStr: string) => formatDateTimeDMY(dateStr)
 
-  const getColumnWidth = (colId: string): string => {
-    const widths: { [key: string]: string } = {
-      operation_id: '150px',
-      shipment_id: '200px',
-      status: '120px',
-      contract_numbers: '180px',
-      po_numbers: '150px',
-      contract_reference_po: '150px',
-      contract_ext_no: '150px',
-      delivery_start: '180px',
-      delivery_end: '180px',
-      ata_vessel_completed_loading: '200px',
-      ata_vessel_complete_discharge: '200px',
-      late_indicator: '130px',
-      vessel_name: '180px',
-      sto_quantity: '140px',
-      incoterm: '120px',
-      b2b_flag: '100px',
-      port_of_loading: '160px',
-      port_of_discharge: '160px',
-      quantity_receive: '140px',
-      vessel_code: '120px',
-      quantity_delivered: '140px'
-    }
-    return widths[colId] || '150px'
-  }
-
   const onSortHeaderClick = (col: CompactColumn) => {
     if (!col.sortable) return
-    if (sortKey === col.id) {
-      setSortDir(prev => prev === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortKey(col.id)
-      setSortDir('asc')
-    }
+    const nextDir: 'asc' | 'desc' =
+      sortKey === col.id ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc'
+    setSortDir(nextDir)
+    setSortKey(col.id)
+    setPage(1)
   }
 
   return (
     <Layout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
-        <div>
+        <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
             <h1 className="text-3xl font-bold">Shipments</h1>
-            <p className="text-gray-600 mt-1">
-              Manage and track all shipments - {totalCount || filteredShipments.length} total
-            </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <VesselIdleInsightChip
+              count={vesselIdleCount}
+              loading={vesselIdleLoading}
+              onClick={handleVesselIdleClick}
+            />
+            {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={downloadTemplate}
+                className="border-green-600 text-green-700 hover:bg-green-50"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download Template
+              </Button>
+            ) : null}
+            {canExportShipments && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={exportFilteredData}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export Data
+              </Button>
+            )}
+            {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
+            <>
+              <input
+                type="file"
+                accept=".csv"
+                onChange={handleBulkUpload}
+                className="hidden"
+                disabled={uploading}
+                id="bulk-upload-input"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => document.getElementById('bulk-upload-input')?.click()}
+                disabled={uploading}
+              >
+                {uploading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-4 w-4 mr-2" />
+                    Upload CSV
+                  </>
+                )}
+              </Button>
+            </>
+            ) : null}
             <Button
+              size="sm"
               onClick={() => {
                 // Allow opening the modal immediately; permissions load async and may fail open for admin workflows.
                 if (perms.loaded && !canOpenAddShipmentModal) {
@@ -2801,112 +4800,136 @@ function ShipmentsPageContent() {
                 }
                 setShowAddShipment(true)
               }}
-              className="bg-blue-600 hover:bg-blue-700"
             >
               <Plus className="h-4 w-4 mr-2" />
               Add New Shipment
             </Button>
-            {canImportShipments && (
-              <Button
-                onClick={downloadTemplate}
-                variant="outline"
-                className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Download Template
-              </Button>
-            )}
-            {canExportShipments && (
-              <Button
-                onClick={exportFilteredData}
-                variant="outline"
-                className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Export Data
-              </Button>
-            )}
-            {canBulkShipments && (
-              <>
-                <input
-                  type="file"
-                  accept=".csv"
-                  onChange={handleBulkUpload}
-                  className="hidden"
-                  disabled={uploading}
-                  id="bulk-upload-input"
-                />
-                <Button
-                  onClick={() => document.getElementById('bulk-upload-input')?.click()}
-                  disabled={uploading}
-                  className="bg-blue-600 hover:bg-blue-700"
-                >
-                  {uploading ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Uploading...
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="h-4 w-4 mr-2" />
-                      Bulk Update
-                    </>
-                  )}
-                </Button>
-              </>
-            )}
           </div>
         </div>
 
-        {/* Status Distribution */}
-        <Card>
+        <ShipmentsGlobalFiltersSection
+          searchDraft={searchDraft}
+          onSearchDraftChange={setSearchDraft}
+          onSearchApply={applySearch}
+          pipelineStage={statusFilter}
+          onPipelineStageChange={handlePipelineStageChange}
+          lateIndicatorFilter={lateIndicatorFilter}
+          onLateIndicatorChange={onLateIndicatorChange}
+          availableIncoterms={availableIncoterms}
+          selectedIncoterms={selectedIncoterms}
+          onIncotermsChange={onIncotermsChange}
+          availableProducts={availableProducts}
+          selectedProducts={selectedProducts}
+          onProductsChange={onProductsChangeWithPageReset}
+          availableSuppliers={availableSuppliers}
+          selectedSuppliers={selectedSuppliers}
+          onSuppliersChange={onSuppliersChangeWithPageReset}
+          availableGroupPlants={availableGroupPlants}
+          selectedGroupPlants={selectedGroupPlants}
+          onGroupPlantsChange={onGroupPlantsChangeWithPageReset}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateFromChange={onGlobalDateFromChange}
+          onDateToChange={onGlobalDateToChange}
+          hasActiveFilters={hasActiveShipmentFilters}
+          onClearFilters={clearShipmentFilters}
+        />
+
+        <ShipmentStatusDistribution
+          loading={section1DataLoading}
+          statusFilter={statusFilter}
+          counts={section1StatusCounts}
+          loadingPortBreakdown={loadingPortBreakdown}
+          dischargePortBreakdown={dischargePortBreakdown}
+          onStageClick={handleStatusCardClick}
+        />
+
+        {/* Section 2 — ETA Loading / Discharge (hidden while SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED is false) */}
+        {SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED ? (
+        <>
+        {/* ETA Loading Status */}
+        <Card className="mt-4">
           <CardHeader>
-            <CardTitle>Status Distribution</CardTitle>
+            <CardTitle className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+              <span>ETA Loading Status</span>
+              {section2EtaScopeLabel ? (
+                <span className="text-xs font-normal text-blue-700">
+                  Scoped to {section2EtaScopeLabel}
+                  {summaryFetching && !section2EtaSummary ? ' · updating…' : ''}
+                </span>
+              ) : null}
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto py-4 px-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               {[
-                { status: 'PLANNED', label: 'Planned', color: 'bg-blue-100', textColor: 'text-blue-800', badgeColor: 'bg-blue-600' },
-                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600' },
-                { status: 'LOADING', label: 'Loading', color: 'bg-orange-100', textColor: 'text-orange-800', badgeColor: 'bg-orange-600' },
-                { status: 'IN_TRANSIT', label: 'In Transit', color: 'bg-purple-100', textColor: 'text-purple-800', badgeColor: 'bg-purple-600' },
-                { status: 'ARRIVED', label: 'Arrived', color: 'bg-indigo-100', textColor: 'text-indigo-800', badgeColor: 'bg-indigo-600' },
-                { status: 'UNLOADING', label: 'Unloading', color: 'bg-cyan-100', textColor: 'text-cyan-800', badgeColor: 'bg-cyan-600' },
-                { status: 'COMPLETED', label: 'Completed', color: 'bg-green-100', textColor: 'text-green-800', badgeColor: 'bg-green-600' },
-                { status: 'CANCELLED', label: 'Cancelled', color: 'bg-red-100', textColor: 'text-red-800', badgeColor: 'bg-red-600' }
-              ].map((statusInfo, index, array) => {
-                const summary = shipmentsSummary?.status
-                const count =
-                  statusInfo.status === 'PLANNED' ? Number(summary?.planned ?? 0)
-                    : statusInfo.status === 'IN_PROGRESS' ? Number(summary?.inProgress ?? 0)
-                      : statusInfo.status === 'LOADING' ? Number(summary?.loading ?? 0)
-                        : statusInfo.status === 'IN_TRANSIT' ? Number(summary?.inTransit ?? 0)
-                          : statusInfo.status === 'ARRIVED' ? Number(summary?.arrived ?? 0)
-                            : statusInfo.status === 'UNLOADING' ? Number(summary?.unloading ?? 0)
-                              : statusInfo.status === 'COMPLETED' ? Number(summary?.completed ?? 0)
-                                : statusInfo.status === 'CANCELLED' ? Number(summary?.cancelled ?? 0)
-                                  : 0
+                {
+                  key: 'MORE_THAN_7D' as const,
+                  label: 'ETA Loading > 7D',
+                  count: section2EtaLoadingCounts.moreThan7D,
+                  color: 'bg-sky-50',
+                  help: etaLoadingCardHelp(FIELD_HELP.shipmentEtaLoadingMoreThan7D),
+                },
+                {
+                  key: 'D_MINUS_2' as const,
+                  label: 'ETA Loading D-2',
+                  count: section2EtaLoadingCounts.dMinus2,
+                  color: 'bg-amber-50',
+                  help: etaLoadingCardHelp(FIELD_HELP.shipmentEtaLoadingDMinus2),
+                },
+                {
+                  key: 'D' as const,
+                  label: 'ETA Loading D',
+                  count: section2EtaLoadingCounts.d,
+                  color: 'bg-emerald-50',
+                  help: etaLoadingCardHelp(FIELD_HELP.shipmentEtaLoadingD),
+                },
+                {
+                  key: 'DELAY' as const,
+                  label: 'ETA Loading Delay',
+                  count: section2EtaLoadingCounts.delay,
+                  color: 'bg-rose-50',
+                  help: etaLoadingCardHelp(FIELD_HELP.shipmentEtaLoadingDelay),
+                },
+                {
+                  key: 'NO_ETA' as const,
+                  label: 'No ETA',
+                  count: section2EtaLoadingCounts.noEta,
+                  color: 'bg-gray-50',
+                  help: etaLoadingCardHelp(FIELD_HELP.shipmentEtaLoadingNoEta),
+                },
+              ].map((bucket) => {
+                const isActive = etaLoadingFilter === bucket.key
                 return (
-                  <div key={statusInfo.status} className="flex items-center flex-shrink-0">
-                    <div className="relative">
-                      {/* Status Circle */}
-                      <div className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg hover:shadow-xl transition-shadow`}>
-                        {/* Count Badge */}
-                        <div className={`absolute -top-3 -right-3 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10`}>
-                          {count}
-                        </div>
-                        {/* Status Label */}
-                        <span className={`text-xs md:text-sm font-semibold ${statusInfo.textColor} text-center px-2 leading-tight`}>
-                          {statusInfo.label}
-                        </span>
-                      </div>
+                  <div
+                    key={bucket.key}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => handleEtaLoadingCardClick(bucket.key)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        handleEtaLoadingCardClick(bucket.key)
+                      }
+                    }}
+                    className={`flex flex-col items-start justify-between rounded-xl border px-3 py-3 text-left shadow-sm transition-colors cursor-pointer hover:bg-gray-50 hover:shadow-md ${bucket.color} ${
+                      isActive ? 'border-blue-500 bg-blue-50/60 ring-2 ring-blue-100' : 'border-gray-200'
+                    }`}
+                  >
+                    <div className="flex w-full items-start justify-between gap-1 mb-1">
+                      <div className="text-xs text-gray-600">{bucket.label}</div>
+                      <span
+                        className="inline-flex shrink-0"
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        <FieldHelp text={bucket.help} side="top" />
+                      </span>
                     </div>
-                    {/* Arrow */}
-                    {index < array.length - 1 && (
-                      <div className="flex-shrink-0 mx-2 md:mx-3">
-                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-gray-400">
-                          <path d="M9 18L15 12L9 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
+                    <div className="text-2xl font-semibold text-gray-900">{bucket.count}</div>
+                    {isActive && (
+                      <div className="mt-1 text-[11px] text-blue-700">
+                        Click again to clear filter
                       </div>
                     )}
                   </div>
@@ -2916,73 +4939,18 @@ function ShipmentsPageContent() {
           </CardContent>
         </Card>
 
-        {/* ETA Loading Status */}
-        <Card className="mt-4">
-          <CardHeader>
-            <CardTitle>ETA Loading Status</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              {[
-                {
-                  key: 'MORE_THAN_7D' as const,
-                  label: 'ETA Loading &gt; 7D',
-                  count: Number(shipmentsSummary?.etaLoading?.moreThan7D ?? etaLoadingBuckets.counts.moreThan7D),
-                  color: 'bg-sky-50',
-                },
-                {
-                  key: 'D_MINUS_2' as const,
-                  label: 'ETA Loading D-2',
-                  count: Number(shipmentsSummary?.etaLoading?.dMinus2 ?? etaLoadingBuckets.counts.dMinus2),
-                  color: 'bg-amber-50',
-                },
-                {
-                  key: 'D' as const,
-                  label: 'ETA Loading D',
-                  count: Number(shipmentsSummary?.etaLoading?.d ?? etaLoadingBuckets.counts.d),
-                  color: 'bg-emerald-50',
-                },
-                {
-                  key: 'DELAY' as const,
-                  label: 'ETA Loading Delay',
-                  count: Number(shipmentsSummary?.etaLoading?.delay ?? etaLoadingBuckets.counts.delay),
-                  color: 'bg-rose-50',
-                },
-                {
-                  key: 'NO_ETA' as const,
-                  label: 'No ETA',
-                  count: Number(shipmentsSummary?.etaLoading?.noEta ?? etaLoadingBuckets.counts.noEta),
-                  color: 'bg-gray-50',
-                },
-              ].map((bucket) => {
-                const isActive = etaLoadingFilter === bucket.key
-                return (
-                  <button
-                    key={bucket.key}
-                    type="button"
-                    onClick={() => setEtaLoadingFilter((prev) => (prev === bucket.key ? 'ALL' : bucket.key))}
-                    className={`flex flex-col items-start justify-between rounded-xl border px-3 py-3 text-left shadow-sm hover:shadow-md transition-shadow ${bucket.color} ${
-                      isActive ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-200'
-                    }`}
-                  >
-                    <div className="text-xs text-gray-600 mb-1">{bucket.label}</div>
-                    <div className="text-2xl font-semibold text-gray-900">{bucket.count}</div>
-                    {isActive && (
-                      <div className="mt-1 text-[11px] text-blue-700">
-                        Click again to clear filter
-                      </div>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          </CardContent>
-        </Card>
-
         {/* ETA Discharge Status */}
         <Card className="mt-4">
           <CardHeader>
-            <CardTitle>ETA Discharge Status</CardTitle>
+            <CardTitle className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+              <span>ETA Discharge Status</span>
+              {section2EtaScopeLabel ? (
+                <span className="text-xs font-normal text-blue-700">
+                  Scoped to {section2EtaScopeLabel}
+                  {summaryFetching && !section2EtaSummary ? ' · updating…' : ''}
+                </span>
+              ) : null}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -2990,211 +4958,82 @@ function ShipmentsPageContent() {
                 {
                   key: 'MORE_THAN_7D' as const,
                   label: 'ETA Discharge > 7D',
-                  count: Number(shipmentsSummary?.etaDischarge?.moreThan7D ?? etaDischargeBuckets.counts.moreThan7D),
+                  count: section2EtaDischargeCounts.moreThan7D,
                   color: 'bg-sky-50',
+                  help: etaDischargeCardHelp(FIELD_HELP.shipmentEtaDischargeMoreThan7D),
                 },
                 {
                   key: 'D_MINUS_2' as const,
                   label: 'ETA Discharge D-2',
-                  count: Number(shipmentsSummary?.etaDischarge?.dMinus2 ?? etaDischargeBuckets.counts.dMinus2),
+                  count: section2EtaDischargeCounts.dMinus2,
                   color: 'bg-amber-50',
+                  help: etaDischargeCardHelp(FIELD_HELP.shipmentEtaDischargeDMinus2),
                 },
                 {
                   key: 'D' as const,
                   label: 'ETA Discharge D',
-                  count: Number(shipmentsSummary?.etaDischarge?.d ?? etaDischargeBuckets.counts.d),
+                  count: section2EtaDischargeCounts.d,
                   color: 'bg-emerald-50',
+                  help: etaDischargeCardHelp(FIELD_HELP.shipmentEtaDischargeD),
                 },
                 {
                   key: 'DELAY' as const,
                   label: 'ETA Discharge Delay',
-                  count: Number(shipmentsSummary?.etaDischarge?.delay ?? etaDischargeBuckets.counts.delay),
+                  count: section2EtaDischargeCounts.delay,
                   color: 'bg-rose-50',
+                  help: etaDischargeCardHelp(FIELD_HELP.shipmentEtaDischargeDelay),
                 },
                 {
                   key: 'NO_ETA' as const,
                   label: 'No ETA',
-                  count: Number(shipmentsSummary?.etaDischarge?.noEta ?? etaDischargeBuckets.counts.noEta),
+                  count: section2EtaDischargeCounts.noEta,
                   color: 'bg-gray-50',
+                  help: etaDischargeCardHelp(FIELD_HELP.shipmentEtaDischargeNoEta),
                 },
               ].map((bucket) => {
                 const isActive = etaDischargeFilter === bucket.key
                 return (
-                  <button
+                  <div
                     key={bucket.key}
-                    type="button"
-                    onClick={() => setEtaDischargeFilter((prev) => (prev === bucket.key ? 'ALL' : bucket.key))}
-                    className={`flex flex-col items-start justify-between rounded-xl border px-3 py-3 text-left shadow-sm hover:shadow-md transition-shadow ${bucket.color} ${
-                      isActive ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-200'
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => handleEtaDischargeCardClick(bucket.key)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        handleEtaDischargeCardClick(bucket.key)
+                      }
+                    }}
+                    className={`flex flex-col items-start justify-between rounded-xl border px-3 py-3 text-left shadow-sm transition-colors cursor-pointer hover:bg-gray-50 hover:shadow-md ${bucket.color} ${
+                      isActive ? 'border-blue-500 bg-blue-50/60 ring-2 ring-blue-100' : 'border-gray-200'
                     }`}
                   >
-                    <div className="text-xs text-gray-600 mb-1">{bucket.label}</div>
+                    <div className="flex w-full items-start justify-between gap-1 mb-1">
+                      <div className="text-xs text-gray-600">{bucket.label}</div>
+                      <span
+                        className="inline-flex shrink-0"
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        <FieldHelp text={bucket.help} side="top" />
+                      </span>
+                    </div>
                     <div className="text-2xl font-semibold text-gray-900">{bucket.count}</div>
                     {isActive && (
                       <div className="mt-1 text-[11px] text-blue-700">
                         Click again to clear filter
                       </div>
                     )}
-                  </button>
+                  </div>
                 )
               })}
             </div>
           </CardContent>
         </Card>
+        </>
+        ) : null}
 
-        {/* View: List vs Daily Planning Deliverables */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm font-medium text-gray-700">View</div>
-          <div className="inline-flex rounded-lg border bg-white p-1">
-            <button
-              type="button"
-              onClick={() => setViewOption('all')}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                viewOption !== 'daily_planning' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              List
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewOption('daily_planning')}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                viewOption === 'daily_planning' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              Daily Planning Deliverables
-            </button>
-          </div>
-        </div>
-
-        {/* Search & filters (below ETA buckets) */}
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:gap-4 xl:items-center">
-              <div className="flex-1 min-w-[200px] relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                <Input
-                  placeholder="Search by Shipment ID, Contract Numbers, PO No, or Vessel Name..."
-                  value={searchDraft}
-                  onChange={(e) => setSearchDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      applySearch()
-                    }
-                  }}
-                  className="pl-10"
-                />
-              </div>
-              <Button variant="outline" onClick={applySearch} disabled={loading}>
-                Apply
-              </Button>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto"
-              >
-                <option value="ALL">All Status</option>
-                <option value="PLANNED">Planned</option>
-                <option value="IN_TRANSIT">In Transit</option>
-                <option value="ARRIVED">Arrived</option>
-                <option value="UNLOADING">Unloading</option>
-                <option value="COMPLETED">Completed</option>
-                <option value="CANCELLED">Cancelled</option>
-              </select>
-              <select
-                value={lateIndicatorFilter}
-                onChange={(e) => setLateIndicatorFilter(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto"
-              >
-                <option value="ALL">All Late Indicator</option>
-                <option value="ON_TIME">On Time</option>
-                <option value="LATE">Late</option>
-                <option value="NA">N/A</option>
-              </select>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm text-gray-600">View by:</span>
-                <select
-                  value={viewOption}
-                  onChange={(e) => {
-                    setViewOption(e.target.value as 'all' | 'sto' | 'contract' | 'vessel' | 'port_loading' | 'port_discharge' | 'daily_planning')
-                    setViewFilterValue('')
-                  }}
-                  className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="all">All</option>
-                  <option value="sto">STO Number</option>
-                  <option value="contract">Contract Numbers</option>
-                  <option value="vessel">Vessel Name</option>
-                  <option value="port_loading">Port of Loading</option>
-                  <option value="port_discharge">Port of Discharge</option>
-                  <option value="daily_planning">Daily Planning Deliverables</option>
-                </select>
-                {viewOption !== 'all' && viewOption !== 'daily_planning' && (
-                  <Input
-                    placeholder={`Filter by ${
-                      viewOption === 'sto' ? 'STO Number'
-                        : viewOption === 'contract' ? 'Contract Numbers'
-                          : viewOption === 'vessel' ? 'Vessel Name'
-                            : viewOption === 'port_loading' ? 'Port of Loading'
-                              : 'Port of Discharge'
-                    }...`}
-                    value={viewFilterValue}
-                    onChange={(e) => setViewFilterValue(e.target.value)}
-                    className="w-full sm:w-48"
-                  />
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm text-gray-600">Contract Date:</span>
-                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-40" />
-                <span className="text-gray-500">to</span>
-                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-40" />
-              </div>
-              <div className="min-w-[260px] w-full sm:w-auto">
-                <SearchableMultiSelect
-                  label="Plant/Site"
-                  options={availablePlantSites}
-                  selected={selectedPlantSites}
-                  onChange={setSelectedPlantSites}
-                  placeholder="Select plant/site(s)"
-                  emptyMessage="Loading plants..."
-                />
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button onClick={handleFilterChange} variant="outline" size="sm">
-                  <Filter className="h-4 w-4 mr-1" />
-                  Apply
-                </Button>
-                {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || viewFilterValue || dateFrom || dateTo || selectedPlantSites.length > 0) && (
-                  <Button
-                    onClick={() => {
-                      setStatusFilter('ALL')
-                      setLateIndicatorFilter('ALL')
-                      setViewOption('all')
-                      setViewFilterValue('')
-                      setSelectedPlantSites([])
-                      const now = new Date()
-                      const yyyy = now.getFullYear()
-                      const to = `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-                      setDateFrom(`${yyyy}-01-01`)
-                      setDateTo(to)
-                      handleFilterChange()
-                    }}
-                    variant="ghost"
-                    size="sm"
-                    className="text-gray-500"
-                  >
-                    <X className="h-4 w-4 mr-1" />
-                    Clear
-                  </Button>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {viewOption === 'daily_planning' && (
+        {false && (
           <>
           <Card>
             <CardHeader className="space-y-4">
@@ -3391,12 +5230,14 @@ function ShipmentsPageContent() {
                           <tr key={r.id} className="hover:bg-gray-50">
                             <td className="sticky left-0 z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[220px] align-top">
                               <div className="font-semibold text-gray-900 truncate" title={r.shipment_id}>{r.shipment_id}</div>
-                              <div className="text-[10px] text-gray-500 truncate" title={r.sto_number || ''}>STO: {r.sto_number || '—'}</div>
+                              <div className="text-[10px] text-gray-500 truncate" title={r.sto_number || ''}>
+                                STO: {resolveShipmentDisplayStoNumber(r.sto_number)}
+                              </div>
                               <div className="text-[10px] text-gray-500 truncate" title={r.vessel_name || ''}>Vessel: {r.vessel_name || '—'}</div>
                             </td>
                             <td className="sticky left-[220px] z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[260px] align-top">
                               <div className="font-medium text-gray-900 whitespace-normal break-words" title={r.contract_ext_no || ''}>{r.contract_ext_no || '—'}</div>
-                              <div className="text-[10px] text-gray-500 whitespace-normal break-words" title={r.supplier || ''}>{r.supplier || '—'}</div>
+                              <div className="text-[10px] text-gray-500 whitespace-normal break-words" title={resolveShipmentListSuppliers(r) || ''}>{resolveShipmentListSuppliers(r) || '—'}</div>
                             </td>
                             {shipCalendarMetaOrderIds.map((id) => {
                               if (id === 'due_start') return <td key={id} className="px-3 py-2 border-b border-gray-100 tabular-nums">{dueStart}</td>
@@ -3477,32 +5318,32 @@ function ShipmentsPageContent() {
           </Card>
 
           <Dialog open={shipPlanningUploadOpen} onOpenChange={setShipPlanningUploadOpen}>
-            <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto">
+            <DialogContent className="max-w-2xl max-h-[88vh]">
               <DialogHeader>
                 <DialogTitle>Shipment daily planning upload result</DialogTitle>
               </DialogHeader>
               {shipPlanningUploadSummary ? (
-                <div className="space-y-3 text-sm">
+                <div className="space-y-4 text-sm">
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                     <div className="rounded-md border bg-slate-50 px-3 py-2">
                       <div className="text-xs text-muted-foreground">Rows processed</div>
                       <div className="text-lg font-semibold tabular-nums">{shipPlanningUploadSummary.processedRows}</div>
                     </div>
                     <div className="rounded-md border bg-green-50 px-3 py-2">
-                      <div className="text-xs text-muted-foreground">Succeeded</div>
+                      <div className="text-xs text-muted-foreground">Operations succeeded</div>
                       <div className="text-lg font-semibold tabular-nums text-green-800">{shipPlanningUploadSummary.succeededOperations}</div>
                     </div>
                     <div className="rounded-md border bg-red-50 px-3 py-2">
-                      <div className="text-xs text-muted-foreground">Failed</div>
+                      <div className="text-xs text-muted-foreground">Operations failed</div>
                       <div className="text-lg font-semibold tabular-nums text-red-800">{shipPlanningUploadSummary.failedOperations}</div>
                     </div>
                   </div>
                   {(shipPlanningUploadSummary.rowParseFailures?.length ?? 0) > 0 ? (
                     <div>
-                      <div className="font-medium text-gray-900 mb-2">Row issues</div>
+                      <div className="font-medium text-gray-900 mb-2">Row issues (file line #)</div>
                       <ul className="max-h-40 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
                         {shipPlanningUploadSummary.rowParseFailures.map((f: any, i: number) => (
-                          <li key={`spr-${i}`}>
+                          <li key={`spr-${i}`} className="text-gray-800">
                             <span className="font-mono">Line {f.rowNumber}</span>{f.contract_ext_no ? ` · ${f.contract_ext_no}` : ''}: {f.reason}
                           </li>
                         ))}
@@ -3511,10 +5352,10 @@ function ShipmentsPageContent() {
                   ) : null}
                   {(shipPlanningUploadSummary.operationFailures?.length ?? 0) > 0 ? (
                     <div>
-                      <div className="font-medium text-gray-900 mb-2">Failures</div>
+                      <div className="font-medium text-gray-900 mb-2">Operation failures</div>
                       <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-2 p-2">
                         {shipPlanningUploadSummary.operationFailures.map((f: any, i: number) => (
-                          <li key={`spf-${i}`}>
+                          <li key={`spf-${i}`} className="text-gray-800">
                             <span className="font-semibold">{f.contract_ext_no}</span>
                             {f.shipment_ids?.length ? <span className="text-gray-600"> · Shipments: {f.shipment_ids.join(', ')}</span> : null}
                             {f.rowNumbers?.length ? <span className="text-gray-600"> (rows {f.rowNumbers.join(', ')})</span> : null}
@@ -3531,16 +5372,53 @@ function ShipmentsPageContent() {
           </>
         )}
 
+        <BulkUploadStatusModal
+          open={!!bulkUploadResult}
+          onOpenChange={(open) => { if (!open) setBulkUploadResult(null) }}
+          title="Shipment bulk upload result"
+          result={bulkUploadResult}
+        />
+
         {/* Shipments List */}
-        {viewOption !== 'daily_planning' && (
         <Card>
           <CardHeader>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-3">
-                <CardTitle>All Shipments</CardTitle>
-                <Badge variant="outline" className="hidden md:inline-flex">
-                  Default view: Compact
-                </Badge>
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <span>All Shipments</span>
+                  {listFetching || tableScopeLoading ? (
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+                  ) : null}
+                </CardTitle>
+                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                    <span className="whitespace-nowrap tabular-nums text-gray-700">
+                      <span className="font-semibold">{tableHeaderCount.value.toLocaleString('en-US')}</span>{' '}
+                      {tableHeaderCount.noun}
+                    </span>
+                    <span className="text-gray-400" aria-hidden>
+                      ·
+                    </span>
+                    <span className="whitespace-nowrap tabular-nums">
+                      Page {page}/{totalPages}
+                      {statusFilter === 'UNPLANNED' && unplannedTableBreakdown ? (
+                        <>
+                          {' · '}
+                          ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')} without shipment ·{' '}
+                          {unplannedTableBreakdown.shipmentRows.toLocaleString('en-US')} STO groups)
+                        </>
+                      ) : null}
+                    </span>
+                    {shipmentsTableScopeLabel ? (
+                      <>
+                        <span className="text-gray-400" aria-hidden>
+                          ·
+                        </span>
+                        <span className="whitespace-nowrap font-medium text-blue-700">
+                          {shipmentsTableScopeLabel}
+                        </span>
+                      </>
+                    ) : null}
+                  </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="relative">
@@ -3548,128 +5426,135 @@ function ShipmentsPageContent() {
                     variant="outline"
                     size="sm"
                     onClick={() => setShowColumnsMenu(v => !v)}
-                    disabled={loading}
+                    disabled={listFetching || section3TableLoading}
                   >
                     <SlidersHorizontal className="h-4 w-4 mr-2" />
                     Columns
                   </Button>
                   {showColumnsMenu && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
-                      <div className="text-xs font-semibold text-gray-600 mb-2">Visible columns</div>
-                      <div className="space-y-2 max-h-72 overflow-auto pr-1">
-                        {compactColumns
-                          .filter(c => c.id !== 'late_indicator' && c.id !== 'operation_id' && c.id !== 'shipment_id' && c.id !== 'status')
-                          .map(col => (
-                            <label key={col.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                              <Checkbox
-                                checked={visibleColumnIds.has(col.id)}
-                                onCheckedChange={() => toggleColumn(col.id)}
-                              />
-                              <span>{col.label}</span>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="text-xs font-semibold text-gray-600">Visible columns</div>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setShowColumnsMenu(false)}>
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                      <div className="flex items-center gap-1 mb-2">
+                        <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set(compactColumns.map(c => c.id)))}>Select All</Button>
+                        <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set())}>Unselect All</Button>
+                        <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => resetCompactColumnView()}>Reset</Button>
+                      </div>
+                      <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
+                        {(() => {
+                          const visibleIds = new Set(visibleColumns.map((c) => c.id))
+                          const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
+                          const orderedIds =
+                            columnOrderIds.length > 0
+                              ? columnOrderIds
+                              : shipmentCompactColumnFallbackOrder(compactColumns.map((c) => c.id))
+                          const hiddenCols = orderedIds
+                            .map((id) => byId.get(id))
+                            .filter((c): c is CompactColumn => !!c && !visibleIds.has(c.id))
+                            .sort((a, b) => a.label.localeCompare(b.label))
+                          return [...visibleColumns, ...hiddenCols]
+                        })().map(col => (
+                          <div
+                            key={col.id}
+                            draggable
+                            onDragStart={() => setDragColId(col.id)}
+                            onDragEnd={() => setDragColId(null)}
+                            onDragOver={e => e.preventDefault()}
+                            onDrop={() => { if (dragColId && dragColId !== col.id) reorderColumnByDrag(dragColId, col.id) }}
+                            className={`flex items-center gap-2 text-sm cursor-grab select-none rounded px-1 py-0.5 ${dragColId === col.id ? 'opacity-40' : 'hover:bg-gray-50'}`}
+                          >
+                            <GripVertical className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                            <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                              <Checkbox checked={visibleColumnIds.has(col.id)} onCheckedChange={() => toggleColumn(col.id)} />
+                              <span className="truncate">{col.label}</span>
                             </label>
-                          ))}
-                      </div>
-                      <div className="mt-3 pt-3 border-t">
-                        <div className="text-xs font-semibold text-gray-600 mb-2">Column order</div>
-                        <div className="space-y-1 max-h-56 overflow-auto pr-1">
-                          {visibleColumns
-                            .filter((c) => !['late_indicator', 'operation_id', 'shipment_id', 'status'].includes(c.id))
-                            .map((col) => (
-                              <div key={`order-${col.id}`} className="flex items-center justify-between gap-2 text-sm">
-                                <span className="truncate">{col.label}</span>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <button
-                                    type="button"
-                                    className="p-1 rounded hover:bg-gray-100 text-gray-600"
-                                    title="Move up"
-                                    onClick={() => moveColumnOrder(col.id, 'up')}
-                                  >
-                                    <ArrowUp className="h-3.5 w-3.5" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="p-1 rounded hover:bg-gray-100 text-gray-600"
-                                    title="Move down"
-                                    onClick={() => moveColumnOrder(col.id, 'down')}
-                                  >
-                                    <ArrowDown className="h-3.5 w-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                        </div>
-                      </div>
-                      <div className="mt-3 flex items-center justify-between gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            setVisibleColumnIds(new Set(defaultVisibleColumnIds))
-                            setColumnOrderIds(compactColumns.map((c) => c.id))
-                          }}
-                        >
-                          Reset
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => setShowColumnsMenu(false)}>
-                          Close
-                        </Button>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => (allExpanded ? collapseAll() : expandAll(allVisibleIds))}
-                  disabled={loading || sortedShipments.length === 0}
-                >
-                  {allExpanded ? (
-                    <>
-                      <Minus className="h-4 w-4 mr-2" />
-                      Collapse All
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Expand All
-                    </>
-                  )}
-                </Button>
-                <div className="flex items-center gap-1 border-l border-gray-200 pl-2 ml-1">
+                <div className="hidden">
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={page <= 1 || loading}
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    onClick={() => (allExpanded ? collapseAll() : expandAll(allVisibleIds))}
+                    disabled={listFetching || section3TableLoading || sortedShipments.length === 0}
                   >
-                    Prev
-                  </Button>
-                  <div className="text-sm text-gray-600 min-w-[72px] text-center px-1">
-                    Page {page}
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={loading || (totalCount > 0 && page * pageSize >= totalCount)}
-                    onClick={() => setPage((p) => p + 1)}
-                  >
-                    Next
+                    {allExpanded ? (
+                      <>
+                        <Minus className="h-4 w-4 mr-2" />
+                        Collapse All
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="h-4 w-4 mr-2" />
+                        Expand All
+                      </>
+                    )}
                   </Button>
                 </div>
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(page - 1)}
+                      disabled={page <= 1 || listFetching || section3TableLoading}
+                    >
+                      Previous
+                    </Button>
+                    <div className="flex items-center gap-1">
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum: number
+                        if (totalPages <= 5) {
+                          pageNum = i + 1
+                        } else if (page <= 3) {
+                          pageNum = i + 1
+                        } else if (page >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i
+                        } else {
+                          pageNum = page - 2 + i
+                        }
+                        return (
+                          <Button
+                            key={pageNum}
+                            variant={page === pageNum ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => handlePageChange(pageNum)}
+                            disabled={listFetching || section3TableLoading}
+                            className="min-w-[40px]"
+                          >
+                            {pageNum}
+                          </Button>
+                        )
+                      })}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(page + 1)}
+                      disabled={page >= totalPages || listFetching || section3TableLoading}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           </CardHeader>
           <CardContent>
-            {loading ? (
-              <div className="text-center py-8">Loading shipments...</div>
-            ) : (
-              <>
+            <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
                 {/* Desktop compact table */}
                 <div className="hidden lg:block border rounded-lg overflow-hidden">
                   {/* Top scrollbar (synced) */}
                   <div
                     ref={topScrollRef}
-                    className="overflow-x-auto border-b bg-white"
+                    className={`${COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS} border-b bg-white`}
                     onScroll={() => {
                       if (isSyncingScroll.current) return
                       const top = topScrollRef.current
@@ -3687,7 +5572,7 @@ function ShipmentsPageContent() {
 
                   <div
                     ref={bottomScrollRef}
-                    className="overflow-x-auto"
+                    className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
                     onScroll={() => {
                       if (isSyncingScroll.current) return
                       const top = topScrollRef.current
@@ -3700,25 +5585,24 @@ function ShipmentsPageContent() {
                       })
                     }}
                   >
-                    <div className="min-w-[1100px]">
-                      {/* Header */}
-                      <div
-                        className="grid gap-3 px-3 py-2 text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10"
-                        style={{
-                          gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} 320px`
-                        }}
-                      >
-                        <div />
+                      <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS}`}>
+                        <thead>
+                        <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
+                          <th
+                            scope="col"
+                            className={`w-10 align-bottom sticky top-0 z-20 bg-gray-50 ${CONTRACT_PERF_TABLE_CELL_PAD}`}
+                          />
                         {visibleColumns.map(col => {
                           const active = sortKey === col.id
-                          const filterActive = isColumnFilterActive(col.id)
-                          const filterType = getFilterTypeForColumn(col.id)
-                          const current = columnFilters[col.id]
+                          const opColClass = operationalTableColumnClass(
+                            getOperationalColumnLayout('shipments', col.id),
+                          )
 
                           return (
-                            <div
+                            <th
                               key={col.id}
-                              className={`relative min-w-0 cursor-move ${dragColId === col.id ? 'opacity-60' : ''}`}
+                              scope="col"
+                              className={`relative text-left align-top font-semibold cursor-move sticky top-0 z-20 bg-gray-50 ${CONTRACT_PERF_TABLE_CELL_PAD} ${opColClass} ${dragColId === col.id ? 'opacity-60' : ''}`}
                               draggable
                               onDragStart={(e) => {
                                 setDragColId(col.id)
@@ -3737,315 +5621,149 @@ function ShipmentsPageContent() {
                                 setDragColId(null)
                               }}
                             >
-                              <div className="flex items-center gap-1 min-w-0">
-                                <button
-                                  type="button"
-                                  className={`flex items-center gap-1 text-left min-w-0 ${col.sortable ? 'hover:text-gray-900' : ''}`}
-                                  onClick={() => {
-                                    if (col.sortable) {
-                                      onSortHeaderClick(col)
-                                    }
-                                  }}
-                                  title={col.sortable ? 'Sort' : undefined}
-                                >
-                                  <span className="truncate">{col.label}</span>
-                                  {col.formulaHelp ? <FieldHelp text={col.formulaHelp} /> : null}
-                                  {col.sortable && active && (
-                                    sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                                  )}
-                                </button>
+                              <ContractPerfTableSortHeader
+                                label={col.label}
+                                formulaHelp={col.formulaHelp}
+                                sortable={col.sortable}
+                                activeSort={active}
+                                sortDir={sortDir}
+                                onSortClick={() => onSortHeaderClick(col)}
+                              />
 
-                                <button
-                                  type="button"
-                                  className={`p-1 rounded hover:bg-gray-100 ${filterActive ? 'text-blue-700' : 'text-gray-500'}`}
-                                  title="Filter"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setOpenHeaderFilterId(prev => (prev === col.id ? null : col.id))
-                                  }}
-                                >
-                                  <Filter className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
 
-                              {openHeaderFilterId === col.id && (
-                                <div
-                                  ref={headerFilterPopoverRef}
-                                  className="absolute left-0 top-full mt-2 w-[280px] bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-30"
-                                  onClick={(e) => e.stopPropagation()}
-                                  onMouseDown={(e) => e.stopPropagation()}
-                                >
-                                  <div className="flex items-center justify-between mb-2">
-                                    <div className="text-xs font-semibold text-gray-700 truncate">{col.label} Filter</div>
-                                    <button
-                                      type="button"
-                                      className="text-xs text-gray-500 hover:text-gray-800"
-                                      onClick={() => setOpenHeaderFilterId(null)}
-                                    >
-                                      Close
-                                    </button>
-                                  </div>
-
-                                  {/* Text filter */}
-                                  {filterType === 'text' && (
-                                    <div className="space-y-2">
-                                      <Input
-                                        value={(current?.type === 'text' && current.value) ? current.value : ''}
-                                        onChange={(e) => {
-                                          const value = e.target.value
-                                          setOrClearFilter(col.id, {
-                                            type: 'text',
-                                            value,
-                                            exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                            emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
-                                            notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
-                                          })
-                                        }}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') {
-                                            e.preventDefault()
-                                            setPage(1)
-                                            fetchShipments(1)
-                                          }
-                                        }}
-                                        placeholder="Type to filter (contains)"
-                                        className="h-8 text-sm"
-                                      />
-                                      <div className="flex flex-col gap-2">
-                                        <label className="flex items-center gap-2 text-xs text-gray-700">
-                                          <Checkbox
-                                            checked={current?.type === 'text' ? Boolean(current.exact) : false}
-                                            onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
-                                              setOrClearFilter(col.id, {
-                                                type: 'text',
-                                                value,
-                                                exact: Boolean(checked),
-                                                emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
-                                              })
-                                            }}
-                                          />
-                                          Exact match
-                                        </label>
-                                        <label className="flex items-center gap-2 text-xs text-gray-700">
-                                          <Checkbox
-                                            checked={Boolean(current?.emptyOnly)}
-                                            onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
-                                              setOrClearFilter(col.id, {
-                                                type: 'text',
-                                                value,
-                                                exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                                emptyOnly: Boolean(checked),
-                                                notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
-                                              })
-                                            }}
-                                          />
-                                          Only blanks
-                                        </label>
-                                        <label className="flex items-center gap-2 text-xs text-gray-700">
-                                          <Checkbox
-                                            checked={Boolean((current as any)?.notBlankOnly)}
-                                            onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
-                                              setOrClearFilter(col.id, {
-                                                type: 'text',
-                                                value,
-                                                exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                                emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
-                                                notBlankOnly: Boolean(checked),
-                                              })
-                                            }}
-                                          />
-                                          Only not blanks
-                                        </label>
-                                      </div>
-                                    </div>
-                                  )}
-
-                                  {/* Number filter */}
-                                  {filterType === 'number' && (
-                                    <div className="space-y-2">
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <Input
-                                          value={(current?.type === 'number' && current.min) ? current.min : ''}
-                                          onChange={(e) => {
-                                            const min = e.target.value
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchShipments(1)
-                                            }
-                                          }}
-                                          placeholder="Min"
-                                          className="h-8 text-sm"
-                                        />
-                                        <Input
-                                          value={(current?.type === 'number' && current.max) ? current.max : ''}
-                                          onChange={(e) => {
-                                            const max = e.target.value
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchShipments(1)
-                                            }
-                                          }}
-                                          placeholder="Max"
-                                          className="h-8 text-sm"
-                                        />
-                                      </div>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean(current?.emptyOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                        />
-                                        Only blanks
-                                      </label>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean((current as any)?.notBlankOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
-                                          }}
-                                        />
-                                        Only not blanks
-                                      </label>
-                                    </div>
-                                  )}
-
-                                  {/* Date filter */}
-                                  {filterType === 'date' && (
-                                    <div className="space-y-2">
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <Input
-                                          type="date"
-                                          value={(current?.type === 'date' && current.from) ? current.from : ''}
-                                          onChange={(e) => {
-                                            const from = e.target.value
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchShipments(1)
-                                            }
-                                          }}
-                                          className="h-8 text-sm"
-                                        />
-                                        <Input
-                                          type="date"
-                                          value={(current?.type === 'date' && current.to) ? current.to : ''}
-                                          onChange={(e) => {
-                                            const to = e.target.value
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchShipments(1)
-                                            }
-                                          }}
-                                          className="h-8 text-sm"
-                                        />
-                                      </div>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean(current?.emptyOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                        />
-                                        Only blanks
-                                      </label>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean((current as any)?.notBlankOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
-                                          }}
-                                        />
-                                        Only not blanks
-                                      </label>
-                                    </div>
-                                  )}
-
-                                  <div className="flex items-center justify-between mt-3 pt-2 border-t">
-                                    <button
-                                      type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
-                                      onClick={() => clearColumnFilter(col.id)}
-                                      disabled={!filterActive}
-                                    >
-                                      Clear filter
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
+                            </th>
                           )
                         })}
-                        <div className="text-right sticky right-0 bg-gray-50 border-l pl-3 pr-2">Actions</div>
-                      </div>
+                        <th
+                          scope="col"
+                          className={`${COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS} border-l text-center align-bottom font-semibold whitespace-nowrap shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD}`}
+                        >
+                          Actions
+                        </th>
+                        </tr>
+                        </thead>
+                        <tbody
+                          className={`transition-opacity duration-200 ${
+                            listFetching && shipments.length > 0 ? 'opacity-65' : 'opacity-100'
+                          }`}
+                        >
 
                       {/* Rows */}
-                      <div className="divide-y">
-                        {sortedShipments.length === 0 ? (
-                          <div className="bg-white">
-                            <div className="px-4 py-10 text-center text-gray-500">
+                        {section3TableLoading || (listFetching && shipments.length === 0) ? (
+                          <TableInitialLoadPlaceholder
+                            colSpan={visibleColumns.length + 2}
+                            icon={Package}
+                          />
+                        ) : !(listFetching || tableScopeLoading) && sortedShipments.length === 0 ? (
+                          <tr>
+                            <td colSpan={visibleColumns.length + 2} className="px-4 py-10 text-center text-gray-500 bg-white">
                               <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />
                               <p>No shipments found</p>
                               {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
-                            </div>
-                          </div>
-                        ) : sortedShipments.map((shipment, idx) => {
-                          const isEditing = editingId === shipment.id
-                          return (
-                            <div key={shipment.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                              <div className="px-3 py-2">
-                                <div
-                                  className="grid gap-3 items-center"
-                                  style={{
-                                    gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} 320px`
-                                  }}
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleExpanded(shipment.id)}
-                                    className="p-1 text-gray-500 hover:text-gray-800"
-                                    title={expandedShipmentIds.has(shipment.id) ? 'Collapse' : 'Expand'}
-                                  >
-                                    {expandedShipmentIds.has(shipment.id) ? (
-                                      <ChevronDown className="h-5 w-5" />
-                                    ) : (
-                                      <ChevronRight className="h-5 w-5" />
-                                    )}
-                                  </button>
+                            </td>
+                          </tr>
+                        ) : (() => {
+                          let stripeIdx = 0
+                          return stoGroupedShipments.flatMap((group) => {
+                            const isMultiStoGroup = group.rows.length > 1
+                            const stoGroupCollapsed = collapsedStoGroupKeys.has(group.stoKey)
+                            const nodes: ReactNode[] = []
 
-                                  {visibleColumns.map(col => (
-                                    <div key={col.id} className="min-w-0">
-                                      {col.id === 'vessel_name' && isEditing ? (
+                            if (isMultiStoGroup) {
+                              nodes.push(
+                                <tr
+                                  key={`sto-group-${group.stoKey}`}
+                                  className="bg-slate-100 border-y border-slate-200"
+                                >
+                                  <td className={`align-middle w-10 ${CONTRACT_PERF_TABLE_CELL_PAD}`}>
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleStoGroupCollapse(group.stoKey)}
+                                      className="p-1 text-slate-600 hover:text-slate-900"
+                                      title={stoGroupCollapsed ? 'Expand STO group' : 'Collapse STO group'}
+                                      aria-expanded={!stoGroupCollapsed}
+                                    >
+                                      {stoGroupCollapsed ? (
+                                        <ChevronRight className="h-5 w-5" />
+                                      ) : (
+                                        <ChevronDown className="h-5 w-5" />
+                                      )}
+                                    </button>
+                                  </td>
+                                  {visibleColumns.map((col) => {
+                                    const opColClass = operationalTableColumnClass(
+                                      getOperationalColumnLayout('shipments', col.id),
+                                    )
+                                    if (col.id === 'shipment_id') {
+                                      return (
+                                        <td
+                                          key={col.id}
+                                          className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
+                                        >
+                                          <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
+                                            <span className="text-sm font-semibold text-slate-900">{group.stoDisplay}</span>
+                                            <Badge variant="outline" className="ml-2 text-xs font-normal">
+                                              {group.rows.length} rows
+                                            </Badge>
+                                          </div>
+                                        </td>
+                                      )
+                                    }
+                                    return (
+                                      <td
+                                        key={col.id}
+                                        className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
+                                      />
+                                    )
+                                  })}
+                                  <td
+                                    className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
+                                  />
+                                </tr>,
+                              )
+                              if (stoGroupCollapsed) return nodes
+                            }
+
+                            for (const shipment of group.rows) {
+                              const isEditing = editingId === shipment.id
+                              const tableInlineEditActive =
+                                isEditing && SHIPMENTS_TABLE_LEGACY_INLINE_EDIT_ENABLED
+                              const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
+                              const rowBg = stripeIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                              stripeIdx += 1
+                              const isStoChildRow = isMultiStoGroup
+                              nodes.push(
+                            <Fragment key={shipment.id}>
+                              <tr className={`${rowBg} ${isStoChildRow ? 'border-l-2 border-slate-200' : ''}`}>
+                                <td className={`align-middle w-10 ${CONTRACT_PERF_TABLE_CELL_PAD}`}>
+                                  {isStoChildRow ? (
+                                    <span className="inline-block w-5" aria-hidden />
+                                  ) : (
+                                  <div className="hidden">
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleExpanded(shipment.id)}
+                                      className="p-1 text-gray-500 hover:text-gray-800"
+                                      title={expandedShipmentIds.has(shipment.id) ? 'Collapse' : 'Expand'}
+                                    >
+                                      {expandedShipmentIds.has(shipment.id) ? (
+                                        <ChevronDown className="h-5 w-5" />
+                                      ) : (
+                                        <ChevronRight className="h-5 w-5" />
+                                      )}
+                                    </button>
+                                  </div>
+                                  )}
+                                </td>
+
+                                  {visibleColumns.map(col => {
+                                    const opColClass = operationalTableColumnClass(
+                                      getOperationalColumnLayout('shipments', col.id),
+                                    )
+                                    return (
+                                    <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
+                                      <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
+                                      {col.id === 'vessel_name' && tableInlineEditActive ? (
                                         <div className="relative">
                                           <Input
                                             value={editedData.vessel_name ?? shipment.vessel_name ?? ''}
@@ -4072,21 +5790,21 @@ function ShipmentsPageContent() {
                                             </div>
                                           )}
                                         </div>
-                                      ) : col.id === 'vessel_code' && isEditing ? (
+                                      ) : col.id === 'vessel_code' && tableInlineEditActive ? (
                                         <Input
                                           value={editedData.vessel_code ?? shipment.vessel_code ?? ''}
                                           disabled
                                           className="h-8 text-sm bg-gray-100 cursor-not-allowed"
                                           placeholder="Filled from Master Vessel"
                                         />
-                                      ) : col.id === 'vessel_owner' && isEditing ? (
+                                      ) : col.id === 'vessel_owner' && tableInlineEditActive ? (
                                         <Input
                                           value={editedData.vessel_owner ?? shipment.vessel_owner ?? ''}
                                           disabled
                                           className="h-8 text-sm bg-gray-100 cursor-not-allowed"
                                           placeholder="Filled from Master Vessel"
                                         />
-                                      ) : col.id === 'vessel_capacity' && isEditing ? (
+                                      ) : col.id === 'vessel_capacity' && tableInlineEditActive ? (
                                         <Input
                                           type="number"
                                           value={
@@ -4100,14 +5818,14 @@ function ShipmentsPageContent() {
                                           className="h-8 text-sm bg-gray-100 cursor-not-allowed"
                                           placeholder="Filled from Master Vessel"
                                         />
-                                      ) : col.id === 'vessel_hull_type' && isEditing ? (
+                                      ) : col.id === 'vessel_hull_type' && tableInlineEditActive ? (
                                         <Input
                                           value={editedData.vessel_hull_type ?? shipment.vessel_hull_type ?? ''}
                                           disabled
                                           className="h-8 text-sm bg-gray-100 cursor-not-allowed"
                                           placeholder="Filled from Master Vessel"
                                         />
-                                      ) : col.id === 'port_of_loading' && isEditing ? (
+                                      ) : col.id === 'port_of_loading' && tableInlineEditActive ? (
                                         <div className="relative">
                                           <Input
                                             value={editedData.port_of_loading ?? shipment.port_of_loading ?? ''}
@@ -4115,7 +5833,7 @@ function ShipmentsPageContent() {
                                             onFocus={() => (editedData.port_of_loading ?? shipment.port_of_loading ?? '').trim().length >= 2 && setShowPortSuggestions(true)}
                                             onBlur={() => setTimeout(() => setShowPortSuggestions(false), 200)}
                                             className="h-8 text-sm"
-                                            placeholder="Type to search port (Master Loading Port)"
+                                            placeholder="Type to search port (Master Port)"
                                           />
                                           {showPortSuggestions && portSuggestions.length > 0 && (
                                             <div className="absolute z-20 mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-52 overflow-y-auto">
@@ -4134,141 +5852,108 @@ function ShipmentsPageContent() {
                                             </div>
                                           )}
                                         </div>
-                                      ) : col.id === 'status' && isEditing ? (
-                                        <select
-                                          value={editedData.status ?? shipment.status ?? ''}
-                                          onChange={(e) => handleFieldChange('status', e.target.value)}
-                                          className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full bg-white"
-                                        >
-                                          <option value="">Select Status</option>
-                                          <option value="PLANNED">PLANNED</option>
-                                          <option value="IN_TRANSIT">IN_TRANSIT</option>
-                                          <option value="ARRIVED">ARRIVED</option>
-                                          <option value="UNLOADING">UNLOADING</option>
-                                          <option value="COMPLETED">COMPLETED</option>
-                                          <option value="CANCELLED">CANCELLED</option>
-                                        </select>
+                                      ) : col.id === 'status' && tableInlineEditActive ? (
+                                        (() => {
+                                          const currentStatus = String(shipment.status || '').toUpperCase()
+                                          if (currentStatus === 'CANCELLED') {
+                                            return (
+                                              <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
+                                            )
+                                          }
+                                          const selected =
+                                            String(editedData.status || '').toUpperCase() === 'CANCELLED'
+                                              ? 'CANCELLED'
+                                              : currentStatus
+                                          return (
+                                            <select
+                                              value={selected}
+                                              onChange={(e) => {
+                                                if (e.target.value === 'CANCELLED') {
+                                                  handleFieldChange('status', 'CANCELLED')
+                                                } else {
+                                                  const next = { ...editedData }
+                                                  delete next.status
+                                                  setEditedData(next)
+                                                }
+                                              }}
+                                              className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full bg-white"
+                                              title="Status lowered automatically. Can only be cancelled manually."
+                                            >
+                                              <option value={currentStatus}>{formatShipmentStatusLabel(shipment.status)}</option>
+                                              <option value="CANCELLED">CANCELLED</option>
+                                            </select>
+                                          )
+                                        })()
+                                      ) : isStoChildRow && col.id === 'shipment_id' ? (
+                                        <span className="text-xs text-gray-400">—</span>
                                       ) : (
                                         col.render(shipment)
                                       )}
-                                    </div>
-                                  ))}
+                                      </div>
+                                    </td>
+                                    )
+                                  })}
 
-                                  <div className="flex items-center justify-end gap-2 sticky right-0 bg-white border-l pl-3 pr-2 shadow-[-8px_0_12px_-12px_rgba(0,0,0,0.35)]">
-                                    {isEditing ? (
-                                      <>
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={handleCancelEdit}
-                                          disabled={saving}
-                                        >
-                                          <X className="h-4 w-4 mr-1" />
-                                          Cancel
-                                        </Button>
-                                        <Button
-                                          size="sm"
-                                          onClick={() => handleSave(shipment.id)}
-                                          disabled={saving}
-                                          className="bg-green-600 hover:bg-green-700"
-                                        >
-                                          {saving ? (
-                                            <>
-                                              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                                              Saving...
-                                            </>
-                                          ) : (
-                                            <>
-                                              <Save className="h-4 w-4 mr-1" />
-                                              Save
-                                            </>
-                                          )}
-                                        </Button>
-                                      </>
+                                  <td className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
+                                    {tableInlineEditActive ? (
+                                      <div className="hidden">
+                                        <>
+                                          <Button
+                                            variant="outline"
+                                            size="icon"
+                                            onClick={handleCancelEdit}
+                                            disabled={saving}
+                                            title="Cancel"
+                                          >
+                                            <X className="h-4 w-4" />
+                                          </Button>
+                                          <Button
+                                            size="icon"
+                                            onClick={() => handleSave(shipment.id)}
+                                            disabled={saving}
+                                            title="Save"
+                                            className="bg-green-600 hover:bg-green-700 text-white"
+                                          >
+                                            {saving ? (
+                                              <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : (
+                                              <Save className="h-4 w-4" />
+                                            )}
+                                          </Button>
+                                        </>
+                                      </div>
                                     ) : (
-                                      <>
-                                      {canShowEditShipmentButton && (
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={() => {
-                                            if (perms.loaded && !canEditShipment) {
-                                              alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
-                                              return
-                                            }
-                                            handleEdit(shipment)
-                                          }}
-                                          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                                        >
-                                          <Edit2 className="h-4 w-4 mr-1" />
-                                          Edit
-                                        </Button>
-                                      )}
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={() => handleViewLoadingPorts(shipment)}
-                                          className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-                                        >
-                                          <Ship className="h-4 w-4 mr-1" />
-                                          Ports
-                                        </Button>
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={() => handleViewDocuments(shipment)}
-                                          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                                        >
-                                          <Package className="h-4 w-4 mr-1" />
-                                          Docs
-                                        </Button>
-                                        <input
-                                          id={`shipment-file-${shipment.id}`}
-                                          type="file"
-                                          accept="application/pdf,image/png,image/jpeg"
-                                          className="hidden"
-                                          onChange={(e) => handleUploadFileChange(shipment, e)}
-                                        />
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={() => document.getElementById(`shipment-file-${shipment.id}`)?.click()}
-                                          disabled={uploadingId === shipment.id}
-                                          className="bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100"
-                                        >
-                                          {uploadingId === shipment.id ? (
-                                            <>
-                                              <span className="h-4 w-4 mr-2 inline-block border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
-                                              Uploading...
-                                            </>
-                                          ) : (
-                                            <>
-                                              <Upload className="h-4 w-4 mr-1" />
-                                              Upload
-                                            </>
-                                          )}
-                                        </Button>
-                                      </>
+                                      <ShipmentViewTableRowActions
+                                        shipment={shipment}
+                                        onAddShipment={() => void handleOpenAddShipmentForContractRow(shipment)}
+                                        onEditShipment={() => handleOpenEditShipmentModal(shipment)}
+                                        onViewShipment={() => handleOpenViewShipmentModal(shipment)}
+                                        onCancelShipment={() => openCancelShipmentDialog(shipment)}
+                                        cancelShipmentLoading={
+                                          cancelShipmentSubmitting && cancelShipmentTarget?.id === shipment.id
+                                        }
+                                        onViewDocs={() => void handleViewDocuments(shipment)}
+                                      />
                                     )}
-                                  </div>
-                                </div>
-
-                                {/* Expanded Details */}
-                                {expandedShipmentIds.has(shipment.id) && (
-                                  <div className="mt-3 p-3 border rounded bg-white">
+                                  </td>
+                              </tr>
+                              {false && expandedShipmentIds.has(shipment.id) && (
+                                <tr key={`${shipment.id}-expanded`} className={rowBg}>
+                                  <td colSpan={visibleColumns.length + 2} className="px-3 py-3">
+                                  <div className="p-3 border rounded bg-white">
                                     {/* Basic Info */}
                                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mb-4 pb-4 border-b">
                                       <div>
                                         <div className="text-gray-500">Source</div>
-                                        <div className="font-medium">{shipment.source_type || shipment.supplier || '-'}</div>
+                                        <div className="font-medium">{formatSapDisplayValue(shipment.source_type || shipment.supplier)}</div>
                                       </div>
                                       <div>
                                         <div className="text-gray-500">Buyer</div>
-                                        <div className="font-medium">{shipment.buyer || shipment.buyers || '-'}</div>
+                                        <div className="font-medium">{formatSapDisplayValue(shipment.buyer || shipment.buyers)}</div>
                                       </div>
                                       <div>
                                         <div className="text-gray-500">Group Name</div>
-                                        <div className="font-medium">{shipment.group_name || shipment.group_names || '-'}</div>
+                                        <div className="font-medium">{formatSapDisplayValue(shipment.group_name || shipment.group_names)}</div>
                                       </div>
                                     </div>
 
@@ -4294,11 +5979,11 @@ function ShipmentsPageContent() {
                                               </div>
                                               <div>
                                                 <div className="text-gray-500">PO No</div>
-                                                <div className="font-medium">{detail.po_number || '-'}</div>
+                                                <div className="font-medium">{formatSapDisplayValue(detail.po_number)}</div>
                                               </div>
                                               <div>
                                                 <div className="text-gray-500">Contract Ext No</div>
-                                                <div className="font-medium">{detail.contract_ext_no || '-'}</div>
+                                                <div className="font-medium">{formatSapDisplayValue(detail.contract_ext_no)}</div>
                                               </div>
                                               <div>
                                                 <div className="text-gray-500">Contract Qty</div>
@@ -4367,143 +6052,149 @@ function ShipmentsPageContent() {
                                       </div>
                                     )}
                                   </div>
-                                )}
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>,
+                              )
+                            }
+                            return nodes
+                          })
+                        })()}
+                        </tbody>
+                      </table>
                   </div>
                 </div>
 
                 {/* Mobile/tablet cards */}
                 <div className="lg:hidden space-y-2">
-                  {sortedShipments.map((shipment) => {
+                  {section3TableLoading || (listFetching && shipments.length === 0) ? (
+                    <div className="rounded-lg border bg-white">
+                      <TableInitialLoadPlaceholderContent icon={Package} />
+                    </div>
+                  ) : !(listFetching || tableScopeLoading) && sortedShipments.length === 0 ? (
+                    <div className="rounded-lg border bg-white px-4 py-10 text-center text-sm text-gray-500">
+                      No shipments found
+                    </div>
+                  ) : (
+                  stoGroupedShipments.flatMap((group) => {
+                    const isMultiStoGroup = group.rows.length > 1
+                    const stoGroupCollapsed = collapsedStoGroupKeys.has(group.stoKey)
+                    const nodes: ReactNode[] = []
+
+                    if (isMultiStoGroup) {
+                      nodes.push(
+                        <div
+                          key={`m-sto-group-${group.stoKey}`}
+                          className="border rounded-lg bg-slate-100 px-3 py-2 flex items-center gap-2"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleStoGroupCollapse(group.stoKey)}
+                            className="p-1 text-slate-600 hover:text-slate-900 shrink-0"
+                            aria-expanded={!stoGroupCollapsed}
+                          >
+                            {stoGroupCollapsed ? (
+                              <ChevronRight className="h-5 w-5" />
+                            ) : (
+                              <ChevronDown className="h-5 w-5" />
+                            )}
+                          </button>
+                          <span className="text-sm font-semibold text-slate-900">{group.stoDisplay}</span>
+                          <Badge variant="outline" className="text-xs font-normal">
+                            {group.rows.length} rows
+                          </Badge>
+                        </div>,
+                      )
+                      if (stoGroupCollapsed) return nodes
+                    }
+
+                    for (const shipment of group.rows) {
                     const isEditing = editingId === shipment.id
-                    return (
+                    const tableInlineEditActive =
+                      isEditing && SHIPMENTS_TABLE_LEGACY_INLINE_EDIT_ENABLED
+                    const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
+                    nodes.push(
                       <div
                         key={shipment.id}
-                        className={`border rounded-lg transition-colors ${isEditing ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
+                        className={`border rounded-lg transition-colors ${isMultiStoGroup ? 'ml-3 border-l-2 border-slate-200' : ''} ${tableInlineEditActive ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
                       >
                         <div className="p-4">
                           <div className="flex items-center justify-between gap-3 mb-3">
                             <div className="flex items-center gap-3 min-w-0">
-                              <button
-                                type="button"
-                                onClick={() => toggleExpanded(shipment.id)}
-                                className="p-1 text-gray-500 hover:text-gray-800"
-                                title={expandedShipmentIds.has(shipment.id) ? 'Collapse' : 'Expand'}
-                              >
-                                {expandedShipmentIds.has(shipment.id) ? (
-                                  <ChevronDown className="h-5 w-5" />
-                                ) : (
-                                  <ChevronRight className="h-5 w-5" />
-                                )}
-                              </button>
+                              <div className="hidden">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleExpanded(shipment.id)}
+                                  className="p-1 text-gray-500 hover:text-gray-800"
+                                  title={expandedShipmentIds.has(shipment.id) ? 'Collapse' : 'Expand'}
+                                >
+                                  {expandedShipmentIds.has(shipment.id) ? (
+                                    <ChevronDown className="h-5 w-5" />
+                                  ) : (
+                                    <ChevronRight className="h-5 w-5" />
+                                  )}
+                                </button>
+                              </div>
                               <div className="min-w-0">
-                                <div className="font-semibold truncate">{shipment.sto_number || shipment.operation_id || ''}</div>
-                                <div className="text-xs text-gray-600 truncate">{shipment.vessel_name || '-'} • {shipment.contract_number || '-'}</div>
+                                <div className="font-semibold truncate">
+                                  {resolveShipmentDisplayStoNumber(shipment.sto_number)}
+                                </div>
+                                {shipment.operation_id ? (
+                                  <div className="text-[10px] text-gray-500 truncate">
+                                    Op: {formatSapDisplayValue(shipment.operation_id)}
+                                  </div>
+                                ) : null}
+                                <div className="text-xs text-gray-600 truncate">{formatSapDisplayValue(shipment.vessel_name)} • {formatSapDisplayValue(shipment.contract_number)}</div>
                               </div>
                               <Badge className={getStatusColor(shipment.status)}>
-                                {shipment.status}
+                                {formatShipmentStatusLabel(shipment.status)}
                               </Badge>
                             </div>
                             <div className="flex gap-2">
-                              {isEditing ? (
+                              {tableInlineEditActive ? (
+                                <div className="hidden">
                                 <>
-                                  <Button variant="outline" size="sm" onClick={handleCancelEdit} disabled={saving}>
-                                    <X className="h-4 w-4 mr-1" />
-                                    Cancel
+                                  <Button variant="outline" size="icon" onClick={handleCancelEdit} disabled={saving} title="Cancel">
+                                    <X className="h-4 w-4" />
                                   </Button>
-                                  <Button size="sm" onClick={() => handleSave(shipment.id)} disabled={saving} className="bg-green-600 hover:bg-green-700">
-                                    {saving ? (
-                                      <>
-                                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                                        Saving...
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Save className="h-4 w-4 mr-1" />
-                                        Save
-                                      </>
-                                    )}
+                                  <Button size="icon" onClick={() => handleSave(shipment.id)} disabled={saving} title="Save" className="bg-green-600 hover:bg-green-700 text-white">
+                                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                                   </Button>
                                 </>
+                                </div>
                               ) : (
-                                <>
-                                  {canShowEditShipmentButton && (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => {
-                                        if (perms.loaded && !canEditShipment) {
-                                          alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
-                                          return
-                                        }
-                                        handleEdit(shipment)
-                                      }}
-                                      className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                                    >
-                                      <Edit2 className="h-4 w-4 mr-1" />
-                                      Edit
-                                    </Button>
-                                  )}
-                                  <Button variant="outline" size="sm" onClick={() => handleViewLoadingPorts(shipment)} className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
-                                    <Ship className="h-4 w-4 mr-1" />
-                                    Ports
-                                  </Button>
-                                  <Button variant="outline" size="sm" onClick={() => handleViewDocuments(shipment)} className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100">
-                                    <Package className="h-4 w-4 mr-1" />
-                                    Docs
-                                  </Button>
-                                  <input
-                                    id={`shipment-file-${shipment.id}`}
-                                    type="file"
-                                    accept="application/pdf,image/png,image/jpeg"
-                                    className="hidden"
-                                    onChange={(e) => handleUploadFileChange(shipment, e)}
-                                  />
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => document.getElementById(`shipment-file-${shipment.id}`)?.click()}
-                                    disabled={uploadingId === shipment.id}
-                                    className="bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100"
-                                  >
-                                    {uploadingId === shipment.id ? (
-                                      <>
-                                        <span className="h-4 w-4 mr-2 inline-block border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
-                                        Uploading...
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Upload className="h-4 w-4 mr-1" />
-                                        Upload
-                                      </>
-                                    )}
-                                  </Button>
-                                </>
+                                <ShipmentViewTableRowActions
+                                  shipment={shipment}
+                                  onAddShipment={() => void handleOpenAddShipmentForContractRow(shipment)}
+                                  onEditShipment={() => handleOpenEditShipmentModal(shipment)}
+                                  onViewShipment={() => handleOpenViewShipmentModal(shipment)}
+                                  onCancelShipment={() => openCancelShipmentDialog(shipment)}
+                                  cancelShipmentLoading={
+                                    cancelShipmentSubmitting && cancelShipmentTarget?.id === shipment.id
+                                  }
+                                  onViewDocs={() => void handleViewDocuments(shipment)}
+                                />
                               )}
                             </div>
                           </div>
 
                           {/* Expanded Details */}
-                          {expandedShipmentIds.has(shipment.id) && (
+                          {false && expandedShipmentIds.has(shipment.id) && (
                             <div className="mt-4">
                               {/* Basic Info */}
                               <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mb-4 pb-4 border-b">
                                 <div>
                                   <div className="text-gray-500">Source</div>
-                                  <div className="font-medium">{shipment.source_type || shipment.supplier || '-'}</div>
+                                  <div className="font-medium">{formatSapDisplayValue(shipment.source_type || shipment.supplier)}</div>
                                 </div>
                                 <div>
                                   <div className="text-gray-500">Buyer</div>
-                                  <div className="font-medium">{shipment.buyer || shipment.buyers || '-'}</div>
+                                  <div className="font-medium">{formatSapDisplayValue(shipment.buyer || shipment.buyers)}</div>
                                 </div>
                                 <div>
                                   <div className="text-gray-500">Group Name</div>
-                                  <div className="font-medium">{shipment.group_name || shipment.group_names || '-'}</div>
+                                  <div className="font-medium">{formatSapDisplayValue(shipment.group_name || shipment.group_names)}</div>
                                 </div>
                               </div>
 
@@ -4526,11 +6217,11 @@ function ShipmentsPageContent() {
                                           </div>
                                           <div>
                                             <div className="text-gray-500">Contract Ext No</div>
-                                            <div className="font-medium">{detail.contract_ext_no || '-'}</div>
+                                            <div className="font-medium">{formatSapDisplayValue(detail.contract_ext_no)}</div>
                                           </div>
                                           <div>
                                             <div className="text-gray-500">PO No</div>
-                                            <div className="font-medium">{detail.po_number || '-'}</div>
+                                            <div className="font-medium">{formatSapDisplayValue(detail.po_number)}</div>
                                           </div>
                                           <div>
                                             <div className="text-gray-500">Contract Qty</div>
@@ -4625,142 +6316,397 @@ function ShipmentsPageContent() {
                           )}
                         </div>
                       </div>
-                    )})}
+                    )
+                    }
+                    return nodes
+                  })
+                  )}
                   </div>
-                </>
-              )}
+
+                {totalPages > 1 && (
+                  <div className="mt-6 flex items-center justify-between border-t pt-4">
+                    <div className="text-sm text-gray-700">
+                      Showing page {page} of {totalPages} ({tableShipmentCount} total shipments)
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handlePageChange(page - 1)}
+                        disabled={page <= 1 || listFetching || section3TableLoading}
+                      >
+                        Previous
+                      </Button>
+                      <div className="flex items-center gap-1">
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                          let pageNum: number
+                          if (totalPages <= 5) {
+                            pageNum = i + 1
+                          } else if (page <= 3) {
+                            pageNum = i + 1
+                          } else if (page >= totalPages - 2) {
+                            pageNum = totalPages - 4 + i
+                          } else {
+                            pageNum = page - 2 + i
+                          }
+                          return (
+                            <Button
+                              key={pageNum}
+                              variant={page === pageNum ? 'default' : 'outline'}
+                              size="sm"
+                              onClick={() => handlePageChange(pageNum)}
+                              disabled={listFetching || section3TableLoading}
+                              className="min-w-[40px]"
+                            >
+                              {pageNum}
+                            </Button>
+                          )
+                        })}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handlePageChange(page + 1)}
+                        disabled={page >= totalPages || listFetching || section3TableLoading}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                )}
+            </div>
           </CardContent>
         </Card>
-        )}
       </div>
 
       {/* Loading Ports Modal */}
       {showLoadingPorts && selectedShipment && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto">
-          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg p-6 my-4 max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-semibold">Vessel Loading Ports — {selectedShipment.vessel_name || selectedShipment.shipment_id}</h3>
-              <Button variant="ghost" onClick={() => setShowLoadingPorts(false)}>
-                <X className="h-5 w-5" />
-              </Button>
-            </div>
-
-            <div className="flex flex-col gap-4 flex-1 min-h-0">
-              {/* Combined Shipment Information and Loading Ports */}
-              <div
-                className={[
-                  'border rounded-lg flex flex-col min-h-0',
-                  portsListExpanded ? 'flex-1' : 'flex-none'
-                ].join(' ')}
-              >
-                <div 
-                  className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer hover:bg-gray-100 rounded-t-lg"
-                  onClick={() => setPortsListExpanded(!portsListExpanded)}
-                >
-                  <h4 className="font-semibold text-sm">Shipment Information</h4>
-                  <div className="flex items-center gap-2">
-                    {portsListExpanded ? (
-                      <ChevronUp className="h-5 w-5 text-gray-500" />
-                    ) : (
-                      <ChevronDown className="h-5 w-5 text-gray-500" />
-                    )}
+        <div className={VESSEL_MODAL_OVERLAY_CLASS}>
+          <div className={VESSEL_MODAL_PANEL_CLASS}>
+            {/* Header */}
+            <div className={VESSEL_MODAL_HEADER_CLASS}>
+              <div className="flex items-center justify-between px-6 py-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-600 text-white shrink-0">
+                    <Anchor className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900">
+                      {selectedShipment.vessel_name || selectedShipment.shipment_id}
+                    </h3>
+                    <p className="text-xs text-gray-500">Vessel loading ports &amp; shipment information</p>
                   </div>
                 </div>
-                {portsListExpanded && (
-                <div className="space-y-3 overflow-auto p-4 flex-1 min-h-0">
+                <Button variant="ghost" size="icon" className="shrink-0 text-gray-400 hover:text-gray-600" aria-label="Close" onClick={closeLoadingPortsModal}>
+                  <X className="h-5 w-5" />
+                </Button>
+              </div>
+            </div>
+
+            <div className={`${VESSEL_MODAL_BODY_CLASS} flex flex-col gap-4`}>
+              {/* Shipment Information */}
+              <div className={VESSEL_MODAL_SECTION_CLASS}>
+                <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100 shrink-0">
+                    <FileText className="h-3.5 w-3.5 text-blue-600" />
+                  </div>
+                  <h4 className="font-semibold text-sm text-gray-800">Shipment Information</h4>
+                </div>
+                <div className="space-y-4 p-4">
                   {/* Shipment-Level Information */}
-                  {shipmentInfo ? (
-                    <div className="border rounded-md p-4 bg-gray-50 mb-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <h5 className="font-semibold text-sm">Shipment Information</h5>
-                          <div className="flex gap-2">
+                  {shipmentInfoLoading ? (
+                    <div className="rounded-xl border border-gray-200 p-6 text-center">
+                      <Loader2 className="h-5 w-5 animate-spin text-gray-400 mx-auto mb-2" />
+                      <p className="text-sm text-gray-500">Loading shipment information...</p>
+                    </div>
+                  ) : (
+                    <>
+                      {shipmentInfoError && (
+                        <div className="rounded-xl border border-red-200 bg-red-50 p-4 mb-2 text-sm text-red-700">
+                          {shipmentInfoError}
+                        </div>
+                      )}
+                      <div className="rounded-xl border border-gray-200 bg-white overflow-hidden mb-2">
+                      {/* Key Metrics Summary Bar */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-gray-100 bg-gray-50 border-b border-gray-200">
+                        {[
+                          {
+                            label: 'Qty Delivery',
+                            value: resolvePortsModalQuantityDelivered(
+                              shipmentInfo,
+                              selectedShipment,
+                              contractDetailsMap[selectedShipment.id],
+                            ),
+                            color: 'text-gray-800',
+                          },
+                          {
+                            label: 'Qty Receive',
+                            value: resolvePortsModalQuantityReceive(
+                              shipmentInfo,
+                              selectedShipment,
+                              contractDetailsMap[selectedShipment.id],
+                            ),
+                            color: 'text-gray-800',
+                          },
+                          { label: 'Loading Port', value: shipmentInfo.vessel_loading_port_1 || '—', color: 'text-blue-700' },
+                          { label: 'Discharge Port', value: shipmentInfo.vessel_discharge_port_1 || '—', color: 'text-cyan-700' },
+                        ].map((m) => (
+                          <div key={m.label} className="px-4 py-3">
+                            <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">{m.label}</div>
+                            <div className={`text-sm font-semibold mt-0.5 truncate ${m.color}`}>{m.value}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Edit Action Bar */}
+                      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 bg-white">
+                        <h5 className="text-xs font-semibold uppercase tracking-wide text-gray-400">Detail Fields</h5>
+                        <div className="flex gap-2">
                           {editingShipmentInfo ? (
                             <>
-                            <Button
-                              variant="outline"
-                              size="sm"
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs"
                                 onClick={handleCancelEditAll}
-                            >
-                              <X className="h-4 w-4 mr-1" /> Cancel
-                            </Button>
-                            <Button
-                              size="sm"
+                                disabled={savingShipmentInfo}
+                              >
+                                <X className="h-3.5 w-3.5 mr-1" /> Cancel
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="h-7 text-xs bg-green-600 hover:bg-green-700"
                                 onClick={handleSaveAll}
-                              className="bg-green-600 hover:bg-green-700"
-                            >
-                              <Save className="h-4 w-4 mr-1" /> Save
-                            </Button>
+                                disabled={savingShipmentInfo}
+                              >
+                                <Save className="h-3.5 w-3.5 mr-1" />
+                                {savingShipmentInfo ? 'Saving...' : 'Save Changes'}
+                              </Button>
                             </>
                           ) : (
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => {
-                                handleEditShipmentInfo()
-                                if (loadingPorts.length > 0) {
-                                  handleEditPort(loadingPorts[0])
-                                }
-                              }}
+                              className="h-7 text-xs"
+                              onClick={handleEditShipmentInfo}
                             >
-                              <Edit2 className="h-4 w-4 mr-1" />
+                              <Edit2 className="h-3.5 w-3.5 mr-1" />
                               Edit
                             </Button>
                           )}
-                          </div>
+                        </div>
+                      </div>
+
+                      <div className="p-4 space-y-4">
+                      {/* Quantities & Ports */}
+                      <div>
+                        <p className={VESSEL_MODAL_SUBSECTION_LABEL_CLASS}>Quantities &amp; Ports</p>
+                        <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3 text-sm">
+                          <ShipmentDetailReadOnlyField
+                            label="STO No"
+                            value={shipmentModalStoDisplay(selectedShipment)}
+                            locked
+                          />
+                        </div>
+                        <VesselPortsQuantitiesTable
+                          stoNumber={shipmentModalStoDisplay(selectedShipment)}
+                          rows={buildVesselPortsQuantityRows(
+                            selectedShipment.id,
+                            contractDetailsMap[selectedShipment.id],
+                            contractDetailsMap[selectedShipment.id]?.length
+                              ? null
+                              : {
+                                  contract_ext_no: shipmentModalContractExtNoDisplay(
+                                    shipmentInfo,
+                                    selectedShipment,
+                                    contractDetailsMap[selectedShipment.id],
+                                  ),
+                                  po_number: shipmentModalPoDisplay(
+                                    shipmentInfo,
+                                    selectedShipment,
+                                    contractDetailsMap[selectedShipment.id],
+                                  ),
+                                  contract_qty: parseApiNumber(shipmentInfo?.contract_qty),
+                                  sto_qty: parseApiNumber(
+                                    shipmentInfo?.sto_quantity ??
+                                      selectedShipment.sto_quantity ??
+                                      selectedShipment.total_quantity_shipped,
+                                  ),
+                                  quantity_delivered: resolvePortsModalQuantityDeliveredKg(
+                                    shipmentInfo,
+                                    selectedShipment,
+                                    contractDetailsMap[selectedShipment.id],
+                                  ),
+                                  quantity_receive: resolvePortsModalQuantityReceiveKg(
+                                    shipmentInfo,
+                                    selectedShipment,
+                                    contractDetailsMap[selectedShipment.id],
+                                  ),
+                                },
+                          )}
+                          loading={Boolean(loadingContractDetails[selectedShipment.id])}
+                          editingRowKey={editingPortsQtyRowKey}
+                          edits={editedPortsContractQty}
+                          quantityEditUnlocked={editingShipmentInfo && isQuantityUnlocked}
+                          onStartEditRow={(rowKey) => {
+                            if (!editingShipmentInfo) {
+                              handleEditShipmentInfo()
+                            }
+                            setEditingPortsQtyRowKey(rowKey)
+                          }}
+                          onCancelEditRow={() => setEditingPortsQtyRowKey(null)}
+                          onConfirmEditRow={handleConfirmPortsQtyRowEdit}
+                          onChangeRowQty={handleChangePortsQtyRow}
+                        />
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
-                        <div>
-                          <div className="text-gray-500">Quantity Delivery</div>
-                          {editingShipmentInfo ? (
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={editedShipmentInfo?.quantity_delivered || ''}
-                              onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, quantity_delivered: parseFloat(e.target.value) || 0 })}
-                              className="h-8 text-sm mt-1"
-                            />
-                          ) : (
-                            <div className="font-medium">{formatNumber(shipmentInfo.quantity_delivered)} Kg</div>
-                          )}
-                        </div>
-                        <div>
-                          <div className="text-gray-500">Quantity Receive</div>
-                          {editingShipmentInfo ? (
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={editedShipmentInfo?.actual_vessel_qty_receive || ''}
-                              onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, actual_vessel_qty_receive: parseFloat(e.target.value) || 0 })}
-                              className="h-8 text-sm mt-1"
-                            />
-                          ) : (
-                            <div className="font-medium">{formatNumber(shipmentInfo.actual_vessel_qty_receive)} Kg</div>
-                          )}
-                        </div>
+                        {editingShipmentInfo && (
+                          <div className="md:col-span-2 lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+                              <div className="flex flex-col gap-2">
+                                <div>
+                                  <p className="text-xs font-medium text-amber-900">Upload SLD</p>
+                                  <p className="text-[11px] text-amber-800/80 mt-0.5">
+                                    SLD document for quantity authorization.
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <input
+                                    id={`quantity-sld-doc-${selectedShipment.id}`}
+                                    type="file"
+                                    accept=".pdf,application/pdf"
+                                    className="hidden"
+                                    onChange={(e) => handleShipmentQuantityDocChange(SHIPMENT_SLD_DOC_TYPE, e)}
+                                    disabled={sldDocUploading || hasUploadedSld}
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-8 text-xs border-amber-300 bg-white hover:bg-amber-50"
+                                    disabled={sldDocUploading || hasUploadedSld}
+                                    onClick={() =>
+                                      document.getElementById(`quantity-sld-doc-${selectedShipment.id}`)?.click()
+                                    }
+                                  >
+                                    {sldDocUploading ? (
+                                      <>
+                                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                                        Uploading...
+                                      </>
+                                    ) : hasUploadedSld ? (
+                                      <>
+                                        <Check className="h-3.5 w-3.5 mr-1 text-green-600" />
+                                        SLD uploaded
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Upload className="h-3.5 w-3.5 mr-1" />
+                                        Upload SLD
+                                      </>
+                                    )}
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+                              <div className="flex flex-col gap-2">
+                                <div>
+                                  <p className="text-xs font-medium text-amber-900">Upload SDD</p>
+                                  <p className="text-[11px] text-amber-800/80 mt-0.5">
+                                    SDD document for quantity authorization.
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <input
+                                    id={`quantity-sdd-doc-${selectedShipment.id}`}
+                                    type="file"
+                                    accept=".pdf,application/pdf"
+                                    className="hidden"
+                                    onChange={(e) => handleShipmentQuantityDocChange(SHIPMENT_SDD_DOC_TYPE, e)}
+                                    disabled={sddDocUploading || hasUploadedSdd}
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-8 text-xs border-amber-300 bg-white hover:bg-amber-50"
+                                    disabled={sddDocUploading || hasUploadedSdd}
+                                    onClick={() =>
+                                      document.getElementById(`quantity-sdd-doc-${selectedShipment.id}`)?.click()
+                                    }
+                                  >
+                                    {sddDocUploading ? (
+                                      <>
+                                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                                        Uploading...
+                                      </>
+                                    ) : hasUploadedSdd ? (
+                                      <>
+                                        <Check className="h-3.5 w-3.5 mr-1 text-green-600" />
+                                        SDD uploaded
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Upload className="h-3.5 w-3.5 mr-1" />
+                                        Upload SDD
+                                      </>
+                                    )}
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                            {!isQuantityUnlocked && (
+                              <p className="sm:col-span-2 text-[11px] text-amber-800/80">
+                                Delivered / Received quantities stay locked until at least one of SLD or SDD is uploaded.
+                              </p>
+                            )}
+                          </div>
+                        )}
+                        <ShipmentMtQuantityField
+                          label="Quantity SFAL"
+                          value={editingShipmentInfo ? editedShipmentInfo?.sfal_qty : shipmentInfo.sfal_qty}
+                          editing={editingShipmentInfo}
+                          onChange={(next) => setEditedShipmentInfo({ ...editedShipmentInfo, sfal_qty: next })}
+                        />
+                        <ShipmentMtQuantityField
+                          label="Quantity SFBD"
+                          value={editingShipmentInfo ? editedShipmentInfo?.sfbd_qty : shipmentInfo.sfbd_qty}
+                          editing={editingShipmentInfo}
+                          onChange={(next) => setEditedShipmentInfo({ ...editedShipmentInfo, sfbd_qty: next })}
+                        />
                         <div>
                           <div className="text-gray-500">Vessel Loading Port 1</div>
                           {editingShipmentInfo ? (
-                            <Input
-                              value={editedShipmentInfo?.vessel_loading_port_1 || ''}
-                              onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, vessel_loading_port_1: e.target.value })}
-                              className="h-8 text-sm mt-1"
-                              placeholder="Loading Port Name"
-                            />
+                            <div className="mt-1">
+                              <MasterLoadingPortCombobox
+                                value={editedShipmentInfo?.vessel_loading_port_1 || ''}
+                                onChange={(value) =>
+                                  setEditedShipmentInfo({ ...editedShipmentInfo, vessel_loading_port_1: value })
+                                }
+                                placeholder="Search Master Port..."
+                                className="h-8 text-sm"
+                              />
+                            </div>
                           ) : (
-                          <div className="font-medium">{shipmentInfo.vessel_loading_port_1 || '-'}</div>
+                          <div className="font-medium">{formatSapDisplayValue(shipmentInfo.vessel_loading_port_1)}</div>
                           )}
                         </div>
                         <div>
                           <div className="text-gray-500">Vessel Discharge Port 1</div>
                           {editingShipmentInfo ? (
-                            <Input
-                              value={editedShipmentInfo?.vessel_discharge_port_1 || ''}
-                              onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, vessel_discharge_port_1: e.target.value })}
-                              className="h-8 text-sm mt-1"
-                              placeholder="Discharge Port Name"
-                            />
+                            <div className="mt-1">
+                              <PlantSiteCombobox
+                                value={editedShipmentInfo?.vessel_discharge_port_1 || ''}
+                                onChange={(value) =>
+                                  setEditedShipmentInfo({ ...editedShipmentInfo, vessel_discharge_port_1: value })
+                                }
+                                placeholder="Search Master Plant..."
+                                className="h-8 text-sm"
+                              />
+                            </div>
                           ) : (
-                            <div className="font-medium">{shipmentInfo.vessel_discharge_port_1 || '-'}</div>
+                            <div className="font-medium">{formatSapDisplayValue(shipmentInfo.vessel_discharge_port_1)}</div>
                           )}
                         </div>
                         <div>
@@ -4797,56 +6743,12 @@ function ShipmentsPageContent() {
                             <div className="font-medium">{formatNumber(shipmentInfo.vessel_oa_budget)}</div>
                           )}
                         </div>
-                        <div>
-                          <div className="text-gray-500">B/L Quantity</div>
-                          {editingShipmentInfo ? (
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={editedShipmentInfo?.bl_quantity || ''}
-                              onChange={(e) => setEditedShipmentInfo({ ...editedShipmentInfo, bl_quantity: parseFloat(e.target.value) || 0 })}
-                              className="h-8 text-sm mt-1"
-                            />
-                          ) : (
-                            <div className="font-medium">{formatNumber(shipmentInfo.bl_quantity)} Kg</div>
-                          )}
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Arrival at Loading Port</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_arrival_at_loading_port)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Berthed at Loading Port</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_berthed_at_loading_port)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Start Loading</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_start_loading)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Completed Loading</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_completed_loading)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Sailed from Loading Port</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_sailed_from_loading_port)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Arrive at Discharge Port</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_arrive_at_discharge_port)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Berthed at Discharge Port</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_berthed_at_discharge_port)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Start Discharging</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_start_discharging)}</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">ATA Vessel Complete Discharge</div>
-                          <div className="font-medium">{formatDate(shipmentInfo.ata_vessel_complete_discharge)}</div>
-                        </div>
+                        <ShipmentMtQuantityField
+                          label="B/L Quantity"
+                          value={editingShipmentInfo ? editedShipmentInfo?.bl_quantity : shipmentInfo.bl_quantity}
+                          editing={editingShipmentInfo}
+                          onChange={(next) => setEditedShipmentInfo({ ...editedShipmentInfo, bl_quantity: next })}
+                        />
                         <div>
                           <div className="text-gray-500">Loading Rate (Kg/day)</div>
                           <div className="font-semibold text-blue-700">
@@ -4858,15 +6760,39 @@ function ShipmentsPageContent() {
                       </div>
                           {(shipmentInfo.loading_rate_kg_per_day ?? shipmentInfo.loading_rate_mt_per_hour) && (
                             <div className="text-xs text-gray-500 mt-1">
-                              Formula: Quantity Receive / (ATA Completed Loading − ATA Start Loading) days
-                    </div>
-                  )}
+                              Qty Receive &divide; (Completed &minus; Start Loading) days
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      </div>
+
+                      {/* ATA Fields Section */}
+                      <div className="border-t pt-4 px-4 pb-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">ATA &mdash; Actual Time of Arrival</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+                          {[
+                            { label: 'Arrival at Loading Port', value: shipmentInfo.ata_vessel_arrival_at_loading_port },
+                            { label: 'Berthed at Loading Port', value: shipmentInfo.ata_vessel_berthed_at_loading_port },
+                            { label: 'Start Loading', value: shipmentInfo.ata_vessel_start_loading },
+                            { label: 'Completed Loading', value: shipmentInfo.ata_vessel_completed_loading },
+                            { label: 'Sailed from Loading Port', value: shipmentInfo.ata_vessel_sailed_from_loading_port },
+                            { label: 'Arrive at Discharge Port', value: shipmentInfo.ata_vessel_arrive_at_discharge_port },
+                            { label: 'Berthed at Discharge Port', value: shipmentInfo.ata_vessel_berthed_at_discharge_port },
+                            { label: 'Start Discharging', value: shipmentInfo.ata_vessel_start_discharging },
+                            { label: 'Complete Discharge', value: shipmentInfo.ata_vessel_complete_discharge },
+                          ].map(({ label, value }) => (
+                            <div key={label}>
+                              <div className="text-xs text-gray-500">ATA Vessel {label}</div>
+                              <div className="font-medium text-sm mt-0.5">{formatDate(value) || "—"}</div>
+                            </div>
+                          ))}
                         </div>
                       </div>
 
                       {/* ETA Fields Section */}
-                      <div className="mt-4 pt-4 border-t">
-                        <h6 className="font-semibold text-sm mb-3 text-gray-700">ETA (Estimated Time of Arrival) Information</h6>
+                      <div className="border-t pt-4 px-4 pb-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">ETA — Estimated Time of Arrival</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           <div>
                             <div className="text-gray-500">ETA Vessel Arrival at Loading Port</div>
@@ -4980,8 +6906,8 @@ function ShipmentsPageContent() {
                       </div>
                       
                       {/* Quality Fields Section */}
-                      <div className="mt-4 pt-4 border-t">
-                        <h6 className="font-semibold text-sm mb-3 text-gray-700">Quality at Loading Loc 1</h6>
+                      <div className="border-t pt-4 px-4 pb-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quality at Loading Loc 1</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           <div>
                             <div className="text-gray-500">Quality at Loading Loc 1 FFA</div>
@@ -5118,8 +7044,8 @@ function ShipmentsPageContent() {
                         </div>
                       </div>
 
-                      <div className="mt-4 pt-4 border-t">
-                        <h6 className="font-semibold text-sm mb-3 text-gray-700">Quality at Discharge Loc 1</h6>
+                      <div className="border-t pt-4 px-4 pb-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quality at Discharge Loc 1</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           <div>
                             <div className="text-gray-500">Quality at Discharge Port FFA</div>
@@ -5172,12 +7098,7 @@ function ShipmentsPageContent() {
                         </div>
                       </div>
                     </div>
-                  ) : (
-                    <div className="border rounded-md p-4 bg-gray-50 mb-4">
-                      <div className="text-center text-gray-500 py-4">
-                        Loading shipment information...
-                      </div>
-                    </div>
+                    </>
                   )}
                 {loadingPorts.length === 0 ? (
                   <div className="text-gray-500">No loading ports yet.</div>
@@ -5228,7 +7149,7 @@ function ShipmentsPageContent() {
                     const isEditing = port.id && editingPortId === port.id
                     const displayData = isEditing && editedPortData ? editedPortData : port
 
-                    // Loading ports: quantity at this port / (ATA completed loading − ATA start loading) in days
+                    // Loading ports: quantity at this port / (ATA completed loading âˆ’ ATA start loading) in days
                     let computedLoadingRate: number | null = null
                     if (!port.is_discharge_port) {
                       const ataStart = displayData.ata_loading_start
@@ -5254,8 +7175,8 @@ function ShipmentsPageContent() {
                             <div className="flex items-center gap-2">
                               <div className="font-medium">
                                 {port.is_discharge_port
-                                  ? `Discharge Port — ${displayData.port_name || '-'}`
-                                  : `${displayData.port_sequence}. ${displayData.port_name || '-'}`}
+                                  ? `Discharge Port — ${formatSapDisplayValue(displayData.port_name)}`
+                                  : `${displayData.port_sequence}. ${formatSapDisplayValue(displayData.port_name)}`}
                               </div>
                               {port.is_discharge_port && (
                                 <Badge className="bg-amber-100 text-amber-700">Discharge</Badge>
@@ -5266,14 +7187,14 @@ function ShipmentsPageContent() {
                             )}
                           </div>
                           <div className="flex gap-2">
-                            {!isEditing && port.id && (
+                            {!isEditing && port.id && !port.is_discharge_port && (
                                   <Button
                                     variant="outline"
                                     size="sm"
-                                    onClick={() => handleDeleteLoadingPort(port.id!)}
+                                    onClick={() => openCancelLoadingPortDialog(port)}
                                     className="text-red-600 border-red-200 hover:bg-red-50"
                                   >
-                                    Delete
+                                    Cancel
                                   </Button>
                             )}
                           </div>
@@ -5289,7 +7210,7 @@ function ShipmentsPageContent() {
                                 className="h-8 text-sm mt-1"
                               />
                             ) : (
-                              <div className="font-medium">{displayData.port_name || '-'}</div>
+                              <div className="font-medium">{formatSapDisplayValue(displayData.port_name)}</div>
                             )}
                           </div>
                           <div>
@@ -5303,7 +7224,7 @@ function ShipmentsPageContent() {
                                 min={1}
                               />
                             ) : (
-                              <div className="font-medium">{displayData.port_sequence || '-'}</div>
+                              <div className="font-medium">{formatSapDisplayValue(displayData.port_sequence)}</div>
                             )}
                           </div>
                           <div>
@@ -5443,7 +7364,7 @@ function ShipmentsPageContent() {
                             </div>
                             {!port.is_discharge_port && (
                               <div className="text-xs text-gray-500 mt-1">
-                                Formula: Quantity Receive / (ATA Completed Loading − ATA Start Loading) days
+                                Formula: Quantity Receive / (ATA Completed Loading âˆ’ ATA Start Loading) days
                               </div>
                             )}
                           </div>
@@ -5467,160 +7388,287 @@ function ShipmentsPageContent() {
                   )
                 })()}
                 </div>
-                )}
               </div>
 
               {/* Add / Edit Loading Port */}
-              <div
-                className={[
-                  'border rounded-lg flex flex-col min-h-0',
-                  addPortExpanded ? 'flex-1' : 'flex-none'
-                ].join(' ')}
-              >
-                <div 
-                  className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer hover:bg-gray-100 rounded-t-lg"
-                  onClick={() => setAddPortExpanded(!addPortExpanded)}
-                >
-                  <h4 className="font-semibold text-sm">Add Loading Port</h4>
-                  {addPortExpanded ? (
-                    <ChevronUp className="h-5 w-5 text-gray-500" />
-                  ) : (
-                    <ChevronDown className="h-5 w-5 text-gray-500" />
-                  )}
-                </div>
-                {addPortExpanded && (
-                <div className="p-4 overflow-auto flex-1 min-h-0">
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
-                <div>
-                  <div className="text-gray-500 mb-1">Port Name</div>
-                  <Input
-                    value={newPort.port_name as string}
-                    onChange={(e) => setNewPort({ ...newPort, port_name: e.target.value })}
-                    className="h-8 text-sm"
-                    placeholder="e.g., Loading Port 1"
-                  />
-                </div>
-                <div>
-                  <div className="text-gray-500 mb-1">Sequence</div>
-                  <Input
-                    type="number"
-                    value={newPort.port_sequence as number}
-                    onChange={(e) => {
-                      const v = parseInt(e.target.value || '1')
-                      setNewPort({ ...newPort, port_sequence: v })
-                    }}
-                    className="h-8 text-sm"
-                    min={1}
-                  />
-                </div>
-                <div>
-                  <div className="text-gray-500 mb-1">Quantity (Kg)</div>
-                  <Input
-                    type="number"
-                    value={newPort.quantity_at_loading_port as number}
-                    onChange={(e) => {
-                      const v = parseFloat(e.target.value || '0')
-                      setNewPort({ ...newPort, quantity_at_loading_port: v })
-                    }}
-                    className="h-8 text-sm"
-                  />
-                </div>
-                <div>
-                  <div className="text-gray-500 mb-1">Loading Rate (Kg/day)</div>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={newPort.loading_rate as number}
-                    onChange={(e) => {
-                      const v = parseFloat(e.target.value || '0')
-                      setNewPort({ ...newPort, loading_rate: v })
-                    }}
-                    className="h-8 text-sm"
-                  />
-                </div>
-
-                <div className="col-span-full">
-                  <div className="text-gray-500 mb-2 font-medium">ETA Date Fields</div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {[
-                  ['ETA Vessel Arrival at Loading Port', 'eta_vessel_arrival'],
-                  ['ETA Vessel Berthed at Loading Port', 'eta_vessel_berthed_at_loading_port'],
-                  ['ETA Vessel Start Loading', 'eta_loading_start'],
-                  ['ETA Vessel Completed Loading', 'eta_loading_completed'],
-                  ['ETA Vessel Sailed from Loading Port', 'eta_vessel_sailed'],
-                  ['ETA Vessel Arrive at Discharge Port', 'eta_vessel_arrive_at_discharge_port'],
-                  ['ETA Vessel Berthed at Discharge Port', 'eta_vessel_berthed_at_discharge_port'],
-                  ['ETA Vessel Start Discharging', 'eta_vessel_start_discharging'],
-                  ['ETA Vessel Complete Discharge', 'eta_vessel_complete_discharge']
-                ].map(([label, key]) => (
-                  <div key={key as string}>
-                    <div className="text-gray-500 mb-1">{label}</div>
-                    <DateInputDdMmYyyy
-                      valueIso={(newPort as any)[key]}
-                      onChangeIso={(iso) => setNewPort({ ...(newPort as any), [key]: iso } as any)}
-                      className="h-8 text-sm"
-                    />
+              <div className={VESSEL_MODAL_SECTION_CLASS}>
+                <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-green-100 shrink-0">
+                    <Plus className="h-3.5 w-3.5 text-green-600" />
                   </div>
-                ))}
+                  <h4 className="font-semibold text-sm text-gray-800">Add Loading Port</h4>
+                </div>
+                <div className="p-4 space-y-4">
+
+                  {/* Basic Info */}
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Port Info</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">STO No</label>
+                        <Input
+                          value={shipmentModalStoDisplay(selectedShipment)}
+                          readOnly
+                          disabled
+                          className="h-9 text-sm bg-gray-100 text-gray-600 cursor-not-allowed"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">PO Number</label>
+                        <Input
+                          value={shipmentModalPoDisplay(
+                            shipmentInfo,
+                            selectedShipment,
+                            contractDetailsMap[selectedShipment.id],
+                          )}
+                          readOnly
+                          disabled
+                          className="h-9 text-sm bg-gray-100 text-gray-600 cursor-not-allowed"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Contract Ext No</label>
+                        <Input
+                          value={shipmentModalContractExtNoDisplay(
+                            shipmentInfo,
+                            selectedShipment,
+                            contractDetailsMap[selectedShipment.id],
+                          )}
+                          readOnly
+                          disabled
+                          className="h-9 text-sm bg-gray-100 text-gray-600 cursor-not-allowed"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Port</label>
+                        <MasterLoadingPortCombobox
+                          value={newPort.port_name as string}
+                          onChange={(value) => setNewPort({ ...newPort, port_name: value })}
+                          placeholder="Search Master Port..."
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Sequence</label>
+                        <Input
+                          type="number"
+                          value={nextAddLoadingPortSequence(loadingPorts)}
+                          readOnly
+                          tabIndex={-1}
+                          aria-readonly="true"
+                          className="h-9 text-sm bg-gray-100 text-gray-600 cursor-not-allowed opacity-90"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Quantity (Kg)</label>
+                        <Input
+                          type="number"
+                          value={newPort.quantity_at_loading_port as number}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value || '0')
+                            setNewPort({ ...newPort, quantity_at_loading_port: v })
+                          }}
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Loading Rate (Kg/day)</label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={newPort.loading_rate as number}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value || '0')
+                            setNewPort({ ...newPort, loading_rate: v })
+                          }}
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ETA Date Fields */}
+                  <div className="border-t pt-4">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">ETA Date Fields</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+                      {[
+                        ['ETA Vessel Arrival at Loading Port', 'eta_vessel_arrival'],
+                        ['ETA Vessel Berthed at Loading Port', 'eta_vessel_berthed_at_loading_port'],
+                        ['ETA Vessel Start Loading', 'eta_loading_start'],
+                        ['ETA Vessel Completed Loading', 'eta_loading_completed'],
+                        ['ETA Vessel Sailed from Loading Port', 'eta_vessel_sailed'],
+                        ['ETA Vessel Arrive at Discharge Port', 'eta_vessel_arrive_at_discharge_port'],
+                        ['ETA Vessel Berthed at Discharge Port', 'eta_vessel_berthed_at_discharge_port'],
+                        ['ETA Vessel Start Discharging', 'eta_vessel_start_discharging'],
+                        ['ETA Vessel Complete Discharge', 'eta_vessel_complete_discharge']
+                      ].map(([label, key]) => (
+                        <div key={key as string}>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
+                          <DateInputDdMmYyyy
+                            valueIso={(newPort as any)[key]}
+                            onChangeIso={(iso) => setNewPort({ ...(newPort as any), [key]: iso } as any)}
+                            className="h-9 text-sm"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="border-t pt-3 flex items-center justify-between gap-3">
+                    <p className="text-xs text-gray-400 italic">ETA fields are optional</p>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => {
+                          setNewPort(createEmptyNewLoadingPort(nextAddLoadingPortSequence(loadingPorts)))
+                        }}
+                      >
+                        <X className="h-3.5 w-3.5 mr-1" /> Reset
+                      </Button>
+                      <Button size="sm" className="h-8 text-xs bg-green-600 hover:bg-green-700" onClick={handleSaveLoadingPort}>
+                        <Save className="h-3.5 w-3.5 mr-1" />
+                        Save Loading Port
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="mt-4 flex items-center justify-end gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setNewPort({
-                      port_name: '',
-                      port_sequence: loadingPorts.length + 1,
-                      quantity_at_loading_port: 0,
-                      eta_vessel_arrival: '',
-                      ata_vessel_arrival: '',
-                      eta_vessel_berthed: '',
-                      ata_vessel_berthed: '',
-                      eta_loading_start: '',
-                      ata_loading_start: '',
-                      eta_loading_completed: '',
-                      ata_loading_completed: '',
-                      eta_vessel_sailed: '',
-                      ata_vessel_sailed: '',
-                      eta_vessel_berthed_at_loading_port: '',
-                      eta_vessel_arrive_at_discharge_port: '',
-                      eta_vessel_berthed_at_discharge_port: '',
-                      eta_vessel_start_discharging: '',
-                      eta_vessel_complete_discharge: '',
-                      loading_rate: 0,
-                      is_discharge_port: false
-                    })
-                  }}
-                >
-                  <X className="h-4 w-4 mr-1" /> Reset
-                </Button>
-                <Button onClick={handleSaveLoadingPort} className="bg-green-600 hover:bg-green-700">
-                  {false ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
-                  Add Loading Port
-                </Button>
+              {/* Cancellation History */}
+            <div className={VESSEL_MODAL_SECTION_CLASS}>
+              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
+                <h4 className="font-semibold text-sm text-gray-800">Cancellation History</h4>
               </div>
-                </div>
+              <div className="p-4">
+                <hr className="my-2 border-gray-200" />
+                {cancelledLoadingPorts.length === 0 ? (
+                  <div className="text-sm text-gray-500">No cancelled activities.</div>
+                ) : (
+                  <div className="space-y-3">
+                    {cancelledLoadingPorts.map((port) => {
+                      const portLabel = port.is_discharge_port
+                        ? `Discharge Port - ${formatSapDisplayValue(port.port_name)}`
+                        : `Loading Port ${formatSapDisplayValue(port.port_sequence)} - ${formatSapDisplayValue(port.port_name)}`
+                      return (
+                        <div
+                          key={`cancelled-${port.id ?? `${port.shipment_id}-${port.port_sequence}-${port.port_name}`}`}
+                          className="rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600"
+                        >
+                          <div className="font-medium text-gray-700">{portLabel}</div>
+                          <div className="mt-1">
+                            <span className="text-gray-500">Remark:</span>{' '}
+                            <span>{formatSapDisplayValue(port.cancel_remark?.trim())}</span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            Cancelled by: {port.cancelled_by_name?.trim() || 'Unknown User'} on {port.cancelled_at ? formatDateTimeDMY(port.cancelled_at) : '-'}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
                 )}
               </div>
+            </div>
             </div>
           </div>
         </div>
       )}
 
+      <Dialog open={!!cancelPortTarget} onOpenChange={(open) => { if (!open) closeCancelLoadingPortDialog() }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cancel Loading Port</DialogTitle>
+            <DialogDescription>
+              {cancelPortTarget
+                ? `Loading Port ${cancelPortTarget.portSequence}: ${formatSapDisplayValue(cancelPortTarget.portName)}`
+                : 'Provide a reason before cancelling this loading port activity.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label htmlFor="cancel-port-remark" className="text-sm font-medium text-gray-700">
+              Cancellation Reason
+            </label>
+            <textarea
+              id="cancel-port-remark"
+              className="w-full min-h-[96px] border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200"
+              placeholder="Enter reason for cancelling this loading port activity..."
+              value={cancelPortRemark}
+              onChange={(e) => setCancelPortRemark(e.target.value)}
+              disabled={cancelPortSubmitting}
+            />
+          </div>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={closeCancelLoadingPortDialog} disabled={cancelPortSubmitting}>
+              Close
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700"
+              onClick={handleConfirmCancelLoadingPort}
+              disabled={cancelPortSubmitting || !cancelPortRemark.trim()}
+            >
+              {cancelPortSubmitting ? 'Cancelling...' : 'Confirm Cancel'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!cancelShipmentTarget} onOpenChange={(open) => { if (!open) closeCancelShipmentDialog() }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cancel Shipment</DialogTitle>
+            <DialogDescription>
+              {cancelShipmentTarget
+                ? `${formatVesselTableDisplay(cancelShipmentTarget.vessel_name)} • ${formatSapDisplayValue(cancelShipmentTarget.contract_number)}`
+                : 'Provide a reason before cancelling this KLIP shipment.'}
+            </DialogDescription>
+          </DialogHeader>
+          <p className="text-sm text-gray-600">
+            Status will become <span className="font-medium">Cancelled</span> and Shipment Plan Qty / OS Qty (Plan)
+            assignments will be cleared.
+          </p>
+          <div className="space-y-2">
+            <label htmlFor="cancel-shipment-remark" className="text-sm font-medium text-gray-700">
+              Cancellation Reason <span className="text-red-600">*</span>
+            </label>
+            <textarea
+              id="cancel-shipment-remark"
+              className="w-full min-h-[96px] border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200"
+              placeholder="Enter reason for cancelling this shipment..."
+              value={cancelShipmentRemark}
+              onChange={(e) => setCancelShipmentRemark(e.target.value)}
+              disabled={cancelShipmentSubmitting}
+            />
+          </div>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={closeCancelShipmentDialog} disabled={cancelShipmentSubmitting}>
+              Close
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => void handleConfirmCancelShipment()}
+              disabled={cancelShipmentSubmitting || !cancelShipmentRemark.trim()}
+            >
+              {cancelShipmentSubmitting ? 'Cancelling...' : 'Confirm Cancel'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Documents Modal */}
       {showDocs && selectedShipment && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg p-6 max-h-[80vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="flex shrink-0 items-center justify-between border-b px-6 py-4">
               <h3 className="text-xl font-semibold">Documents — {selectedShipment.vessel_name || selectedShipment.shipment_id}</h3>
-              <Button variant="ghost" onClick={() => setShowDocs(false)}>
+              <Button variant="ghost" size="icon" className="shrink-0" aria-label="Close" onClick={() => setShowDocs(false)}>
                 <X className="h-5 w-5" />
               </Button>
             </div>
 
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
             {docsLoading ? (
               <div className="text-sm text-gray-500 py-8 text-center">Loading documents...</div>
             ) : shipmentDocs.length === 0 ? (
@@ -5647,17 +7695,63 @@ function ShipmentsPageContent() {
                 ))}
               </div>
             )}
+            </div>
           </div>
         </div>
       )}
 
-      <AddShipmentModal
-        open={showAddShipment}
-        onClose={() => setShowAddShipment(false)}
-        onCreated={() => {
-          void fetchShipments(1)
+      <AddNewShipmentModal
+        open={showAddShipment || editShipmentFromTable != null || plotShipmentFromTable != null}
+        mode={editShipmentFromTable ? 'edit' : 'add'}
+        readOnly={editShipmentFromTable?.readOnly === true}
+        editContractId={editShipmentFromTable?.editContractId ?? null}
+        editShipmentId={editShipmentFromTable?.shipmentId ?? null}
+        plotShipmentId={plotShipmentFromTable?.shipmentId ?? null}
+        editStoNumber={
+          editShipmentFromTable?.editStoNumber ?? plotShipmentFromTable?.editStoNumber ?? null
+        }
+        editContractNumbers={
+          editShipmentFromTable?.editContractNumbers ?? plotShipmentFromTable?.editContractNumbers ?? null
+        }
+        prefilledPOs={addShipmentPrefilledPOs}
+        prefilledStoNumber={addShipmentPrefilledSto}
+        prefilledContractNumbers={addShipmentPrefilledContractNumbers}
+        onClose={handleCloseShipmentModal}
+        onShipmentChanged={() => {
+          invalidateLogisticsListCaches()
+          section1SummaryForceNextFetchRef.current = true
+          void fetchVesselIdle()
+          void fetchShipments(1, undefined, { force: true })
+        }}
+        onSubmit={async (payload) => {
+          if (editShipmentFromTable?.readOnly) return
+          await submitAddNewShipmentPayload(payload)
+          handleCloseShipmentModal()
+          invalidateLogisticsListCaches()
+          section1SummaryForceNextFetchRef.current = true
+          void fetchVesselIdle()
+          void fetchShipments(1, undefined, { force: true })
         }}
       />
+
+      <VesselIdleModal
+        open={vesselIdleModalOpen}
+        loading={vesselIdleLoading}
+        vessels={vesselIdleList}
+        onClose={() => setVesselIdleModalOpen(false)}
+        onVesselNameClick={handleVesselIdleNameClick}
+      />
+
+      <VesselHistoryModal
+        open={vesselHistoryModalOpen}
+        onClose={() => {
+          setVesselHistoryModalOpen(false)
+          setSelectedVesselForHistory(null)
+        }}
+        selection={selectedVesselForHistory}
+        sourceRows={vesselHistorySourceRows}
+      />
+
     </Layout>
   )
 }

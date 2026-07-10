@@ -5,6 +5,7 @@ import {
   createMasterVessel,
   updateMasterVessel,
   bulkUploadMasterVessels,
+  deleteMasterVessel,
 } from '../controllers/masterVessel.controller';
 
 const router = express.Router();
@@ -17,6 +18,7 @@ router.get('/', listMasterVessels);
 // Create / edit / bulk upload – restrict to ADMIN or roles with data.master_vessels permissions (enforced via role-permissions on frontend)
 router.post('/', authorize('ADMIN'), createMasterVessel);
 router.put('/:id', authorize('ADMIN'), updateMasterVessel);
+router.delete('/:id', authorize('ADMIN'), deleteMasterVessel);
 router.post('/upload', authorize('ADMIN'), bulkUploadMasterVessels);
 
 export default router;

@@ -3,6 +3,15 @@ import multer from 'multer';
 import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import {
+  getTruckingRealization,
+  updateTruckingRealization,
+  updateTruckingDailyActuals,
+  downloadDailyActualsTemplate,
+  bulkUploadDailyActuals,
+  bulkUploadWbRekap,
+  getTruckingDailyActualsCalendar,
+} from '../controllers/truckingRealization.controller';
+import {
   getTruckingOperations,
   getTruckingOperationById,
   createTruckingOperation,
@@ -13,6 +22,13 @@ import {
   updateTruckingDailyDeliverables,
   downloadDailyPlanningDeliverablesTemplate,
   bulkUploadDailyPlanningDeliverables,
+  downloadBulkCreateTruckingTemplate,
+  bulkCreateTruckingOperations,
+  bulkUploadUnplannedPlanning,
+  bulkUploadPlannedPlanning,
+  downloadCargoReadinessTemplate,
+  bulkUpdateCargoReadiness,
+  getTruckingActivityLog,
 } from '../controllers/trucking.controller';
 
 const router = express.Router();
@@ -42,11 +58,47 @@ router.get('/', getTruckingOperations);
 // Contract suggestions (LAND + Open) for create form
 router.get('/contracts/suggestions', getLandOpenContractSuggestions);
 
+// Validate contract number (legacy alias — some clients used /contracts/validate)
+router.get('/contracts/validate', validateContractNumber);
+
 // Validate contract number
 router.get('/validate/contract', validateContractNumber);
 
 // Create trucking operation
 router.post('/', auditLog('CREATE', 'TRUCKING_OPERATION'), createTruckingOperation);
+
+// Bulk create trucking operations from CSV
+router.get('/bulk-create/template', downloadBulkCreateTruckingTemplate);
+router.post(
+  '/bulk-create',
+  planningUpload.single('file'),
+  auditLog('CREATE', 'TRUCKING_OPERATION'),
+  bulkCreateTruckingOperations,
+);
+
+// Unplanned view-table XLSX — upsert daily qty; create Operation ID only when PO has none yet
+router.post(
+  '/unplanned-planning/bulk-upload',
+  planningUpload.single('file'),
+  auditLog('UPDATE', 'TRUCKING_OPERATION'),
+  bulkUploadUnplannedPlanning,
+);
+
+router.post(
+  '/planned-planning/bulk-upload',
+  planningUpload.single('file'),
+  auditLog('UPDATE', 'TRUCKING_OPERATION'),
+  bulkUploadPlannedPlanning,
+);
+
+// Bulk update cargo readiness date
+router.get('/cargo-readiness/template', downloadCargoReadinessTemplate);
+router.post(
+  '/cargo-readiness/bulk-update',
+  planningUpload.single('file'),
+  auditLog('UPDATE', 'TRUCKING_OPERATION'),
+  bulkUpdateCargoReadiness,
+);
 
 // Calendar view: daily planning deliverables (specific paths before generic GET)
 router.get('/daily-planning-deliverables/template', downloadDailyPlanningDeliverablesTemplate);
@@ -57,7 +109,32 @@ router.post(
   bulkUploadDailyPlanningDeliverables,
 );
 router.get('/daily-planning-deliverables', getTruckingDailyDeliverablesCalendar);
+
+// Daily actual progress (realization quantities)
+router.get('/daily-actuals/template', downloadDailyActualsTemplate);
+router.post(
+  '/daily-actuals/bulk-upload',
+  planningUpload.single('file'),
+  auditLog('UPDATE', 'TRUCKING_OPERATION'),
+  bulkUploadDailyActuals,
+);
+
+router.post(
+  '/wb-rekap/bulk-upload',
+  planningUpload.single('file'),
+  auditLog('UPDATE', 'TRUCKING_OPERATION'),
+  bulkUploadWbRekap,
+);
+
+router.get('/daily-actuals/calendar', getTruckingDailyActualsCalendar);
+
+// Activity log (before generic :id route)
+router.get('/:truckingId/activity-log', getTruckingActivityLog);
+
 router.put('/:id/daily-planning-deliverables', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyDeliverables);
+router.put('/:id/daily-actuals', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyActuals);
+router.get('/:id/realization', getTruckingRealization);
+router.put('/:id/realization', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingRealization);
 
 // Get trucking operation by ID
 router.get('/:id', getTruckingOperationById);

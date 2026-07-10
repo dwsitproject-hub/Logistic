@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { AuditService } from '../services/audit.service';
+import { fetchUserScopeAssociations } from '../services/userAssociations.service';
 import { AuthRequest } from '../middleware/auth';
 
 export const register = async (req: Request, res: Response): Promise<void> => {
@@ -112,6 +113,8 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       userAgent: req.get('user-agent')
     });
 
+    const scope = await fetchUserScopeAssociations(user.id, user.plant);
+
     res.json({
       success: true,
       data: {
@@ -124,6 +127,9 @@ export const login = async (req: Request, res: Response): Promise<void> => {
           level: user.level || null,
           transport_type: user.transport_type || null,
           plant: user.plant || null,
+          plants: scope.plants,
+          group_plants: scope.group_plants,
+          products: scope.products,
           is_active: user.is_active,
           is_first_login: user.is_first_login || false,
         },
@@ -155,9 +161,17 @@ export const getProfile = async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
+    const row = result.rows[0];
+    const scope = await fetchUserScopeAssociations(row.id, row.plant);
+
     res.json({
       success: true,
-      data: result.rows[0],
+      data: {
+        ...row,
+        plants: scope.plants,
+        group_plants: scope.group_plants,
+        products: scope.products,
+      },
     });
   } catch (error) {
     logger.error('Get profile error:', error);

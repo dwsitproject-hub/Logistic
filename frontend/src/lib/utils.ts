@@ -28,3 +28,36 @@ export function formatKgFromMt(mt: number | string | null | undefined) {
   return `${formatNumber(toKgFromMt(mt))} Kg`
 }
 
+/** Contract/shipment quantities are stored in kg; display as MT. */
+export function formatQtyMtFromKg(kg: number | string | null | undefined, opts?: { maxFractionDigits?: number }) {
+  if (kg === null || kg === undefined || kg === '') return '-'
+  const raw =
+    typeof kg === 'string' ? kg.replace(/,/g, '').replace(/\s+/g, '').trim() : kg
+  const n = typeof raw === 'string' ? Number(raw) : raw
+  if (!Number.isFinite(n)) return '-'
+  const maxFractionDigits = opts?.maxFractionDigits ?? 2
+  return `${(n / 1000).toLocaleString('en-US', { maximumFractionDigits: maxFractionDigits })} MT`
+}
+
+/** Outstanding qty in kg; over-delivery (negative kg) shows +MT; remaining (positive kg) shows MT without minus. */
+export function formatOutstandingQtyMtFromKg(kg: number | string | null | undefined) {
+  if (kg === null || kg === undefined || kg === '') return '-'
+  const n = typeof kg === 'string' ? Number(kg) : kg
+  if (!Number.isFinite(n)) return '-'
+  const mt = n / 1000
+  const absFmt = Math.abs(mt).toLocaleString('en-US', { maximumFractionDigits: 2 })
+  if (n < 0) return `+${absFmt} MT`
+  if (n > 0) return `${absFmt} MT`
+  return `${(0).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+}
+
+/** View-table text color for outstanding qty (kg): green over-delivery, black remaining, gray zero. */
+export function outstandingQtyMtColorClass(kg: number | string | null | undefined): string {
+  if (kg === null || kg === undefined || kg === '') return 'text-gray-400'
+  const n = typeof kg === 'string' ? Number(kg) : kg
+  if (!Number.isFinite(n)) return 'text-gray-400'
+  if (n < 0) return 'text-green-600'
+  if (n > 0) return 'text-gray-900'
+  return 'text-gray-500'
+}
+

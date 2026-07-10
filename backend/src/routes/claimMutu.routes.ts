@@ -1,9 +1,8 @@
 import express from 'express';
 import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
 import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
+import { ensureUploadDir } from '../utils/fileUpload';
 import {
   uploadClaimMutuExcel,
   listClaimMutuImports,
@@ -16,13 +15,7 @@ const router = express.Router();
 
 router.use(authenticateToken);
 
-const ensureUploadDir = () => {
-  const dir = path.join(process.cwd(), 'uploads', 'claim-mutu');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return dir;
-};
-
-const uploadDir = ensureUploadDir();
+const uploadDir = ensureUploadDir('claim-mutu');
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {

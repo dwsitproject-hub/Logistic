@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Upload, ArrowLeft, RefreshCw, ArrowUp, ArrowDown, Filter as FilterIcon } from 'lucide-react'
 import api from '@/lib/api'
 import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 
 type ClaimMutuImport = {
   id: string
@@ -92,7 +93,7 @@ export default function ClaimMutuPage() {
     errors: { rowIndex: number; message: string }[]
   } | null>(null)
 
-  const pageSize = 200
+  const pageSize = 20
   const [page, setPage] = useState(1)
   const [sortKey, setSortKey] = useState<string>('os_days')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
@@ -1008,8 +1009,8 @@ export default function ClaimMutuPage() {
                                 case 'vendor':
                                   return (
                                     <div>
-                                      <div className="font-medium">{r.vendor_name || '-'}</div>
-                                      <div className="text-[11px] text-gray-500">{r.vendor_code || '-'}</div>
+                                      <div className="font-medium">{formatSapDisplayValue(r.vendor_name)}</div>
+                                      <div className="text-[11px] text-gray-500">{formatSapDisplayValue(r.vendor_code)}</div>
                                     </div>
                                   )
                                 case 'cr_date':
@@ -1032,7 +1033,7 @@ export default function ClaimMutuPage() {
                                 case 'mutu_klaim_stone':
                                   return r[c.id] ?? '-'
                                 default:
-                                  return r[c.id] || '-'
+                                  return formatSapDisplayValue(r[c.id])
                               }
                             })()
 

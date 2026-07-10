@@ -1,33 +1,42 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { Input } from '@/components/ui/input'
+import { sortFilterOptionsWithSelectedFirst } from '@/lib/globalScopeFilters'
 
 // Searchable multi-select dropdown (type to filter, multiple selection with OR).
 // Copied from Dashboard to keep Plant/Site and Incoterm UX consistent.
 export function SearchableMultiSelect({
   label,
   options,
-  selected,
+  selected = [],
   onChange,
   placeholder,
   emptyMessage = 'Loading...',
+  /** When true, selected values appear at the top of the list (for plotted Product / Group Plant). */
+  pinSelectedToTop = false,
 }: {
   label: string
   options: string[]
-  selected: string[]
+  selected?: string[]
   onChange: (value: string[]) => void
   placeholder: string
   emptyMessage?: string
+  pinSelectedToTop?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const containerRef = useRef<HTMLDivElement>(null)
 
+  const orderedOptions = useMemo(
+    () => (pinSelectedToTop ? sortFilterOptionsWithSelectedFirst(options, selected) : options),
+    [options, selected, pinSelectedToTop],
+  )
+
   const filtered = search.trim()
-    ? options.filter((o) => o.toLowerCase().includes(search.toLowerCase().trim()))
-    : options
+    ? orderedOptions.filter((o) => o.toLowerCase().includes(search.toLowerCase().trim()))
+    : orderedOptions
 
   useEffect(() => {
     if (!open) return

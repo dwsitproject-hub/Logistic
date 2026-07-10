@@ -1,20 +1,123 @@
 import { Response } from 'express';
 import { query } from '../database/connection';
+import { assertTruckingOperationContractOpen, isContractDeliveryClosed, SQL_CONTRACT_IMPORT_STATUS } from '../utils/contractDeliveryStatus';
+import { sapTruckingLoadingLocationSql } from '../utils/sapTruckingLoadingLocationSql';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
-import { normalizeAndValidateDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/truckingDailyDeliverables';
+import { mergeDailyDeliverablesRows, normalizeAndValidateDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/truckingDailyDeliverables';
 import {
   appendTruckingColumnFilters,
   appendTruckingGlobalSearch,
   appendTruckingLateIndicatorFilter,
   parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
+import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+import { appendTruckingPipelineStageFilter } from '../utils/truckingPagePipelineSql';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import {
   allocateNextSyntheticSequenceDefault,
   buildSyntheticOperationId,
   formatDDMMYYYY,
 } from '../utils/operationId';
+import {
+  sqlTruckingOutstandingQtyByIncoterm,
+  sqlTruckingQuantityDeliveredCoalesce,
+  sqlTruckingQuantityReceiveCoalesce,
+  sqlTruckingQuantitySentCoalesce,
+} from '../utils/truckingQuantitySql';
+import {
+  isTruckingPageIncoterm,
+  truckingPageListScopeWhereSql,
+} from '../utils/truckingIncotermScope';
+import { sqlContractGlobalOutstandingExpr } from '../utils/contractGlobalOutstandingSql';
+import { buildQtyMoveCte } from '../utils/contractGlobalOutstandingSql';
+import {
+  sqlSapTruckingLastReceiveDate,
+  sqlSapTruckingStartReceiveDate,
+} from '../utils/truckingSapDates';
+import {
+  TRUCKING_REALIZATIONS_JOIN,
+  sqlRealizationEndDate,
+  sqlRealizationStartDate,
+} from '../utils/truckingRealizationSql';
+import { hasTruckingKlipPlanning } from '../utils/truckingEffectiveStatus';
+import {
+  invalidateTruckingListCache,
+  resolveTruckingListForRequest,
+} from '../services/truckingList.service';
+import { SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP } from '../utils/truckingEffectiveStatus';
+import {
+  findActiveTruckingOpsByContractId,
+  findTruckingOpForPlannedPlanningUpload,
+  findTruckingOpForUnplannedPlanningUpload,
+  formatDuplicateTruckingMessage,
+  resolveContractByExtNoOrId,
+  resolveContractForUnplannedPlanningUpload,
+  truckingOperationIdIsAssigned,
+} from '../utils/truckingOperationUniqueness';
+import {
+  buildDailyDeliverablesFromKgEntries,
+  filterEntriesLockedByActuals,
+  filterEntriesWithinUnplannedWindow,
+  isUnplannedWidePlanningTemplateMatrix,
+  isWidePlanningTemplateMatrix,
+  parseUnplannedWidePlanningMatrix,
+  resolvePlanningStartEndFromDeliverables,
+  unplannedUploadCellToString,
+} from '../utils/truckingUnplannedPlanningUpload';
+import {
+  fetchContractOutstandingQtyKg,
+  fetchTruckingOperationOutstandingQtyKg,
+  resolveTruckingPlanningMaxQtyKg,
+  sumPlanningEntriesKg,
+  validatePlanningTotalAgainstOutstandingKg,
+} from '../utils/truckingUnplannedPlanningOsQty';
+
+let truckingOpIdBackfillChecked = false;
+let truckingStatusReconcileLastRun = 0;
+const TRUCKING_STATUS_RECONCILE_INTERVAL_MS = 10 * 60 * 1000;
+
+async function reconcileTruckingStatusesFromSapIfDue(): Promise<void> {
+  const now = Date.now();
+  if (now - truckingStatusReconcileLastRun < TRUCKING_STATUS_RECONCILE_INTERVAL_MS) return;
+  truckingStatusReconcileLastRun = now;
+  try {
+    const result = await query(SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP);
+    const count = result.rowCount ?? 0;
+    if (count > 0) {
+      invalidateTruckingListCache();
+      logger.info(`Reconciled trucking status from SAP for ${count} operation(s)`);
+    }
+  } catch (err) {
+    logger.warn('Trucking status reconcile from SAP failed (list continues)', err);
+  }
+}
+
+async function ensureMissingTruckingOperationIdsIfNeeded(): Promise<void> {
+  if (truckingOpIdBackfillChecked) return;
+  const check = await query(
+    `SELECT 1
+     FROM trucking_operations t
+     WHERE t.operation_id IS NULL
+        OR TRIM(COALESCE(t.operation_id::text, '')) = ''
+        OR TRIM(t.operation_id::text) IN ('-', 'N/A', '—')
+     LIMIT 1`,
+  );
+  truckingOpIdBackfillChecked = true;
+  if (check.rows.length === 0) return;
+  await ensureMissingTruckingOperationIds();
+}
+
+function deriveTruckingStatus(
+  truckingStartDate: any,
+  truckingCompletionDate: any,
+  cargoReadinessDate: any
+): string {
+  if (truckingCompletionDate) return 'COMPLETED';
+  if (truckingStartDate) return 'IN_TRANSIT';
+  if (cargoReadinessDate) return 'LOADING';
+  return 'PLANNED';
+}
 
 export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Response) => {
   try {
@@ -29,7 +132,15 @@ export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Resp
       WITH latest_spd AS (
         SELECT DISTINCT ON (spd.contract_number)
           spd.contract_number,
-          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no
+          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no,
+          COALESCE(spd.data->'contract'->>'contract_type', spd.data->>'B2B Flag') AS b2b_flag,
+          COALESCE(
+            spd.data->'contract'->>'contract_reference_po',
+            spd.data->>'CONTRACT REFF PO',
+            spd.data->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'CONTRACT REFF PO'
+          ) AS contract_reference_po
         FROM sap_processed_data spd
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
@@ -44,18 +155,30 @@ export const getLandOpenContractSuggestions = async (req: AuthRequest, res: Resp
         c.sto_number
       FROM contracts c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-      WHERE
-        UPPER(COALESCE(c.status, '')) IN ('OPEN', 'ACTIVE')
-        AND UPPER(COALESCE(c.transport_mode, '')) = 'LAND'
-        AND (
-          COALESCE(l.contract_ext_no, '') ILIKE $1
-          OR c.contract_id ILIKE $1
-          OR COALESCE(c.po_number, '') ILIKE $1
-        )
-      ORDER BY COALESCE(l.contract_ext_no, c.contract_id)
+      WHERE (
+        COALESCE(l.contract_ext_no, '') ILIKE $1
+        OR c.contract_id ILIKE $1
+        OR COALESCE(c.po_number, '') ILIKE $1
+        OR COALESCE(c.sto_number, '') ILIKE $1
+      )
+      AND NOT (
+        UPPER(TRIM(COALESCE(l.b2b_flag, c.contract_type::text, ''))) = 'B2B'
+        AND NULLIF(TRIM(COALESCE(l.contract_reference_po, '')), '') IS NOT NULL
+      )
+      ${truckingPageListScopeWhereSql}
+      ORDER BY
+        CASE
+          WHEN COALESCE(c.po_number, '') = $2 THEN 0
+          WHEN COALESCE(l.contract_ext_no, '') = $2 THEN 1
+          WHEN c.contract_id = $2 THEN 2
+          WHEN COALESCE(c.sto_number, '') = $2 THEN 3
+          ELSE 4
+        END,
+        c.contract_date DESC NULLS LAST,
+        COALESCE(l.contract_ext_no, c.contract_id)
       LIMIT 10
       `,
-      [`%${term}%`]
+      [`%${term}%`, term]
     );
 
     return res.json({ success: true, data: result.rows });
@@ -107,410 +230,16 @@ async function ensureMissingTruckingOperationIds(): Promise<void> {
 
 export const getTruckingOperations = async (req: AuthRequest, res: Response) => {
   try {
-    await ensureMissingTruckingOperationIds();
-    const { status, location, loadingLocation, unloadingLocation, dateFrom, dateTo, sto, contract, plant, page = 1, limit = 10 } = req.query;
-    const offset = (Number(page) - 1) * Number(limit);
-    const globalSearch =
-      typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';
-    const colFilters = parseColumnFiltersQuery((req.query as any).columnFilters);
-    const lateIndicatorParam = (req.query as any).lateIndicator as string | undefined;
-    const sortKey = String((req.query as any).sortKey || 'created_at');
-    const sortDirRaw = String((req.query as any).sortDir || 'desc').toLowerCase();
-    const sortDir = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
-
-    let queryText = `
-      SELECT 
-        t.id,
-        t.operation_id,
-        t.contract_id,
-        t.location,
-        t.loading_location,
-        t.unloading_location,
-        t.trucking_owner,
-        t.cargo_readiness_date,
-        -- Use DB trucking dates, but fallback to SAP \"Trucking Start/Last Receive Date\" when DB is empty
-        COALESCE(
-          t.trucking_start_date,
-          (
-            SELECT (
-              CASE
-                WHEN trim(v.val) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(v.val)::date
-                WHEN trim(v.val) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(v.val), 'MM/DD/YY')
-                ELSE NULL
-              END
-            )
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Trucking Start Receive Date',
-                spd.data->>'Trucking Start Receive Date'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) v
-            WHERE v.val IS NOT NULL AND length(trim(v.val)) >= 6
-          )
-        ) AS trucking_start_date,
-        COALESCE(
-          t.trucking_completion_date,
-          (
-            SELECT (
-              CASE
-                WHEN trim(v.val) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(v.val)::date
-                WHEN trim(v.val) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(v.val), 'MM/DD/YY')
-                ELSE NULL
-              END
-            )
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Trucking Last Receive Date',
-                spd.data->>'Trucking Last Receive Date'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) v
-            WHERE v.val IS NOT NULL AND length(trim(v.val)) >= 6
-          )
-        ) AS trucking_completion_date,
-        t.eta_trucking_start_date,
-        t.eta_trucking_completion_date,
-        t.eta_delivery_start_date,
-        t.eta_delivery_end_date,
-        -- Quantities: prefer trucking_operations, fallback to latest SAP row for the contract
-        COALESCE(
-          t.quantity_sent,
-          (
-            SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Quantity Sent via Trucking (Based on Surat Jalan)',
-                spd.data->>'quantity_sent_via_trucking_based_on_surat_jalan',
-                spd.data->'raw'->>'Quantity Sent via Trucking',
-                spd.data->'raw'->>'Quantity Sent',
-                spd.data->>'Quantity Sent'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) q
-            WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-          )
-        ) AS quantity_sent,
-        COALESCE(
-          t.quantity_delivered,
-          (
-            SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Quantity Delivered via Trucking',
-                spd.data->>'quantity_delivered_via_trucking',
-                spd.data->'raw'->>'Qty Receive',
-                spd.data->'raw'->>'Quantity Receive'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) q
-            WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-          )
-        ) AS quantity_delivered,
-        -- UI expects quantity_receive; use delivered as a practical default
-        COALESCE(
-          NULL,
-          t.quantity_delivered,
-          (
-            SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Qty Receive',
-                spd.data->'raw'->>'Quantity Receive',
-                spd.data->>'quantity_delivered_via_trucking'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) q
-            WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-          )
-        ) AS quantity_receive,
-        t.gain_loss_percentage,
-        t.gain_loss_amount,
-        t.oa_budget,
-        t.oa_actual,
-        t.status,
-        t.created_at,
-        t.updated_at,
-        CASE
-          WHEN NULLIF(TRIM(c.sto_number::text), '') IS NOT NULL THEN
-            (
-              SELECT STRING_AGG(DISTINCT cc.contract_id, ', ' ORDER BY cc.contract_id)
-              FROM contracts cc
-              WHERE UPPER(COALESCE(NULLIF(TRIM(cc.transport_mode), ''), 'LAND')) = 'LAND'
-                AND NULLIF(TRIM(cc.sto_number::text), '') = NULLIF(TRIM(c.sto_number::text), '')
-            )
-          WHEN NULLIF(TRIM(t.operation_id::text), '') IS NOT NULL THEN
-            (
-              SELECT STRING_AGG(DISTINCT cc2.contract_id, ', ' ORDER BY cc2.contract_id)
-              FROM trucking_operations t2
-              INNER JOIN contracts cc2 ON t2.contract_id = cc2.id
-              WHERE NULLIF(TRIM(t2.operation_id::text), '') = NULLIF(TRIM(t.operation_id::text), '')
-            )
-          ELSE c.contract_id
-        END AS contract_number,
-        c.po_number,
-        -- Prefer showing all SAP STOs when contract has multiple
-        COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers) AS sto_number,
-        sa.sto_numbers AS sto_numbers,
-        c.quantity_ordered as sto_quantity,
-        c.quantity_ordered as contract_qty,
-        c.delivery_start_date,
-        c.delivery_end_date,
-        c.supplier,
-        c.buyer,
-        c.product,
-        c.group_name,
-        s.estimated_km,
-        CASE
-          WHEN NULLIF(TRIM(c.sto_number::text), '') IS NOT NULL THEN
-            (
-              SELECT STRING_AGG(DISTINCT NULLIF(TRIM(z.v), ''), ', ' ORDER BY NULLIF(TRIM(z.v), ''))
-              FROM (
-                SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS v
-                FROM sap_processed_data spd
-                WHERE spd.contract_number IN (
-                  SELECT cc.contract_id
-                  FROM contracts cc
-                  WHERE UPPER(COALESCE(NULLIF(TRIM(cc.transport_mode), ''), 'LAND')) = 'LAND'
-                    AND NULLIF(TRIM(cc.sto_number::text), '') = NULLIF(TRIM(c.sto_number::text), '')
-                )
-              ) z
-              WHERE NULLIF(TRIM(z.v), '') IS NOT NULL
-            )
-          WHEN NULLIF(TRIM(t.operation_id::text), '') IS NOT NULL THEN
-            (
-              SELECT STRING_AGG(DISTINCT NULLIF(TRIM(z.v), ''), ', ' ORDER BY NULLIF(TRIM(z.v), ''))
-              FROM (
-                SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS v
-                FROM sap_processed_data spd
-                WHERE spd.contract_number IN (
-                  SELECT cc2.contract_id
-                  FROM trucking_operations t2
-                  INNER JOIN contracts cc2 ON t2.contract_id = cc2.id
-                  WHERE NULLIF(TRIM(t2.operation_id::text), '') = NULLIF(TRIM(t.operation_id::text), '')
-                )
-              ) z
-              WHERE NULLIF(TRIM(z.v), '') IS NOT NULL
-            )
-          ELSE
-            (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Contract Ext No',
-                spd.data->>'Contract Ext No'
-              )
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            )
-        END AS contract_ext_no
-      FROM trucking_operations t
-      LEFT JOIN contracts c ON t.contract_id = c.id
-      LEFT JOIN shipments s ON t.shipment_id = s.id
-      -- Match dashboard baseline: exclude B2B "child" contracts (latest SAP says B2B + Contract Reference PO not blank)
-      LEFT JOIN LATERAL (
-        SELECT
-          COALESCE(
-            spd.data->'contract'->>'contract_type',
-            spd.data->>'B2B Flag',
-            spd.data->'raw'->>'B2B Flag',
-            spd.data->>'Contract Type'
-          ) AS b2b_flag_raw,
-          COALESCE(
-            spd.data->'contract'->>'contract_reference_po',
-            spd.data->>'CONTRACT REFF PO',
-            spd.data->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'CONTRACT REFF PO'
-          ) AS contract_reference_po_raw
-        FROM sap_processed_data spd
-        WHERE spd.contract_number = c.contract_id
-        ORDER BY spd.created_at DESC NULLS LAST
-        LIMIT 1
-      ) b2b ON true
-      LEFT JOIN LATERAL (
-        SELECT STRING_AGG(DISTINCT x.effective_sto, ', ' ORDER BY x.effective_sto) AS sto_numbers
-        FROM (
-          SELECT NULLIF(TRIM(COALESCE(
-            spd.sto_number::text,
-            spd.data->'raw'->>'STO No.',
-            spd.data->'raw'->>'STO Number',
-            spd.data->'shipment'->>'sto_no',
-            spd.data->'contract'->>'sto_no'
-          )), '') AS effective_sto
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-        ) x
-        WHERE x.effective_sto IS NOT NULL AND x.effective_sto != ''
-      ) sa ON true
-      WHERE 1=1
-        AND NOT (
-          c.contract_id IS NOT NULL
-          AND UPPER(NULLIF(TRIM(COALESCE(b2b.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
-          AND NULLIF(TRIM(COALESCE(b2b.contract_reference_po_raw, '')), '') IS NOT NULL
-        )
-    `;
-    const queryParams: any[] = [];
-    let paramIndex = 1;
-
-    if (status) {
-      queryText += ` AND t.status = $${paramIndex}`;
-      queryParams.push(status);
-      paramIndex++;
+    const summaryOnly =
+      String((req.query as { summaryOnly?: string }).summaryOnly || '').toLowerCase() === 'true';
+    if (!summaryOnly) {
+      void ensureMissingTruckingOperationIdsIfNeeded();
+      void reconcileTruckingStatusesFromSapIfDue();
     }
-
-    if (location) {
-      queryText += ` AND t.location ILIKE $${paramIndex}`;
-      queryParams.push(`%${location}%`);
-      paramIndex++;
-    }
-
-    if (loadingLocation) {
-      queryText += ` AND t.loading_location ILIKE $${paramIndex}`;
-      queryParams.push(`%${loadingLocation}%`);
-      paramIndex++;
-    }
-
-    if (unloadingLocation) {
-      queryText += ` AND t.unloading_location ILIKE $${paramIndex}`;
-      queryParams.push(`%${unloadingLocation}%`);
-      paramIndex++;
-    }
-
-    // Dashboard baseline filters by CONTRACT DATE (YTD). Keep Trucking page aligned:
-    // dateFrom/dateTo apply to contracts.contract_date (not trucking_start_date).
-    if (dateFrom) {
-      queryText += ` AND c.contract_date >= $${paramIndex}`;
-      queryParams.push(dateFrom);
-      paramIndex++;
-    }
-
-    if (dateTo) {
-      queryText += ` AND c.contract_date <= $${paramIndex}`;
-      queryParams.push(dateTo);
-      paramIndex++;
-    }
-
-    if (sto) {
-      queryText += ` AND c.sto_number = $${paramIndex}`;
-      queryParams.push(sto);
-      paramIndex++;
-    }
-
-    if (contract) {
-      queryText += ` AND c.contract_id = $${paramIndex}`;
-      queryParams.push(contract);
-      paramIndex++;
-    }
-
-    const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
-    const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-    if (plants.length > 0) {
-      // Plant/Site filter: map to unloading location (fallback to derived location).
-      queryText += ` AND COALESCE(NULLIF(TRIM(t.unloading_location::text), ''), NULLIF(TRIM(t.location::text), ''), '') = ANY($${paramIndex}::text[])`;
-      queryParams.push(plants);
-      paramIndex++;
-    }
-
-    const innerParams = [...queryParams];
-    const outerStart = paramIndex;
-
-    let fp = outerStart;
-    const gSearch = appendTruckingGlobalSearch(globalSearch, fp);
-    fp = gSearch.nextIndex;
-    const cCol = appendTruckingColumnFilters(colFilters, fp);
-    fp = cCol.nextIndex;
-    const li = appendTruckingLateIndicatorFilter(lateIndicatorParam, fp);
-    fp = li.nextIndex;
-
-    const outerSql = `${gSearch.sql}${cCol.sql}${li.sql}`;
-    const outerParams = [...gSearch.params, ...cCol.params, ...li.params];
-
-    const preOuterQuery = queryText;
-    const allowedSort: Record<string, string> = {
-      created_at: 't.created_at',
-      operation_id: 't.operation_id',
-      status: 't.status',
-      contract_number: 'c.contract_id',
-      po_number: 'c.po_number',
-      sto_number: 'COALESCE(NULLIF(TRIM(c.sto_number::text), \'\'), sa.sto_numbers)',
-      trucking_owner: 't.trucking_owner',
-      loading_location: 't.loading_location',
-      unloading_location: 't.unloading_location',
-      trucking_start_date: 't.trucking_start_date',
-      trucking_completion_date: 't.trucking_completion_date',
-      delivery_start_date: 'c.delivery_start_date',
-      delivery_end_date: 'c.delivery_end_date',
-      quantity_delivered: 't.quantity_delivered',
-      quantity_sent: 't.quantity_sent',
-      oa_budget: 't.oa_budget',
-      oa_actual: 't.oa_actual',
-      gain_loss_percentage: 't.gain_loss_percentage',
-      gain_loss_amount: 't.gain_loss_amount',
-    };
-    const orderExpr = allowedSort[sortKey] || 't.created_at';
-    queryText = `${preOuterQuery}${outerSql} ORDER BY ${orderExpr} ${sortDir} NULLS LAST, t.created_at DESC LIMIT $${fp} OFFSET $${fp + 1}`;
-    const mainParams = [...innerParams, ...outerParams, Number(limit), offset];
-
-    const result = await query(queryText, mainParams);
-
-    const countQuery = `SELECT COUNT(*)::bigint AS count FROM (${preOuterQuery}${outerSql}) AS _trucking_filtered`;
-    const countParams = [...innerParams, ...outerParams];
-
-    const countResult = await query(countQuery, countParams);
-    const summaryQuery = `
-      SELECT
-        COUNT(*)::bigint AS total_count,
-        COUNT(*) FILTER (WHERE status = 'PLANNED')::bigint AS planned_count,
-        COUNT(*) FILTER (WHERE status = 'IN_PROGRESS')::bigint AS in_progress_count,
-        COUNT(*) FILTER (WHERE status = 'LOADING')::bigint AS loading_count,
-        COUNT(*) FILTER (WHERE status = 'IN_TRANSIT')::bigint AS in_transit_count,
-        COUNT(*) FILTER (WHERE status = 'UNLOADING')::bigint AS unloading_count,
-        COUNT(*) FILTER (WHERE status = 'COMPLETED')::bigint AS completed_count,
-        COUNT(*) FILTER (WHERE status = 'CANCELLED')::bigint AS cancelled_count
-      FROM (${preOuterQuery}${outerSql}) AS _trucking_filtered
-    `;
-    const summaryResult = await query(summaryQuery, countParams);
-    const sr = summaryResult.rows[0] || {};
-
+    const data = await resolveTruckingListForRequest(req);
     return res.json({
       success: true,
-      data: {
-        truckingOperations: result.rows,
-        summary: {
-          total: Number(sr.total_count || 0),
-          status: {
-            planned: Number(sr.planned_count || 0),
-            inProgress: Number(sr.in_progress_count || 0),
-            loading: Number(sr.loading_count || 0),
-            inTransit: Number(sr.in_transit_count || 0),
-            unloading: Number(sr.unloading_count || 0),
-            completed: Number(sr.completed_count || 0),
-            cancelled: Number(sr.cancelled_count || 0),
-          },
-        },
-        pagination: {
-          total: parseInt(countResult.rows[0].count),
-          page: Number(page),
-          limit: Number(limit),
-          totalPages: Math.ceil(parseInt(countResult.rows[0].count) / Number(limit)),
-        },
-      },
+      data,
     });
   } catch (error) {
     logger.error('Get trucking operations error:', error);
@@ -532,16 +261,29 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
     const result = await query(
       `SELECT 
         t.*,
+        t.trucking_start_date AS planning_start_date,
+        t.trucking_completion_date AS planning_end_date,
+        tr.realization_start_date,
+        tr.realization_end_date,
+        tr.source AS realization_source,
+        ${sqlRealizationStartDate('c')} AS effective_realization_start_date,
+        ${sqlRealizationEndDate('c')} AS effective_realization_end_date,
         c.contract_id as contract_number,
+        c.po_number,
         c.supplier,
         c.buyer,
         c.product,
         c.group_name,
         c.quantity_ordered,
-        c.unit
+        c.unit,
+        ${sqlSapTruckingStartReceiveDate('c')} AS sap_trucking_start_receive_date,
+        ${sqlSapTruckingLastReceiveDate('c')} AS sap_trucking_last_receive_date
        FROM trucking_operations t
        LEFT JOIN contracts c ON t.contract_id = c.id
-       WHERE t.id = $1`,
+       LEFT JOIN shipments s ON t.shipment_id = s.id
+       ${TRUCKING_REALIZATIONS_JOIN}
+       WHERE t.id = $1
+         ${truckingPageListScopeWhereSql}`,
       [id]
     );
 
@@ -587,7 +329,7 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
       gain_loss_amount,
       oa_budget,
       oa_actual,
-      status,
+      status: statusInput,
       daily_deliverables
     } = req.body;
 
@@ -600,7 +342,7 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
     }
 
     const raw = String(contract_number).trim();
-    // Resolve contract by Contract ID OR Contract Ext No (latest SAP)
+    // Resolve contract by PO, Contract ID, or Contract Ext No (latest SAP)
     const contractResult = await query(
       `
       WITH latest_spd AS (
@@ -611,11 +353,16 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
       )
-      SELECT c.id
+      SELECT c.id, UPPER(TRIM(COALESCE(c.transport_mode, ''))) AS transport_mode
       FROM contracts c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-      WHERE c.contract_id = $1 OR COALESCE(l.contract_ext_no, '') = $1
-      ORDER BY (c.contract_id = $1) DESC
+      WHERE COALESCE(c.po_number, '') = $1
+         OR c.contract_id = $1
+         OR COALESCE(l.contract_ext_no, '') = $1
+      ORDER BY
+        (COALESCE(c.po_number, '') = $1) DESC,
+        (c.contract_id = $1) DESC,
+        (COALESCE(l.contract_ext_no, '') = $1) DESC
       LIMIT 1
       `,
       [raw]
@@ -628,7 +375,26 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
       });
     }
 
-    const contractId = contractResult.rows[0].id;
+    const contractRow = contractResult.rows[0];
+    if (contractRow.transport_mode === 'SEA') {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message:
+            'Trucking operations cannot be created for SEA-only contracts. Use Shipments for sea logistics, or set transport mode to MIX/LAND.',
+        },
+      });
+    }
+
+    const contractId = contractRow.id;
+
+    const existingActive = await findActiveTruckingOpsByContractId(contractId);
+    if (existingActive.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: { message: formatDuplicateTruckingMessage(existingActive) },
+      });
+    }
 
     let finalOperationId =
       operation_id != null && String(operation_id).trim() !== ''
@@ -647,15 +413,37 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
       [contractId]
     );
     const contractDates = contractDatesRes.rows[0] || {};
+    const planningMaxQtyKg = await resolveTruckingPlanningMaxQtyKg(contractId);
     const dd = normalizeAndValidateDailyDeliverables({
       daily_deliverables,
       startRaw: contractDates.delivery_start_date ?? trucking_start_date,
       endRaw: contractDates.delivery_end_date ?? trucking_completion_date,
-      maxQtyRaw: quantity_delivered,
+      maxQtyRaw: planningMaxQtyKg,
+      maxQtyLabel: 'Outstanding Qty (kg)',
     });
     if (!dd.ok) {
       return res.status(400).json({ success: false, error: { message: dd.message } });
     }
+
+    const allowedCreateStatuses = new Set([
+      'PLANNED',
+      'IN_TRANSIT',
+      'ARRIVED',
+      'UNLOADING',
+      'COMPLETED',
+      'CANCELLED',
+    ]);
+    const normalizedStatus = String(statusInput ?? '').trim().toUpperCase();
+    const status = allowedCreateStatuses.has(normalizedStatus)
+      ? normalizedStatus
+      : hasTruckingKlipPlanning(dd.rows)
+        ? 'PLANNED'
+        : deriveTruckingStatus(null, null, cargo_readiness_date);
+
+    const lastDdDate =
+      dd.rows.length > 0
+        ? dd.rows.reduce((max, row) => ((row.date || '') > max ? row.date : max), dd.rows[0].date)
+        : null;
 
     // Insert new trucking operation
     const result = await query(
@@ -667,7 +455,7 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         eta_delivery_start_date, eta_delivery_end_date,
         quantity_sent, quantity_delivered,
         gain_loss_percentage, gain_loss_amount, oa_budget, oa_actual, status,
-        daily_deliverables
+        daily_deliverables, last_daily_deliverable_date
       ) VALUES (
         $1::uuid, $2, $3, $4, $5, $6, $7::date,
         $8::date, $9::date,
@@ -675,7 +463,7 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         $12::date, $13::date,
         $14::numeric, $15::numeric, $16::numeric,
         $17::numeric, $18::numeric, $19::numeric, $20,
-        $21::jsonb
+        $21::jsonb, $22::date
       ) RETURNING *`,
       [
         contractId,
@@ -697,12 +485,14 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         gain_loss_amount || null,
         oa_budget || null,
         oa_actual || null,
-        status || 'PLANNED',
-        JSON.stringify(dd.rows)
+        status,
+        JSON.stringify(dd.rows),
+        lastDdDate,
       ]
     );
 
     logger.info('Trucking operation created:', { id: result.rows[0].id, operation_id: finalOperationId });
+    invalidateTruckingListCache();
 
     return res.json({
       success: true,
@@ -720,16 +510,27 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
 
 export const validateContractNumber = async (req: AuthRequest, res: Response) => {
   try {
-    const { contract_number } = req.query;
+    const po_number = req.query.po_number;
+    const contract_number = req.query.contract_number;
+    const lookupTerm = String(po_number ?? contract_number ?? '').trim();
+    const lookupByPo = po_number != null && String(po_number).trim() !== '';
 
-    if (!contract_number) {
+    if (!lookupTerm) {
       return res.status(400).json({
         success: false,
-        error: { message: 'Contract number is required' },
+        error: { message: lookupByPo ? 'PO Number is required' : 'Contract number is required' },
       });
     }
 
-    const raw = String(contract_number).trim();
+    const raw = lookupTerm;
+    const matchWhereSql = lookupByPo
+      ? `COALESCE(c.po_number, '') = $1`
+      : `(
+          COALESCE(c.po_number, '') = $1
+           OR c.contract_id = $1
+           OR COALESCE(l.contract_ext_no, '') = $1
+           OR c.id::text = $1
+        )`;
     const result = await query(
       `
       WITH latest_spd AS (
@@ -744,22 +545,114 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         SELECT c.*
         FROM contracts c
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-        WHERE c.contract_id = $1
-           OR COALESCE(l.contract_ext_no, '') = $1
-        ORDER BY (c.contract_id = $1) DESC
+        WHERE ${matchWhereSql}
+        ORDER BY
+          (COALESCE(c.po_number, '') = $1) DESC,
+          (c.contract_id = $1) DESC,
+          (COALESCE(l.contract_ext_no, '') = $1) DESC,
+          c.contract_date DESC NULLS LAST
         LIMIT 1
+      ),
+      contract_candidates AS (
+        SELECT contract_id AS contract_number FROM matched
+      ),
+      ${buildQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_number FROM contract_candidates' })},
+      sto_lines AS (
+        SELECT STRING_AGG(DISTINCT TRIM(sto.sto_number), ', ' ORDER BY TRIM(sto.sto_number)) AS sto_numbers
+        FROM (
+          SELECT TRIM(cs.sto_number::text) AS sto_number
+          FROM contract_stos cs
+          INNER JOIN matched m ON m.id = cs.contract_id
+          WHERE cs.sto_number IS NOT NULL AND TRIM(cs.sto_number::text) != ''
+          UNION
+          SELECT TRIM(COALESCE(
+            spd.sto_number::text,
+            spd.data->'raw'->>'STO No.',
+            spd.data->'raw'->>'STO Number',
+            spd.data->'shipment'->>'sto_no'
+          )) AS sto_number
+          FROM sap_processed_data spd
+          INNER JOIN matched m ON m.contract_id = spd.contract_number
+          WHERE TRIM(COALESCE(
+            spd.sto_number::text,
+            spd.data->'raw'->>'STO No.',
+            spd.data->'raw'->>'STO Number',
+            spd.data->'shipment'->>'sto_no'
+          )) != ''
+        ) sto
+        WHERE sto.sto_number IS NOT NULL AND TRIM(sto.sto_number) != ''
       )
       SELECT
         c.id,
         c.contract_id,
+        c.po_number,
         l.contract_ext_no,
-        c.sto_number,
+        COALESCE(NULLIF(TRIM(sl.sto_numbers), ''), NULLIF(TRIM(c.sto_number::text), '')) AS sto_number,
+        sl.sto_numbers,
         c.supplier,
+        c.buyer,
         c.product,
         c.group_name,
-        c.quantity_ordered
+        c.quantity_ordered,
+        c.contract_date,
+        c.delivery_start_date,
+        c.delivery_end_date,
+        c.cargo_readiness_date,
+        c.transport_mode,
+        c.incoterm,
+        c.status AS contract_status,
+        (
+          SELECT COALESCE(spd.data->'contract'->>'status', spd.data->>'status')
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = c.contract_id
+          ORDER BY spd.created_at DESC NULLS LAST
+          LIMIT 1
+        ) AS sap_import_status,
+        COALESCE(
+          (
+            SELECT COALESCE(spd.data->'contract'->>'status', spd.data->>'status')
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = c.contract_id
+            ORDER BY spd.created_at DESC NULLS LAST
+            LIMIT 1
+          ),
+          c.status
+        ) AS import_status,
+        c.plant_code,
+        mp.plant_name,
+        mp.company_name AS plant_company_name,
+        NULLIF(TRIM(mp.group_plant), '') AS group_plant_suggestion,
+        COALESCE(sap_loc.sap_loading_location, NULLIF(TRIM(c.supplier), '')) AS sap_loading_location,
+        (
+          SELECT s.mills
+          FROM suppliers s
+          WHERE c.supplier IS NOT NULL AND TRIM(c.supplier) != ''
+            AND NULLIF(TRIM(s.mills), '') IS NOT NULL
+            AND (
+              TRIM(LOWER(COALESCE(s.parent_company, ''))) = TRIM(LOWER(c.supplier))
+              OR TRIM(LOWER(COALESCE(s.mills, ''))) = TRIM(LOWER(c.supplier))
+              OR TRIM(LOWER(COALESCE(s.group_holding, ''))) = TRIM(LOWER(c.supplier))
+            )
+          ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC NULLS LAST
+          LIMIT 1
+        ) AS supplier_mills_suggestion,
+        ${sqlContractGlobalOutstandingExpr({
+          contractQtyExpr: 'COALESCE(c.quantity_ordered, 0)',
+          incotermExpr: 'c.incoterm',
+          contractNumberExpr: 'c.contract_id',
+        })} AS outstanding_quantity
       FROM matched c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+      LEFT JOIN sto_lines sl ON TRUE
+      LEFT JOIN master_plants mp ON mp.plant_code = c.plant_code
+      LEFT JOIN LATERAL (
+        SELECT
+          ${sapTruckingLoadingLocationSql} AS sap_loading_location
+        FROM sap_processed_data spd
+        WHERE spd.contract_number = c.contract_id
+        ORDER BY spd.created_at DESC NULLS LAST
+        LIMIT 1
+      ) sap_loc ON TRUE
       LIMIT 1
       `,
       [raw]
@@ -769,7 +662,17 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       return res.json({
         success: true,
         exists: false,
-        message: 'Contract number does not exist',
+        message: lookupByPo ? 'PO Number does not exist' : 'Contract does not exist',
+      });
+    }
+
+    const row = result.rows[0] as { transport_mode?: string | null; incoterm?: string | null };
+    if (!isTruckingPageIncoterm(row.incoterm)) {
+      return res.json({
+        success: true,
+        exists: false,
+        message:
+          'Trucking operations are only available for FRC/LCO incoterms. Use Shipments for sea logistics (CIF/FOB/CFR).',
       });
     }
 
@@ -782,7 +685,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
     logger.error('Validate contract number error:', error);
     return res.status(500).json({
       success: false,
-      error: { message: 'Failed to validate contract number' },
+      error: { message: 'Failed to validate contract lookup' },
     });
   }
 };
@@ -816,6 +719,14 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
     }
     const cur = currentRes.rows[0];
 
+    const contractOpen = await assertTruckingOperationContractOpen(id);
+    if (!contractOpen.ok) {
+      return res.status(403).json({
+        success: false,
+        error: { message: contractOpen.message },
+      });
+    }
+
     // Build dynamic update query
     const updateFields = [];
     const updateValues = [];
@@ -841,17 +752,26 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
       if (allowedFields.includes(key)) {
         if (key === 'daily_deliverables') {
           // Validate against merged record state (updates override current).
+          const planningMaxQtyKg = await resolveTruckingPlanningMaxQtyKg(cur.contract_id);
           const dd2 = normalizeAndValidateDailyDeliverables({
             daily_deliverables: value,
             startRaw: (cur.delivery_start_date ?? updateData.trucking_start_date ?? cur.trucking_start_date),
             endRaw: (cur.delivery_end_date ?? updateData.trucking_completion_date ?? cur.trucking_completion_date),
-            maxQtyRaw: updateData.quantity_delivered ?? cur.quantity_delivered,
+            maxQtyRaw: planningMaxQtyKg,
+            maxQtyLabel: 'Outstanding Qty (kg)',
           });
           if (!dd2.ok) {
             return res.status(400).json({ success: false, error: { message: dd2.message } });
           }
           updateFields.push(`daily_deliverables = $${paramIndex}::jsonb`);
           updateValues.push(JSON.stringify(dd2.rows));
+          paramIndex++;
+          // Keep denormalized date in sync
+          const lastDd = dd2.rows.length > 0
+            ? dd2.rows.reduce((mx, r) => (!mx || r.date > mx ? r.date : mx), '')
+            : null;
+          updateFields.push(`last_daily_deliverable_date = $${paramIndex}::date`);
+          updateValues.push(lastDd);
           paramIndex++;
           continue;
         }
@@ -896,6 +816,7 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
     }
 
     logger.info('Trucking operation updated:', { id, updatedFields: updateFields.length });
+    invalidateTruckingListCache();
 
     return res.json({
       success: true,
@@ -913,7 +834,7 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
 
 export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res: Response) => {
   try {
-    await ensureMissingTruckingOperationIds();
+    await ensureMissingTruckingOperationIdsIfNeeded();
     const from = String((req.query as any).from || '').slice(0, 10);
     const to = String((req.query as any).to || '').slice(0, 10);
     if (!from || !to) {
@@ -928,15 +849,25 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
     const unloadingLocation = (req.query as any).unloadingLocation as string | undefined;
     const dateFrom = (req.query as any).dateFrom as string | undefined;
     const dateTo = (req.query as any).dateTo as string | undefined;
+    const sto = (req.query as any).sto as string | undefined;
+    const contract = (req.query as any).contract as string | undefined;
+    const plant = (req.query as any).plant;
+    const colFilters = parseColumnFiltersQuery((req.query as any).columnFilters);
 
     const params: any[] = [from, to];
     let idx = 3;
     let extraWhere = '';
+    const truckingStoExprForStatus = `NULLIF(TRIM(c.sto_number::text), '')`;
 
     if (status && String(status).toUpperCase() !== 'ALL') {
-      extraWhere += ` AND t.status = $${idx}`;
-      params.push(status);
-      idx += 1;
+      const stageFilter = appendTruckingPipelineStageFilter(
+        String(status),
+        truckingStoExprForStatus,
+        idx,
+      );
+      extraWhere += stageFilter.sql;
+      params.push(...stageFilter.params);
+      idx = stageFilter.nextIndex;
     }
     if (loadingLocation && String(loadingLocation).trim() !== '') {
       extraWhere += ` AND t.loading_location ILIKE $${idx}`;
@@ -960,74 +891,47 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
       params.push(String(dateTo).trim());
       idx += 1;
     }
+    if (sto && String(sto).trim() !== '') {
+      extraWhere += ` AND c.sto_number = $${idx}`;
+      params.push(String(sto).trim());
+      idx += 1;
+    }
+    if (contract && String(contract).trim() !== '') {
+      extraWhere += ` AND c.contract_id = $${idx}`;
+      params.push(String(contract).trim());
+      idx += 1;
+    }
+
+    const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+    const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+    const groupPlantFilter = appendGroupPlantFilter(
+      plants,
+      idx,
+      groupPlantExpr('c.plant_code', 'c.company_name'),
+      'c.plant_code',
+    );
+    extraWhere += groupPlantFilter.sql;
+    params.push(...groupPlantFilter.params);
+    idx = groupPlantFilter.nextIndex;
 
     const gSearch = appendTruckingGlobalSearch(globalSearch, idx);
     extraWhere += gSearch.sql;
     params.push(...gSearch.params);
     idx = gSearch.nextIndex;
 
+    const cCol = appendTruckingColumnFilters(colFilters, idx);
+    extraWhere += cCol.sql;
+    params.push(...cCol.params);
+    idx = cCol.nextIndex;
+
     const li = appendTruckingLateIndicatorFilter(lateIndicatorParam, idx);
     extraWhere += li.sql;
     params.push(...li.params);
     idx = li.nextIndex;
 
-    const qtySentSql = `COALESCE(
-          t.quantity_sent,
-          (
-            SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Quantity Sent via Trucking (Based on Surat Jalan)',
-                spd.data->>'quantity_sent_via_trucking_based_on_surat_jalan',
-                spd.data->'raw'->>'Quantity Sent via Trucking',
-                spd.data->'raw'->>'Quantity Sent',
-                spd.data->>'Quantity Sent'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) q
-            WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-          )
-        )`;
-    const qtyDelSql = `COALESCE(
-          t.quantity_delivered,
-          (
-            SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Quantity Delivered via Trucking',
-                spd.data->>'quantity_delivered_via_trucking',
-                spd.data->'raw'->>'Qty Receive',
-                spd.data->'raw'->>'Quantity Receive'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) q
-            WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-          )
-        )`;
-    const qtyRecvSql = `COALESCE(
-          t.quantity_delivered,
-          (
-            SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-            FROM (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Qty Receive',
-                spd.data->'raw'->>'Quantity Receive',
-                spd.data->>'quantity_delivered_via_trucking'
-              ) AS val
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            ) q
-            WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-          )
-        )`;
+    const qtySentSql = sqlTruckingQuantitySentCoalesce();
+    const qtyDelSql = sqlTruckingQuantityDeliveredCoalesce();
+    const qtyRecvSql = sqlTruckingQuantityReceiveCoalesce();
     const contractExtSql = `COALESCE(
           l.contract_ext_no,
           (SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No')
@@ -1042,11 +946,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
            LIMIT 1),
           c.contract_type::text
         )`;
-    const outstandingQtySql = `GREATEST(
-          COALESCE(c.quantity_ordered, 0)
-          - COALESCE(${qtyRecvSql}, 0),
-          0
-        )`;
+    const outstandingQtySql = sqlTruckingOutstandingQtyByIncoterm(qtyDelSql, qtyRecvSql);
 
     const result = await query(
       `
@@ -1081,6 +981,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
         c.supplier,
         c.product,
         c.group_name,
+        c.incoterm,
         c.source_type,
         ${ltSpotSql} AS lt_spot,
         t.loading_location,
@@ -1099,9 +1000,22 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
         ${qtyRecvSql} AS quantity_receive,
         ${outstandingQtySql} AS outstanding_quantity,
         t.daily_deliverables,
+        COALESCE(
+          (
+            SELECT jsonb_agg(
+              jsonb_build_object('date', da.progress_date::text, 'quantity_delivered', da.quantity_kg)
+              ORDER BY da.progress_date
+            )
+            FROM trucking_daily_actuals da
+            WHERE da.trucking_operation_id = t.id
+          ),
+          '[]'::jsonb
+        ) AS daily_actuals,
         t.updated_at
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
+      LEFT JOIN shipments s ON t.shipment_id = s.id
+      ${TRUCKING_REALIZATIONS_JOIN}
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       WHERE
         NOT (
@@ -1109,6 +1023,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
           AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
           AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
         )
+        ${truckingPageListScopeWhereSql}
         AND
         COALESCE(
           c.delivery_start_date,
@@ -1142,6 +1057,7 @@ export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Res
 
     const currentRes = await query(
       `SELECT t.id,
+              t.contract_id,
               c.delivery_start_date,
               c.delivery_end_date,
               t.eta_delivery_start_date,
@@ -1150,25 +1066,7 @@ export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Res
               t.eta_trucking_completion_date,
               t.trucking_start_date,
               t.trucking_completion_date,
-              COALESCE(
-                t.quantity_delivered,
-                (
-                  SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-                  FROM (
-                    SELECT COALESCE(
-                      spd.data->'raw'->>'Quantity Delivered via Trucking',
-                      spd.data->>'quantity_delivered_via_trucking',
-                      spd.data->'raw'->>'Qty Receive',
-                      spd.data->'raw'->>'Quantity Receive'
-                    ) AS val
-                    FROM sap_processed_data spd
-                    WHERE spd.contract_number = c.contract_id
-                    ORDER BY spd.created_at DESC NULLS LAST
-                    LIMIT 1
-                  ) q
-                  WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-                )
-              ) AS quantity_delivered
+              ${sqlTruckingQuantityDeliveredCoalesce()} AS quantity_delivered
        FROM trucking_operations t
        LEFT JOIN contracts c ON t.contract_id = c.id
        WHERE t.id = $1
@@ -1179,6 +1077,7 @@ export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Res
       return res.status(404).json({ success: false, error: { message: 'Trucking operation not found' } });
     }
     const cur = currentRes.rows[0] as {
+      contract_id: string;
       delivery_start_date?: string | null;
       delivery_end_date?: string | null;
       eta_delivery_start_date?: string | null;
@@ -1189,6 +1088,14 @@ export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Res
       trucking_completion_date?: string | null;
       quantity_delivered?: unknown;
     };
+
+    const contractOpen = await assertTruckingOperationContractOpen(id);
+    if (!contractOpen.ok) {
+      return res.status(403).json({
+        success: false,
+        error: { message: contractOpen.message },
+      });
+    }
 
     const startRaw =
       cur.delivery_start_date ??
@@ -1201,24 +1108,32 @@ export const updateTruckingDailyDeliverables = async (req: AuthRequest, res: Res
       cur.eta_trucking_completion_date ??
       cur.trucking_completion_date;
 
+    const planningMaxQtyKg = await resolveTruckingPlanningMaxQtyKg(cur.contract_id);
     const dd = normalizeAndValidateDailyDeliverables({
       daily_deliverables,
       startRaw,
       endRaw,
-      maxQtyRaw: cur.quantity_delivered,
+      maxQtyRaw: planningMaxQtyKg,
+      maxQtyLabel: 'Outstanding Qty (kg)',
     });
     if (!dd.ok) {
       return res.status(400).json({ success: false, error: { message: dd.message } });
     }
 
+    const lastDdDate = dd.rows.length > 0
+      ? dd.rows.reduce((mx, r) => (!mx || r.date > mx ? r.date : mx), '')
+      : null;
     const upd = await query(
       `UPDATE trucking_operations
-       SET daily_deliverables = $2::jsonb, updated_at = CURRENT_TIMESTAMP
+       SET daily_deliverables = $2::jsonb,
+           last_daily_deliverable_date = $3::date,
+           updated_at = CURRENT_TIMESTAMP
        WHERE id = $1
        RETURNING *`,
-      [id, JSON.stringify(dd.rows)],
+      [id, JSON.stringify(dd.rows), lastDdDate],
     );
 
+    invalidateTruckingListCache();
     return res.json({ success: true, data: upd.rows[0], message: 'Daily planning deliverables updated successfully' });
   } catch (error) {
     logger.error('Update trucking daily deliverables error:', error);
@@ -1250,25 +1165,7 @@ function findPlanningColumnIndex(headers: unknown[], candidates: string[]): numb
 
 /** Same resolved quantity_delivered subquery as single-operation update (SAP fallback). */
 function sqlResolvedQuantityDelivered(): string {
-  return `COALESCE(
-                t.quantity_delivered,
-                (
-                  SELECT CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)
-                  FROM (
-                    SELECT COALESCE(
-                      spd.data->'raw'->>'Quantity Delivered via Trucking',
-                      spd.data->>'quantity_delivered_via_trucking',
-                      spd.data->'raw'->>'Qty Receive',
-                      spd.data->'raw'->>'Quantity Receive'
-                    ) AS val
-                    FROM sap_processed_data spd
-                    WHERE spd.contract_number = c.contract_id
-                    ORDER BY spd.created_at DESC NULLS LAST
-                    LIMIT 1
-                  ) q
-                  WHERE q.val IS NOT NULL AND trim(q.val) ~ '^[0-9.,\\s]+$'
-                )
-              )`;
+  return sqlTruckingQuantityDeliveredCoalesce();
 }
 
 export const downloadDailyPlanningDeliverablesTemplate = async (_req: AuthRequest, res: Response) => {
@@ -1425,6 +1322,7 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
       const opRes = await query(
         `SELECT t.id,
                 t.operation_id,
+                t.contract_id,
                 c.delivery_start_date,
                 c.delivery_end_date,
                 t.eta_delivery_start_date,
@@ -1473,6 +1371,7 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
       const cur = opRes.rows[0] as {
         id: string;
         operation_id: string;
+        contract_id: string;
         delivery_start_date?: string | null;
         delivery_end_date?: string | null;
         eta_delivery_start_date?: string | null;
@@ -1526,11 +1425,13 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
 
       const dailyDeliverables = inWindow.map(({ date, quantity_delivered }) => ({ date, quantity_delivered }));
 
+      const planningMaxQtyKg = await resolveTruckingPlanningMaxQtyKg(cur.contract_id);
       const dd = normalizeAndValidateDailyDeliverables({
         daily_deliverables: dailyDeliverables,
         startRaw,
         endRaw,
-        maxQtyRaw: cur.quantity_delivered,
+        maxQtyRaw: planningMaxQtyKg,
+        maxQtyLabel: 'Outstanding Qty (kg)',
       });
 
       if (!dd.ok) {
@@ -1543,11 +1444,16 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
         continue;
       }
 
+      const lastDdDateBulk = dd.rows.length > 0
+        ? dd.rows.reduce((mx: string, r: { date: string }) => (!mx || r.date > mx ? r.date : mx), '')
+        : null;
       await query(
         `UPDATE trucking_operations
-         SET daily_deliverables = $2::jsonb, updated_at = CURRENT_TIMESTAMP
+         SET daily_deliverables = $2::jsonb,
+             last_daily_deliverable_date = $3::date,
+             updated_at = CURRENT_TIMESTAMP
          WHERE id = $1`,
-        [cur.id, JSON.stringify(dd.rows)],
+        [cur.id, JSON.stringify(dd.rows), lastDdDateBulk],
       );
 
       operationsSucceeded += 1;
@@ -1558,6 +1464,7 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
     const succeededOps = operationsSucceeded;
     const rowLevelIssues = rowParseFailures.length;
 
+    invalidateTruckingListCache();
     return res.json({
       success: true,
       data: {
@@ -1575,5 +1482,1153 @@ export const bulkUploadDailyPlanningDeliverables = async (req: AuthRequest, res:
   } catch (error) {
     logger.error('Bulk upload daily planning deliverables error:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to process upload' } });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Bulk Create Trucking Operations from CSV
+// CSV columns: Contract Ext No | Date | Qty Delivery
+// ---------------------------------------------------------------------------
+
+export const downloadBulkCreateTruckingTemplate = async (_req: AuthRequest, res: Response) => {
+  // Generate 60 date columns starting from today
+  const today = new Date();
+  const dateCols: string[] = [];
+  for (let i = 0; i < 60; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    dateCols.push(`${dd}/${mm}/${d.getFullYear()}`);
+  }
+  const header = ['Contract Ext No', ...dateCols].join(',');
+  // Example: two contracts with some filled quantities
+  const row1Qty = dateCols.map((_, i) => (i === 0 ? '1000' : i === 1 ? '1500' : ''));
+  const row2Qty = dateCols.map((_, i) => (i === 2 ? '2000' : i === 3 ? '2000' : ''));
+  const rows = [
+    ['01/HAP-PFAD/2026', ...row1Qty].join(','),
+    ['002/KJG/CPO/2026', ...row2Qty].join(','),
+  ].join('\n');
+  const bom = '﻿';
+  const body = `${bom}${header}\n${rows}\n`;
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="bulk_create_trucking_template.csv"');
+  return res.status(200).send(body);
+};
+
+export const bulkCreateTruckingOperations = async (req: AuthRequest, res: Response) => {
+  try {
+    const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+    if (!file?.buffer) {
+      return res.status(400).json({ success: false, error: { message: 'File is required (CSV or Excel)' } });
+    }
+
+    let matrix: unknown[][];
+    try {
+      matrix = parsePlanningSheetToMatrix(file.buffer);
+    } catch (e: any) {
+      return res.status(400).json({
+        success: false,
+        error: { message: e?.message || 'Could not read spreadsheet' },
+      });
+    }
+
+    if (matrix.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'File must include a header row and at least one data row' },
+      });
+    }
+
+    const headerRow = matrix[0];
+
+    // Detect format: wide (pivot) if the 2nd column header parses as a date; otherwise long format
+    const secondColRaw = headerRow[1];
+    const secondColStr = String(secondColRaw ?? '').trim().toLowerCase();
+    const isWideFormat =
+      secondColStr !== 'date' &&
+      secondColStr !== 'tanggal' &&
+      secondColStr !== 'qty' &&
+      secondColStr !== 'qty delivery' &&
+      toIsoDate10FromCell(secondColRaw) !== null;
+
+    type ParsedLine = { lineNumber: number; contract_ext_no: string; dateRaw: unknown; qtyRaw: unknown };
+    const lines: ParsedLine[] = [];
+    const rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[] = [];
+
+    if (isWideFormat) {
+      // Wide/pivot format: header row = [Contract Ext No, date1, date2, ...]
+      // Each data row: [contractExtNo, qty1, qty2, ...]
+      const dateColumns: { colIdx: number; dateRaw: unknown }[] = [];
+      for (let ci = 1; ci < headerRow.length; ci++) {
+        const cellVal = headerRow[ci];
+        if (cellVal !== null && cellVal !== undefined && String(cellVal).trim() !== '') {
+          dateColumns.push({ colIdx: ci, dateRaw: cellVal });
+        }
+      }
+
+      if (dateColumns.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: { message: 'Wide format detected but no date columns found in header row' },
+        });
+      }
+
+      for (let rIdx = 1; rIdx < matrix.length; rIdx++) {
+        const row = matrix[rIdx];
+        const ext = String(row[0] ?? '').trim();
+        const hasAnyQty = dateColumns.some(({ colIdx }) => {
+          const v = row[colIdx];
+          return v !== undefined && v !== null && String(v).trim() !== '';
+        });
+        if (!ext && !hasAnyQty) continue;
+
+        const lineNumber = rIdx + 1;
+        if (!ext) {
+          rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: '-', reason: 'Contract Ext No is required' });
+          continue;
+        }
+        if (ext.toUpperCase() === 'TBA') {
+          rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext, reason: 'Contract Ext No "TBA" is not allowed — please fill in the actual contract number first' });
+          continue;
+        }
+
+        let rowLimitHit = false;
+        for (const { colIdx, dateRaw } of dateColumns) {
+          const qtyCell = row[colIdx];
+          if (qtyCell === undefined || qtyCell === null || String(qtyCell).trim() === '') continue;
+          if (lines.length >= MAX_BULK_PLANNING_ROWS) {
+            rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext, reason: `Exceeds max ${MAX_BULK_PLANNING_ROWS} rows` });
+            rowLimitHit = true;
+            break;
+          }
+          lines.push({ lineNumber, contract_ext_no: ext, dateRaw, qtyRaw: qtyCell });
+        }
+        if (rowLimitHit) break;
+      }
+    } else {
+      // Long format: Contract Ext No | Date | Qty Delivery
+      const extIdx = findPlanningColumnIndex(headerRow, [
+        'contract_ext_no', 'contract ext no', 'contractextno', 'contract ext', 'ext no',
+      ]);
+      const dateIdx = findPlanningColumnIndex(headerRow, ['date', 'tanggal']);
+      const qtyIdx = findPlanningColumnIndex(headerRow, [
+        'qty_delivery', 'qty delivery', 'quantity_delivered', 'quantity delivered', 'quantity', 'qty',
+      ]);
+
+      if (extIdx < 0 || dateIdx < 0 || qtyIdx < 0) {
+        return res.status(400).json({
+          success: false,
+          error: { message: 'Missing required columns. Expected: "Contract Ext No", "Date", "Qty Delivery"' },
+        });
+      }
+
+      for (let rIdx = 1; rIdx < matrix.length; rIdx++) {
+        const row = matrix[rIdx];
+        const ext = String(row[extIdx] ?? '').trim();
+        const dateRaw = row[dateIdx];
+        const qtyCell = row[qtyIdx];
+
+        const emptyRow =
+          !ext &&
+          (dateRaw === undefined || dateRaw === null || String(dateRaw).trim() === '') &&
+          (qtyCell === undefined || qtyCell === null || String(qtyCell).trim() === '');
+        if (emptyRow) continue;
+
+        const lineNumber = rIdx + 1;
+        if (lines.length >= MAX_BULK_PLANNING_ROWS) {
+          rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext || '-', reason: `Exceeds max ${MAX_BULK_PLANNING_ROWS} rows` });
+          break;
+        }
+        if (!ext) {
+          rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: '-', reason: 'Contract Ext No is required' });
+          continue;
+        }
+        if (ext.toUpperCase() === 'TBA') {
+          rowParseFailures.push({ rowNumber: lineNumber, contract_ext_no: ext, reason: 'Contract Ext No "TBA" is not allowed — please fill in the actual contract number first' });
+          continue;
+        }
+        lines.push({ lineNumber, contract_ext_no: ext, dateRaw: dateRaw ?? '', qtyRaw: qtyCell });
+      }
+    }
+
+    // Group rows by Contract Ext No
+    const byContractExt = new Map<string, ParsedLine[]>();
+    for (const ln of lines) {
+      const k = ln.contract_ext_no.trim().toLowerCase();
+      const list = byContractExt.get(k) || [];
+      list.push(ln);
+      byContractExt.set(k, list);
+    }
+
+    const opFailures: {
+      contract_ext_no: string;
+      rowNumbers: number[];
+      reason: string;
+      operation_ids?: string[];
+    }[] = [];
+    let operationsCreated = 0;
+    let operationsUpdated = 0;
+    let rowsSucceeded = 0;
+
+    for (const [, groupLines] of byContractExt) {
+      const contractExtNo = groupLines[0].contract_ext_no;
+      const rowNumbers = groupLines.map((l) => l.lineNumber);
+
+      const contract = await resolveContractByExtNoOrId(contractExtNo);
+      if (!contract) {
+        opFailures.push({
+          contract_ext_no: contractExtNo,
+          rowNumbers,
+          reason: 'Contract Ext No not found in SAP data. Ensure SAP data has been imported for this contract.',
+        });
+        continue;
+      }
+
+      try {
+        const outcome = await upsertTruckingDailyFromGroup(
+          contract,
+          contractExtNo,
+          groupLines,
+          rowNumbers,
+          rowParseFailures,
+          opFailures,
+        );
+        if (outcome === 'created') {
+          operationsCreated += 1;
+          rowsSucceeded += groupLines.length;
+        } else if (outcome === 'updated') {
+          operationsUpdated += 1;
+          rowsSucceeded += groupLines.length;
+        }
+      } catch (err) {
+        logger.error('upsertTruckingDailyFromGroup error:', err);
+        opFailures.push({
+          contract_ext_no: contractExtNo,
+          rowNumbers,
+          reason: 'Internal error saving trucking operation',
+        });
+      }
+    }
+
+    const processedRows = lines.length + rowParseFailures.length;
+
+    if (operationsCreated > 0 || operationsUpdated > 0) invalidateTruckingListCache();
+    return res.json({
+      success: true,
+      data: {
+        processedRows,
+        operationsCreated,
+        operationsUpdated,
+        operationsFailed: opFailures.length,
+        succeededRows: rowsSucceeded,
+        rowParseFailures,
+        operationFailures: opFailures,
+      },
+    });
+  } catch (error) {
+    logger.error('Bulk create trucking operations error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to process upload' } });
+  }
+};
+
+type BulkTruckingOpFailure = {
+  contract_ext_no: string;
+  rowNumbers: number[];
+  reason: string;
+  operation_ids?: string[];
+};
+
+type FailedUnplannedRetemplateRow = {
+  rowNumber: number;
+  po_number: string;
+  contract_ext_no: string;
+  cells: string[];
+  reason: string;
+};
+
+function resolveTruckingDueWindow(cur: {
+  delivery_start_date?: unknown;
+  delivery_end_date?: unknown;
+  eta_delivery_start_date?: unknown;
+  eta_delivery_end_date?: unknown;
+  eta_trucking_start_date?: unknown;
+  eta_trucking_completion_date?: unknown;
+  trucking_start_date?: unknown;
+  trucking_completion_date?: unknown;
+}): { startRaw: unknown; endRaw: unknown } {
+  return {
+    startRaw:
+      cur.delivery_start_date ??
+      cur.eta_delivery_start_date ??
+      cur.eta_trucking_start_date ??
+      cur.trucking_start_date,
+    endRaw:
+      cur.delivery_end_date ??
+      cur.eta_delivery_end_date ??
+      cur.eta_trucking_completion_date ??
+      cur.trucking_completion_date,
+  };
+}
+
+/** Bulk-create: insert first operation per contract, otherwise update daily deliverables on the single active row. */
+async function upsertTruckingDailyFromGroup(
+  contract: { id: string; delivery_start_date?: unknown; delivery_end_date?: unknown },
+  contractExtNo: string,
+  groupLines: { lineNumber: number; contract_ext_no: string; dateRaw: unknown; qtyRaw: unknown }[],
+  rowNumbers: number[],
+  rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[],
+  opFailures: BulkTruckingOpFailure[],
+): Promise<'created' | 'updated' | false> {
+  const dateToQty = new Map<string, { quantity_delivered: number; lineNumber: number }>();
+  for (const ln of groupLines) {
+    const ds = toIsoDate10FromCell(ln.dateRaw);
+    if (!ds) {
+      rowParseFailures.push({ rowNumber: ln.lineNumber, contract_ext_no: ln.contract_ext_no, reason: 'Invalid date' });
+      continue;
+    }
+    const qty = parseDailyDeliverableQuantity(ln.qtyRaw);
+    if (qty === null || qty < 0) {
+      rowParseFailures.push({ rowNumber: ln.lineNumber, contract_ext_no: ln.contract_ext_no, reason: 'Invalid quantity' });
+      continue;
+    }
+    dateToQty.set(ds, { quantity_delivered: qty, lineNumber: ln.lineNumber });
+  }
+
+  if (dateToQty.size === 0) {
+    opFailures.push({ contract_ext_no: contractExtNo, rowNumbers, reason: 'No valid date/qty rows after parsing' });
+    return false;
+  }
+
+  const dailyDeliverablesWithLine = Array.from(dateToQty.entries())
+    .map(([date, v]) => ({
+      date,
+      quantity_delivered: v.quantity_delivered,
+      lineNumber: v.lineNumber,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const activeOps = await findActiveTruckingOpsByContractId(contract.id);
+
+  if (activeOps.length > 1) {
+    opFailures.push({
+      contract_ext_no: contractExtNo,
+      rowNumbers,
+      reason:
+        'Multiple trucking operations share this contract; merge duplicates or cancel extras before bulk upload',
+      operation_ids: activeOps
+        .map((r) => (r.operation_id && String(r.operation_id).trim()) || r.id)
+        .filter(Boolean),
+    });
+    return false;
+  }
+
+  if (activeOps.length === 1) {
+    const cur = activeOps[0];
+    const { startRaw, endRaw } = resolveTruckingDueWindow(cur);
+    const startS = toIsoDate10FromCell(startRaw);
+    const endS = toIsoDate10FromCell(endRaw);
+    const inWindow =
+      startS && endS
+        ? dailyDeliverablesWithLine.filter((r) => {
+            const ok = r.date >= startS && r.date <= endS;
+            if (!ok) {
+              rowParseFailures.push({
+                rowNumber: r.lineNumber,
+                contract_ext_no: contractExtNo,
+                reason: `date ${r.date} is outside Due Start (${startS}) … Due End (${endS}) and was skipped`,
+              });
+            }
+            return ok;
+          })
+        : dailyDeliverablesWithLine;
+
+    if (inWindow.length === 0) {
+      opFailures.push({
+        contract_ext_no: contractExtNo,
+        rowNumbers,
+        reason:
+          startS && endS
+            ? `All rows are outside Due Start (${startS}) … Due End (${endS}); nothing to upload`
+            : 'Due Start/Due End are required when daily deliverables are provided',
+        operation_ids: cur.operation_id ? [String(cur.operation_id)] : [cur.id],
+      });
+      return false;
+    }
+
+    const dailyDeliverables = inWindow.map(({ date, quantity_delivered }) => ({ date, quantity_delivered }));
+    const planningMaxQtyKg = await resolveTruckingPlanningMaxQtyKg(contract.id);
+    const dd = normalizeAndValidateDailyDeliverables({
+      daily_deliverables: dailyDeliverables,
+      startRaw,
+      endRaw,
+      maxQtyRaw: planningMaxQtyKg,
+      maxQtyLabel: 'Outstanding Qty (kg)',
+    });
+    if (!dd.ok) {
+      opFailures.push({
+        contract_ext_no: contractExtNo,
+        rowNumbers,
+        reason: dd.message,
+        operation_ids: cur.operation_id ? [String(cur.operation_id)] : [cur.id],
+      });
+      return false;
+    }
+
+    const lastDdDate =
+      dd.rows.length > 0
+        ? dd.rows.reduce((mx: string, r: { date: string }) => (!mx || r.date > mx ? r.date : mx), '')
+        : null;
+
+    await query(
+      `UPDATE trucking_operations
+       SET daily_deliverables = $2::jsonb,
+           last_daily_deliverable_date = $3::date,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1::uuid`,
+      [cur.id, JSON.stringify(dd.rows), lastDdDate],
+    );
+    return 'updated';
+  }
+
+  const dailyRows = dailyDeliverablesWithLine.map(({ date, quantity_delivered }) => ({
+    date,
+    quantity_delivered,
+  }));
+  const sortedDates = dailyRows.map((r) => r.date).sort();
+  const minDate = sortedDates[0];
+  const maxDate = sortedDates[sortedDates.length - 1];
+  const etaStart = contract.delivery_start_date
+    ? (toIsoDate10FromCell(contract.delivery_start_date) ?? minDate)
+    : minDate;
+  const etaEnd = contract.delivery_end_date
+    ? (toIsoDate10FromCell(contract.delivery_end_date) ?? maxDate)
+    : maxDate;
+
+  const dd = normalizeAndValidateDailyDeliverables({
+    daily_deliverables: dailyRows,
+    startRaw: contract.delivery_start_date ?? etaStart,
+    endRaw: contract.delivery_end_date ?? etaEnd,
+    maxQtyRaw: null,
+  });
+  if (!dd.ok) {
+    opFailures.push({ contract_ext_no: contractExtNo, rowNumbers, reason: dd.message });
+    return false;
+  }
+
+  const dmy = formatDDMMYYYY(new Date());
+  const seq = await allocateNextSyntheticSequenceDefault('trucking_operations', 'LAND', dmy);
+  const operationId = buildSyntheticOperationId('LAND', dmy, seq);
+  const lastDdDate =
+    dd.rows.length > 0
+      ? dd.rows.reduce((mx: string, r: { date: string }) => (!mx || r.date > mx ? r.date : mx), '')
+      : null;
+
+  await query(
+    `INSERT INTO trucking_operations (
+       contract_id, operation_id,
+       eta_delivery_start_date, eta_delivery_end_date,
+       status, daily_deliverables, last_daily_deliverable_date
+     ) VALUES (
+       $1::uuid, $2,
+       $3::date, $4::date,
+       $5, $6::jsonb, $7::date
+     )`,
+    [
+      contract.id,
+      operationId,
+      etaStart,
+      etaEnd,
+      'PLANNED',
+      JSON.stringify(dd.rows),
+      lastDdDate,
+    ],
+  );
+  return 'created';
+}
+
+/** Unplanned view-table XLSX: upsert daily planning; assign/create Operation ID only when PO has none yet. */
+export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Response) => {
+  try {
+    const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+    if (!file?.buffer) {
+      return res.status(400).json({ success: false, error: { message: 'File is required (CSV or Excel)' } });
+    }
+
+    let matrix: unknown[][];
+    try {
+      matrix = parsePlanningSheetToMatrix(file.buffer);
+    } catch (e: any) {
+      return res.status(400).json({
+        success: false,
+        error: { message: e?.message || 'Could not read spreadsheet' },
+      });
+    }
+
+    if (matrix.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'File must include a header row and at least one data row' },
+      });
+    }
+
+    if (!isUnplannedWidePlanningTemplateMatrix(matrix)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message:
+            'Invalid Unplanned template. Expected headers: Group, Supplier, Source, Contract Date, Contract Ext No, PO, OS Qty (MT), Plan Qty (MT), then date columns (today … +60 days).',
+        },
+      });
+    }
+
+    const { rows: parsedRows, rowParseFailures } = parseUnplannedWidePlanningMatrix(matrix);
+    const operationFailures: BulkTruckingOpFailure[] = [];
+    const operationWarnings: BulkTruckingOpFailure[] = [];
+    const failedRetemplateRows: FailedUnplannedRetemplateRow[] = [];
+    const uploadHeaderRow = (matrix[0] ?? []).map((cell) => unplannedUploadCellToString(cell));
+    let operationsCreated = 0;
+    let operationsUpdated = 0;
+    let succeededRows = 0;
+
+    const allocateLandTruckingOperationId = async (): Promise<string> => {
+      const dmy = formatDDMMYYYY(new Date());
+      const seq = await allocateNextSyntheticSequenceDefault('trucking_operations', 'LAND', dmy);
+      return buildSyntheticOperationId('LAND', dmy, seq);
+    };
+
+    for (const parsed of parsedRows) {
+      const label = parsed.contract_ext_no || parsed.po_number || '-';
+      const op = await findTruckingOpForUnplannedPlanningUpload({
+        poNumber: parsed.po_number,
+        contractExtNo: parsed.contract_ext_no,
+      });
+
+      let deliveryEnd: unknown;
+      let contractForCreate: Awaited<ReturnType<typeof resolveContractForUnplannedPlanningUpload>> = null;
+      let dueWindowSource: {
+        delivery_start_date?: unknown;
+        delivery_end_date?: unknown;
+        eta_delivery_start_date?: unknown;
+        eta_delivery_end_date?: unknown;
+        eta_trucking_start_date?: unknown;
+        eta_trucking_completion_date?: unknown;
+        trucking_start_date?: unknown;
+        trucking_completion_date?: unknown;
+        quantity_delivered?: unknown;
+      };
+
+      if (op) {
+        const contractOpen = await assertTruckingOperationContractOpen(op.id);
+        if (!contractOpen.ok) {
+          operationFailures.push({
+            contract_ext_no: label,
+            rowNumbers: [parsed.rowNumber],
+            reason: contractOpen.message,
+            operation_ids: op.operation_id ? [String(op.operation_id)] : [op.id],
+          });
+          continue;
+        }
+        deliveryEnd = op.delivery_end_date;
+        dueWindowSource = op;
+      } else {
+        const contract = await resolveContractForUnplannedPlanningUpload({
+          poNumber: parsed.po_number,
+          contractExtNo: parsed.contract_ext_no,
+        });
+        if (!contract) {
+          operationFailures.push({
+            contract_ext_no: label,
+            rowNumbers: [parsed.rowNumber],
+            reason: 'Contract not found for this PO / Contract Ext No',
+          });
+          continue;
+        }
+        if (String(contract.transport_mode ?? '').trim().toUpperCase() === 'SEA') {
+          operationFailures.push({
+            contract_ext_no: label,
+            rowNumbers: [parsed.rowNumber],
+            reason: 'Cannot create trucking operation for SEA-only contract',
+          });
+          continue;
+        }
+        const importStatusRes = await query(
+          `SELECT ${SQL_CONTRACT_IMPORT_STATUS} AS import_status FROM contracts c WHERE c.id = $1::uuid LIMIT 1`,
+          [contract.id],
+        );
+        const importStatus = (importStatusRes.rows[0] as { import_status?: string | null } | undefined)
+          ?.import_status;
+        if (isContractDeliveryClosed(importStatus)) {
+          operationFailures.push({
+            contract_ext_no: label,
+            rowNumbers: [parsed.rowNumber],
+            reason: 'Contract status is Close — cannot add Unplanned planning',
+          });
+          continue;
+        }
+        deliveryEnd = contract.delivery_end_date;
+        dueWindowSource = contract;
+        contractForCreate = contract;
+      }
+
+      if (!deliveryEnd) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'Due Date Delivery (End) is missing for this contract/operation',
+          operation_ids: op?.operation_id ? [String(op.operation_id)] : undefined,
+        });
+        continue;
+      }
+
+      const inWindowEntries = filterEntriesWithinUnplannedWindow(
+        parsed.entries,
+        deliveryEnd,
+        label,
+        rowParseFailures,
+      );
+
+      if (inWindowEntries.length === 0) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'All quantity cells are outside the allowed Unplanned planning date window',
+          operation_ids: op?.operation_id ? [String(op.operation_id)] : undefined,
+        });
+        continue;
+      }
+
+      const contractUuid =
+        contractForCreate?.id ??
+        (
+          await resolveContractForUnplannedPlanningUpload({
+            poNumber: parsed.po_number,
+            contractExtNo: parsed.contract_ext_no,
+          })
+        )?.id ??
+        null;
+
+      const totalPlanningKg = sumPlanningEntriesKg(inWindowEntries);
+      const outstandingKg = contractUuid ? await fetchContractOutstandingQtyKg(contractUuid) : null;
+      const osValidation = validatePlanningTotalAgainstOutstandingKg(totalPlanningKg, outstandingKg);
+      if (!osValidation.ok) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: osValidation.reason,
+          operation_ids: op?.operation_id ? [String(op.operation_id)] : undefined,
+        });
+        failedRetemplateRows.push({
+          rowNumber: parsed.rowNumber,
+          po_number: parsed.po_number,
+          contract_ext_no: parsed.contract_ext_no,
+          cells: parsed.rawCells.map((cell) => unplannedUploadCellToString(cell)),
+          reason: osValidation.reason,
+        });
+        continue;
+      }
+
+      const incomingDaily = buildDailyDeliverablesFromKgEntries(inWindowEntries);
+      const mergedDaily =
+        op && truckingOperationIdIsAssigned(op.operation_id)
+          ? mergeDailyDeliverablesRows(op.daily_deliverables, incomingDaily)
+          : incomingDaily;
+      const planningDates = resolvePlanningStartEndFromDeliverables(mergedDaily);
+      if (!planningDates) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'No valid planning quantities after parsing',
+          operation_ids: op?.operation_id ? [String(op.operation_id)] : undefined,
+        });
+        continue;
+      }
+
+      const { startRaw, endRaw } = resolveTruckingDueWindow(dueWindowSource);
+      // Planning qty is kg and OS total is already validated above. Do not cap by
+      // t.quantity_delivered — SAP often stores MT-scale values (e.g. 250 MT as 250).
+      const dd = normalizeAndValidateDailyDeliverables({
+        daily_deliverables: mergedDaily,
+        startRaw,
+        endRaw,
+        maxQtyRaw: null,
+      });
+      if (!dd.ok) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: dd.message,
+          operation_ids: op?.operation_id ? [String(op.operation_id)] : undefined,
+        });
+        continue;
+      }
+
+      const lastDdDate =
+        dd.rows.length > 0
+          ? dd.rows.reduce((mx: string, r: { date: string }) => (!mx || r.date > mx ? r.date : mx), '')
+          : null;
+
+      if (op && truckingOperationIdIsAssigned(op.operation_id)) {
+        await query(
+          `UPDATE trucking_operations
+           SET daily_deliverables = $2::jsonb,
+               last_daily_deliverable_date = $3::date,
+               trucking_start_date = COALESCE(trucking_start_date, $4::date),
+               trucking_completion_date = GREATEST(
+                 COALESCE(trucking_completion_date, $5::date),
+                 $5::date
+               ),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1::uuid`,
+          [op.id, JSON.stringify(dd.rows), lastDdDate, planningDates.startIso, planningDates.endIso],
+        );
+        operationsUpdated += 1;
+        succeededRows += inWindowEntries.length;
+
+        const siblingCount = Number(op.duplicate_sibling_count ?? 1);
+        if (siblingCount > 1) {
+          operationWarnings.push({
+            contract_ext_no: label,
+            rowNumbers: [parsed.rowNumber],
+            reason: `Multiple trucking operations exist for this PO/contract (${siblingCount} active). Updated the operation with Operation ID only.`,
+            operation_ids: [String(op.operation_id)],
+          });
+        }
+        continue;
+      }
+
+      const newOperationId = await allocateLandTruckingOperationId();
+      const etaStart =
+        toIsoDate10FromCell(dueWindowSource.delivery_start_date) ?? planningDates.startIso;
+      const etaEnd =
+        toIsoDate10FromCell(dueWindowSource.delivery_end_date) ?? planningDates.endIso;
+
+      if (op) {
+        await query(
+          `UPDATE trucking_operations
+           SET operation_id = $2,
+               daily_deliverables = $3::jsonb,
+               last_daily_deliverable_date = $4::date,
+               trucking_start_date = COALESCE(trucking_start_date, $5::date),
+               trucking_completion_date = GREATEST(
+                 COALESCE(trucking_completion_date, $6::date),
+                 $6::date
+               ),
+               eta_delivery_start_date = COALESCE(eta_delivery_start_date, $7::date),
+               eta_delivery_end_date = COALESCE(eta_delivery_end_date, $8::date),
+               status = CASE WHEN status IS NULL OR TRIM(status) = '' THEN 'PLANNED' ELSE status END,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1::uuid
+             AND (operation_id IS NULL OR TRIM(operation_id::text) = '')`,
+          [
+            op.id,
+            newOperationId,
+            JSON.stringify(dd.rows),
+            lastDdDate,
+            planningDates.startIso,
+            planningDates.endIso,
+            etaStart,
+            etaEnd,
+          ],
+        );
+        operationsCreated += 1;
+        succeededRows += inWindowEntries.length;
+        continue;
+      }
+
+      if (!contractForCreate) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'Contract not found for this PO / Contract Ext No',
+        });
+        continue;
+      }
+
+      await query(
+        `INSERT INTO trucking_operations (
+           contract_id, operation_id,
+           eta_delivery_start_date, eta_delivery_end_date,
+           trucking_start_date, trucking_completion_date,
+           status, daily_deliverables, last_daily_deliverable_date
+         ) VALUES (
+           $1::uuid, $2,
+           $3::date, $4::date,
+           $5::date, $6::date,
+           'PLANNED', $7::jsonb, $8::date
+         )`,
+        [
+          contractForCreate.id,
+          newOperationId,
+          etaStart,
+          etaEnd,
+          planningDates.startIso,
+          planningDates.endIso,
+          JSON.stringify(dd.rows),
+          lastDdDate,
+        ],
+      );
+      operationsCreated += 1;
+      succeededRows += inWindowEntries.length;
+    }
+
+    if (operationsCreated > 0 || operationsUpdated > 0) invalidateTruckingListCache();
+
+    return res.json({
+      success: true,
+      data: {
+        processedRows: parsedRows.length + rowParseFailures.length,
+        operationsCreated,
+        operationsUpdated,
+        operationsFailed: operationFailures.length,
+        succeededRows,
+        rowParseFailures,
+        operationFailures,
+        operationWarnings,
+        failedRetemplateRows,
+        uploadHeaderRow,
+      },
+    });
+  } catch (error) {
+    logger.error('Bulk upload unplanned planning error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to process Unplanned planning upload' } });
+  }
+};
+
+/** Planned / In Progress view-table XLSX: replace editable daily planning; dates locked by WB actuals are skipped. */
+export const bulkUploadPlannedPlanning = async (req: AuthRequest, res: Response) => {
+  try {
+    const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+    if (!file?.buffer) {
+      return res.status(400).json({ success: false, error: { message: 'File is required (CSV or Excel)' } });
+    }
+
+    let matrix: unknown[][];
+    try {
+      matrix = parsePlanningSheetToMatrix(file.buffer);
+    } catch (e: any) {
+      return res.status(400).json({
+        success: false,
+        error: { message: e?.message || 'Could not read spreadsheet' },
+      });
+    }
+
+    if (matrix.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'File must include a header row and at least one data row' },
+      });
+    }
+
+    if (!isWidePlanningTemplateMatrix(matrix)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message:
+            'Invalid Planned template. Expected headers: Group, Supplier, Source, Contract Date, Contract Ext No, PO, OS Qty (MT), Plan Qty (MT), then date columns (today … +60 days).',
+        },
+      });
+    }
+
+    const { rows: parsedRows, rowParseFailures } = parseUnplannedWidePlanningMatrix(matrix);
+    const operationFailures: BulkTruckingOpFailure[] = [];
+    const operationWarnings: BulkTruckingOpFailure[] = [];
+    const failedRetemplateRows: FailedUnplannedRetemplateRow[] = [];
+    const uploadHeaderRow = (matrix[0] ?? []).map((cell) => unplannedUploadCellToString(cell));
+    let operationsUpdated = 0;
+    let succeededRows = 0;
+
+    for (const parsed of parsedRows) {
+      const label = parsed.contract_ext_no || parsed.po_number || '-';
+      const op = await findTruckingOpForPlannedPlanningUpload({
+        poNumber: parsed.po_number,
+        contractExtNo: parsed.contract_ext_no,
+      });
+
+      if (!op) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'Planned or In Progress trucking operation not found for this PO / Contract Ext No',
+        });
+        continue;
+      }
+
+      if (!truckingOperationIdIsAssigned(op.operation_id)) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'Operation ID is not assigned — use Unplanned planning upload first',
+          operation_ids: [String(op.operation_id ?? op.id)],
+        });
+        continue;
+      }
+
+      const contractOpen = await assertTruckingOperationContractOpen(op.id);
+      if (!contractOpen.ok) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: contractOpen.message,
+          operation_ids: [String(op.operation_id)],
+        });
+        continue;
+      }
+
+      const inWindowEntries = filterEntriesWithinUnplannedWindow(
+        parsed.entries,
+        op.delivery_end_date,
+        label,
+        rowParseFailures,
+      );
+
+      const editableEntries = filterEntriesLockedByActuals(
+        inWindowEntries,
+        op.daily_actuals,
+        label,
+        rowParseFailures,
+      );
+
+      if (editableEntries.length === 0) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason:
+            'No editable planning quantities — all dates are outside the window or locked by WB actuals',
+          operation_ids: [String(op.operation_id)],
+        });
+        continue;
+      }
+
+      const totalPlanningKg = sumPlanningEntriesKg(editableEntries);
+      const outstandingKg = await fetchTruckingOperationOutstandingQtyKg(op.id);
+      const osValidation = validatePlanningTotalAgainstOutstandingKg(totalPlanningKg, outstandingKg);
+      if (!osValidation.ok) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: osValidation.reason,
+          operation_ids: [String(op.operation_id)],
+        });
+        failedRetemplateRows.push({
+          rowNumber: parsed.rowNumber,
+          po_number: parsed.po_number,
+          contract_ext_no: parsed.contract_ext_no,
+          cells: parsed.rawCells.map((cell) => unplannedUploadCellToString(cell)),
+          reason: osValidation.reason,
+        });
+        continue;
+      }
+
+      const incomingDaily = buildDailyDeliverablesFromKgEntries(editableEntries);
+      const mergedDaily = mergeDailyDeliverablesRows(op.daily_deliverables, incomingDaily);
+      const planningDates = resolvePlanningStartEndFromDeliverables(mergedDaily);
+      if (!planningDates) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'No valid planning quantities after parsing',
+          operation_ids: [String(op.operation_id)],
+        });
+        continue;
+      }
+
+      const { startRaw, endRaw } = resolveTruckingDueWindow(op);
+      // Planning qty is kg; OS total already validated. Skip quantity_delivered cap (SAP MT-scale).
+      const dd = normalizeAndValidateDailyDeliverables({
+        daily_deliverables: mergedDaily,
+        startRaw,
+        endRaw,
+        maxQtyRaw: null,
+      });
+      if (!dd.ok) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: dd.message,
+          operation_ids: [String(op.operation_id)],
+        });
+        continue;
+      }
+
+      const lastDdDate =
+        dd.rows.length > 0
+          ? dd.rows.reduce((mx: string, r: { date: string }) => (!mx || r.date > mx ? r.date : mx), '')
+          : null;
+
+      await query(
+        `UPDATE trucking_operations
+         SET daily_deliverables = $2::jsonb,
+             last_daily_deliverable_date = $3::date,
+             trucking_start_date = COALESCE(trucking_start_date, $4::date),
+             trucking_completion_date = GREATEST(
+               COALESCE(trucking_completion_date, $5::date),
+               $5::date
+             ),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1::uuid`,
+        [op.id, JSON.stringify(dd.rows), lastDdDate, planningDates.startIso, planningDates.endIso],
+      );
+      operationsUpdated += 1;
+      succeededRows += editableEntries.length;
+
+      const siblingCount = Number(op.duplicate_sibling_count ?? 1);
+      if (siblingCount > 1) {
+        operationWarnings.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: `Multiple trucking operations exist for this PO/contract (${siblingCount} active). Updated the Planned operation with Operation ID only.`,
+          operation_ids: [String(op.operation_id)],
+        });
+      }
+    }
+
+    if (operationsUpdated > 0) invalidateTruckingListCache();
+
+    return res.json({
+      success: true,
+      data: {
+        processedRows: parsedRows.length + rowParseFailures.length,
+        operationsCreated: 0,
+        operationsUpdated,
+        operationsFailed: operationFailures.length,
+        succeededRows,
+        rowParseFailures,
+        operationFailures,
+        operationWarnings,
+        failedRetemplateRows,
+        uploadHeaderRow,
+      },
+    });
+  } catch (error) {
+    logger.error('Bulk upload planned planning error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to process Planned planning upload' } });
+  }
+};
+
+export const downloadCargoReadinessTemplate = async (_req: AuthRequest, res: Response) => {
+  const header = 'PO,Date';
+  const examples = [
+    'OP-LAND-15042026001,15/04/2026',
+    'OP-LAND-16042026002,16/04/2026',
+  ].join('\n');
+  const bom = '﻿';
+  const body = `${bom}${header}\n${examples}\n`;
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="cargo_readiness_template.csv"');
+  return res.status(200).send(body);
+};
+
+export const bulkUpdateCargoReadiness = async (req: AuthRequest, res: Response) => {
+  try {
+    const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+    if (!file?.buffer) {
+      return res.status(400).json({ success: false, error: { message: 'File is required (CSV or Excel)' } });
+    }
+
+    let matrix: unknown[][];
+    try {
+      matrix = parsePlanningSheetToMatrix(file.buffer);
+    } catch (e: any) {
+      return res.status(400).json({ success: false, error: { message: e?.message || 'Could not read file' } });
+    }
+
+    if (matrix.length < 2) {
+      return res.status(400).json({ success: false, error: { message: 'File must include a header row and at least one data row' } });
+    }
+
+    const headerRow = matrix[0];
+    const poIdx = findPlanningColumnIndex(headerRow, ['po', 'operation_id', 'operation id', 'op id']);
+    const dateIdx = findPlanningColumnIndex(headerRow, [
+      'date', 'cargo readiness date', 'cargo_readiness_date', 'cargo date', 'tanggal',
+    ]);
+
+    if (poIdx < 0) {
+      return res.status(400).json({ success: false, error: { message: 'Missing required column: PO' } });
+    }
+    if (dateIdx < 0) {
+      return res.status(400).json({ success: false, error: { message: 'Missing required column: Date' } });
+    }
+
+    let updated = 0;
+    const errors: string[] = [];
+
+    for (let i = 1; i < matrix.length; i++) {
+      const row = matrix[i];
+      const po = String(row[poIdx] ?? '').trim();
+      const dateRaw = row[dateIdx];
+      const cargoDate = toIsoDate10FromCell(dateRaw);
+
+      if (!po && !dateRaw) continue;
+      if (!po) { errors.push(`Row ${i + 1}: Missing PO`); continue; }
+      if (!cargoDate) { errors.push(`Row ${i + 1}: Invalid date "${dateRaw}"`); continue; }
+
+      // Match by operation_id first, then po_number from linked contract
+      const result = await query(
+        `UPDATE trucking_operations t
+         SET cargo_readiness_date = $2, updated_at = CURRENT_TIMESTAMP
+         WHERE t.operation_id = $1
+            OR EXISTS (
+              SELECT 1 FROM contracts c
+              WHERE c.id = t.contract_id AND c.po_number = $1
+            )`,
+        [po, cargoDate],
+      );
+
+      if ((result.rowCount ?? 0) === 0) {
+        errors.push(`Row ${i + 1}: No trucking operation found for PO "${po}"`);
+      } else {
+        updated += result.rowCount ?? 0;
+      }
+    }
+
+    if (updated > 0) invalidateTruckingListCache();
+    return res.json({
+      success: true,
+      data: { updated, errors },
+      message: `Updated ${updated} operation(s)`,
+    });
+  } catch (error) {
+    logger.error('Bulk update cargo readiness error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to update cargo readiness dates' } });
+  }
+};
+
+/** Activity / audit trail for a single trucking operation (modal history section). */
+export const getTruckingActivityLog = async (req: AuthRequest, res: Response) => {
+  try {
+    const truckingId = String(req.params.truckingId || '').trim();
+    if (!truckingId) {
+      return res.status(400).json({ success: false, error: { message: 'Trucking operation ID is required' } });
+    }
+
+    const exists = await query(`SELECT id FROM trucking_operations WHERE id = $1 LIMIT 1`, [truckingId]);
+    if (exists.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { message: 'Trucking operation not found' } });
+    }
+
+    const result = await query(
+      `SELECT
+         a.id,
+         a.action,
+         a.entity_type,
+         a.entity_id,
+         a.before_data,
+         a.after_data,
+         a.timestamp,
+         COALESCE(u.username, '') AS username,
+         COALESCE(u.full_name, '') AS full_name
+       FROM audit_logs a
+       LEFT JOIN users u ON a.user_id = u.id
+       WHERE a.entity_type = 'TRUCKING_OPERATION' AND a.entity_id = $1
+       ORDER BY a.timestamp DESC
+       LIMIT 200`,
+      [truckingId],
+    );
+
+    return res.json({ success: true, data: result.rows });
+  } catch (error) {
+    logger.error('Get trucking activity log error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load trucking activity log' } });
   }
 };

@@ -3,6 +3,12 @@
  */
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
+import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql'
+import {
+  sqlTruckingOutstandingQtyByIncoterm,
+  sqlTruckingQuantityDeliveredCoalesce,
+  sqlTruckingQuantityReceiveCoalesce,
+} from './truckingQuantitySql'
 
 export { parseColumnFiltersQuery }
 
@@ -10,11 +16,18 @@ function lateIndicatorTruckingExpr(): string {
   return `(
   CASE
     WHEN c.delivery_end_date IS NULL THEN '-'
-    WHEN t.eta_trucking_completion_date IS NULL AND t.trucking_completion_date IS NULL THEN '-'
-    WHEN (t.eta_trucking_completion_date IS NOT NULL AND c.delivery_end_date::date >= t.eta_trucking_completion_date::date)
-      OR (t.trucking_completion_date IS NOT NULL AND c.delivery_end_date::date >= t.trucking_completion_date::date)
-    THEN 'On Time'
-    ELSE 'Late'
+    WHEN t.trucking_completion_date IS NOT NULL THEN
+      CASE
+        WHEN c.delivery_end_date::date < t.trucking_completion_date::date THEN 'Late'
+        ELSE 'On Time'
+      END
+    WHEN t.eta_trucking_completion_date IS NOT NULL THEN
+      CASE
+        WHEN c.delivery_end_date::date < t.eta_trucking_completion_date::date THEN 'Late'
+        ELSE 'On Time'
+      END
+    WHEN c.delivery_end_date::date < CURRENT_DATE THEN 'Late'
+    ELSE 'On Time'
   END
 )`;
 }
@@ -25,21 +38,26 @@ const TRUCK_COL: Record<string, string> = {
   contract_number: 'c.contract_id',
   po_number: 'c.po_number',
   sto_number: 'c.sto_number',
-  status: 't.status',
+  status: sqlTruckingPagePipelineStageExpr('c'),
   location: 't.location',
   loading_location: 't.loading_location',
   unloading_location: 't.unloading_location',
   trucking_owner: 't.trucking_owner',
   supplier: 'c.supplier',
   product: 'c.product',
+  incoterm: 'c.incoterm',
   buyer: 'c.buyer',
   group_name: 'c.group_name',
   contract_ext_no: `(SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1)`,
   contract_qty: 'c.quantity_ordered',
   sto_quantity: 'c.quantity_ordered',
   quantity_sent: 't.quantity_sent',
-  quantity_delivered: 't.quantity_delivered',
-  quantity_receive: 'COALESCE(t.quantity_delivered, 0)',
+  quantity_delivered: `COALESCE(t.quantity_delivered, 0)`,
+  quantity_receive: sqlTruckingQuantityReceiveCoalesce(),
+  outstanding_quantity: sqlTruckingOutstandingQtyByIncoterm(
+    sqlTruckingQuantityDeliveredCoalesce(),
+    sqlTruckingQuantityReceiveCoalesce(),
+  ),
   oa_budget: 't.oa_budget',
   oa_actual: 't.oa_actual',
   estimated_km: 's.estimated_km',
@@ -67,15 +85,10 @@ export function appendTruckingGlobalSearch(
   const contractExtExpr = `(SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1)`
   const sql = `
     AND (
-      COALESCE(t.operation_id::text, '') ILIKE ${likeExpr}
+      COALESCE(${contractExtExpr}, '') ILIKE ${likeExpr}
       OR COALESCE(c.contract_id::text, '') ILIKE ${likeExpr}
-      OR COALESCE(${contractExtExpr}, '') ILIKE ${likeExpr}
-      OR COALESCE(c.sto_number::text, '') ILIKE ${likeExpr}
       OR COALESCE(c.po_number::text, '') ILIKE ${likeExpr}
-      OR COALESCE(t.loading_location::text, '') ILIKE ${likeExpr}
-      OR COALESCE(t.unloading_location::text, '') ILIKE ${likeExpr}
-      OR COALESCE(t.trucking_owner::text, '') ILIKE ${likeExpr}
-      OR COALESCE(c.supplier::text, '') ILIKE ${likeExpr}
+      OR COALESCE(c.sto_number::text, '') ILIKE ${likeExpr}
     )`
   return { sql, params: [`%${searchTrim}%`], nextIndex: startIndex + 1 }
 }
@@ -141,6 +154,23 @@ export function appendTruckingColumnFilters(
         pi += 1
       }
       continue
+    }
+
+    if (f.type === 'multi') {
+      const vals = Array.isArray(f.values) ? f.values.filter((x) => x != null && String(x).trim() !== '') : []
+      const incBlank = Boolean(f.includeBlank)
+      const ors: string[] = []
+      if (incBlank) {
+        ors.push(`(${expr} IS NULL OR TRIM(${expr}::text) = '')`)
+      }
+      if (vals.length > 0) {
+        ors.push(`${expr}::text = ANY($${pi}::text[])`)
+        params.push(vals)
+        pi += 1
+      }
+      if (ors.length > 0) {
+        parts.push(` AND (${ors.join(' OR ')})`)
+      }
     }
   }
 

@@ -1,7 +1,16 @@
 import * as XLSX from 'xlsx';
+import * as fs from 'fs';
 import pool from '../database/connection';
 import logger from '../utils/logger';
+import {
+  SAP_MASTER_V2_UAT_FIELD_MAPPING,
+  applySapMasterV2RawFieldAliases,
+  isSapMasterV2UatFlatHeaderRow,
+  isTruckingQuantityField,
+  resolveSapMasterV2QualityLocation,
+} from '../utils/sapMasterV2UatFormat';
 import { SapDataDistributionService } from './sapDataDistribution.service';
+import { invalidateShipmentsListCache } from './shipmentList.service';
 
 export interface MasterV2Config {
   filePath: string;
@@ -43,6 +52,12 @@ export interface FieldMetadata {
   isCalculated: boolean;
 }
 
+interface MasterV2WorkbookData {
+  fieldMetadata: FieldMetadata[];
+  validDataRows: any[][];
+  sheetName: string;
+}
+
 export class SapMasterV2ImportService {
   
   private static DEFAULT_CONFIG: MasterV2Config = {
@@ -57,68 +72,167 @@ export class SapMasterV2ImportService {
   };
   
   /**
-   * Import data from SAP MASTER v2 Excel file
+   * Parse workbook from disk (throws on invalid file/sheet before any DB write).
+   */
+  private static loadMasterV2WorkbookData(filePath: string): MasterV2WorkbookData {
+    const workbook = XLSX.readFile(filePath);
+    let sheetName = this.DEFAULT_CONFIG.sheetName;
+    if (!workbook.SheetNames.includes(sheetName)) {
+      sheetName = workbook.SheetNames.includes('MASTER v2')
+        ? 'MASTER v2'
+        : workbook.SheetNames[0];
+    }
+    const worksheet = workbook.Sheets[sheetName];
+    if (!worksheet) {
+      throw new Error(`Sheet "${sheetName}" not found`);
+    }
+
+    const jsonData = XLSX.utils.sheet_to_json(worksheet, {
+      header: 1,
+      defval: null,
+      raw: false,
+    }) as any[][];
+
+    const config = this.resolveWorkbookConfig(jsonData);
+    const fieldMetadata = this.parseFieldMetadata(jsonData, config);
+    const dataRows = jsonData.slice(config.dataStartRow);
+    const validDataRows = dataRows.filter(
+      (row) => row && row.some((cell) => cell !== null && cell !== undefined && cell !== '')
+    );
+
+    logger.info('Excel file loaded', { totalRows: jsonData.length, sheetName, dataRows: validDataRows.length });
+
+    return { fieldMetadata, validDataRows, sheetName };
+  }
+
+  /** Detect UAT flat header (82 cols) vs legacy multi-row MASTER v2 template. */
+  private static resolveWorkbookConfig(jsonData: any[][]): MasterV2Config {
+    if (isSapMasterV2UatFlatHeaderRow(jsonData[0] ?? [])) {
+      return { ...this.DEFAULT_CONFIG };
+    }
+    // Legacy template: metadata rows 0-7, headers row 8, data from row 9
+    const legacyHeaderIdx = jsonData.findIndex((row, idx) =>
+      idx > 0 &&
+      Array.isArray(row) &&
+      row.some((cell) => String(cell ?? '').toLowerCase().includes('contract no')),
+    );
+    if (legacyHeaderIdx >= 0) {
+      return {
+        ...this.DEFAULT_CONFIG,
+        legendRow1: Math.max(0, legacyHeaderIdx - 2),
+        legendRow2: Math.max(0, legacyHeaderIdx - 1),
+        headerRow: legacyHeaderIdx,
+        sapFieldRow1: legacyHeaderIdx,
+        sapFieldRow2: legacyHeaderIdx,
+        dataStartRow: legacyHeaderIdx + 1,
+      };
+    }
+    return { ...this.DEFAULT_CONFIG };
+  }
+
+  private static async markImportFailed(importId: string, error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      await pool.query(
+        `UPDATE sap_data_imports
+         SET status = 'failed', error_log = $1
+         WHERE id = $2`,
+        [JSON.stringify([message]), importId]
+      );
+    } catch (updateErr) {
+      logger.error('Failed to mark SAP import as failed', { importId, updateErr });
+    }
+  }
+
+  /**
+   * Queue a file import: validate + create DB record, then process rows in the background.
+   * Returns quickly so nginx/proxy timeouts do not abort long imports (~5000+ rows).
+   */
+  static async queueMasterV2FileImport(filePath: string): Promise<{ importId: string; totalRecords: number }> {
+    const { fieldMetadata, validDataRows } = this.loadMasterV2WorkbookData(filePath);
+
+    const client = await pool.connect();
+    let importId: string;
+    try {
+      await client.query('BEGIN');
+      const importResult = await client.query(
+        `INSERT INTO sap_data_imports (import_date, status, total_records)
+         VALUES (CURRENT_DATE, 'processing', $1)
+         RETURNING id`,
+        [validDataRows.length]
+      );
+      importId = importResult.rows[0].id;
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    setImmediate(() => {
+      void (async () => {
+        try {
+          await this.processMasterV2Import(importId, validDataRows, fieldMetadata);
+          logger.info('SAP MASTER v2 background import completed', { importId });
+        } catch (error) {
+          logger.error('SAP MASTER v2 background import failed', { importId, error });
+          await this.markImportFailed(importId, error);
+        } finally {
+          if (fs.existsSync(filePath)) {
+            try {
+              fs.unlinkSync(filePath);
+            } catch (unlinkErr) {
+              logger.warn('Failed to delete temp SAP upload file', { filePath, unlinkErr });
+            }
+          }
+        }
+      })();
+    });
+
+    return { importId, totalRecords: validDataRows.length };
+  }
+
+  /**
+   * Import data from SAP MASTER v2 Excel file (blocks until all rows are processed).
    */
   static async importMasterV2File(filePath: string): Promise<SapMasterV2ImportResult> {
+    const { fieldMetadata, validDataRows } = this.loadMasterV2WorkbookData(filePath);
+
     const client = await pool.connect();
-    
+    let importId: string;
     try {
-      logger.info('Starting SAP MASTER v2 import', { filePath });
-      
       await client.query('BEGIN');
-      
-      // 1. Create import record
       const importResult = await client.query(
-        `INSERT INTO sap_data_imports (import_date, status, total_records) 
-         VALUES (CURRENT_DATE, 'processing', 0) 
+        `INSERT INTO sap_data_imports (import_date, status, total_records)
+         VALUES (CURRENT_DATE, 'processing', $1)
          RETURNING id`,
-        []
+        [validDataRows.length]
       );
-      const importId = importResult.rows[0].id;
-      
-      // 2. Read and parse Excel file
-      const workbook = XLSX.readFile(filePath);
-      // Try to find the sheet by name (supports both "Logistic Report" and "MASTER v2" for backward compatibility)
-      let sheetName = this.DEFAULT_CONFIG.sheetName;
-      if (!workbook.SheetNames.includes(sheetName)) {
-        // Fallback to MASTER v2 or first sheet
-        sheetName = workbook.SheetNames.includes('MASTER v2') 
-          ? 'MASTER v2' 
-          : workbook.SheetNames[0];
-      }
-      const worksheet = workbook.Sheets[sheetName];
-      
-      if (!worksheet) {
-        throw new Error(`Sheet "${sheetName}" not found`);
-      }
-      
-      // 3. Convert to JSON array
-      const jsonData = XLSX.utils.sheet_to_json(worksheet, {
-        header: 1,
-        defval: null,
-        raw: false
-      }) as any[][];
-      
-      logger.info('Excel file loaded', { totalRows: jsonData.length, sheetName });
-      
-      // 4. Parse metadata from header rows
-      const fieldMetadata = this.parseFieldMetadata(jsonData);
-      logger.info('Field metadata parsed', { totalFields: fieldMetadata.length });
-      
-      // 5. Extract data rows
-      const dataRows = jsonData.slice(this.DEFAULT_CONFIG.dataStartRow);
-      const validDataRows = dataRows.filter(row => 
-        row && row.some(cell => cell !== null && cell !== undefined && cell !== '')
-      );
-      
-      logger.info('Data rows extracted', { totalDataRows: validDataRows.length });
-      
-      // Update total records
-      await client.query(
-        'UPDATE sap_data_imports SET total_records = $1 WHERE id = $2',
-        [validDataRows.length, importId]
-      );
-      
+      importId = importResult.rows[0].id;
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return this.processMasterV2Import(importId, validDataRows, fieldMetadata);
+  }
+
+  private static async processMasterV2Import(
+    importId: string,
+    validDataRows: any[][],
+    fieldMetadata: FieldMetadata[]
+  ): Promise<SapMasterV2ImportResult> {
+    const client = await pool.connect();
+
+    try {
+      logger.info('Processing SAP MASTER v2 import rows', { importId, totalRows: validDataRows.length });
+
+      await client.query('BEGIN');
+
       // 6. Process each data row
       let processedRecords = 0;
       let failedRecords = 0;
@@ -131,6 +245,19 @@ export class SapMasterV2ImportService {
         qualitySurveysCreated: 0,
         truckingOperationsCreated: 0,
         paymentsCreated: 0
+      };
+
+      const maybeRefreshImportProgress = async () => {
+        const rowsDone = processedRecords + failedRecords + skippedRecords;
+        if (rowsDone === 1 || rowsDone % 25 === 0) {
+          if (rowsDone % 100 === 0) {
+            logger.info(`Progress: ${rowsDone}/${validDataRows.length} records processed`);
+          }
+          await pool.query(
+            `UPDATE sap_data_imports SET processed_records = $1, failed_records = $2 WHERE id = $3`,
+            [processedRecords + skippedRecords, failedRecords, importId],
+          );
+        }
       };
       
       for (let i = 0; i < validDataRows.length; i++) {
@@ -221,6 +348,7 @@ export class SapMasterV2ImportService {
 
               await client.query(`RELEASE SAVEPOINT ${savepointName}`);
               processedRecords++;
+              await maybeRefreshImportProgress();
               continue;
             }
           }
@@ -247,11 +375,7 @@ export class SapMasterV2ImportService {
           await client.query(`RELEASE SAVEPOINT ${savepointName}`);
 
           processedRecords++;
-
-          // Log progress every 100 records
-          if ((i + 1) % 100 === 0) {
-            logger.info(`Progress: ${i + 1}/${validDataRows.length} records processed`);
-          }
+          await maybeRefreshImportProgress();
 
         } catch (error) {
           // Rollback only this row's changes and continue
@@ -280,6 +404,7 @@ export class SapMasterV2ImportService {
               logger.error('Failed to record row error to sap_raw_data', { rawDataId, updateErr });
             }
           }
+          await maybeRefreshImportProgress();
         }
       }
       
@@ -298,6 +423,21 @@ export class SapMasterV2ImportService {
       );
       
       await client.query('COMMIT');
+
+      if (processedRecords > 0) {
+        invalidateShipmentsListCache();
+        setImmediate(() => {
+          import('./contractQtyMoveSnapshot.service')
+            .then(({ ContractQtyMoveSnapshotService }) => ContractQtyMoveSnapshotService.refreshAll())
+            .catch(() => {});
+          import('./contractStoAggSnapshot.service')
+            .then(({ ContractStoAggSnapshotService }) => ContractStoAggSnapshotService.refreshAll())
+            .catch(() => {});
+          import('./contractLatestSpdSnapshot.service')
+            .then(({ ContractLatestSpdSnapshotService }) => ContractLatestSpdSnapshotService.refreshAll())
+            .catch(() => {});
+        });
+      }
       
       logger.info('SAP MASTER v2 import completed', {
         importId,
@@ -320,7 +460,8 @@ export class SapMasterV2ImportService {
       
     } catch (error) {
       await client.query('ROLLBACK');
-      logger.error('SAP MASTER v2 import failed', error);
+      logger.error('SAP MASTER v2 import failed', { importId, error });
+      await this.markImportFailed(importId, error);
       throw error;
     } finally {
       client.release();
@@ -330,8 +471,7 @@ export class SapMasterV2ImportService {
   /**
    * Parse field metadata from header rows
    */
-  private static parseFieldMetadata(jsonData: any[][]): FieldMetadata[] {
-    const config = this.DEFAULT_CONFIG;
+  private static parseFieldMetadata(jsonData: any[][], config: MasterV2Config = this.DEFAULT_CONFIG): FieldMetadata[] {
     const metadata: FieldMetadata[] = [];
     
     const legendRow1 = jsonData[config.legendRow1] || [];
@@ -450,10 +590,7 @@ export class SapMasterV2ImportService {
       // Store in raw object with proper field name
         if (fieldName && fieldName.trim() !== '') {
         parsed.raw[fieldName] = value;
-        // Raw aliases so backend (shipment.controller) finds expected keys from sap_processed_data.data.raw
-        const lower = fieldName.trim().toLowerCase();
-        if (lower === 'quantity delivery' || lower === 'qty deliver') parsed.raw['Quantity Delivered'] = value;
-        if (lower === 'quantity receive' || lower === 'qty receive') parsed.raw['Quantity Receive'] = value;
+        applySapMasterV2RawFieldAliases(parsed.raw, fieldName, value);
 
         // Categorize by type - STO should go to shipment first
         const normalizedFieldName = this.normalizeFieldName(fieldName);
@@ -462,6 +599,8 @@ export class SapMasterV2ImportService {
           parsed.shipment[normalizedFieldName] = value;
         } else if (this.isContractField(fieldName)) {
           parsed.contract[normalizedFieldName] = value;
+        } else if (isTruckingQuantityField(fieldName)) {
+          this.addTruckingData(parsed.trucking, fieldName, value);
         } else if (this.isShipmentField(fieldName)) {
           parsed.shipment[normalizedFieldName] = value;
         } else if (this.isQualityField(fieldName)) {
@@ -490,21 +629,26 @@ export class SapMasterV2ImportService {
       'sea / land', 'sea/land', // Handle with and without spaces
       'contract quantity', 'unit price', 'due date delivery',
       'source', 'ltc / spot', 'lt/spot', // Handle with and without space
-      'status', 'sto no', 'sto quantity', 'classification',
-      'b2b flag', 'contract type', 'contract reff po', 'contract reff po ini', 'contract reff so ini', // Updated fields
-      'contract ref po', 'company code' // Company Code field
+      'status', 'gr po status', 'gr sto status', 'sto no', 'sto quantity', 'classification',
+      'b2b flag', 'contract type', 'contract reff po', 'contract reff po ini', 'contract reff so ini',
+      'contract ref po', 'contract ref po initial', 'contract ref so initial',
+      'contract ext no', 'company code', 'plant code', 'vendor group',
     ];
     return contractFields.some(cf => lower.includes(cf));
   }
   
   private static isShipmentField(fieldName: string): boolean {
+    const lower = fieldName.toLowerCase();
+    if (isTruckingQuantityField(fieldName)) return false;
     const shipmentFields = [
       'vessel', 'voyage', 'loading port', 'discharge port', 'eta', 'ata',
       'berthed', 'sailed', 'arrival', 'quantity at', 'sto', 'shipment',
       'qty deliver', 'quantity delivery', 'qty receive', 'quantity receive', 'last receive',
-      'sto item' // New field
+      'sto item',
+      'ship figure', 'sfal', 'sfbd',
+      'transit destination', 'discharge destination',
     ];
-    return shipmentFields.some(sf => fieldName.toLowerCase().includes(sf));
+    return shipmentFields.some(sf => lower.includes(sf));
   }
   
   private static isQualityField(fieldName: string): boolean {
@@ -514,11 +658,12 @@ export class SapMasterV2ImportService {
   
   private static isTruckingField(fieldName: string): boolean {
     const lower = fieldName.toLowerCase();
+    if (isTruckingQuantityField(fieldName)) return true;
     return lower.includes('truck') ||
            lower.includes('trucking') ||
            lower.includes('cargo readiness') ||
-           lower.includes('qty deliver') ||
-           lower.includes('qty receive') ||
+           (lower.includes('qty deliver') && !lower.includes('vessel')) ||
+           (lower.includes('qty receive') && !lower.includes('vessel')) ||
            lower.includes('selisih qty');
   }
   
@@ -594,6 +739,9 @@ export class SapMasterV2ImportService {
       
       'company code': 'company_code',
       'company code.': 'company_code',
+
+      'plant code': 'plant_code',
+      'plant code.': 'plant_code',
       
       'incoterm at starting point 1': 'incoterm_starting_1',
       'incoterm at starting point 2': 'incoterm_starting_2',
@@ -726,6 +874,7 @@ export class SapMasterV2ImportService {
       // SHIPPING/VESSEL FIELDS
       'loading method (pipeline / trucking)': 'loading_method',
       // UPDATED: Column positions changed (AN, AO, AP, AQ, AR, AS, AT, AU)
+      'vessel loading port': 'vessel_loading_port_1',
       'vessel loading port 1': 'vessel_loading_port_1', // Column AN
       'vessel loading port 2': 'vessel_loading_port_2',
       'vessel loading port 3': 'vessel_loading_port_3',
@@ -874,8 +1023,10 @@ export class SapMasterV2ImportService {
     };
     
     // Check for exact match first
-    if (fieldMapping[cleanFieldName]) {
-      return fieldMapping[cleanFieldName];
+    const mergedMapping = { ...fieldMapping, ...SAP_MASTER_V2_UAT_FIELD_MAPPING };
+
+    if (mergedMapping[cleanFieldName]) {
+      return mergedMapping[cleanFieldName];
     }
     
     // Check for partial matches with priority order
@@ -890,12 +1041,12 @@ export class SapMasterV2ImportService {
     
     for (const key of priorityKeys) {
       if (cleanFieldName.includes(key)) {
-        return fieldMapping[key];
+        return mergedMapping[key];
       }
     }
     
     // Check for general partial matches
-    for (const [key, value] of Object.entries(fieldMapping)) {
+    for (const [key, value] of Object.entries(mergedMapping)) {
       if (cleanFieldName.includes(key) || key.includes(cleanFieldName)) {
         return value;
       }
@@ -911,18 +1062,7 @@ export class SapMasterV2ImportService {
    * Add quality data (handles multiple locations)
    */
   private static addQualityData(qualityArray: any[], fieldName: string, value: any): void {
-    // Determine location from field name (case-insensitive)
-    const lowerFieldName = fieldName.toLowerCase();
-    let location = 'Unknown';
-    if (lowerFieldName.includes('loading loc 1') || lowerFieldName.includes('loading location 1') || lowerFieldName.includes('loading port 1')) {
-      location = 'Loading Port 1';
-    } else if (lowerFieldName.includes('loading loc 2') || lowerFieldName.includes('loading location 2') || lowerFieldName.includes('loading port 2')) {
-      location = 'Loading Port 2';
-    } else if (lowerFieldName.includes('loading loc 3') || lowerFieldName.includes('loading location 3') || lowerFieldName.includes('loading port 3')) {
-      location = 'Loading Port 3';
-    } else if (lowerFieldName.includes('discharge port')) {
-      location = 'Discharge Port';
-    }
+    const location = resolveSapMasterV2QualityLocation(fieldName);
     
     // Find or create quality record for this location
     let qualityRecord = qualityArray.find(q => q.location === location);
@@ -1029,6 +1169,11 @@ export class SapMasterV2ImportService {
       logger.error('Data distribution failed', error);
       throw error;
     }
+  }
+
+  /** Parse one SAP MASTER v2 row (for tests and diagnostics). */
+  static parseDataRowForTest(row: unknown[], fieldMetadata: FieldMetadata[]): Record<string, unknown> {
+    return this.parseDataRow(row as any[], fieldMetadata);
   }
 }
 

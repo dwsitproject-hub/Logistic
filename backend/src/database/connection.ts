@@ -13,6 +13,13 @@ const pool = new Pool({
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
+  // Disable PostgreSQL JIT compilation for this app's connections. The generated
+  // list/report queries contain hundreds of expressions, which trips the JIT cost
+  // thresholds and makes Postgres spend most of the query time LLVM-compiling them
+  // on EVERY execution (measured: trucking list 11.7s -> 2.3s with jit off; JIT was
+  // ~9.7s of it). JIT only changes how the executor evaluates expressions, never
+  // query results or plans, so this is a pure latency win for our workload.
+  options: '-c jit=off',
 });
 
 pool.on('connect', () => {

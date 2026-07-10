@@ -64,9 +64,11 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:5001/api}
     container_name: klip-frontend
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5001/api}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:5001/api}
     ports:
       - "${FRONTEND_PORT:-3001}:3001"
     depends_on:
@@ -75,7 +77,7 @@ services:
       - klip-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3001/login',(r)=>{r.on('end',()=>process.exit(r.statusCode>=200&&r.statusCode<400?0:1));r.resume();}).on('error',()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -88,3 +90,4 @@ volumes:
 networks:
   klip-network:
     driver: bridge
+

@@ -75,3 +75,333 @@
   }
 }
 
+@layer components {
+  /* Compact data tables — headers may wrap between words, never inside a word */
+  .klip-compact-table-header-label {
+    overflow-wrap: normal;
+    word-break: normal;
+    hyphens: none;
+  }
+
+  .klip-compact-table.klip-compact-table {
+    table-layout: fixed;
+  }
+
+  /*
+   * Operational list tables (Shipments, Trucking): shrink-wrap columns to the longest
+   * unbreakable word/token in each column; wrap-type columns absorb leftover width.
+   */
+  .klip-compact-table.klip-compact-table--operational {
+    table-layout: auto;
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .klip-compact-table--operational th,
+  .klip-compact-table--operational td.klip-compact-table-cell {
+    word-break: normal;
+    overflow-wrap: normal;
+    hyphens: none;
+    position: relative;
+  }
+
+  .klip-compact-table--operational th {
+    white-space: normal;
+    vertical-align: top;
+  }
+
+  .klip-compact-table--operational td.klip-compact-table-cell {
+    white-space: normal;
+    vertical-align: middle;
+    overflow: visible;
+    max-width: none;
+  }
+
+  /* Sort header flex must not shrink below longest header word */
+  .klip-compact-table--operational th > div {
+    min-width: min-content;
+  }
+
+  .klip-compact-table--operational .klip-compact-table-cell-inner {
+    display: block;
+    width: min-content;
+    min-width: min-content;
+    max-width: 100%;
+    word-break: normal;
+    overflow-wrap: normal;
+    white-space: inherit;
+  }
+
+  /* Neutralize Tailwind break-words inside operational data cells */
+  .klip-compact-table--operational .klip-compact-table-cell-inner .break-words {
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  /* Shrink-wrapped: width = longest unbreakable token (header word or cell string) */
+  .klip-compact-table--operational th.klip-op-col--short,
+  .klip-compact-table--operational td.klip-op-col--short,
+  .klip-compact-table--operational th.klip-op-col--token,
+  .klip-compact-table--operational td.klip-op-col--token,
+  .klip-compact-table--operational th.klip-op-col--stack,
+  .klip-compact-table--operational td.klip-op-col--stack {
+    width: min-content;
+    max-width: max-content;
+    word-break: normal;
+    overflow-wrap: normal;
+  }
+
+  .klip-compact-table--operational th.klip-op-col--short,
+  .klip-compact-table--operational th.klip-op-col--token,
+  .klip-compact-table--operational th.klip-op-col--stack {
+    white-space: normal;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--short,
+  .klip-compact-table--operational td.klip-op-col--token {
+    white-space: nowrap;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--stack {
+    vertical-align: top;
+    white-space: normal;
+  }
+
+  /*
+   * Operational list tables (Shipments, Trucking, Contracts, Contract Performance,
+   * Shipping Performance, Oil Loss, Commercial Documents) — center single-line cells
+   * vertically when a row is taller due to stacked multi-value columns.
+   */
+  .klip-compact-table--row-vcenter td.klip-compact-table-cell {
+    vertical-align: middle;
+  }
+
+  .klip-compact-table--row-vcenter td.klip-op-col--stack:not(:has(.klip-compact-table-stack)) {
+    vertical-align: middle;
+  }
+
+  .klip-compact-table--row-vcenter td.klip-op-col--stack:has(.klip-compact-table-stack) {
+    vertical-align: top;
+  }
+
+  .klip-compact-table--row-vcenter .klip-compact-table-cell-inner {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+  }
+
+  .klip-compact-table--row-vcenter .klip-compact-table-cell-inner:has(.klip-compact-table-stack) {
+    justify-content: flex-start;
+  }
+
+  .klip-compact-table-nowrap {
+    white-space: nowrap;
+    word-break: normal;
+    overflow-wrap: normal;
+  }
+
+  .klip-compact-table-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.125rem;
+    width: min-content;
+    min-width: min-content;
+  }
+
+  /* Multi-word columns (Vessel, Product, Supplier) absorb remaining table width */
+  .klip-compact-table--operational th.klip-op-col--wrap,
+  .klip-compact-table--operational td.klip-op-col--wrap {
+    width: auto;
+    min-width: min-content;
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: normal;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--wrap .klip-compact-table-cell-inner {
+    width: auto;
+    min-width: min-content;
+    max-width: 32rem;
+  }
+
+  /* Long text columns — cap width; cell content uses truncate + title tooltip */
+  .klip-compact-table--operational th.klip-op-col--truncate,
+  .klip-compact-table--operational td.klip-op-col--truncate {
+    width: auto;
+    max-width: 12.5rem;
+    min-width: min-content;
+    overflow: hidden;
+  }
+
+  .klip-compact-table--operational th.klip-op-col--truncate {
+    white-space: normal;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--truncate {
+    white-space: nowrap;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--truncate .klip-compact-table-cell-inner {
+    max-width: 12.5rem;
+    overflow: hidden;
+  }
+
+  .klip-compact-table--operational col.klip-op-col--fixed {
+    width: auto;
+  }
+
+  /* Token columns grow to full content (vessel name, transporter, etc.) */
+  .klip-compact-table--intrinsic-token-cols th.klip-op-col--token,
+  .klip-compact-table--intrinsic-token-cols td.klip-op-col--token {
+    width: max-content;
+    min-width: min-content;
+    max-width: none;
+  }
+
+  .klip-compact-table--intrinsic-token-cols td.klip-op-col--token .klip-compact-table-cell-inner {
+    width: max-content;
+    min-width: min-content;
+    max-width: none;
+  }
+
+  /*
+   * Contract Performance + Shipping Performance Section 3 — narrower columns with
+   * word-boundary header wrap and single-line truncated cells.
+   */
+  .klip-compact-table--perf-narrow-cols {
+    table-layout: fixed;
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .klip-compact-table--perf-narrow-cols th.klip-op-col--truncate,
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--truncate {
+    max-width: 8.5rem;
+    overflow: hidden;
+  }
+
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--truncate .klip-compact-table-cell-inner {
+    width: 100%;
+    min-width: 0;
+    max-width: 8.5rem;
+    overflow: hidden;
+  }
+
+  .klip-compact-table--perf-narrow-cols th.klip-op-col--short,
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--short {
+    max-width: 6.5rem;
+    overflow: hidden;
+  }
+
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--short .klip-compact-table-cell-inner {
+    width: 100%;
+    min-width: 0;
+    max-width: 6.5rem;
+    overflow: hidden;
+  }
+
+  .klip-compact-table--commercial-docs th.klip-op-col--actions,
+  .klip-compact-table--commercial-docs td.klip-op-col--actions {
+    width: 148px;
+    min-width: 148px;
+    max-width: 148px;
+    padding-left: 0.625rem;
+    padding-right: 0.625rem;
+  }
+
+  .klip-compact-table--commercial-docs .klip-commercial-docs-actions-inner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.625rem;
+    min-width: 0;
+  }
+
+  .klip-compact-table--commercial-docs .klip-commercial-docs-actions-inner > * {
+    flex-shrink: 0;
+  }
+
+  /*
+   * Sticky Actions column — header + body freeze on horizontal scroll.
+   * Perf tables put sticky-top on each th (not tr) so corner cell sticks correctly.
+   */
+  .klip-compact-table--operational th.klip-op-col--actions,
+  .klip-compact-table--operational td.klip-op-col--actions {
+    position: sticky;
+    right: 0;
+    width: 80px;
+    min-width: 80px;
+    max-width: 80px;
+    box-sizing: border-box;
+    border-left: 1px solid rgb(229 231 235);
+    box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.08);
+  }
+
+  .klip-compact-table--operational thead th.klip-op-col--actions {
+    top: 0;
+    z-index: 40;
+    background-color: rgb(249 250 251);
+  }
+
+  .klip-compact-table--operational tbody td.klip-op-col--actions {
+    z-index: 10;
+  }
+
+  .klip-compact-table--operational tbody tr.bg-white td.klip-op-col--actions {
+    background-color: rgb(255 255 255);
+  }
+
+  .klip-compact-table--operational tbody tr.bg-gray-50 td.klip-op-col--actions {
+    background-color: rgb(249 250 251);
+  }
+
+  /*
+   * Operational list tables (Contract, Shipment, Trucking) — Actions header only.
+   * Body <td> sticky classes stay as-is on each page.
+   */
+  .klip-compact-table--operational thead th.klip-op-col--actions-header {
+    position: sticky;
+    right: 0;
+    top: 0;
+    z-index: 40;
+    background-color: rgb(249 250 251);
+  }
+
+  /* Trucking page — progressive table loading (row-level shimmer, not per-cell) */
+  @keyframes klip-trucking-row-shimmer {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  .klip-trucking-table--loading tbody {
+    position: relative;
+  }
+
+  .klip-trucking-loading-row {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .klip-trucking-loading-row::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(148, 163, 184, 0.12) 45%,
+      rgba(148, 163, 184, 0.12) 55%,
+      transparent 100%
+    );
+    transform: translateX(-100%);
+    animation: klip-trucking-row-shimmer 2s ease-in-out infinite;
+    pointer-events: none;
+  }
+}
+

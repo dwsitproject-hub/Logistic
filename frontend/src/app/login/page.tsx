@@ -1,22 +1,57 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useEffect, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import ChangePasswordModal from '@/components/ChangePasswordModal'
 import api from '@/lib/api'
+import { resolvePostAuthRedirect } from '@/lib/navigationAccess'
 
-export default function LoginPage() {
+type StoredAuthUser = {
+  id?: string
+  role?: string
+  is_first_login?: boolean
+}
+
+async function redirectAfterAuth(
+  user: StoredAuthUser,
+  router: ReturnType<typeof useRouter>,
+  setError: (msg: string) => void,
+) {
+  try {
+    const route = await resolvePostAuthRedirect(user.role, user.id)
+    if (!route) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      setError('Your account has no accessible pages. Contact your administrator.')
+      return
+    }
+    router.push(route)
+  } catch {
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    setError('Failed to load your permissions. Please try again.')
+  }
+}
+
+function LoginPageContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [isFirstLogin, setIsFirstLogin] = useState(false)
+
+  useEffect(() => {
+    if (searchParams.get('error') === 'no_access') {
+      setError('Your account has no accessible pages. Contact your administrator.')
+    }
+  }, [searchParams])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -25,45 +60,58 @@ export default function LoginPage() {
 
     try {
       const response = await api.post('/auth/login', { username, password })
-      const { user, token, requirePasswordChange } = response.data.data
+      const payload = response.data?.data
+      if (!payload?.token || !payload?.user) {
+        setError('Unexpected server response. Please contact support.')
+        return
+      }
+      const { user, token, requirePasswordChange } = payload
 
       localStorage.setItem('token', token)
       localStorage.setItem('user', JSON.stringify(user))
 
-      // Check if password change is required
       if (requirePasswordChange) {
         setIsFirstLogin(true)
         setShowPasswordModal(true)
-        setLoading(false)
       } else {
-        router.push('/dashboard')
+        await redirectAfterAuth(user, router, setError)
       }
     } catch (err: any) {
-      setError(err.response?.data?.error?.message || 'Login failed')
+      if (err.code === 'ERR_NETWORK' || !err.response) {
+        setError('Cannot reach KLIP server. Check your connection or try again later.')
+      } else {
+        setError(err.response?.data?.error?.message || 'Login failed')
+      }
+    } finally {
       setLoading(false)
     }
   }
 
-  const handlePasswordChangeSuccess = () => {
-    // Update user object to reflect password has been changed
+  const handlePasswordChangeSuccess = async () => {
+    setShowPasswordModal(false)
     const userStr = localStorage.getItem('user')
+    let user: StoredAuthUser = {}
     if (userStr) {
-      const user = JSON.parse(userStr)
+      user = JSON.parse(userStr) as StoredAuthUser
       user.is_first_login = false
       localStorage.setItem('user', JSON.stringify(user))
     }
-    
-    router.push('/dashboard')
+
+    setLoading(true)
+    await redirectAfterAuth(user, router, setError)
+    setLoading(false)
   }
 
   return (
     <>
-      <ChangePasswordModal
-        isOpen={showPasswordModal}
-        isFirstLogin={isFirstLogin}
-        onClose={() => {}}
-        onSuccess={handlePasswordChangeSuccess}
-      />
+      {showPasswordModal && (
+        <ChangePasswordModal
+          isOpen={showPasswordModal}
+          isFirstLogin={isFirstLogin}
+          onClose={() => {}}
+          onSuccess={handlePasswordChangeSuccess}
+        />
+      )}
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1">
@@ -103,20 +151,24 @@ export default function LoginPage() {
               {loading ? 'Logging in...' : 'Login'}
             </Button>
           </form>
-          <div className="mt-6 text-sm text-muted-foreground">
-            <p className="font-semibold mb-2">Demo Credentials:</p>
-            <ul className="space-y-1 text-xs">
-              <li>Admin: admin / admin123</li>
-              <li>Trading: trading / trading123</li>
-              <li>Logistics: logistics / logistics123</li>
-              <li>Finance: finance / finance123</li>
-              <li>Management: management / management123</li>
-            </ul>
-          </div>
         </CardContent>
       </Card>
     </div>
     </>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+          <p className="text-gray-500">Loading...</p>
+        </div>
+      }
+    >
+      <LoginPageContent />
+    </Suspense>
   )
 }
 

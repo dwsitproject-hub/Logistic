@@ -1,41 +1,40 @@
 'use client'
 
-import { useEffect, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from './ui/button'
 import { TooltipProvider } from './ui/tooltip'
 import { AppTourProvider, useAppTour } from './AppTourProvider'
 import { PageActivityFab } from './PageActivityFab'
-import {
-  LayoutDashboard,
-  Presentation,
-  FileText,
-  Package,
-  Truck,
-  DollarSign,
-  FolderOpen,
-  Users,
-  Settings,
-  LogOut,
-  Menu,
-  X,
-  Database,
-  Layers,
-  BookOpen,
-  Bot,
-} from 'lucide-react'
+import { UserActivityTracker } from './UserActivityTracker'
+import { LogOut, Menu, X, BookOpen } from 'lucide-react'
 import {
   PermissionsProvider,
+  clearPermissionsCache,
   usePermissions,
-  canViewPermission,
-  isAdminRole,
 } from '@/components/PermissionsContext'
+import { NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
+import { filterNavigationItems, isPathAccessible } from '@/lib/navigationAccess'
+import { clearClientDataCache } from '@/lib/clientDataCache'
+import { prefetchNavigationPage } from '@/lib/pagePrefetch'
 
 type UserLite = {
   id?: string
   full_name?: string
   role?: string
+}
+
+function readStoredUser(): UserLite | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const token = localStorage.getItem('token')
+    const userData = localStorage.getItem('user')
+    if (!token || !userData) return null
+    return JSON.parse(userData) as UserLite
+  } catch {
+    return null
+  }
 }
 
 function LayoutChrome({
@@ -44,18 +43,22 @@ function LayoutChrome({
   pathname,
   navigation,
   filteredNavigation,
+  sidebarNavigationLoading,
   sidebarOpen,
   setSidebarOpen,
   handleLogout,
+  onNavHover,
 }: {
   children: React.ReactNode
   user: UserLite
   pathname: string
   navigation: { name: string; href: string; icon: ComponentType<{ className?: string }>; roles: string[] }[]
   filteredNavigation: { name: string; href: string; icon: ComponentType<{ className?: string }>; roles: string[] }[]
+  sidebarNavigationLoading?: boolean
   sidebarOpen: boolean
   setSidebarOpen: (v: boolean | ((p: boolean) => boolean)) => void
   handleLogout: () => void
+  onNavHover: (href: string) => void
 }) {
   const { startTour } = useAppTour()
   const pageTitle = navigation.find((item) => item.href === pathname)?.name || 'KLIP'
@@ -66,22 +69,32 @@ function LayoutChrome({
         data-tour="tour-sidebar"
         className={`${
           sidebarOpen ? 'w-64' : 'w-20'
-        } bg-white border-r border-gray-200 transition-all duration-300 ease-in-out shrink-0`}
+        } bg-white border-r border-gray-200 transition-all duration-300 ease-in-out shrink-0 flex flex-col overflow-hidden`}
       >
-        <div className="flex items-center justify-between p-4 border-b">
+        <div className="flex items-center justify-between p-4 border-b shrink-0">
           {sidebarOpen && <h1 className="text-2xl font-bold text-primary">KLIP</h1>}
           <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)}>
             {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </Button>
         </div>
-        <nav className="p-4 space-y-2">
-          {filteredNavigation.map((item) => {
+        <nav className="flex-1 overflow-y-auto p-4 space-y-2">
+          {sidebarNavigationLoading
+            ? Array.from({ length: 8 }).map((_, index) => (
+                <div
+                  key={`nav-skeleton-${index}`}
+                  className={`rounded-lg bg-gray-100 animate-pulse ${sidebarOpen ? 'h-9' : 'h-9 w-9'}`}
+                  aria-hidden
+                />
+              ))
+            : filteredNavigation.map((item) => {
             const Icon = item.icon
             const isActive = pathname === item.href
             return (
               <Link
                 key={item.name}
                 href={item.href}
+                prefetch={true}
+                onMouseEnter={() => onNavHover(item.href)}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
                   isActive ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100'
                 }`}
@@ -125,70 +138,11 @@ function LayoutChrome({
         </main>
 
         <PageActivityFab />
+        <UserActivityTracker />
       </div>
     </div>
   )
 }
-
-const NAV_ITEMS: {
-  name: string
-  href: string
-  icon: ComponentType<{ className?: string }>
-  roles: string[]
-  permissionKey: string
-}[] = [
-  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['ALL'], permissionKey: 'page.dashboard' },
-  {
-    name: 'Management Dashboard',
-    href: '/management-dashboard',
-    icon: Presentation,
-    roles: ['ALL'],
-    permissionKey: 'page.management_dashboard',
-  },
-  { name: 'Contracts', href: '/contracts', icon: FileText, roles: ['ALL'], permissionKey: 'page.contracts' },
-  {
-    name: 'Contract Performance',
-    href: '/contract-performance',
-    icon: FileText,
-    roles: ['ALL'],
-    permissionKey: 'page.contracts',
-  },
-  { name: 'Shipments', href: '/shipments', icon: Package, roles: ['ALL'], permissionKey: 'page.shipments' },
-  { name: 'Trucking', href: '/trucking', icon: Truck, roles: ['ALL'], permissionKey: 'page.trucking' },
-  // Claim Mutu is a trucking-adjacent module, placed right after Trucking
-  { name: 'Claim Mutu', href: '/claim-mutu', icon: Truck, roles: ['ALL'], permissionKey: 'page.claim_mutu' },
-  { name: 'Claim Susut', href: '/claim-susut', icon: Truck, roles: ['ALL'], permissionKey: 'page.claim_susut' },
-  { name: 'Suppliers Dashboard', href: '/customer-360', icon: Users, roles: ['ALL'], permissionKey: 'page.customer_360' },
-  { name: 'Suppliers', href: '/supplier', icon: Users, roles: ['ALL'], permissionKey: 'page.suppliers' },
-  {
-    name: 'Customer 360',
-    href: '/customer-360-company',
-    icon: Users,
-    roles: ['ALL'],
-    permissionKey: 'page.customer_360_company',
-  },
-  {
-    name: 'Master Product Configuration',
-    href: '/master-product-configuration',
-    icon: Layers,
-    roles: ['ALL'],
-    permissionKey: 'page.master_product_configuration',
-  },
-  { name: 'Master Vessel', href: '/master-vessel', icon: Layers, roles: ['ALL'], permissionKey: 'page.master_vessels' },
-  {
-    name: 'Master Loading Port',
-    href: '/master-loading-port',
-    icon: Layers,
-    roles: ['ALL'],
-    permissionKey: 'page.master_loading_ports',
-  },
-  { name: 'Finance', href: '/finance', icon: DollarSign, roles: ['FINANCE', 'MANAGEMENT', 'ADMIN'], permissionKey: 'page.finance' },
-  { name: 'KLIP Agent AI', href: '/klip-agent-ai', icon: Bot, roles: ['ALL'], permissionKey: 'page.klip_agent_ai' },
-  { name: 'Documents', href: '/documents', icon: FolderOpen, roles: ['ALL'], permissionKey: 'page.documents' },
-  { name: 'SAP Data', href: '/sap-imports', icon: Database, roles: ['ADMIN', 'SUPPORT', 'MANAGEMENT'], permissionKey: 'page.sap' },
-  { name: 'Users', href: '/users', icon: Users, roles: ['ALL'], permissionKey: 'page.users' },
-  { name: 'Audit Logs', href: '/audit', icon: Settings, roles: ['ADMIN', 'SUPPORT'], permissionKey: 'page.audit' },
-]
 
 function LayoutWithPermissions({
   user,
@@ -203,17 +157,49 @@ function LayoutWithPermissions({
   const perms = usePermissions()
 
   const handleLogout = () => {
+    clearClientDataCache()
+    clearPermissionsCache()
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     router.push('/login')
   }
 
-  const filteredNavigation = NAV_ITEMS.filter((item) => {
-    const roleOk = item.roles.includes('ALL') || (user.role != null && item.roles.includes(user.role))
-    if (!roleOk) return false
-    if (isAdminRole(user.role)) return true
-    return canViewPermission(perms, item.permissionKey)
-  })
+  const handleNavHover = (href: string) => {
+    prefetchNavigationPage(href)
+  }
+
+  const filteredNavigation = useMemo(
+    () => filterNavigationItems(NAV_ITEMS, user.role, perms),
+    [user.role, perms.byKey, perms.loaded],
+  )
+
+  const lastSidebarNavigationRef = useRef<NavItem[]>([])
+  const sidebarNavigation = useMemo(() => {
+    if (filteredNavigation.length > 0) {
+      lastSidebarNavigationRef.current = filteredNavigation
+      return filteredNavigation
+    }
+    return lastSidebarNavigationRef.current
+  }, [filteredNavigation])
+
+  const sidebarNavigationLoading = !perms.loaded && sidebarNavigation.length === 0
+
+  useEffect(() => {
+    if (!perms.loaded) return
+
+    const allowed = filterNavigationItems(NAV_ITEMS, user.role, perms)
+    if (allowed.length === 0) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      router.replace('/login?error=no_access')
+      return
+    }
+
+    const firstRoute = allowed[0].href
+    if (!isPathAccessible(pathname, allowed)) {
+      router.replace(firstRoute)
+    }
+  }, [perms.loaded, perms.byKey, pathname, user.role, router])
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -222,10 +208,12 @@ function LayoutWithPermissions({
           user={user}
           pathname={pathname}
           navigation={NAV_ITEMS}
-          filteredNavigation={filteredNavigation}
+          filteredNavigation={sidebarNavigation}
+          sidebarNavigationLoading={sidebarNavigationLoading}
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
           handleLogout={handleLogout}
+          onNavHover={handleNavHover}
         >
           {children}
         </LayoutChrome>
@@ -239,14 +227,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserLite | null>(null)
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
-    const userData = localStorage.getItem('user')
-
-    if (!token || !userData) {
-      router.push('/login')
-    } else {
-      setUser(JSON.parse(userData))
+    const stored = readStoredUser()
+    if (!stored) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      router.replace('/login')
+      return
     }
+    setUser(stored)
   }, [router])
 
   if (!user) {
@@ -254,7 +242,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <PermissionsProvider userRole={user.role}>
+    <PermissionsProvider userRole={user.role} userId={user.id}>
       <LayoutWithPermissions user={user}>{children}</LayoutWithPermissions>
     </PermissionsProvider>
   )

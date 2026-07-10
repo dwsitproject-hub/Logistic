@@ -25,18 +25,15 @@ export function normalizeAndValidateDailyDeliverables(args: {
   startRaw: unknown;
   endRaw: unknown;
   maxQtyRaw: unknown;
+  /** Shown in cap-exceeded errors (default: allowed planning quantity in kg). */
+  maxQtyLabel?: string;
 }): { ok: true; rows: NormalizedDailyDeliverableRow[] } | { ok: false; message: string } {
-  const { daily_deliverables, startRaw, endRaw, maxQtyRaw } = args;
+  const { daily_deliverables, maxQtyRaw, maxQtyLabel } = args;
+  const capLabel = maxQtyLabel ?? 'allowed planning quantity (kg)';
 
   if (daily_deliverables == null) return { ok: true, rows: [] };
   if (!Array.isArray(daily_deliverables)) {
     return { ok: false, message: 'daily_deliverables must be an array' };
-  }
-
-  const start = startRaw ? new Date(String(startRaw)) : null;
-  const end = endRaw ? new Date(String(endRaw)) : null;
-  if (!start || Number.isNaN(start.getTime()) || !end || Number.isNaN(end.getTime())) {
-    return { ok: false, message: 'Due Date Delivery Start/End are required when daily deliverables are provided' };
   }
 
   const maxQty =
@@ -70,18 +67,6 @@ export function normalizeAndValidateDailyDeliverables(args: {
     return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
   };
 
-  const startS = toIsoDate10(startRaw);
-  const endS = toIsoDate10(endRaw);
-  if (!startS || !endS) {
-    return { ok: false, message: 'Due Date Delivery Start/End are required when daily deliverables are provided' };
-  }
-  if (startS > endS) {
-    return {
-      ok: false,
-      message: `Due Start (${startS}) must be on or before Due End (${endS}).`,
-    };
-  }
-
   const rows: NormalizedDailyDeliverableRow[] = [];
   let sum = 0;
 
@@ -101,15 +86,8 @@ export function normalizeAndValidateDailyDeliverables(args: {
     if (!ds) {
       return { ok: false, message: `Daily deliverables row ${idx + 1}: invalid date` };
     }
-    // Inclusive window: Due Start ≤ date ≤ Due End
-    if (ds < startS || ds > endS) {
-      return {
-        ok: false,
-        message: `Daily deliverables row ${idx + 1}: date ${ds} must satisfy Due Start (${startS}) ≤ date ≤ Due End (${endS}) (inclusive).`,
-      };
-    }
     if (maxQty != null && qn > maxQty) {
-      return { ok: false, message: `Daily deliverables row ${idx + 1}: quantity cannot exceed Quantity Delivered` };
+      return { ok: false, message: `Daily deliverables row ${idx + 1}: quantity cannot exceed ${capLabel}` };
     }
 
     sum += qn;
@@ -117,9 +95,32 @@ export function normalizeAndValidateDailyDeliverables(args: {
   }
 
   if (maxQty != null && sum > maxQty) {
-    return { ok: false, message: 'Sum of daily deliverables quantity cannot exceed Quantity Delivered' };
+    return { ok: false, message: `Sum of daily deliverables quantity cannot exceed ${capLabel}` };
   }
 
   return { ok: true, rows };
+}
+
+/** Upsert by date — incoming rows override existing dates; other dates are preserved. */
+export function mergeDailyDeliverablesRows(
+  existing: unknown,
+  incoming: NormalizedDailyDeliverableRow[],
+): NormalizedDailyDeliverableRow[] {
+  const byDate = new Map<string, number>();
+  if (Array.isArray(existing)) {
+    for (const row of existing as DailyDeliverableInputRow[]) {
+      const date = String(row?.date ?? '').trim().slice(0, 10);
+      const qty = parseDailyDeliverableQuantity(row?.quantity_delivered);
+      if (date && qty !== null && qty >= 0) {
+        byDate.set(date, qty);
+      }
+    }
+  }
+  for (const row of incoming) {
+    byDate.set(row.date, row.quantity_delivered);
+  }
+  return Array.from(byDate.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, quantity_delivered]) => ({ date, quantity_delivered }));
 }
 

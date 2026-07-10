@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
 import api from '@/lib/api'
@@ -23,8 +24,9 @@ export default function MasterProductConfigurationPage() {
   const [items, setItems] = useState<Product[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [limit] = useState(50)
+  const [limit] = useState(20)
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -37,18 +39,16 @@ export default function MasterProductConfigurationPage() {
   useEffect(() => {
     const userStr = localStorage.getItem('user')
     if (!userStr) { router.push('/login'); return }
-    fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page])
+  }, [router])
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async (pageNum: number, searchQuery: string) => {
     setLoading(true)
     setError('')
     try {
       const params = new URLSearchParams()
-      params.append('page', String(page))
+      params.append('page', String(pageNum))
       params.append('limit', String(limit))
-      if (search) params.append('search', search)
+      if (searchQuery) params.append('search', searchQuery)
       const res = await api.get(`/products?${params.toString()}`)
       setItems(res.data.data.items)
       setTotal(res.data.data.total)
@@ -57,7 +57,20 @@ export default function MasterProductConfigurationPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [limit])
+
+  const skipSearchPageReset = useRef(true)
+  useEffect(() => {
+    if (skipSearchPageReset.current) {
+      skipSearchPageReset.current = false
+      return
+    }
+    setPage(1)
+  }, [debouncedSearch])
+
+  useEffect(() => {
+    void fetchData(page, debouncedSearch)
+  }, [page, debouncedSearch, fetchData])
 
   const openAdd = () => { setEditing(null); setForm({ product_name: '', percent_produce: '', working_hours_per_day: '', working_days_per_month: '', working_days_per_year: '' }); setShowModal(true) }
   const openEdit = (p: Product) => { setEditing(p); setForm({ ...p }); setShowModal(true) }
@@ -75,7 +88,7 @@ export default function MasterProductConfigurationPage() {
       }
       if (editing) { await api.put(`/products/${editing.id}`, payload); setSuccess('Product updated') }
       else { await api.post('/products', payload); setSuccess('Product created') }
-      setShowModal(false); fetchData()
+      setShowModal(false); void fetchData(page, debouncedSearch)
     } catch (err: any) {
       const msg = err?.response?.data?.error?.message 
         || (err?.response ? `${err.response.status} ${err.response.statusText}` : '')
@@ -87,7 +100,7 @@ export default function MasterProductConfigurationPage() {
 
   const removeProduct = async (p: Product) => {
     if (!confirm(`Delete ${p.product_name}?`)) return
-    try { await api.delete(`/products/${p.id}`); fetchData() } catch (e: any) { alert(e?.response?.data?.error?.message || 'Delete failed') }
+    try { await api.delete(`/products/${p.id}`); void fetchData(page, debouncedSearch) } catch (e: any) { alert(e?.response?.data?.error?.message || 'Delete failed') }
   }
 
   return (
@@ -96,8 +109,7 @@ export default function MasterProductConfigurationPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Master Product Configuration</h1>
         <div className="flex items-center gap-2">
-          <Input placeholder="Search products..." value={search} onChange={(e) => setSearch(e.target.value)} />
-          <Button onClick={() => { setPage(1); fetchData() }}>Search</Button>
+          <Input placeholder="Search products..." value={search} onChange={(e) => setSearch(e.target.value)} className="max-w-sm" />
           <Button onClick={openAdd}>Add Product</Button>
         </div>
       </div>
@@ -153,7 +165,7 @@ export default function MasterProductConfigurationPage() {
 
       {showModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
-          <div className="bg-white rounded-md w-full max-w-3xl p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-md w-full max-w-3xl max-h-[90vh] overflow-y-auto px-6 pb-6">
             <h2 className="text-xl font-semibold mb-4">{editing ? 'Edit Product' : 'Add Product'}</h2>
             <form onSubmit={saveProduct} className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {[

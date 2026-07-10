@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
 import Layout from '@/components/Layout'
 import { DashboardContent } from '../dashboard/DashboardContent'
+import { canViewNavItem, getFirstAccessibleRoute, parsePermissionsResponse } from '@/lib/navigationAccess'
+import { NAV_ITEMS } from '@/lib/navigationConfig'
 
 export default function ManagementDashboardPage() {
   const router = useRouter()
@@ -16,9 +18,16 @@ export default function ManagementDashboardPage() {
       .get('/roles/my-permissions')
       .then((res) => {
         if (cancelled) return
-        const ok = !!res.data?.data?.permissions?.['page.management_dashboard']?.canView
+        const raw = (res.data?.data?.permissions ?? {}) as Record<string, Record<string, boolean | undefined>>
+        const byKey = parsePermissionsResponse(raw)
+        const userStr = localStorage.getItem('user')
+        const userRole = userStr ? (JSON.parse(userStr).role as string | undefined) : undefined
+        const perms = { byKey, loaded: true, userRole }
+        const mgmtNav = NAV_ITEMS.find((item) => item.href === '/management-dashboard')
+        const ok = mgmtNav ? canViewNavItem(mgmtNav, userRole, perms) : false
         if (!ok) {
-          router.replace('/dashboard')
+          const fallback = getFirstAccessibleRoute(userRole, perms)
+          router.replace(fallback ?? '/login?error=no_access')
           return
         }
         setReady(true)

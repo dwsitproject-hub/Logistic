@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import jwt from 'jsonwebtoken';
-import { authenticateToken, authorize, AuthRequest } from './auth';
+import { authenticateToken, authorize, authorizeSapImportsUpload, AuthRequest } from './auth';
 import type { Response, NextFunction } from 'express';
+
+vi.mock('../database/connection', () => ({
+  query: vi.fn(),
+}));
+
+import { query } from '../database/connection';
 
 function mockRes() {
   const res = {
@@ -93,5 +99,48 @@ describe('authorize', () => {
     const next = vi.fn() as NextFunction;
     mid(req, res, next);
     expect(next).toHaveBeenCalled();
+  });
+});
+
+describe('authorizeSapImportsUpload', () => {
+  beforeEach(() => {
+    vi.mocked(query).mockReset();
+  });
+
+  it('401 when user missing (negative)', async () => {
+    const req = {} as AuthRequest;
+    const res = mockRes();
+    const next = vi.fn() as NextFunction;
+    await authorizeSapImportsUpload(req, res, next);
+    expect(res.statusCode).toBe(401);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('next for ADMIN without DB lookup (positive)', async () => {
+    const req = { user: { id: '1', username: 'admin', email: 'a@x.com', role: 'ADMIN' } } as AuthRequest;
+    const res = mockRes();
+    const next = vi.fn() as NextFunction;
+    await authorizeSapImportsUpload(req, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('next for LOGISTICS when page.sap can_create is true (positive)', async () => {
+    vi.mocked(query).mockResolvedValueOnce({ rows: [{ allowed: true }] } as never);
+    const req = { user: { id: 'u2', username: 'dinna', email: 'd@x.com', role: 'LOGISTICS' } } as AuthRequest;
+    const res = mockRes();
+    const next = vi.fn() as NextFunction;
+    await authorizeSapImportsUpload(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it('403 for LOGISTICS when page.sap can_create is false (negative)', async () => {
+    vi.mocked(query).mockResolvedValueOnce({ rows: [{ allowed: false }] } as never);
+    const req = { user: { id: 'u2', username: 'dinna', email: 'd@x.com', role: 'LOGISTICS' } } as AuthRequest;
+    const res = mockRes();
+    const next = vi.fn() as NextFunction;
+    await authorizeSapImportsUpload(req, res, next);
+    expect(res.statusCode).toBe(403);
+    expect(next).not.toHaveBeenCalled();
   });
 });

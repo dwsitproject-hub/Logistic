@@ -135,7 +135,7 @@ sudo apt-get install -y nginx
    ```bash
    cd /opt
    sudo mkdir -p klip && sudo chown $USER:$USER klip
-   git clone https://github.com/jerrypra0906/Logistic.git klip
+   git clone https://github.com/dwsitproject-hub/Logistic.git klip
    cd klip
    ```
 
@@ -195,7 +195,7 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
    ```bash
    cd /opt
    sudo mkdir -p klip && sudo chown $USER:$USER klip
-   git clone https://github.com/jerrypra0906/Logistic.git klip
+   git clone https://github.com/dwsitproject-hub/Logistic.git klip
    cd klip
    ```
 
@@ -209,10 +209,16 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
 
    ```env
    NEXT_PUBLIC_API_URL=/api
-   FRONTEND_PORT=3001
+   FRONTEND_PORT=80
    ```
 
-   Save and exit. **Important**: `NEXT_PUBLIC_API_URL` is baked into the frontend at **build** time. Use `/api` so the browser uses the same host as the page and Nginx can proxy to the backend.
+   By default the compose file maps **host port 80 → container port 3001** (Next.js still listens on 3001 inside the container). Users open **`http://<IP>/`** without `:3001`.
+
+   **If host Nginx also listens on port 80** on the same machine, either disable/stop Nginx or use **`FRONTEND_PORT=3001`** so Docker binds **3001** and Nginx proxies `/` → `127.0.0.1:3001` (recommended split for `/api` via Nginx).
+
+   **Docker-only on port 80 (no Nginx):** set **`BACKEND_INTERNAL_URL=http://172.28.92.57:5001`** (adjust IP) so Next.js **rewrites** `/api/*` to the backend at build time. Omit `BACKEND_INTERNAL_URL` when Nginx handles `/api`.
+
+   Save and exit. **Important**: `NEXT_PUBLIC_API_URL` is baked into the frontend at **build** time. Use `/api` so the browser uses the same host as the page.
 
 3. **Build and start the frontend container**:
 
@@ -227,8 +233,10 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
 
    ```bash
    docker compose -f docker-compose.frontend.yml ps
-   curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3001
+   curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1/
    ```
+
+   With default `FRONTEND_PORT=80`, use **`http://127.0.0.1/`** (port 80). If you set `FRONTEND_PORT=3001`, use `http://127.0.0.1:3001`.
 
    You should get `200`.
 
@@ -295,6 +303,22 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
            proxy_set_header Upgrade $http_upgrade;
            proxy_set_header Connection "upgrade";
            proxy_cache_bypass $http_upgrade;
+       }
+
+       # SAP MASTER file import runs synchronously and can take many minutes (thousands of rows).
+       # This path MUST use longer proxy timeouts than generic /api/ — otherwise Nginx closes the
+       # connection (~60s) while Node is still working; the browser then shows 500 / "Internal Server Error".
+       location /api/sap-master-v2/import-upload {
+           proxy_pass http://klip_backend/api/sap-master-v2/import-upload;
+           proxy_http_version 1.1;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+           proxy_connect_timeout 60s;
+           proxy_send_timeout 3600s;
+           proxy_read_timeout 3600s;
+           client_max_body_size 50M;
        }
 
        # /api/* → backend server
@@ -708,6 +732,20 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_cache_bypass $http_upgrade;
+    }
+
+    # SAP MASTER upload: long-running request (many minutes); do not use the 60s /api/ defaults here.
+    location /api/sap-master-v2/import-upload {
+        proxy_pass http://klip_backend/api/sap-master-v2/import-upload;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 3600s;
+        proxy_read_timeout 3600s;
+        client_max_body_size 50M;
     }
 
     # Backend API – proxy to private IP

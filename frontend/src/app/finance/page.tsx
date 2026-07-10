@@ -28,6 +28,7 @@ import { formatRupiah } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY } from '@/lib/dateFormat'
+import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 
 type PaymentStatus = 'PENDING' | 'PARTIAL' | 'PAID' | 'OVERDUE'
 
@@ -603,19 +604,19 @@ export default function FinancePage() {
                         payments.map((payment) => (
                           <TableRow key={payment.id}>
                             <TableCell>
-                              <div className="font-medium text-gray-900">{payment.invoice_number || '-'}</div>
+                              <div className="font-medium text-gray-900">{formatSapDisplayValue(payment.invoice_number)}</div>
                               <div className="text-xs text-gray-500">
                                 {payment.invoice_date ? `Invoice date: ${formatDate(payment.invoice_date)}` : ''}
                               </div>
                             </TableCell>
                             <TableCell>
-                              <div className="font-medium text-gray-900">{payment.contract_id || '-'}</div>
+                              <div className="font-medium text-gray-900">{formatSapDisplayValue(payment.contract_id)}</div>
                               <div className="text-xs text-gray-500">
                                 {payment.product ? `Product: ${payment.product}` : ''}
                               </div>
                             </TableCell>
                             <TableCell>
-                              <div className="text-sm text-gray-900">{payment.supplier || '-'}</div>
+                              <div className="text-sm text-gray-900">{formatSapDisplayValue(payment.supplier)}</div>
                             </TableCell>
                             <TableCell className="text-right font-semibold text-gray-900">
                               {formatAmount(payment.payment_amount)}

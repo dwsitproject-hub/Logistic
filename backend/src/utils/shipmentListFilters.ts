@@ -3,22 +3,78 @@
  */
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
+import {
+  LEGACY_SHIPMENT_STATUS_ALIASES,
+  SHIPMENT_AUTO_STATUSES,
+  SHIPMENT_DISCHARGE_ETA_PHASE_STATUSES,
+  SHIPMENT_LOADING_ETA_PHASE_STATUSES,
+  type ShipmentAutoStatus,
+} from './shipmentStatus'
 
 export { parseColumnFiltersQuery }
 
-/** Late indicator aligned with frontend `getLateIndicator` (shipments page). */
+function sqlQuoteStatusList(statuses: readonly ShipmentAutoStatus[]): string {
+  return statuses.map((s) => `'${s}'`).join(', ')
+}
+
+function resolveShipmentStatusFilterParam(raw: string | undefined): ShipmentAutoStatus | null {
+  const normalized = String(raw ?? '')
+    .trim()
+    .toUpperCase()
+  if (!normalized || normalized === 'ALL') return null
+  const legacy = LEGACY_SHIPMENT_STATUS_ALIASES[normalized]
+  if (legacy) return legacy
+  if ((SHIPMENT_AUTO_STATUSES as readonly string[]).includes(normalized)) {
+    return normalized as ShipmentAutoStatus
+  }
+  return null
+}
+
+/** Late indicator: compare actual/ETA first; same calendar day = On Time. */
 function lateIndicatorExpr(alias: string): string {
+  return shipmentLateIndicatorCaseSql(alias);
+}
+
+export function shipmentLateIndicatorCaseSql(
+  alias: string,
+  cols: { ata?: string; eta?: string } = {},
+): string {
+  const ata = cols.ata ?? `${alias}.ata_vessel_complete_discharge`;
+  const eta = cols.eta ?? `${alias}.eta_vessel_complete_discharge`;
   return `(
   CASE
     WHEN ${alias}.delivery_end_date IS NULL THEN '-'
+    WHEN ${ata} IS NOT NULL THEN
+      CASE
+        WHEN (${alias}.delivery_end_date::date) < (${ata}::date) THEN 'Late'
+        ELSE 'On Time'
+      END
+    WHEN ${eta} IS NOT NULL THEN
+      CASE
+        WHEN (${alias}.delivery_end_date::date) < (${eta}::date) THEN 'Late'
+        ELSE 'On Time'
+      END
     WHEN (${alias}.delivery_end_date::date) < CURRENT_DATE THEN 'Late'
-    WHEN ${alias}.ata_vessel_complete_discharge IS NULL AND ${alias}.eta_vessel_complete_discharge IS NULL THEN '-'
-    WHEN (${alias}.ata_vessel_complete_discharge IS NOT NULL AND (${alias}.delivery_end_date::date) < (${alias}.ata_vessel_complete_discharge::date))
-      OR (${alias}.eta_vessel_complete_discharge IS NOT NULL AND (${alias}.delivery_end_date::date) < (${alias}.eta_vessel_complete_discharge::date))
-    THEN 'Late'
     ELSE 'On Time'
   END
 )`;
+}
+
+/** Boolean late filter for dashboard aggregates (matches lateIndicatorExpr). */
+export function shipmentIsLateSql(
+  alias: string,
+  cols: { ata?: string; eta?: string } = {},
+): string {
+  const ata = cols.ata ?? `${alias}.ata_vessel_complete_discharge`;
+  const eta = cols.eta ?? `${alias}.eta_vessel_complete_discharge`;
+  return `(
+    ${alias}.delivery_end_date IS NOT NULL
+    AND (
+      (${ata} IS NOT NULL AND (${alias}.delivery_end_date::date) < (${ata}::date))
+      OR (${ata} IS NULL AND ${eta} IS NOT NULL AND (${alias}.delivery_end_date::date) < (${eta}::date))
+      OR (${ata} IS NULL AND ${eta} IS NULL AND (${alias}.delivery_end_date::date) < CURRENT_DATE)
+    )
+  )`;
 }
 
 const SB_COL: Record<string, string> = {
@@ -45,6 +101,7 @@ const SB_COL: Record<string, string> = {
   buyers: 'sb.buyers',
   product: 'sb.product',
   products: 'sb.products',
+  incoterm: 'sb.incoterm',
   group_name: 'sb.group_name',
   group_names: 'sb.group_names',
   charter_type: 'sb.charter_type',
@@ -92,15 +149,11 @@ export function appendShipmentGlobalSearch(
   const likeExpr = `$${p}::text`
   const sql = `
     AND (
-      COALESCE(sb.sto_number::text, '') ILIKE ${likeExpr}
-      OR COALESCE(sb.shipment_id::text, '') ILIKE ${likeExpr}
-      OR COALESCE(sb.operation_id::text, '') ILIKE ${likeExpr}
+      COALESCE(sb.contract_ext_no::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.contract_numbers::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.po_numbers::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.sto_number::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.vessel_name::text, '') ILIKE ${likeExpr}
-      OR COALESCE(sb.supplier::text, '') ILIKE ${likeExpr}
-      OR COALESCE(sb.port_of_discharge::text, '') ILIKE ${likeExpr}
-      OR COALESCE(sb.plant_site::text, '') ILIKE ${likeExpr}
     )`
   return { sql, params: [`%${searchTrim}%`], nextIndex: startIndex + 1 }
 }
@@ -114,7 +167,8 @@ export function appendShipmentColumnFilters(
   let pi = startIndex
 
   for (const [colId, raw] of Object.entries(filters)) {
-    const expr = SB_COL[colId]
+    const expr =
+      colId === 'status' ? shipmentEffectiveStatusExpr('sb') : SB_COL[colId]
     if (!expr || !raw || typeof raw !== 'object') continue
 
     const f = raw as ColumnFilterPayload[string]
@@ -166,6 +220,23 @@ export function appendShipmentColumnFilters(
         pi += 1
       }
       continue
+    }
+
+    if (f.type === 'multi') {
+      const vals = Array.isArray(f.values) ? f.values.filter((x) => x != null && String(x).trim() !== '') : []
+      const incBlank = Boolean(f.includeBlank)
+      const ors: string[] = []
+      if (incBlank) {
+        ors.push(`(${expr} IS NULL OR TRIM(${expr}::text) = '')`)
+      }
+      if (vals.length > 0) {
+        ors.push(`${expr}::text = ANY($${pi}::text[])`)
+        params.push(vals)
+        pi += 1
+      }
+      if (ors.length > 0) {
+        parts.push(` AND (${ors.join(' OR ')})`)
+      }
     }
   }
 
@@ -237,6 +308,13 @@ export function appendShipmentViewOptionFilter(
       nextIndex: startIndex + 1,
     }
   }
+  if (mode === 'contract_ext' || mode === 'contract_ext_no') {
+    return {
+      sql: ` AND COALESCE(sb.contract_ext_no::text, '') ILIKE $${p}`,
+      params: [`%${q}%`],
+      nextIndex: startIndex + 1,
+    }
+  }
   if (mode === 'vessel') {
     return {
       sql: ` AND COALESCE(sb.vessel_name::text, '') ILIKE $${p}`,
@@ -279,6 +357,84 @@ export function normalizeShipmentEtaBucketParam(raw: unknown): string | null {
  * - Skips rows that would show as COMPLETED after ATA derivation (all 9 ATA milestones present on sb).
  * - Priority: NO_ETA → DELAY → D → D_MINUS_2 → MORE_THAN_7D; else GAP (matches no toolbar bucket).
  */
+/** True when grouped row has at least one shipment-level ETA milestone. */
+export function shipmentHasAnyEtaExpr(alias: string): string {
+  const f = alias
+  return `(
+    ${f}.eta_arrival IS NOT NULL OR ${f}.eta_berthed IS NOT NULL OR ${f}.eta_loading_start IS NOT NULL OR ${f}.eta_loading_complete IS NOT NULL OR ${f}.eta_sailed IS NOT NULL
+    OR ${f}.eta_discharge_arrival IS NOT NULL OR ${f}.eta_discharge_berthed IS NOT NULL OR ${f}.eta_discharge_start IS NOT NULL OR ${f}.eta_vessel_complete_discharge IS NOT NULL
+  )`
+}
+
+/**
+ * Effective SEA shipment status on grouped list rows (`shipment_base` / `filtered_shipments`).
+ * Mirrors deriveShipmentStatus — granular ATA tiers for Shipments module.
+ */
+export function shipmentEffectiveStatusExpr(alias: string): string {
+  const f = alias
+  return `(
+    CASE
+      WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
+      WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS TRUE THEN 'COMPLETED'
+      WHEN ${f}.ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'
+      WHEN ${f}.ata_vessel_start_discharging IS NOT NULL THEN 'UNLOADING'
+      WHEN ${f}.ata_vessel_berthed_at_discharge_port IS NOT NULL THEN 'BERTHED_DP'
+      WHEN ${f}.ata_vessel_arrive_at_discharge_port IS NOT NULL THEN 'ARRIVED_DP'
+      WHEN ${f}.ata_vessel_sailed_from_loading_port IS NOT NULL THEN 'SAILED'
+      WHEN ${f}.ata_vessel_completed_loading IS NOT NULL THEN 'COMPLETED_LOADING'
+      WHEN ${f}.ata_vessel_start_loading IS NOT NULL THEN 'LOADING'
+      WHEN ${f}.ata_vessel_berthed_at_loading_port IS NOT NULL THEN 'BERTHED_LP'
+      WHEN ${f}.ata_vessel_arrival_at_loading_port IS NOT NULL THEN 'ARRIVED_LP'
+      WHEN ${shipmentHasAnyEtaExpr(f)} THEN 'PLANNED'
+      ELSE 'UNPLANNED'
+    END
+  )`
+}
+
+/** Statuses that contribute to ETA Loading buckets (matches shipmentsPageDerivedData). */
+export function shipmentLoadingEtaPhaseExpr(alias: string): string {
+  return `${shipmentEffectiveStatusExpr(alias)} IN (${sqlQuoteStatusList(SHIPMENT_LOADING_ETA_PHASE_STATUSES)})`
+}
+
+/** Statuses that contribute to ETA Discharge buckets (matches shipmentsPageDerivedData). */
+export function shipmentDischargeEtaPhaseExpr(alias: string): string {
+  return `${shipmentEffectiveStatusExpr(alias)} IN (${sqlQuoteStatusList(SHIPMENT_DISCHARGE_ETA_PHASE_STATUSES)})`
+}
+
+/** Filter list rows by derived status (matches deriveShipmentStatus / shipmentEffectiveStatusExpr). */
+export function appendShipmentStatusFilter(
+  statusParam: string | undefined,
+  startIndex: number
+): { sql: string; params: unknown[]; nextIndex: number } {
+  const resolved = resolveShipmentStatusFilterParam(statusParam)
+  if (!resolved) {
+    return { sql: '', params: [], nextIndex: startIndex }
+  }
+
+  return {
+    sql: ` AND ${shipmentEffectiveStatusExpr('sb')} = $${startIndex}`,
+    params: [resolved],
+    nextIndex: startIndex + 1,
+  }
+}
+
+/** Section 2 ETA summary scope when a status card is active (toolbar scope unchanged). */
+export function appendShipmentScopeStatusFilter(
+  scopeStatusParam: string | undefined,
+  startIndex: number
+): { sql: string; params: unknown[]; nextIndex: number } {
+  const resolved = resolveShipmentStatusFilterParam(scopeStatusParam)
+  if (!resolved) {
+    return { sql: '', params: [], nextIndex: startIndex }
+  }
+
+  return {
+    sql: ` AND ${shipmentEffectiveStatusExpr('sb')} = $${startIndex}`,
+    params: [resolved],
+    nextIndex: startIndex + 1,
+  }
+}
+
 export function appendShipmentEtaBucketFilters(
   etaLoading: string | null,
   etaDischarge: string | null
@@ -382,10 +538,10 @@ export function appendShipmentEtaBucketFilters(
 
   const parts: string[] = []
   if (etaLoading) {
-    parts.push(` AND (${loadingBucket}) = '${etaLoading}'`)
+    parts.push(` AND ${shipmentLoadingEtaPhaseExpr('sb')} AND (${loadingBucket}) = '${etaLoading}'`)
   }
   if (etaDischarge) {
-    parts.push(` AND (${dischargeBucket}) = '${etaDischarge}'`)
+    parts.push(` AND ${shipmentDischargeEtaPhaseExpr('sb')} AND (${dischargeBucket}) = '${etaDischarge}'`)
   }
 
   return { sql: parts.join(''), params: [], nextIndex: 0 }

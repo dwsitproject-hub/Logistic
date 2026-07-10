@@ -2,6 +2,7 @@ import * as cron from 'node-cron';
 import { ExcelImportService } from './excelImport.service';
 import logger from '../utils/logger';
 import { FinanceMaterializedViewService } from './financeMaterializedView.service';
+import { PipelineDailySummaryService } from './pipelineDailySummary.service';
 
 export interface ScheduledImport {
   id: string;
@@ -62,6 +63,15 @@ export class SchedulerService {
         config: {
           type: 'logistics_overview',
           description: 'Daily evening import of Logistics Overview data'
+        }
+      },
+      {
+        name: 'Pipeline Daily Summary Refresh',
+        schedule: '0 6 * * *', // 6:00 AM JKT — pre-aggregate Trucking + Shipments pipeline cards
+        isActive: true,
+        config: {
+          type: 'pipeline_daily_summary',
+          description: 'Refresh trucking/shipment pipeline daily summary tables'
         }
       }
     ];
@@ -158,6 +168,19 @@ export class SchedulerService {
         case 'logistics_overview':
           result = await ExcelImportService.importLogisticsOverview();
           break;
+        case 'pipeline_daily_summary':
+          await PipelineDailySummaryService.refreshAll();
+          await import('./contractQtyMoveSnapshot.service').then(({ ContractQtyMoveSnapshotService }) =>
+            ContractQtyMoveSnapshotService.refreshAll(),
+          );
+          await import('./contractStoAggSnapshot.service').then(({ ContractStoAggSnapshotService }) =>
+            ContractStoAggSnapshotService.refreshAll(),
+          );
+          await import('./contractLatestSpdSnapshot.service').then(({ ContractLatestSpdSnapshotService }) =>
+            ContractLatestSpdSnapshotService.refreshAll(),
+          );
+          result = { success: true, totalRecords: 0, processedRecords: 0, failedRecords: 0 };
+          break;
         default:
           throw new Error(`Unknown import type: ${importSchedule.config.type}`);
       }
@@ -185,6 +208,16 @@ export class SchedulerService {
       // Keep finance MV in sync with new SAP rows without blocking the scheduler.
       setImmediate(() => {
         FinanceMaterializedViewService.refreshContractPaymentDates().catch(() => {});
+        PipelineDailySummaryService.refreshAll().catch(() => {});
+        import('./contractQtyMoveSnapshot.service')
+          .then(({ ContractQtyMoveSnapshotService }) => ContractQtyMoveSnapshotService.refreshAll())
+          .catch(() => {});
+        import('./contractStoAggSnapshot.service')
+          .then(({ ContractStoAggSnapshotService }) => ContractStoAggSnapshotService.refreshAll())
+          .catch(() => {});
+        import('./contractLatestSpdSnapshot.service')
+          .then(({ ContractLatestSpdSnapshotService }) => ContractLatestSpdSnapshotService.refreshAll())
+          .catch(() => {});
       });
       
     } catch (error) {

@@ -1,18 +1,41 @@
 import express from 'express';
+import multer from 'multer';
 import {
   getContracts,
   getUnassignedCounts,
   getContract,
   getContractStoInformation,
+  getContractLogisticsStoDetail,
   getContractActivityLog,
   getB2bPartiesForContract,
   getContractFilterIncoterms,
+  getContractFilterGroupPlants,
+  getContractFilterB2bFlags,
+  getLatePerformance,
+  getLatePerformanceSummary,
+  getLatePerformanceTree,
+  getLatePerformanceData,
+  getDistinctBuyers,
   createContract,
   updateContract,
+  bulkUpdateCargoReadiness,
 } from '../controllers/contract.controller';
 import { createContractRemark, getContractRemarks } from '../controllers/remarks.controller';
 import { authenticateToken, authorize } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
+
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok =
+      /\.(csv|xlsx|xls)$/i.test(file.originalname) ||
+      ['text/csv', 'application/vnd.ms-excel',
+       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+       'application/octet-stream', 'text/plain'].includes(file.mimetype);
+    cb(null, ok);
+  },
+});
 
 const router = express.Router();
 
@@ -49,8 +72,15 @@ router.use(authenticateToken);
  *         description: Contracts retrieved successfully
  */
 router.get('/', getContracts);
+router.get('/late-performance/summary', getLatePerformanceSummary);
+router.get('/late-performance/tree', getLatePerformanceTree);
+router.get('/late-performance/data', getLatePerformanceData);
+router.get('/late-performance', getLatePerformance);
 router.get('/filter-options/incoterms', getContractFilterIncoterms);
+router.get('/filter-options/group-plants', getContractFilterGroupPlants);
+router.get('/filter-options/b2b-flags', getContractFilterB2bFlags);
 router.get('/unassigned-counts', getUnassignedCounts);
+router.get('/buyers', getDistinctBuyers);
 
 /**
  * @swagger
@@ -73,6 +103,7 @@ router.get('/unassigned-counts', getUnassignedCounts);
  *         description: Contract not found
  */
 router.get('/:id/sto-information', getContractStoInformation);
+router.get('/:id/logistics-sto-detail', getContractLogisticsStoDetail);
 router.get('/:id/activity-log', getContractActivityLog);
 router.get('/:id/remarks', getContractRemarks);
 router.post('/:id/remarks', createContractRemark);
@@ -137,6 +168,7 @@ router.get('/:id', getContract);
  *         description: Contract created successfully
  */
 router.post('/', authorize('ADMIN', 'TRADING'), auditLog('CREATE', 'CONTRACT'), createContract);
+router.post('/bulk-cargo-readiness', authorize('ADMIN', 'TRADING'), csvUpload.single('file'), auditLog('UPDATE', 'CONTRACT'), bulkUpdateCargoReadiness);
 
 /**
  * @swagger

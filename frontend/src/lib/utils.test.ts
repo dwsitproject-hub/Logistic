@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatNumber, formatRupiah, toKgFromMt, formatKgFromMt } from './utils';
+import { formatNumber, formatRupiah, toKgFromMt, formatKgFromMt, formatOutstandingQtyMtFromKg } from './utils';
 
 describe('formatNumber', () => {
   it('formats integers with grouping (positive)', () => {
@@ -24,6 +24,20 @@ describe('formatRupiah', () => {
 
   it('non-finite becomes zero (negative)', () => {
     expect(formatRupiah(Number.NaN)).toBe('Rp. 0');
+  });
+});
+
+describe('formatOutstandingQtyMtFromKg', () => {
+  it('shows +MT for over-delivery (negative kg)', () => {
+    expect(formatOutstandingQtyMtFromKg(-2500)).toBe('+2.5 MT');
+  });
+
+  it('shows MT without minus for remaining outstanding (positive kg)', () => {
+    expect(formatOutstandingQtyMtFromKg(1500)).toBe('1.5 MT');
+  });
+
+  it('shows zero MT for fully delivered', () => {
+    expect(formatOutstandingQtyMtFromKg(0)).toBe('0 MT');
   });
 });
 

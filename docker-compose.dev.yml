@@ -30,7 +30,7 @@ services:
       - ./backend/.env
     environment:
       NODE_ENV: development
-      PORT: 5001
+      PORT: 5002
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: klip_db
@@ -39,8 +39,9 @@ services:
       JWT_SECRET: dev-secret-change-in-production
       JWT_EXPIRES_IN: 7d
       # GEMINI_API_KEY is loaded from env_file (backend/.env); do not hardcode keys here
+      # ANTHROPIC_API_KEY: optional — AI Shipment Planner (Claude) on Add New Shipment
     ports:
-      - "5001:5001"
+      - "5002:5002"
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,10 +60,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.dev
       args:
-        NEXT_PUBLIC_API_URL: http://backend:5001/api
+        NEXT_PUBLIC_API_URL: http://backend:5002/api
     container_name: klip-frontend-dev
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:5001/api
+      NEXT_PUBLIC_API_URL: http://localhost:5002/api
     ports:
       - "3001:3001"
     depends_on:

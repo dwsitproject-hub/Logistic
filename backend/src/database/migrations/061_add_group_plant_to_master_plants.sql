@@ -1,0 +1,2 @@
+ALTER TABLE master_plants
+  ADD COLUMN IF NOT EXISTS group_plant VARCHAR(255);

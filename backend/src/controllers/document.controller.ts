@@ -1,17 +1,15 @@
 import { Request, Response } from 'express';
-import path from 'path';
 import fs from 'fs';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { scanFileWithClamdIfConfigured } from '../services/clamScan.service';
+import {
+  ensureUploadDir,
+  resolveUploadAbsolutePath,
+  toRelativeUploadPath,
+} from '../utils/fileUpload';
 
-export const ensureUploadDir = () => {
-  const uploadDir = path.join(process.cwd(), 'uploads');
-  if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-  }
-  return uploadDir;
-};
+export { ensureUploadDir };
 
 export const listDocuments = async (req: Request, res: Response) => {
   try {
@@ -68,13 +66,15 @@ export const uploadDocumentHandler = async (req: Request, res: Response) => {
       });
     }
 
+    const relativePath = toRelativeUploadPath(file.path);
+
     const insert = await query(
       `INSERT INTO documents (document_type, file_name, file_path, file_size, mime_type, contract_id, shipment_id, payment_id, trucking_operation_id, description)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [
         document_type || 'OTHER',
         file.originalname,
-        file.path.replace(/\\/g, '/'),
+        relativePath,
         file.size,
         file.mimetype,
         contract_id || null,
@@ -86,8 +86,19 @@ export const uploadDocumentHandler = async (req: Request, res: Response) => {
     );
 
     return res.json({ success: true, data: insert.rows[0], message: 'Document uploaded successfully' });
-  } catch (error) {
+  } catch (error: unknown) {
     logger.error('Upload document error:', error);
+    const pgCode = (error as { code?: string })?.code;
+    const pgDetail = (error as { detail?: string })?.detail;
+    if (pgCode === '23514') {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Invalid document type for this upload',
+          detail: pgDetail,
+        },
+      });
+    }
     return res.status(500).json({ success: false, error: { message: 'Failed to upload document' } });
   }
 };
@@ -100,7 +111,7 @@ export const downloadDocument = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: { message: 'Document not found' } });
     }
     const doc = result.rows[0];
-    const absPath = path.isAbsolute(doc.file_path) ? doc.file_path : path.join(process.cwd(), doc.file_path);
+    const absPath = resolveUploadAbsolutePath(doc.file_path);
     if (!fs.existsSync(absPath)) {
       return res.status(404).json({ success: false, error: { message: 'File not found on server' } });
     }

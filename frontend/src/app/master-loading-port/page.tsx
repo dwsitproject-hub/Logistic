@@ -1,13 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
-import { Plus, Upload, Edit2 } from 'lucide-react'
+import { Plus, Upload, Edit2, Trash2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -42,9 +43,11 @@ export default function MasterLoadingPortPage() {
   const [items, setItems] = useState<MasterLoadingPort[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [editing, setEditing] = useState<MasterLoadingPort | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [form, setForm] = useState<Partial<MasterLoadingPort>>({})
+  const [isAdmin, setIsAdmin] = useState(false)
   const [uploadResult, setUploadResult] = useState<{
     total: number
     success: number
@@ -54,27 +57,35 @@ export default function MasterLoadingPortPage() {
     errors: Array<{ row: number; port: string; reason: string }>
   } | null>(null)
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async (searchQuery: string) => {
     try {
       setLoading(true)
       const params = new URLSearchParams()
-      if (search.trim().length >= 2) {
-        params.set('search', search.trim())
+      if (searchQuery.length >= 2) {
+        params.set('search', searchQuery)
       }
       const res = await api.get('/master-loading-ports', { params })
       setItems(res.data?.data?.items || [])
     } catch (err) {
       console.error('Failed to load master loading ports', err)
-      alert('Failed to load master loading ports')
+      alert('Failed to load master ports')
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
-    fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    try {
+      const u = JSON.parse(localStorage.getItem('user') || 'null')
+      setIsAdmin(String(u?.role || '').toUpperCase() === 'ADMIN')
+    } catch {
+      setIsAdmin(false)
+    }
   }, [])
+
+  useEffect(() => {
+    void fetchData(debouncedSearch)
+  }, [debouncedSearch, fetchData])
 
   const openNew = () => {
     setEditing(null)
@@ -143,10 +154,10 @@ export default function MasterLoadingPortPage() {
       setEditing(null)
       setForm({})
       setIsFormOpen(false)
-      fetchData()
+      void fetchData(debouncedSearch)
     } catch (err: any) {
       console.error('Save master loading port error', err)
-      const msg = err?.response?.data?.error?.message || 'Failed to save master loading port'
+      const msg = err?.response?.data?.error?.message || 'Failed to save master port'
       alert(msg)
     }
   }
@@ -265,12 +276,26 @@ export default function MasterLoadingPortPage() {
           errors: [],
         })
       }
-      fetchData()
+      void fetchData(debouncedSearch)
     } catch (err) {
       console.error('Upload master loading port file error', err)
-      alert('Failed to parse or upload file. Please upload CSV exported from Master Loading Port.xlsx')
+      alert('Failed to parse or upload file. Please upload CSV exported from Master Port.xlsx')
     } finally {
       e.target.value = ''
+    }
+  }
+
+  const handleDelete = async (p: MasterLoadingPort) => {
+    if (!isAdmin) return
+    const ok = confirm(`Delete loading port?\n\n${p.port}`)
+    if (!ok) return
+    try {
+      await api.delete(`/master-loading-ports/${p.id}`)
+      await fetchData(debouncedSearch)
+    } catch (err: any) {
+      console.error('Delete master loading port error', err)
+      const msg = err?.response?.data?.error?.message || 'Failed to delete master port'
+      alert(msg)
     }
   }
 
@@ -279,9 +304,9 @@ export default function MasterLoadingPortPage() {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Master Loading Port</h1>
+            <h1 className="text-3xl font-bold text-gray-900">Master Port</h1>
             <p className="text-gray-600 mt-2">
-              Maintain reference data for loading ports used in shipments.
+              Maintain reference data for ports used in shipments.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -315,9 +340,6 @@ export default function MasterLoadingPortPage() {
                 onChange={(e) => setSearch(e.target.value)}
                 className="max-w-sm"
               />
-              <Button variant="outline" size="sm" onClick={fetchData} disabled={loading}>
-                Apply
-              </Button>
             </div>
           </CardContent>
         </Card>
@@ -325,7 +347,7 @@ export default function MasterLoadingPortPage() {
         {isFormOpen && (
           <Card>
             <CardHeader>
-              <CardTitle>{editing ? 'Edit Loading Port' : 'New Loading Port'}</CardTitle>
+              <CardTitle>{editing ? 'Edit Port' : 'New Port'}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -351,26 +373,26 @@ export default function MasterLoadingPortPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Masuk Alur</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Channel Access</label>
                   <select
                     className="border rounded-md px-3 py-2 w-full text-sm"
                     value={form.masuk_alur || ''}
                     onChange={(e) => handleChange('masuk_alur', e.target.value || null)}
                   >
                     <option value="">Select...</option>
-                    <option value="Ya">Ya</option>
-                    <option value="Tidak">Tidak</option>
+                    <option value="Ya">Yes</option>
+                    <option value="Tidak">No</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Lebar Alur</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Channel Width</label>
                   <Input
                     value={form.lebar_alur || ''}
                     onChange={(e) => handleChange('lebar_alur', e.target.value)}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Jumlah Jembatan</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Bridge Count</label>
                   <Input
                     type="number"
                     value={form.jumlah_jembatan ?? ''}
@@ -380,26 +402,26 @@ export default function MasterLoadingPortPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Jenis Port</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Port Type</label>
                   <select
                     className="border rounded-md px-3 py-2 w-full text-sm"
                     value={form.jenis_port || ''}
                     onChange={(e) => handleChange('jenis_port', e.target.value || null)}
                   >
                     <option value="">Select...</option>
-                    <option value="Umum">Umum</option>
+                    <option value="Umum">General</option>
                     <option value="TUKS">TUKS</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Pemilik Port</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Port Owner</label>
                   <Input
                     value={form.pemilik_port || ''}
                     onChange={(e) => handleChange('pemilik_port', e.target.value)}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Antri Muat (hari)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Loading Queue (days)</label>
                   <Input
                     type="number"
                     value={form.antri_muat_hari ?? ''}
@@ -409,7 +431,7 @@ export default function MasterLoadingPortPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Jumlah Demaraga</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Berth Count</label>
                   <Input
                     type="number"
                     value={form.jumlah_demaraga ?? ''}
@@ -419,7 +441,7 @@ export default function MasterLoadingPortPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Panjang Demaraga</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Berth Length</label>
                   <Input
                     value={form.panjang_demaraga || ''}
                     onChange={(e) => handleChange('panjang_demaraga', e.target.value)}
@@ -440,7 +462,7 @@ export default function MasterLoadingPortPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Siklus Pasang</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Tide Cycle</label>
                   <Input
                     value={form.siklus_pasang || ''}
                     onChange={(e) => handleChange('siklus_pasang', e.target.value)}
@@ -493,13 +515,13 @@ export default function MasterLoadingPortPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Master Loading Port List</CardTitle>
+            <CardTitle>Master Port List</CardTitle>
           </CardHeader>
           <CardContent>
             {loading ? (
               <div className="py-8 text-center text-gray-500">Loading...</div>
             ) : items.length === 0 ? (
-              <div className="py-8 text-center text-gray-500">No loading ports found</div>
+              <div className="py-8 text-center text-gray-500">No ports found</div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
@@ -508,17 +530,17 @@ export default function MasterLoadingPortPage() {
                       <th className="text-left px-3 py-2 font-medium">Region</th>
                       <th className="text-left px-3 py-2 font-medium">Port</th>
                       <th className="text-left px-3 py-2 font-medium">Coordinate</th>
-                      <th className="text-left px-3 py-2 font-medium">Masuk Alur</th>
-                      <th className="text-left px-3 py-2 font-medium">Lebar Alur</th>
-                      <th className="text-left px-3 py-2 font-medium">Jumlah Jembatan</th>
-                      <th className="text-left px-3 py-2 font-medium">Jenis Port</th>
-                      <th className="text-left px-3 py-2 font-medium">Pemilik Port</th>
-                      <th className="text-left px-3 py-2 font-medium">Antri Muat (hari)</th>
-                      <th className="text-left px-3 py-2 font-medium">Jumlah Demaraga</th>
-                      <th className="text-left px-3 py-2 font-medium">Panjang Demaraga</th>
+                      <th className="text-left px-3 py-2 font-medium">Channel Access</th>
+                      <th className="text-left px-3 py-2 font-medium">Channel Width</th>
+                      <th className="text-left px-3 py-2 font-medium">Bridge Count</th>
+                      <th className="text-left px-3 py-2 font-medium">Port Type</th>
+                      <th className="text-left px-3 py-2 font-medium">Port Owner</th>
+                      <th className="text-left px-3 py-2 font-medium">Loading Queue (days)</th>
+                      <th className="text-left px-3 py-2 font-medium">Berth Count</th>
+                      <th className="text-left px-3 py-2 font-medium">Berth Length</th>
                       <th className="text-left px-3 py-2 font-medium">Draft</th>
                       <th className="text-left px-3 py-2 font-medium">DWT</th>
-                      <th className="text-left px-3 py-2 font-medium">Siklus Pasang</th>
+                      <th className="text-left px-3 py-2 font-medium">Tide Cycle</th>
                       <th className="text-left px-3 py-2 font-medium">Loading Method</th>
                       <th className="text-left px-3 py-2 font-medium">Loading Rate (Kg/hour)</th>
                       <th className="text-left px-3 py-2 font-medium">Shipper</th>
@@ -546,10 +568,18 @@ export default function MasterLoadingPortPage() {
                         <td className="px-3 py-2">{p.loading_rate_mt_per_hour ?? '-'}</td>
                         <td className="px-3 py-2">{p.shipper || '-'}</td>
                         <td className="px-3 py-2 text-right">
-                          <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
-                            <Edit2 className="h-4 w-4 mr-1" />
-                            Edit
-                          </Button>
+                          <div className="inline-flex gap-2">
+                            <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
+                              <Edit2 className="h-4 w-4 mr-1" />
+                              Edit
+                            </Button>
+                            {isAdmin && (
+                              <Button variant="destructive" size="sm" onClick={() => handleDelete(p)}>
+                                <Trash2 className="h-4 w-4 mr-1" />
+                                Delete
+                              </Button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -563,7 +593,7 @@ export default function MasterLoadingPortPage() {
 
       {/* Upload result dialog */}
       <Dialog open={!!uploadResult} onOpenChange={(open) => !open && setUploadResult(null)}>
-        <DialogContent className="sm:max-w-xl max-h-[85vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-xl max-h-[85vh]">
           <DialogHeader>
             <DialogTitle>Upload result</DialogTitle>
           </DialogHeader>

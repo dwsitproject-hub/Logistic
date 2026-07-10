@@ -33,7 +33,9 @@ import {
 import api from '@/lib/api'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { durationCycleDaysClass } from '@/lib/cycleDaysDisplay'
 import { formatDateDMY } from '@/lib/dateFormat'
+import { formatSapDisplayValue, formatSapGroupDisplayLabel } from '@/lib/sapDisplayValue'
 
 interface DashboardStats {
   contracts: {
@@ -1218,6 +1220,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
     legendMdCols?: 3 | 4
     formatValue?: (v: number) => string
   }) => {
+    const segDisplay = (label: string) => formatSapGroupDisplayLabel(label)
     const total = segments.reduce((s, x) => s + (Number.isFinite(x.value) ? x.value : 0), 0)
     const fmt = (v: number) => (formatValue ? formatValue(v) : formatNumber(v))
     const hasBreakdown = segments.some((s) => !!s.breakdown)
@@ -1240,20 +1243,20 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                 ? ` | OutDel ${fmt(seg.breakdown.outstandingDelivery)} / OutPay ${fmt(seg.breakdown.outstandingPayment)} / ClaimMutu ${fmt(seg.breakdown.outstandingClaimMutu)} / ClaimSusut ${fmt(seg.breakdown.outstandingClaimSusut)} / Done ${fmt(seg.breakdown.completed)}`
                 : ''
               const common = {
-                key: seg.label,
                 className: `${color(seg.tone)} ${clickable ? 'cursor-pointer hover:opacity-90' : ''} border-r border-white/60 last:border-r-0`,
                 style: { width: `${w}%` },
-                title: `${seg.label}: ${fmt(v)} (${pctText(v, total)})${breakdownSuffix}`,
+                title: `${segDisplay(seg.label)}: ${fmt(v)} (${pctText(v, total)})${breakdownSuffix}`,
               } as const
               return clickable ? (
                 <button
+                  key={seg.label}
                   type="button"
                   {...common}
                   onClick={() => onSegmentClick(seg.label)}
-                  aria-label={`Filter: ${seg.label}`}
+                  aria-label={`Filter: ${segDisplay(seg.label)}`}
                 />
               ) : (
-                <div {...common} />
+                <div key={seg.label} {...common} />
               )
             })}
           </div>
@@ -1292,7 +1295,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                   <div className={`grid grid-cols-[minmax(160px,2fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)] gap-3 px-3 py-2.5 text-[11px] ${onSegmentClick ? 'hover:bg-gray-50' : ''}`}>
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`h-2 w-2 rounded-full ${dot} shrink-0`} />
-                      <span className="text-gray-700 font-medium truncate">{seg.label}</span>
+                      <span className="text-gray-700 font-medium truncate">{segDisplay(seg.label)}</span>
                       <span className="text-[10px] text-gray-500 tabular-nums shrink-0">({pctText(v, total)})</span>
                     </div>
                     <div className="text-right tabular-nums font-semibold text-gray-900 whitespace-nowrap truncate" title={fmt(v)}>
@@ -1348,7 +1351,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                 <div className={`rounded-md border bg-white px-2 py-2 min-w-0 ${onSegmentClick ? 'hover:bg-gray-50' : ''}`}>
                   <div className="flex items-center gap-2 min-w-0">
                     <span className={`h-2 w-2 rounded-full ${dot} shrink-0`} />
-                    <span className="text-[11px] text-gray-600 leading-snug break-words">{seg.label}</span>
+                    <span className="text-[11px] text-gray-600 leading-snug break-words">{segDisplay(seg.label)}</span>
                   </div>
                   <div className="mt-1 flex items-baseline justify-between gap-2 min-w-0">
                     <span className="text-[11px] font-semibold text-gray-900 tabular-nums whitespace-nowrap">{fmt(v)}</span>
@@ -2619,11 +2622,18 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       ]
 
                       return (
-                        <button
+                        <div
                           key={p.product}
-                          type="button"
+                          role="button"
+                          tabIndex={0}
                           className="w-full text-left p-3.5 rounded-xl border bg-white hover:bg-gray-50 transition-colors shadow-sm"
                           onClick={() => openProductContracts({ product: p.product, title: `${p.product} contracts` })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              openProductContracts({ product: p.product, title: `${p.product} contracts` })
+                            }
+                          }}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-start gap-3 min-w-0">
@@ -2631,7 +2641,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                 {index + 1}
                               </div>
                               <div className="min-w-0">
-                                <div className="font-semibold text-sm truncate text-gray-900">{p.product}</div>
+                                <div className="font-semibold text-sm truncate text-gray-900">{formatSapGroupDisplayLabel(p.product)}</div>
                                 <div className="text-[11px] text-gray-500">
                                   {p.summary.contract_count} contracts • {p.summary.supplier_count} suppliers
                                 </div>
@@ -2782,7 +2792,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                           const open = (extra?: Record<string, string>) =>
                                             openProductContracts({
                                               product: p.product,
-                                              title: `${p.product} — ${incoterm} — ${plantSite} — ${sourceType} — ${ltSpot}`,
+                                              title: `${formatSapGroupDisplayLabel(p.product)} — ${formatSapDisplayValue(incoterm)} — ${formatSapDisplayValue(plantSite)} — ${formatSapDisplayValue(sourceType)} — ${formatSapDisplayValue(ltSpot)}`,
                                               extraParams: {
                                                 incoterm,
                                                 plantSite,
@@ -2793,10 +2803,10 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                             })
                                           return (
                                           <tr key={`${r.product}-${r.incoterm}-${r.plant_site}-${r.source_type}-${r.lt_spot}-${i}`} className="hover:bg-white/60">
-                                            <td className="py-2 pr-3">{incoterm}</td>
-                                            <td className="py-2 pr-3">{plantSite}</td>
-                                            <td className="py-2 pr-3">{sourceType}</td>
-                                            <td className="py-2 pr-3">{ltSpot}</td>
+                                            <td className="py-2 pr-3">{formatSapDisplayValue(incoterm)}</td>
+                                            <td className="py-2 pr-3">{formatSapDisplayValue(plantSite)}</td>
+                                            <td className="py-2 pr-3">{formatSapDisplayValue(sourceType)}</td>
+                                            <td className="py-2 pr-3">{formatSapDisplayValue(ltSpot)}</td>
                                             <td className="py-2 pr-3 text-right tabular-nums">
                                               <button
                                                 type="button"
@@ -2857,7 +2867,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                               </div>
                             </div>
                           )}
-                        </button>
+                        </div>
                       )
                     })
                   })()
@@ -2987,11 +2997,18 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       ]
 
                       return (
-                        <button
+                        <div
                           key={p.product}
-                          type="button"
+                          role="button"
+                          tabIndex={0}
                           className="w-full text-left p-3.5 rounded-xl border bg-white hover:bg-gray-50 transition-colors shadow-sm"
                           onClick={() => openProductContracts({ product: p.product, title: `${p.product} contracts` })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              openProductContracts({ product: p.product, title: `${p.product} contracts` })
+                            }
+                          }}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-start gap-3 min-w-0">
@@ -2999,7 +3016,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                 {index + 1}
                               </div>
                               <div className="min-w-0">
-                                <div className="font-semibold text-sm truncate text-gray-900">{p.product}</div>
+                                <div className="font-semibold text-sm truncate text-gray-900">{formatSapGroupDisplayLabel(p.product)}</div>
                                 <div className="text-[11px] text-gray-500">
                                   {p.summary.contract_count} contracts • {p.summary.supplier_count} suppliers
                                 </div>
@@ -3087,7 +3104,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                               formatValue={(v) => formatRupiah(v)}
                             />
                           </div>
-                        </button>
+                        </div>
                       )
                     })
                   })()
@@ -3195,11 +3212,18 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       }
 
                       return (
-                        <button
+                        <div
                           key={`${p.plant}-${index}`}
-                          type="button"
+                          role="button"
+                          tabIndex={0}
                           className="w-full text-left p-3.5 rounded-xl border bg-white hover:bg-gray-50 transition-colors shadow-sm"
                           onClick={() => openPlantContracts({ plant: p.plant, title: `${p.plant} contracts` })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              openPlantContracts({ plant: p.plant, title: `${p.plant} contracts` })
+                            }
+                          }}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-start gap-3 min-w-0">
@@ -3207,8 +3231,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                 {index + 1}
                               </div>
                               <div className="min-w-0">
-                                <div className="text-sm font-semibold text-gray-900 truncate" title={p.plant}>
-                                  {p.plant}
+                                <div className="text-sm font-semibold text-gray-900 truncate" title={formatSapGroupDisplayLabel(p.plant)}>
+                                  {formatSapGroupDisplayLabel(p.plant)}
                                 </div>
                                 <div className="text-[11px] text-gray-500">
                                   {formatNumber(p.summary.contract_count)} contracts
@@ -3315,7 +3339,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                               formatValue={(v) => formatKg(v)}
                             />
                           </div>
-                        </button>
+                        </div>
                       )
                     })
                   })()
@@ -3489,8 +3513,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Plant Details Modal */}
       {selectedPlant && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
+            <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b bg-white px-6 py-4 mb-4">
               <div>
                 <h2 className="text-xl font-semibold">{selectedPlant.plant_location}</h2>
                 <p className="text-sm text-gray-500">{selectedPlant.contract_count} Contracts</p>
@@ -3553,9 +3577,9 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       {plantDetails.map((detail, idx) => (
                         <tr key={idx} className="hover:bg-gray-50">
                           <td className="px-4 py-3 text-left">{detail.contract_id}</td>
-                          <td className="px-4 py-3 text-left">{detail.sto_number || '-'}</td>
-                          <td className="px-4 py-3 text-left">{detail.supplier}</td>
-                          <td className="px-4 py-3 text-left">{detail.product}</td>
+                          <td className="px-4 py-3 text-left">{formatSapDisplayValue(detail.sto_number)}</td>
+                          <td className="px-4 py-3 text-left">{formatSapDisplayValue(detail.supplier)}</td>
+                          <td className="px-4 py-3 text-left">{formatSapDisplayValue(detail.product)}</td>
                           <td className="px-4 py-3 text-right font-medium">
                             {formatNumber(detail.total_quantity)}
                           </td>
@@ -3586,8 +3610,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Supplier Details Modal */}
       {selectedSupplierName && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white w-full max-w-4xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
+            <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b bg-white px-6 py-4 mb-4">
               <div>
                 <h2 className="text-xl font-semibold">Supplier — {selectedSupplierName}</h2>
               </div>
@@ -3616,8 +3640,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       {supplierContracts.map((c, idx) => (
                         <tr key={idx} className="hover:bg-gray-50">
                           <td className="px-4 py-3">{c.contract_id}</td>
-                          <td className="px-4 py-3">{c.supplier}</td>
-                          <td className="px-4 py-3">{c.product}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(c.supplier)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(c.product)}</td>
                           <td className="px-4 py-3 text-right">{formatNumber(c.total_quantity)}</td>
                         </tr>)
                       )}
@@ -3633,8 +3657,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Trucking Owner Details Modal */}
       {selectedOwnerName && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-5xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white w-full max-w-5xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
+            <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b bg-white px-6 py-4 mb-4">
               <div>
                 <h2 className="text-xl font-semibold">Trucking Owner — {selectedOwnerName}</h2>
               </div>
@@ -3686,8 +3710,8 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Vessel Details Modal */}
       {selectedVesselName && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-5xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white w-full max-w-5xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
+            <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b bg-white px-6 py-4 mb-4">
               <div>
                 <h2 className="text-xl font-semibold">Vessel — {selectedVesselName}</h2>
               </div>
@@ -3737,7 +3761,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Universal Shipments Drilldown Modal (Shipment Performance card) */}
       {shipDrilldownTitle && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
             <div className="flex items-start justify-between mb-4 gap-4">
               <div className="min-w-0">
                 <h2 className="text-xl font-semibold truncate">{shipDrilldownTitle}</h2>
@@ -3785,12 +3809,12 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       {shipDrilldownRows.map((s) => (
                         <tr key={s.id} className="hover:bg-gray-50">
                           <td className="px-4 py-3">
-                            {s.sto_number || s.operation_id || s.shipment_id || '-'}
+                            {formatSapDisplayValue(s.sto_number || s.operation_id || s.shipment_id)}
                           </td>
-                          <td className="px-4 py-3">{s.vessel_name || '-'}</td>
-                          <td className="px-4 py-3">{s.port_of_loading || '-'}</td>
-                          <td className="px-4 py-3">{s.port_of_discharge || '-'}</td>
-                          <td className="px-4 py-3">{s.contract_id || '-'}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(s.vessel_name)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(s.port_of_loading)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(s.port_of_discharge)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(s.contract_id)}</td>
                           <td className="px-4 py-3">{formatDate(s.delivery_end_date)}</td>
                           <td className="px-4 py-3 text-center">
                             <span
@@ -3802,11 +3826,11 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                     : 'bg-gray-100 text-gray-800'
                               }`}
                             >
-                              {s.late_indicator || '-'}
+                              {formatSapDisplayValue(s.late_indicator)}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-center">
-                            <Badge>{s.status || '-'}</Badge>
+                            <Badge>{formatSapDisplayValue(s.status)}</Badge>
                           </td>
                         </tr>
                       ))}
@@ -3866,7 +3890,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Universal Trucking Drilldown Modal (Trucking Performance card) */}
       {truckDrilldownTitle && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
             <div className="flex items-start justify-between mb-4 gap-4">
               <div className="min-w-0">
                 <h2 className="text-xl font-semibold truncate">{truckDrilldownTitle}</h2>
@@ -3916,18 +3940,18 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                     <tbody className="divide-y">
                       {truckDrilldownRows.map((t) => (
                         <tr key={t.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3">{t.operation_id || '-'}</td>
-                          <td className="px-4 py-3">{t.sto_number || '-'}</td>
-                          <td className="px-4 py-3">{t.contract_ext_no || '-'}</td>
-                          <td className="px-4 py-3">{t.location || '-'}</td>
-                          <td className="px-4 py-3">{t.trucking_owner || '-'}</td>
-                          <td className="px-4 py-3">{t.contract_id || '-'}</td>
-                          <td className="px-4 py-3">{t.supplier || '-'}</td>
-                          <td className="px-4 py-3">{t.product || '-'}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(t.operation_id)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(t.sto_number)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(t.contract_ext_no)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(t.location)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(t.trucking_owner)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(t.contract_id)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(t.supplier)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(t.product)}</td>
                           <td className="px-4 py-3 text-right tabular-nums">{formatNumber(t.quantity_sent ?? 0)}</td>
                           <td className="px-4 py-3 text-right tabular-nums">{formatNumber(t.quantity_delivered ?? 0)}</td>
                           <td className="px-4 py-3 text-center">
-                            <Badge>{t.status || '-'}</Badge>
+                            <Badge>{formatSapDisplayValue(t.status)}</Badge>
                           </td>
                         </tr>
                       ))}
@@ -3986,7 +4010,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Universal Payments Drilldown Modal (Payment Performance card) */}
       {payDrilldownTitle && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg max-h-[90vh] overflow-y-auto px-6 pb-6">
             <div className="flex items-start justify-between mb-4 gap-4">
               <div className="min-w-0">
                 <h2 className="text-xl font-semibold truncate">{payDrilldownTitle}</h2>
@@ -4059,7 +4083,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       All Plant/Site
                     </Button>
                     {paySelectedPlantSite ? (
-                      <span className="text-xs text-gray-500">Filtered: {paySelectedPlantSite}</span>
+                      <span className="text-xs text-gray-500">Filtered: {formatSapGroupDisplayLabel(paySelectedPlantSite)}</span>
                     ) : null}
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -4076,7 +4100,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                           await fetchPaymentsDrilldownPage(1, q)
                         }}
                       >
-                        <div className="text-[11px] text-gray-500 truncate">{s.plantSite}</div>
+                        <div className="text-[11px] text-gray-500 truncate">{formatSapGroupDisplayLabel(s.plantSite)}</div>
                         <div className="text-sm font-semibold tabular-nums">{money(s.totalContractValue)}</div>
                         <div className="text-[11px] text-gray-500">{formatNumber(s.contracts)} contracts</div>
                       </button>
@@ -4112,13 +4136,13 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                     <tbody className="divide-y">
                       {payDrilldownRows.map((p) => (
                         <tr key={p.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3">{p.contract_id || '-'}</td>
-                          <td className="px-4 py-3">{p.plant_site || '-'}</td>
-                          <td className="px-4 py-3">{p.sto_number || '-'}</td>
-                          <td className="px-4 py-3">{p.contract_ext_no || '-'}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(p.contract_id)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(p.plant_site)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(p.sto_number)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(p.contract_ext_no)}</td>
                           <td className="px-4 py-3 text-right tabular-nums">{money(p.unit_price ?? 0)}</td>
                           <td className="px-4 py-3 text-right tabular-nums">{money(p.contract_value ?? 0)}</td>
-                          <td className="px-4 py-3">{p.invoice_number || '-'}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(p.invoice_number)}</td>
                           <td className="px-4 py-3">{formatDate(p.payment_due_date)}</td>
                           <td className="px-4 py-3">{formatDate(p.dp_date)}</td>
                           <td className="px-4 py-3">{formatDate(p.payoff_date)}</td>
@@ -4128,7 +4152,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                             {money(p.payment_amount ?? 0)}
                           </td>
                           <td className="px-4 py-3 text-center">
-                            <Badge>{p.payment_status || '-'}</Badge>
+                            <Badge>{formatSapDisplayValue(p.payment_status)}</Badge>
                           </td>
                         </tr>
                       ))}
@@ -4210,7 +4234,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       {/* Universal Contracts Drilldown Modal (for performance cards) */}
       {drilldownTitle && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-[96vw] max-w-[96vw] rounded-lg shadow-lg p-4 md:p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white w-[96vw] max-w-[96vw] rounded-lg shadow-lg p-4 md:max-h-[90vh] overflow-y-auto px-6 pb-6">
             <div className="flex items-start justify-between mb-4 gap-4">
               <div className="min-w-0">
                 <h2 className="text-xl font-semibold truncate">{drilldownTitle}</h2>
@@ -4296,16 +4320,16 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                       {drilldownContracts.map((c) => (
                         <tr key={c.id} className="hover:bg-gray-50">
                           <td className="px-4 py-3">{c.contract_id}</td>
-                          <td className="px-4 py-3">{c.contract_ext_no || '-'}</td>
-                          <td className="px-4 py-3">{c.group_name || '-'}</td>
-                          <td className="px-4 py-3">{c.supplier || '-'}</td>
-                          <td className="px-4 py-3">{c.product || '-'}</td>
-                          <td className="px-4 py-3">{c.incoterm || '-'}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(c.contract_ext_no)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(c.group_name)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(c.supplier)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(c.product)}</td>
+                          <td className="px-4 py-3">{formatSapDisplayValue(c.incoterm)}</td>
                           {isManagementDashboard && (
                             <>
-                              <td className="px-4 py-3">{c.plant_site || '-'}</td>
-                              <td className="px-4 py-3">{c.source_type || '-'}</td>
-                              <td className="px-4 py-3">{c.lt_spot || '-'}</td>
+                              <td className="px-4 py-3">{formatSapDisplayValue(c.plant_site)}</td>
+                              <td className="px-4 py-3">{formatSapDisplayValue(c.source_type)}</td>
+                              <td className="px-4 py-3">{formatSapDisplayValue(c.lt_spot)}</td>
                               <td className="px-4 py-3 text-right tabular-nums">{c.total_delay ?? '-'}</td>
                               <td className="px-4 py-3 text-right tabular-nums">{c.cargo_readiness_issue ?? '-'}</td>
                               <td className="px-4 py-3 text-right tabular-nums">{c.aging_os ?? '-'}</td>
@@ -4331,7 +4355,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                           </td>
                           <td className="px-4 py-3 text-center">
                             <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium bg-gray-100 text-gray-800">
-                              {c.status || '-'}
+                              {formatSapDisplayValue(c.status)}
                             </span>
                           </td>
                         </tr>
@@ -4537,10 +4561,10 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                               {formatNumber(g.qtyOutstanding)}
                             </button>
                           </td>
-                          <td className="px-4 py-3 text-right tabular-nums">
+                          <td className={`px-4 py-3 text-right tabular-nums font-semibold ${durationCycleDaysClass(g.weightedAvgDeliveryDays)}`}>
                             {g.weightedAvgDeliveryDays != null ? formatNumber(Math.round(g.weightedAvgDeliveryDays)) : '-'}
                           </td>
-                          <td className="px-4 py-3 text-right tabular-nums">
+                          <td className={`px-4 py-3 text-right tabular-nums font-semibold ${durationCycleDaysClass(g.weightedAvgPaymentDays)}`}>
                             {g.weightedAvgPaymentDays != null ? formatNumber(Math.round(g.weightedAvgPaymentDays)) : '-'}
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums">
@@ -4648,7 +4672,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
 
       {claimDrilldownKind && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-[96vw] max-w-[96vw] rounded-lg shadow-lg p-4 md:p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white w-[96vw] max-w-[96vw] rounded-lg shadow-lg p-4 md:max-h-[90vh] overflow-y-auto px-6 pb-6">
             <div className="flex items-start justify-between mb-4 gap-4">
               <div className="min-w-0">
                 <h2 className="text-xl font-semibold truncate">

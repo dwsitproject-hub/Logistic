@@ -1,0 +1,1461 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KLIP Glossary — KPN Logistics Intelligence Platform</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --accent: #1d4ed8;
+      --accent-soft: #eff6ff;
+      --code-bg: #f1f5f9;
+      --warn-bg: #fffbeb;
+      --warn-border: #fcd34d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    header {
+      background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
+      color: #fff;
+      padding: 2rem 1.5rem;
+    }
+    header h1 { margin: 0 0 0.25rem; font-size: 1.75rem; }
+    header p { margin: 0; opacity: 0.85; max-width: 52rem; }
+    .layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 1.5rem;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      nav.toc { position: static; }
+    }
+    nav.toc {
+      position: sticky;
+      top: 1rem;
+      align-self: start;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      font-size: 0.9rem;
+    }
+    nav.toc h2 {
+      margin: 0 0 0.75rem;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    nav.toc ul { list-style: none; padding: 0; margin: 0; }
+    nav.toc li { margin: 0.35rem 0; }
+    nav.toc a { color: var(--accent); text-decoration: none; }
+    nav.toc a:hover { text-decoration: underline; }
+    nav.toc .sub { padding-left: 1rem; font-size: 0.85rem; }
+    main section {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem 1.75rem;
+      margin-bottom: 1.25rem;
+    }
+    main h2 {
+      margin: 0 0 1rem;
+      font-size: 1.35rem;
+      border-bottom: 2px solid var(--accent-soft);
+      padding-bottom: 0.5rem;
+    }
+    main h3 {
+      margin: 1.5rem 0 0.75rem;
+      font-size: 1.05rem;
+      color: #1e293b;
+    }
+    main h4 { margin: 1rem 0 0.5rem; font-size: 0.95rem; }
+    p { margin: 0.5rem 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      margin: 0.75rem 0 1rem;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.65rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #f1f5f9; font-weight: 600; }
+    code, .formula {
+      font-family: Consolas, "Courier New", monospace;
+      background: var(--code-bg);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+      font-size: 0.88em;
+    }
+    .formula { display: inline-block; margin: 0.25rem 0; }
+    .note {
+      background: var(--warn-bg);
+      border: 1px solid var(--warn-border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      margin: 1rem 0;
+      font-size: 0.92rem;
+    }
+    .tag {
+      display: inline-block;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      margin-right: 0.35rem;
+    }
+    ul { margin: 0.5rem 0; padding-left: 1.25rem; }
+    li { margin: 0.35rem 0; }
+    footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.8rem;
+      padding: 2rem 1rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>KLIP Glossary</h1>
+    <p>KPN Logistics Intelligence Platform — istilah, rumus, dan aturan kalkulasi untuk tim bisnis &amp; teknis. Route: <code>/contract-performance</code>, <code>/shipping-performance</code>, <code>/trucking</code>, <code>/oil-loss</code>, <code>/commercial-documents</code>, <code>/ai-klip-agent-activity</code>, dll.</p>
+  </header>
+
+  <div class="layout">
+    <nav class="toc" aria-label="Daftar isi">
+      <h2>Contents</h2>
+      <ul>
+        <li><a href="#umum">Umum</a></li>
+        <li><a href="#logistics-ids">Operation ID &amp; Shipment ID</a>
+          <ul class="sub">
+            <li><a href="#logistics-sto-no">STO No</a></li>
+            <li><a href="#logistics-shipment-id">Shipment ID</a></li>
+            <li><a href="#logistics-operation-id">Operation ID</a></li>
+            <li><a href="#logistics-grouping">Prioritas grouping</a></li>
+            <li><a href="#logistics-contoh">Contoh skenario</a></li>
+          </ul>
+        </li>
+        <li><a href="#contract-performance">Contract Performance</a>
+          <ul class="sub">
+            <li><a href="#cp-primitif">Hari kalender</a></li>
+            <li><a href="#cp-outstanding">Outstanding Qty</a></li>
+            <li><a href="#cp-trade">Trade Cycle</a></li>
+            <li><a href="#cp-dp-cash-log">DP / Cash / Log Cycle</a></li>
+            <li><a href="#cp-avg">Avg Trade / DP / Log</a></li>
+            <li><a href="#cp-ontime">On Time / Late</a></li>
+            <li><a href="#cp-sumber">Sumber data</a></li>
+          </ul>
+        </li>
+        <li><a href="#shipping-performance">Shipping Performance</a>
+          <ul class="sub">
+            <li><a href="#sp-scope">Scope &amp; filter</a></li>
+            <li><a href="#sp-dates">ETA / ATA</a></li>
+            <li><a href="#sp-cycles">Cycle deltas</a></li>
+            <li><a href="#sp-qty">Quantity</a></li>
+            <li><a href="#sp-outstanding">Outstanding Qty</a></li>
+            <li><a href="#sp-cards">Section 1 cards</a></li>
+            <li><a href="#sp-ontime">On Time / Late</a></li>
+            <li><a href="#sp-section23">Section 2 &amp; 3</a></li>
+          </ul>
+        </li>
+        <li><a href="#oil-loss">Oil Loss</a>
+          <ul class="sub">
+            <li><a href="#oil-loss-eligibility">Eligibility</a></li>
+            <li><a href="#oil-loss-section1">Section 1 — R1–R4</a></li>
+            <li><a href="#oil-loss-period">Filter Period</a></li>
+            <li><a href="#oil-loss-truck">Transport: Truck</a></li>
+            <li><a href="#oil-loss-vessel">Transport: Vessel</a></li>
+            <li><a href="#oil-loss-enrich">Shipment &amp; Trucking</a></li>
+            <li><a href="#oil-loss-r4">R4 Total (MT)</a></li>
+            <li><a href="#oil-loss-section3">Section 3 tabel</a></li>
+            <li><a href="#oil-loss-sap">Rekonsiliasi SAP</a></li>
+          </ul>
+        </li>
+        <li><a href="#operation-trucking">Operation Trucking</a>
+          <ul class="sub">
+            <li><a href="#trucking-planning-vs-actual">Planning vs Realisasi</a></li>
+            <li><a href="#trucking-schema">Skema &amp; extension tables</a></li>
+            <li><a href="#trucking-status">Status efektif</a></li>
+            <li><a href="#trucking-outstanding">Outstanding Qty (MT)</a></li>
+            <li><a href="#trucking-modals">Add / Edit Trucking</a></li>
+            <li><a href="#trucking-calendar">Calendar &amp; CSV</a></li>
+            <li><a href="#trucking-api">API realization</a></li>
+          </ul>
+        </li>
+        <li><a href="#sap-klip-input">SAP Upload &amp; Input KLIP</a>
+          <ul class="sub">
+            <li><a href="#sap-klip-prinsip">Prinsip umum</a></li>
+            <li><a href="#sap-klip-aktivitas">Aktivitas KLIP</a></li>
+            <li><a href="#sap-klip-shipment">Field Shipment dilindungi</a></li>
+            <li><a href="#sap-klip-trucking">Field Trucking dilindungi</a></li>
+            <li><a href="#sap-klip-merge">Aturan merge</a></li>
+            <li><a href="#sap-klip-contoh">Contoh perilaku</a></li>
+            <li><a href="#sap-klip-lain">Di luar cakupan</a></li>
+          </ul>
+        </li>
+        <li><a href="#ai-klip-agent">AI Klip Agent</a>
+          <ul class="sub">
+            <li><a href="#ai-klip-overview">Ringkasan &amp; menu</a></li>
+            <li><a href="#ai-klip-shipment-planner">Shipment Planner (Add Shipment)</a></li>
+            <li><a href="#ai-klip-vessel-suggest">Saran vessel &amp; port</a></li>
+            <li><a href="#ai-klip-eta-suggest">Saran semua ETA</a></li>
+            <li><a href="#ai-klip-charter">Charter type</a></li>
+            <li><a href="#ai-klip-chat">KLIP Agent AI (Chat)</a></li>
+            <li><a href="#ai-klip-activity-log">Activity Log</a></li>
+            <li><a href="#ai-klip-cache">Pattern cache</a></li>
+          </ul>
+        </li>
+        <li><a href="#referensi">Referensi file</a></li>
+      </ul>
+    </nav>
+
+    <main>
+      <section id="umum">
+        <h2>Umum</h2>
+        <p><strong>Oil Loss</strong> — selisih negatif antara kuantitas yang diterima (<em>Qty Receive</em>) dan yang dikirim/delivery (<em>Qty Delivery</em>) pada kontrak/STO yang sudah <em>Close</em>.</p>
+        <p><strong>Contract Date</strong> — tanggal kontrak untuk filter periodik; prioritas dari tabel <code>contracts.contract_date</code>, fallback SAP raw <code>Contract Date</code>.</p>
+        <p><strong>MT</strong> — Metric Ton. Data qty disimpan dalam <strong>Kg</strong> di sistem; tampilan UI Oil Loss dibagi 1000 (2 desimal).</p>
+        <p><strong>Calendar days</strong> — selisih tanggal dalam hari kalender utuh (bukan jam kerja). Dipakai di Contract Performance &amp; Shipping Performance: <span class="formula">hari = tanggal akhir − tanggal awal</span>. Nilai positif = milestone kedua lebih lambat dari yang pertama.</p>
+        <p><strong>Open vs Close (kontrak)</strong> — status dari SAP <code>import_status</code> (fallback <code>contracts.status</code>). Open = kontrak belum selesai; Close = selesai. Aturan cycle berbeda untuk Open dan Close.</p>
+        <p><strong>LAND vs SEA</strong> — mode transport kontrak menentukan sumber tanggal completion: LAND → <code>trucking_operations</code>; SEA → <code>shipments</code> + <code>vessel_loading_ports</code>.</p>
+      </section>
+
+      <section id="logistics-ids">
+        <h2>Operation ID, Shipment ID &amp; STO No <span class="tag">Shipments · Contracts</span></h2>
+        <p>Tiga identifier ini sering muncul bersama di halaman <strong>Shipments</strong>, <strong>Trucking</strong>, dan modal <strong>Contract Detail → Logistics Information</strong>. Masing-masing punya peran berbeda; jangan disamakan.</p>
+
+        <h3 id="logistics-sto-no">STO No</h3>
+        <p><strong>Nomor dokumen STO resmi dari SAP.</strong> Disimpan di <code>contracts.sto_number</code> dan ditampilkan sebagai kolom <em>STO No</em> di UI.</p>
+        <ul>
+          <li>Muncul setelah SAP upload atau ketika SAP sudah menetapkan STO ke kontrak/shipment.</li>
+          <li>Merupakan referensi bisnis ke dokumen SAP (bukan ID internal KLIP).</li>
+          <li>Pada shipment manual yang belum dapat STO dari SAP, kolom <em>STO No</em> seharusnya <strong>kosong</strong> (<code>—</code>) — bukan diisi Operation ID.</li>
+        </ul>
+
+        <h3 id="logistics-shipment-id">Shipment ID</h3>
+        <p><strong>Identitas unik per baris shipment</strong> di tabel <code>shipments.shipment_id</code> (constraint unik di database). Satu contract dalam satu operasi biasanya punya satu baris → satu Shipment ID.</p>
+        <table>
+          <thead>
+            <tr><th>Sumber</th><th>Format contoh</th><th>Arti</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>SAP upload</td><td><code>1586004692</code></td><td>Nomor STO/delivery dari SAP — sering sama dengan STO No</td></tr>
+            <tr><td>Add New Shipment (tanpa STO)</td><td><code>MNL-12345678-1004030411</code></td><td>ID internal per contract; prefix <code>MNL-</code> / <code>MSEA-</code></td></tr>
+            <tr><td>Add New Shipment (dengan STO)</td><td><code>1586004692-1004030411</code></td><td><code>{STO}-{contract_id}</code></td></tr>
+          </tbody>
+        </table>
+        <p>Setelah SAP import, <code>shipment_id</code> dapat diselaraskan ke nomor STO numerik SAP. Shipment ID tidak selalu ditampilkan sebagai kolom terpisah di Contract Detail, tetapi dipakai internal untuk join dan upsert.</p>
+
+        <h3 id="logistics-operation-id">Operation ID</h3>
+        <p><strong>Identitas transaksi / operasi perencanaan KLIP</strong> — mengelompokkan beberapa contract yang direncanakan dalam <em>satu aksi</em> (satu vessel, satu rencana trucking). Kolom: <code>shipments.operation_id</code> dan <code>trucking_operations.operation_id</code>.</p>
+        <table>
+          <thead>
+            <tr><th>Sumber</th><th>Format contoh</th><th>Arti</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Add New Shipment (modal UI)</td><td><code>OP-1004030411-87654321</code></td><td><code>OP-{contractId}-{timestamp}</code> — dibagi ke semua contract dalam operasi yang sama</td></tr>
+            <tr><td>Add New Shipment (API backend)</td><td><code>OP-SEA-030620260001</code></td><td><code>OP-SEA-{DDMMYYYY}{urutan}</code> jika belum ada STO</td></tr>
+            <tr><td>Add New Trucking</td><td><code>OP-LAND-030620260001</code></td><td><code>OP-LAND-{DDMMYYYY}{urutan}</code></td></tr>
+          </tbody>
+        </table>
+        <ul>
+          <li><strong>Satu Operation ID</strong> → bisa beberapa baris shipment (multi-contract, satu vessel).</li>
+          <li>Dipakai sebagai <strong>kunci grup</strong> di daftar Shipments/Trucking ketika <strong>belum ada STO</strong> dari SAP.</li>
+          <li>Menandakan data direncanakan user lewat KLIP, bukan nomor dokumen SAP.</li>
+        </ul>
+
+        <h3 id="logistics-grouping">Prioritas grouping (<code>sto_key</code>)</h3>
+        <p>Halaman Shipments (dan banyak query agregasi) memilih kunci grup dengan urutan:</p>
+        <p class="formula">sto_key = COALESCE(contracts.sto_number, SAP effective_sto, operation_id, shipment_id)</p>
+        <table>
+          <thead>
+            <tr><th>Urutan</th><th>Kondisi</th><th>Kunci grup</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>STO sudah ada di contract / SAP</td><td><strong>STO No</strong></td></tr>
+            <tr><td>2</td><td>Belum ada STO (manual / planned)</td><td><strong>Operation ID</strong></td></tr>
+            <tr><td>3</td><td>Fallback</td><td><strong>Shipment ID</strong></td></tr>
+          </tbody>
+        </table>
+
+        <h4>Perbandingan singkat</h4>
+        <table>
+          <thead>
+            <tr><th></th><th>Operation ID</th><th>Shipment ID</th><th>STO No</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Asal</strong></td><td>KLIP (user planning)</td><td>KLIP atau SAP</td><td>SAP</td></tr>
+            <tr><td><strong>Cakupan</strong></td><td>Satu transaksi (multi-contract)</td><td>Satu baris shipment</td><td>Satu dokumen STO SAP</td></tr>
+            <tr><td><strong>Kapan terisi</strong></td><td>Saat Add New / Edit</td><td>Saat create shipment / SAP import</td><td>Saat SAP assign STO</td></tr>
+            <tr><td><strong>Contract Detail</strong></td><td>Kolom Operation ID</td><td>Tidak selalu kolom terpisah</td><td>Kolom STO No</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="logistics-contoh">Contoh skenario</h3>
+        <table>
+          <thead>
+            <tr><th>Skenario</th><th>STO No</th><th>Operation ID</th><th>Shipment ID</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Plan dulu via Add New Shipment (2 contract, vessel sama), SAP belum ada</td>
+              <td>Kosong</td>
+              <td>Sama, mis. <code>OP-SEA-030620260001</code></td>
+              <td>Bedah per contract: <code>MNL-…-1004030411</code>, <code>MNL-…-1004030412</code></td>
+            </tr>
+            <tr>
+              <td>SAP upload mengirim STO <code>1586004692</code></td>
+              <td><code>1586004692</code></td>
+              <td>Bisa masih ada dari planning awal</td>
+              <td><code>1586004692</code> (atau diselaraskan ke angka STO)</td>
+            </tr>
+            <tr>
+              <td>Contract <code>1004030411</code> hanya di-plan, belum ada STO SAP</td>
+              <td><code>—</code> (null)</td>
+              <td>Terisi (mis. <code>OP-SEA-…</code>)</td>
+              <td><code>MNL-…-1004030411</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Contract Detail → Logistics Information:</strong> jika belum ada STO SAP, tabel STO hanya menampilkan <em>Operation ID</em> pada kolom Operation ID; kolom <em>STO No</em> tetap kosong (<code>—</code>). Operation ID <strong>bukan</strong> pengganti STO No di kolom yang sama. API <code>GET /contracts/:id/sto-information</code> memetakan STO No hanya dari <code>contracts.sto_number</code> / SAP effective STO — tidak fallback ke <code>sto_key</code> / Operation ID.
+        </div>
+      </section>
+
+      <section id="contract-performance">
+        <h2>Contract Performance <span class="tag">/contract-performance</span></h2>
+        <p>Halaman ini memakai komponen yang sama dengan daftar kontrak (<code>/contracts</code>) dengan mode performance. <strong>Semua cycle dihitung di backend</strong> (<code>GET /api/contracts</code> + <code>GET /api/contracts/late-performance/summary</code>); frontend hanya menampilkan.</p>
+
+        <h3 id="cp-primitif">Primitif hari kalender</h3>
+        <p>Fungsi <code>diffCalendarDays(start, end)</code> = selisih hari kalender dari <em>start</em> ke <em>end</em>. Jika salah satu tanggal kosong → nilai <code>null</code> (tidak dihitung).</p>
+        <p><strong>Due Date Delivery End</strong> — anchor trade cycle. Prioritas: <code>contracts.delivery_end_date</code> → SAP <code>Due Date Delivery (End)</code>. Tanpa due end → kontrak dikecualikan dari agregasi Section 1/2.</p>
+
+        <h3 id="cp-outstanding">Outstanding Qty</h3>
+        <p>Sisa kuantitas yang belum terpenuhi menurut incoterm:</p>
+        <table>
+          <thead>
+            <tr><th>Incoterm</th><th>Qty yang dikurangi dari Contract Qty</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>FRC, CIF, CFR</strong></td><td><code>Quantity Receive</code> (SAP, agregat per kontrak)</td></tr>
+            <tr><td><strong>LCO, FOB</strong></td><td><code>Quantity Delivery</code> (SAP)</td></tr>
+            <tr><td><strong>Lainnya</strong></td><td><code>total_sto_quantity</code> — jumlah <code>sto_quantity</code> unik dari SAP</td></tr>
+          </tbody>
+        </table>
+        <p><span class="formula">Outstanding = quantity_ordered − qty_fulfilled</span> (Kg di API; UI kolom MT = ÷ 1000).</p>
+        <div class="note">
+          <strong>Section 1 (kartu Open)</strong> memakai <code>Math.max(0, outstanding)</code> — tidak negatif.<br>
+          <strong>Section 3 (tabel)</strong> boleh negatif = <em>Over Delivered</em> (sudah terkirim melebihi order).
+        </div>
+        <p><strong>Close card</strong> di Section 1 menampilkan <em>Contract Qty</em> (jumlah <code>quantity_ordered</code>), bukan outstanding.</p>
+
+        <h3 id="cp-trade">Trade Cycle (<code>trade_cycle_days</code>)</h3>
+        <p>Mengukur keterlambatan penyelesaian terhadap <strong>Due Date Delivery End</strong>. Positif = terlambat; ≤ 0 = on time (atau lebih cepat).</p>
+
+        <h4>Close — LAND</h4>
+        <p><span class="formula">Trade Cycle = diffCalendarDays(dueEnd, last_trucking_completion)</span></p>
+        <p><code>last_trucking_completion</code> = <code>MAX</code> dari: <code>trucking_completion_date</code>, SAP Trucking Last Receive, <code>eta_trucking_completion_date</code>, <code>eta_delivery_end_date</code>.</p>
+
+        <h4>Close — SEA</h4>
+        <p><span class="formula">Trade Cycle = diffCalendarDays(dueEnd, last_ata_vessel_complete_discharge)</span></p>
+        <p>Completion = <code>MAX</code> dari: <code>ata_discharge_complete</code>, <code>arrival_date</code>, <code>eta_discharge_complete</code> pada shipment kontrak.</p>
+
+        <h4>Open — Condition A (Standard ETA ada)</h4>
+        <table>
+          <thead>
+            <tr><th>Mode</th><th>Standard ETA</th><th>Completion untuk trade</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>LAND</td><td><code>MAX(eta_trucking_completion, eta_delivery_end)</code></td><td><code>last_trucking_daily_deliverable_date</code> (MAX tanggal dari JSON daily deliverables)</td></tr>
+            <tr><td>SEA</td><td>ETA vessel arrival port loading pertama</td><td><code>last_eta_vessel_complete_discharge</code></td></tr>
+          </tbody>
+        </table>
+        <p><span class="formula">Trade Cycle = diffCalendarDays(dueEnd, completion)</span></p>
+
+        <h4>Open — Condition B (Standard ETA kosong)</h4>
+        <p><span class="formula">Trade Cycle = diffCalendarDays(dueEnd, today)</span> — hari ini vs due end.</p>
+        <ul>
+          <li><strong>Late</strong> jika <code>tradeCycle ≥ 0</code> (hari ini sudah melewati atau sama dengan due end)</li>
+          <li><strong>On Time</strong> jika <code>tradeCycle &lt; 0</code> — <em>0 hari = Late</em> di Condition B</li>
+        </ul>
+        <p>Open tanpa transport valid → trade cycle dipaksa <code>-1</code> (On Time).</p>
+
+        <h3 id="cp-dp-cash-log">DP Cycle, Cash Cycle, Log Cycle</h3>
+        <p>Tanggal finansial hanya dari <strong>SAP</strong> (bukan tabel <code>payments</code>) untuk perhitungan cycle.</p>
+        <table>
+          <thead>
+            <tr><th>Cycle</th><th>Tanggal kunci</th><th>Close (LAND)</th><th>Close (SEA)</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>DP Cycle</strong></td>
+              <td>SAP <code>DP Date</code></td>
+              <td><code>diff(last_trucking_completion, dpDate)</code></td>
+              <td><code>diff(last_ata_discharge, dpDate)</code></td>
+            </tr>
+            <tr>
+              <td><strong>Cash Cycle</strong></td>
+              <td>SAP <code>Payoff Date</code></td>
+              <td><code>diff(last_trucking_completion, payoffDate)</code></td>
+              <td><code>diff(last_ata_discharge, payoffDate)</code></td>
+            </tr>
+            <tr>
+              <td><strong>Log Cycle</strong></td>
+              <td><code>cargo_readiness_date</code></td>
+              <td><code>diff(cargo_readiness, last_trucking_completion)</code></td>
+              <td><code>diff(cargo_readiness, last_ata_discharge)</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <p><strong>Open</strong> DP / Cash / Log: <span class="formula">diff(anchor_date, effectiveCompletionEnd)</span></p>
+        <ul>
+          <li>Standard ETA <strong>kosong</strong> → completion end = <strong>hari ini</strong></li>
+          <li>Standard ETA <strong>ada</strong> → LAND: daily deliverable terakhir; SEA: ETA complete discharge (wajib ada, tanpa substitusi today)</li>
+        </ul>
+        <p>Jika DP Date / Payoff / Cargo Readiness / completion tidak lengkap → cycle = <code>null</code> (UI: <em>- days</em>).</p>
+
+        <h3 id="cp-avg">Avg Trade, Avg DP, Avg Log (Section 1)</h3>
+        <p>Dari <code>GET /contracts/late-performance/summary</code>. Hanya kontrak dengan <strong>Due Date Delivery End</strong> ter-resolve. Terpisah untuk kartu <strong>Open</strong> dan <strong>Close</strong>.</p>
+        <table>
+          <thead>
+            <tr><th>Metrik</th><th>Rumus</th><th>Catatan</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Avg Trade</strong></td>
+              <td><code>ROUND( Σ|tradeCycle| / jumlah kontrak )</code></td>
+              <td>Semua kontrak dengan trade cycle terhitung</td>
+            </tr>
+            <tr>
+              <td><strong>Avg DP</strong></td>
+              <td><code>ROUND( Σ dpCycle / jumlah )</code></td>
+              <td>Hanya kontrak dengan DP cycle non-null; jika 0 kontrak → <em>- days</em></td>
+            </tr>
+            <tr>
+              <td><strong>Avg Log</strong></td>
+              <td><code>ROUND( Σ logCycle / jumlah )</code></td>
+              <td>Hanya kontrak dengan log cycle non-null</td>
+            </tr>
+          </tbody>
+        </table>
+        <p><strong>Konteks warna kartu Open:</strong> merah (late context) jika rata-rata <em>signed</em> trade cycle &gt; 0.</p>
+        <p>Interpretasi bisnis (help text UI): Open Avg Trade = ETA vs Due End; Open Avg DP = ETA completion vs DP Date; Open Avg Log = ETA completion vs Cargo Readiness. Close memakai ATA sebagai completion.</p>
+
+        <h3 id="cp-ontime">On Time / Late</h3>
+        <table>
+          <thead>
+            <tr><th>Status</th><th>On Time jika</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Close</strong></td><td><code>trade_cycle_days ≤ 0</code></td></tr>
+            <tr><td><strong>Open, Condition A</strong> (ETA ada)</td><td><code>trade_cycle_days ≤ 0</code></td></tr>
+            <tr><td><strong>Open, Condition B</strong> (ETA kosong)</td><td><code>trade_cycle_days &lt; 0</code> (0 hari = Late)</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Persentase kartu Section 1:</strong></p>
+        <p><span class="formula">On Time % = round( onTimeCount / (onTimeCount + lateCount) × 100 )</span></p>
+        <p><span class="formula">Late % = round( lateCount / (onTimeCount + lateCount) × 100 )</span></p>
+        <p><strong>Section 2 drilldown:</strong> pohon Late = kontrak dengan <code>contract_perf_on_time = false</code>; On Time = sebaliknya. <strong>Unscheduled:</strong> Close dengan trade cycle null.</p>
+        <p><strong>Section 3 filter</strong> <code>lateOnTimeFilter=LATE|ON_TIME</code> memfilter baris tabel sesuai klasifikasi di atas.</p>
+        <p><strong>Over / Under Delivery</strong> (Close): Outstanding &lt; 0 → Over Delivery; &gt; 0 → Under Delivery; = 0 → Passed. Open → "-".</p>
+        <p><strong>Contract Aging</strong> = hari dari hari ini ke Due Date Delivery End (merah jika overdue).</p>
+        <p><strong>Urgent flag</strong> (merah): due start dalam ≤ 14 hari dan baris logistik wajib masih kosong (SEA: tanpa shipment/STO; LAND: tanpa trucking; MIX: salah satu leg kosong).</p>
+
+        <h3 id="cp-sumber">Sumber data (SAP + operasional)</h3>
+        <table>
+          <thead>
+            <tr><th>Kebutuhan</th><th>Sumber utama</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Qty Receive / Delivery</td><td><code>sap_processed_data</code> (CTE qty movement)</td></tr>
+            <tr><td>Due dates, DP, Payoff, status</td><td>SAP raw / <code>latest_spd_data</code></td></tr>
+            <tr><td>Trucking completion</td><td><code>trucking_operations</code> (planning) + <code>trucking_realizations</code> / SAP AV/AW (realisasi) — lihat <a href="#operation-trucking">Operation Trucking</a></td></tr>
+            <tr><td>Vessel ATA / ETA</td><td><code>shipments</code>, <code>vessel_loading_ports</code></td></tr>
+            <tr><td>Cargo readiness</td><td><code>contracts.cargo_readiness_date</code></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="shipping-performance">
+        <h2>Shipping Performance <span class="tag">/shipping-performance</span></h2>
+        <p>Fokus pada shipment <strong>SEA</strong> dan <strong>MIX</strong> (<code>contracts.transport_mode</code>). <strong>Tidak memakai</strong> tabel <code>trucking_operations</code>. Cycle dihitung per baris shipment di backend SQL; kartu &amp; drilldown di frontend.</p>
+
+        <h3 id="sp-scope">Scope &amp; filter</h3>
+        <ul>
+          <li>Transport: <code>SEA</code> atau <code>MIX</code> (default SEA jika kosong)</li>
+          <li>Status <code>UNPLANNED</code> selalu dikecualikan dari semua section</li>
+          <li>Filter global: incoterm, plant, product, vessel, status, contract date, search</li>
+          <li>Shipments &amp; Shipping Performance: filter <strong>transport mode SEA/MIX</strong>. Trucking: filter <strong>transport mode LAND</strong> saja (tanpa filter STO Type).</li>
+        </ul>
+
+        <h3 id="sp-dates">Resolusi tanggal ETA / ATA</h3>
+        <p><strong>ETR (anchor loading):</strong> <code>contracts.cargo_readiness_date</code></p>
+        <p>Prioritas port-level dari <code>vessel_loading_ports</code> (port loading pertama &amp; discharge pertama), fallback kolom ETA/ATA pada <code>shipments</code>.</p>
+        <table>
+          <thead>
+            <tr><th>Milestone</th><th>Loading (ETA / ATA)</th><th>Discharge (ETA / ATA)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Arrival</td><td><code>eta_vessel_arrival</code> / <code>ata_vessel_arrival</code></td><td><code>eta_vessel_arrive_at_discharge_port</code> / <code>ata_vessel_arrival</code></td></tr>
+            <tr><td>Berthed</td><td><code>eta_vessel_berthed_at_loading_port</code> / <code>ata_vessel_berthed</code></td><td><code>eta_vessel_berthed_at_discharge_port</code> / <code>ata_vessel_berthed</code></td></tr>
+            <tr><td>Completed</td><td><code>eta_loading_completed</code> / <code>ata_loading_completed</code></td><td><code>eta_vessel_complete_discharge</code> / <code>ata_loading_completed</code> (discharge leg)</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="sp-cycles">Cycle deltas (hari bertanda)</h3>
+        <p>Setiap segmen = selisih hari kalender. <strong>Positif = late / delay</strong>; <strong>≤ 0 = on time atau ahead</strong>.</p>
+        <table>
+          <thead>
+            <tr><th>Field</th><th>Rumus (ETA)</th><th>Varian ATA (kartu Close)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Loading ETA−ETR</td><td><code>loading_eta_arrival − cargo_readiness_date</code></td><td><code>ata_loading_eta_etr</code></td></tr>
+            <tr><td>Loading ETA−ETB</td><td><code>loading_eta_arrival − loading_eta_berthed</code></td><td>ATA berthed loading</td></tr>
+            <tr><td>Loading ETB−ETC</td><td><code>loading_eta_berthed − loading_eta_completed</code></td><td>ATA loading complete</td></tr>
+            <tr><td>Discharge ETA−ETB</td><td><code>discharge_eta_arrival − discharge_eta_berthed</code></td><td>ATA discharge</td></tr>
+            <tr><td>Discharge ETB−ETC</td><td><code>discharge_eta_berthed − discharge_eta_completed</code></td><td>ATA discharge complete</td></tr>
+            <tr><td><strong>Total</strong></td><td colspan="2">Jumlah 5 segmen; segmen null dihitung sebagai <strong>0</strong></td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="sp-qty">Quantity per shipment</h3>
+        <table>
+          <thead>
+            <tr><th>Metrik</th><th>Rumus</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>STO Qty</strong></td><td><code>COALESCE(sap_sto_qty, contracts.sto_quantity, 0)</code></td></tr>
+            <tr><td><strong>Received Qty</strong></td><td>Incoterm FRC/CIF/CFR → SAP Receive; LCO/FOB → SAP Delivered; else prioritas SAP; fallback <code>actual_vessel_qty_receive</code>, <code>bl_quantity</code></td></tr>
+            <tr><td><strong>Delivered Qty</strong></td><td>SAP Quantity Delivered (agregat per shipment)</td></tr>
+            <tr><td><strong>Outstanding Qty</strong></td><td>Lihat <a href="#sp-outstanding">Outstanding Qty (MT)</a></td></tr>
+          </tbody>
+        </table>
+        <p>Join SAP: <code>sto_number</code> / raw <code>STO No.</code> / <code>STO Number</code> ↔ shipment <code>shipment_id</code> / <code>operation_id</code> / <code>contracts.sto_number</code>.</p>
+
+        <h3 id="sp-outstanding">Outstanding Qty (MT) — kolom tabel &amp; agregasi</h3>
+        <p>
+          Dihitung <strong>per baris shipment</strong> di backend SQL (<code>shippingPerformance.service.ts</code>).
+          Basis kuantitas bukan <em>Contract Qty</em> global, melainkan <strong>STO Qty</strong> pada leg shipment tersebut.
+          Nilai disimpan <strong>Kg</strong> di API; kolom tabel &amp; view <em>By Vessel</em> ditampilkan dalam <strong>MT</strong> (÷ 1000).
+        </p>
+        <p><span class="formula">Outstanding Qty = GREATEST(STO Qty − fulfilled_qty, 0)</span></p>
+        <table>
+          <thead>
+            <tr><th>Langkah</th><th>Definisi</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>STO Qty</strong> (<code>sto_qty</code>)</td>
+              <td><code>COALESCE(sap_sto_quantity, contracts.sto_quantity, 0)</code> — SAP dijumlahkan per shipment dari <code>contract.sto_quantity</code> / <code>shipment.sto_quantity</code> / raw <code>STO Quantity</code></td>
+            </tr>
+            <tr>
+              <td><strong>fulfilled_qty</strong></td>
+              <td>Bergantung incoterm kontrak (lihat tabel di bawah)</td>
+            </tr>
+            <tr>
+              <td><strong>Floor nol</strong></td>
+              <td><code>GREATEST(…, 0)</code> — tidak pernah negatif; over-delivery ditampilkan sebagai <strong>0</strong> (berbeda dari Contract Performance yang boleh negatif)</td>
+            </tr>
+          </tbody>
+        </table>
+        <table>
+          <thead>
+            <tr><th>Incoterm</th><th>Qty yang dikurangi dari STO Qty</th><th>Sumber SAP (per shipment)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>FRC, CIF, CFR</strong></td><td><code>Quantity Receive</code></td><td><code>sa.quantity_receive</code> — SUM raw <code>Quantity Receive</code> / <code>Qty Receive</code></td></tr>
+            <tr><td><strong>LCO, FOB</strong></td><td><code>Quantity Delivered</code></td><td><code>sa.quantity_delivered_sap</code> — SUM raw <code>Quantity Delivered</code> / <code>Quantity Delivery</code></td></tr>
+            <tr>
+              <td><strong>Lainnya</strong></td>
+              <td>Prioritas: SAP Receive → SAP Delivered → fallback shipment</td>
+              <td><code>COALESCE(quantity_receive, quantity_delivered_sap, actual_vessel_qty_receive, bl_quantity, 0)</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Perbedaan vs Contract Performance:</strong> halaman kontrak memakai <code>quantity_ordered</code> (contract-level) dan agregat SAP per kontrak (<code>qty_move</code>).
+          Shipping Performance memakai <strong>STO Qty per shipment</strong> dan SAP yang di-join ke shipment lewat STO key
+          (<code>shipment_id</code> / <code>operation_id</code> / <code>contracts.sto_number</code>).
+        </div>
+        <p><strong>Penggunaan di UI:</strong></p>
+        <ul>
+          <li><strong>Section 3 — kolom Outstanding Qty</strong>: nilai per shipment (atau <code>SUM</code> pada view <em>By Vessel</em> → label <em>Qty Outstanding (MT)</em>).</li>
+          <li><strong>Section 2 drilldown</strong>: hanya baris dengan <code>outstanding_qty &gt; 0</code> dan status bukan <code>COMPLETED</code>; <code>totalQty</code> tiap node = jumlah outstanding baris eligible.</li>
+          <li><strong>Section 1 kartu</strong>: metrik <code>totalQty</code> internal = <code>SUM(outstanding_qty)</code> baris dalam scope kartu (Kg).</li>
+        </ul>
+
+        <h3 id="sp-cards">Section 1 — Kartu ringkasan</h3>
+        <p>Klasifikasi per <strong>kontrak</strong> (bukan per baris shipment):</p>
+        <table>
+          <thead>
+            <tr><th>Kartu</th><th>Kontrak masuk jika</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>On Going (with ETA)</strong></td><td>Ada minimal 1 shipment dengan salah satu dari 6 ETA; tidak ada ATA pada shipment manapun</td></tr>
+            <tr><td><strong>On Going (no ETA)</strong></td><td>Tidak ada ATA dan tidak ada ETA pada shipment</td></tr>
+            <tr><td><strong>Close</strong></td><td>Ada minimal 1 ATA (6 field ATA) pada shipment kontrak</td></tr>
+          </tbody>
+        </table>
+        <p><strong>6 ETA:</strong> loading arrival/berthed/completed + discharge arrival/berthed/completed (ETA).</p>
+        <p><strong>Metrik kartu:</strong></p>
+        <ul>
+          <li><strong>Total Vessels</strong> = <code>COUNT(DISTINCT vessel_name)</code> pada baris dalam kartu</li>
+          <li><strong>Contracts</strong> = jumlah kontrak unik yang eligible untuk kartu</li>
+          <li><strong>Avg Load / Discharge / Total</strong> = rata-rata delta (1 desimal); baris null dikecualikan dari pembagi</li>
+          <li>Kartu <em>On Going (no ETA)</em> hanya vessel + contract count (tanpa rata-rata cycle)</li>
+          <li>Kartu <strong>Close</strong> memakai field delta <strong>ATA</strong>, bukan ETA</li>
+        </ul>
+
+        <h3 id="sp-ontime">On Time / Late (warna sel)</h3>
+        <p>Bukan SLA 35 hari (itu untuk log cycle di Contract Performance). Aturan Shipping Performance:</p>
+        <p><span class="formula">delta &gt; 0 → Late (merah)</span> · <span class="formula">delta ≤ 0 → On Time / Ahead (hijau)</span></p>
+        <p>Tampilan sel: magnitude absolut + warna dari nilai bertanda.</p>
+
+        <h3 id="sp-section23">Section 2 &amp; 3</h3>
+        <p><strong>Section 2 drilldown</strong> (frontend): Product → Group Plant → Incoterm → Vessel. Bar % = <code>vesselCount_node / vesselCount_kartu × 100</code>.</p>
+        <p><strong>Section 3 tabel</strong> — filter: kartu aktif + drilldown + toolbar.</p>
+        <table>
+          <thead>
+            <tr><th>View</th><th>Agregasi</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Per shipment</td><td>Satu baris per shipment; delta per baris</td></tr>
+            <tr><td>By Vessel</td><td>Qty: <code>SUM</code>; cycle deltas: <code>AVG</code> per vessel; <code>shipment_count</code> = jumlah baris</td></tr>
+          </tbody>
+        </table>
+        <p>Status filter Section 3: Open = PLANNED, IN_PROGRESS, LOADING, IN_TRANSIT, ARRIVED, UNLOADING; Closed = COMPLETED.</p>
+        <p><strong>Vessel History Modal:</strong> On Going vs History; rata-rata hanya ATA untuk shipment Close/Cancelled.</p>
+      </section>
+
+      <section id="oil-loss">
+        <h2>Oil Loss <span class="tag">/oil-loss</span></h2>
+        <p>Halaman menampilkan STO dari <strong>SAP Processed Data</strong> yang memenuhi kriteria loss + eligibility. Terdiri dari Section 1 (summary R1–R4), Section 2 (drilldown), Section 3 (tabel).</p>
+
+        <h3 id="oil-loss-eligibility">Kriteria &amp; eligibility global</h3>
+        <p>Baris masuk pipeline Oil Loss hanya jika <strong>semua</strong> kondisi berikut terpenuhi:</p>
+        <table>
+          <thead>
+            <tr><th>#</th><th>Kondisi</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td><code>Qty Receive &lt; Qty Delivery</code> (ada oil loss)</td></tr>
+            <tr><td>2</td><td>Status = <strong>Close</strong> (case-insensitive)</td></tr>
+            <tr><td>3</td><td>Qty Delivery &amp; Qty Receive valid &amp; numerik (dari SAP raw)</td></tr>
+            <tr><td>4</td><td>Memenuhi kombinasi <strong>Incoterm × Mode</strong> (Vessel atau Truck — lihat di bawah)</td></tr>
+          </tbody>
+        </table>
+        <p>Incoterm: prioritas tabel <code>contracts</code>, fallback SAP. Mode: field SAP <code>SEA / LAND</code> (kosong → default <code>LAND</code>).</p>
+
+        <h3 id="oil-loss-section1">Section 1 — Summary kartu R1–R4</h3>
+        <p>Global bar: <strong>Period</strong> (MTD / YTD / bulan), <strong>Transport</strong> (All / Vessel / Truck), <strong>Product</strong> (All / CPO / PK / POME / SHELL PALM).</p>
+        <p>Setiap kartu menampilkan:</p>
+        <ul>
+          <li><strong>Total (MT)</strong> — jumlah loss Kg semua contract dalam scope ÷ 1000</li>
+          <li><strong>Total (%)</strong> — rata-rata tertimbang % loss berdasarkan Qty Delivery per contract</li>
+        </ul>
+
+        <table>
+          <thead>
+            <tr><th>Kartu</th><th>Rumus loss (per contract, Kg)</th><th>Basis %</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>R1</strong></td><td><code>Qty SFAL − Qty Delivery</code></td><td>Qty Delivery</td></tr>
+            <tr><td><strong>R2</strong></td><td><code>Qty SFBD − Qty SFAL</code></td><td>Qty SFAL</td></tr>
+            <tr><td><strong>R3</strong></td><td><code>Qty Receive − Qty SFBD</code></td><td>Qty SFBD</td></tr>
+            <tr><td><strong>R4</strong></td><td><code>Qty Receive − Qty Delivery</code></td><td>Qty Delivery</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Agregasi per contract</h4>
+        <p>Beberapa baris STO dengan <strong>contract number sama</strong> dijumlahkan dulu (Qty Delivery, Receive, SFAL, SFBD), baru rumus R1–R4 dihitung per group. Group key: <code>contract_number</code> → fallback <code>contract_ext_no</code> → <code>row.id</code>.</p>
+
+        <h3 id="oil-loss-period">Filter Period (MTD, YTD, bulan)</h3>
+        <p>Filter period memakai <strong>Contract Date</strong> (bukan delivery date, receive date, atau due delivery).</p>
+        <table>
+          <thead>
+            <tr><th>Period</th><th>Rentang tanggal</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>MTD</strong></td><td>Tanggal 1 bulan berjalan → hari ini</td></tr>
+            <tr><td><strong>YTD</strong></td><td>1 Januari tahun berjalan → hari ini</td></tr>
+            <tr><td><strong>January … bulan berjalan</strong></td><td>Tanggal 1 bulan tersebut → akhir bulan (atau hari ini jika bulan berjalan)</td></tr>
+          </tbody>
+        </table>
+        <p>Referensi waktu: tanggal lokal browser. Field: <code>contract_date</code>, fallback <code>operation_date</code> (SAP Contract Date).</p>
+
+        <h3 id="oil-loss-truck">Transport = Truck</h3>
+        <table>
+          <thead>
+            <tr><th>Aspek</th><th>Aturan</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Incoterm</td><td><strong>FRC</strong> atau <strong>LCO</strong></td></tr>
+            <tr><td>Mode</td><td><strong>LAND</strong> (SAP <code>SEA / LAND</code>)</td></tr>
+            <tr><td>Transporter (drilldown)</td><td>Truck Transporter dari SAP</td></tr>
+            <tr><td>R4</td><td><code>Σ Qty Receive − Σ Qty Delivery</code> per contract → total semua contract Truck dalam period</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Bukan semua LAND di SAP.</strong> STO LAND dengan incoterm FOB/CIF masuk segment <em>Vessel</em> (jika memenuhi aturan vessel), bukan Truck.
+        </div>
+
+        <h3 id="oil-loss-vessel">Transport = Vessel</h3>
+        <table>
+          <thead>
+            <tr><th>Aspek</th><th>Aturan</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Incoterm</td><td><strong>FOB</strong> atau <strong>CIF</strong></td></tr>
+            <tr><td>Mode</td><td><strong>SEA</strong>, atau <strong>MIX</strong> dengan <strong>STO Type = V</strong></td></tr>
+            <tr><td>Transporter (drilldown)</td><td>Vessel Name dari SAP</td></tr>
+            <tr><td>SFAL / SFBD</td><td>SAP raw → fallback <code>shipments.sfal_qty</code> / <code>sfbd_qty</code></td></tr>
+            <tr><td>R1–R3</td><td>Membutuhkan SFAL/SFBD; contract tanpa qty tersebut di-skip untuk kartu tersebut</td></tr>
+            <tr><td>R4</td><td>Sama seperti Truck: <code>Qty Receive − Qty Delivery</code> (tidak pakai SFAL/SFBD)</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Bukan semua SEA di SAP.</strong> SEA dengan incoterm FRC/LCO tidak masuk Vessel. MIX dengan STO Type selain <code>V</code> (mis. truck leg) tidak masuk Vessel.
+        </div>
+
+        <h3 id="oil-loss-r4">R4 — Total (MT) di card</h3>
+        <p>Langkah kalkulasi (contoh: MTD + Truck + Product All):</p>
+        <ol>
+          <li>Ambil semua baris eligible dari API <code>GET /api/oil-loss</code></li>
+          <li>Filter: Truck (FRC/LCO + LAND), Contract Date dalam MTD, product &amp; staff scope user</li>
+          <li>Kelompokkan per <code>contract_number</code>; jumlahkan Qty Delivery &amp; Qty Receive (Kg)</li>
+          <li>Per group: <span class="formula">lossKg = Σ Receive − Σ Delivery</span> (hanya jika delivery &gt; 0)</li>
+          <li><span class="formula">R4 Total (MT) = Σ lossKg ÷ 1000</span></li>
+        </ol>
+        <p><strong>R4 Total (%)</strong> = rata-rata tertimbang: <code>Σ (Qty Delivery × loss%) ÷ Σ Qty Delivery</code> per contract dalam scope.</p>
+        <p><strong>Avg (MT)</strong> per kartu = <code>totalMt / sampleCount</code>. <strong>Avg (%)</strong> = rata-rata sederhana % per contract (bukan tertimbang).</p>
+
+        <h3 id="oil-loss-enrich">Kombinasi SAP + Shipment + Trucking</h3>
+        <p>Qty Delivery / Receive <strong>hanya dari SAP raw</strong> — tidak dari <code>shipments</code> atau <code>trucking_operations</code>.</p>
+        <p>Enrichment (join opsional, tidak mengubah rumus R4 dasar):</p>
+        <table>
+          <thead>
+            <tr><th>Lookup</th><th>Join key</th><th>Field dipakai</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>shipments_by_sto</code></td><td>STO No (SAP / <code>sto_number</code>)</td><td><code>sfal_qty</code>, <code>sfbd_qty</code> (fallback R1–R3)</td></tr>
+            <tr><td><code>shipments_by_contract</code></td><td><code>contract_number</code></td><td>SFAL/SFBD shipment</td></tr>
+            <tr><td><code>trucking_by_sto</code></td><td><code>operation_id</code> = STO key</td><td><code>trucking_owner</code>, loading/unloading location</td></tr>
+            <tr><td><code>trucking_by_contract</code></td><td><code>contract_id</code></td><td>trucking owner &amp; lokasi</td></tr>
+            <tr><td><code>contracts_latest</code></td><td>contract number</td><td>incoterm, product, plant, contract date</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Label transporter</strong> (drilldown): Vessel → Vessel Name / Vessel Owner; Truck → Truck Transporter / trucking owner DB.</p>
+
+        <h4>Matriks Incoterm × Mode (eligibility)</h4>
+        <table>
+          <thead>
+            <tr><th></th><th>LAND</th><th>SEA</th><th>MIX + STO V</th><th>MIX (bukan V)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>FRC / LCO</strong></td><td>Truck ✓</td><td>✗</td><td>✗</td><td>✗</td></tr>
+            <tr><td><strong>FOB / CIF</strong></td><td>✗</td><td>Vessel ✓</td><td>Vessel ✓</td><td>✗</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="oil-loss-section3">Section 3 — Tabel agregasi</h3>
+        <table>
+          <thead>
+            <tr><th>View</th><th>Grouping</th><th>Oil Loss (Kg / MT)</th><th>Oil Loss (%)</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>All Contract</strong></td>
+              <td>Per contract number (STO dijumlah dulu)</td>
+              <td><code>Σ Receive − Σ Delivery</code></td>
+              <td><code>gain_loss / Σ Delivery × 100</code></td>
+            </tr>
+            <tr>
+              <td><strong>By Transporter</strong></td>
+              <td>Transporter (normalized)</td>
+              <td><code>Σ Receive − Σ Delivery</code> per group</td>
+              <td>Jumlah % R4 per contract dalam group (bukan tertimbang Section 1)</td>
+            </tr>
+            <tr>
+              <td><strong>By Supplier</strong></td>
+              <td>Supplier</td>
+              <td>Sama seperti By Transporter</td>
+              <td>Sama</td>
+            </tr>
+          </tbody>
+        </table>
+        <p><strong>Section 2 drilldown</strong> loss per node = jumlah <em>row-level</em> <code>Receive − Delivery</code> (per baris STO, belum di-agregasi per contract dulu).</p>
+        <p>Baris tabel individual: <span class="formula">loss% = (Receive − Delivery) ÷ Delivery × 100</span> jika Delivery &gt; 0.</p>
+
+        <h3 id="oil-loss-sap">Rekonsiliasi dengan SAP</h3>
+        <p>Di SAP, jika Anda menjumlahkan <code>Qty Receive − Qty Delivery</code> manual, rumusnya <strong>sama</strong> dengan R4. Selisih angka biasanya karena <strong>set baris berbeda</strong>, bukan rumus berbeda.</p>
+        <table>
+          <thead>
+            <tr><th>Penyebab selisih umum</th><th>KLIP</th><th>Cek manual SAP</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Cakupan baris</td><td>Semua contract eligible dalam filter</td><td>Mungkin hanya 1 STO / subset</td></tr>
+            <tr><td>Tanggal</td><td>Contract Date (MTD/YTD)</td><td>Mungkin filter tanggal lain</td></tr>
+            <tr><td>Transport Truck</td><td>FRC/LCO + LAND saja</td><td>Mungkin semua LAND</td></tr>
+            <tr><td>Transport Vessel</td><td>FOB/CIF + SEA atau MIX+V</td><td>Mungkin semua SEA</td></tr>
+            <tr><td>Status</td><td>Close saja</td><td>Mungkin campur Open</td></tr>
+            <tr><td>Staff scope</td><td>Product / group plant user</td><td>Export SAP tanpa scope</td></tr>
+            <tr><td>Agregasi</td><td>Beberapa STO → 1 contract number dijumlah</td><td>Per-baris vs per-contract</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Cara cek di KLIP</strong> (filter sama): Section 2 drilldown total scope ≈ R4 Total; Section 3 view <em>By Contract</em> — jumlahkan kolom <em>Oil Loss (MT)</em>.</p>
+
+        <h3>Sumber quantity</h3>
+        <table>
+          <thead>
+            <tr><th>Field</th><th>Sumber</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Qty Delivery</td><td>SAP: <code>Quantity Delivered</code> / <code>Quantity Delivery</code> / <code>Qty Deliver</code></td></tr>
+            <tr><td>Qty Receive</td><td>SAP: <code>Quantity Receive</code> / <code>Qty Receive</code></td></tr>
+            <tr><td>Qty SFAL</td><td>SAP SFAL → fallback shipment SFAL (Kg)</td></tr>
+            <tr><td>Qty SFBD</td><td>SAP SFBD → fallback shipment SFBD (Kg)</td></tr>
+            <tr><td>Contract Date</td><td><code>contracts.contract_date</code> → SAP Contract Date</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="operation-trucking">
+        <h2>Operation Trucking <span class="tag">/trucking · Contract LAND/MIX</span></h2>
+        <p>
+          Halaman <strong>Trucking</strong> dan modal <strong>Add / Edit Trucking</strong> (dari Contract Page kartu LAND/MIX atau dari tabel Trucking)
+          memisahkan secara ketat data <strong>Planning (ETA / target)</strong> dan <strong>Realisasi (ATA / actual)</strong>.
+          Skema utama <code>trucking_operations</code> <strong>tidak diubah</strong> — realisasi disimpan di tabel extension agar modul lain yang membaca tabel utama tetap aman.
+        </p>
+
+        <h3 id="trucking-planning-vs-actual">Planning vs Realisasi</h3>
+        <table>
+          <thead>
+            <tr><th>Lapisan</th><th>Arti bisnis</th><th>Penyimpanan</th><th>Diisi lewat</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Planning (ETA)</strong></td>
+              <td>Rencana window trucking &amp; qty per hari</td>
+              <td>
+                <code>trucking_operations.trucking_start_date</code>,
+                <code>trucking_completion_date</code>,
+                <code>daily_deliverables</code> (JSONB, qty dalam <strong>Kg</strong>)
+              </td>
+              <td>Add New Trucking, Edit Trucking (bagian planning), tab Calendar mode <em>Planning (ETA)</em>, bulk CSV planning</td>
+            </tr>
+            <tr>
+              <td><strong>Realisasi (ATA)</strong></td>
+              <td>Tanggal mulai/selesai receive aktual &amp; qty harian aktual</td>
+              <td>
+                <code>trucking_realizations</code> (1 baris per operation),
+                <code>trucking_daily_actuals</code> (per tanggal)
+              </td>
+              <td>SAP sync (kolom AV/AW), Edit Trucking (realization dates), tab Calendar mode <em>Actual (ATA)</em>, bulk CSV actuals</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Penting:</strong> Kolom <code>trucking_start_date</code> / <code>trucking_completion_date</code> pada tabel utama sekarang semantiknya = <em>planning window</em>.
+          Tanggal receive di tabel Trucking (kolom <em>Start Receive Date</em> / <em>Last Receive Date</em>) diambil dari lapisan realisasi:
+          <span class="formula">COALESCE(trucking_realizations.*, SAP AV/AW)</span> — bukan dari tanggal planning.
+        </div>
+
+        <h3 id="trucking-schema">Skema &amp; extension tables</h3>
+        <table>
+          <thead>
+            <tr><th>Tabel</th><th>Kolom utama</th><th>Relasi</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>trucking_operations</code></td>
+              <td>Planning dates, <code>daily_deliverables</code>, qty, status DB, <code>operation_id</code>, dll.</td>
+              <td>Tabel utama (tidak di-drop / di-rename)</td>
+            </tr>
+            <tr>
+              <td><code>trucking_realizations</code></td>
+              <td><code>realization_start_date</code>, <code>realization_end_date</code>, <code>source</code> (<code>sap</code> / <code>manual</code>), <code>sap_synced_at</code></td>
+              <td><code>UNIQUE(trucking_operation_id)</code> → FK ke <code>trucking_operations.id</code></td>
+            </tr>
+            <tr>
+              <td><code>trucking_daily_actuals</code></td>
+              <td><code>progress_date</code>, <code>quantity_kg</code>, <code>source</code></td>
+              <td><code>UNIQUE(trucking_operation_id, progress_date)</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Migration: <code>090_trucking_realization_extension_tables.sql</code> — backfill SAP AV/AW ke <code>trucking_realizations</code> tanpa mengubah kolom planning.</p>
+
+        <h3 id="trucking-status">Status efektif (kartu Section 1 &amp; filter tabel)</h3>
+        <p>UI Trucking memakai <strong>effective status</strong> (bukan hanya kolom <code>status</code> DB). Urutan evaluasi:</p>
+        <table>
+          <thead>
+            <tr><th>Status UI</th><th>Kondisi</th><th>Sumber data</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>CANCELLED</strong></td><td><code>t.status = 'CANCELLED'</code></td><td>Kolom status DB</td></tr>
+            <tr><td><strong>Completed</strong></td><td>Realization end date terisi</td><td><code>trucking_realizations</code> → fallback SAP AW</td></tr>
+            <tr><td><strong>In Progress</strong></td><td>Realization start terisi, end masih kosong</td><td><code>trucking_realizations</code> → fallback SAP AV</td></tr>
+            <tr><td><strong>Planned</strong></td><td>Ada <code>daily_deliverables</code> dengan tanggal + qty &gt; 0</td><td>JSON planning di tabel utama</td></tr>
+            <tr><td><strong>Unplanned</strong></td><td>STO dari SAP ada, belum ada planning KLIP</td><td><code>contracts.sto_number</code> / agregasi STO</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          Status <strong>In Progress</strong> dan <strong>Completed</strong> <strong>tidak</strong> diturunkan dari tanggal planning (<code>trucking_start_date</code> / <code>trucking_completion_date</code>).
+          Add New Trucking yang hanya mengisi planning tidak otomatis menjadi In Progress.
+        </div>
+        <p>Baris <strong>Unplanned</strong> dari SAP: tombol <em>Add</em> (bukan Edit) membuka Add New Trucking dalam mode <em>plot</em> — menyimpan planning ke baris STO yang sudah ada via <code>PUT</code>, bukan <code>POST</code> baru.</p>
+
+        <h3 id="trucking-outstanding">Outstanding Qty (MT) — kolom tabel</h3>
+        <p>Outstanding dihitung per incoterm (qty disimpan Kg, tampilan MT):</p>
+        <table>
+          <thead>
+            <tr><th>Incoterm</th><th>Rumus (Kg)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>FRC</strong></td><td><span class="formula">Contract Qty − Received Qty</span></td></tr>
+            <tr><td><strong>LCO</strong></td><td><span class="formula">Contract Qty − Delivered Qty</span></td></tr>
+            <tr><td>Lainnya</td><td>— (tidak ditampilkan)</td></tr>
+          </tbody>
+        </table>
+        <p>Over-delivery (nilai negatif) ditampilkan hijau sebagai <code>+X MT</code>; masih outstanding merah. Tooltip kolom menjelaskan formula per baris (FRC vs LCO).</p>
+
+        <h3 id="trucking-modals">Add New Trucking &amp; Edit Trucking</h3>
+        <h4>Add New Trucking / Plot (Unplanned)</h4>
+        <ul>
+          <li>Wajib: <em>Start Date (Planning)</em>, <em>End Date (Planning)</em>, <em>Quantity per day</em> (MT).</li>
+          <li>Qty per hari didistribusi ke <code>daily_deliverables</code>; hari terakhir mendapat sisa jika total melebihi outstanding.</li>
+          <li>Hanya menulis field <strong>planning</strong> pada <code>trucking_operations</code> — tidak menulis realisasi.</li>
+          <li><strong>Plot mode</strong>: untuk baris Unplanned — <code>PUT /trucking/:id</code> dengan planning saja.</li>
+        </ul>
+        <h4>Edit Trucking</h4>
+        <ul>
+          <li><strong>Planning</strong> (start/end planning, qty/day → <code>daily_deliverables</code>): sama seperti Add, via <code>PUT /trucking/:id</code>.</li>
+          <li><strong>Realisasi</strong>: SAP AV/AW read-only; <em>Realization Start/Last Receive Date</em> dapat di-override manual → <code>PUT /trucking/:id/realization</code>.</li>
+          <li>Section SAP receive dates di modal = referensi SAP; field editable = lapisan realisasi KLIP.</li>
+        </ul>
+
+        <h3 id="trucking-calendar">Daily Planning Deliverables — Calendar</h3>
+        <p>Tab <strong>Daily Planning Deliverables</strong> pada halaman Trucking punya toggle:</p>
+        <table>
+          <thead>
+            <tr><th>Mode UI</th><th>Isi sel grid</th><th>Penyimpanan</th><th>API save / CSV</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Planning (ETA)</strong></td>
+              <td>Qty rencana per hari (input MT, simpan Kg)</td>
+              <td><code>daily_deliverables</code></td>
+              <td><code>PUT …/daily-planning-deliverables</code>, bulk <code>POST …/daily-planning-deliverables/bulk-upload</code></td>
+            </tr>
+            <tr>
+              <td><strong>Actual (ATA)</strong></td>
+              <td>Qty aktual per hari</td>
+              <td><code>trucking_daily_actuals</code></td>
+              <td><code>PUT …/daily-actuals</code>, bulk <code>POST …/daily-actuals/bulk-upload</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Format CSV kedua mode: <code>contract_ext_no, date, quantity_delivered</code> (qty dalam Kg di backend). Validasi due window kontrak tetap berlaku pada mode planning.</p>
+
+        <h3 id="trucking-api">API realization (ringkas)</h3>
+        <table>
+          <thead>
+            <tr><th>Method</th><th>Path</th><th>Fungsi</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>GET</td><td><code>/api/trucking/:id/realization</code></td><td>Planning + realization + <code>daily_actuals</code></td></tr>
+            <tr><td>PUT</td><td><code>/api/trucking/:id/realization</code></td><td>Manual override tanggal realisasi</td></tr>
+            <tr><td>PUT</td><td><code>/api/trucking/:id/daily-actuals</code></td><td>Update qty harian aktual</td></tr>
+            <tr><td>GET</td><td><code>/api/trucking</code></td><td>List — kolom receive date = realisasi; <code>planning_start_date</code> / <code>planning_end_date</code> terpisah</td></tr>
+          </tbody>
+        </table>
+        <p>Reconcile SAP periodik (<code>SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP</code>) menulis ke <code>trucking_realizations</code>, bukan menimpa tanggal planning.</p>
+      </section>
+
+      <section id="sap-klip-input">
+        <h2>SAP Upload &amp; Input KLIP <span class="tag">sapDataDistribution</span></h2>
+        <p>Saat <strong>SAP data upload</strong> (re-import), KLIP menggabungkan data SAP ke baris operasional yang sudah ada. Ada <strong>dua lapisan</strong> perlindungan yang berbeda: perlindungan <em>baris</em> (row) dan perlindungan <em>field</em> (kolom).</p>
+
+        <h3 id="sap-klip-prinsip">Prinsip umum</h3>
+        <table>
+          <thead>
+            <tr><th>Lapisan</th><th>Pertanyaan</th><th>Kebijakan</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Baris (row)</strong></td>
+              <td>Apakah baris shipment/trucking di-cancel atau diganti baris SAP baru?</td>
+              <td>Baris dengan <strong>aktivitas KLIP</strong> tidak di-<code>CANCELLED</code> dan tidak dihapus oleh reconcile duplikat SAP. Upload SAP terbaru tetap menjadi sumber kebenaran untuk baris <em>SAP-only</em> (tanpa aktivitas KLIP).</td>
+            </tr>
+            <tr>
+              <td><strong>Field (kolom)</strong></td>
+              <td>Jika baris yang sama di-update, field mana yang boleh ditiban nilai SAP?</td>
+              <td>Field operasional tertentu yang sudah diinput lewat KLIP <strong>tidak ditiban</strong> SAP selama nilainya sudah terisi. SAP hanya mengisi field kosong pada baris tersebut.</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Upload SAP terbaru = source of truth</strong> untuk kontrak, STO, dan baris operasional yang belum disentuh user. Input manual lewat <em>Add New Shipment</em>, <em>Add New Trucking</em>, atau <em>Edit</em> dilindungi pada field yang tercantum di bawah.
+        </div>
+
+        <h3 id="sap-klip-aktivitas">Apa yang dianggap aktivitas KLIP?</h3>
+        <p>Sistem memeriksa aktivitas KLIP sebelum menerapkan perlindungan field. Jika tidak ada aktivitas KLIP, field mengikuti aturan merge SAP biasa (<code>COALESCE(SAP, existing)</code>).</p>
+
+        <h4>Shipment — <code>hasKlipShipmentActivity</code></h4>
+        <ul>
+          <li><code>shipment_id</code> manual (<code>MNL-*</code> / <code>MSEA-*</code>) dari Add New Shipment</li>
+          <li><code>operation_id</code> terisi (setiap Add New Shipment memiliki ini)</li>
+          <li><code>daily_deliverables</code> tidak kosong</li>
+          <li>Audit log <code>UPDATE</code> pada entity <code>SHIPMENT</code> (mis. Edit Shipment)</li>
+          <li>Ada dokumen terlampir (<code>documents.shipment_id</code>)</li>
+          <li>Ada assignment qty user (<code>user_sto_contract_assignments</code> untuk STO + contract)</li>
+        </ul>
+
+        <h4>Trucking — <code>hasKlipTruckingActivity</code></h4>
+        <ul>
+          <li><code>operation_id</code> terisi (setiap Add New Trucking memiliki ini)</li>
+          <li><code>daily_deliverables</code> tidak kosong</li>
+          <li>Salah satu ETA terisi: <code>eta_trucking_start_date</code>, <code>eta_trucking_completion_date</code>, <code>eta_delivery_start_date</code>, <code>eta_delivery_end_date</code></li>
+          <li>Audit log <code>UPDATE</code> pada entity <code>TRUCKING_OPERATION</code></li>
+        </ul>
+
+        <h3 id="sap-klip-shipment">Field Shipment yang dilindungi dari SAP</h3>
+        <p>Berlaku pada baris dengan aktivitas KLIP. Field di UI Shipments / Add New Shipment / Edit Shipment:</p>
+        <table>
+          <thead>
+            <tr><th>Label UI / bisnis</th><th>Kolom database</th><th>Ditiban SAP?</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Vessel Code</td><td><code>vessel_code</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Vessel Name</td><td><code>vessel_name</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Quantity Delivery</td><td><code>quantity_delivered</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Quantity Receive</td><td><code>actual_vessel_qty_receive</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Loading Port</td><td><code>port_of_loading</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Discharge Port</td><td><code>port_of_discharge</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+          </tbody>
+        </table>
+        <p>Jika field masih kosong/null pada baris aktivitas KLIP, SAP <strong>boleh mengisi</strong> nilai pertama kali.</p>
+
+        <h3 id="sap-klip-trucking">Field Trucking yang dilindungi dari SAP</h3>
+        <p>Berlaku pada baris dengan aktivitas KLIP. Field di UI Trucking / Add New Trucking / Edit Trucking:</p>
+        <table>
+          <thead>
+            <tr><th>Label UI / bisnis</th><th>Kolom database</th><th>Ditiban SAP?</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Loading Location</td><td><code>loading_location</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Unloading Location</td><td><code>unloading_location</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+            <tr><td>Qty Delivery</td><td><code>quantity_delivered</code></td><td>Tidak, jika sudah terisi di KLIP</td></tr>
+          </tbody>
+        </table>
+        <p>Field ETA trucking/delivery (<code>eta_trucking_*</code>, <code>eta_delivery_*</code>), tanggal planning (<code>trucking_start_date</code>, <code>trucking_completion_date</code>), dan <code>daily_deliverables</code> <strong>tidak pernah</strong> di-update oleh SAP upload (terlepas dari aktivitas KLIP). Tanggal receive SAP (AV/AW) ditulis ke <code>trucking_realizations</code> — lihat <a href="#operation-trucking">Operation Trucking</a>.</p>
+
+        <h3 id="sap-klip-merge">Aturan merge SQL</h3>
+        <p>Implementasi di <code>klipSapFieldMerge.ts</code> — dipakai pada <code>upsertShipment</code> dan <code>createTruckingOperation</code> saat SAP distribution:</p>
+        <table>
+          <thead>
+            <tr><th>Kondisi</th><th>Pola merge</th><th>Artinya</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Aktivitas KLIP + field sudah ada nilai</td>
+              <td><span class="formula">COALESCE(existing, SAP)</span></td>
+              <td>Nilai KLIP dipertahankan; SAP tidak menimpa</td>
+            </tr>
+            <tr>
+              <td>Aktivitas KLIP + field masih kosong</td>
+              <td><span class="formula">COALESCE(existing, SAP)</span></td>
+              <td>SAP mengisi field kosong</td>
+            </tr>
+            <tr>
+              <td>Tidak ada aktivitas KLIP (baris SAP-only)</td>
+              <td><span class="formula">COALESCE(SAP, existing)</span></td>
+              <td>SAP menang jika mengirim nilai; re-import SAP memperbarui data operasional</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Port/lokasi: nilai kosong, string kosong, dan placeholder <code>0.00</code> dianggap belum terisi.</p>
+
+        <h3 id="sap-klip-contoh">Contoh perilaku</h3>
+        <table>
+          <thead>
+            <tr><th>Skenario</th><th>Hasil</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Add New Shipment isi vessel <em>MV ABC</em>; SAP upload kirim <em>TK.BERLIAN UTAMA</em></td><td>Vessel tetap <em>MV ABC</em></td></tr>
+            <tr><td>Add New Shipment tanpa vessel; SAP upload kirim vessel lengkap (code + name)</td><td>Vessel diisi dari SAP</td></tr>
+            <tr><td>Edit Shipment mengisi Qty Receive; SAP upload kirim qty berbeda</td><td>Qty Receive KLIP tetap</td></tr>
+            <tr><td>Baris murni dari SAP (belum ada aktivitas KLIP); re-import SAP mengubah qty</td><td>Qty mengikuti SAP terbaru</td></tr>
+            <tr><td>Add New Trucking isi Loading Location; SAP upload kirim lokasi lain</td><td>Loading Location KLIP tetap</td></tr>
+            <tr><td>Dua baris shipment SAP-only pada contract yang sama; upload SAP baru</td><td>Baris lama SAP-only di-<code>CANCELLED</code>; baris dengan aktivitas KLIP tetap aktif</td></tr>
+            <tr><td>Add New Shipment manual (<code>MNL-*</code>) + SAP STO baru tanpa match vessel</td><td>Baris manual tidak di-cancel; SAP dapat membuat baris STO terpisah</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="sap-klip-lain">Di luar cakupan perlindungan field</h3>
+        <p>Field berikut <strong>masih dapat</strong> di-merge / ditiban SAP (atau mengikuti aturan lain), meskipun baris punya aktivitas KLIP:</p>
+        <ul>
+          <li>ETA/ATA milestone shipment (<code>eta_arrival</code>, <code>ata_*</code>, dll.)</li>
+          <li><code>status</code> shipment — hanya naik level milestone, tidak turun</li>
+          <li><code>voyage_no</code>, <code>vessel_owner</code>, OA budget/actual, loading rate, SFAL/SFBD, dll.</li>
+          <li>Tanggal realisasi trucking (SAP AV/AW) → <code>trucking_realizations</code> (<code>realization_start_date</code>, <code>realization_end_date</code>) — <strong>bukan</strong> menimpa <code>trucking_start_date</code> / <code>trucking_completion_date</code> planning</li>
+          <li><code>trucking_owner</code>, <code>quantity_sent</code>, <code>oa_budget</code>, <code>oa_actual</code></li>
+          <li>Detail port per sequence di <code>vessel_loading_ports</code> (ETA/ATA per port, quality) — update SAP langsung pada baris port yang cocok</li>
+          <li>Master kontrak (<code>contracts.*</code>) — umumnya <code>COALESCE(SAP, existing)</code>; <code>sto_number</code> diselaraskan ke STO SAP terbaru pada keeper shipment</li>
+        </ul>
+        <div class="note">
+          <strong>Reconcile duplikat:</strong> setelah upsert SAP, <code>finalizeSapShipmentAfterUpsert</code> menyamakan <code>shipment_id</code> keeper ke STO SAP dan membatalkan sibling SAP-only. Baris aktivitas KLIP di-skip dari cancel tetapi field non-dilindungi pada keeper tetap dapat di-merge SAP.
+        </div>
+      </section>
+
+      <section id="ai-klip-agent">
+        <h2>AI Klip Agent</h2>
+        <p>
+          Fitur AI di KLIP membantu mengisi rencana shipment dan menjawab pertanyaan operasional.
+          Ada <strong>dua agent</strong> terpisah dengan API key dan sumber data berbeda. Semua field hasil saran
+          <strong>tetap dapat diedit manual</strong> setelah di-apply.
+        </p>
+
+        <h3 id="ai-klip-overview">Ringkasan &amp; menu</h3>
+        <table>
+          <thead>
+            <tr><th>Agent</th><th>Menu / lokasi UI</th><th>API key (server)</th><th>Fungsi utama</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>AI Klip Agent — Shipment Planner</strong></td>
+              <td>Add New Shipment → Section 2 <em>Vessel Detail</em> (tombol di atas field Vessel Name)</td>
+              <td><code>ANTHROPIC_API_KEY</code> · model <code>ANTHROPIC_MODEL</code> (default <code>claude-sonnet-4-6</code>)</td>
+              <td>Satu klik mengisi vessel, charter type, discharge port, loading port, dan <strong>seluruh milestone ETA</strong></td>
+            </tr>
+            <tr>
+              <td><strong>AI Klip Agent — Chat</strong></td>
+              <td>Sidebar → <em>KLIP Agent AI</em> (<code>/klip-agent-ai</code>)</td>
+              <td><code>GEMINI_API_KEY</code> · <code>gemini-2.5-flash</code></td>
+              <td>Tanya jawab analitik logistics/commercial berdasarkan data live KLIP (+ upload file opsional)</td>
+            </tr>
+            <tr>
+              <td><strong>AI Agent Activity Log</strong></td>
+              <td>Sidebar → <em>AI Agent Activity Log</em> (<code>/ai-klip-agent-activity</code>)</td>
+              <td>—</td>
+              <td>Audit trail: API key name, tanggal, dan deskripsi aktivitas kedua agent di atas</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="ai-klip-shipment-planner">Shipment Planner — Add New Shipment</h3>
+        <p>
+          Tombol <span class="tag">AI Klip Agent</span> di Section 2 membutuhkan minimal <strong>satu PO</strong> di Section 1.
+          Sistem membaca dimensi kontrak dari PO terpilih:
+        </p>
+        <p class="formula">Supplier · Buyer · Product · Incoterm</p>
+        <p>
+          Setelah klik, alur backend: <strong>suggest vessel</strong> → terapkan ke form → <strong>suggest ETA</strong> untuk setiap blok
+          ETA Schedule di Section 3. UI menampilkan penjelasan pola (sebelum apply) dan konfirmasi pola yang dipakai (setelah apply).
+        </p>
+        <div class="note">
+          <strong>PO belum ter-planning di SAP</strong> (vessel/port kosong pada baris SAP PO itu) masih bisa di-suggest
+          jika ada riwayat vessel di <code>sap_processed_data</code> atau <code>shipments</code> untuk kombinasi yang lebih luas
+          (mis. Buyer + Product sama, supplier berbeda).
+        </div>
+
+        <h3 id="ai-klip-vessel-suggest">Saran vessel, discharge port &amp; loading port</h3>
+        <p>Endpoint: <code>POST /api/shipments/suggest-vessel</code>. Input: <code>supplier_id</code>, <code>buyer_id</code>, <code>product_id</code>, <code>incoterm</code>.</p>
+        <p>Prioritas resolusi (berhenti pada tier pertama yang menghasilkan vessel name):</p>
+        <table>
+          <thead>
+            <tr><th>Urutan</th><th>Sumber</th><th>Label <code>source</code></th><th>Data yang dibaca</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>Pattern cache</td>
+              <td><code>SAP_HISTORICAL</code> atau <code>CLAUDE_AI</code> (cached)</td>
+              <td>Tabel <code>vessel_patterns</code> — key: supplier + buyer + product + incoterm</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>Shipment KLIP</td>
+              <td><code>SAP_HISTORICAL</code></td>
+              <td><code>shipments</code> ⋈ <code>contracts</code> — kombinasi exact supplier/buyer/product/incoterm; mode vessel + port paling sering</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>Riwayat SAP import</td>
+              <td><code>SAP_HISTORICAL</code></td>
+              <td><code>sap_processed_data</code> — tier match diperlebar (lihat tabel di bawah)</td>
+            </tr>
+            <tr>
+              <td>4</td>
+              <td>Claude AI</td>
+              <td><code>CLAUDE_AI</code></td>
+              <td>Segment historis SAP/KLIP dikirim ke model; output JSON vessel + port</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>Tier match <code>sap_processed_data</code> (vessel / port)</h4>
+        <table>
+          <thead>
+            <tr><th>Tier</th><th>Kombinasi dimensi</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>Supplier + Buyer + Product + Incoterm</td></tr>
+            <tr><td>2</td><td>Supplier + Buyer + Product</td></tr>
+            <tr><td>3</td><td>Supplier + Buyer</td></tr>
+            <tr><td>4</td><td>Buyer + Product + Incoterm</td></tr>
+            <tr><td>5</td><td>Buyer + Product</td></tr>
+            <tr><td>6</td><td>Buyer saja</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Vessel diambil dari <code>raw → Vessel Name</code> atau <code>shipment → vessel_name</code>.
+          Discharge port: <code>Vessel Discharge Port</code> / <code>vessel_discharge_port</code>.
+          Loading port: <code>Vessel Loading Port 1</code> / <code>vessel_loading_port_1</code> / <code>Port of Loading</code>.
+          Kode port numerik SAP (mis. <code>22.03</code>) difilter — yang dipakai adalah nama teks port.
+        </p>
+        <p>
+          Jika AI tidak mengembalikan loading port, fallback ke <code>port_of_loading</code> dari data kontrak/PO (SAP text).
+        </p>
+
+        <h3 id="ai-klip-eta-suggest">Saran semua milestone ETA</h3>
+        <p>
+          Endpoint: <code>POST /api/shipments/suggest-eta</code>.
+          Dipanggil otomatis setelah vessel/port ter-resolve (satu panggilan per blok ETA di Section 3).
+        </p>
+
+        <h4>Input yang dipakai</h4>
+        <table>
+          <thead>
+            <tr><th>Parameter</th><th>Asal di UI</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>vessel_name</code></td><td>Hasil suggest vessel (atau vessel yang sudah diisi user)</td></tr>
+            <tr><td><code>loading_port</code></td><td>Loading port hasil suggest / kontrak / field Section 3</td></tr>
+            <tr><td><code>discharge_port</code></td><td>Discharge port Section 2</td></tr>
+            <tr><td><code>loading_date</code></td><td>Tanggal jangkar — lihat tabel prioritas di bawah</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Prioritas <code>loading_date</code> (hari ke-0 untuk seluruh milestone)</h4>
+        <table>
+          <thead>
+            <tr><th>Urutan</th><th>Sumber</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td><code>etaVesselArrivalAtLoadingPort</code> yang sudah ada di blok ETA (jika terisi)</td></tr>
+            <tr><td>2</td><td><code>delivery_start_date</code> dari kontrak / PO</td></tr>
+            <tr><td>3</td><td>Tanggal hari ini (server)</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Prioritas <code>avg_transit_days</code> (hari loading arrival → discharge arrival)</h4>
+        <table>
+          <thead>
+            <tr><th>Urutan</th><th>Sumber</th><th>Label <code>source</code></th><th>Perhitungan</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>Pattern cache</td>
+              <td>cached</td>
+              <td>Tabel <code>eta_patterns</code> — key: vessel + loading_port + discharge_port</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>Shipment KLIP historis</td>
+              <td><code>SAP_HISTORICAL</code></td>
+              <td>
+                Rata-rata <span class="formula">(eta_discharge_arrival atau ata_discharge_arrival) − (eta_arrival atau ata_arrival)</span>
+                pada <code>shipments</code> dengan vessel + loading + discharge port yang sama (case-insensitive)
+              </td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>Claude AI</td>
+              <td><code>CLAUDE_AI</code></td>
+              <td>Segment rute historis (<code>eta_arrival</code>, <code>eta_sailed</code>, <code>eta_discharge_arrival</code>, ATA) dikirim ke model</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>Rumus milestone ETA (semua field Section 3 diisi sekaligus)</h4>
+        <p>
+          Misalkan <code>L</code> = <code>loading_date</code> dan <code>T</code> = <code>max(1, round(avg_transit_days))</code>.
+          Offset dalam hari kalender dari <code>L</code>:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Field UI (Add New Shipment)</th><th>Offset dari L</th><th>Keterangan</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>ETA Vessel Arrival at Loading Port</td><td><code>+0</code></td><td>= <code>loading_date</code></td></tr>
+            <tr><td>ETA Vessel Berthed at Loading Port</td><td><code>+0</code></td><td>Hari yang sama dengan arrival</td></tr>
+            <tr><td>ETA Vessel Start Loading</td><td><code>+1</code></td><td></td></tr>
+            <tr><td>ETA Vessel Completed Loading</td><td><code>+2</code></td><td></td></tr>
+            <tr><td>ETA Vessel Sailed from Loading Port</td><td><code>+3</code></td><td></td></tr>
+            <tr><td>ETA Vessel Arrive at Discharge Port</td><td><code>+T</code></td><td>Transit utama (dari rata-rata historis / AI)</td></tr>
+            <tr><td>ETA Vessel Berthed at Discharge Port</td><td><code>+T + 1</code></td><td></td></tr>
+            <tr><td>ETA Vessel Start Discharging</td><td><code>+T + 2</code></td><td></td></tr>
+            <tr><td>ETA Vessel Complete Discharge</td><td><code>+T + 4</code></td><td></td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Catatan:</strong> Milestone loading (hari +0 s.d. +3) memakai offset tetap operasional.
+          Bagian discharge (hari <code>T</code> ke atas) memakai <code>avg_transit_days</code> dari riwayat shipment KLIP
+          atau estimasi Claude untuk rute <em>vessel + loading port + discharge port</em> yang sama.
+          Bukan membaca langsung 9 kolom ETA per milestone dari SAP untuk PO tersebut.
+        </div>
+
+        <h3 id="ai-klip-charter">Saran charter type</h3>
+        <p>
+          <strong>Charter type tidak ada di SAP Data.</strong> Saran diambil dari pola KLIP setelah vessel ter-resolve:
+        </p>
+        <ol>
+          <li>Charter type dari hasil vessel suggest (jika ada di shipment/SAP segment)</li>
+          <li>Mode <code>charter_type</code> pada <code>shipments</code> ⋈ <code>contracts</code> — tier match diperlebar (supplier/buyer/product/incoterm)</li>
+          <li>Fallback: jika Incoterm = <code>CIF</code> → suggest <code>CIF</code></li>
+        </ol>
+        <p>Nilai dinormalisasi ke opsi UI: <code>CIF</code>, <code>V/C</code>, <code>T/C</code>.</p>
+
+        <h3 id="ai-klip-chat">KLIP Agent AI (Chat)</h3>
+        <p>
+          Endpoint: <code>POST /api/agent-ai/ask</code>. Memakai <strong>Google Gemini</strong>, bukan Anthropic.
+          Alur singkat:
+        </p>
+        <ol>
+          <li>Pertanyaan user (+ konteks chat sebelumnya, file upload opsional)</li>
+          <li>Query agregat live dari <code>contracts</code>, <code>shipments</code>, <code>trucking_operations</code>, <code>payments</code>, dll.</li>
+          <li>Jika pertanyaan cocok metrik deterministik → jawaban langsung tanpa LLM</li>
+          <li>Jika tidak → Gemini dengan konteks JSON + memori Q&amp;A serupa (<code>agent_ai_memory</code>)</li>
+        </ol>
+        <p>Setiap jawaban disimpan ke <code>agent_ai_memory</code> dan dicatat di Activity Log.</p>
+
+        <h3 id="ai-klip-activity-log">AI Agent Activity Log</h3>
+        <p>
+          Halaman <code>/ai-klip-agent-activity</code> menampilkan tabel audit dengan kolom:
+          <strong>API Key Name</strong>, <strong>Date</strong>, <strong>Activity</strong>.
+          Filter: rentang tanggal dan nama agent.
+        </p>
+        <table>
+          <thead>
+            <tr><th>API Key Name (tampilan)</th><th>Agent</th><th>Contoh activity</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Anthropic (claude-sonnet-4-6)</code></td>
+              <td>Shipment Planner</td>
+              <td>Suggested vessel "…" (SAP_HISTORICAL) for Supplier / Buyer / Product / Incoterm</td>
+            </tr>
+            <tr>
+              <td><code>Anthropic (…)</code></td>
+              <td>Shipment Planner</td>
+              <td>Suggested ETA schedule (~N days, …) for "Vessel" Port A → Port B</td>
+            </tr>
+            <tr>
+              <td><code>Google Gemini (gemini-2.5-flash)</code></td>
+              <td>Chat</td>
+              <td>Answered question: …</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Data disimpan di <code>ai_klip_agent_activity_logs</code>. Riwayat chat lama di-backfill dari <code>agent_ai_memory</code> saat migrasi pertama.</p>
+
+        <h3 id="ai-klip-cache">Pattern cache (percepat suggest berikutnya)</h3>
+        <table>
+          <thead>
+            <tr><th>Tabel</th><th>Unique key</th><th>Isi cache</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>vessel_patterns</code></td>
+              <td>supplier + buyer + product + incoterm</td>
+              <td>vessel name, charter type, discharge port, loading port, source</td>
+            </tr>
+            <tr>
+              <td><code>eta_patterns</code></td>
+              <td>vessel + loading_port + discharge_port</td>
+              <td><code>avg_transit_days</code>, source</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Cache di-update setiap suggest sukses agar klik berikutnya untuk kombinasi sama lebih cepat.</p>
+      </section>
+
+      <section id="referensi">
+        <h2>Referensi file (implementasi)</h2>
+        <table>
+          <thead>
+            <tr><th>Halaman / topik</th><th>File utama</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Contract Performance UI</td><td><code>frontend/src/app/contract-performance/page.tsx</code>, <code>frontend/src/app/contracts/page.tsx</code></td></tr>
+            <tr><td>Contract cycles &amp; outstanding SQL</td><td><code>backend/src/controllers/contract.controller.ts</code>, <code>contractsListOuterSql.ts</code>, <code>contractsQtyMoveSql.ts</code></td></tr>
+            <tr><td>Late performance / Section 1–2</td><td><code>backend/src/services/latePerformance.service.ts</code></td></tr>
+            <tr><td>Calendar days</td><td><code>backend/src/utils/calendarDays.ts</code></td></tr>
+            <tr><td>Cycle display &amp; help text</td><td><code>frontend/src/lib/cycleDaysDisplay.ts</code>, <code>fieldHelpText.ts</code></td></tr>
+            <tr><td>Shipping Performance UI</td><td><code>frontend/src/app/shipping-performance/page.tsx</code></td></tr>
+            <tr><td>Shipping SQL &amp; rows</td><td><code>backend/src/services/shippingPerformance.service.ts</code></td></tr>
+            <tr><td>Shipping labels &amp; ports</td><td><code>frontend/src/lib/shippingPerformanceLabels.ts</code>, <code>shippingPerformancePorts.ts</code></td></tr>
+            <tr><td>Oil Loss UI</td><td><code>frontend/src/app/oil-loss/page.tsx</code></td></tr>
+            <tr><td>Oil Loss filter Period / Transport</td><td><code>frontend/src/lib/oilLossGlobalFilters.ts</code></td></tr>
+            <tr><td>Oil Loss R1–R4</td><td><code>frontend/src/lib/oilLossSummary.ts</code>, <code>backend/src/utils/oilLossSummary.ts</code></td></tr>
+            <tr><td>Oil Loss eligibility</td><td><code>frontend/src/lib/oilLossEligibility.ts</code>, <code>backend/src/utils/oilLossEligibility.ts</code></td></tr>
+            <tr><td>Oil Loss SQL &amp; enrichment</td><td><code>backend/src/utils/oilLossQuerySql.ts</code>, <code>oilLossSapSql.ts</code></td></tr>
+            <tr><td>Oil Loss drilldown &amp; tabel</td><td><code>frontend/src/lib/oilLossDrilldown.ts</code>, <code>oilLossAllContractColumns.ts</code></td></tr>
+            <tr><td>Dokumentasi teknis Oil Loss</td><td><code>docs/OIL_LOSS_PAGE.md</code></td></tr>
+            <tr><td>SAP distribution &amp; upsert</td><td><code>backend/src/services/sapDataDistribution.service.ts</code></td></tr>
+            <tr><td>Aktivitas KLIP (row protect)</td><td><code>backend/src/utils/klipLogisticsActivity.ts</code></td></tr>
+            <tr><td>Merge field KLIP vs SAP</td><td><code>backend/src/utils/klipSapFieldMerge.ts</code></td></tr>
+            <tr><td>Operation ID (synthetic)</td><td><code>backend/src/utils/operationId.ts</code></td></tr>
+            <tr><td>Shipment STO key / grouping</td><td><code>backend/src/utils/shipmentStoTypeSql.ts</code>, <code>shipment.controller.ts</code></td></tr>
+            <tr><td>Contract STO information API</td><td><code>backend/src/controllers/contract.controller.ts</code> (<code>getContractStoInformation</code>)</td></tr>
+            <tr><td>Contract logistics STO display rules</td><td><code>backend/src/utils/contractLogisticsStoDisplay.ts</code></td></tr>
+            <tr><td>Contract Detail modal (Logistics table)</td><td><code>frontend/src/components/contracts/ContractDetailModal.tsx</code></td></tr>
+            <tr><td>Add New Shipment API</td><td><code>backend/src/controllers/shipment.controller.ts</code> (<code>createShipment</code>)</td></tr>
+            <tr><td>Trucking UI &amp; calendar</td><td><code>frontend/src/app/trucking/page.tsx</code>, <code>frontend/src/lib/truckingColumns.ts</code></td></tr>
+            <tr><td>Add / Edit Trucking modal</td><td><code>frontend/src/components/trucking/CreateTruckingOperationModal.tsx</code></td></tr>
+            <tr><td>Planning deliverables (frontend)</td><td><code>frontend/src/lib/truckingPlanningDeliverables.ts</code></td></tr>
+            <tr><td>Effective status &amp; reconcile SAP</td><td><code>backend/src/utils/truckingEffectiveStatus.ts</code></td></tr>
+            <tr><td>Realization SQL join</td><td><code>backend/src/utils/truckingRealizationSql.ts</code></td></tr>
+            <tr><td>Realization service &amp; API</td><td><code>backend/src/services/truckingRealization.service.ts</code>, <code>truckingRealization.controller.ts</code></td></tr>
+            <tr><td>Extension tables migration</td><td><code>backend/src/database/migrations/090_trucking_realization_extension_tables.sql</code></td></tr>
+            <tr><td>Outstanding qty SQL</td><td><code>backend/src/utils/truckingQuantitySql.ts</code></td></tr>
+            <tr><td>Trucking list SELECT</td><td><code>backend/src/utils/truckingListSelectSql.ts</code>, <code>truckingList.service.ts</code></td></tr>
+            <tr><td>Add New Trucking API</td><td><code>backend/src/controllers/trucking.controller.ts</code> (<code>createTruckingOperation</code>)</td></tr>
+            <tr><td>AI Shipment Planner (vessel + ETA)</td><td><code>backend/src/services/shipmentAiPlanner.service.ts</code>, <code>shipmentAiPlanner.controller.ts</code></td></tr>
+            <tr><td>AI Klip Agent Activity Log</td><td><code>backend/src/services/aiKlipAgentActivityLog.service.ts</code>, <code>frontend/src/app/ai-klip-agent-activity/page.tsx</code></td></tr>
+            <tr><td>KLIP Agent AI (Chat)</td><td><code>backend/src/controllers/agentAi.controller.ts</code>, <code>frontend/src/app/klip-agent-ai/page.tsx</code></td></tr>
+            <tr><td>Anthropic client (Shipment Planner)</td><td><code>backend/src/utils/anthropicClient.ts</code></td></tr>
+            <tr><td>Add New Shipment — tombol AI</td><td><code>frontend/src/components/shared/AddNewShipmentModal.tsx</code></td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    KLIP Glossary — diperbarui 2026-06-03 · Operation Trucking (Planning vs Realisasi) · Contract Performance · Shipping Performance · Oil Loss · Commercial Documents · AI Klip Agent · Operation ID &amp; Shipment ID · SAP Upload &amp; Input KLIP · Buka: <code>docs/KLIP_Glossary.html</code>
+  </footer>
+</body>
+</html>

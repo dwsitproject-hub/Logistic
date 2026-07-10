@@ -2,6 +2,11 @@ import { Response } from 'express';
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
+import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
+import { diffCalendarDays } from '../utils/calendarDays';
+import { shipmentIsLateSql } from '../utils/shipmentListFilters';
+import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
 
 // Normalize query param to string[] (Express sends array for ?key=a&key=b)
 const toFilterArray = (v: unknown): string[] => {
@@ -296,52 +301,37 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
     // Also break down delivered/outstanding by payoff status:
     // - paid: has at least one non-empty payoff_date
     // - outstanding payment: has at least one empty payoff_date
+    const contractsQtyMoveCte = await resolveContractsQtyMoveCte('contract_scope');
+    const contractsStoAggCte = await resolveContractsStoAggCte('contract_scope');
     const outstandingStats = await query(`
-      WITH contract_qty AS (
+      WITH contract_scope AS (
+        SELECT DISTINCT c.contract_id
+        FROM contracts c
+        WHERE 1=1 ${contractFilter}
+      ),
+      ${contractsQtyMoveCte},
+      ${contractsStoAggCte},
+      contract_qty AS (
         SELECT 
           c.id AS contract_pk,
           c.contract_id,
           MAX(c.quantity_ordered) AS contract_quantity,
           MAX(COALESCE(c.contract_value, 0)) AS contract_value,
           MAX(COALESCE(c.incoterm, '')) AS incoterm,
-          COALESCE((
-            SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC))
-            FROM sap_processed_data spd
-            WHERE spd.contract_number = c.contract_id
-              AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
-          ), 0) AS quantity_delivery,
-          COALESCE((
-            SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC))
-            FROM sap_processed_data spd
-            WHERE spd.contract_number = c.contract_id
-              AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
-          ), 0) AS quantity_receive,
-          -- “Delivered quantity” for dashboard = the basis that drives Outstanding Quantity by Incoterm rule
+          COALESCE(MAX(qm.quantity_delivery), 0) AS quantity_delivery,
+          COALESCE(MAX(qm.quantity_receive), 0) AS quantity_receive,
           COALESCE(
             CASE
-              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE((
-                SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC))
-                FROM sap_processed_data spd
-                WHERE spd.contract_number = c.contract_id
-                  AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
-              ), 0)
-              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('LCO', 'FOB') THEN COALESCE((
-                SELECT SUM(CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC))
-                FROM sap_processed_data spd
-                WHERE spd.contract_number = c.contract_id
-                  AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
-              ), 0)
-              ELSE COALESCE((
-                SELECT SUM(CAST(REPLACE(REPLACE(spd.data->'contract'->>'sto_quantity', ',', ''), ' ', '') AS NUMERIC))
-                FROM sap_processed_data spd
-                WHERE spd.contract_number = c.contract_id 
-                  AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-              ), 0)
+              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('FRC', 'CIF', 'CFR') THEN MAX(qm.quantity_receive)
+              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('LCO', 'FOB') THEN MAX(qm.quantity_delivery)
+              ELSE MAX(sa.total_sto_quantity)
             END,
             0
           ) AS delivered_quantity
         FROM contracts c
-        WHERE 1=1 ${contractFilter}
+        INNER JOIN contract_scope cs ON cs.contract_id = c.contract_id
+        LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
+        LEFT JOIN sto_agg sa ON sa.contract_number = c.contract_id
         GROUP BY c.id, c.contract_id
       ),
       payment_status_per_contract AS (
@@ -486,7 +476,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
                 WHEN NOT (
                   sb.eta_arrival IS NOT NULL OR sb.eta_berthed IS NOT NULL OR sb.eta_loading_start IS NOT NULL OR sb.eta_loading_complete IS NOT NULL OR sb.eta_sailed IS NOT NULL
                   OR sb.eta_discharge_arrival IS NOT NULL OR sb.eta_discharge_berthed IS NOT NULL OR sb.eta_discharge_start IS NOT NULL OR sb.eta_discharge_complete IS NOT NULL
-                ) THEN 'PLANNED'
+                ) THEN 'UNPLANNED'
                 WHEN (
                   sb.eta_arrival IS NOT NULL AND sb.eta_berthed IS NOT NULL AND sb.eta_loading_start IS NOT NULL AND sb.eta_loading_complete IS NOT NULL AND sb.eta_sailed IS NOT NULL
                   AND sb.eta_discharge_arrival IS NOT NULL AND sb.eta_discharge_berthed IS NOT NULL
@@ -508,7 +498,10 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
       )
       SELECT
         COUNT(*) as total_shipments,
-        COUNT(*) FILTER (WHERE effective_status = 'PLANNED') as planned_shipments,
+        COUNT(*) FILTER (WHERE (
+          eta_arrival IS NOT NULL OR eta_berthed IS NOT NULL OR eta_loading_start IS NOT NULL OR eta_loading_complete IS NOT NULL OR eta_sailed IS NOT NULL
+          OR eta_discharge_arrival IS NOT NULL OR eta_discharge_berthed IS NOT NULL OR eta_discharge_start IS NOT NULL OR eta_discharge_complete IS NOT NULL
+        )) as planned_shipments,
         COUNT(*) FILTER (WHERE effective_status = 'IN_PROGRESS') as in_progress_shipments,
         COUNT(*) FILTER (WHERE effective_status = 'LOADING') as loading_shipments,
         COUNT(*) FILTER (WHERE effective_status = 'IN_TRANSIT') as in_transit_shipments,
@@ -516,20 +509,7 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         COUNT(*) FILTER (WHERE effective_status = 'UNLOADING') as unloading_shipments,
         COUNT(*) FILTER (WHERE effective_status = 'COMPLETED') as completed_shipments,
         COUNT(*) FILTER (WHERE effective_status = 'CANCELLED') as cancelled_shipments,
-        COUNT(*) FILTER (
-          WHERE
-            delivery_end_date IS NOT NULL
-            AND (
-              delivery_end_date::date < CURRENT_DATE
-              OR (
-                (ata_discharge_complete IS NOT NULL OR eta_discharge_complete IS NOT NULL)
-                AND (
-                  (ata_discharge_complete IS NOT NULL AND delivery_end_date::date < ata_discharge_complete::date)
-                  OR (eta_discharge_complete IS NOT NULL AND delivery_end_date::date < eta_discharge_complete::date)
-                )
-              )
-            )
-        ) as late_shipments
+        COUNT(*) FILTER (WHERE ${shipmentIsLateSql('ship', { ata: 'ship.ata_discharge_complete', eta: 'ship.eta_discharge_complete' })}) as late_shipments
       FROM ship
       `,
       params,
@@ -594,10 +574,10 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         COUNT(*) FILTER (WHERE status = 'CANCELLED') as cancelled_trucking_operations,
         COUNT(DISTINCT late_key) FILTER (WHERE
           delivery_end_date IS NOT NULL
-          AND (eta_trucking_completion_date IS NOT NULL OR effective_completion_date IS NOT NULL)
-          AND NOT (
-            (eta_trucking_completion_date IS NOT NULL AND delivery_end_date::date >= eta_trucking_completion_date::date)
-            OR (effective_completion_date IS NOT NULL AND delivery_end_date::date >= effective_completion_date::date)
+          AND (
+            (effective_completion_date IS NOT NULL AND delivery_end_date::date < effective_completion_date::date)
+            OR (effective_completion_date IS NULL AND eta_trucking_completion_date IS NOT NULL AND delivery_end_date::date < eta_trucking_completion_date::date)
+            OR (effective_completion_date IS NULL AND eta_trucking_completion_date IS NULL AND delivery_end_date::date < CURRENT_DATE)
           )
         ) as late_trucking_operations
       FROM trucking_with_completion
@@ -1699,7 +1679,7 @@ export const getShipmentsByStatus = async (req: AuthRequest, res: Response) => {
       WITH ship_base AS (
         SELECT
           COALESCE(NULLIF(TRIM(c.sto_number::text), ''), NULLIF(TRIM(s.operation_id), ''), NULLIF(TRIM(s.shipment_id), ''), s.id::text) AS ship_key,
-          (array_agg(s.id ORDER BY s.created_at DESC) FILTER (WHERE s.id IS NOT NULL))[1] AS id,
+          ${sqlShipmentListPrimaryIdAgg(`COALESCE(NULLIF(TRIM(c.sto_number::text), ''), NULLIF(TRIM(s.operation_id), ''), NULLIF(TRIM(s.shipment_id), ''), s.id::text)`)} AS id,
           MAX(NULLIF(TRIM(c.sto_number::text), '')) AS sto_number,
           MAX(NULLIF(TRIM(s.operation_id), '')) AS operation_id,
           MAX(NULLIF(TRIM(s.shipment_id), '')) AS shipment_id,
@@ -1758,7 +1738,7 @@ export const getShipmentsByStatus = async (req: AuthRequest, res: Response) => {
                 WHEN NOT (
                   sb.eta_arrival IS NOT NULL OR sb.eta_berthed IS NOT NULL OR sb.eta_loading_start IS NOT NULL OR sb.eta_loading_complete IS NOT NULL OR sb.eta_sailed IS NOT NULL
                   OR sb.eta_discharge_arrival IS NOT NULL OR sb.eta_discharge_berthed IS NOT NULL OR sb.eta_discharge_start IS NOT NULL OR sb.eta_discharge_complete IS NOT NULL
-                ) THEN 'PLANNED'
+                ) THEN 'UNPLANNED'
                 WHEN (
                   sb.eta_arrival IS NOT NULL AND sb.eta_berthed IS NOT NULL AND sb.eta_loading_start IS NOT NULL AND sb.eta_loading_complete IS NOT NULL AND sb.eta_sailed IS NOT NULL
                   AND sb.eta_discharge_arrival IS NOT NULL AND sb.eta_discharge_berthed IS NOT NULL
@@ -1778,16 +1758,17 @@ export const getShipmentsByStatus = async (req: AuthRequest, res: Response) => {
           END AS status,
           CASE
             WHEN sb.delivery_end_date IS NULL THEN '-'
-            WHEN (
-              sb.delivery_end_date::date < CURRENT_DATE
-              OR (
-                (sb.ata_discharge_complete IS NOT NULL OR sb.eta_discharge_complete IS NOT NULL)
-                AND (
-                  (sb.ata_discharge_complete IS NOT NULL AND sb.delivery_end_date::date < sb.ata_discharge_complete::date)
-                  OR (sb.eta_discharge_complete IS NOT NULL AND sb.delivery_end_date::date < sb.eta_discharge_complete::date)
-                )
-              )
-            ) THEN 'Late'
+            WHEN sb.ata_discharge_complete IS NOT NULL THEN
+              CASE
+                WHEN sb.delivery_end_date::date < sb.ata_discharge_complete::date THEN 'Late'
+                ELSE 'On Time'
+              END
+            WHEN sb.eta_discharge_complete IS NOT NULL THEN
+              CASE
+                WHEN sb.delivery_end_date::date < sb.eta_discharge_complete::date THEN 'Late'
+                ELSE 'On Time'
+              END
+            WHEN sb.delivery_end_date::date < CURRENT_DATE THEN 'Late'
             ELSE 'On Time'
           END AS late_indicator
         FROM ship_base sb
@@ -3816,7 +3797,7 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
             WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(q.quantity_receive, 0)
             WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(q.quantity_delivery, 0)
             ELSE COALESCE(q.sto_quantity, 0)
-          END AS delivered_quantity
+          END AS delivered_quantity,
           (c.delivery_end_date::date - CURRENT_DATE) AS aging_os,
           CASE
             WHEN UPPER(COALESCE(NULLIF(TRIM(COALESCE(c.transport_mode, '')), ''), l.data->'contract'->>'transport_mode', l.data->'contract'->>'sea_land', l.data->'raw'->>'Sea / Land', l.data->'raw'->>'Sea_Land', '')) LIKE 'LAND%'
@@ -3943,16 +3924,6 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
     const totalCount = Number(row0?.total_count) || 0;
     const rows = Array.isArray(row0?.rows) ? row0.rows : [];
 
-    const asDate = (d: unknown): Date | null => {
-      if (d == null) return null;
-      if (d instanceof Date) return d;
-      if (typeof d === 'string') {
-        const t = Date.parse(d);
-        if (Number.isNaN(t)) return null;
-        return new Date(t);
-      }
-      return null;
-    };
     const parseFlexibleDate = (v: unknown): Date | null => {
       if (v == null) return null;
       if (v instanceof Date) return v;
@@ -3978,15 +3949,7 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
       if (!Number.isNaN(t)) return new Date(t);
       return null;
     };
-    const diffInDays = (start: unknown, end: unknown): number | null => {
-      const s = asDate(start);
-      const e = asDate(end);
-      if (!s || !e) return null;
-      const msPerDay = 24 * 60 * 60 * 1000;
-      const sMid = new Date(s.getFullYear(), s.getMonth(), s.getDate());
-      const eMid = new Date(e.getFullYear(), e.getMonth(), e.getDate());
-      return Math.round((eMid.getTime() - sMid.getTime()) / msPerDay);
-    };
+    const diffInDays = (start: unknown, end: unknown): number | null => diffCalendarDays(start, end);
 
     // Compute log_cycle_days + cash_cycle_days for drilldown weighted averages
     const today = new Date();

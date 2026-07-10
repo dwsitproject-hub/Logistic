@@ -23,6 +23,32 @@ function parseForDisplay(input: string): Date | null {
   return Number.isNaN(fallback.getTime()) ? null : fallback
 }
 
+/** Normalize UI/API date input to `YYYY-MM-DD` for Postgres `date` columns. */
+export function toApiDateOnly(input: string | Date | null | undefined): string | null {
+  if (input === null || input === undefined || input === '') return null
+  if (input instanceof Date) {
+    if (Number.isNaN(input.getTime())) return null
+    return format(input, 'yyyy-MM-dd')
+  }
+  const s = String(input).trim()
+  if (!s) return null
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
+  const fromDd = parseDdMmYyyyToIso(s)
+  if (fromDd) return fromDd
+  const d = parseForDisplay(s)
+  return d ? format(d, 'yyyy-MM-dd') : null
+}
+
+/** Numeric timestamp for sorting (null = empty / unparseable). */
+export function toSortableTimestamp(input: string | Date | null | undefined): number | null {
+  if (input === null || input === undefined || input === '') return null
+  if (input instanceof Date) {
+    return Number.isNaN(input.getTime()) ? null : input.getTime()
+  }
+  const d = parseForDisplay(String(input))
+  return d ? d.getTime() : null
+}
+
 /** Date only: DD/MM/YYYY */
 export function formatDateDMY(input: string | Date | null | undefined): string {
   if (input === null || input === undefined || input === '') return '-'
@@ -100,4 +126,25 @@ export function parseDdMmYyyyToIso(s: string): string | null {
   const d = new Date(yyyy, mm - 1, dd)
   if (d.getFullYear() !== yyyy || d.getMonth() !== mm - 1 || d.getDate() !== dd) return null
   return `${yyyy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
+}
+
+/** True when `iso` falls outside optional inclusive min/max bounds (YYYY-MM-DD). */
+export function isIsoOutsideAllowedRange(
+  iso: string,
+  minIso?: string,
+  maxIso?: string,
+): boolean {
+  if (!iso) return false
+  if (minIso && iso < minIso) return true
+  if (maxIso && iso > maxIso) return true
+  return false
+}
+
+export const OUTSIDE_ALLOWED_DATE_RANGE_MESSAGE = 'Outside allowed date range'
+
+export function outsideAllowedDateRangeMessage(minIso?: string, maxIso?: string): string {
+  if (minIso && maxIso) {
+    return `Outside allowed date range (${formatDateDMY(minIso)} – ${formatDateDMY(maxIso)})`
+  }
+  return OUTSIDE_ALLOWED_DATE_RANGE_MESSAGE
 }

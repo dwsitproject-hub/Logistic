@@ -82,7 +82,7 @@ export const listSuppliers = async (req: AuthRequest, res: Response) => {
   try {
     const { page = '1', limit = '50', search = '' } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page as string, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit as string, 10) || 50, 1), 200);
+    const limitNum = Math.min(Math.max(parseInt(limit as string, 10) || 50, 1), 5000);
     const offset = (pageNum - 1) * limitNum;
 
     const where: string[] = [];
@@ -90,7 +90,7 @@ export const listSuppliers = async (req: AuthRequest, res: Response) => {
 
     if (search) {
       params.push(`%${search}%`);
-      where.push('(plant_code ILIKE $' + params.length + ' OR mills ILIKE $' + params.length + ' OR parent_company ILIKE $' + params.length + ' OR island ILIKE $' + params.length + ' OR province ILIKE $' + params.length + ')');
+      where.push('(plant_code ILIKE $' + params.length + ' OR mills ILIKE $' + params.length + ' OR mill_code ILIKE $' + params.length + ' OR group_id ILIKE $' + params.length + ' OR island ILIKE $' + params.length + ' OR province ILIKE $' + params.length + ')');
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -125,31 +125,13 @@ export const getSupplierById = async (req: AuthRequest, res: Response) => {
 export const createSupplier = async (req: AuthRequest, res: Response) => {
   try {
     const {
-      plant_code,
-      mills,
-      group_id,
-      parent_company,
-      group_holding,
-      controlling_shareholder,
-      other_shareholders,
-      group_type,
-      group_scale,
-      integrated_status,
-      cap,
-      city_regency,
-      province,
-      island,
-      longitude,
-      latitude,
-      kml_folder,
-      map,
-      rspo,
-      rspo_type,
-      ispo,
-      iscc,
-      year_commence,
-      updated_date,
-      remarks,
+      plant_code, mills, group_id, parent_company, group_holding,
+      controlling_shareholder, other_shareholders,
+      prov_code, prov_no, mill_no, mill_code,
+      group_type, group_scale, integrated_status, cap,
+      city_regency, province, island, longitude, latitude,
+      kml_folder, map, rspo, rspo_type, ispo, iscc, ggl,
+      year_commence, updated_date, update_year, remarks,
     } = req.body;
 
     const normalizeNum = (v: any) => (v === '' || v === undefined ? null : Number(v));
@@ -161,55 +143,33 @@ export const createSupplier = async (req: AuthRequest, res: Response) => {
     const insertSql = `
       INSERT INTO ${TABLE} (
         plant_code, mills, group_id, parent_company, group_holding, controlling_shareholder, other_shareholders,
+        prov_code, prov_no, mill_no, mill_code,
         group_type, group_scale, integrated_status, cap,
         cpo_prod_est_month, pk_prod_est_month, pome_prod_est_month, shell_prod_est_month,
         cpo_prod_est_year, pk_prod_est_year, pome_prod_est_year, shell_prod_est_year,
-        city_regency, province, island, longitude, latitude, kml_folder, map, rspo, rspo_type, ispo, iscc,
-        year_commence, updated_date, remarks
+        city_regency, province, island, longitude, latitude, kml_folder, map,
+        rspo, rspo_type, ispo, iscc, ggl,
+        year_commence, updated_date, update_year, remarks
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,
-        $8,$9,$10,$11,
-        $12,$13,$14,$15,
-        $16,$17,$18,$19,
-        $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-        $31,$32,$33
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+        $12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
+        $24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,
+        $36,$37,$38,$39
       ) RETURNING *
     `;
 
     const params = [
-      normalizeStr(plant_code),
-      normalizeStr(mills),
-      normalizeStr(group_id),
-      normalizeStr(parent_company),
-      normalizeStr(group_holding),
-      normalizeStr(controlling_shareholder),
-      normalizeStr(other_shareholders),
-      normalizeStr(group_type),
-      normalizeStr(group_scale),
-      normalizeStr(integrated_status),
-      normalizeNum(cap),
-      est.cpo_month,
-      est.pk_month,
-      est.pome_month,
-      est.shell_month,
-      est.cpo_year,
-      est.pk_year,
-      est.pome_year,
-      est.shell_year,
-      normalizeStr(city_regency),
-      normalizeStr(province),
-      normalizeStr(island),
-      normalizeNum(longitude),
-      normalizeNum(latitude),
-      normalizeStr(kml_folder),
-      normalizeStr(map),
-      normalizeStr(rspo),
-      normalizeStr(rspo_type),
-      normalizeStr(ispo),
-      normalizeStr(iscc),
-      normalizeNum(year_commence),
-      normalizeStr(updated_date),
-      normalizeStr(remarks),
+      normalizeStr(plant_code), normalizeStr(mills), normalizeStr(group_id),
+      normalizeStr(parent_company), normalizeStr(group_holding),
+      normalizeStr(controlling_shareholder), normalizeStr(other_shareholders),
+      normalizeStr(prov_code), normalizeStr(prov_no), normalizeStr(mill_no), normalizeStr(mill_code),
+      normalizeStr(group_type), normalizeStr(group_scale), normalizeStr(integrated_status), normalizeNum(cap),
+      est.cpo_month, est.pk_month, est.pome_month, est.shell_month,
+      est.cpo_year, est.pk_year, est.pome_year, est.shell_year,
+      normalizeStr(city_regency), normalizeStr(province), normalizeStr(island),
+      normalizeNum(longitude), normalizeNum(latitude), normalizeStr(kml_folder), normalizeStr(map),
+      normalizeStr(rspo), normalizeStr(rspo_type), normalizeStr(ispo), normalizeStr(iscc), normalizeStr(ggl),
+      normalizeNum(year_commence), normalizeStr(updated_date), normalizeNum(update_year), normalizeStr(remarks),
     ];
 
     const result = await query(insertSql, params);
@@ -226,17 +186,19 @@ export const updateSupplier = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const fields = [
       'plant_code','mills','group_id','parent_company','group_holding','controlling_shareholder','other_shareholders',
+      'prov_code','prov_no','mill_no','mill_code',
       'group_type','group_scale','integrated_status','cap',
       'cpo_prod_est_month','pk_prod_est_month','pome_prod_est_month','shell_prod_est_month',
       'cpo_prod_est_year','pk_prod_est_year','pome_prod_est_year','shell_prod_est_year',
-      'city_regency','province','island','longitude','latitude','kml_folder','map','rspo','rspo_type','ispo','iscc',
-      'year_commence','updated_date','remarks'
+      'city_regency','province','island','longitude','latitude','kml_folder','map',
+      'rspo','rspo_type','ispo','iscc','ggl',
+      'year_commence','updated_date','update_year','remarks'
     ];
 
     const setClauses: string[] = [];
     const params: any[] = [];
     const numericFields = new Set([
-      'cap','longitude','latitude','year_commence',
+      'cap','longitude','latitude','year_commence','update_year',
       'cpo_prod_est_month','pk_prod_est_month','pome_prod_est_month','shell_prod_est_month',
       'cpo_prod_est_year','pk_prod_est_year','pome_prod_est_year','shell_prod_est_year'
     ]);
@@ -317,134 +279,223 @@ export const importSuppliersFromExcel = async (req: AuthRequest, res: Response) 
       return res.status(400).json({ success: false, error: { message: 'No file uploaded' } });
     }
 
-    const workbook = XLSX.readFile(file.path);
+    const workbook = XLSX.readFile(file.path, { raw: false, dense: false });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
     if (rows.length < 2) {
-      return res.status(400).json({ success: false, error: { message: 'Excel must have header and at least one data row' } });
+      return res.status(400).json({ success: false, error: { message: 'File must have header and at least one data row' } });
     }
 
-    // Expected order as provided by user
-    const expectedHeaders = [
-      'PLANT CODE','MILLS','GROUP ID','PARENT COMPANY','GROUP / HOLDING','Controlling Shareholder','Other Shareholders','GROUP TYPE','Group Scale','Integrated Status','CAP',
-      'CITY / REGENCY','PROVINCE','ISLAND','Long.','Lat.','KML_FOLDER','MAP','RSPO','RSPO Type','ISPO','ISCC','Year Commence','Updated Date','Remarks'
-    ];
-
-    const headerRow = rows[0].map((h) => (h || '').toString().trim());
-
-    const mapIndex = (label: string) => headerRow.findIndex((h) => h.toLowerCase() === label.toLowerCase());
-    const idxs = expectedHeaders.map(mapIndex);
-
-    const missing = expectedHeaders.filter((_h, i) => idxs[i] === -1);
-    if (missing.length > 0) {
-      return res.status(400).json({ success: false, error: { message: `Missing columns: ${missing.join(', ')}` } });
+    // Find the header row: look for the row containing "PLANT CODE"
+    let headerRowIdx = -1;
+    for (let i = 0; i < Math.min(rows.length, 10); i++) {
+      if (rows[i].some((c) => String(c ?? '').trim().toUpperCase() === 'PLANT CODE')) {
+        headerRowIdx = i;
+        break;
+      }
+    }
+    if (headerRowIdx === -1) {
+      return res.status(400).json({ success: false, error: { message: 'Cannot find header row with PLANT CODE column' } });
     }
 
-    const productMap = await loadProductConfigs();
+    // Normalize header values (collapse whitespace/newlines)
+    const headerRow = rows[headerRowIdx].map((h) =>
+      String(h ?? '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()
+    );
+
+    // Column position map — fixed positions per the standard file format
+    // Duplicate "Prod Est" headers are disambiguated by position (month first, then year)
+    const colPos = {
+      // "PLANT CODE" col in file is a category ("MILL"), not a unique ID.
+      // The actual unique identifier is "MILL CODE" (e.g. "ACEH/MILL - 0001").
+      plant_code: headerRow.findIndex((h) => h.toUpperCase() === 'MILL CODE'),
+      mill_code:  headerRow.findIndex((h) => h.toUpperCase() === 'MILL CODE'),
+      mills:      headerRow.findIndex((h) => h.toUpperCase() === 'MILLS'),
+      group_id:   headerRow.findIndex((h) => h.toUpperCase() === 'GROUP ID'),
+      group_type: headerRow.findIndex((h) => h.toUpperCase() === 'GROUP TYPE'),
+      group_scale: headerRow.findIndex((h) => h.toUpperCase() === 'GROUP SCALE'),
+      integrated_status: headerRow.findIndex((h) => h.toUpperCase() === 'INTEGRATED STATUS'),
+      cap: headerRow.findIndex((h) => /^CAP/.test(h.toUpperCase())),
+      // CPO/PK/POME/SHELL Prod Est appear twice — first = month, second = year
+      ...(() => {
+        const normalize = (s: string) => s.replace(/[\r\n\s]+/g, ' ').trim().toUpperCase();
+        const allIdxs = (prefix: string) =>
+          headerRow.reduce((acc, h, i) => {
+            const n = normalize(h);
+            if (n.startsWith(prefix) && n.includes('PROD EST')) acc.push(i);
+            return acc;
+          }, [] as number[]);
+        const cpo  = allIdxs('CPO');
+        const pk   = allIdxs('PK');
+        const pome = allIdxs('POME');
+        const shel = allIdxs('SHELL');
+        return {
+          cpo_prod_est_month:   cpo[0]  ?? -1,
+          pk_prod_est_month:    pk[0]   ?? -1,
+          pome_prod_est_month:  pome[0] ?? -1,
+          shell_prod_est_month: shel[0] ?? -1,
+          cpo_prod_est_year:    cpo[1]  ?? -1,
+          pk_prod_est_year:     pk[1]   ?? -1,
+          pome_prod_est_year:   pome[1] ?? -1,
+          shell_prod_est_year:  shel[1] ?? -1,
+        };
+      })(),
+      city_regency:  headerRow.findIndex((h) => h.toUpperCase() === 'CITY / REGENCY'),
+      province:      headerRow.findIndex((h) => h.toUpperCase() === 'PROVINCE'),
+      island:        headerRow.findIndex((h) => h.toUpperCase() === 'ISLAND'),
+      longitude:     headerRow.findIndex((h) => /^(LONGITUDE|LONG\.)$/i.test(h)),
+      latitude:      headerRow.findIndex((h) => /^(LATITUDE|LAT\.)$/i.test(h)),
+      kml_folder:    headerRow.findIndex((h) => h.toUpperCase() === 'KML_FOLDER'),
+      map:           headerRow.findIndex((h) => /^(GOOGLE MAPS?|MAP)$/i.test(h)),
+      rspo:          headerRow.findIndex((h) => h.toUpperCase() === 'RSPO'),
+      rspo_type:     headerRow.findIndex((h) => h.toUpperCase() === 'RSPO TYPE'),
+      ispo:          headerRow.findIndex((h) => h.toUpperCase() === 'ISPO'),
+      iscc:          headerRow.findIndex((h) => h.toUpperCase() === 'ISCC'),
+      ggl:           headerRow.findIndex((h) => h.toUpperCase() === 'GGL'),
+      year_commence: headerRow.findIndex((h) => h.toUpperCase() === 'YEAR COMMENCE'),
+      updated_date:  headerRow.findIndex((h) => h.toUpperCase() === 'UPDATE DATE' || h.toUpperCase() === 'UPDATED DATE'),
+      update_year:   headerRow.findIndex((h) => h.toUpperCase() === 'UPDATE YEAR'),
+      remarks:       headerRow.findIndex((h) => h.toUpperCase() === 'REMARKS'),
+    };
+
+    if (colPos.plant_code === -1) {
+      return res.status(400).json({ success: false, error: { message: 'PLANT CODE column not found in header row' } });
+    }
+
+    const parseNum = (v: any): number | null => {
+      if (v === null || v === undefined || v === '') return null;
+      const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/,/g, ''));
+      return isFinite(n) ? n : null;
+    };
+    const parseStr = (v: any): string | null => {
+      if (v === null || v === undefined) return null;
+      const s = String(v).trim();
+      return s === '' ? null : s;
+    };
+    // Excel stores dates as serial numbers (days since 1900-01-00).
+    // Convert to YYYY-MM-DD string; also handles JS Date objects and plain strings.
+    const parseDate = (v: any): string | null => {
+      if (v === null || v === undefined || v === '') return null;
+      if (v instanceof Date) {
+        if (isNaN(v.getTime())) return null;
+        return v.toISOString().substring(0, 10);
+      }
+      if (typeof v === 'number' && isFinite(v)) {
+        // Excel serial date → JS Date (subtract 25569 days to reach Unix epoch)
+        const ms = Math.round((v - 25569) * 86400 * 1000);
+        const d = new Date(ms);
+        if (isNaN(d.getTime())) return null;
+        return d.toISOString().substring(0, 10);
+      }
+      const s = String(v).trim();
+      if (s === '') return null;
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? s : d.toISOString().substring(0, 10);
+    };
+
     let inserted = 0;
     let updated = 0;
     const errors: string[] = [];
 
-    for (let r = 1; r < rows.length; r++) {
+    // Data rows start 3 rows after header (skip widths row + sub-header row + header itself)
+    const dataStartIdx = headerRowIdx + 3;
+
+    for (let r = dataStartIdx; r < rows.length; r++) {
       const row = rows[r];
       if (!row || row.every((c) => c === null || c === '')) continue;
 
-      const get = (label: string) => row[mapIndex(label)];
-      const payload = {
-        plant_code: get('PLANT CODE'),
-        mills: get('MILLS'),
-        group_id: get('GROUP ID'),
-        parent_company: get('PARENT COMPANY'),
-        group_holding: get('GROUP / HOLDING'),
-        controlling_shareholder: get('Controlling Shareholder'),
-        other_shareholders: get('Other Shareholders'),
-        group_type: get('GROUP TYPE'),
-        group_scale: get('Group Scale'),
-        integrated_status: get('Integrated Status'),
-        cap: get('CAP'),
-        city_regency: get('CITY / REGENCY'),
-        province: get('PROVINCE'),
-        island: get('ISLAND'),
-        longitude: get('Long.'),
-        latitude: get('Lat.'),
-        kml_folder: get('KML_FOLDER'),
-        map: get('MAP'),
-        rspo: get('RSPO'),
-        rspo_type: get('RSPO Type'),
-        ispo: get('ISPO'),
-        iscc: get('ISCC'),
-        year_commence: get('Year Commence'),
-        updated_date: get('Updated Date'),
-        remarks: get('Remarks'),
-      } as any;
+      const g = (col: number) => col >= 0 ? row[col] : null;
 
-      if (!payload.plant_code) {
-        errors.push(`Row ${r + 1}: PLANT CODE is required`);
-        continue;
-      }
+      const plant_code = parseStr(g(colPos.plant_code));
+      // Skip footer/summary rows that have no MILL CODE
+      if (!plant_code) continue;
+
+      const payload = {
+        plant_code,
+        mill_code:   plant_code, // same as plant_code (both from MILL CODE column)
+        mills:       parseStr(g(colPos.mills)),
+        group_id:    parseStr(g(colPos.group_id)),
+        group_type:  parseStr(g(colPos.group_type)),
+        group_scale: parseStr(g(colPos.group_scale)),
+        integrated_status: parseStr(g(colPos.integrated_status)),
+        cap:         parseNum(g(colPos.cap)),
+        cpo_prod_est_month:   parseNum(g(colPos.cpo_prod_est_month)),
+        pk_prod_est_month:    parseNum(g(colPos.pk_prod_est_month)),
+        pome_prod_est_month:  parseNum(g(colPos.pome_prod_est_month)),
+        shell_prod_est_month: parseNum(g(colPos.shell_prod_est_month)),
+        cpo_prod_est_year:    parseNum(g(colPos.cpo_prod_est_year)),
+        pk_prod_est_year:     parseNum(g(colPos.pk_prod_est_year)),
+        pome_prod_est_year:   parseNum(g(colPos.pome_prod_est_year)),
+        shell_prod_est_year:  parseNum(g(colPos.shell_prod_est_year)),
+        city_regency: parseStr(g(colPos.city_regency)),
+        province:     parseStr(g(colPos.province)),
+        island:       parseStr(g(colPos.island)),
+        longitude:    parseNum(g(colPos.longitude)),
+        latitude:     parseNum(g(colPos.latitude)),
+        kml_folder:   parseStr(g(colPos.kml_folder)),
+        map:          parseStr(g(colPos.map)),
+        rspo:         parseStr(g(colPos.rspo)),
+        rspo_type:    parseStr(g(colPos.rspo_type)),
+        ispo:         parseStr(g(colPos.ispo)),
+        iscc:         parseStr(g(colPos.iscc)),
+        ggl:          parseStr(g(colPos.ggl)),
+        year_commence: parseNum(g(colPos.year_commence)),
+        updated_date: parseDate(g(colPos.updated_date)),
+        update_year:  parseNum(g(colPos.update_year)),
+        remarks:      parseStr(g(colPos.remarks)),
+      };
 
       try {
-        const est = computeEstimates(payload.cap, productMap);
-        // Identify existing row matching the specified identity fields
-        const checkRes = await query(
-          `SELECT id FROM ${TABLE} WHERE plant_code = $1 AND COALESCE(mills,'') = COALESCE($2,'') AND COALESCE(group_id,'') = COALESCE($3,'')
-           AND COALESCE(parent_company,'') = COALESCE($4,'') AND COALESCE(group_holding,'') = COALESCE($5,'')
-           AND COALESCE(controlling_shareholder,'') = COALESCE($6,'') AND COALESCE(other_shareholders,'') = COALESCE($7,'') LIMIT 1`,
-          [payload.plant_code, payload.mills, payload.group_id, payload.parent_company, payload.group_holding, payload.controlling_shareholder, payload.other_shareholders]
-        );
+        // Upsert keyed on plant_code (unique constraint)
+        const checkRes = await query(`SELECT id FROM ${TABLE} WHERE plant_code = $1 LIMIT 1`, [plant_code]);
 
-        const matchCount = (checkRes.rowCount ?? 0);
-        if (matchCount > 0) {
-          // Update this specific row
+        if ((checkRes.rowCount ?? 0) > 0) {
           const id = checkRes.rows[0].id as string;
           await query(
-            `UPDATE ${TABLE} SET 
-              group_type = $1, group_scale = $2, integrated_status = $3, cap = $4,
-              cpo_prod_est_month = $5, pk_prod_est_month = $6, pome_prod_est_month = $7, shell_prod_est_month = $8,
-              cpo_prod_est_year = $9, pk_prod_est_year = $10, pome_prod_est_year = $11, shell_prod_est_year = $12,
-              city_regency = $13, province = $14, island = $15, longitude = $16, latitude = $17, kml_folder = $18, map = $19,
-              rspo = $20, rspo_type = $21, ispo = $22, iscc = $23, year_commence = $24, updated_date = $25, remarks = $26,
-              updated_at = NOW()
-             WHERE id = $27`,
+            `UPDATE ${TABLE} SET
+              mill_code=$1,
+              mills=$2, group_id=$3, group_type=$4, group_scale=$5, integrated_status=$6, cap=$7,
+              cpo_prod_est_month=$8, pk_prod_est_month=$9, pome_prod_est_month=$10, shell_prod_est_month=$11,
+              cpo_prod_est_year=$12, pk_prod_est_year=$13, pome_prod_est_year=$14, shell_prod_est_year=$15,
+              city_regency=$16, province=$17, island=$18, longitude=$19, latitude=$20, kml_folder=$21, map=$22,
+              rspo=$23, rspo_type=$24, ispo=$25, iscc=$26, ggl=$27,
+              year_commence=$28, updated_date=$29, update_year=$30, remarks=$31,
+              updated_at=NOW()
+            WHERE id=$32`,
             [
-              payload.group_type, payload.group_scale, payload.integrated_status, payload.cap,
-              est.cpo_month, est.pk_month, est.pome_month, est.shell_month,
-              est.cpo_year, est.pk_year, est.pome_year, est.shell_year,
+              payload.mill_code,
+              payload.mills, payload.group_id, payload.group_type, payload.group_scale, payload.integrated_status, payload.cap,
+              payload.cpo_prod_est_month, payload.pk_prod_est_month, payload.pome_prod_est_month, payload.shell_prod_est_month,
+              payload.cpo_prod_est_year, payload.pk_prod_est_year, payload.pome_prod_est_year, payload.shell_prod_est_year,
               payload.city_regency, payload.province, payload.island, payload.longitude, payload.latitude, payload.kml_folder, payload.map,
-              payload.rspo, payload.rspo_type, payload.ispo, payload.iscc, payload.year_commence, payload.updated_date, payload.remarks,
+              payload.rspo, payload.rspo_type, payload.ispo, payload.iscc, payload.ggl,
+              payload.year_commence, payload.updated_date, payload.update_year, payload.remarks,
               id,
             ]
           );
           updated += 1;
         } else {
-          // Insert new row
           await query(
             `INSERT INTO ${TABLE} (
-              plant_code, mills, group_id, parent_company, group_holding, controlling_shareholder, other_shareholders,
-              group_type, group_scale, integrated_status, cap,
+              plant_code, mill_code,
+              mills, group_id, group_type, group_scale, integrated_status, cap,
               cpo_prod_est_month, pk_prod_est_month, pome_prod_est_month, shell_prod_est_month,
               cpo_prod_est_year, pk_prod_est_year, pome_prod_est_year, shell_prod_est_year,
-              city_regency, province, island, longitude, latitude, kml_folder, map, rspo, rspo_type, ispo, iscc,
-              year_commence, updated_date, remarks
+              city_regency, province, island, longitude, latitude, kml_folder, map,
+              rspo, rspo_type, ispo, iscc, ggl,
+              year_commence, updated_date, update_year, remarks
             ) VALUES (
-              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33
+              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+              $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
             )`,
             [
-              payload.plant_code,
-              payload.mills,
-              payload.group_id,
-              payload.parent_company,
-              payload.group_holding,
-              payload.controlling_shareholder,
-              payload.other_shareholders,
-              payload.group_type,
-              payload.group_scale,
-              payload.integrated_status,
-              payload.cap,
-              est.cpo_month, est.pk_month, est.pome_month, est.shell_month,
-              est.cpo_year, est.pk_year, est.pome_year, est.shell_year,
+              payload.plant_code, payload.mill_code,
+              payload.mills, payload.group_id, payload.group_type, payload.group_scale, payload.integrated_status, payload.cap,
+              payload.cpo_prod_est_month, payload.pk_prod_est_month, payload.pome_prod_est_month, payload.shell_prod_est_month,
+              payload.cpo_prod_est_year, payload.pk_prod_est_year, payload.pome_prod_est_year, payload.shell_prod_est_year,
               payload.city_regency, payload.province, payload.island, payload.longitude, payload.latitude, payload.kml_folder, payload.map,
-              payload.rspo, payload.rspo_type, payload.ispo, payload.iscc, payload.year_commence, payload.updated_date, payload.remarks,
+              payload.rspo, payload.rspo_type, payload.ispo, payload.iscc, payload.ggl,
+              payload.year_commence, payload.updated_date, payload.update_year, payload.remarks,
             ]
           );
           inserted += 1;

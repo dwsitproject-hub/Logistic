@@ -1,8 +1,43 @@
 import { PoolClient } from 'pg';
 import logger from '../utils/logger';
 import { isLandSapRowEligibleForTruckingCreation } from '../utils/landTruckingEligibility';
+import {
+  isTruckingPageIncoterm,
+  resolveTruckingIncotermFromParsedData,
+} from '../utils/truckingIncotermScope';
 import { isSeaSapRowEligibleForShipmentCreation } from '../utils/seaShipmentEligibility';
-import { deriveShipmentStatusFromAta } from '../utils/shipmentStatus';
+import { deriveShipmentStatus, sqlShipmentStatusRank } from '../utils/shipmentStatus';
+import {
+  SQL_CONTRACT_IMPORT_STATUS,
+  isContractDeliveryClosed,
+} from '../utils/contractDeliveryStatus';
+import { resolveSapVesselIdentity } from '../utils/sapVesselFields';
+import { resolveSapTruckingQuantityDelivered } from '../utils/sapMasterV2UatFormat';
+import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
+import {
+  denormalizeShipmentPortsFromSap,
+  resolvePrimarySapDischargePortText,
+  resolvePrimarySapLoadingPortText,
+  upsertVesselLoadingPortsFromSapData,
+} from './vesselLoadingPortsFromSap.service';
+import {
+  upsertTruckingRealization,
+} from './truckingRealization.service';
+import {
+  finalizeSapShipmentAfterUpsert,
+  findSapShipmentSupersedeCandidate,
+  findShipmentByPoAndSto,
+  hasKlipShipmentActivity,
+  hasKlipTruckingActivity,
+  isSapSourcedShipmentId,
+  finalizeSapTruckingAfterUpsert,
+} from '../utils/klipLogisticsActivity';
+import {
+  buildShipmentKlipProtectedSetSql,
+  buildTruckingKlipProtectedSetSql,
+} from '../utils/klipSapFieldMerge';
+import { sqlHasTruckingKlipPlanning } from '../utils/truckingEffectiveStatus';
+import { SQL_TRUCKING_KEEPER_PRIORITY_ORDER } from '../utils/truckingOperationUniqueness';
 
 export interface DistributionResult {
   contractId?: string;
@@ -185,6 +220,8 @@ export class SapDataDistributionService {
       const modeLabel = this.parseTransportModeLabel(seaLandRaw);
       const isLand = modeLabel === 'LAND';
       const isSea = modeLabel === 'SEA';
+      const incotermLabel = resolveTruckingIncotermFromParsedData(parsedData);
+      const isTruckIncoterm = isTruckingPageIncoterm(incotermLabel);
       const hasShipment = this.hasShipmentData(parsedData.shipment);
       const seaEligible = isSeaSapRowEligibleForShipmentCreation(parsedData);
       const hasVesselLike =
@@ -212,6 +249,8 @@ export class SapDataDistributionService {
       logger.info('Routing decision based on SEA / LAND:', {
         sea_land_raw: seaLandRaw,
         modeLabel,
+        incotermLabel,
+        isTruckIncoterm,
         isLand,
         isSea: seaLike,
         hasShipmentData: hasShipment,
@@ -220,20 +259,27 @@ export class SapDataDistributionService {
       
       // 2a. SEA: create/update shipment only when SAP row has at least one shipping anchor field
       // (STO No, ports, vessel, STO qty, qty delivery/receive, ATA milestones — see seaShipmentEligibility).
-      if (seaLike && hasShipment && seaEligible) {
+      // FRC/LCO incoterms route to trucking even when SAP Sea/Land is inconsistent.
+      if (seaLike && hasShipment && seaEligible && !isTruckIncoterm) {
         try {
           // Extract vessel data from shipment object (where it's actually stored)
+          const vesselIdentity = resolveSapVesselIdentity(
+            parsedData.shipment,
+            parsedData.vessel,
+            parsedData.raw,
+          );
           const vesselData = {
-            vessel_name: parsedData.shipment?.vessel_name,
-            vessel_code: parsedData.shipment?.vessel_code,
+            vessel_name: vesselIdentity.vessel_name,
+            vessel_code: vesselIdentity.vessel_code,
+            vessel_owner: vesselIdentity.vessel_owner,
             voyage_no: parsedData.shipment?.voyage_no,
-            vessel_owner: parsedData.shipment?.vessel_owner,
             vessel_draft: parsedData.shipment?.vessel_draft,
             vessel_loa: parsedData.shipment?.vessel_loa,
             vessel_capacity: parsedData.shipment?.vessel_capacity,
             vessel_hull_type: parsedData.shipment?.vessel_hull_type,
-            vessel_registration_year: parsedData.shipment?.vessel_registration_year || parsedData.vessel?.registration_year,
-            charter_type: parsedData.shipment?.charter_type || parsedData.vessel?.charter_type
+            vessel_registration_year:
+              parsedData.shipment?.vessel_registration_year || parsedData.vessel?.registration_year,
+            charter_type: parsedData.shipment?.charter_type || parsedData.vessel?.charter_type,
           };
           
           logger.info('Attempting to upsert shipment with data (SEA):', {
@@ -241,18 +287,40 @@ export class SapDataDistributionService {
             vessel_name: vesselData.vessel_name,
             contractId: result.contractId
           });
-          result.shipmentId = await this.upsertShipment(
+          const shipmentPayload = { ...(parsedData.shipment || {}) };
+          this.enrichShipmentSfalSfbdFromRaw(shipmentPayload, parsedData.raw);
+
+          const shipmentId = await this.upsertShipment(
             client,
-            parsedData.shipment,
+            shipmentPayload,
             result.contractId, // ensure we link shipment to whatever contract id we resolved
             vesselData,
-            userId
+            userId,
+            parsedData,
           );
-          logger.info('Shipment upserted successfully:', result.shipmentId);
-          
-          // Create or update vessel loading ports
-          await this.upsertVesselLoadingPorts(client, result.shipmentId, parsedData);
-          logger.info('Vessel loading ports processed for shipment:', result.shipmentId);
+          const shipmentUuid = this.toUuid(shipmentId);
+          if (!shipmentUuid) {
+            result.shipmentId = undefined;
+            logger.warn('Shipment upsert returned no UUID; skipping port sync and KLIP activity checks', {
+              contractId: result.contractId,
+              sto_no: parsedData.shipment?.sto_no,
+            });
+          } else {
+            result.shipmentId = shipmentUuid;
+            logger.info('Shipment upserted successfully:', result.shipmentId);
+
+            // Create or update vessel loading ports
+            await this.upsertVesselLoadingPorts(client, result.shipmentId, parsedData);
+            const klipProtectPorts = await hasKlipShipmentActivity(
+              client,
+              result.shipmentId,
+              result.contractId ?? undefined,
+            );
+            await denormalizeShipmentPortsFromSap(client, result.shipmentId, parsedData, {
+              protectKlip: klipProtectPorts,
+            });
+            logger.info('Vessel loading ports processed for shipment:', result.shipmentId);
+          }
         } catch (shipmentError) {
           logger.error('Failed to upsert shipment:', shipmentError);
           logger.error('Shipment data:', JSON.stringify(parsedData.shipment, null, 2));
@@ -263,17 +331,16 @@ export class SapDataDistributionService {
           contractId: result.contractId,
           sto_no: parsedData.shipment?.sto_no,
         });
-      } else if (isLand && isLandSapRowEligibleForTruckingCreation(parsedData)) {
-        // 2b. LAND: create trucking only when SAP row has at least one trucking anchor field
-        // (STO No, loading/discharge location, owner, STO qty, qty delivery/receive — see landTruckingEligibility).
+      } else if (isTruckIncoterm && isLandSapRowEligibleForTruckingCreation(parsedData)) {
+        // 2b. FRC/LCO: use parsedData.trucking[] (columns AV/AW Last/Start Receive) — NOT vessel shipment dates.
         try {
-          logger.info('Creating trucking operation from shipment data (LAND):', {
+          logger.info('Creating trucking operation(s) from SAP trucking data (FRC/LCO):', {
             sto_no: parsedData.shipment?.sto_no,
-            contractId: result.contractId
+            contractId: result.contractId,
+            truckingLegs: parsedData.trucking?.length ?? 0,
           });
-          
-          // Convert shipment data to trucking operation format
-          const truckingDataFromShipment = {
+
+          const shipmentFallback = {
             sequence: 1,
             data: {
               cargo_readiness_at_starting_location: parsedData.shipment?.eta_vessel_arrival_loading_port_1 || null,
@@ -282,25 +349,32 @@ export class SapDataDistributionService {
               trucking_owner_at_starting_location: parsedData.shipment?.vessel_owner || null,
               trucking_oa_budget_at_starting_location: null,
               trucking_oa_actual_at_starting_location: null,
-              quantity_sent_via_trucking_based_on_surat_jalan: parsedData.shipment?.quantity_at_loading_port_1_based_on_bast || null,
-              quantity_delivered_via_trucking: parsedData.shipment?.quantity_delivered || null,
+              quantity_sent_via_trucking_based_on_surat_jalan:
+                parsedData.shipment?.quantity_at_loading_port_1_based_on_bast || null,
+              quantity_delivered_via_trucking: resolveSapTruckingQuantityDelivered(parsedData),
               trucking_gain_loss_at_starting_location: null,
-              trucking_starting_date_at_starting_location: parsedData.shipment?.eta_vessel_arrival_loading_port_1 || null,
-              trucking_completion_date_at_starting_location: parsedData.shipment?.ata_vessel_sailed_at_loading_port_1 || null
-            }
+            },
           };
-          
-          const truckingId = await this.createTruckingOperation(
-            client,
-            undefined, // No shipment_id for LAND operations
-            result.contractId,
-            truckingDataFromShipment
-          );
-          if (truckingId) result.truckingOperationIds.push(truckingId);
-          logger.info('Trucking operation created successfully from shipment data:', truckingId);
+
+          const truckingEntries =
+            Array.isArray(parsedData.trucking) && parsedData.trucking.length > 0
+              ? parsedData.trucking
+              : [shipmentFallback];
+
+          for (const entry of truckingEntries) {
+            const enriched = this.enrichLandTruckingDataFromRaw(parsedData, entry);
+            const truckingId = await this.createTruckingOperation(
+              client,
+              undefined,
+              result.contractId,
+              enriched
+            );
+            if (truckingId) result.truckingOperationIds.push(truckingId);
+            logger.info('Trucking operation upserted from SAP (FRC/LCO):', truckingId);
+          }
         } catch (truckingError) {
-          logger.error('Failed to create trucking operation from shipment data:', truckingError);
-          logger.error('Shipment data:', JSON.stringify(parsedData.shipment, null, 2));
+          logger.error('Failed to create trucking operation from SAP (FRC/LCO):', truckingError);
+          logger.error('Parsed trucking:', JSON.stringify(parsedData.trucking, null, 2));
           throw truckingError;
         }
       } else {
@@ -368,6 +442,90 @@ export class SapDataDistributionService {
   }
   
   /**
+   * Move dependent rows from one contract UUID to another (placeholder → real contract).
+   */
+  private static async mergeContractRecords(
+    client: PoolClient,
+    fromContractUuid: string,
+    toContractUuid: string
+  ): Promise<void> {
+    if (fromContractUuid === toContractUuid) return;
+
+    await client.query(
+      `UPDATE shipments SET contract_id = $1 WHERE contract_id = $2`,
+      [toContractUuid, fromContractUuid]
+    );
+    await client.query(
+      `UPDATE trucking_operations SET contract_id = $1 WHERE contract_id = $2`,
+      [toContractUuid, fromContractUuid]
+    );
+    await client.query(
+      `UPDATE payments SET contract_id = $1 WHERE contract_id = $2`,
+      [toContractUuid, fromContractUuid]
+    );
+    await client.query(
+      `UPDATE documents SET contract_id = $1 WHERE contract_id = $2`,
+      [toContractUuid, fromContractUuid]
+    );
+    await client.query(
+      `INSERT INTO contract_stos (
+         contract_id, sto_number, sto_quantity, sto_type, sto_item, sto_classification, plant_code
+       )
+       SELECT $1, sto_number, sto_quantity, sto_type, sto_item, sto_classification, plant_code
+       FROM contract_stos
+       WHERE contract_id = $2
+       ON CONFLICT (contract_id, sto_number) DO UPDATE SET
+         sto_quantity = COALESCE(EXCLUDED.sto_quantity, contract_stos.sto_quantity),
+         sto_type = COALESCE(EXCLUDED.sto_type, contract_stos.sto_type),
+         sto_item = COALESCE(EXCLUDED.sto_item, contract_stos.sto_item),
+         sto_classification = COALESCE(EXCLUDED.sto_classification, contract_stos.sto_classification),
+         plant_code = COALESCE(EXCLUDED.plant_code, contract_stos.plant_code),
+         updated_at = CURRENT_TIMESTAMP`,
+      [toContractUuid, fromContractUuid]
+    );
+    await client.query(`DELETE FROM contracts WHERE id = $1`, [fromContractUuid]);
+  }
+
+  /**
+   * When SAP rows arrive with contract_no + po_no, reconcile any PO-prefixed placeholder.
+   * If the real contract_id already exists, merge the placeholder into it instead of renaming
+   * (renaming would violate contracts_contract_id_key).
+   */
+  private static async reconcilePoPlaceholder(
+    client: PoolClient,
+    contractNumber: string,
+    poNumber: string
+  ): Promise<void> {
+    const placeholderId = `PO-${poNumber}`;
+    const placeholder = await client.query(
+      `SELECT id FROM contracts WHERE contract_id = $1 LIMIT 1`,
+      [placeholderId]
+    );
+    if (placeholder.rows.length === 0) return;
+
+    const placeholderUuid = placeholder.rows[0].id as string;
+    const existingReal = await client.query(
+      `SELECT id FROM contracts WHERE contract_id = $1 LIMIT 1`,
+      [contractNumber]
+    );
+
+    if (existingReal.rows.length > 0) {
+      const realUuid = existingReal.rows[0].id as string;
+      if (realUuid !== placeholderUuid) {
+        logger.info(`Merging placeholder contract ${placeholderId} into existing ${contractNumber}`);
+        await this.mergeContractRecords(client, placeholderUuid, realUuid);
+      }
+      return;
+    }
+
+    logger.info(`Renaming placeholder contract ${placeholderId} to ${contractNumber}`);
+    await client.query(
+      `UPDATE contracts SET contract_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [contractNumber, placeholderUuid]
+    );
+  }
+
+  /**
    * Create or update contract
    */
   private static async upsertContract(
@@ -383,6 +541,14 @@ export class SapDataDistributionService {
       throw new Error('Contract number or PO number is required');
     }
 
+    // Serialize upserts for the same business contract_id within this transaction (batch + concurrent imports).
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1::text))`, [effectiveContractId]);
+
+    // When we have a proper contract_no, reconcile PO-prefixed placeholder rows for the same PO.
+    if (contractNumber && poNumber) {
+      await this.reconcilePoPlaceholder(client, contractNumber, poNumber);
+    }
+
     const quantity = this.parseNumber(contractData.contract_quantity);
     const unitPrice = this.parseNumber(contractData.unit_price);
     const contractValue = (quantity && unitPrice) ? quantity * unitPrice : null;
@@ -396,10 +562,10 @@ export class SapDataDistributionService {
         incoterm, transport_mode, quantity_ordered, unit, unit_price, contract_value,
         delivery_start_date, delivery_end_date, source_type, contract_type,
         status, sto_number, sto_quantity, logistics_classification, po_classification,
-        created_by
+        plant_code, created_by
       ) VALUES (
         $1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10::numeric, 'MT', $11::numeric, $12::numeric,
-        $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22
+        $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22, $23
       )
       ON CONFLICT (contract_id) DO UPDATE SET
         group_name = COALESCE(EXCLUDED.group_name, contracts.group_name),
@@ -422,6 +588,7 @@ export class SapDataDistributionService {
         sto_quantity = COALESCE(EXCLUDED.sto_quantity, contracts.sto_quantity),
         logistics_classification = COALESCE(EXCLUDED.logistics_classification, contracts.logistics_classification),
         po_classification = COALESCE(EXCLUDED.po_classification, contracts.po_classification),
+        plant_code = COALESCE(EXCLUDED.plant_code, contracts.plant_code),
         updated_at = CURRENT_TIMESTAMP
       RETURNING id`,
       [
@@ -446,10 +613,38 @@ export class SapDataDistributionService {
         this.parseNumber(contractData.sto_quantity),
         contractData.logistics_area_classification,
         contractData.sto_classification || contractData.po_classification,
+        contractData.plant_code || null,
         userId
       ]
     );
-    return result.rows[0].id;
+    const contractUuid = result.rows[0].id as string;
+
+    // Persist each STO as a separate row in contract_stos to support multiple STOs per contract.
+    const stoNo = contractData.sto_no != null ? String(contractData.sto_no).trim() || null : null;
+    if (stoNo) {
+      await client.query(
+        `INSERT INTO contract_stos (contract_id, sto_number, sto_quantity, sto_type, sto_item, sto_classification, plant_code)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (contract_id, sto_number) DO UPDATE SET
+           sto_quantity     = COALESCE(EXCLUDED.sto_quantity, contract_stos.sto_quantity),
+           sto_type         = COALESCE(EXCLUDED.sto_type, contract_stos.sto_type),
+           sto_item         = COALESCE(EXCLUDED.sto_item, contract_stos.sto_item),
+           sto_classification = COALESCE(EXCLUDED.sto_classification, contract_stos.sto_classification),
+           plant_code       = COALESCE(EXCLUDED.plant_code, contract_stos.plant_code),
+           updated_at       = CURRENT_TIMESTAMP`,
+        [
+          contractUuid,
+          stoNo,
+          this.parseNumber(contractData.sto_quantity),
+          contractData.sto_type || null,
+          contractData.sto_item || null,
+          contractData.sto_classification || contractData.po_classification || null,
+          contractData.plant_code || null
+        ]
+      );
+    }
+
+    return contractUuid;
   }
   
   /**
@@ -460,15 +655,21 @@ export class SapDataDistributionService {
     shipmentData: any,
     contractId: string | undefined,
     vesselData: any,
-    _userId?: string
-  ): Promise<string> {
+    _userId?: string,
+    parsedData?: Record<string, unknown>,
+  ): Promise<string | null> {
     const contractUuid = this.toUuid(contractId);
     const shipmentIdFromSap = shipmentData.shipment_id || shipmentData.sto_no;
 
+    const resolvedVessel = resolveSapVesselIdentity(
+      shipmentData,
+      vesselData,
+      (shipmentData as { raw?: Record<string, unknown> })?.raw,
+    );
     const voyageNo = vesselData.voyage_no || shipmentData.voyage_no;
-    const vesselCode = vesselData.vessel_code || shipmentData.vessel_code;
-    const vesselName = vesselData.vessel_name || shipmentData.vessel_name;
-    const vesselOwner = vesselData.vessel_owner || shipmentData.vessel_owner;
+    const vesselCode = resolvedVessel.vessel_code || vesselData.vessel_code || shipmentData.vessel_code;
+    const vesselName = resolvedVessel.vessel_name || vesselData.vessel_name || shipmentData.vessel_name;
+    const vesselOwner = resolvedVessel.vessel_owner || vesselData.vessel_owner || shipmentData.vessel_owner;
 
     const vesselDraft = this.parseNumber(shipmentData.vessel_draft ?? vesselData.vessel_draft);
     const vesselLoa = this.parseNumber(shipmentData.vessel_loa ?? vesselData.vessel_loa);
@@ -480,13 +681,35 @@ export class SapDataDistributionService {
     const loadingMethod = shipmentData.loading_method || null;
     const dischargeMethod = shipmentData.discharge_method || null;
 
-    // Prioritize vessel_loading_port_1 from SAP data, ensuring we don't use invalid values like '0.00'
-    let portOfLoading = shipmentData.vessel_loading_port_1 || shipmentData.port_of_loading || shipmentData.loading_port || shipmentData.loading_port_1 || null;
+    // Denormalize SAP Vessel Loading/Discharge Port onto shipment shell (list fast-path).
+    const sapPortContext =
+      parsedData ??
+      ({
+        shipment: shipmentData,
+        raw: (shipmentData as { raw?: Record<string, unknown> })?.raw ?? {},
+      } as Record<string, unknown>);
+    let portOfLoading = resolvePrimarySapLoadingPortText(sapPortContext);
+    if (!portOfLoading) {
+      portOfLoading =
+        shipmentData.vessel_loading_port_1 ||
+        shipmentData.vessel_loading_port ||
+        shipmentData.port_of_loading ||
+        shipmentData.loading_port ||
+        shipmentData.loading_port_1 ||
+        null;
+    }
     if (portOfLoading && (portOfLoading === '0.00' || portOfLoading.trim() === '')) {
       portOfLoading = null;
     }
-    
-    let portOfDischarge = shipmentData.vessel_discharge_port || shipmentData.port_of_discharge || shipmentData.discharge_port || null;
+
+    let portOfDischarge = resolvePrimarySapDischargePortText(sapPortContext);
+    if (!portOfDischarge) {
+      portOfDischarge =
+        shipmentData.vessel_discharge_port ||
+        shipmentData.port_of_discharge ||
+        shipmentData.discharge_port ||
+        null;
+    }
     if (portOfDischarge && (portOfDischarge === '0.00' || portOfDischarge.trim() === '')) {
       portOfDischarge = null;
     }
@@ -506,6 +729,8 @@ export class SapDataDistributionService {
     const quantityReceive = this.parseNumber(shipmentData.quantity_receive ?? shipmentData.actual_vessel_qty_receive ?? shipmentData.quantity_delivered);
     const actualVesselQtyReceive = quantityReceive;
     const blQuantity = this.parseNumber(shipmentData.bl_quantity);
+    const sfalQty = this.parseSapFigureQtyKg(shipmentData.sfal, shipmentData.sfal_qty);
+    const sfbdQty = this.parseSapFigureQtyKg(shipmentData.sfbd, shipmentData.sfbd_qty);
     const quantityDelivered = quantityDelivery ?? actualVesselQtyReceive ?? this.parseNumber(shipmentData.quantity_delivered);
     let difference = this.parseNumber(shipmentData.difference_final_qty_vs_bl_qty);
     if (difference === null && actualVesselQtyReceive !== null && blQuantity !== null) {
@@ -543,7 +768,7 @@ export class SapDataDistributionService {
     const ataSailedLoading = this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_1 ?? shipmentData.ata_vessel_sailed_from_loading_port ?? shipmentData.ata_sailed);
     const ataDischargeBerthed = this.parseDate(shipmentData.ata_vessel_berthed_at_discharge_port ?? shipmentData.ata_discharge_berthed);
 
-    const statusForInsert = deriveShipmentStatusFromAta({
+    const statusForInsert = deriveShipmentStatus({
       ata_arrival_at_loading_port: ataArrivalLoading,
       ata_berthed_at_loading_port: ataBerthedLoading,
       ata_start_loading: ataLoadingStart,
@@ -553,6 +778,9 @@ export class SapDataDistributionService {
       ata_berthed_at_discharge_port: ataDischargeBerthed,
       ata_start_discharging: ataDischargeStart,
       ata_complete_discharge: ataDischargeComplete,
+      contract_import_status: (await this.isContractSapClosedForUuid(client, contractUuid))
+        ? 'Close'
+        : null,
     });
 
     // Strategy:
@@ -569,6 +797,48 @@ export class SapDataDistributionService {
       );
       if (existingByShipment.rows.length > 0) {
         targetShipmentId = existingByShipment.rows[0].id;
+      }
+    }
+
+    if (!targetShipmentId && contractUuid && shipmentIdFromSap) {
+      const supersedeId = await findSapShipmentSupersedeCandidate(
+        client,
+        contractUuid,
+        String(shipmentIdFromSap).trim(),
+      );
+      if (supersedeId) {
+        targetShipmentId = supersedeId;
+        logger.info('upsertShipment: reusing SAP-only shipment row for new STO from latest upload', {
+          contractId,
+          supersededShipmentUuid: supersedeId,
+          sapShipmentId: shipmentIdFromSap,
+        });
+      }
+    }
+
+    if (!targetShipmentId && contractUuid && isSapSourcedShipmentId(shipmentIdFromSap)) {
+      const poRes = await client.query<{ po_number: string | null }>(
+        `SELECT po_number FROM contracts WHERE id = $1::uuid LIMIT 1`,
+        [contractUuid],
+      );
+      const poMatch = await findShipmentByPoAndSto(
+        client,
+        poRes.rows[0]?.po_number,
+        String(shipmentIdFromSap).trim(),
+      );
+      if (poMatch) {
+        targetShipmentId = poMatch.id;
+        if (poMatch.contractUuid !== contractUuid) {
+          await client.query(
+            `UPDATE shipments SET contract_id = $1::uuid, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
+            [contractUuid, poMatch.id],
+          );
+          logger.info('upsertShipment: reusing PO+STO shipment from sibling contract', {
+            contractId,
+            shipmentUuid: poMatch.id,
+            sapShipmentId: shipmentIdFromSap,
+          });
+        }
       }
     }
 
@@ -593,62 +863,113 @@ export class SapDataDistributionService {
       }
     }
 
+    // Planned MNL/MSEA shipment on this contract — reuse when SAP assigns STO (even if SAP has vessel name).
+    if (!targetShipmentId && contractUuid && shipmentIdFromSap) {
+      const existingPlanned = await client.query(
+        `SELECT id FROM shipments
+         WHERE contract_id = $1
+           AND COALESCE(status, '') <> 'CANCELLED'
+           AND (shipment_id LIKE 'MNL-%' OR shipment_id LIKE 'MSEA-%')
+         ORDER BY created_at DESC LIMIT 1`,
+        [contractUuid]
+      );
+      if (existingPlanned.rows.length > 0) {
+        targetShipmentId = existingPlanned.rows[0].id;
+        logger.info('upsertShipment: matched planned MNL/MSEA shipment for SAP STO', {
+          contractId,
+          existingShipmentId: targetShipmentId,
+          sapShipmentId: shipmentIdFromSap,
+        });
+      }
+    }
+
+    // SAP re-import: when contract has exactly one active shipment, update it instead of inserting a duplicate.
+    if (!targetShipmentId && contractUuid) {
+      const soleActive = await client.query<{ id: string }>(
+        `SELECT id FROM shipments
+         WHERE contract_id = $1::uuid
+           AND COALESCE(status, '') <> 'CANCELLED'
+         ORDER BY created_at DESC`,
+        [contractUuid],
+      );
+      if (soleActive.rows.length === 1) {
+        targetShipmentId = soleActive.rows[0].id;
+        logger.info('upsertShipment: reusing sole active shipment on contract for SAP update', {
+          contractId,
+          existingShipmentId: targetShipmentId,
+          sapShipmentId: shipmentIdFromSap,
+        });
+      }
+    }
+
     if (targetShipmentId) {
       const id = targetShipmentId;
+      const klipProtectShipmentFields = await hasKlipShipmentActivity(
+        client,
+        id,
+        contractUuid ?? undefined,
+      );
+      const shipmentProtectedSql = buildShipmentKlipProtectedSetSql(
+        klipProtectShipmentFields,
+        'param',
+      );
       await client.query(
         `UPDATE shipments SET
           contract_id = COALESCE($1::uuid, contract_id),
           voyage_no = COALESCE($2, voyage_no),
-          vessel_code = COALESCE($3, vessel_code),
-          vessel_owner = COALESCE($4, vessel_owner),
-          vessel_draft = COALESCE($5::numeric, vessel_draft),
-          vessel_loa = COALESCE($6::numeric, vessel_loa),
-          vessel_capacity = COALESCE($7::numeric, vessel_capacity),
-          vessel_hull_type = COALESCE($8, vessel_hull_type),
-          vessel_registration_year = COALESCE($9::int, vessel_registration_year),
-          charter_type = COALESCE($10, charter_type),
-          loading_method = COALESCE($11, loading_method),
-          discharge_method = COALESCE($12, discharge_method),
-          port_of_loading = CASE WHEN $13::text IS NOT NULL AND trim(COALESCE($13::text, '')) != '' AND trim(COALESCE($13::text, '')) != '0.00' THEN $13::text ELSE port_of_loading END,
-          port_of_discharge = CASE WHEN $14::text IS NOT NULL AND trim(COALESCE($14::text, '')) != '' AND trim(COALESCE($14::text, '')) != '0.00' THEN $14::text ELSE port_of_discharge END,
-          shipment_date = COALESCE($15::date, shipment_date),
-          arrival_date = COALESCE($16::date, arrival_date),
-          quantity_shipped = COALESCE($17::numeric, quantity_shipped),
-          quantity_delivered = COALESCE($18::numeric, quantity_delivered),
-          bl_quantity = COALESCE($19::numeric, bl_quantity),
-          actual_vessel_qty_receive = COALESCE($20::numeric, actual_vessel_qty_receive),
-          difference_final_qty_vs_bl_qty = COALESCE($21::numeric, difference_final_qty_vs_bl_qty),
-          estimated_km = COALESCE($22::numeric, estimated_km),
-          estimated_nautical_miles = COALESCE($23::numeric, estimated_nautical_miles),
-          vessel_oa_budget = COALESCE($24::numeric, vessel_oa_budget),
-          vessel_oa_actual = COALESCE($25::numeric, vessel_oa_actual),
-          average_vessel_speed = COALESCE($26::numeric, average_vessel_speed),
-          loading_rate = COALESCE($27::numeric, loading_rate),
-          discharge_rate = COALESCE($28::numeric, discharge_rate),
-          loading_duration_days = COALESCE($29::int, loading_duration_days),
-          discharge_duration_days = COALESCE($30::int, discharge_duration_days),
-          total_lead_time_days = COALESCE($31::int, total_lead_time_days),
-          eta_arrival = COALESCE($32::date, eta_arrival),
-          ata_arrival = COALESCE($33::date, ata_arrival),
-          eta_sailed = COALESCE($34::date, eta_sailed),
-          ata_sailed = COALESCE($35::date, ata_sailed),
-          eta_loading_start = COALESCE($36::date, eta_loading_start),
-          ata_loading_start = COALESCE($37::date, ata_loading_start),
-          eta_loading_complete = COALESCE($38::date, eta_loading_complete),
-          ata_loading_complete = COALESCE($39::date, ata_loading_complete),
-          eta_discharge_arrival = COALESCE($40::date, eta_discharge_arrival),
-          ata_discharge_arrival = COALESCE($41::date, ata_discharge_arrival),
-          eta_discharge_start = COALESCE($42::date, eta_discharge_start),
-          ata_discharge_start = COALESCE($43::date, ata_discharge_start),
-          eta_discharge_complete = COALESCE($44::date, eta_discharge_complete),
-          ata_discharge_complete = COALESCE($45::date, ata_discharge_complete),
-          status = $46,
+          ${shipmentProtectedSql},
+          vessel_owner = COALESCE($5, vessel_owner),
+          vessel_draft = COALESCE($6::numeric, vessel_draft),
+          vessel_loa = COALESCE($7::numeric, vessel_loa),
+          vessel_capacity = COALESCE($8::numeric, vessel_capacity),
+          vessel_hull_type = COALESCE($9, vessel_hull_type),
+          vessel_registration_year = COALESCE($10::int, vessel_registration_year),
+          charter_type = COALESCE($11, charter_type),
+          loading_method = COALESCE($12, loading_method),
+          discharge_method = COALESCE($13, discharge_method),
+          shipment_date = COALESCE($16::date, shipment_date),
+          arrival_date = COALESCE($17::date, arrival_date),
+          quantity_shipped = COALESCE($18::numeric, quantity_shipped),
+          bl_quantity = COALESCE($20::numeric, bl_quantity),
+          difference_final_qty_vs_bl_qty = COALESCE($22::numeric, difference_final_qty_vs_bl_qty),
+          estimated_km = COALESCE($23::numeric, estimated_km),
+          estimated_nautical_miles = COALESCE($24::numeric, estimated_nautical_miles),
+          vessel_oa_budget = COALESCE($25::numeric, vessel_oa_budget),
+          vessel_oa_actual = COALESCE($26::numeric, vessel_oa_actual),
+          average_vessel_speed = COALESCE($27::numeric, average_vessel_speed),
+          loading_rate = COALESCE($28::numeric, loading_rate),
+          discharge_rate = COALESCE($29::numeric, discharge_rate),
+          loading_duration_days = COALESCE($30::int, loading_duration_days),
+          discharge_duration_days = COALESCE($31::int, discharge_duration_days),
+          total_lead_time_days = COALESCE($32::int, total_lead_time_days),
+          eta_arrival = COALESCE($33::date, eta_arrival),
+          ata_arrival = COALESCE($34::date, ata_arrival),
+          eta_sailed = COALESCE($35::date, eta_sailed),
+          ata_sailed = COALESCE($36::date, ata_sailed),
+          eta_loading_start = COALESCE($37::date, eta_loading_start),
+          ata_loading_start = COALESCE($38::date, ata_loading_start),
+          eta_loading_complete = COALESCE($39::date, eta_loading_complete),
+          ata_loading_complete = COALESCE($40::date, ata_loading_complete),
+          eta_discharge_arrival = COALESCE($41::date, eta_discharge_arrival),
+          ata_discharge_arrival = COALESCE($42::date, ata_discharge_arrival),
+          eta_discharge_start = COALESCE($43::date, eta_discharge_start),
+          ata_discharge_start = COALESCE($44::date, ata_discharge_start),
+          eta_discharge_complete = COALESCE($45::date, eta_discharge_complete),
+          ata_discharge_complete = COALESCE($46::date, ata_discharge_complete),
+          sfal_qty = COALESCE($47::numeric, sfal_qty),
+          sfbd_qty = COALESCE($48::numeric, sfbd_qty),
+          status = CASE
+            WHEN ${sqlShipmentStatusRank('$49::text')} > ${sqlShipmentStatusRank('status')}
+            THEN $49
+            ELSE status
+          END,
           updated_at = CURRENT_TIMESTAMP
-         WHERE id = $47`,
+         WHERE id = $50`,
         [
           contractUuid,
           voyageNo,
           vesselCode,
+          vesselName,
           vesselOwner,
           vesselDraft,
           vesselLoa,
@@ -691,12 +1012,49 @@ export class SapDataDistributionService {
           ataDischargeStart,
           etaDischargeComplete,
           ataDischargeComplete,
+          sfalQty,
+          sfbdQty,
           statusForInsert,
           id
         ]
       );
+      await ensureMasterVesselFromSap(
+        { vessel_code: vesselCode, vessel_name: vesselName, vessel_owner: vesselOwner },
+        client,
+      );
+      if (contractUuid) {
+        const reconcile = await finalizeSapShipmentAfterUpsert(
+          client,
+          contractUuid,
+          id,
+          shipmentIdFromSap ? String(shipmentIdFromSap).trim() : null,
+        );
+        if (reconcile.cancelledShipmentIds.length > 0) {
+          logger.info('upsertShipment: cancelled superseded SAP shipment rows', {
+            contractId,
+            keeperShipmentId: id,
+            cancelled: reconcile.cancelledShipmentIds,
+          });
+        }
+      }
       return id;
     } else if (shipmentIdFromSap) {
+      let klipProtectShipmentFields = false;
+      const existingForConflict = await client.query(
+        `SELECT id FROM shipments WHERE shipment_id = $1 LIMIT 1`,
+        [shipmentIdFromSap],
+      );
+      if (existingForConflict.rows.length > 0) {
+        klipProtectShipmentFields = await hasKlipShipmentActivity(
+          client,
+          existingForConflict.rows[0].id,
+          contractUuid ?? undefined,
+        );
+      }
+      const shipmentConflictProtectedSql = buildShipmentKlipProtectedSetSql(
+        klipProtectShipmentFields,
+        'excluded',
+      );
       const result = await client.query(
         `INSERT INTO shipments (
           shipment_id, contract_id, status, voyage_no, vessel_code, vessel_name, vessel_owner,
@@ -709,15 +1067,66 @@ export class SapDataDistributionService {
           eta_loading_complete, ata_loading_complete, eta_discharge_arrival, ata_discharge_arrival,
           eta_discharge_start, ata_discharge_start, eta_discharge_complete, ata_discharge_complete,
           loading_rate, discharge_rate, loading_duration_days, discharge_duration_days,
-          total_lead_time_days
+          total_lead_time_days, sfal_qty, sfbd_qty
         ) VALUES (
           $1, $2::uuid, $3, $4, $5, $6, $7, $8::numeric, $9::numeric, $10::numeric, $11, $12::int,
           $13, $14, $15, $16, $17, $18::date, $19::date, $20::date, $21::date, $22::date, $23::date,
           $24::numeric, $25::numeric, $26::numeric, $27::numeric, $28::numeric, $29::numeric, $30::numeric,
           $31::numeric, $32::numeric, $33::numeric, $34::date, $35::date, $36::date, $37::date,
           $38::date, $39::date, $40::date, $41::date, $42::date, $43::date, $44::numeric, $45::numeric,
-          $46::int, $47::int, $48::int
-        ) RETURNING id`,
+          $46::int, $47::int, $48::int, $49::numeric, $50::numeric
+        )
+        ON CONFLICT (shipment_id) DO UPDATE SET
+          contract_id   = COALESCE(EXCLUDED.contract_id, shipments.contract_id),
+          voyage_no     = COALESCE(EXCLUDED.voyage_no, shipments.voyage_no),
+          ${shipmentConflictProtectedSql},
+          vessel_owner  = COALESCE(EXCLUDED.vessel_owner, shipments.vessel_owner),
+          vessel_draft  = COALESCE(EXCLUDED.vessel_draft, shipments.vessel_draft),
+          vessel_loa    = COALESCE(EXCLUDED.vessel_loa, shipments.vessel_loa),
+          vessel_capacity = COALESCE(EXCLUDED.vessel_capacity, shipments.vessel_capacity),
+          vessel_hull_type = COALESCE(EXCLUDED.vessel_hull_type, shipments.vessel_hull_type),
+          vessel_registration_year = COALESCE(EXCLUDED.vessel_registration_year, shipments.vessel_registration_year),
+          charter_type  = COALESCE(EXCLUDED.charter_type, shipments.charter_type),
+          loading_method  = COALESCE(EXCLUDED.loading_method, shipments.loading_method),
+          discharge_method = COALESCE(EXCLUDED.discharge_method, shipments.discharge_method),
+          eta_arrival   = COALESCE(EXCLUDED.eta_arrival, shipments.eta_arrival),
+          ata_arrival   = COALESCE(EXCLUDED.ata_arrival, shipments.ata_arrival),
+          eta_sailed    = COALESCE(EXCLUDED.eta_sailed, shipments.eta_sailed),
+          ata_sailed    = COALESCE(EXCLUDED.ata_sailed, shipments.ata_sailed),
+          shipment_date = COALESCE(EXCLUDED.shipment_date, shipments.shipment_date),
+          arrival_date  = COALESCE(EXCLUDED.arrival_date, shipments.arrival_date),
+          quantity_shipped = COALESCE(EXCLUDED.quantity_shipped, shipments.quantity_shipped),
+          bl_quantity   = COALESCE(EXCLUDED.bl_quantity, shipments.bl_quantity),
+          difference_final_qty_vs_bl_qty = COALESCE(EXCLUDED.difference_final_qty_vs_bl_qty, shipments.difference_final_qty_vs_bl_qty),
+          estimated_km  = COALESCE(EXCLUDED.estimated_km, shipments.estimated_km),
+          estimated_nautical_miles = COALESCE(EXCLUDED.estimated_nautical_miles, shipments.estimated_nautical_miles),
+          vessel_oa_budget = COALESCE(EXCLUDED.vessel_oa_budget, shipments.vessel_oa_budget),
+          vessel_oa_actual = COALESCE(EXCLUDED.vessel_oa_actual, shipments.vessel_oa_actual),
+          average_vessel_speed = COALESCE(EXCLUDED.average_vessel_speed, shipments.average_vessel_speed),
+          eta_loading_start = COALESCE(EXCLUDED.eta_loading_start, shipments.eta_loading_start),
+          ata_loading_start = COALESCE(EXCLUDED.ata_loading_start, shipments.ata_loading_start),
+          eta_loading_complete = COALESCE(EXCLUDED.eta_loading_complete, shipments.eta_loading_complete),
+          ata_loading_complete = COALESCE(EXCLUDED.ata_loading_complete, shipments.ata_loading_complete),
+          eta_discharge_arrival = COALESCE(EXCLUDED.eta_discharge_arrival, shipments.eta_discharge_arrival),
+          ata_discharge_arrival = COALESCE(EXCLUDED.ata_discharge_arrival, shipments.ata_discharge_arrival),
+          eta_discharge_start = COALESCE(EXCLUDED.eta_discharge_start, shipments.eta_discharge_start),
+          ata_discharge_start = COALESCE(EXCLUDED.ata_discharge_start, shipments.ata_discharge_start),
+          eta_discharge_complete = COALESCE(EXCLUDED.eta_discharge_complete, shipments.eta_discharge_complete),
+          ata_discharge_complete = COALESCE(EXCLUDED.ata_discharge_complete, shipments.ata_discharge_complete),
+          loading_rate  = COALESCE(EXCLUDED.loading_rate, shipments.loading_rate),
+          discharge_rate = COALESCE(EXCLUDED.discharge_rate, shipments.discharge_rate),
+          loading_duration_days = COALESCE(EXCLUDED.loading_duration_days, shipments.loading_duration_days),
+          discharge_duration_days = COALESCE(EXCLUDED.discharge_duration_days, shipments.discharge_duration_days),
+          total_lead_time_days = COALESCE(EXCLUDED.total_lead_time_days, shipments.total_lead_time_days),
+          sfal_qty = COALESCE(EXCLUDED.sfal_qty, shipments.sfal_qty),
+          sfbd_qty = COALESCE(EXCLUDED.sfbd_qty, shipments.sfbd_qty),
+          status = CASE
+            WHEN ${sqlShipmentStatusRank('EXCLUDED.status')} > ${sqlShipmentStatusRank('shipments.status')}
+            THEN EXCLUDED.status
+            ELSE shipments.status
+          END,
+          updated_at    = CURRENT_TIMESTAMP
+        RETURNING id`,
         [
           shipmentIdFromSap,
           contractUuid,
@@ -766,10 +1175,32 @@ export class SapDataDistributionService {
           dischargeRate,
           loadingDurationDays,
           dischargeDurationDays,
-          totalLeadTimeDays
+          totalLeadTimeDays,
+          sfalQty,
+          sfbdQty
         ]
       );
-      return result.rows[0].id;
+      await ensureMasterVesselFromSap(
+        { vessel_code: vesselCode, vessel_name: vesselName, vessel_owner: vesselOwner },
+        client,
+      );
+      const newId = result.rows[0].id as string;
+      if (contractUuid) {
+        const reconcile = await finalizeSapShipmentAfterUpsert(
+          client,
+          contractUuid,
+          newId,
+          shipmentIdFromSap ? String(shipmentIdFromSap).trim() : null,
+        );
+        if (reconcile.cancelledShipmentIds.length > 0) {
+          logger.info('upsertShipment: cancelled superseded SAP shipment rows after insert', {
+            contractId,
+            keeperShipmentId: newId,
+            cancelled: reconcile.cancelledShipmentIds,
+          });
+        }
+      }
+      return newId;
     }
 
     // If we reach here, we had neither a direct shipment_id nor a good vessel-name match.
@@ -779,7 +1210,7 @@ export class SapDataDistributionService {
       contractId,
       vesselName
     });
-    return '';
+    return null;
   }
   
   /**
@@ -791,251 +1222,7 @@ export class SapDataDistributionService {
     parsedData: any
   ): Promise<void> {
     if (!shipmentId) return;
-    
-    const shipmentData = parsedData.shipment || {};
-
-    const qualityByLocation = new Map<string, Record<string, any>>();
-    if (Array.isArray(parsedData.quality)) {
-      for (const qualityItem of parsedData.quality) {
-        if (!qualityItem || !qualityItem.location) continue;
-        qualityByLocation.set(qualityItem.location, qualityItem.data || {});
-      }
-    }
-
-    const mapQualityColumns = (location: string) => {
-      const qualityData = qualityByLocation.get(location);
-      const mapped: any = {};
-      if (!qualityData) {
-        return mapped;
-      }
-
-      for (const [key, rawValue] of Object.entries(qualityData)) {
-        const normalizedKey = key.toLowerCase();
-        if (normalizedKey.includes('ffa')) {
-          mapped.quality_ffa = this.parseNumber(rawValue);
-        } else if (normalizedKey.includes('m_i') || normalizedKey.includes('mi') || normalizedKey.includes('moisture')) {
-          mapped.quality_mi = this.parseNumber(rawValue);
-        } else if (normalizedKey.includes('dobi')) {
-          mapped.quality_dobi = this.parseNumber(rawValue);
-        } else if (normalizedKey.includes('red')) {
-          mapped.quality_red = this.parseNumber(rawValue);
-        } else if (normalizedKey.includes('d_s') || normalizedKey.includes('d&s') || normalizedKey.includes('ds')) {
-          mapped.quality_ds = this.parseNumber(rawValue);
-        } else if (normalizedKey.includes('stone')) {
-          mapped.quality_stone = this.parseNumber(rawValue);
-        }
-      }
-
-      return mapped;
-    };
-
-    const loadingPorts: Array<Record<string, any>> = [];
-
-    // Loading Port 1
-    if (shipmentData.vessel_loading_port_1 || shipmentData.quantity_at_loading_port_1_based_on_bast || qualityByLocation.has('Loading Port 1')) {
-      loadingPorts.push({
-        port_name: shipmentData.vessel_loading_port_1 || 'Loading Port 1',
-        port_sequence: 1,
-        quantity_at_loading_port: this.parseNumber(shipmentData.quantity_at_loading_port_1_based_on_bast),
-        eta_vessel_arrival: this.parseDate(shipmentData.eta_vessel_arrival_loading_port_1),
-        ata_vessel_arrival: this.parseDate(shipmentData.ata_vessel_arrival_at_loading_port_1),
-        eta_vessel_berthed: this.parseDate(shipmentData.eta_vessel_berthed_at_loading_port_1),
-        ata_vessel_berthed: this.parseDate(shipmentData.ata_vessel_berthed_at_loading_port_1),
-        eta_loading_start: this.parseDate(shipmentData.eta_loading_start_at_loading_port_1),
-        ata_loading_start: this.parseDate(shipmentData.ata_loading_start_at_loading_port_1 ?? shipmentData.ata_vessel_start_loading),
-        eta_loading_completed: this.parseDate(shipmentData.eta_loading_completed_at_loading_port_1),
-        ata_loading_completed: this.parseDate(shipmentData.ata_loading_completed_at_loading_port_1 ?? shipmentData.ata_vessel_completed_loading),
-        eta_vessel_sailed: this.parseDate(shipmentData.eta_vessel_sailed_at_loading_port_1),
-        ata_vessel_sailed: this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_1 ?? shipmentData.ata_vessel_sailed_from_loading_port),
-        loading_rate: this.parseNumber(shipmentData.loading_rate_at_loading_port_1),
-        is_discharge_port: false,
-        ...mapQualityColumns('Loading Port 1')
-      });
-    }
-
-    // Loading Port 2
-    if (shipmentData.vessel_loading_port_2 || shipmentData.quantity_at_loading_port_2 || qualityByLocation.has('Loading Port 2')) {
-      loadingPorts.push({
-        port_name: shipmentData.vessel_loading_port_2 || 'Loading Port 2',
-        port_sequence: 2,
-        quantity_at_loading_port: this.parseNumber(shipmentData.quantity_at_loading_port_2),
-        eta_vessel_arrival: this.parseDate(shipmentData.eta_vessel_arrival_at_loading_port_2),
-        ata_vessel_arrival: this.parseDate(shipmentData.ata_vessel_arrival_at_loading_port_2),
-        eta_vessel_berthed: this.parseDate(shipmentData.eta_vessel_berthed_at_loading_port_2),
-        ata_vessel_berthed: this.parseDate(shipmentData.ata_vessel_berthed_at_loading_port_2),
-        eta_loading_start: this.parseDate(shipmentData.eta_loading_start_at_loading_port_2),
-        ata_loading_start: this.parseDate(shipmentData.ata_loading_start_at_loading_port_2),
-        eta_loading_completed: this.parseDate(shipmentData.eta_loading_completed_at_loading_port_2),
-        ata_loading_completed: this.parseDate(shipmentData.ata_loading_completed_at_loading_port_2),
-        eta_vessel_sailed: this.parseDate(shipmentData.eta_vessel_sailed_at_loading_port_2),
-        ata_vessel_sailed: this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_2),
-        loading_rate: this.parseNumber(shipmentData.loading_rate_at_loading_port_2),
-        is_discharge_port: false,
-        ...mapQualityColumns('Loading Port 2')
-      });
-    }
-
-    // Loading Port 3
-    if (shipmentData.vessel_loading_port_3 || shipmentData.quantity_at_loading_port_3 || qualityByLocation.has('Loading Port 3')) {
-      loadingPorts.push({
-        port_name: shipmentData.vessel_loading_port_3 || 'Loading Port 3',
-        port_sequence: 3,
-        quantity_at_loading_port: this.parseNumber(shipmentData.quantity_at_loading_port_3),
-        eta_vessel_arrival: this.parseDate(shipmentData.eta_vessel_arrival_at_loading_port_3),
-        ata_vessel_arrival: this.parseDate(shipmentData.ata_vessel_arrival_at_loading_port_3),
-        eta_vessel_berthed: this.parseDate(shipmentData.eta_vessel_berthed_at_loading_port_3),
-        ata_vessel_berthed: this.parseDate(shipmentData.ata_vessel_berthed_at_loading_port_3),
-        eta_loading_start: this.parseDate(shipmentData.eta_loading_start_at_loading_port_3),
-        ata_loading_start: this.parseDate(shipmentData.ata_loading_start_at_loading_port_3),
-        eta_loading_completed: this.parseDate(shipmentData.eta_loading_completed_at_loading_port_3),
-        ata_loading_completed: this.parseDate(shipmentData.ata_loading_completed_at_loading_port_3),
-        eta_vessel_sailed: this.parseDate(shipmentData.eta_vessel_sailed_at_loading_port_3),
-        ata_vessel_sailed: this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_3),
-        loading_rate: this.parseNumber(shipmentData.loading_rate_at_loading_port_3),
-        is_discharge_port: false,
-        ...mapQualityColumns('Loading Port 3')
-      });
-    }
-
-    // Discharge Port entry (if data available)
-    const dischargeQuality = mapQualityColumns('Discharge Port');
-    const dischargePortName = shipmentData.vessel_discharge_port || shipmentData.port_of_discharge || null;
-    const dischargeQuantity = this.parseNumber(shipmentData.actual_vessel_qty_receive ?? shipmentData.quantity_delivered);
-    const dischargeRate = this.parseNumber(shipmentData.discharge_rate_at_discharging_port);
-
-    if (dischargePortName || Object.keys(dischargeQuality).length > 0) {
-      loadingPorts.push({
-        port_name: dischargePortName || 'Discharge Port',
-        port_sequence: 999,
-        quantity_at_loading_port: dischargeQuantity,
-        eta_vessel_arrival: this.parseDate(shipmentData.eta_arrival_at_discharge_port),
-        ata_vessel_arrival: this.parseDate(shipmentData.ata_vessel_arrival_at_discharge_port),
-        eta_vessel_berthed: this.parseDate(shipmentData.eta_vessel_berthed_at_discharge_port),
-        ata_vessel_berthed: this.parseDate(shipmentData.ata_vessel_berthed_at_discharge_port),
-        eta_loading_start: this.parseDate(shipmentData.eta_discharging_start_at_discharge_port),
-        ata_loading_start: this.parseDate(shipmentData.ata_discharging_start_at_discharge_port ?? shipmentData.ata_vessel_start_discharging),
-        eta_loading_completed: this.parseDate(shipmentData.eta_discharging_completed_at_discharge_port),
-        ata_loading_completed: this.parseDate(shipmentData.ata_discharging_completed_at_discharge_port ?? shipmentData.ata_vessel_completed_discharge),
-        eta_vessel_sailed: this.parseDate(shipmentData.eta_discharging_completed_at_discharge_port),
-        ata_vessel_sailed: this.parseDate(shipmentData.ata_discharging_completed_at_discharge_port ?? shipmentData.ata_vessel_completed_discharge),
-        loading_rate: dischargeRate,
-        is_discharge_port: true,
-        ...dischargeQuality
-      });
-    }
-
-    for (const port of loadingPorts) {
-      if (!port.port_name) {
-        continue;
-      }
-
-      const existing = await client.query(
-        `SELECT id FROM vessel_loading_ports 
-         WHERE shipment_id = $1 
-           AND port_sequence = $2
-           AND COALESCE(is_discharge_port, false) = $3
-         LIMIT 1`,
-        [shipmentId, port.port_sequence, port.is_discharge_port === true]
-      );
-
-      if (existing.rows.length > 0) {
-        const updateValues = [
-          existing.rows[0].id,
-          port.port_name,
-          port.port_sequence,
-          port.quantity_at_loading_port,
-          port.eta_vessel_arrival,
-          port.ata_vessel_arrival,
-          port.eta_vessel_berthed,
-          port.ata_vessel_berthed,
-          port.eta_loading_start,
-          port.ata_loading_start,
-          port.eta_loading_completed,
-          port.ata_loading_completed,
-          port.eta_vessel_sailed,
-          port.ata_vessel_sailed,
-          port.loading_rate,
-          port.quality_ffa ?? null,
-          port.quality_mi ?? null,
-          port.quality_dobi ?? null,
-          port.quality_red ?? null,
-          port.quality_ds ?? null,
-          port.quality_stone ?? null,
-          port.is_discharge_port === true,
-          shipmentId
-        ];
-
-        await client.query(
-          `UPDATE vessel_loading_ports SET
-             port_name = $2,
-             port_sequence = $3,
-             quantity_at_loading_port = $4::numeric,
-             eta_vessel_arrival = $5::timestamp,
-             ata_vessel_arrival = $6::timestamp,
-             eta_vessel_berthed = $7::timestamp,
-             ata_vessel_berthed = $8::timestamp,
-             eta_loading_start = $9::timestamp,
-             ata_loading_start = $10::timestamp,
-             eta_loading_completed = $11::timestamp,
-             ata_loading_completed = $12::timestamp,
-             eta_vessel_sailed = $13::timestamp,
-             ata_vessel_sailed = $14::timestamp,
-             loading_rate = $15::numeric,
-             quality_ffa = $16::numeric,
-             quality_mi = $17::numeric,
-             quality_dobi = $18::numeric,
-             quality_red = $19::numeric,
-             quality_ds = $20::numeric,
-             quality_stone = $21::numeric,
-             is_discharge_port = $22::boolean,
-             updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1 AND shipment_id = $23`,
-          updateValues
-        );
-      } else {
-        await client.query(
-          `INSERT INTO vessel_loading_ports (
-             shipment_id, port_name, port_sequence, quantity_at_loading_port,
-             eta_vessel_arrival, ata_vessel_arrival, eta_vessel_berthed, ata_vessel_berthed,
-             eta_loading_start, ata_loading_start, eta_loading_completed, ata_loading_completed,
-             eta_vessel_sailed, ata_vessel_sailed, loading_rate,
-             quality_ffa, quality_mi, quality_dobi, quality_red, quality_ds, quality_stone,
-             is_discharge_port
-           ) VALUES (
-             $1::uuid, $2, $3, $4::numeric,
-             $5::timestamp, $6::timestamp, $7::timestamp, $8::timestamp,
-             $9::timestamp, $10::timestamp, $11::timestamp, $12::timestamp,
-             $13::timestamp, $14::timestamp, $15::numeric,
-             $16::numeric, $17::numeric, $18::numeric, $19::numeric, $20::numeric, $21::numeric,
-             $22::boolean
-           )`,
-          [
-            shipmentId,
-            port.port_name,
-            port.port_sequence,
-            port.quantity_at_loading_port,
-            port.eta_vessel_arrival,
-            port.ata_vessel_arrival,
-            port.eta_vessel_berthed,
-            port.ata_vessel_berthed,
-            port.eta_loading_start,
-            port.ata_loading_start,
-            port.eta_loading_completed,
-            port.ata_loading_completed,
-            port.eta_vessel_sailed,
-            port.ata_vessel_sailed,
-            port.loading_rate,
-            port.quality_ffa ?? null,
-            port.quality_mi ?? null,
-            port.quality_dobi ?? null,
-            port.quality_red ?? null,
-            port.quality_ds ?? null,
-            port.quality_stone ?? null,
-            port.is_discharge_port === true
-          ]
-        );
-      }
-    }
+    await upsertVesselLoadingPortsFromSapData(client, shipmentId, parsedData ?? {});
   }
   
   /**
@@ -1077,6 +1264,88 @@ export class SapDataDistributionService {
   }
   
   /**
+   * SAP upload uses "Trucking Start/Last Receive Date" (columns AV/AW), not
+   * trucking_completion_date_at_starting_location. Resolve DB dates from all aliases.
+   */
+  private static firstParsedDate(...values: unknown[]): string | null {
+    for (const v of values) {
+      const d = this.parseDate(v);
+      if (d) return d;
+    }
+    return null;
+  }
+
+  private static resolveTruckingStartDate(data: Record<string, unknown>): string | null {
+    return this.firstParsedDate(
+      data.trucking_starting_date_at_starting_location,
+      data.trucking_starting_date_at_starting_location_2,
+      data.trucking_starting_date_at_starting_location_3,
+      data.trucking_start_receive_date
+    );
+  }
+
+  private static resolveTruckingCompletionDate(data: Record<string, unknown>): string | null {
+    return this.firstParsedDate(
+      data.trucking_completion_date_at_starting_location,
+      data.trucking_completion_date_at_starting_location_2,
+      data.trucking_completion_date_at_starting_location_3,
+      data.trucking_last_receive_date,
+      data.last_receive_date
+    );
+  }
+
+  private static deriveTruckingStatusForSap(
+    startDate: string | null,
+    completionDate: string | null,
+    contractClosed = false,
+  ): 'PLANNED' | 'IN_PROGRESS' | 'COMPLETED' {
+    if (completionDate || contractClosed) return 'COMPLETED';
+    if (startDate) return 'IN_PROGRESS';
+    return 'PLANNED';
+  }
+
+  private static async isContractSapClosedForUuid(
+    client: PoolClient,
+    contractUuid: string | null,
+  ): Promise<boolean> {
+    if (!contractUuid) return false;
+    const result = await client.query(
+      `SELECT ${SQL_CONTRACT_IMPORT_STATUS} AS import_status FROM contracts c WHERE c.id = $1 LIMIT 1`,
+      [contractUuid],
+    );
+    return isContractDeliveryClosed(result.rows[0]?.import_status);
+  }
+
+  /** Copy SAP raw AV/AW columns into trucking leg when normalized trucking[] dates are missing. */
+  private static enrichLandTruckingDataFromRaw(parsedData: any, truckingData: any): { sequence: number; data: Record<string, unknown> } {
+    const data: Record<string, unknown> = { ...(truckingData?.data || {}) };
+    const raw = parsedData?.raw || {};
+    const pick = (keys: string[]): unknown => {
+      for (const k of keys) {
+        const v = raw[k];
+        if (v != null && String(v).trim() !== '') return v;
+      }
+      return null;
+    };
+    if (!data.trucking_start_receive_date) {
+      data.trucking_start_receive_date = pick([
+        'Trucking Start Receive Date',
+        'trucking start receive date',
+      ]);
+    }
+    if (!data.trucking_last_receive_date) {
+      data.trucking_last_receive_date = pick([
+        'Trucking Last Receive Date',
+        'trucking last receive date',
+      ]);
+    }
+    if (!data.quantity_delivered_via_trucking) {
+      data.quantity_delivered_via_trucking = resolveSapTruckingQuantityDelivered(parsedData);
+    }
+    return { sequence: truckingData?.sequence ?? 1, data };
+  }
+
+  /**
    * Create or update trucking operation
    */
   private static async createTruckingOperation(
@@ -1088,6 +1357,39 @@ export class SapDataDistributionService {
     const shipmentUuid = this.toUuid(shipmentId);
     const contractUuid = this.toUuid(contractId);
     if (!shipmentUuid && !contractUuid) return null;
+
+    if (contractUuid) {
+      const incRes = await client.query(
+        `SELECT
+           c.incoterm,
+           (
+             SELECT COALESCE(
+               spd.data->'contract'->>'incoterm',
+               spd.data->'raw'->>'Incoterm',
+               spd.data->>'Incoterm'
+             )
+             FROM sap_processed_data spd
+             WHERE TRIM(spd.contract_number) = TRIM(c.contract_id::text)
+             ORDER BY spd.created_at DESC NULLS LAST
+             LIMIT 1
+           ) AS sap_incoterm
+         FROM contracts c
+         WHERE c.id = $1
+         LIMIT 1`,
+        [contractUuid]
+      );
+      const incoterm = resolveTruckingIncotermFromParsedData(
+        null,
+        incRes.rows[0]?.incoterm ?? incRes.rows[0]?.sap_incoterm,
+      );
+      if (!isTruckingPageIncoterm(incoterm)) {
+        logger.warn('Skipping trucking upsert: contract incoterm is not FRC/LCO', {
+          contractUuid,
+          incoterm,
+        });
+        return null;
+      }
+    }
     
     const data = truckingData.data;
     if (!data || Object.keys(data).length === 0) return null;
@@ -1106,59 +1408,72 @@ export class SapDataDistributionService {
     // Derive a generic plant/location value for filters and dashboards
     const location = unloadingLocation || loadingLocation || null;
     
-    const startDate = this.parseDate(data.trucking_starting_date_at_starting_location);
-    const completionDate = this.parseDate(data.trucking_completion_date_at_starting_location);
-    const status =
-      completionDate != null ? 'COMPLETED' :
-      startDate != null ? 'IN_PROGRESS' :
-      'PLANNED';
+    const startDate = this.resolveTruckingStartDate(data);
+    const completionDate = this.resolveTruckingCompletionDate(data);
+    const contractSapClosed = await this.isContractSapClosedForUuid(client, contractUuid);
+    const status = this.deriveTruckingStatusForSap(startDate, completionDate, contractSapClosed);
 
     const truckingOwner = data.trucking_owner_at_starting_location;
 
-    // Try to find existing trucking operation by contract + similar trucking owner (>= 0.8)
+    // Reuse existing active trucking row on this contract (never insert duplicate SAP siblings).
     let targetTruckingId: string | null = null;
-    if (contractUuid && truckingOwner) {
-      const existingForContract = await client.query(
-        `SELECT id, trucking_owner FROM trucking_operations WHERE contract_id = $1`,
-        [contractUuid]
+    if (contractUuid) {
+      const existingForContract = await client.query<{ id: string; trucking_owner: string | null }>(
+        `SELECT t.id, t.trucking_owner
+         FROM trucking_operations t
+         WHERE t.contract_id = $1::uuid
+           AND COALESCE(t.status, '') <> 'CANCELLED'
+         ORDER BY
+           CASE WHEN ${sqlHasTruckingKlipPlanning('t')} THEN 0 ELSE 1 END,
+           ${SQL_TRUCKING_KEEPER_PRIORITY_ORDER}`,
+        [contractUuid],
       );
 
-      let bestId: string | null = null;
-      let bestScore = 0;
-      for (const row of existingForContract.rows) {
-        const score = this.stringSimilarity(truckingOwner, row.trucking_owner);
-        if (score > bestScore) {
-          bestScore = score;
-          bestId = row.id;
+      if (existingForContract.rows.length > 0) {
+        const keeperRow = existingForContract.rows[0]!;
+        if (truckingOwner) {
+          let bestId = keeperRow.id;
+          let bestScore = 0;
+          for (const row of existingForContract.rows) {
+            const score = this.stringSimilarity(truckingOwner, row.trucking_owner);
+            if (score > bestScore) {
+              bestScore = score;
+              bestId = row.id;
+            }
+          }
+          targetTruckingId = bestScore >= 0.8 ? bestId : keeperRow.id;
+        } else {
+          targetTruckingId = keeperRow.id;
         }
-      }
-
-      if (bestId && bestScore >= 0.8) {
-        targetTruckingId = bestId;
       }
     }
 
     if (targetTruckingId) {
+      const klipProtectTruckingFields = await hasKlipTruckingActivity(client, targetTruckingId);
+      const truckingProtectedSql = buildTruckingKlipProtectedSetSql(klipProtectTruckingFields);
       // Update existing trucking operation, but do NOT override:
-      // - status
       // - eta_delivery_start_date, eta_delivery_end_date
       // - eta_trucking_start_date, eta_trucking_completion_date
+      // KLIP-protected when row has user activity: loading/unloading location, qty delivered.
+      // Status is re-derived from SAP start/last receive when not CANCELLED.
       await client.query(
         `UPDATE trucking_operations SET
-          shipment_id = COALESCE($1::uuid, shipment_id),
+          shipment_id = COALESCE(NULLIF($1::text, '')::uuid, shipment_id),
           location_sequence = COALESCE($2, location_sequence),
           cargo_readiness_date = COALESCE($3::date, cargo_readiness_date),
-          loading_location = COALESCE($4, loading_location),
-          unloading_location = COALESCE($5, unloading_location),
+          ${truckingProtectedSql},
           location = COALESCE($6, location),
           trucking_owner = COALESCE($7, trucking_owner),
           oa_budget = COALESCE($8::numeric, oa_budget),
           oa_actual = COALESCE($9::numeric, oa_actual),
           quantity_sent = COALESCE($10::numeric, quantity_sent),
-          quantity_delivered = COALESCE($11::numeric, quantity_delivered),
           gain_loss = COALESCE($12::numeric, gain_loss),
-          trucking_start_date = COALESCE($13::date, trucking_start_date),
-          trucking_completion_date = COALESCE($14::date, trucking_completion_date),
+          status = CASE
+            WHEN status = 'CANCELLED' THEN status
+            WHEN $14::date IS NOT NULL THEN 'COMPLETED'
+            WHEN $13::date IS NOT NULL THEN 'IN_PROGRESS'
+            ELSE COALESCE(status, 'PLANNED')
+          END,
           updated_at = CURRENT_TIMESTAMP
          WHERE id = $15`,
         [
@@ -1179,6 +1494,17 @@ export class SapDataDistributionService {
           targetTruckingId
         ]
       );
+      if (startDate || completionDate) {
+        await upsertTruckingRealization(client, targetTruckingId, {
+          realizationStartDate: startDate,
+          realizationEndDate: completionDate,
+          source: 'sap',
+          markSapSynced: true,
+        });
+      }
+      if (contractUuid) {
+        await finalizeSapTruckingAfterUpsert(client, contractUuid, targetTruckingId);
+      }
       return targetTruckingId;
     }
 
@@ -1191,7 +1517,7 @@ export class SapDataDistributionService {
       ) VALUES (
         $1::uuid, $2::uuid, $3, $4::date, $5, $6, $7, $8,
         $9::numeric, $10::numeric, $11::numeric, $12::numeric, $13::numeric,
-        $14::date, $15::date, $16
+        NULL, NULL, $14
       ) RETURNING id`,
       [
         shipmentUuid,
@@ -1207,13 +1533,23 @@ export class SapDataDistributionService {
         this.parseNumber(data.quantity_sent_via_trucking_based_on_surat_jalan),
         this.parseNumber(data.quantity_delivered_via_trucking),
         this.parseNumber(data.trucking_gain_loss_at_starting_location),
-        startDate,
-        completionDate,
         status
       ]
     );
-    
-    return result.rows[0].id;
+    const newTruckingId = result.rows[0].id as string;
+    if (startDate || completionDate) {
+      await upsertTruckingRealization(client, newTruckingId, {
+        realizationStartDate: startDate,
+        realizationEndDate: completionDate,
+        source: 'sap',
+        markSapSynced: true,
+      });
+    }
+
+    if (contractUuid) {
+      await finalizeSapTruckingAfterUpsert(client, contractUuid, newTruckingId);
+    }
+    return newTruckingId;
   }
   
   /**
@@ -1472,6 +1808,36 @@ export class SapDataDistributionService {
   /**
    * Helper: Parse number from various formats
    */
+  /** Copy SFAL/SFBD from SAP raw row when normalized shipment object missed them. */
+  private static enrichShipmentSfalSfbdFromRaw(shipmentData: Record<string, unknown>, raw: Record<string, unknown> | undefined): void {
+    if (!shipmentData || !raw) return;
+    if (shipmentData.sfal == null && shipmentData.sfal_qty == null) {
+      const sfal = raw[' Ship Figure After Loading (SFAL) ']
+        ?? raw['Ship Figure After Loading (SFAL)']
+        ?? null;
+      if (sfal != null && String(sfal).trim() !== '') {
+        shipmentData.sfal = sfal;
+      }
+    }
+    if (shipmentData.sfbd == null && shipmentData.sfbd_qty == null) {
+      const sfbd = raw[' Ship Figure Before Discharge (SFBD) ']
+        ?? raw['Ship Figure Before Discharge (SFBD)']
+        ?? null;
+      if (sfbd != null && String(sfbd).trim() !== '') {
+        shipmentData.sfbd = sfbd;
+      }
+    }
+  }
+
+  /** SAP figure quantities are stored in Kg (same unit as Quantity Delivery / Receive). */
+  private static parseSapFigureQtyKg(...values: unknown[]): number | null {
+    for (const value of values) {
+      const kg = this.parseNumber(value);
+      if (kg !== null) return kg;
+    }
+    return null;
+  }
+
   private static parseNumber(value: any): number | null {
     if (!value) return null;
     

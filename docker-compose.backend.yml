@@ -16,6 +16,11 @@ services:
   postgres:
     image: postgres:14-alpine
     container_name: klip-postgres
+    # The staging host is a small shared box (~3.4G) running containers from several
+    # projects. Cap memory so a heavy query burst degrades klip only, instead of
+    # taking the whole instance down (observed 2026-07-10: instance hit ~95% memory
+    # and became unreachable). Normal usage observed: ~340M.
+    mem_limit: 1g
     environment:
       POSTGRES_DB: ${DB_NAME:-klip_db}
       POSTGRES_USER: ${DB_USER:-postgres}
@@ -39,6 +44,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: klip-backend
+    # See postgres note: cap memory on the shared staging host. Normal usage ~180M.
+    mem_limit: 768m
     env_file:
       - ./backend/.env
     environment:
@@ -50,6 +57,8 @@ services:
       DB_PORT: "5432"
       # DB_NAME, DB_USER, DB_PASSWORD, JWT_SECRET: from env_file (backend/.env) unless you set them in /opt/klip/.env
       JWT_EXPIRES_IN: 7d
+      # Shared upload root inside container (see backend_uploads volume below; Synology optional override)
+      UPLOAD_DIR: /app/uploads
       # GEMINI_API_KEY comes from env_file: ./backend/.env (do not override here or it will be empty)
     ports:
       - "${BACKEND_PORT:-5001}:5001"
@@ -59,6 +68,8 @@ services:
     networks:
       - klip-backend-network
     volumes:
+      # Default: local Docker volume (works when Synology is unreachable from cloud backend).
+      # For Synology bind mount after network is ready, add -f docker-compose.backend.synology.yml
       - backend_uploads:/app/uploads
       - backend_logs:/app/logs
     restart: unless-stopped

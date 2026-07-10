@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { parsePlanningTemplateDateText } from './planningTemplateDateFormat';
 
 /** True if cell is non-empty for row filtering (preserves Date / number from Excel). */
 function cellHasValue(c: unknown): boolean {
@@ -23,6 +24,24 @@ export function parsePlanningSheetToMatrix(buffer: Buffer): unknown[][] {
   return matrix
     .map((row) => row.map((c) => (c === null || c === undefined ? '' : c)))
     .filter((row) => row.some((c) => cellHasValue(c)));
+}
+
+/** Read all worksheets from an Excel workbook buffer (for WB rekap multi-sheet files). */
+export function parseWbRekapWorkbookSheetsFromBuffer(
+  buffer: Buffer,
+): Array<{ sheetName: string; matrix: unknown[][] }> {
+  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+  const sheets: Array<{ sheetName: string; matrix: unknown[][] }> = [];
+  for (const sheetName of wb.SheetNames) {
+    const ws = wb.Sheets[sheetName];
+    if (!ws) continue;
+    const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true }) as unknown[][];
+    const filtered = matrix
+      .map((row) => row.map((c) => (c === null || c === undefined ? '' : c)))
+      .filter((row) => row.some((c) => cellHasValue(c)));
+    sheets.push({ sheetName, matrix: filtered });
+  }
+  return sheets;
 }
 
 /**
@@ -76,6 +95,9 @@ export function toIsoDate10FromCell(raw: unknown): string | null {
 
   const s0 = String(raw).trim();
   if (!s0) return null;
+
+  const planningDate = parsePlanningTemplateDateText(s0);
+  if (planningDate) return planningDate;
 
   const dmy = parseDmySeparatorsToIso10(s0);
   if (dmy) return dmy;

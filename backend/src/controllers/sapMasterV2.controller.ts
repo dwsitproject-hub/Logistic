@@ -4,6 +4,20 @@ import logger from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
 
+/** Safe fields only — raw pg errors can break JSON.stringify when nested/circular. */
+function sapImportHttpError(error: unknown): { message: string; code?: string; detail?: string } {
+  if (error instanceof Error) {
+    const e = error as Error & { code?: string; detail?: string };
+    const body: { message: string; code?: string; detail?: string } = {
+      message: e.message || 'Unknown error',
+    };
+    if (typeof e.code === 'string') body.code = e.code;
+    if (typeof e.detail === 'string') body.detail = e.detail;
+    return body;
+  }
+  return { message: typeof error === 'string' ? error : 'Unknown error' };
+}
+
 /**
  * Import SAP MASTER v2 data from uploaded file
  */
@@ -29,10 +43,7 @@ export const importMasterV2 = async (req: Request, res: Response): Promise<void>
     logger.error('SAP MASTER v2 import failed', error);
     res.status(500).json({
       success: false,
-      error: {
-        message: error instanceof Error ? error.message : 'Unknown error',
-        details: error
-      }
+      error: sapImportHttpError(error),
     });
   }
 };
@@ -163,12 +174,37 @@ export const getImportStatus = async (req: Request, res: Response): Promise<void
 export const getAllImports = async (_req: Request, res: Response): Promise<void> => {
   try {
     const pool = (await import('../database/connection')).default;
+
+    // Mark imports stuck after server restart (processing but no rows ever written).
+    await pool.query(
+      `UPDATE sap_data_imports
+       SET status = 'failed',
+           error_log = COALESCE(error_log, $1)
+       WHERE status IN ('processing', 'pending')
+         AND import_timestamp < NOW() - INTERVAL '30 minutes'
+         AND NOT EXISTS (SELECT 1 FROM sap_raw_data srd WHERE srd.import_id = sap_data_imports.id)`,
+      [JSON.stringify(['Import interrupted — no rows were processed. Please upload the file again.'])],
+    );
+
     const result = await pool.query(
-      `SELECT id, import_date, import_timestamp, status, total_records, 
-              processed_records, failed_records 
-       FROM sap_data_imports 
-       ORDER BY import_timestamp DESC 
-       LIMIT 50`
+      `SELECT
+         i.id,
+         i.import_date,
+         i.import_timestamp,
+         i.status,
+         i.total_records,
+         COALESCE(rc.processed, 0)::int AS processed_records,
+         COALESCE(rc.failed, 0)::int AS failed_records
+       FROM sap_data_imports i
+       LEFT JOIN LATERAL (
+         SELECT
+           COUNT(*) FILTER (WHERE status IN ('processed', 'skipped')) AS processed,
+           COUNT(*) FILTER (WHERE status = 'failed') AS failed
+         FROM sap_raw_data
+         WHERE import_id = i.id
+       ) rc ON TRUE
+       ORDER BY i.import_timestamp DESC
+       LIMIT 50`,
     );
     
     res.json({
@@ -227,50 +263,41 @@ export const getPendingEntries = async (_req: Request, res: Response): Promise<v
  */
 export const importMasterV2Upload = async (req: Request, res: Response): Promise<void> => {
   try {
-    // Check if file was uploaded
     if (!req.file) {
       res.status(400).json({
         success: false,
-        error: { message: 'No file uploaded' }
+        error: { message: 'No file uploaded' },
       });
       return;
     }
 
     const filePath = req.file.path;
-    logger.info('Starting SAP MASTER v2 import from uploaded file', { 
+    logger.info('Queueing SAP MASTER v2 import from uploaded file', {
       fileName: req.file.originalname,
-      filePath 
+      filePath,
     });
-    
-    const result = await SapMasterV2ImportService.importMasterV2File(filePath);
-    
-    // Clean up uploaded file
-    fs.unlinkSync(filePath);
-    
-    res.json({
+
+    const queued = await SapMasterV2ImportService.queueMasterV2FileImport(filePath);
+
+    res.status(202).json({
       success: true,
       data: {
-        ...result,
-        message: result.failedRecords > 0
-          ? `Import completed with ${result.processedRecords} processed and ${result.failedRecords} failed.`
-          : `Import completed successfully with ${result.processedRecords} records processed.`
-      }
+        importId: queued.importId,
+        totalRecords: queued.totalRecords,
+        status: 'processing',
+        message: `Import started for ${queued.totalRecords.toLocaleString()} records. Monitor progress in Import History.`,
+      },
     });
-    
   } catch (error) {
     logger.error('SAP MASTER v2 upload import failed', error);
-    
-    // Clean up file if it exists
+
     if (req.file?.path && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
-    
+
     res.status(500).json({
       success: false,
-      error: {
-        message: error instanceof Error ? error.message : 'Unknown error',
-        details: error
-      }
+      error: sapImportHttpError(error),
     });
   }
 };

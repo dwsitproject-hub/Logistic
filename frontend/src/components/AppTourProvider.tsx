@@ -141,6 +141,22 @@ function TourOverlay({
 
   const isLast = index >= total - 1
 
+  const holePad = 6
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 0
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 0
+
+  const hole =
+    rect && rect.width > 0 && rect.height > 0
+      ? {
+          left: rect.left - holePad,
+          top: rect.top - holePad,
+          right: rect.right + holePad,
+          bottom: rect.bottom + holePad,
+          width: rect.width + holePad * 2,
+          height: rect.height + holePad * 2,
+        }
+      : null
+
   const cardStyle: CSSProperties = (() => {
     const pad = 16
     const cardW = Math.min(360, window.innerWidth - pad * 2)
@@ -165,23 +181,78 @@ function TourOverlay({
 
   return (
     <div className="fixed inset-0 z-[350]" aria-modal role="dialog">
-      {/* Dim overlay — click outside the card to dismiss */}
-      <button
-        type="button"
-        className="absolute inset-0 bg-black/55"
-        aria-label="Close tour"
-        onClick={onClose}
-      />
-      {rect && rect.width > 0 && rect.height > 0 && (
-        <div
-          className="pointer-events-none fixed rounded-lg border-2 border-white shadow-[0_0_0_4px_rgba(59,130,246,0.35)]"
-          style={{
-            left: rect.left - 6,
-            top: rect.top - 6,
-            width: rect.width + 12,
-            height: rect.height + 12,
-            zIndex: 360,
-          }}
+      {/* Dim only outside the highlighted region (sidebar stays clear / not grayed) */}
+      {hole ? (
+        <>
+          {Math.max(0, hole.top) > 0 ? (
+            <button
+              key="dim-top"
+              type="button"
+              className="fixed z-[340] cursor-default bg-black/55"
+              style={{ left: 0, top: 0, width: vw, height: Math.max(0, hole.top) }}
+              aria-label="Close tour"
+              onClick={onClose}
+            />
+          ) : null}
+          {hole.bottom < vh ? (
+            <button
+              key="dim-bottom"
+              type="button"
+              tabIndex={-1}
+              aria-hidden
+              className="fixed z-[340] cursor-default bg-black/55"
+              style={{ left: 0, top: hole.bottom, width: vw, height: Math.max(0, vh - hole.bottom) }}
+              onClick={onClose}
+            />
+          ) : null}
+          {Math.max(0, hole.left) > 0 && hole.bottom > hole.top ? (
+            <button
+              key="dim-left"
+              type="button"
+              tabIndex={-1}
+              aria-hidden
+              className="fixed z-[340] cursor-default bg-black/55"
+              style={{
+                left: 0,
+                top: hole.top,
+                width: hole.left,
+                height: Math.max(0, hole.bottom - hole.top),
+              }}
+              onClick={onClose}
+            />
+          ) : null}
+          {Math.max(0, vw - hole.right) > 0 && hole.bottom > hole.top ? (
+            <button
+              key="dim-right"
+              type="button"
+              tabIndex={-1}
+              aria-hidden
+              className="fixed z-[340] cursor-default bg-black/55"
+              style={{
+                left: hole.right,
+                top: hole.top,
+                width: Math.max(0, vw - hole.right),
+                height: Math.max(0, hole.bottom - hole.top),
+              }}
+              onClick={onClose}
+            />
+          ) : null}
+          <div
+            className="pointer-events-none fixed z-[360] rounded-lg border-2 border-white shadow-[0_0_0_4px_rgba(59,130,246,0.35)]"
+            style={{
+              left: hole.left,
+              top: hole.top,
+              width: hole.width,
+              height: hole.height,
+            }}
+          />
+        </>
+      ) : (
+        <button
+          type="button"
+          className="absolute inset-0 z-[340] bg-black/55"
+          aria-label="Close tour"
+          onClick={onClose}
         />
       )}
 

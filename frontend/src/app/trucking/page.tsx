@@ -7,22 +7,271 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Truck, Package, Save, Loader2, Download, Upload, Edit2, Plus, Minus, SlidersHorizontal, ChevronRight, ChevronDown, ArrowUp, ArrowDown, Check, ArrowLeft, ArrowRight } from 'lucide-react'
+import { Search, Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
+import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
+import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
+import { formatOperationalTableTextDisplay, formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { format } from 'date-fns'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { TruckingOutstandingQtyWithTooltip } from '@/components/trucking/TruckingOutstandingQtyWithTooltip'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
+import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
+import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
+import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
+import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
+import {
+  compareSapStoListRowPriority,
+  shouldPrioritizeSapStoRows,
+} from '@/lib/listSapStoPriority'
+import {
+  TableInitialLoadPlaceholder,
+  TableInitialLoadPlaceholderContent,
+} from '@/components/performance/TableInitialLoadPlaceholder'
+import {
+  COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
+  CONTRACT_PERF_TABLE_CELL_PAD,
+  CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS,
+  CONTRACT_PERF_TABLE_ROW_MIN_H,
+} from '@/lib/contractPerformanceColumns'
+import {
+  COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
+  COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+} from '@/lib/compactTableUi'
+import { formatQtyMtFromKg } from '@/lib/utils'
+import {
+  applyHPlusOnePlanningPromotions,
+  getHPlusOneIsoDate,
+  isDateInDueWindow,
+  resolveCalendarCellQtyKg,
+} from '@/lib/truckingCalendarActuals'
+import {
+  buildTruckingActualsTemplateXlsxBlob,
+  DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP,
+  isActualsTemplateDownloadEnabled,
+  isPlannedPlanningTemplateMode,
+  isUnplannedPlanningTemplateMode,
+  isWidePlanningTemplateFile,
+  triggerFailedUnplannedUploadRetemplateDownload,
+  type TruckingActualsTemplateRow,
+} from '@/lib/truckingActualsTemplate'
+import { buildTruckingPlanningTemplateFilename } from '@/lib/truckingTemplateFilename'
+import {
+  TRUCKING_COLUMN_LAYOUT_VERSION,
+  TRUCKING_COLUMN_LAYOUT_VERSION_KEY,
+  buildTruckingVisibleColumns,
+  mergeTruckingColumnOrder,
+  truckingCompactColumnFallbackOrder,
+  truckingDefaultVisibleColumnIds,
+} from '@/lib/truckingColumns'
+import {
+  OperationalNowrapCell,
+  OperationalStackedCommaCell,
+  getOperationalColumnLayout,
+  operationalTableColumnClass,
+} from '@/lib/operationalTableLayout'
+import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
+
+const TRUCKING_ACTIONS_COL_WIDTH = 140
+
+/** Hide header Upload CSV + Create New above Global Filters — set true to restore. */
+const TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED = false
+
+const TRUCKING_STATUS_LABELS: Record<string, string> = {
+  UNPLANNED: 'Unplanned',
+  PLANNED: 'Planned',
+  IN_PROGRESS: 'In Progress',
+  COMPLETED: 'Completed',
+  CANCELLED: 'Cancelled',
+}
+
+/** Parse API qty (kg) — handles numeric strings with commas. */
+function parseTruckingQtyKg(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  const n = Number(String(value).replace(/,/g, '').replace(/\s+/g, '').trim())
+  return Number.isFinite(n) ? n : null
+}
+
+/** Display trucking qty stored in kg as MT (table, calendar, mobile). */
+function formatTruckingQtyMt(value: unknown): string {
+  const kg = parseTruckingQtyKg(value)
+  if (kg === null) return '—'
+  if (kg === 0) return '0 MT'
+  return formatQtyMtFromKg(kg)
+}
+
+/** API daily_deliverables.quantity_delivered is kg; calendar drafts/edits are MT. */
+function kgToDailyPlanningMtDraft(kg: number): string {
+  if (!Number.isFinite(kg) || kg <= 0) return ''
+  const mt = kg / 1000
+  const rounded = Math.round(mt * 100) / 100
+  return String(rounded)
+}
+
+function dailyPlanningMtToKg(mt: number): number {
+  return Math.round(mt * 1000 * 100) / 100
+}
+
+/** Parse MT qty from calendar cell draft (user input). */
+function parseDailyPlanningMtDraft(raw: string): number | 'invalid' {
+  const trimmed = raw.trim()
+  if (trimmed === '') return 0
+  const n = Number(String(raw).replace(/,/g, ''))
+  if (!Number.isFinite(n) || n < 0) return 'invalid'
+  return n
+}
+
+/** Format MT draft for display (no unit suffix — legend above table). */
+function formatDailyPlanningQtyMtDisplay(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '0.00'
+  const n = Number(String(value).replace(/,/g, '').trim())
+  if (!Number.isFinite(n)) return '—'
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
 
 /** Aligns with list `formatNumber` / `formatKg`: comma thousands, period decimals. */
 function formatTruckingQtyPlain(n: number): string {
   if (!Number.isFinite(n)) return '—'
   if (n === 0) return '0'
   return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: true })
+}
+
+function truckingDbStatus(operation: Pick<TruckingOperation, 'status' | 'status_db'>): string {
+  return String(operation.status_db ?? operation.status ?? '').trim().toUpperCase()
+}
+
+function truckingStatusLabel(status: string | undefined | null): string {
+  const key = String(status ?? '').trim().toUpperCase()
+  return TRUCKING_STATUS_LABELS[key] ?? key
+}
+
+function isTruckingPlanningEditLocked(status: string | undefined | null): boolean {
+  return String(status ?? '').trim().toUpperCase() === 'CANCELLED'
+}
+
+function isTruckingEditDisabled(operation: TruckingOperation): boolean {
+  return isTruckingPlanningEditLocked(truckingDbStatus(operation))
+}
+
+function truckingEditDisabledReason(operation: TruckingOperation): string {
+  if (isTruckingPlanningEditLocked(truckingDbStatus(operation))) {
+    return 'Edit trucking is not available for cancelled operations'
+  }
+  return 'Edit Trucking'
+}
+
+function truckingEditTooltip(operation: TruckingOperation): string {
+  if (isTruckingEditDisabled(operation)) {
+    return truckingEditDisabledReason(operation)
+  }
+  if (isContractRecordClosed(operation)) {
+    return 'View Trucking (read-only)'
+  }
+  return 'Edit Trucking'
+}
+
+function isTruckingUnplanned(operation: Pick<TruckingOperation, 'status'>): boolean {
+  return String(operation.status ?? '').trim().toUpperCase() === 'UNPLANNED'
+}
+
+function isTruckingContractBacklogRow(
+  operation: Pick<TruckingOperation, 'row_kind'>,
+): boolean {
+  return String(operation.row_kind ?? '').trim() === 'contract_backlog'
+}
+
+function resolveTruckingDocumentContractId(
+  operation: Pick<TruckingOperation, 'contract_id'>,
+): string {
+  return String(operation.contract_id ?? '').trim()
+}
+
+function truckingDocumentScopeLabel(operation: TruckingOperation): string {
+  if (isTruckingContractBacklogRow(operation)) {
+    const po = String(operation.po_number ?? '').trim()
+    const contractNo = String(operation.contract_number ?? '').trim()
+    return po ? `PO ${po}` : contractNo || 'Contract'
+  }
+  return String(operation.operation_id ?? '').trim() || 'Operation'
+}
+
+function TruckTableAddTruckingButton({ onAdd }: { onAdd: () => void }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={onAdd}
+          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+          aria-label="Add Trucking"
+        >
+          <span className="relative inline-flex h-4 w-4 items-center justify-center">
+            <Truck className="h-4 w-4" />
+            <Plus className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
+          </span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">Add Trucking</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function TruckTableEditTruckingButton({
+  onEdit,
+  disabled = false,
+  disabledReason = 'Edit Trucking',
+  tooltip,
+}: {
+  onEdit: () => void
+  disabled?: boolean
+  disabledReason?: string
+  tooltip?: string
+}) {
+  const button = (
+    <Button
+      variant="outline"
+      size="icon"
+      onClick={onEdit}
+      disabled={disabled}
+      className={
+        disabled
+          ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed hover:bg-gray-50'
+          : 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
+      }
+      aria-label={tooltip ?? (disabled ? disabledReason : 'Edit Trucking')}
+    >
+      <span className="relative inline-flex h-4 w-4 items-center justify-center">
+        <Truck className="h-4 w-4" />
+        <Pencil className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
+      </span>
+    </Button>
+  )
+
+  const tooltipText = tooltip ?? (disabled ? disabledReason : 'Edit Trucking')
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {disabled ? <span className="inline-flex">{button}</span> : button}
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {tooltipText}
+      </TooltipContent>
+    </Tooltip>
+  )
 }
 
 interface TruckingOperation {
@@ -34,6 +283,7 @@ interface TruckingOperation {
   sto_number: string
   sto_quantity?: number
   contract_qty?: number
+  contract_date?: string
   delivery_start_date?: string
   delivery_end_date?: string
   location: string
@@ -41,25 +291,74 @@ interface TruckingOperation {
   unloading_location?: string
   trucking_owner: string
   cargo_readiness_date: string
+  planning_start_date?: string
+  planning_end_date?: string
   trucking_start_date: string
   trucking_completion_date: string
+  eta_trucking_completion_date?: string | null
   quantity_sent: number
   quantity_delivered: number
   quantity_receive?: number
+  outstanding_quantity?: number
   gain_loss_percentage: number
   gain_loss_amount: number
   oa_budget: number
   oa_actual: number
   estimated_km?: number
   status: string
+  /** Raw DB status — use for edit lock (CANCELLED) when effective status differs. */
+  status_db?: string
   // ETA dates removed from UI (kept in DB/backend)
   created_at: string
   supplier: string
   buyer: string
   product: string
+  incoterm?: string
   group_name: string
+  source_type?: string
   contract_ext_no?: string
+  contract_import_status?: string
+  sto_numbers?: string | null
   daily_deliverables?: Array<{ date: string; quantity_delivered: number }>
+  /** contract_backlog = open PO without trucking op; execution = normal trucking row */
+  row_kind?: 'contract_backlog' | string
+}
+
+function mergeTruckingSapFields(
+  base: TruckingOperation[],
+  hydrated: TruckingOperation[],
+): TruckingOperation[] {
+  if (!hydrated.length) return base
+  const byId = new Map<string, TruckingOperation>()
+  for (const row of hydrated) {
+    if (row.id) byId.set(String(row.id), row)
+  }
+  return base.map((row) => {
+    const match = row.id ? byId.get(String(row.id)) : undefined
+    if (!match) return row
+    return {
+      ...row,
+      status: match.status ?? row.status,
+      status_db: match.status_db ?? row.status_db,
+      contract_ext_no: match.contract_ext_no ?? row.contract_ext_no,
+      sto_number: match.sto_number ?? row.sto_number,
+      sto_numbers: match.sto_numbers ?? row.sto_numbers,
+      quantity_sent: match.quantity_sent ?? row.quantity_sent,
+      quantity_delivered: match.quantity_delivered ?? row.quantity_delivered,
+      quantity_receive: match.quantity_receive ?? row.quantity_receive,
+      outstanding_quantity: match.outstanding_quantity ?? row.outstanding_quantity,
+    }
+  })
+}
+
+function dedupeTruckingOperationsForTemplate(ops: TruckingOperation[]): TruckingOperation[] {
+  const seen = new Set<string>()
+  return ops.filter((op) => {
+    const key = op.id || `${op.contract_number}|${op.po_number ?? ''}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 type TruckingCalendarRow = {
@@ -72,6 +371,7 @@ type TruckingCalendarRow = {
   supplier?: string
   product?: string
   group_name?: string
+  incoterm?: string
   source_type?: string
   lt_spot?: string
   outstanding_quantity?: number
@@ -86,6 +386,7 @@ type TruckingCalendarRow = {
   quantity_delivered?: number
   quantity_receive?: number
   daily_deliverables?: Array<{ date: string; quantity_delivered: number }>
+  daily_actuals?: Array<{ date: string; quantity_delivered: number }>
 }
 
 interface DocumentItem {
@@ -99,62 +400,316 @@ interface DocumentItem {
   created_at?: string
 }
 
+function buildCalendarCellDrafts(
+  rows: TruckingCalendarRow[],
+  month: Date,
+): Record<string, string> {
+  const yyyy = month.getFullYear()
+  const mm = month.getMonth()
+  const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
+  const tomorrowIso = getHPlusOneIsoDate()
+  const drafts: Record<string, string> = {}
+  for (const r of rows) {
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = `${yyyy}-${String(mm + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+      const qtyKg = resolveCalendarCellQtyKg(r, date, tomorrowIso)
+      drafts[`${r.id}:${date}`] = kgToDailyPlanningMtDraft(qtyKg)
+    }
+  }
+  return drafts
+}
+
+function isDateInCalendarMonth(dateIso: string, month: Date): boolean {
+  const d = (dateIso || '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false
+  const yyyy = month.getFullYear()
+  const mm = month.getMonth()
+  const prefix = `${yyyy}-${String(mm + 1).padStart(2, '0')}-`
+  return d.startsWith(prefix)
+}
+
+function getRowDueDateBounds(row: TruckingCalendarRow): { start: string; end: string } | null {
+  const start = (row.delivery_start_date || '').slice(0, 10)
+  const end = (row.delivery_end_date || '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) return null
+  return { start, end }
+}
+
+function buildRowDeliverablesFromDrafts(
+  row: TruckingCalendarRow,
+  month: Date,
+  drafts: Record<string, string>,
+): Array<{ date: string; quantity_delivered: number }> {
+  const yyyy = month.getFullYear()
+  const mm = month.getMonth()
+  const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
+  const existing = row.daily_actuals || []
+  const outsideMonth = existing.filter(
+    (x) => !isDateInCalendarMonth((x?.date || '').slice(0, 10), month),
+  )
+  const inMonth: Array<{ date: string; quantity_delivered: number }> = []
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = `${yyyy}-${String(mm + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    const key = `${row.id}:${date}`
+    const qtyMt = parseDailyPlanningMtDraft(drafts[key] ?? '')
+    if (qtyMt === 'invalid') throw new Error(`Invalid quantity on ${date}`)
+    if (qtyMt > 0) {
+      if (!isDateInDueWindow(row, date)) {
+        const bounds = getRowDueDateBounds(row)
+        throw new Error(
+          bounds
+            ? `Date ${date} is outside Due Start (${bounds.start}) – Due End (${bounds.end})`
+            : `Date ${date} is outside the allowed due delivery window`,
+        )
+      }
+      inMonth.push({ date, quantity_delivered: dailyPlanningMtToKg(qtyMt) })
+    }
+  }
+  return [...outsideMonth, ...inMonth].sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+}
+
+function calendarDraftsHaveChanges(
+  rows: TruckingCalendarRow[],
+  month: Date,
+  drafts: Record<string, string>,
+  baseline: Record<string, string>,
+): boolean {
+  const yyyy = month.getFullYear()
+  const mm = month.getMonth()
+  const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
+  for (const r of rows) {
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = `${yyyy}-${String(mm + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+      const key = `${r.id}:${date}`
+      if ((drafts[key] ?? '') !== (baseline[key] ?? '')) return true
+    }
+  }
+  return false
+}
+
+function calendarRowPlannedQtyKg(r: TruckingCalendarRow): number {
+  return (r.daily_deliverables || []).reduce((s, x) => s + Number(x?.quantity_delivered || 0), 0)
+}
+
+const CALENDAR_STICKY_CONTRACT_COL_IDS = ['contract_ext_no', 'sto_number', 'supplier'] as const
+
+const CALENDAR_STICKY_CONTRACT_COL_WIDTHS: Record<string, number> = {
+  contract_ext_no: 140,
+  sto_number: 96,
+  supplier: 120,
+}
+
+const CALENDAR_META_COL_LABELS: Record<string, string> = {
+  contract_ext_no: 'Contract Ext No',
+  sto_number: 'STO',
+  supplier: 'Supplier',
+  owner: 'Owner',
+  due_start: 'Due Start',
+  due_end: 'Due End',
+  source_type: 'Source Type',
+  lt_spot: 'LT/SPOT',
+  product: 'Product',
+  group_name: 'Group Name',
+  outstanding_quantity: 'Outstanding Qty (MT)',
+  qty_sent: 'Qty Sent (MT)',
+  qty_sent_planning: 'Qty Sent planning (MT)',
+  qty_delivered: 'Delivery Qty (MT)',
+  qty_received: 'Received Qty (MT)',
+}
+
+const CALENDAR_NUMERIC_SORT_COLS = new Set([
+  'outstanding_quantity',
+  'qty_sent',
+  'qty_sent_planning',
+  'qty_delivered',
+  'qty_received',
+])
+
+function getTruckingCalendarSortValue(
+  row: TruckingCalendarRow,
+  sortKey: string,
+  cellDrafts: Record<string, string>,
+): string | number {
+  if (sortKey.startsWith('day:')) {
+    const date = sortKey.slice(4)
+    const qtyMt = parseDailyPlanningMtDraft(cellDrafts[`${row.id}:${date}`] ?? '')
+    return qtyMt === 'invalid' ? 0 : qtyMt
+  }
+
+  switch (sortKey) {
+    case 'operation_id':
+      return row.operation_id || ''
+    case 'contract_ext_no':
+      return row.contract_ext_no || row.contract_number || ''
+    case 'sto_number':
+      return row.sto_number || ''
+    case 'supplier':
+      return row.supplier || ''
+    case 'owner':
+      return row.trucking_owner || ''
+    case 'due_start':
+      return row.delivery_start_date || ''
+    case 'due_end':
+      return row.delivery_end_date || ''
+    case 'source_type':
+      return row.source_type || ''
+    case 'lt_spot':
+      return row.lt_spot || ''
+    case 'product':
+      return row.product || ''
+    case 'group_name':
+      return row.group_name || ''
+    case 'outstanding_quantity':
+      return Number(row.outstanding_quantity ?? 0)
+    case 'qty_sent':
+      return Number(row.quantity_sent || 0)
+    case 'qty_sent_planning':
+      return calendarRowPlannedQtyKg(row)
+    case 'qty_delivered':
+      return Number(row.quantity_delivered || 0)
+    case 'qty_received':
+      return Number(row.quantity_receive ?? 0)
+    default:
+      return ''
+  }
+}
+
+function compareCalendarSortValues(
+  a: string | number,
+  b: string | number,
+  dir: 'asc' | 'desc',
+): number {
+  const dirMul = dir === 'asc' ? 1 : -1
+  if (typeof a === 'number' && typeof b === 'number') {
+    return (a - b) * dirMul
+  }
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }) * dirMul
+}
+
+function migrateCalendarVisibleMetaCols(cols: string[]): string[] {
+  const next = new Set(cols.map(String))
+  if (next.has('contract_block')) {
+    next.delete('contract_block')
+    next.add('contract_ext_no')
+    next.add('sto_number')
+    next.add('supplier')
+  }
+  return Array.from(next)
+}
+
+function migrateCalendarMetaOrderIds(order: string[]): string[] {
+  const expanded = order.flatMap((id) =>
+    id === 'contract_block' ? ['contract_ext_no', 'sto_number', 'supplier'] : [id],
+  )
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const id of expanded) {
+    if (id === 'contract_block' || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
 function CalendarDeliverablesTable({
   month,
   rows,
   loading,
-  savingKey,
-  editing,
-  editValue,
+  savingAll,
+  cellDrafts,
+  cellBaseline,
   formatQty,
   visibleMetaCols,
   metaOrderIds,
   onReorderMetaCols,
-  onEditStart,
-  onEditChange,
-  onEditCancel,
-  onEditCommit,
+  onCellChange,
 }: {
   month: Date
   rows: TruckingCalendarRow[]
   loading: boolean
-  savingKey: string | null
-  editing: { id: string; date: string } | null
-  editValue: string
+  savingAll: boolean
+  cellDrafts: Record<string, string>
+  cellBaseline: Record<string, string>
   formatQty: (n: number) => string
   visibleMetaCols: Set<string>
   metaOrderIds: string[]
   onReorderMetaCols: (dragId: string, dropId: string) => void
-  onEditStart: (id: string, date: string, initial: string) => void
-  onEditChange: (v: string) => void
-  onEditCancel: () => void
-  onEditCommit: (id: string, date: string, value: string) => Promise<void>
+  onCellChange: (id: string, date: string, value: string) => void
 }) {
   const yyyy = month.getFullYear()
   const mm = month.getMonth()
   const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1)
   const operationColW = 220
-  const contractColW = 300
   const opShown = visibleMetaCols.has('operation_id')
-  const contractShown = visibleMetaCols.has('contract_block')
-  const contractLeft = opShown ? operationColW : 0
+  const stickyContractCols = CALENDAR_STICKY_CONTRACT_COL_IDS.filter((id) => visibleMetaCols.has(id))
+  const stickyLeftByCol = useMemo(() => {
+    const positions: Record<string, number> = {}
+    let left = 0
+    if (opShown) {
+      positions.operation_id = 0
+      left += operationColW
+    }
+    for (const id of stickyContractCols) {
+      positions[id] = left
+      left += CALENDAR_STICKY_CONTRACT_COL_WIDTHS[id] ?? 120
+    }
+    return positions
+  }, [opShown, stickyContractCols])
   const [dragMetaColId, setDragMetaColId] = useState<string | null>(null)
   const scrollTopRef = useRef<HTMLDivElement | null>(null)
   const scrollBottomRef = useRef<HTMLDivElement | null>(null)
   const isSyncing = useRef(false)
+  const editInputRef = useRef<HTMLInputElement | null>(null)
+  const [editingQtyCellKey, setEditingQtyCellKey] = useState<string | null>(null)
+  const editingQtyValueRef = useRef<string>('')
   const dayIso = (day: number) => {
     const m = String(mm + 1).padStart(2, '0')
     const d = String(day).padStart(2, '0')
     return `${yyyy}-${m}-${d}`
   }
-  const getQty = (r: TruckingCalendarRow, date: string) => {
-    const hit = (r.daily_deliverables || []).find((x) => (x?.date || '').slice(0, 10) === date)
-    return hit ? Number(hit.quantity_delivered || 0) : 0
-  }
+  const sumPlannedQty = (r: TruckingCalendarRow) => calendarRowPlannedQtyKg(r)
 
-  const sumPlannedQty = (r: TruckingCalendarRow) =>
-    (r.daily_deliverables || []).reduce((s, x) => s + Number(x?.quantity_delivered || 0), 0)
+  const [sortKey, setSortKey] = useState<string>('operation_id')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+
+  const onSortHeaderClick = useCallback((key: string) => {
+    setSortDir((prevDir) => (sortKey === key ? (prevDir === 'asc' ? 'desc' : 'asc') : 'asc'))
+    setSortKey(key)
+  }, [sortKey])
+
+  const sortedRows = useMemo(() => {
+    if (!rows.length) return rows
+    return [...rows].sort((a, b) =>
+      compareCalendarSortValues(
+        getTruckingCalendarSortValue(a, sortKey, cellDrafts),
+        getTruckingCalendarSortValue(b, sortKey, cellDrafts),
+        sortDir,
+      ),
+    )
+  }, [rows, sortKey, sortDir, cellDrafts])
+
+  useEffect(() => {
+    if (editingQtyCellKey) {
+      editInputRef.current?.focus()
+      editInputRef.current?.select()
+    }
+  }, [editingQtyCellKey])
+
+  const startInlineQtyEdit = useCallback((key: string, current: string) => {
+    if (savingAll) return
+    editingQtyValueRef.current = current
+    setEditingQtyCellKey(key)
+  }, [savingAll])
+
+  const commitInlineQtyEdit = useCallback((rowId: string, date: string) => {
+    onCellChange(rowId, date, editingQtyValueRef.current)
+    setEditingQtyCellKey(null)
+  }, [onCellChange])
+
+  const cancelInlineQtyEdit = useCallback(() => {
+    setEditingQtyCellKey(null)
+  }, [])
 
   const orderedMetaCols = useMemo(() => {
     const all = [
@@ -165,7 +720,6 @@ function CalendarDeliverablesTable({
       'lt_spot',
       'product',
       'group_name',
-      'supplier',
       'outstanding_quantity',
       'qty_sent',
       'qty_sent_planning',
@@ -200,7 +754,7 @@ function CalendarDeliverablesTable({
       top.removeEventListener('scroll', onTop)
       bottom.removeEventListener('scroll', onBottom)
     }
-  }, [rows.length, daysInMonth, opShown, contractShown, visibleMetaCols])
+  }, [rows.length, daysInMonth, opShown, stickyContractCols, visibleMetaCols])
 
   return (
     <div>
@@ -210,6 +764,7 @@ function CalendarDeliverablesTable({
         <div className="text-center py-10 text-gray-500">No trucking operations in this month window</div>
       ) : (
         <>
+        <p className="text-xs text-gray-500 mb-2">Daily quantity values are in MT.</p>
         <div ref={scrollTopRef} className="overflow-x-auto border rounded-md bg-white">
           <div className="h-3" style={{ width: `${2000 + daysInMonth * 48}px` }} />
         </div>
@@ -222,33 +777,38 @@ function CalendarDeliverablesTable({
                   className="sticky z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200"
                   style={{ left: 0, minWidth: operationColW, maxWidth: operationColW }}
                 >
-                  Operation ID
+                  <ContractPerfTableSortHeader
+                    label="Operation ID"
+                    sortable
+                    activeSort={sortKey === 'operation_id'}
+                    sortDir={sortDir}
+                    onSortClick={() => onSortHeaderClick('operation_id')}
+                  />
                 </th>
               ) : null}
-              {contractShown ? (
-                <th
-                  className="sticky z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200"
-                  style={{ left: contractLeft, minWidth: contractColW }}
-                >
-                  Contract Ext No / STO / Supplier
-                </th>
-              ) : null}
+              {stickyContractCols.map((id) => {
+                const colW = CALENDAR_STICKY_CONTRACT_COL_WIDTHS[id] ?? 120
+                const left = stickyLeftByCol[id] ?? 0
+                const label = CALENDAR_META_COL_LABELS[id] ?? id
+                return (
+                  <th
+                    key={id}
+                    className="sticky z-20 bg-gray-100 px-3 py-2 text-left font-semibold text-gray-700 border-b border-gray-200"
+                    style={{ left, minWidth: colW, maxWidth: colW }}
+                  >
+                    <ContractPerfTableSortHeader
+                      label={label}
+                      sortable
+                      activeSort={sortKey === id}
+                      sortDir={sortDir}
+                      onSortClick={() => onSortHeaderClick(id)}
+                    />
+                  </th>
+                )
+              })}
               {orderedMetaCols.map((id) => {
-                const label =
-                  id === 'owner' ? 'Owner'
-                    : id === 'due_start' ? 'Due Start'
-                      : id === 'due_end' ? 'Due End'
-                        : id === 'source_type' ? 'Source Type'
-                          : id === 'lt_spot' ? 'LT/SPOT'
-                            : id === 'product' ? 'Product'
-                              : id === 'group_name' ? 'Group Name'
-                                : id === 'supplier' ? 'Supplier'
-                                  : id === 'outstanding_quantity' ? 'Outstanding Qty'
-                                    : id === 'qty_sent' ? 'Qty Sent'
-                                      : id === 'qty_sent_planning' ? 'QTY Sent (planning)'
-                                        : id === 'qty_delivered' ? 'Qty Delivered'
-                                          : 'Qty Received'
-                const alignRight = new Set(['outstanding_quantity', 'qty_sent', 'qty_sent_planning', 'qty_delivered', 'qty_received']).has(id)
+                const label = CALENDAR_META_COL_LABELS[id] ?? id
+                const alignRight = CALENDAR_NUMERIC_SORT_COLS.has(id)
                 return (
                   <th
                     key={id}
@@ -272,23 +832,42 @@ function CalendarDeliverablesTable({
                     }}
                     title="Drag to reorder"
                   >
-                    {label}
+                    <div className={alignRight ? 'flex justify-end' : ''}>
+                      <ContractPerfTableSortHeader
+                        label={label}
+                        sortable
+                        activeSort={sortKey === id}
+                        sortDir={sortDir}
+                        onSortClick={() => onSortHeaderClick(id)}
+                      />
+                    </div>
                   </th>
                 )
               })}
-              {days.map((d) => (
-                <th key={d} className="px-2 py-2 text-right font-semibold text-gray-700 border-b border-gray-200 tabular-nums">
-                  {d}
-                </th>
-              ))}
+              {days.map((d) => {
+                const date = dayIso(d)
+                return (
+                  <th key={d} className="px-2 py-2 text-right font-semibold text-gray-700 border-b border-gray-200 tabular-nums">
+                    <div className="flex justify-end">
+                      <ContractPerfTableSortHeader
+                        label={d}
+                        sortable
+                        activeSort={sortKey === `day:${date}`}
+                        sortDir={sortDir}
+                        onSortClick={() => onSortHeaderClick(`day:${date}`)}
+                      />
+                    </div>
+                  </th>
+                )
+              })}
             </tr>
           </thead>
           <tbody className="bg-white">
-            {rows.map((r) => {
-              const opLabel = r.operation_id || '-'
-              const contractLabel = (r.contract_ext_no || r.contract_number || '-') as string
-              const stoLabel = r.sto_number || '-'
-              const supplierLabel = r.supplier || '-'
+            {sortedRows.map((r) => {
+              const opLabel = formatOperationalTableTextDisplay(r.operation_id)
+              const contractExtLabel = formatOperationalTableTextDisplay(r.contract_ext_no || r.contract_number)
+              const stoLabel = formatOperationalTableTextDisplay(r.sto_number)
+              const supplierLabel = formatOperationalTableTextDisplay(r.supplier)
               const dueStart = r.delivery_start_date
                 ? formatDateDMY(r.delivery_start_date || '')
                 : '-'
@@ -309,50 +888,67 @@ function CalendarDeliverablesTable({
                     >
                       <div className="font-semibold text-gray-900 truncate" title={opLabel}>{opLabel}</div>
                       <div className="text-[10px] text-gray-500 truncate" title={`${r.loading_location || ''} → ${r.unloading_location || ''}`}>
-                        {(r.loading_location || '-')} → {(r.unloading_location || '-')}
+                        {formatOperationalTableTextDisplay(r.loading_location)} → {formatOperationalTableTextDisplay(r.unloading_location)}
                       </div>
                     </td>
                   ) : null}
-                  {contractShown ? (
-                    <td
-                      className="sticky z-10 bg-white px-3 py-2 border-b border-gray-100 align-top"
-                      style={{ left: contractLeft, minWidth: contractColW, maxWidth: 'min(360px,40vw)' }}
-                    >
-                      <div className="font-medium text-gray-900 whitespace-normal break-words leading-snug" title={contractLabel}>{contractLabel}</div>
-                      <div className="text-[10px] text-gray-500 whitespace-normal break-words mt-0.5" title={`STO: ${stoLabel}`}>STO: {stoLabel}</div>
-                      <div className="text-[10px] text-gray-500 whitespace-normal break-words" title={supplierLabel}>{supplierLabel}</div>
-                    </td>
-                  ) : null}
+                  {stickyContractCols.map((id) => {
+                    const colW = CALENDAR_STICKY_CONTRACT_COL_WIDTHS[id] ?? 120
+                    const left = stickyLeftByCol[id] ?? 0
+                    const label =
+                      id === 'contract_ext_no'
+                        ? contractExtLabel
+                        : id === 'sto_number'
+                          ? stoLabel
+                          : supplierLabel
+                    return (
+                      <td
+                        key={id}
+                        className="sticky z-10 bg-white px-3 py-2 border-b border-gray-100 align-top"
+                        style={{ left, minWidth: colW, maxWidth: colW }}
+                      >
+                        <div
+                          className="font-medium text-gray-900 whitespace-normal break-words leading-snug"
+                          title={label}
+                        >
+                          {label}
+                        </div>
+                      </td>
+                    )
+                  })}
                   {orderedMetaCols.map((id) => {
                     const alignRight = new Set(['outstanding_quantity', 'qty_sent', 'qty_sent_planning', 'qty_delivered', 'qty_received']).has(id)
                     const val = (() => {
                       switch (id) {
                         case 'owner':
-                          return r.trucking_owner || '-'
+                          return formatOperationalTableTextDisplay(r.trucking_owner)
                         case 'due_start':
                           return dueStart
                         case 'due_end':
                           return dueEnd
                         case 'source_type':
-                          return (r as any).source_type || '—'
+                          return formatOperationalTableTextDisplay((r as any).source_type)
                         case 'lt_spot':
-                          return (r as any).lt_spot || '—'
+                          return formatSapDisplayValue((r as any).lt_spot)
                         case 'product':
-                          return r.product || '—'
+                          return formatOperationalTableTextDisplay(r.product)
                         case 'group_name':
-                          return r.group_name || '—'
-                        case 'supplier':
-                          return r.supplier || '—'
+                          return formatOperationalTableTextDisplay(r.group_name)
                         case 'outstanding_quantity':
-                          return outQty ? formatQty(outQty) : '—'
+                          return (
+                            <TruckingOutstandingQtyWithTooltip
+                              outstandingKg={outQty}
+                              incoterm={r.incoterm}
+                            />
+                          )
                         case 'qty_sent':
-                          return qtySent ? formatQty(qtySent) : '-'
+                          return formatTruckingQtyMt(qtySent)
                         case 'qty_sent_planning':
-                          return plannedSum ? formatQty(plannedSum) : '—'
+                          return formatTruckingQtyMt(plannedSum)
                         case 'qty_delivered':
-                          return qtyDel != null && Number.isFinite(qtyDel) ? formatQty(qtyDel) : '—'
+                          return formatTruckingQtyMt(qtyDel)
                         case 'qty_received':
-                          return qtyRecv != null && Number.isFinite(qtyRecv) ? formatQty(qtyRecv) : '—'
+                          return formatTruckingQtyMt(qtyRecv)
                         default:
                           return '-'
                       }
@@ -368,50 +964,50 @@ function CalendarDeliverablesTable({
                   })}
                   {days.map((d) => {
                     const date = dayIso(d)
-                    const qty = getQty(r, date)
                     const key = `${r.id}:${date}`
-                    const isEditing = editing?.id === r.id && editing?.date === date
-                    const isSaving = savingKey === key
+                    const draftValue = cellDrafts[key] ?? ''
+                    const isDirty = (draftValue ?? '') !== (cellBaseline[key] ?? '')
+                    const isEditingThisCell = editingQtyCellKey === key
                     return (
                       <td
                         key={date}
-                        className={`px-2 py-1.5 border-b border-gray-100 text-right tabular-nums ${isEditing ? 'bg-amber-50' : ''}`}
-                        onClick={() => {
-                          if (isSaving) return
-                          onEditStart(r.id, date, qty ? String(qty) : '')
-                        }}
+                        className={`px-2 py-1.5 border-b border-gray-100 text-right tabular-nums ${isDirty ? 'bg-amber-50/50' : ''}`}
                       >
-                        {isEditing ? (
-                          <div className="flex items-center justify-end gap-1">
-                            <input
-                              autoFocus
-                              value={editValue}
-                              onChange={(e) => onEditChange(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Escape') onEditCancel()
-                                if (e.key === 'Enter') onEditCommit(r.id, date, editValue)
-                                if (e.key === 'Tab') {
-                                  e.preventDefault()
-                                  void (async () => {
-                                    await onEditCommit(r.id, date, editValue)
-                                    const nextDay = d + 1
-                                    if (nextDay > daysInMonth) return
-                                    const nextDate = dayIso(nextDay)
-                                    const nextQty = getQty(r, nextDate)
-                                    onEditStart(r.id, nextDate, nextQty ? String(nextQty) : '')
-                                  })()
-                                }
-                              }}
-                              onBlur={() => onEditCommit(r.id, date, editValue)}
-                              className="w-[64px] h-7 px-2 rounded border bg-white text-right text-xs"
-                              placeholder="0"
-                            />
-                            {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-500" /> : null}
-                          </div>
-                        ) : qty ? (
-                          <span className="font-medium text-slate-900">{formatQty(qty)}</span>
+                        {isEditingThisCell ? (
+                          <input
+                            ref={editInputRef}
+                            key={key}
+                            defaultValue={draftValue}
+                            onChange={(e) => {
+                              editingQtyValueRef.current = e.target.value
+                            }}
+                            onBlur={() => commitInlineQtyEdit(r.id, date)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault()
+                                commitInlineQtyEdit(r.id, date)
+                              } else if (e.key === 'Escape') {
+                                e.preventDefault()
+                                cancelInlineQtyEdit()
+                              }
+                            }}
+                            disabled={savingAll}
+                            className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-white text-right text-xs focus:border-blue-400 focus:ring-1 focus:ring-blue-200 disabled:opacity-60"
+                            placeholder="0"
+                            title={date}
+                          />
                         ) : (
-                          <span className="text-gray-300">—</span>
+                          <button
+                            type="button"
+                            onClick={() => startInlineQtyEdit(key, draftValue)}
+                            disabled={savingAll}
+                            className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-gray-50 text-right text-xs text-gray-700 hover:bg-white disabled:opacity-60"
+                            title={`Click to edit ${date}`}
+                          >
+                            {draftValue
+                              ? formatDailyPlanningQtyMtDisplay(draftValue)
+                              : '0.00'}
+                          </button>
                         )}
                       </td>
                     )
@@ -431,7 +1027,10 @@ function CalendarDeliverablesTable({
 function TruckingPageContent() {
   const searchParams = useSearchParams()
   const [truckingOperations, setTruckingOperations] = useState<TruckingOperation[]>([])
-  const [loading, setLoading] = useState(true)
+  /** Stale-while-revalidate: true while list API is in flight; never clears existing rows. */
+  const [listFetching, setListFetching] = useState(false)
+  /** True while table scope filters change — shows loading shell without stale rows. */
+  const [tableScopeLoading, setTableScopeLoading] = useState(false)
   // Search should apply only on Enter / Apply (not per keystroke)
   const [searchDraft, setSearchDraft] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
@@ -441,37 +1040,69 @@ function TruckingPageContent() {
   const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
   const [loadingLocationFilter, setLoadingLocationFilter] = useState('')
   const [unloadingLocationFilter, setUnloadingLocationFilter] = useState('')
-  const [selectedPlantSites, setSelectedPlantSites] = useState<string[]>([])
-  const [availablePlantSites, setAvailablePlantSites] = useState<string[]>([])
+  type ColumnFilter =
+    | { type: 'text'; value: string; exact?: boolean; emptyOnly?: boolean; notBlankOnly?: boolean }
+    | { type: 'number'; min?: string; max?: string; emptyOnly?: boolean; notBlankOnly?: boolean }
+    | { type: 'date'; from?: string; to?: string; emptyOnly?: boolean; notBlankOnly?: boolean }
+  const [columnFilters, setColumnFilters] = useState<Record<string, ColumnFilter>>({})
+  const {
+    selectedProducts,
+    setSelectedProducts,
+    selectedGroupPlants,
+    setSelectedGroupPlants,
+    userScopeReady,
+    resetUserScopeFilters,
+    handleProductsChange,
+    handleGroupPlantsChange,
+  } = useUserScopeFilterDefaults('trucking')
+  const scopeSummaryRequestKey = useMemo(
+    () => JSON.stringify({ p: [...selectedProducts].sort(), g: [...selectedGroupPlants].sort() }),
+    [selectedProducts, selectedGroupPlants],
+  )
+  const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
+  const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
+  const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
+  const [availableProducts, setAvailableProducts] = useState<string[]>([])
+  const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
+  const [availableSuppliers, setAvailableSuppliers] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
-  // Date filters: keep draft values so typing/selecting doesn't auto-refresh until Apply
-  const [dateFromDraft, setDateFromDraft] = useState(() => {
+  const [templateDownloading, setTemplateDownloading] = useState(false)
+  const onSuppliersChange = useCallback((values: string[]) => {
+    setPage(1)
+    setHasMore(true)
+    setSelectedSuppliers(values)
+  }, [])
+
+  const defaultContractDateRange = useMemo(() => {
     const now = new Date()
     const yyyy = now.getFullYear()
-    return `${yyyy}-01-01`
-  })
-  const [dateToDraft, setDateToDraft] = useState(() => {
-    const now = new Date()
-    const yyyy = now.getFullYear()
-    return `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  })
-  const [dateFrom, setDateFrom] = useState(() => {
-    const now = new Date()
-    const yyyy = now.getFullYear()
-    return `${yyyy}-01-01`
-  })
-  const [dateTo, setDateTo] = useState(() => {
-    const now = new Date()
-    const yyyy = now.getFullYear()
-    return `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  })
+    return {
+      from: `${yyyy}-01-01`,
+      to: `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
+    }
+  }, [])
+  const [dateFrom, setDateFrom] = useState(() => defaultContractDateRange.from)
+  const [dateTo, setDateTo] = useState(() => defaultContractDateRange.to)
   const [uploadingId, setUploadingId] = useState<string>('')
   const [page, setPage] = useState<number>(1)
-  const pageSize = 50
+  const pageSize = 20
   const [totalCount, setTotalCount] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
   const [hasMore, setHasMore] = useState<boolean>(true)
-  const [truckingSummary, setTruckingSummary] = useState<any>(null)
+  /** Section 1 status circles — toolbar scope only (excludes status card filter). */
+  const [truckingSection1Summary, setTruckingSection1Summary] = useState<any>(null)
+  /** Stale-while-revalidate: true while summary API is in flight; keeps prior card counts. */
+  const [summaryFetching, setSummaryFetching] = useState(false)
+  /** UI-only: active status card count from view-table pagination.total (summary API still authoritative for other cards). */
+  const [statusCardTotalFromList, setStatusCardTotalFromList] = useState<{
+    status: string
+    total: number
+  } | null>(null)
+  const truckingSummaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const listFetchGenRef = useRef(0)
+  const summaryFetchGenRef = useRef(0)
+  const section1SummaryForceNextFetchRef = useRef(true)
 
   // View tabs
   const [activeTab, setActiveTab] = useState<'list' | 'calendar'>('list')
@@ -483,9 +1114,9 @@ function TruckingPageContent() {
   })
   const [calendarRows, setCalendarRows] = useState<TruckingCalendarRow[]>([])
   const [calendarLoading, setCalendarLoading] = useState(false)
-  const [calendarSavingKey, setCalendarSavingKey] = useState<string | null>(null)
-  const [calendarEditing, setCalendarEditing] = useState<{ id: string; date: string } | null>(null)
-  const [calendarEditValue, setCalendarEditValue] = useState<string>('')
+  const [calendarCellDrafts, setCalendarCellDrafts] = useState<Record<string, string>>({})
+  const [calendarSavedBaseline, setCalendarSavedBaseline] = useState<Record<string, string>>({})
+  const [calendarSavingAll, setCalendarSavingAll] = useState(false)
   const [planningUploadOpen, setPlanningUploadOpen] = useState(false)
   const [planningUploading, setPlanningUploading] = useState(false)
   const [planningUploadSummary, setPlanningUploadSummary] = useState<{
@@ -498,6 +1129,62 @@ function TruckingPageContent() {
     rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[]
     operationFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string; operation_ids?: string[] }[]
   } | null>(null)
+
+  const [wbUploadOpen, setWbUploadOpen] = useState(false)
+  const [wbUploading, setWbUploading] = useState(false)
+  const [wbUploadSummary, setWbUploadSummary] = useState<{
+    importId: string
+    status: string
+    sheetsProcessed: string[]
+    sheetsSkipped: Array<{ sheetName: string; reason: string }>
+    rawTicketRows: number
+    aggregatedPoDates: number
+    operationsUpdated: number
+    operationsFailed: number
+    rowsUpserted: number
+    rowParseFailures: Array<{ sheetName?: string; rowNumber: number; po_number: string; reason: string }>
+    operationFailures: Array<{ po_number: string; progress_date?: string; reason: string; operation_ids?: string[] }>
+  } | null>(null)
+
+  const [bulkCreateUploadOpen, setBulkCreateUploadOpen] = useState(false)
+  const [bulkCreateUploading, setBulkCreateUploading] = useState(false)
+  const [bulkCreateSummary, setBulkCreateSummary] = useState<{
+    processedRows: number
+    operationsCreated: number
+    operationsUpdated?: number
+    operationsFailed: number
+    succeededRows: number
+    rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[]
+    operationFailures: {
+      contract_ext_no: string
+      rowNumbers: number[]
+      reason: string
+      operation_ids?: string[]
+    }[]
+    operationWarnings?: {
+      contract_ext_no: string
+      rowNumbers: number[]
+      reason: string
+      operation_ids?: string[]
+    }[]
+    failedRetemplateRows?: Array<{
+      rowNumber: number
+      po_number: string
+      contract_ext_no: string
+      cells: string[]
+      reason: string
+    }>
+    uploadHeaderRow?: string[]
+  } | null>(null)
+  const [actualsUploadOpen, setActualsUploadOpen] = useState(false)
+  const [actualsUploadSummary, setActualsUploadSummary] = useState<{
+    processedRows: number
+    operationsUpdated: number
+    operationsFailed: number
+    succeededRows: number
+    rowParseFailures: { rowNumber: number; contract_ext_no: string; reason: string }[]
+    operationFailures: { contract_ext_no: string; rowNumbers: number[]; reason: string }[]
+  } | null>(null)
   const planningFileInputRef = useRef<HTMLInputElement | null>(null)
   const [calendarColumnsOpen, setCalendarColumnsOpen] = useState(false)
   const calendarColumnsRef = useRef<HTMLDivElement | null>(null)
@@ -506,7 +1193,9 @@ function TruckingPageContent() {
     () =>
       new Set([
         'operation_id',
-        'contract_block',
+        'contract_ext_no',
+        'sto_number',
+        'supplier',
         'owner',
         'due_start',
         'due_end',
@@ -518,7 +1207,6 @@ function TruckingPageContent() {
         'lt_spot',
         'product',
         'group_name',
-        'supplier',
         'outstanding_quantity',
       ]),
   )
@@ -544,8 +1232,12 @@ function TruckingPageContent() {
         if (cancelled) return
         const cols = Array.isArray(value?.visibleMetaCols) ? value.visibleMetaCols : Array.isArray(value?.visible) ? value.visible : null
         const order = Array.isArray(value?.metaOrderIds) ? value.metaOrderIds : Array.isArray(value?.metaOrder) ? value.metaOrder : null
-        if (Array.isArray(cols) && cols.length > 0) setCalendarVisibleMetaCols(new Set(cols.map((x: any) => String(x))))
-        if (Array.isArray(order) && order.length > 0) setCalendarMetaOrderIds(order.map((x: any) => String(x)))
+        if (Array.isArray(cols) && cols.length > 0) {
+          setCalendarVisibleMetaCols(new Set(migrateCalendarVisibleMetaCols(cols.map((x: any) => String(x)))))
+        }
+        if (Array.isArray(order) && order.length > 0) {
+          setCalendarMetaOrderIds(migrateCalendarMetaOrderIds(order.map((x: any) => String(x))))
+        }
       } catch {
         // ignore
       }
@@ -643,9 +1335,39 @@ function TruckingPageContent() {
       if (dateFrom) params.set('dateFrom', dateFrom)
       if (dateTo) params.set('dateTo', dateTo)
       if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') params.set('lateIndicator', lateIndicatorFilter)
+      const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+        selectedIncoterms,
+        selectedProducts,
+        selectedSuppliers,
+      })
+      if (Object.keys(mergedColumnFilters).length > 0) {
+        params.set('columnFilters', JSON.stringify(mergedColumnFilters))
+      }
+      const stoParam = searchParams.get('sto')
+      if (stoParam) params.set('sto', stoParam)
+      const contractParam = searchParams.get('contract')
+      if (contractParam) params.set('contract', contractParam)
+      if (selectedGroupPlants.length > 0) {
+        selectedGroupPlants.forEach((p) => params.append('plant', p))
+      }
 
       const res = await api.get(`/trucking/daily-planning-deliverables?${params.toString()}`)
-      setCalendarRows((res.data?.data || []) as TruckingCalendarRow[])
+      const rawRows = (res.data?.data || []) as TruckingCalendarRow[]
+      const tomorrowIso = getHPlusOneIsoDate()
+      const rows = await applyHPlusOnePlanningPromotions(rawRows, async (rowId, progressDate, quantityKg) => {
+        try {
+          const saveRes = await api.put(`/trucking/${rowId}/daily-actuals`, {
+            daily_actuals: [{ progress_date: progressDate, quantity_kg: quantityKg }],
+            replace: false,
+          })
+          return saveRes.data?.data?.daily_actuals as
+            | Array<{ date: string; quantity_delivered: number }>
+            | undefined
+        } catch {
+          return undefined
+        }
+      }, tomorrowIso)
+      setCalendarRows(rows)
     } catch (e: any) {
       const msg = e?.response?.data?.error?.message || e?.message || 'Failed to load calendar deliverables'
       alert(msg)
@@ -662,21 +1384,163 @@ function TruckingPageContent() {
     dateFrom,
     dateTo,
     lateIndicatorFilter,
+    columnFilters,
+    selectedIncoterms,
+    selectedProducts,
+    selectedSuppliers,
+    selectedGroupPlants,
+    searchParams,
   ])
 
   useEffect(() => {
     if (activeTab !== 'calendar') return
+    if (!userScopeReady) return
     fetchCalendarRows()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, fetchCalendarRows])
+  }, [
+    activeTab,
+    userScopeReady,
+    calendarMonth,
+    searchTerm,
+    statusFilter,
+    loadingLocationFilter,
+    unloadingLocationFilter,
+    dateFrom,
+    dateTo,
+    lateIndicatorFilter,
+    columnFilters,
+    selectedIncoterms,
+    selectedProducts,
+    selectedSuppliers,
+    selectedGroupPlants,
+    searchParams,
+  ])
+
+  useEffect(() => {
+    if (activeTab !== 'calendar') return
+    const baseline = buildCalendarCellDrafts(calendarRows, calendarMonth)
+    setCalendarSavedBaseline(baseline)
+    setCalendarCellDrafts(baseline)
+  }, [activeTab, calendarRows, calendarMonth])
+
+  const calendarHasUnsavedChanges = useMemo(
+    () => calendarDraftsHaveChanges(calendarRows, calendarMonth, calendarCellDrafts, calendarSavedBaseline),
+    [calendarRows, calendarMonth, calendarCellDrafts, calendarSavedBaseline],
+  )
+
+  const saveAllCalendarDrafts = useCallback(async () => {
+    if (!calendarHasUnsavedChanges) return
+
+    const yyyy = calendarMonth.getFullYear()
+    const mm = calendarMonth.getMonth()
+    const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
+    const dirtyRowIds = new Set<string>()
+
+    for (const r of calendarRows) {
+      for (let d = 1; d <= daysInMonth; d++) {
+        const date = `${yyyy}-${String(mm + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+        const key = `${r.id}:${date}`
+        if ((calendarCellDrafts[key] ?? '') !== (calendarSavedBaseline[key] ?? '')) {
+          dirtyRowIds.add(r.id)
+        }
+      }
+    }
+
+    for (const r of calendarRows) {
+      const bounds = getRowDueDateBounds(r)
+      for (let d = 1; d <= daysInMonth; d++) {
+        const date = `${yyyy}-${String(mm + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+        const key = `${r.id}:${date}`
+        const raw = calendarCellDrafts[key] ?? ''
+        if (!dirtyRowIds.has(r.id)) continue
+        const qtyMt = parseDailyPlanningMtDraft(raw)
+        if (qtyMt === 'invalid') {
+          alert(`Invalid quantity for ${r.operation_id || r.id} on ${formatDateDMY(date)}. Use numbers >= 0.`)
+          return
+        }
+        if (qtyMt > 0 && bounds && !isDateInDueWindow(r, date)) {
+          alert(
+            `${r.operation_id || r.id}: ${formatDateDMY(date)} is outside the due delivery window (${formatDateDMY(bounds.start)} – ${formatDateDMY(bounds.end)}). Remove qty on that day or adjust Due End on the contract.`,
+          )
+          return
+        }
+      }
+    }
+
+    setCalendarSavingAll(true)
+    let saved = 0
+    let failed = 0
+    let lastError = ''
+
+    const updates = new Map<string, Array<{ date: string; quantity_delivered: number }>>()
+
+    try {
+      for (const id of dirtyRowIds) {
+        const row = calendarRows.find((r) => r.id === id)
+        if (!row) continue
+        try {
+          const next = buildRowDeliverablesFromDrafts(row, calendarMonth, calendarCellDrafts)
+          const res = await api.put(`/trucking/${id}/daily-actuals`, {
+            daily_actuals: next.map((x) => ({
+              progress_date: x.date,
+              quantity_kg: x.quantity_delivered,
+            })),
+            replace: true,
+          })
+          if (res.data?.success) {
+            updates.set(id, res.data.data.daily_actuals || next)
+            saved += 1
+          } else {
+            failed += 1
+            lastError = res.data?.error?.message || 'Save failed'
+          }
+        } catch (e: any) {
+          failed += 1
+          lastError = e?.response?.data?.error?.message || e?.message || 'Save failed'
+        }
+      }
+
+      if (updates.size > 0) {
+        setCalendarRows((prev) =>
+          prev.map((r) =>
+            updates.has(r.id) ? { ...r, daily_actuals: updates.get(r.id)! } : r,
+          ),
+        )
+      }
+
+      if (failed === 0) {
+        if (saved > 0) {
+          alert(`Saved daily actual delivery for ${saved} operation(s).`)
+        }
+      } else {
+        alert(
+          lastError
+            ? `Saved ${saved} operation(s); ${failed} failed. ${lastError}`
+            : `Saved ${saved} operation(s); ${failed} failed.`,
+        )
+        if (updates.size === 0) {
+          await fetchCalendarRows()
+        }
+      }
+    } finally {
+      setCalendarSavingAll(false)
+    }
+  }, [
+    calendarHasUnsavedChanges,
+    calendarRows,
+    calendarMonth,
+    calendarCellDrafts,
+    calendarSavedBaseline,
+    fetchCalendarRows,
+  ])
 
   const downloadDailyPlanningTemplate = async () => {
     try {
-      const res = await api.get('/trucking/daily-planning-deliverables/template', { responseType: 'blob' })
+      const res = await api.get('/trucking/daily-actuals/template', { responseType: 'blob' })
       const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv;charset=utf-8' }))
       const a = document.createElement('a')
       a.href = url
-      a.download = 'daily_planning_deliverables_template.csv'
+      a.download = 'daily_actuals_template.csv'
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -694,10 +1558,20 @@ function TruckingPageContent() {
     try {
       const fd = new FormData()
       fd.append('file', file)
-      const res = await api.post('/trucking/daily-planning-deliverables/bulk-upload', fd)
+      const res = await api.post('/trucking/daily-actuals/bulk-upload', fd)
       const data = res.data?.data
       if (data) {
-        setPlanningUploadSummary(data)
+        const opFailures = data.operationFailures ?? []
+        setPlanningUploadSummary({
+          processedRows: Number(data.processedRows ?? 0),
+          succeededOperations: Number(data.operationsUpdated ?? data.contractsUpdated ?? data.succeededOperations ?? 0),
+          failedOperations: Number(data.failedOperations ?? opFailures.length),
+          succeededRows: Number(data.succeededRows ?? 0),
+          rowLevelIssues: Number(data.rowLevelIssues ?? (data.rowParseFailures?.length ?? 0)),
+          operationLevelFailures: Number(data.operationLevelFailures ?? opFailures.length),
+          rowParseFailures: data.rowParseFailures ?? [],
+          operationFailures: opFailures,
+        })
         setPlanningUploadOpen(true)
       }
       await fetchCalendarRows()
@@ -707,6 +1581,52 @@ function TruckingPageContent() {
       setPlanningUploading(false)
     }
   }
+
+  const handleWbRekapFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setWbUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await api.post('/trucking/wb-rekap/bulk-upload', fd)
+      const data = res.data?.data
+      if (data) {
+        setWbUploadSummary({
+          importId: String(data.importId ?? ''),
+          status: String(data.status ?? ''),
+          sheetsProcessed: data.sheetsProcessed ?? [],
+          sheetsSkipped: data.sheetsSkipped ?? [],
+          rawTicketRows: Number(data.rawTicketRows ?? 0),
+          aggregatedPoDates: Number(data.aggregatedPoDates ?? 0),
+          operationsUpdated: Number(data.operationsUpdated ?? 0),
+          operationsFailed: Number(data.operationsFailed ?? 0),
+          rowsUpserted: Number(data.rowsUpserted ?? 0),
+          rowParseFailures: data.rowParseFailures ?? [],
+          operationFailures: data.operationFailures ?? [],
+        })
+        setWbUploadOpen(true)
+      }
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      await fetchTruckingOperations(page, undefined, { force: true })
+      if (activeTab === 'calendar') {
+        await fetchCalendarRows()
+      }
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
+          ?.message ||
+        (err as Error)?.message ||
+        'WB upload failed'
+      alert(message)
+    } finally {
+      setWbUploading(false)
+    }
+  }
+
+  const isListActualsTemplateDownloadEnabled = isActualsTemplateDownloadEnabled(statusFilter)
 
   const planningYearOptions = useMemo(() => {
     const y = new Date().getFullYear()
@@ -721,15 +1641,220 @@ function TruckingPageContent() {
 
   // Create new trucking operation modal
   const [showCreateForm, setShowCreateForm] = useState(false)
+  const [editTruckingFromTable, setEditTruckingFromTable] = useState<{
+    operationId: string
+    contractId: string
+    contractExtNo?: string
+    poNumber?: string
+  } | null>(null)
+  const [plotTruckingFromTable, setPlotTruckingFromTable] = useState<{
+    operationId: string
+    contractId: string
+    contractExtNo?: string
+    poNumber?: string
+  } | null>(null)
+  const [createTruckingPrefill, setCreateTruckingPrefill] = useState<{
+    contractId: string
+    contractExtNo?: string
+    poNumber?: string
+  } | null>(null)
+  const [unplannedBreakdown, setUnplannedBreakdown] = useState<{
+    contractRows: number
+    executionRows: number
+    totalTableRows: number
+  } | null>(null)
 
-  // Compact/Expand view state
-  const [expandedOperationIds, setExpandedOperationIds] = useState<Set<string>>(() => new Set())
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
-  const [sortKey, setSortKey] = useState<string>('created_at')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
-  const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => new Set())
+  const [sortKey, setSortKey] = useState<string>('supplier')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+
+  const buildTruckingListSearchParams = useCallback(
+    (opts?: {
+      page?: number
+      limit?: number
+      includeSummary?: boolean
+      summaryOnly?: boolean
+      searchOverride?: string
+      /** Full SAP join for exports (accurate contract ext no, qty, dates). */
+      skipSapJoin?: boolean
+    }) => {
+      const params = new URLSearchParams()
+      params.append('skipSapJoin', opts?.skipSapJoin === false ? 'false' : 'true')
+      params.append('limit', String(opts?.limit ?? pageSize))
+      params.append('page', String(opts?.page ?? page))
+      params.append('sortKey', sortKey)
+      params.append('sortDir', sortDir)
+      if (statusFilter && statusFilter !== 'ALL') {
+        params.append('status', statusFilter)
+      }
+      if (loadingLocationFilter) {
+        params.append('loadingLocation', loadingLocationFilter)
+      }
+      if (unloadingLocationFilter) {
+        params.append('unloadingLocation', unloadingLocationFilter)
+      }
+      if (dateFrom) params.append('dateFrom', dateFrom)
+      if (dateTo) params.append('dateTo', dateTo)
+      const searchTrim = (opts?.searchOverride ?? searchTerm).trim()
+      if (searchTrim.length >= 2) {
+        params.append('search', searchTrim)
+      }
+      const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+        selectedIncoterms,
+        selectedProducts,
+        selectedSuppliers,
+      })
+      const cfKeys = Object.keys(mergedColumnFilters)
+      if (cfKeys.length > 0) {
+        params.append('columnFilters', JSON.stringify(mergedColumnFilters))
+      }
+      if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
+        params.append('lateIndicator', lateIndicatorFilter)
+      }
+      const stoParam = searchParams.get('sto')
+      if (stoParam) {
+        params.append('sto', stoParam)
+      }
+      const contractParam = searchParams.get('contract')
+      if (contractParam) {
+        params.append('contract', contractParam)
+      }
+      if (selectedGroupPlants.length > 0) {
+        selectedGroupPlants.forEach((p) => params.append('plant', p))
+      }
+      if (opts?.summaryOnly) {
+        params.delete('status')
+        params.set('summaryOnly', 'true')
+      } else if (opts?.includeSummary === false) {
+        params.append('includeSummary', 'false')
+      }
+      return params
+    },
+    [
+      page,
+      pageSize,
+      sortKey,
+      sortDir,
+      statusFilter,
+      loadingLocationFilter,
+      unloadingLocationFilter,
+      dateFrom,
+      dateTo,
+      searchTerm,
+      columnFilters,
+      selectedIncoterms,
+      selectedProducts,
+      selectedSuppliers,
+      lateIndicatorFilter,
+      searchParams,
+      selectedGroupPlants,
+    ],
+  )
+
+  const downloadFilteredActualsTemplate = useCallback(async () => {
+    const unplannedMode = isUnplannedPlanningTemplateMode(statusFilter)
+    const plannedMode = isPlannedPlanningTemplateMode(statusFilter)
+    const exportPageSize = 500
+
+    setTemplateDownloading(true)
+    try {
+      const collected: TruckingOperation[] = []
+      let exportPage = 1
+      let exportTotalPages = 1
+
+      while (exportPage <= exportTotalPages) {
+        const params = buildTruckingListSearchParams({
+          page: exportPage,
+          limit: exportPageSize,
+          includeSummary: false,
+          skipSapJoin: false,
+        })
+        const response = await api.get(`/trucking?${params.toString()}`)
+        const envelope = response.data as {
+          data?: {
+            truckingOperations?: TruckingOperation[]
+            pagination?: { totalPages?: number }
+          }
+        }
+        const items = envelope?.data?.truckingOperations || []
+        collected.push(...items)
+        exportTotalPages = Number(envelope?.data?.pagination?.totalPages || 1)
+        exportPage += 1
+      }
+
+      const deduped = dedupeTruckingOperationsForTemplate(collected)
+      const rows: TruckingActualsTemplateRow[] = deduped
+        .filter((op) => {
+          const osKg = parseTruckingQtyKg(op.outstanding_quantity) ?? 0
+          if (osKg <= 0) return false
+          if (unplannedMode) return op.status === 'UNPLANNED'
+          if (plannedMode) return op.status === 'PLANNED' || op.status === 'IN_PROGRESS'
+          return false
+        })
+        .map((op) =>
+          unplannedMode || plannedMode
+            ? {
+                contract_ext_no: op.contract_ext_no,
+                contract_number: op.contract_number,
+                po_number: op.po_number,
+                group_name: op.group_name,
+                supplier: op.supplier,
+                source_type: op.source_type,
+                contract_date: op.contract_date,
+                outstanding_quantity: op.outstanding_quantity,
+                daily_deliverables: op.daily_deliverables,
+                templateKind: unplannedMode ? ('unplanned' as const) : ('planned' as const),
+              }
+            : {
+                contract_ext_no: op.contract_ext_no,
+                contract_number: op.contract_number,
+                po_number: op.po_number,
+                planning_start_date: op.planning_start_date,
+                planning_end_date: op.planning_end_date,
+                daily_deliverables: op.daily_deliverables,
+              },
+        )
+
+      if (rows.length === 0) {
+        alert(
+          unplannedMode
+            ? 'No Unplanned operations with outstanding qty match the current filters.'
+            : 'No Planned or In Progress operations with outstanding qty match the current filters.',
+        )
+        return
+      }
+
+      const blob = buildTruckingActualsTemplateXlsxBlob(rows)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = buildTruckingPlanningTemplateFilename(unplannedMode ? 'unplanned' : 'planned')
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Failed to download trucking template:', error)
+      alert('Failed to download template. Please try again.')
+    } finally {
+      setTemplateDownloading(false)
+    }
+  }, [buildTruckingListSearchParams, statusFilter])
+
+  const columnStorageKey = 'trucking.compact.visibleColumns'
+  const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set()
+    try {
+      const stored = localStorage.getItem(columnStorageKey)
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        return new Set(Array.isArray(parsed) ? parsed.map(String) : [])
+      }
+    } catch {}
+    return new Set()
+  })
   const columnOrderStorageKey = 'trucking.compact.columnOrder'
-  const userViewPrefKey = 'trucking.compact.view.v1'
+  const userViewPrefKey = 'trucking.compact.view.v2'
   const [columnOrderIds, setColumnOrderIds] = useState<string[]>(() => {
     if (typeof window === 'undefined') return []
     try {
@@ -750,13 +1875,6 @@ function TruckingPageContent() {
   const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
   const isSyncingScroll = useRef(false)
 
-  // Excel-like column filtering
-  type ColumnFilter =
-    | { type: 'text'; value: string; exact?: boolean; emptyOnly?: boolean; notBlankOnly?: boolean }
-    | { type: 'number'; min?: string; max?: string; emptyOnly?: boolean; notBlankOnly?: boolean }
-    | { type: 'date'; from?: string; to?: string; emptyOnly?: boolean; notBlankOnly?: boolean }
-
-  const [columnFilters, setColumnFilters] = useState<Record<string, ColumnFilter>>({})
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
   const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
 
@@ -780,33 +1898,52 @@ function TruckingPageContent() {
       setStatusFilter(statusParam)
     }
     setPage(1)
-    setTruckingOperations([])
     setHasMore(true)
   }, [searchParams])
 
   useEffect(() => {
+    if (!userScopeReady) return
+    section1SummaryForceNextFetchRef.current = true
+  }, [userScopeReady, scopeSummaryRequestKey])
+
+  useEffect(() => {
+    if (!userScopeReady) return
     fetchTruckingOperations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir, selectedPlantSites])
+  }, [userScopeReady, page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir, selectedGroupPlants, selectedIncoterms, selectedProducts, selectedSuppliers, dateFrom, dateTo, searchTerm, columnFilters])
 
   useEffect(() => {
     let cancelled = false
-    api
-      .get('/dashboard/filter-options/plants')
-      .then((res) => {
+    Promise.all([
+      api.get('/contracts/filter-options/group-plants'),
+      api.get('/contracts/filter-options/incoterms'),
+      api.get('/dashboard/filter-options/products'),
+      api.get('/dashboard/filter-options/suppliers'),
+    ])
+      .then(([plantRes, incRes, productRes, supplierRes]) => {
         if (cancelled) return
-        const plantPayload = res.data?.data
-        const plants = (Array.isArray(plantPayload)
-          ? plantPayload
-          : plantPayload && typeof plantPayload === 'object' && 'plants' in plantPayload
-            ? (plantPayload as { plants?: string[] }).plants
+        const plants = (plantRes.data?.data?.groupPlants || []) as string[]
+        const incs = (incRes.data?.data?.incoterms || []) as string[]
+        const productPayload = productRes.data?.data
+        const products = (Array.isArray(productPayload)
+          ? productPayload
+          : productPayload && typeof productPayload === 'object' && 'products' in productPayload
+            ? (productPayload as { products?: string[] }).products
             : []) as string[]
-        setAvailablePlantSites(Array.isArray(plants) ? plants : [])
+        const supplierPayload = supplierRes.data?.data
+        const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
+        setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
+        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
+        setAvailableProducts(Array.isArray(products) ? products : [])
+        setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
       })
       .catch((e) => {
         if (cancelled) return
-        console.error('Failed to fetch plant/site options:', e)
-        setAvailablePlantSites([])
+        console.error('Failed to fetch filter options:', e)
+        setAvailableGroupPlants([])
+        setAvailableIncoterms([])
+        setAvailableProducts([])
+        setAvailableSuppliers([])
       })
     return () => {
       cancelled = true
@@ -826,7 +1963,6 @@ function TruckingPageContent() {
 
   const applySearch = useCallback(() => {
     setPage(1)
-    setTruckingOperations([])
     setHasMore(true)
     setSearchTerm(searchDraft)
     fetchTruckingOperations(1, searchDraft)
@@ -835,67 +1971,278 @@ function TruckingPageContent() {
 
   // Column header filters apply only when user presses Enter inside the filter popover.
 
-  const fetchTruckingOperations = async (forcedPage?: number, searchOverride?: string) => {
+  /** Reset visible rows so Section 3 shows loading when table scope filters change. */
+  const beginTableScopeRefresh = useCallback(() => {
+    setTruckingOperations([])
+    setTableScopeLoading(true)
+    setStatusCardTotalFromList(null)
+    setTotalCount(0)
+    setTotalPages(1)
+  }, [])
+
+  const fetchTruckingOperations = async (
+    forcedPage?: number,
+    searchOverride?: string,
+    options?: { force?: boolean },
+  ) => {
+    const listGen = ++listFetchGenRef.current
+    const fetchStatusFilter = statusFilter
+    setListFetching(true)
+    setSummaryFetching(true)
     try {
-      setLoading(true)
       const effectivePage = forcedPage ?? page
-      const params = new URLSearchParams()
-      params.append('limit', String(pageSize))
-      params.append('page', String(effectivePage))
-      params.append('sortKey', sortKey)
-      params.append('sortDir', sortDir)
-      if (statusFilter && statusFilter !== 'ALL') {
-        params.append('status', statusFilter)
+      const params = buildTruckingListSearchParams({
+        page: effectivePage,
+        limit: pageSize,
+        includeSummary: false,
+        searchOverride,
+      })
+
+      const listUrl = `/trucking?${params.toString()}`
+      const listCacheKey = buildCacheKey('GET', listUrl)
+
+      const summaryParams = new URLSearchParams(params.toString())
+      summaryParams.delete('status')
+      summaryParams.delete('includeSummary')
+      summaryParams.set('summaryOnly', 'true')
+      summaryParams.set('page', '1')
+      summaryParams.set('limit', '1')
+      const summaryUrl = `/trucking?${summaryParams.toString()}`
+      const summaryCacheKey = buildCacheKey('GET', summaryUrl)
+      const summaryForce = options?.force || section1SummaryForceNextFetchRef.current
+
+      const applySummaryEnvelope = (envelope: {
+        data?: {
+          summary?: typeof truckingSection1Summary
+        }
+      }) => {
+        if (envelope?.data?.summary) {
+          setTruckingSection1Summary(envelope.data.summary)
+        }
+        setSummaryFetching(false)
       }
-      if (loadingLocationFilter) {
-        params.append('loadingLocation', loadingLocationFilter)
+
+      const applyListEnvelope = (envelope: {
+        data?: {
+          truckingOperations?: TruckingOperation[]
+          pagination?: { total?: number; totalPages?: number }
+          unplannedBreakdown?: {
+            contractRows?: number
+            executionRows?: number
+            totalTableRows?: number
+          }
+          summary?: {
+            status?: {
+              planned?: number
+              inProgress?: number
+              completed?: number
+              cancelled?: number
+            }
+          }
+        }
+      }) => {
+        const items = envelope?.data?.truckingOperations || []
+        setTruckingOperations(items)
+        const total = Number(envelope?.data?.pagination?.total ?? 0)
+        const pages = Number(envelope?.data?.pagination?.totalPages || 1)
+        setTotalCount(total)
+        setTotalPages(pages)
+        setHasMore(effectivePage < pages)
+        setTableScopeLoading(false)
+        const breakdown = envelope?.data?.unplannedBreakdown
+        if (breakdown) {
+          setUnplannedBreakdown({
+            contractRows: Number(breakdown.contractRows ?? 0),
+            executionRows: Number(breakdown.executionRows ?? 0),
+            totalTableRows: Number(breakdown.totalTableRows ?? 0),
+          })
+        } else {
+          setUnplannedBreakdown(null)
+        }
+        const activeStage = String(fetchStatusFilter ?? '').trim().toUpperCase()
+        if (activeStage && activeStage !== 'ALL') {
+          const listTotal =
+            activeStage === 'UNPLANNED'
+              ? Number(breakdown?.totalTableRows ?? total)
+              : total
+          setStatusCardTotalFromList({ status: activeStage, total: listTotal })
+        } else {
+          setStatusCardTotalFromList(null)
+        }
       }
-      if (unloadingLocationFilter) {
-        params.append('unloadingLocation', unloadingLocationFilter)
+
+      const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
+        listCacheKey,
+        () => api.get(listUrl).then((r) => r.data),
+        {
+          force: options?.force,
+          onRevalidate: (fresh) => {
+            if (listGen !== listFetchGenRef.current) return
+            applyListEnvelope(fresh)
+            setListFetching(false)
+          },
+        },
+      )
+      section1SummaryForceNextFetchRef.current = false
+      if (listGen !== listFetchGenRef.current) return
+      applyListEnvelope(listEnvelope)
+      if (!listRevalidating) setListFetching(false)
+
+      /** Section 1 summary after table shell — avoids competing with list query on DB/CPU. */
+      const scheduleSummaryFetches = () => {
+        if (listGen !== listFetchGenRef.current) return
+        const summaryGen = ++summaryFetchGenRef.current
+        void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+          force: summaryForce,
+          onRevalidate: (fresh) => {
+            if (summaryGen !== summaryFetchGenRef.current) return
+            applySummaryEnvelope(fresh)
+          },
+        })
+          .then(({ data }) => {
+            if (summaryGen !== summaryFetchGenRef.current) return
+            applySummaryEnvelope(data)
+          })
+          .catch(() => {
+            if (summaryGen === summaryFetchGenRef.current) setSummaryFetching(false)
+          })
       }
-      if (dateFrom) params.append('dateFrom', dateFrom)
-      if (dateTo) params.append('dateTo', dateTo)
-      const searchTrim = (searchOverride ?? searchTerm).trim()
-      if (searchTrim.length >= 2) {
-        params.append('search', searchTrim)
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => scheduleSummaryFetches(), { timeout: 2000 })
+      } else {
+        setTimeout(scheduleSummaryFetches, 250)
       }
-      const cfKeys = Object.keys(columnFilters)
-      if (cfKeys.length > 0) {
-        params.append('columnFilters', JSON.stringify(columnFilters))
+
+      // SAP hydrate after table paint — avoids competing with shell query on DB/CPU.
+      const scheduleHydrate = () => {
+        const hydrateParams = new URLSearchParams(params.toString())
+        hydrateParams.delete('includeSummary')
+        hydrateParams.set('skipSapJoin', 'false')
+        const hydrateUrl = `/trucking?${hydrateParams.toString()}`
+        const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
+        void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
+          force: options?.force,
+          onRevalidate: (fresh) => {
+            if (listGen !== listFetchGenRef.current) return
+            const hydrated = fresh?.data?.truckingOperations || []
+            if (hydrated.length) {
+              setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
+            }
+          },
+        })
+          .then(({ data }) => {
+            if (listGen !== listFetchGenRef.current) return
+            const hydrated = data?.data?.truckingOperations || []
+            if (hydrated.length) {
+              setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
+            }
+          })
+          .catch((err) => {
+            console.warn('Trucking SAP hydrate failed (table shows shell data):', err)
+          })
       }
-      if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
-        params.append('lateIndicator', lateIndicatorFilter)
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => scheduleHydrate(), { timeout: 2000 })
+      } else {
+        setTimeout(scheduleHydrate, 250)
       }
-      
-      // Check for STO parameter from URL
-      const stoParam = searchParams.get('sto')
-      if (stoParam) {
-        params.append('sto', stoParam)
-      }
-      
-      // Check for contract parameter from URL
-      const contractParam = searchParams.get('contract')
-      if (contractParam) {
-        params.append('contract', contractParam)
-      }
-      if (selectedPlantSites.length > 0) {
-        selectedPlantSites.forEach((p) => params.append('plant', p))
-      }
-      
-      const response = await api.get(`/trucking?${params.toString()}`)
-      const items = response.data.data.truckingOperations || []
-      setTruckingOperations((prev) => (effectivePage === 1 ? items : [...prev, ...items]))
-      setTruckingSummary(response.data.data.summary || null)
-      const total = Number(response.data.data.pagination?.total ?? 0)
-      const totalPages = Number(response.data.data.pagination?.totalPages || 1)
-      setTotalCount(total)
-      setHasMore(effectivePage < totalPages)
     } catch (error) {
+      if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch trucking operations:', error)
       alert('Failed to load trucking operations. Please refresh the page.')
-      setTruckingSummary(null)
+      setListFetching(false)
+      setSummaryFetching(false)
+    }
+  }
+
+  const uploadUnplannedPlanningFromWideTemplate = useCallback(async (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await api.post('/trucking/unplanned-planning/bulk-upload', fd)
+    const data = res.data?.data
+    if (data) {
+      setBulkCreateSummary({
+        processedRows: Number(data.processedRows ?? 0),
+        operationsCreated: Number(data.operationsCreated ?? 0),
+        operationsUpdated: Number(data.operationsUpdated ?? 0),
+        operationsFailed: Number(data.operationsFailed ?? 0),
+        succeededRows: Number(data.succeededRows ?? 0),
+        rowParseFailures: data.rowParseFailures ?? [],
+        operationFailures: data.operationFailures ?? [],
+        operationWarnings: data.operationWarnings ?? [],
+        failedRetemplateRows: data.failedRetemplateRows ?? [],
+        uploadHeaderRow: data.uploadHeaderRow ?? [],
+      })
+      setBulkCreateUploadOpen(true)
+    }
+    invalidateLogisticsListCaches()
+    section1SummaryForceNextFetchRef.current = true
+    await fetchTruckingOperations(page, undefined, { force: true })
+  }, [fetchTruckingOperations, page])
+
+  const uploadPlannedPlanningFromWideTemplate = useCallback(async (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await api.post('/trucking/planned-planning/bulk-upload', fd)
+    const data = res.data?.data
+    if (data) {
+      setBulkCreateSummary({
+        processedRows: Number(data.processedRows ?? 0),
+        operationsCreated: Number(data.operationsCreated ?? 0),
+        operationsUpdated: Number(data.operationsUpdated ?? 0),
+        operationsFailed: Number(data.operationsFailed ?? 0),
+        succeededRows: Number(data.succeededRows ?? 0),
+        rowParseFailures: data.rowParseFailures ?? [],
+        operationFailures: data.operationFailures ?? [],
+        operationWarnings: data.operationWarnings ?? [],
+        failedRetemplateRows: data.failedRetemplateRows ?? [],
+        uploadHeaderRow: data.uploadHeaderRow ?? [],
+      })
+      setBulkCreateUploadOpen(true)
+    }
+    invalidateLogisticsListCaches()
+    section1SummaryForceNextFetchRef.current = true
+    await fetchTruckingOperations(page, undefined, { force: true })
+  }, [fetchTruckingOperations, page])
+
+  const handleBulkCreateFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+
+    setBulkCreateUploading(true)
+    try {
+      if (isUnplannedPlanningTemplateMode(statusFilter)) {
+        await uploadUnplannedPlanningFromWideTemplate(file)
+        return
+      }
+
+      if (isPlannedPlanningTemplateMode(statusFilter)) {
+        const isPlanningTemplate = await isWidePlanningTemplateFile(file)
+        if (!isPlanningTemplate) {
+          alert(
+            'Invalid file. Upload the Planned daily trucking template (Group, Supplier, …, date columns).',
+          )
+          return
+        }
+        await uploadPlannedPlanningFromWideTemplate(file)
+        return
+      }
+
+      const fd = new FormData()
+      fd.append('file', file)
+
+      const res = await api.post('/trucking/bulk-create', fd)
+      const data = res.data?.data
+      if (data) {
+        setBulkCreateSummary(data)
+        setBulkCreateUploadOpen(true)
+      }
+      await fetchTruckingOperations(1, undefined, { force: true })
+    } catch (err: any) {
+      alert(err?.response?.data?.error?.message || err?.message || 'Upload failed')
     } finally {
-      setLoading(false)
+      setBulkCreateUploading(false)
     }
   }
 
@@ -938,10 +2285,67 @@ function TruckingPageContent() {
     setEditedData(prev => ({ ...prev, [field]: value }))
   }
 
+  const handleOpenEditTruckingModal = (operation: TruckingOperation) => {
+    if (isTruckingEditDisabled(operation)) {
+      return
+    }
+    const contractId = (operation.contract_number || operation.contract_ext_no || '').trim()
+    const poNumber = operation.po_number?.trim()
+    if (!contractId && !poNumber) {
+      alert('PO Number or Contract ID is required to edit this trucking operation.')
+      return
+    }
+    setPlotTruckingFromTable(null)
+    setEditTruckingFromTable({
+      operationId: operation.id,
+      contractId,
+      contractExtNo: operation.contract_ext_no || operation.contract_number,
+      poNumber,
+    })
+  }
+
+  const handleOpenAddTruckingModal = (operation: TruckingOperation) => {
+    const contractId = (operation.contract_number || operation.contract_ext_no || '').trim()
+    const poNumber = operation.po_number?.trim()
+    if (!contractId && !poNumber) {
+      alert('PO Number or Contract ID is required to add trucking planning.')
+      return
+    }
+    setEditTruckingFromTable(null)
+    if (isTruckingContractBacklogRow(operation)) {
+      setPlotTruckingFromTable(null)
+      setCreateTruckingPrefill({
+        contractId,
+        contractExtNo: operation.contract_ext_no || operation.contract_number,
+        poNumber,
+      })
+      setShowCreateForm(true)
+      return
+    }
+    setShowCreateForm(false)
+    setCreateTruckingPrefill(null)
+    setPlotTruckingFromTable({
+      operationId: operation.id,
+      contractId,
+      contractExtNo: operation.contract_ext_no || operation.contract_number,
+      poNumber,
+    })
+  }
+
+  const handleCloseTruckingModal = () => {
+    setShowCreateForm(false)
+    setEditTruckingFromTable(null)
+    setPlotTruckingFromTable(null)
+    setCreateTruckingPrefill(null)
+  }
+
   const handleCreated = () => {
+    handleCloseTruckingModal()
     setPage(1)
-    setTruckingOperations([])
     setHasMore(true)
+    invalidateLogisticsListCaches()
+    section1SummaryForceNextFetchRef.current = true
+    void fetchTruckingOperations(1, undefined, { force: true })
   }
 
   const downloadTemplate = async () => {
@@ -991,6 +2395,7 @@ function TruckingPageContent() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
+      case 'UNPLANNED': return 'bg-slate-100 text-slate-800'
       case 'PLANNED': return 'bg-blue-100 text-blue-800'
       case 'IN_PROGRESS': return 'bg-yellow-100 text-yellow-800'
       case 'LOADING': return 'bg-orange-100 text-orange-800'
@@ -1003,6 +2408,48 @@ function TruckingPageContent() {
   }
 
   // Document functions
+  const fetchOperationDocuments = async (operation: TruckingOperation) => {
+    try {
+      setDocsLoading(true)
+      const merged: DocumentItem[] = []
+      const seen = new Set<string>()
+
+      const appendDocs = (rows: DocumentItem[] | undefined) => {
+        for (const doc of rows ?? []) {
+          const docId = String(doc.id ?? '').trim()
+          if (!docId || seen.has(docId)) continue
+          seen.add(docId)
+          merged.push(doc)
+        }
+      }
+
+      if (isTruckingContractBacklogRow(operation)) {
+        const contractId = resolveTruckingDocumentContractId(operation)
+        if (!contractId) {
+          setOperationDocs([])
+          return
+        }
+        const res = await api.get('/documents', { params: { contractId } })
+        appendDocs(res.data?.data)
+      } else {
+        const res = await api.get('/documents', { params: { truckingOperationId: operation.id } })
+        appendDocs(res.data?.data)
+        const contractId = resolveTruckingDocumentContractId(operation)
+        if (contractId) {
+          const contractRes = await api.get('/documents', { params: { contractId } })
+          appendDocs(contractRes.data?.data)
+        }
+      }
+
+      setOperationDocs(merged)
+    } catch (err) {
+      console.error('Fetch documents error:', err)
+      setOperationDocs([])
+    } finally {
+      setDocsLoading(false)
+    }
+  }
+
   const handleUploadFileChange = async (operation: TruckingOperation, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -1014,12 +2461,24 @@ function TruckingPageContent() {
       return
     }
 
+    const backlogRow = isTruckingContractBacklogRow(operation)
+    const contractId = resolveTruckingDocumentContractId(operation)
+    if (backlogRow && !contractId) {
+      alert('Contract reference is missing; cannot upload document.')
+      e.target.value = ''
+      return
+    }
+
     setUploadingId(operation.id)
     try {
       const form = new FormData()
       form.append('file', file)
       form.append('document_type', 'OTHER')
-      form.append('trucking_operation_id', operation.id)
+      if (backlogRow) {
+        form.append('contract_id', contractId)
+      } else {
+        form.append('trucking_operation_id', operation.id)
+      }
 
       const res = await api.post('/documents/upload', form, {
         headers: { 'Content-Type': 'multipart/form-data' }
@@ -1027,7 +2486,7 @@ function TruckingPageContent() {
       if (res.data?.success) {
         alert('Document uploaded successfully!')
         if (selectedOperation && selectedOperation.id === operation.id) {
-          await fetchOperationDocuments(operation.id)
+          await fetchOperationDocuments(operation)
         }
       } else {
         alert(res.data?.error?.message || 'Failed to upload document')
@@ -1038,22 +2497,6 @@ function TruckingPageContent() {
     } finally {
       setUploadingId('')
       e.target.value = ''
-    }
-  }
-
-  const fetchOperationDocuments = async (operationInternalId: string) => {
-    try {
-      setDocsLoading(true)
-      const params = new URLSearchParams()
-      params.append('truckingOperationId', operationInternalId)
-      const res = await api.get(`/documents?${params.toString()}`)
-      const docs: DocumentItem[] = res.data?.data || []
-      setOperationDocs(docs)
-    } catch (err) {
-      console.error('Fetch documents error:', err)
-      setOperationDocs([])
-    } finally {
-      setDocsLoading(false)
     }
   }
 
@@ -1081,7 +2524,7 @@ function TruckingPageContent() {
   const handleViewDocuments = async (operation: TruckingOperation) => {
     setSelectedOperation(operation)
     setShowDocs(true)
-    await fetchOperationDocuments(operation.id)
+    await fetchOperationDocuments(operation)
   }
 
   const formatNumber = (num: number | string) => {
@@ -1118,47 +2561,143 @@ function TruckingPageContent() {
   const formatShortDate = (dateStr: string) => formatDateDMY(dateStr)
 
   // Helper function to calculate late indicator
-  const getLateIndicator = (operation: TruckingOperation): { color: string; text: string } => {
-    if (!operation.delivery_end_date) {
-      return { color: 'bg-gray-100 text-gray-800', text: '-' }
-    }
-    
-    const deliveryEnd = new Date(operation.delivery_end_date).getTime()
-    const actualCompletion = operation.trucking_completion_date ? new Date(operation.trucking_completion_date).getTime() : null
-    
-    // If completion date is null, cannot determine
-    if (actualCompletion === null) {
-      return { color: 'bg-gray-100 text-gray-800', text: '-' }
-    }
-    
-    // Green if delivery_end >= actual completion; red otherwise
-    const isOnTime = deliveryEnd >= actualCompletion
-    
-    if (isOnTime) {
-      return { color: 'bg-green-100 text-green-800', text: 'On Time' }
-    } else {
-      return { color: 'bg-red-100 text-red-800', text: 'Late' }
-    }
-  }
+  const getLateIndicator = (operation: TruckingOperation): { color: string; text: string } =>
+    computeLateIndicatorDisplay(
+      operation.delivery_end_date,
+      operation.trucking_completion_date,
+      operation.eta_trucking_completion_date,
+    )
 
-  const handleFilterChange = () => {
-    setDateFrom(dateFromDraft)
-    setDateTo(dateToDraft)
+  const hasActiveTruckingFilters = useMemo(() => {
+    return (
+      searchDraft.trim() !== '' ||
+      searchTerm.trim() !== '' ||
+      statusFilter !== 'ALL' ||
+      lateIndicatorFilter !== 'ALL' ||
+      !!loadingLocationFilter.trim() ||
+      !!unloadingLocationFilter.trim() ||
+      selectedGroupPlants.length > 0 ||
+      selectedIncoterms.length > 0 ||
+      selectedProducts.length > 0 ||
+      selectedSuppliers.length > 0 ||
+      Object.keys(columnFilters).length > 0 ||
+      dateFrom !== defaultContractDateRange.from ||
+      dateTo !== defaultContractDateRange.to
+    )
+  }, [
+    searchDraft,
+    searchTerm,
+    statusFilter,
+    lateIndicatorFilter,
+    loadingLocationFilter,
+    unloadingLocationFilter,
+    selectedGroupPlants,
+    selectedIncoterms,
+    selectedProducts,
+    selectedSuppliers,
+    columnFilters,
+    dateFrom,
+    dateTo,
+    defaultContractDateRange,
+  ])
+
+  const clearTruckingFilters = useCallback(() => {
+    markUserScopeFiltersCleared('trucking')
+    setSearchDraft('')
+    setSearchTerm('')
+    setStatusFilter('ALL')
+    setLateIndicatorFilter('ALL')
+    setLoadingLocationFilter('')
+    setUnloadingLocationFilter('')
+    resetUserScopeFilters()
+    setSelectedIncoterms([])
+    setSelectedSuppliers([])
+    setColumnFilters({})
+    setDateFrom(defaultContractDateRange.from)
+    setDateTo(defaultContractDateRange.to)
     setPage(1)
-    fetchTruckingOperations(1)
-  }
+    setHasMore(true)
+  }, [defaultContractDateRange, resetUserScopeFilters])
+
+  /** Section 1 status circles — toggles Section 2 dropdown + Section 3 API `status` param. */
+  const handleStatusCardClick = useCallback((status: string) => {
+    beginTableScopeRefresh()
+    setPage(1)
+    setHasMore(true)
+    setStatusFilter((prev) => (prev === status ? 'ALL' : status))
+  }, [beginTableScopeRefresh])
+
+  const truckingActiveFilterScopeLabel = useMemo(() => {
+    const parts: string[] = []
+    if (statusFilter !== 'ALL') {
+      parts.push(TRUCKING_STATUS_LABELS[statusFilter] ?? statusFilter)
+    }
+    if (lateIndicatorFilter !== 'ALL') {
+      const lateLabels: Record<string, string> = { ON_TIME: 'On Time', LATE: 'Late', NA: 'N/A' }
+      parts.push(`Late: ${lateLabels[lateIndicatorFilter] ?? lateIndicatorFilter}`)
+    }
+    if (searchTerm.trim().length >= 2) {
+      parts.push(`Search "${searchTerm.trim()}"`)
+    }
+    if (selectedIncoterms.length > 0) {
+      parts.push(
+        `Incoterm${selectedIncoterms.length > 1 ? 's' : ''}: ${selectedIncoterms.slice(0, 2).join(', ')}${selectedIncoterms.length > 2 ? '…' : ''}`,
+      )
+    }
+    if (selectedProducts.length > 0) {
+      parts.push(
+        `Product${selectedProducts.length > 1 ? 's' : ''}: ${selectedProducts.slice(0, 2).join(', ')}${selectedProducts.length > 2 ? '…' : ''}`,
+      )
+    }
+    if (selectedSuppliers.length > 0) {
+      parts.push(
+        `Supplier${selectedSuppliers.length > 1 ? 's' : ''}: ${selectedSuppliers.slice(0, 2).join(', ')}${selectedSuppliers.length > 2 ? '…' : ''}`,
+      )
+    }
+    if (selectedGroupPlants.length > 0) {
+      parts.push(
+        `Plant${selectedGroupPlants.length > 1 ? 's' : ''}: ${selectedGroupPlants.slice(0, 2).join(', ')}${selectedGroupPlants.length > 2 ? '…' : ''}`,
+      )
+    }
+    if (Object.keys(columnFilters).length > 0) {
+      parts.push(`${Object.keys(columnFilters).length} column filter(s)`)
+    }
+    if (dateFrom !== defaultContractDateRange.from || dateTo !== defaultContractDateRange.to) {
+      parts.push('Contract date filtered')
+    }
+    const stoParam = searchParams.get('sto')
+    if (stoParam) parts.push(`STO ${stoParam}`)
+    const contractParam = searchParams.get('contract')
+    if (contractParam) parts.push(`Contract ${contractParam}`)
+    return parts.length > 0 ? parts.join(' · ') : null
+  }, [
+    statusFilter,
+    lateIndicatorFilter,
+    searchTerm,
+    selectedIncoterms,
+    selectedProducts,
+    selectedSuppliers,
+    selectedGroupPlants,
+    columnFilters,
+    dateFrom,
+    dateTo,
+    defaultContractDateRange,
+    searchParams,
+  ])
 
   // Excel-like filtering helpers
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
-    if (colId === 'contract_qty' || colId === 'sto_quantity' || colId === 'quantity_sent' || colId === 'quantity_delivered' || colId === 'quantity_receive' || colId === 'oa_budget' || colId === 'oa_actual' || colId === 'estimated_km' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount') return 'number'
-    if (colId === 'cargo_readiness_date' || colId === 'trucking_start_date' || colId === 'trucking_completion_date' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'created_at') return 'date'
+    if (colId === 'contract_qty' || colId === 'sto_quantity' || colId === 'quantity_sent' || colId === 'quantity_delivered' || colId === 'quantity_receive' || colId === 'outstanding_qty_mt' || colId === 'oa_budget' || colId === 'oa_actual' || colId === 'estimated_km' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount') return 'number'
+    if (colId === 'cargo_readiness_date' || colId === 'contract_date' || colId === 'trucking_start_date' || colId === 'trucking_completion_date' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'created_at') return 'date'
     return 'text'
   }
 
   const getColumnRawValue = (o: TruckingOperation, colId: string): string | number | null => {
     switch (colId) {
       case 'operation_id': return o.operation_id || ''
-      case 'contract_number': return o.contract_number || ''
+      case 'contract_number':
+      case 'contract_ext_no': return o.contract_ext_no || o.contract_number || ''
+      case 'contract_date': return o.contract_date || ''
       case 'po_number': return o.po_number || ''
       case 'sto_number': return o.sto_number || ''
       case 'status': return o.status || ''
@@ -1168,13 +2707,15 @@ function TruckingPageContent() {
       case 'trucking_owner': return o.trucking_owner || ''
       case 'supplier': return o.supplier || ''
       case 'product': return o.product || ''
+      case 'incoterm': return o.incoterm || ''
       case 'buyer': return o.buyer || ''
       case 'group_name': return o.group_name || ''
       case 'contract_qty': return typeof o.contract_qty === 'number' ? o.contract_qty : null
       case 'sto_quantity': return typeof o.sto_quantity === 'number' ? o.sto_quantity : null
       case 'quantity_sent': return typeof o.quantity_sent === 'number' ? o.quantity_sent : null
-      case 'quantity_delivered': return typeof o.quantity_delivered === 'number' ? o.quantity_delivered : null
-      case 'quantity_receive': return typeof o.quantity_receive === 'number' ? o.quantity_receive : (typeof o.quantity_delivered === 'number' ? o.quantity_delivered : null)
+      case 'quantity_delivered': return parseTruckingQtyKg(o.quantity_delivered)
+      case 'quantity_receive': return parseTruckingQtyKg(o.quantity_receive ?? o.quantity_delivered)
+      case 'outstanding_qty_mt': return typeof o.outstanding_quantity === 'number' ? o.outstanding_quantity : null
       case 'oa_budget': return typeof o.oa_budget === 'number' ? o.oa_budget : null
       case 'oa_actual': return typeof o.oa_actual === 'number' ? o.oa_actual : null
       case 'estimated_km': return typeof o.estimated_km === 'number' ? o.estimated_km : null
@@ -1192,7 +2733,89 @@ function TruckingPageContent() {
   }
 
   // Search, column filters, and late indicator are applied on the server across the full dataset.
-  const filteredOperations = truckingOperations
+  const filteredOperations = useMemo(() => {
+    if (!statusFilter || statusFilter === 'ALL') return truckingOperations
+    const stage = statusFilter.trim().toUpperCase()
+    return truckingOperations.filter(
+      (op) => String(op.status ?? '').trim().toUpperCase() === stage,
+    )
+  }, [truckingOperations, statusFilter])
+
+  /** Unplanned view table: headline and Section 2 card both use hybrid table row total. */
+  const unplannedTableBreakdown = useMemo(() => {
+    if (unplannedBreakdown) return unplannedBreakdown
+    const fromSummary = truckingSection1Summary?.unplannedTable
+    if (!fromSummary) return null
+    return {
+      contractRows: Number(fromSummary.contractRows ?? 0),
+      executionRows: Number(fromSummary.executionRows ?? 0),
+      totalTableRows: Number(fromSummary.totalTableRows ?? 0),
+    }
+  }, [unplannedBreakdown, truckingSection1Summary?.unplannedTable])
+
+  /** Section 2 card counts — summary SQL + instant patch for the active status from view-table total. */
+  const truckingStatusCardCounts = useMemo(() => {
+    const s = truckingSection1Summary?.status
+    const counts: Record<string, number> = {
+      UNPLANNED: Number(
+        unplannedTableBreakdown?.totalTableRows ??
+          truckingSection1Summary?.unplannedTable?.totalTableRows ??
+          s?.unplanned ??
+          0,
+      ),
+      PLANNED: Number(s?.planned ?? 0),
+      IN_PROGRESS: Number(s?.inProgress ?? 0),
+      COMPLETED: Number(s?.completed ?? 0),
+      CANCELLED: Number(s?.cancelled ?? 0),
+    }
+    if (
+      statusCardTotalFromList &&
+      summaryFetching &&
+      Object.prototype.hasOwnProperty.call(counts, statusCardTotalFromList.status)
+    ) {
+      counts[statusCardTotalFromList.status] = statusCardTotalFromList.total
+    }
+    return counts
+  }, [
+    truckingSection1Summary,
+    unplannedTableBreakdown?.totalTableRows,
+    statusCardTotalFromList,
+    summaryFetching,
+  ])
+
+  const tableHeaderCount = useMemo(() => {
+    if (statusFilter === 'UNPLANNED') {
+      const rowTotal =
+        unplannedTableBreakdown?.totalTableRows ??
+        (truckingSection1Summary?.status?.unplanned != null
+          ? Number(truckingSection1Summary.status.unplanned)
+          : totalCount)
+      return {
+        value: rowTotal,
+        noun: 'rows' as const,
+      }
+    }
+    if (
+      statusFilter === 'PLANNED' ||
+      statusFilter === 'IN_PROGRESS' ||
+      statusFilter === 'COMPLETED' ||
+      statusFilter === 'CANCELLED'
+    ) {
+      return {
+        value: totalCount,
+        noun: 'trucking' as const,
+      }
+    }
+    return {
+      value: totalCount,
+      noun: 'operations' as const,
+    }
+  }, [
+    statusFilter,
+    unplannedTableBreakdown?.totalTableRows,
+    truckingSection1Summary?.status?.unplanned,
+    totalCount,
+  ])
 
   // Compact columns definition
   interface CompactColumn {
@@ -1210,7 +2833,7 @@ function TruckingPageContent() {
   const compactColumns: CompactColumn[] = useMemo(() => [
     {
       id: 'late_indicator',
-      label: 'Late Indicator',
+      label: 'Late Indicators',
       formulaHelp: FIELD_HELP.lateIndicator,
       defaultVisible: true,
       sortable: true,
@@ -1224,17 +2847,54 @@ function TruckingPageContent() {
       }
     },
     {
-      id: 'operation_id',
-      label: 'Operation ID',
+      id: 'sto_number',
+      label: 'STO',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (o) => o.operation_id || '',
+      getSortValue: (o) => (isTruckingContractBacklogRow(o) ? '' : o.sto_number || ''),
       render: (o) => (
-        <div className="min-w-0 break-words">
-          <div className="font-semibold break-words">{o.operation_id}</div>
-          <div className="text-xs text-gray-600 break-words">{o.location || '-'} • {o.trucking_owner || '-'}</div>
-        </div>
+        <OperationalNowrapCell
+          value={isTruckingContractBacklogRow(o) ? '—' : o.sto_number}
+          title={isTruckingContractBacklogRow(o) ? '—' : o.sto_number || ''}
+        />
       )
+    },
+    {
+      id: 'contract_date',
+      label: 'Contract Date',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.contract_date || '',
+      render: (o) => <span className="text-sm">{formatShortDate(o.contract_date || '')}</span>
+    },
+    {
+      id: 'contract_ext_no',
+      label: 'Contract Ext No',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.contract_ext_no || o.contract_number || '',
+      render: (o) => (
+        <OperationalStackedCommaCell
+          value={o.contract_ext_no || o.contract_number}
+          title={(o.contract_ext_no || o.contract_number || '') as string}
+        />
+      )
+    },
+    {
+      id: 'po_number',
+      label: 'PO',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.po_number || '',
+      render: (o) => <OperationalNowrapCell value={o.po_number} title={o.po_number || ''} />
+    },
+    {
+      id: 'supplier',
+      label: 'Supplier',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.supplier || '',
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.supplier)}</span>
     },
     {
       id: 'status',
@@ -1244,55 +2904,113 @@ function TruckingPageContent() {
       getSortValue: (o) => o.status || '',
       render: (o) => (
         <Badge className={getStatusColor(o.status)}>
-          {o.status}
+          {truckingStatusLabel(o.status)}
         </Badge>
       )
     },
     {
-      id: 'contract_number',
-      label: 'Contract Ext No',
+      id: 'product',
+      label: 'Product',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (o) => o.contract_ext_no || o.contract_number || '',
-      render: (o) => (
-        <span className="text-sm break-words block" title={(o.contract_ext_no || o.contract_number || '') as string}>
-          {o.contract_ext_no || o.contract_number || '-'}
-        </span>
-      )
+      getSortValue: (o) => o.product || '',
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.product)}</span>
     },
     {
-      id: 'po_number',
-      label: 'PO No',
+      id: 'incoterm',
+      label: 'Incoterm',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (o) => o.po_number || '',
-      render: (o) => (
-        <span className="text-sm break-words block" title={o.po_number || ''}>
-          {o.po_number || '-'}
-        </span>
-      )
+      getSortValue: (o) => o.incoterm || '',
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.incoterm)}</span>
     },
     {
-      id: 'sto_number',
-      label: 'STO No',
+      id: 'contract_qty',
+      label: 'Contract Qty (MT)',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (o) => o.sto_number || '',
+      getSortValue: (o) => o.contract_qty || 0,
       render: (o) => (
-        <span className="text-sm break-words block" title={o.sto_number || ''}>
-          {o.sto_number || '-'}
+        <span className="text-sm break-words tabular-nums">
+          {formatQtyMtFromKg(o.contract_qty)}
         </span>
       )
     },
     {
       id: 'sto_quantity',
-      label: 'STO Quantity',
+      label: 'STO Qty (MT)',
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.sto_quantity || 0,
       render: (o) => (
-        <span className="text-sm break-words">
-          {formatKg(o.sto_quantity || 0)}
+        <span className="text-sm break-words tabular-nums">
+          {formatQtyMtFromKg(o.sto_quantity)}
+        </span>
+      )
+    },
+    {
+      id: 'quantity_delivered',
+      label: 'Delivery Qty (MT)',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => parseTruckingQtyKg(o.quantity_delivered) ?? 0,
+      render: (o) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatTruckingQtyMt(o.quantity_delivered)}
+        </span>
+      )
+    },
+    {
+      id: 'quantity_receive',
+      label: 'Received Qty (MT)',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => parseTruckingQtyKg(o.quantity_receive ?? o.quantity_delivered) ?? 0,
+      render: (o) => (
+        <span className="text-sm break-words tabular-nums">
+          {formatTruckingQtyMt(o.quantity_receive ?? o.quantity_delivered)}
+        </span>
+      )
+    },
+    {
+      id: 'outstanding_qty_mt',
+      label: 'Outstanding Qty (MT)',
+      formulaHelp: FIELD_HELP.truckingOutstandingQtyMt,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => typeof o.outstanding_quantity === 'number' ? o.outstanding_quantity : 0,
+      render: (o) => (
+        <TruckingOutstandingQtyWithTooltip
+          outstandingKg={o.outstanding_quantity}
+          incoterm={o.incoterm}
+        />
+      )
+    },
+    {
+      id: 'trucking_start_date',
+      label: 'Start Receive Date',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.trucking_start_date || '',
+      render: (o) => <span className="text-sm">{formatShortDate(o.trucking_start_date)}</span>
+    },
+    {
+      id: 'trucking_completion_date',
+      label: 'Last Receive Date',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (o) => o.trucking_completion_date || '',
+      render: (o) => <span className="text-sm">{formatShortDate(o.trucking_completion_date)}</span>
+    },
+    {
+      id: 'operation_id',
+      label: 'Operation ID',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (o) => o.operation_id || '',
+      render: (o) => (
+        <span className="text-sm break-words block" title={o.operation_id || ''}>
+          {formatOperationalTableTextDisplay(o.operation_id)}
         </span>
       )
     },
@@ -1302,81 +3020,41 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.location || '',
-      render: (o) => <span className="text-sm break-words">{o.location || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.location)}</span>
     },
     {
       id: 'loading_location',
       label: 'Truck Loading Location',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.loading_location || o.location || '',
-      render: (o) => <span className="text-sm break-words">{o.loading_location || o.location || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.loading_location || o.location)}</span>
     },
     {
       id: 'unloading_location',
       label: 'Truck Discharge Location',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.unloading_location || '',
-      render: (o) => <span className="text-sm break-words">{o.unloading_location || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.unloading_location)}</span>
     },
     {
       id: 'trucking_owner',
       label: 'Trucking Owner',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.trucking_owner || '',
-      render: (o) => <span className="text-sm break-words">{o.trucking_owner || '-'}</span>
-    },
-    {
-      id: 'supplier',
-      label: 'Supplier',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.supplier || '',
-      render: (o) => <span className="text-sm break-words">{o.supplier || '-'}</span>
-    },
-    {
-      id: 'product',
-      label: 'Product',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.product || '',
-      render: (o) => <span className="text-sm break-words">{o.product || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.trucking_owner)}</span>
     },
     {
       id: 'quantity_sent',
       label: 'Qty Sent (Kg)',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.quantity_sent || 0,
       render: (o) => (
         <span className="text-sm break-words">
           {formatKg(o.quantity_sent)}
-        </span>
-      )
-    },
-    {
-      id: 'quantity_delivered',
-      label: 'Quantity Delivery (Kg)',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.quantity_delivered || 0,
-      render: (o) => (
-        <span className="text-sm break-words">
-          {formatKg(o.quantity_delivered)}
-        </span>
-      )
-    },
-    {
-      id: 'quantity_receive',
-      label: 'Quantity Receive (Kg)',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.quantity_receive || o.quantity_delivered || 0,
-      render: (o) => (
-        <span className="text-sm break-words">
-          {formatKg(o.quantity_receive || o.quantity_delivered)}
         </span>
       )
     },
@@ -1410,7 +3088,7 @@ function TruckingPageContent() {
       id: 'oa_budget',
       label: 'Trucking OA Budget',
       formulaHelp: FIELD_HELP.truckingOaBudget,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.oa_budget || 0,
       render: (o) => (
@@ -1423,7 +3101,7 @@ function TruckingPageContent() {
       id: 'oa_actual',
       label: 'Trucking OA Actual',
       formulaHelp: FIELD_HELP.truckingOaActual,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.oa_actual || 0,
       render: (o) => (
@@ -1435,7 +3113,7 @@ function TruckingPageContent() {
     {
       id: 'estimated_km',
       label: 'Estimated KM',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.estimated_km || 0,
       render: (o) => (
@@ -1453,27 +3131,10 @@ function TruckingPageContent() {
       render: (o) => <span className="text-sm">{formatShortDate(o.cargo_readiness_date)}</span>
     },
     {
-      id: 'trucking_start_date',
-      label: 'Trucking Start Receive Date',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.trucking_start_date || '',
-      render: (o) => <span className="text-sm">{formatShortDate(o.trucking_start_date)}</span>
-    },
-    {
-      id: 'trucking_completion_date',
-      label: 'Trucking Last Receive Date',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.trucking_completion_date || '',
-      render: (o) => <span className="text-sm">{formatShortDate(o.trucking_completion_date)}</span>
-    },
-    // ETA date columns removed from UI
-    {
       id: 'delivery_start_date',
       label: 'Due Date Delivery Start',
       formulaHelp: FIELD_HELP.etaVsDueDelivery,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.delivery_start_date || '',
       render: (o) => <span className="text-sm">{formatShortDate(o.delivery_start_date || '')}</span>
@@ -1482,22 +3143,10 @@ function TruckingPageContent() {
       id: 'delivery_end_date',
       label: 'Due Date Delivery End',
       formulaHelp: FIELD_HELP.etaVsDueDelivery,
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.delivery_end_date || '',
       render: (o) => <span className="text-sm">{formatShortDate(o.delivery_end_date || '')}</span>
-    },
-    {
-      id: 'contract_qty',
-      label: 'Contract Qty',
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (o) => o.contract_qty || 0,
-      render: (o) => (
-        <span className="text-sm break-words">
-          {formatKg(o.contract_qty || 0)}
-        </span>
-      )
     },
     {
       id: 'buyer',
@@ -1505,7 +3154,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.buyer || '',
-      render: (o) => <span className="text-sm break-words">{o.buyer || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.buyer)}</span>
     },
     {
       id: 'group_name',
@@ -1513,7 +3162,7 @@ function TruckingPageContent() {
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.group_name || '',
-      render: (o) => <span className="text-sm break-words">{o.group_name || '-'}</span>
+      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.group_name)}</span>
     }
   ], [])
 
@@ -1523,11 +3172,22 @@ function TruckingPageContent() {
       .map(c => c.id)
   }, [compactColumns])
 
+  const compactColumnIdsKey = useMemo(() => compactColumns.map((c) => c.id).join('|'), [compactColumns])
+
   useEffect(() => {
     if (visibleColumnIds.size === 0) {
       setVisibleColumnIds(new Set(defaultVisibleColumnIds))
     }
   }, [defaultVisibleColumnIds, visibleColumnIds.size])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (visibleColumnIds.size > 0) {
+      try {
+        localStorage.setItem(columnStorageKey, JSON.stringify(Array.from(visibleColumnIds)))
+      } catch {}
+    }
+  }, [visibleColumnIds])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1539,15 +3199,49 @@ function TruckingPageContent() {
   }, [columnOrderIds])
 
   useEffect(() => {
-    // Initialize / heal column order with any missing ids.
     const allIds = compactColumns.map((c) => c.id)
+    const canonical = truckingCompactColumnFallbackOrder(allIds)
+    let forceLayoutReset = false
+    if (typeof window !== 'undefined') {
+      try {
+        if (localStorage.getItem(TRUCKING_COLUMN_LAYOUT_VERSION_KEY) !== TRUCKING_COLUMN_LAYOUT_VERSION) {
+          forceLayoutReset = true
+          localStorage.setItem(TRUCKING_COLUMN_LAYOUT_VERSION_KEY, TRUCKING_COLUMN_LAYOUT_VERSION)
+          localStorage.setItem(columnOrderStorageKey, JSON.stringify(canonical))
+          localStorage.setItem(columnStorageKey, JSON.stringify(truckingDefaultVisibleColumnIds(allIds)))
+        }
+      } catch {
+        forceLayoutReset = true
+      }
+    }
+
+    if (forceLayoutReset) {
+      const defaultVis = truckingDefaultVisibleColumnIds(allIds)
+      setVisibleColumnIds(new Set(defaultVis))
+      setColumnOrderIds(canonical)
+      void api
+        .post('/user-preferences/me', {
+          key: userViewPrefKey,
+          value: {
+            visibleColumnIds: defaultVis,
+            columnOrderIds: canonical,
+          },
+        })
+        .catch(() => {
+          /* localStorage already updated */
+        })
+      return
+    }
+
     setColumnOrderIds((prev) => {
-      const base = prev.length > 0 ? prev : allIds
-      const deduped = Array.from(new Set(base))
-      const missing = allIds.filter((id) => !deduped.includes(id))
-      return [...deduped, ...missing].filter((id) => allIds.includes(id))
+      const next = mergeTruckingColumnOrder(prev, allIds)
+      if (prev.length === next.length && prev.every((v, i) => v === next[i])) return prev
+      return next
     })
-    // Load per-user saved view
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compactColumnIdsKey])
+
+  useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
@@ -1566,25 +3260,40 @@ function TruckingPageContent() {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const visibleColumns = useMemo(
+    () => buildTruckingVisibleColumns(compactColumns, visibleColumnIds, columnOrderIds),
+    [columnOrderIds, compactColumns, visibleColumnIds],
+  )
+
+  const resetCompactColumnView = useCallback(() => {
+    const allIds = compactColumns.map((c) => c.id)
+    const vis = new Set(truckingDefaultVisibleColumnIds(allIds))
+    const order = truckingCompactColumnFallbackOrder(allIds)
+    setVisibleColumnIds(vis)
+    setColumnOrderIds(order)
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(columnStorageKey, JSON.stringify(Array.from(vis)))
+        localStorage.setItem(columnOrderStorageKey, JSON.stringify(order))
+      } catch {
+        // ignore
+      }
+    }
   }, [compactColumns])
 
-  const visibleColumns = useMemo(() => {
-    const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
-    const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : compactColumns.map((c) => c.id))
-      .filter((id) => byId.has(id))
-    const orderedAll = orderedIds.map((id) => byId.get(id)!).filter(Boolean)
-    const visible = orderedAll.filter((c) => visibleColumnIds.has(c.id))
-    // Always include status even if hidden (editing requires it).
-    const visibleIds = new Set(visible.map((c) => c.id))
-    const statusCol = byId.get('status')
-    const withStatus = !visibleIds.has('status') && statusCol ? [...visible, statusCol] : visible
-    return withStatus
-  }, [columnOrderIds, compactColumns, editingId, visibleColumnIds])
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 1 || newPage > totalPages || listFetching) return
+    setPage(newPage)
+    fetchTruckingOperations(newPage)
+  }
 
   const reorderColumnByDrag = (dragId: string, dropId: string) => {
     if (dragId === dropId) return
     setColumnOrderIds((prev) => {
-      const ids = prev.length > 0 ? [...prev] : compactColumns.map((c) => c.id)
+      const allIds = compactColumns.map((c) => c.id)
+      const ids = prev.length > 0 ? [...prev] : truckingCompactColumnFallbackOrder(allIds)
       const from = ids.indexOf(dragId)
       const to = ids.indexOf(dropId)
       if (from < 0 || to < 0) return ids
@@ -1613,45 +3322,22 @@ function TruckingPageContent() {
   }, [columnOrderIds, visibleColumnIds])
 
   const sortedOperations = useMemo(() => {
-    const col = compactColumns.find(c => c.id === sortKey)
-    if (!col?.sortable || !col.getSortValue) return filteredOperations
+    const prioritizeSapSto = shouldPrioritizeSapStoRows(statusFilter)
+    if (!prioritizeSapSto) return filteredOperations
+    return [...filteredOperations].sort((a, b) => compareSapStoListRowPriority(a, b))
+  }, [filteredOperations, statusFilter])
 
-    const sorted = [...filteredOperations].sort((a, b) => {
-      const aVal = col.getSortValue!(a)
-      const bVal = col.getSortValue!(b)
-      const dirMul = sortDir === 'asc' ? 1 : -1
+  const section3TableLoading =
+    tableScopeLoading || (listFetching && truckingOperations.length === 0)
 
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        return (aVal - bVal) * dirMul
-      }
-      return String(aVal).localeCompare(String(bVal)) * dirMul
-    })
-
-    return sorted
-  }, [compactColumns, filteredOperations, sortDir, sortKey])
-
-  const allVisibleIds = useMemo(() => sortedOperations.map(o => o.id), [sortedOperations])
-  const expandedCount = expandedOperationIds.size
-  const allExpanded = expandedCount > 0 && expandedCount === allVisibleIds.length
-
-  const toggleExpand = (id: string) => {
-    setExpandedOperationIds(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
-      return next
-    })
-  }
-
-  const expandAll = (ids: string[]) => {
-    setExpandedOperationIds(new Set(ids))
-  }
-
-  const collapseAll = () => {
-    setExpandedOperationIds(new Set())
+  const onSortHeaderClick = (col: CompactColumn) => {
+    if (!col.sortable) return
+    const nextDir: 'asc' | 'desc' =
+      sortKey === col.id ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc'
+    setSortDir(nextDir)
+    setSortKey(col.id)
+    setPage(1)
+    fetchTruckingOperations(1)
   }
 
   const toggleColumn = (colId: string) => {
@@ -1702,99 +3388,99 @@ function TruckingPageContent() {
     })
   }
 
-  const getColumnWidth = (colId: string): string => {
-    const widths: { [key: string]: string } = {
-      'late_indicator': '130px',
-      'operation_id': '180px',
-      'status': '120px',
-      'contract_number': '160px',
-      'po_number': '120px',
-      'sto_number': '120px',
-      'sto_quantity': '130px',
-      'location': '150px',
-      'loading_location': '170px',
-      'unloading_location': '180px',
-      'trucking_owner': '150px',
-      'supplier': '150px',
-      'product': '120px',
-      'quantity_sent': '130px',
-      'quantity_delivered': '150px',
-      'quantity_receive': '150px',
-      'gain_loss_percentage': '120px',
-      'gain_loss_amount': '150px',
-      'oa_budget': '150px',
-      'oa_actual': '150px',
-      'estimated_km': '130px',
-      'cargo_readiness_date': '140px',
-      'trucking_start_date': '180px',
-      'trucking_completion_date': '200px',
-      'delivery_start_date': '180px',
-      'delivery_end_date': '180px',
-      'contract_qty': '130px',
-      'buyer': '150px',
-      'group_name': '120px'
-    }
-    return widths[colId] || '120px'
-  }
-
-  // Calculate table scroll width
+  // Calculate table scroll width (match semantic table width for top scrollbar sync)
   useEffect(() => {
     const calculateWidth = () => {
-      const bottom = bottomScrollRef.current
-      if (bottom) {
-        setTableScrollWidth(bottom.scrollWidth)
+      const table = bottomScrollRef.current?.querySelector('[data-trucking-list-table]') as HTMLElement | null
+      if (table) {
+        setTableScrollWidth(table.offsetWidth)
+        return
       }
+      const bottom = bottomScrollRef.current
+      if (bottom) setTableScrollWidth(bottom.scrollWidth)
     }
     calculateWidth()
+    const t = window.setTimeout(calculateWidth, 0)
     window.addEventListener('resize', calculateWidth)
-    return () => window.removeEventListener('resize', calculateWidth)
-  }, [visibleColumns, sortedOperations])
+    return () => {
+      window.clearTimeout(t)
+      window.removeEventListener('resize', calculateWidth)
+    }
+  }, [visibleColumns, sortedOperations, editingId])
+
+  const truckingViewToggle = (
+    <div className="inline-flex rounded-lg border bg-white p-1">
+      <button
+        type="button"
+        onClick={() => setActiveTab('list')}
+        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'list' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+      >
+        List
+      </button>
+      <button
+        type="button"
+        onClick={() => setActiveTab('calendar')}
+        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'calendar' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+      >
+        Daily Planning Deliverables
+      </button>
+    </div>
+  )
 
   return (
     <Layout>
       <div className="space-y-6">
+        <input
+          type="file"
+          accept=".csv,.xlsx,.xls"
+          className="hidden"
+          id="bulk-create-trucking-input"
+          onChange={handleBulkCreateFileChange}
+          disabled={bulkCreateUploading}
+        />
+        <input
+          type="file"
+          accept=".xlsx,.xls"
+          className="hidden"
+          id="wb-rekap-upload-input"
+          onChange={handleWbRekapFileChange}
+          disabled={wbUploading}
+        />
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold">Trucking Operations</h1>
-            <p className="text-gray-600 mt-1">
-              Manage and track all trucking operations - {totalCount || filteredOperations.length} total
-            </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             <Button
-              onClick={() => setShowCreateForm(true)}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Create New
-            </Button>
-            <Button
-              onClick={downloadTemplate}
+              size="sm"
               variant="outline"
-              className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+              className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
+              onClick={() => document.getElementById('wb-rekap-upload-input')?.click()}
+              disabled={wbUploading}
             >
-              <Download className="h-4 w-4 mr-2" />
-              Download Template
+              {wbUploading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Upload WB
+                </>
+              )}
             </Button>
-            <label className="cursor-pointer">
-              <input
-                type="file"
-                accept=".csv"
-                onChange={() => alert('CSV upload feature coming soon!')}
-                className="hidden"
-                disabled={uploading}
-              />
+            {(isUnplannedPlanningTemplateMode(statusFilter) ||
+              isPlannedPlanningTemplateMode(statusFilter)) ? (
               <Button
-                disabled={uploading}
-                className="bg-blue-600 hover:bg-blue-700 cursor-pointer"
-                onClick={(e) => {
-                  e.preventDefault()
-                  const input = e.currentTarget.parentElement?.querySelector('input[type="file"]') as HTMLInputElement
-                  input?.click()
-                }}
+                size="sm"
+                variant="outline"
+                className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+                disabled={bulkCreateUploading || listFetching}
               >
-                {uploading ? (
+                {bulkCreateUploading ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     Uploading...
@@ -1802,159 +3488,222 @@ function TruckingPageContent() {
                 ) : (
                   <>
                     <Upload className="h-4 w-4 mr-2" />
-                    Bulk Update
+                    Upload Daily Planning
                   </>
                 )}
               </Button>
-            </label>
+            ) : null}
+            {TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED ? (
+              <>
+                {!isUnplannedPlanningTemplateMode(statusFilter) ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+                    disabled={bulkCreateUploading}
+                  >
+                    {bulkCreateUploading ? (
+                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
+                    ) : (
+                      <><Upload className="h-4 w-4 mr-2" />Upload CSV</>
+                    )}
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setPlotTruckingFromTable(null)
+                    setEditTruckingFromTable(null)
+                    setShowCreateForm(true)
+                  }}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create New
+                </Button>
+              </>
+            ) : null}
           </div>
         </div>
 
-        {/* Filters (list + daily planning) */}
-        <>
+        {/* Section 1: Global Filters */}
         <Card>
-          <CardContent className="pt-6">
-            <div className="flex flex-wrap gap-3 items-center">
-              <div className="flex-1 min-w-[280px] relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                <Input
-                  placeholder="Search by Operation ID, Contract Numbers, PO No, or Truck Loading/Discharge..."
-                  value={searchDraft}
-                  onChange={(e) => setSearchDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      applySearch()
-                    }
-                  }}
-                  className="pl-10"
-                />
-              </div>
-              <Button variant="outline" onClick={applySearch} disabled={loading}>
-                Apply
-              </Button>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="shrink-0 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="ALL">All Status</option>
-                <option value="PLANNED">Planned</option>
-                <option value="IN_PROGRESS">In Progress</option>
-                <option value="COMPLETED">Completed</option>
-                <option value="CANCELLED">Cancelled</option>
-              </select>
-              <select
-                value={lateIndicatorFilter}
-                onChange={(e) => setLateIndicatorFilter(e.target.value)}
-                className="shrink-0 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="ALL">All Late Indicator</option>
-                <option value="ON_TIME">On Time</option>
-                <option value="LATE">Late</option>
-                <option value="NA">N/A</option>
-              </select>
-              <Input
-                placeholder="Truck Loading Location"
-                value={loadingLocationFilter}
-                onChange={(e) => setLoadingLocationFilter(e.target.value)}
-                className="shrink-0 w-48"
-              />
-              <Input
-                placeholder="Truck Discharge Location"
-                value={unloadingLocationFilter}
-                onChange={(e) => setUnloadingLocationFilter(e.target.value)}
-                className="shrink-0 w-48"
-              />
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-sm text-gray-600">Contract Date:</span>
-                <Input type="date" value={dateFromDraft} onChange={(e) => setDateFromDraft(e.target.value)} className="w-40" />
-                <span className="text-gray-500">to</span>
-                <Input type="date" value={dateToDraft} onChange={(e) => setDateToDraft(e.target.value)} className="w-40" />
-              </div>
-              <div className="min-w-[260px] shrink-0">
-                <SearchableMultiSelect
-                  label="Plant/Site"
-                  options={availablePlantSites}
-                  selected={selectedPlantSites}
-                  onChange={setSelectedPlantSites}
-                  placeholder="Select plant/site(s)"
-                  emptyMessage="Loading plants..."
-                />
-              </div>
-              <Button onClick={handleFilterChange} variant="outline" size="sm" className="shrink-0">
-                <Filter className="h-4 w-4 mr-1" />
-                Apply
-              </Button>
-              {(statusFilter !== 'ALL' || lateIndicatorFilter !== 'ALL' || loadingLocationFilter || unloadingLocationFilter || dateFromDraft || dateToDraft || selectedPlantSites.length > 0) && (
-                <Button 
-                  onClick={() => {
-                    setStatusFilter('ALL')
-                    setLateIndicatorFilter('ALL')
-                    setLoadingLocationFilter('')
-                    setUnloadingLocationFilter('')
-                    setSelectedPlantSites([])
-                    const now = new Date()
-                    const yyyy = now.getFullYear()
-                    const to = `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-                    setDateFromDraft(`${yyyy}-01-01`)
-                    setDateToDraft(to)
-                    setDateFrom(`${yyyy}-01-01`)
-                    setDateTo(to)
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Global Filters</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-4">
+                <div className="relative min-w-[12rem] flex-1">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
+                  <Input
+                    placeholder="Search by Contract Ext No, Contract No, PO No, or STO No..."
+                    value={searchDraft}
+                    onChange={(e) => setSearchDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        applySearch()
+                      }
+                    }}
+                    className="pl-10"
+                  />
+                </div>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => {
+                    beginTableScopeRefresh()
                     setPage(1)
-                    fetchTruckingOperations(1)
+                    setHasMore(true)
+                    setStatusFilter(e.target.value)
                   }}
-                  variant="ghost"
-                  size="sm"
-                  className="shrink-0 text-gray-500"
+                  className="rounded-lg border px-4 py-2"
                 >
-                  <X className="h-4 w-4 mr-1" />
-                  Clear
-                </Button>
-              )}
+                  <option value="ALL">All Status</option>
+                  <option value="UNPLANNED">Unplanned</option>
+                  <option value="PLANNED">Planned</option>
+                  <option value="IN_PROGRESS">In Progress</option>
+                  <option value="COMPLETED">Completed</option>
+                  <option value="CANCELLED">Cancelled</option>
+                </select>
+                <select
+                  value={lateIndicatorFilter}
+                  onChange={(e) => setLateIndicatorFilter(e.target.value)}
+                  className="rounded-lg border px-4 py-2"
+                >
+                  <option value="ALL">All Late Indicator</option>
+                  <option value="ON_TIME">On Time</option>
+                  <option value="LATE">Late</option>
+                  <option value="NA">N/A</option>
+                </select>
+              </div>
+
+              <PerformanceScopeFilters
+                hideGroupPlantFilter={false}
+                incotermOptions={availableIncoterms}
+                selectedIncoterms={selectedIncoterms}
+                onIncotermsChange={setSelectedIncoterms}
+                showProductFilter
+                productOptions={availableProducts}
+                selectedProducts={selectedProducts}
+                onProductsChange={handleProductsChange}
+                showSupplierFilter
+                supplierOptions={availableSuppliers}
+                selectedSuppliers={selectedSuppliers}
+                onSuppliersChange={onSuppliersChange}
+                groupPlantOptions={availableGroupPlants}
+                selectedGroupPlants={selectedGroupPlants}
+                onGroupPlantsChange={handleGroupPlantsChange}
+                dateFrom={dateFrom}
+                dateTo={dateTo}
+                onDateFromChange={setDateFrom}
+                onDateToChange={setDateTo}
+                showDateRange={false}
+                incotermEmptyMessage="Loading incoterms..."
+                productEmptyMessage="Loading products..."
+                supplierEmptyMessage="Loading suppliers..."
+                groupPlantPlaceholder="Select group plant(s)"
+                groupPlantEmptyMessage="No group plants"
+              />
+
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-sm font-medium text-gray-700">Contract Date:</label>
+                  <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={setDateFrom} className="w-40" />
+                  <span className="text-gray-500">to</span>
+                  <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={setDateTo} className="w-40" />
+                  {hasActiveTruckingFilters ? (
+                    <Button
+                      type="button"
+                      onClick={clearTruckingFilters}
+                      variant="ghost"
+                      size="sm"
+                      className="text-gray-500"
+                    >
+                      <X className="h-4 w-4 mr-1" />
+                      Clear
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>
-        </>
 
-        {/* Calendar is rendered in the main section below (replaces All Trucking Operations on that tab). */}
-
-        {/* Status Distribution */}
+        {/* Section 2: Summary Trucking Status */}
         <Card>
           <CardHeader>
-            <CardTitle>Status Distribution</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              Summary Trucking Status
+              {summaryFetching ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+              ) : null}
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto overflow-y-visible pt-4 pb-4 px-6">
+            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto py-4 px-4">
               {[
-                { status: 'PLANNED', label: 'Planned', color: 'bg-blue-100', textColor: 'text-blue-800', badgeColor: 'bg-blue-600' },
-                { status: 'IN_PROGRESS', label: 'In Progress', color: 'bg-yellow-100', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-600' },
-                { status: 'COMPLETED', label: 'Completed', color: 'bg-green-100', textColor: 'text-green-800', badgeColor: 'bg-green-600' },
-                { status: 'CANCELLED', label: 'Cancelled', color: 'bg-red-100', textColor: 'text-red-800', badgeColor: 'bg-red-600' }
+                {
+                  status: 'UNPLANNED',
+                  label: 'Unplanned',
+                  color: 'bg-slate-100',
+                  textColor: 'text-slate-800',
+                  badgeColor: 'bg-slate-600',
+                  help: FIELD_HELP.truckingStatusUnplanned,
+                },
+                {
+                  status: 'PLANNED',
+                  label: 'Planned',
+                  color: 'bg-blue-100',
+                  textColor: 'text-blue-800',
+                  badgeColor: 'bg-blue-600',
+                  help: FIELD_HELP.truckingStatusPlanned,
+                },
+                {
+                  status: 'IN_PROGRESS',
+                  label: 'In Progress',
+                  color: 'bg-yellow-100',
+                  textColor: 'text-yellow-800',
+                  badgeColor: 'bg-yellow-600',
+                  help: FIELD_HELP.truckingStatusInProgress,
+                },
+                {
+                  status: 'COMPLETED',
+                  label: 'Completed',
+                  color: 'bg-green-100',
+                  textColor: 'text-green-800',
+                  badgeColor: 'bg-green-600',
+                  help: FIELD_HELP.truckingStatusCompleted,
+                },
+                {
+                  status: 'CANCELLED',
+                  label: 'Cancelled',
+                  color: 'bg-red-100',
+                  textColor: 'text-red-800',
+                  badgeColor: 'bg-red-600',
+                  help: FIELD_HELP.truckingStatusCancelled,
+                },
               ].map((statusInfo, index, array) => {
-                const s = truckingSummary?.status
-                const count =
-                  statusInfo.status === 'PLANNED' ? Number(s?.planned ?? 0)
-                    : statusInfo.status === 'IN_PROGRESS' ? Number(s?.inProgress ?? 0)
-                      : statusInfo.status === 'COMPLETED' ? Number(s?.completed ?? 0)
-                        : statusInfo.status === 'CANCELLED' ? Number(s?.cancelled ?? 0)
-                          : 0
+                const isStatusActive = statusFilter === statusInfo.status
+                const count = truckingStatusCardCounts[statusInfo.status] ?? 0
                 return (
                   <div key={statusInfo.status} className="flex items-center flex-shrink-0">
-                    <div className="relative overflow-visible">
-                      {/* Status Circle */}
-                      <div className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg hover:shadow-xl transition-shadow`}>
-                        {/* Count Badge */}
-                        <div className={`absolute -top-2 -right-2 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-7 h-7 md:w-8 md:h-8 flex items-center justify-center shadow-lg z-10`}>
+                    <div className="relative">
+                      <button
+                        type="button"
+                        title={statusInfo.help}
+                        onClick={() => handleStatusCardClick(statusInfo.status)}
+                        className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg transition-all cursor-pointer hover:shadow-xl hover:scale-[1.02] ${
+                          isStatusActive ? 'ring-4 ring-blue-400 ring-offset-2' : ''
+                        }`}
+                      >
+                        <div className={`absolute -top-3 -right-3 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10`}>
                           {count}
                         </div>
-                        {/* Status Label */}
-                        <span className={`text-xs md:text-sm font-semibold ${statusInfo.textColor} text-center px-2 leading-tight`}>
+                        <span className={`text-xs md:text-sm font-semibold ${statusInfo.textColor} text-center px-2 leading-tight ${isStatusActive ? 'font-bold' : ''}`}>
                           {statusInfo.label}
                         </span>
-                      </div>
+                      </button>
                     </div>
-                    {/* Arrow */}
                     {index < array.length - 1 && (
                       <div className="flex-shrink-0 mx-2 md:mx-3">
                         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-gray-400">
@@ -1969,47 +3718,45 @@ function TruckingPageContent() {
           </CardContent>
         </Card>
 
-        {/* View: List vs Daily Planning Deliverables — above main table/calendar */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm font-medium text-gray-700">View</div>
-          <div className="inline-flex rounded-lg border bg-white p-1">
-            <button
-              type="button"
-              onClick={() => setActiveTab('list')}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'list' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-            >
-              List
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('calendar')}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'calendar' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-            >
-              Daily Planning Deliverables
-            </button>
-          </div>
-          {activeTab === 'calendar' ? (
-            <div className="text-xs text-slate-500 w-full sm:w-auto sm:text-right">
-              Click a cell to edit daily deliverables.
-            </div>
-          ) : null}
-        </div>
+        {/* Section 3: Main View Table — calendar or list tab below */}
 
         {activeTab === 'calendar' && (
           <>
           <Card>
-            <CardHeader className="space-y-4">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <CardTitle className="text-base flex flex-wrap items-center gap-2">
-                    Daily Planning Deliverables — Calendar
-                    <Badge variant="outline" className="text-[10px]">Unit: Kg</Badge>
-                  </CardTitle>
-                  <div className="text-xs text-gray-600 mt-1 max-w-xl">
-                    Shows operations that overlap the selected month (due delivery / trucking dates). Edit cells or upload CSV/Excel (Contract Ext No, date, quantity) — same validation as the website (due date range, quantity caps).
-                  </div>
+            <CardHeader className="space-y-3">
+              <div>
+                <CardTitle className="text-base flex flex-wrap items-center gap-2">
+                  Daily Planning Deliverables — Calendar
+                  {calendarLoading ? (
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+                  ) : null}
+                  <Badge variant="outline" className="text-[10px]">Daily qty: MT</Badge>
+                </CardTitle>
+                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                  <span className="whitespace-nowrap tabular-nums text-gray-700">
+                    <span className="font-semibold">{calendarRows.length.toLocaleString('en-US')}</span> operations
+                  </span>
+                  {truckingActiveFilterScopeLabel ? (
+                    <>
+                      <span className="text-gray-400" aria-hidden>
+                        ·
+                      </span>
+                      <span className="whitespace-nowrap font-medium text-blue-700">
+                        {truckingActiveFilterScopeLabel}
+                      </span>
+                    </>
+                  ) : null}
+                </p>
+                <div className="text-xs text-gray-600 mt-1 max-w-xl">
+                  Planned qty from Add Trucking is shown until actual qty is recorded via cell edit, CSV upload, or auto-conversion on H+1 (tomorrow).
+                  Edit cells or upload CSV/Excel — qty saved as actual delivery (validation: due date range, quantity caps).
+                  {' '}
+                  Enter qty only on days within each row&apos;s Due Start – Due End (gray days are blocked). Amber = unsaved; click Save.
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                {truckingViewToggle}
+                <div className="flex flex-wrap items-center gap-2 ml-auto">
                   <div className="relative" ref={calendarColumnsRef}>
                     <Button
                       type="button"
@@ -2026,19 +3773,20 @@ function TruckingPageContent() {
                         <div className="space-y-2 max-h-72 overflow-auto pr-1">
                           {[
                             { id: 'operation_id', label: 'Operation ID' },
-                            { id: 'contract_block', label: 'Contract Ext No / STO / Supplier' },
+                            { id: 'contract_ext_no', label: 'Contract Ext No' },
+                            { id: 'sto_number', label: 'STO' },
+                            { id: 'supplier', label: 'Supplier' },
                             { id: 'owner', label: 'Owner' },
                             { id: 'due_start', label: 'Due Start' },
                             { id: 'due_end', label: 'Due End' },
                             { id: 'qty_sent', label: 'Qty Sent' },
                             { id: 'qty_sent_planning', label: 'Qty Sent (planning)' },
-                            { id: 'qty_delivered', label: 'Qty Delivered' },
-                            { id: 'qty_received', label: 'Qty Received' },
+                            { id: 'qty_delivered', label: 'Delivery Qty (MT)' },
+                            { id: 'qty_received', label: 'Received Qty (MT)' },
                             { id: 'source_type', label: 'Source Type' },
                             { id: 'lt_spot', label: 'LT/SPOT' },
                             { id: 'product', label: 'Product' },
                             { id: 'group_name', label: 'Group Name' },
-                            { id: 'supplier', label: 'Supplier' },
                             { id: 'outstanding_quantity', label: 'Outstanding Quantity' },
                           ].map((c) => (
                             <label key={c.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
@@ -2084,6 +3832,20 @@ function TruckingPageContent() {
                       <Upload className="h-4 w-4 mr-1" />
                     )}
                     Upload
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={!calendarHasUnsavedChanges || calendarSavingAll || calendarLoading}
+                    onClick={() => void saveAllCalendarDrafts()}
+                    className="bg-green-600 hover:bg-green-700 text-white"
+                  >
+                    {calendarSavingAll ? (
+                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    ) : (
+                      <Save className="h-4 w-4 mr-1" />
+                    )}
+                    Save
                   </Button>
                 </div>
               </div>
@@ -2149,60 +3911,25 @@ function TruckingPageContent() {
                 month={calendarMonth}
                 rows={calendarRows}
                 loading={calendarLoading}
-                savingKey={calendarSavingKey}
-                editing={calendarEditing}
-                editValue={calendarEditValue}
+                savingAll={calendarSavingAll}
+                cellDrafts={calendarCellDrafts}
+                cellBaseline={calendarSavedBaseline}
                 formatQty={formatTruckingQtyPlain}
                 visibleMetaCols={calendarVisibleMetaCols}
                 metaOrderIds={calendarMetaOrderIds}
                 onReorderMetaCols={reorderCalendarMetaCols}
-                onEditStart={(id, date, initial) => {
-                  setCalendarEditing({ id, date })
-                  setCalendarEditValue(initial)
-                }}
-                onEditChange={setCalendarEditValue}
-                onEditCancel={() => {
-                  setCalendarEditing(null)
-                  setCalendarEditValue('')
-                }}
-                onEditCommit={async (id, date, rawValue) => {
+                onCellChange={(id, date, value) => {
                   const key = `${id}:${date}`
-                  setCalendarSavingKey(key)
-                  try {
-                    const q = rawValue.trim() === '' ? null : Number(String(rawValue).replace(/,/g, ''))
-                    if (q != null && (!Number.isFinite(q) || q < 0)) {
-                      alert('Quantity must be a valid number (>= 0)')
-                      return
-                    }
-                    const row = calendarRows.find((r) => r.id === id)
-                    if (!row) return
-                    const existing = (row.daily_deliverables || []).slice()
-                    const next = existing.filter((x) => (x?.date || '').slice(0, 10) !== date)
-                    if (q != null && q !== 0) {
-                      next.push({ date, quantity_delivered: q })
-                      next.sort((a, b) => (a.date || '').localeCompare(b.date || ''))
-                    }
-                    const res = await api.put(`/trucking/${id}/daily-planning-deliverables`, { daily_deliverables: next })
-                    if (res.data?.success) {
-                      setCalendarRows((prev) => prev.map((r) => (r.id === id ? { ...r, daily_deliverables: res.data.data.daily_deliverables || next } : r)))
-                      setCalendarEditing(null)
-                      setCalendarEditValue('')
-                    }
-                  } catch (e: any) {
-                    const msg = e?.response?.data?.error?.message || e?.message || 'Failed to update daily deliverables'
-                    alert(msg)
-                  } finally {
-                    setCalendarSavingKey(null)
-                  }
+                  setCalendarCellDrafts((prev) => ({ ...prev, [key]: value }))
                 }}
               />
             </CardContent>
           </Card>
 
           <Dialog open={planningUploadOpen} onOpenChange={setPlanningUploadOpen}>
-            <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto">
+            <DialogContent className="max-w-2xl max-h-[88vh]" aria-describedby={undefined}>
               <DialogHeader>
-                <DialogTitle>Daily planning upload result</DialogTitle>
+                <DialogTitle>Daily actuals upload result</DialogTitle>
               </DialogHeader>
               {planningUploadSummary ? (
                 <div className="space-y-4 text-sm">
@@ -2267,77 +3994,485 @@ function TruckingPageContent() {
           </>
         )}
 
+        {/* Bulk Create Trucking Result Modal */}
+        <Dialog open={wbUploadOpen} onOpenChange={setWbUploadOpen}>
+          <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto" aria-describedby={undefined}>
+            <DialogHeader>
+              <DialogTitle>WB rekap upload result</DialogTitle>
+            </DialogHeader>
+            {wbUploadSummary ? (
+              <div className="space-y-4 text-sm">
+                <div className="rounded-md border bg-slate-50 px-3 py-2 text-xs text-muted-foreground">
+                  Import ID: <span className="font-mono text-slate-800">{wbUploadSummary.importId}</span>
+                  {' · '}
+                  Status:{' '}
+                  <span className="font-semibold uppercase text-slate-800">{wbUploadSummary.status}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <div className="rounded-md border bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">WB tickets parsed</div>
+                    <div className="text-lg font-semibold tabular-nums">{wbUploadSummary.rawTicketRows}</div>
+                  </div>
+                  <div className="rounded-md border bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">PO × date aggregates</div>
+                    <div className="text-lg font-semibold tabular-nums">{wbUploadSummary.aggregatedPoDates}</div>
+                  </div>
+                  <div className="rounded-md border bg-green-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Operations updated</div>
+                    <div className="text-lg font-semibold tabular-nums text-green-800">
+                      {wbUploadSummary.operationsUpdated}
+                    </div>
+                  </div>
+                  <div className="rounded-md border bg-blue-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Daily actual rows upserted</div>
+                    <div className="text-lg font-semibold tabular-nums text-blue-800">
+                      {wbUploadSummary.rowsUpserted}
+                    </div>
+                  </div>
+                  <div className="rounded-md border bg-red-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Failed PO/date rows</div>
+                    <div className="text-lg font-semibold tabular-nums text-red-800">
+                      {wbUploadSummary.operationsFailed}
+                    </div>
+                  </div>
+                </div>
+                {wbUploadSummary.sheetsProcessed.length > 0 ? (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-1">Sheets processed</div>
+                    <p className="text-xs text-gray-700">{wbUploadSummary.sheetsProcessed.join(', ')}</p>
+                  </div>
+                ) : null}
+                {(wbUploadSummary.sheetsSkipped?.length ?? 0) > 0 ? (
+                  <div>
+                    <div className="font-medium text-amber-900 mb-2">Sheets skipped</div>
+                    <ul className="max-h-32 overflow-auto rounded border border-amber-200 bg-amber-50 text-xs space-y-1 p-2">
+                      {wbUploadSummary.sheetsSkipped.map((s, i) => (
+                        <li key={`wbs-${i}`} className="text-amber-950">
+                          <span className="font-semibold">{s.sheetName}</span>: {s.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(wbUploadSummary.rowParseFailures?.length ?? 0) > 0 ? (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-2">Row parse issues</div>
+                    <ul className="max-h-40 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
+                      {wbUploadSummary.rowParseFailures.map((f, i) => (
+                        <li key={`wb-rpf-${i}`} className="text-gray-800">
+                          {f.sheetName ? `${f.sheetName} · ` : ''}
+                          <span className="font-mono">Line {f.rowNumber}</span>
+                          {f.po_number ? ` · PO ${f.po_number}` : ''}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(wbUploadSummary.operationFailures?.length ?? 0) > 0 ? (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-2">Failed PO / date (skipped)</div>
+                    <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-2 p-2">
+                      {wbUploadSummary.operationFailures.map((f, i) => (
+                        <li key={`wb-of-${i}`} className="text-gray-800">
+                          <span className="font-semibold">PO {f.po_number}</span>
+                          {f.progress_date ? ` · ${f.progress_date}` : ''}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={bulkCreateUploadOpen} onOpenChange={setBulkCreateUploadOpen}>
+          <DialogContent className="max-w-2xl max-h-[88vh]" aria-describedby={undefined}>
+            <DialogHeader>
+              <DialogTitle>
+                {isUnplannedPlanningTemplateMode(statusFilter)
+                  ? 'Unplanned planning upload result'
+                  : isPlannedPlanningTemplateMode(statusFilter)
+                    ? 'Planned planning upload result'
+                    : 'Bulk create trucking upload result'}
+              </DialogTitle>
+            </DialogHeader>
+            {bulkCreateSummary ? (
+              <div className="space-y-4 text-sm">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <div className="rounded-md border bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Rows processed</div>
+                    <div className="text-lg font-semibold tabular-nums">{bulkCreateSummary.processedRows}</div>
+                  </div>
+                  <div className="rounded-md border bg-green-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Operations created</div>
+                    <div className="text-lg font-semibold tabular-nums text-green-800">{bulkCreateSummary.operationsCreated}</div>
+                  </div>
+                  <div className="rounded-md border bg-blue-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Operations updated</div>
+                    <div className="text-lg font-semibold tabular-nums text-blue-800">
+                      {bulkCreateSummary.operationsUpdated ?? 0}
+                    </div>
+                  </div>
+                  <div className="rounded-md border bg-red-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Operations failed</div>
+                    <div className="text-lg font-semibold tabular-nums text-red-800">{bulkCreateSummary.operationsFailed}</div>
+                  </div>
+                  <div className="rounded-md border bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Rows applied (success)</div>
+                    <div className="text-lg font-semibold tabular-nums">{bulkCreateSummary.succeededRows}</div>
+                  </div>
+                </div>
+                {(bulkCreateSummary.rowParseFailures?.length ?? 0) > 0 && (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-2">Row issues</div>
+                    <ul className="max-h-40 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
+                      {bulkCreateSummary.rowParseFailures.map((f, i) => (
+                        <li key={`rpf-${i}`} className="text-gray-800">
+                          <span className="font-mono">Line {f.rowNumber}</span>
+                          {f.contract_ext_no ? ` · ${f.contract_ext_no}` : ''}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(bulkCreateSummary.operationFailures?.length ?? 0) > 0 && (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-2">Operation failures</div>
+                    <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-2 p-2">
+                      {bulkCreateSummary.operationFailures.map((f, i) => (
+                        <li key={`of-${i}`} className="text-gray-800">
+                          <span className="font-semibold">{f.contract_ext_no}</span>
+                          {f.rowNumbers?.length ? (
+                            <span className="text-gray-600"> (rows {f.rowNumbers.join(', ')})</span>
+                          ) : null}
+                          : {f.reason}
+                          {f.operation_ids?.length ? (
+                            <span className="text-gray-500"> [{f.operation_ids.join(', ')}]</span>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(bulkCreateSummary.operationWarnings?.length ?? 0) > 0 && (
+                  <div>
+                    <div className="font-medium text-amber-900 mb-2">Warnings</div>
+                    <ul className="max-h-40 overflow-auto rounded border border-amber-200 bg-amber-50 text-xs space-y-2 p-2">
+                      {bulkCreateSummary.operationWarnings!.map((f, i) => (
+                        <li key={`ow-${i}`} className="text-amber-950">
+                          <span className="font-semibold">{f.contract_ext_no}</span>
+                          {f.rowNumbers?.length ? (
+                            <span className="text-amber-800"> (rows {f.rowNumbers.join(', ')})</span>
+                          ) : null}
+                          : {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(isUnplannedPlanningTemplateMode(statusFilter) ||
+                  isPlannedPlanningTemplateMode(statusFilter)) &&
+                (bulkCreateSummary.failedRetemplateRows?.length ?? 0) > 0 &&
+                (bulkCreateSummary.uploadHeaderRow?.length ?? 0) > 0 ? (
+                  <div className="rounded-md border border-red-200 bg-red-50/70 p-3">
+                    <div className="font-medium text-red-900 mb-1">
+                      {bulkCreateSummary.failedRetemplateRows!.length} PO row(s) rejected — total planning qty ≠
+                      Outstanding Qty
+                    </div>
+                    <p className="text-xs text-red-800 mb-3">
+                      Download the corrected template with failure reasons, adjust daily qty (MT) so the row total
+                      matches OS Qty (MT), then upload the failed rows file again.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="border-red-300 bg-white text-red-800 hover:bg-red-100"
+                      onClick={() =>
+                        triggerFailedUnplannedUploadRetemplateDownload({
+                          uploadHeaderRow: bulkCreateSummary.uploadHeaderRow!,
+                          failedRows: bulkCreateSummary.failedRetemplateRows!.map((row) => ({
+                            cells: row.cells,
+                            reason: row.reason,
+                          })),
+                          filename: buildTruckingPlanningTemplateFilename(
+                            isUnplannedPlanningTemplateMode(statusFilter) ? 'unplanned' : 'planned',
+                          ).replace('.xlsx', '-failed.xlsx'),
+                        })
+                      }
+                    >
+                      <Download className="mr-2 h-4 w-4" />
+                      Download failed PO template
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={actualsUploadOpen} onOpenChange={setActualsUploadOpen}>
+          <DialogContent className="max-w-2xl max-h-[88vh]" aria-describedby={undefined}>
+            <DialogHeader>
+              <DialogTitle>Daily actuals upload result</DialogTitle>
+            </DialogHeader>
+            {actualsUploadSummary ? (
+              <div className="space-y-4 text-sm">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <div className="rounded-md border bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Rows processed</div>
+                    <div className="text-lg font-semibold tabular-nums">{actualsUploadSummary.processedRows}</div>
+                  </div>
+                  <div className="rounded-md border bg-green-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Operations updated</div>
+                    <div className="text-lg font-semibold tabular-nums text-green-800">
+                      {actualsUploadSummary.operationsUpdated}
+                    </div>
+                  </div>
+                  <div className="rounded-md border bg-red-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Operations failed</div>
+                    <div className="text-lg font-semibold tabular-nums text-red-800">
+                      {actualsUploadSummary.operationsFailed}
+                    </div>
+                  </div>
+                  <div className="rounded-md border bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Rows applied (success)</div>
+                    <div className="text-lg font-semibold tabular-nums">{actualsUploadSummary.succeededRows}</div>
+                  </div>
+                </div>
+                {(actualsUploadSummary.rowParseFailures?.length ?? 0) > 0 ? (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-2">Row issues (file line #)</div>
+                    <ul className="max-h-40 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
+                      {actualsUploadSummary.rowParseFailures.map((f, i) => (
+                        <li key={`aurpf-${i}`} className="text-gray-800">
+                          <span className="font-mono">Line {f.rowNumber}</span>
+                          {f.contract_ext_no ? ` · ${f.contract_ext_no}` : ''}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(actualsUploadSummary.operationFailures?.length ?? 0) > 0 ? (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-2">Operation failures</div>
+                    <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-2 p-2">
+                      {actualsUploadSummary.operationFailures.map((f, i) => (
+                        <li key={`auof-${i}`} className="text-gray-800">
+                          <span className="font-semibold">{f.contract_ext_no}</span>
+                          {f.rowNumbers?.length ? (
+                            <span className="text-gray-600"> (rows {f.rowNumbers.join(', ')})</span>
+                          ) : null}
+                          : {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </DialogContent>
+        </Dialog>
+
         {/* Trucking Operations List */}
         {activeTab === 'list' && (
         <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <CardTitle>All Trucking Operations</CardTitle>
-                <Badge variant="outline" className="hidden md:inline-flex">
-                  Default view: Compact
-                </Badge>
-              </div>
-              <div className="flex items-center gap-2">
+          <CardHeader className="space-y-3">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                All Trucking Operations
+                {listFetching ? (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+                ) : null}
+              </CardTitle>
+              <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                <span className="whitespace-nowrap tabular-nums text-gray-700">
+                  <span className="font-semibold">{tableHeaderCount.value.toLocaleString('en-US')}</span>{' '}
+                  {tableHeaderCount.noun}
+                </span>
+                <span className="text-gray-400" aria-hidden>
+                  ·
+                </span>
+                <span className="whitespace-nowrap tabular-nums">
+                  Page {page}/{totalPages}
+                  {statusFilter === 'UNPLANNED' && unplannedTableBreakdown ? (
+                    <>
+                      {' · '}
+                      ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')} without trucking ·{' '}
+                      {unplannedTableBreakdown.executionRows.toLocaleString('en-US')} ops)
+                    </>
+                  ) : statusFilter !== 'UNPLANNED' ? (
+                    <> · {totalCount.toLocaleString('en-US')} rows</>
+                  ) : null}
+                </span>
+                {truckingActiveFilterScopeLabel ? (
+                  <>
+                    <span className="text-gray-400" aria-hidden>
+                      ·
+                    </span>
+                    <span className="whitespace-nowrap font-medium text-blue-700">
+                      {truckingActiveFilterScopeLabel}
+                    </span>
+                  </>
+                ) : null}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {truckingViewToggle}
+              <div className="flex flex-wrap items-center gap-2 ml-auto">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                        onClick={downloadFilteredActualsTemplate}
+                        disabled={
+                          !isListActualsTemplateDownloadEnabled || listFetching || templateDownloading
+                        }
+                      >
+                        {templateDownloading ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Download className="h-4 w-4 mr-2" />
+                        )}
+                        Download Template
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {!isListActualsTemplateDownloadEnabled ? (
+                    <TooltipContent side="top">{DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP}</TooltipContent>
+                  ) : null}
+                </Tooltip>
                 <div className="relative">
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => setShowColumnsMenu(v => !v)}
-                    disabled={loading}
+                    disabled={listFetching}
                   >
                     <SlidersHorizontal className="h-4 w-4 mr-2" />
                     Columns
                   </Button>
                   {showColumnsMenu && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
-                      <div className="text-xs font-semibold text-gray-600 mb-2">Visible columns</div>
-                      <div className="space-y-2 max-h-72 overflow-auto pr-1">
-                        {compactColumns
-                          .filter(c => c.id !== 'operation_id' && c.id !== 'status')
-                          .map(col => (
-                            <label key={col.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="text-xs font-semibold text-gray-600">Visible columns</div>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setShowColumnsMenu(false)}>
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                      <div className="flex items-center gap-1 mb-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() => setVisibleColumnIds(new Set(compactColumns.map(c => c.id)))}
+                        >
+                          Select All
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() => setVisibleColumnIds(new Set())}
+                        >
+                          Unselect All
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() => resetCompactColumnView()}
+                        >
+                          Reset
+                        </Button>
+                      </div>
+                      <div className="border-t pt-2 space-y-1 max-h-72 overflow-auto pr-1">
+                        {(() => {
+                          const visibleIds = new Set(visibleColumns.map((c) => c.id))
+                          const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
+                          const orderedIds =
+                            columnOrderIds.length > 0
+                              ? columnOrderIds
+                              : truckingCompactColumnFallbackOrder(compactColumns.map((c) => c.id))
+                          const hiddenCols = orderedIds
+                            .map((id) => byId.get(id))
+                            .filter((c): c is typeof compactColumns[0] => !!c && !visibleIds.has(c.id))
+                            .sort((a, b) => a.label.localeCompare(b.label))
+                          return [...visibleColumns, ...hiddenCols]
+                        })().map(col => (
+                          <div
+                            key={col.id}
+                            draggable
+                            onDragStart={() => setDragColId(col.id)}
+                            onDragEnd={() => setDragColId(null)}
+                            onDragOver={e => e.preventDefault()}
+                            onDrop={() => { if (dragColId && dragColId !== col.id) reorderColumnByDrag(dragColId, col.id) }}
+                            className={`flex items-center gap-2 text-sm cursor-grab select-none rounded px-1 py-0.5 ${dragColId === col.id ? 'opacity-40' : 'hover:bg-gray-50'}`}
+                          >
+                            <GripVertical className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                            <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
                               <Checkbox
                                 checked={visibleColumnIds.has(col.id)}
                                 onCheckedChange={() => toggleColumn(col.id)}
                               />
-                              <span>{col.label}</span>
+                              <span className="truncate">{col.label}</span>
                             </label>
-                          ))}
-                      </div>
-                      <div className="mt-3 flex items-center justify-between gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setVisibleColumnIds(new Set(defaultVisibleColumnIds))}
-                        >
-                          Reset
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => setShowColumnsMenu(false)}>
-                          Close
-                        </Button>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => (allExpanded ? collapseAll() : expandAll(allVisibleIds))}
-                  disabled={loading || sortedOperations.length === 0}
-                >
-                  {allExpanded ? (
-                    <>
-                      <Minus className="h-4 w-4 mr-2" />
-                      Collapse All
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Expand All
-                    </>
-                  )}
-                </Button>
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(page - 1)}
+                      disabled={page <= 1 || listFetching}
+                    >
+                      Previous
+                    </Button>
+                    <div className="flex items-center gap-1">
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum: number
+                        if (totalPages <= 5) {
+                          pageNum = i + 1
+                        } else if (page <= 3) {
+                          pageNum = i + 1
+                        } else if (page >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i
+                        } else {
+                          pageNum = page - 2 + i
+                        }
+                        return (
+                          <Button
+                            key={pageNum}
+                            variant={page === pageNum ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => handlePageChange(pageNum)}
+                            disabled={listFetching}
+                            className="min-w-[40px]"
+                          >
+                            {pageNum}
+                          </Button>
+                        )
+                      })}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(page + 1)}
+                      disabled={page >= totalPages || listFetching}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           </CardHeader>
@@ -2346,16 +4481,14 @@ function TruckingPageContent() {
               <div className="text-center py-8 text-gray-500">
                 Create form is open. Close it to view the trucking list.
               </div>
-            ) : loading ? (
-              <div className="text-center py-8">Loading trucking operations...</div>
             ) : (
-              <>
+              <div className="min-h-[480px]">
                 {/* Desktop compact table */}
                 <div className="hidden lg:block border rounded-lg overflow-hidden">
                   {/* Top scrollbar (synced) */}
                   <div
                     ref={topScrollRef}
-                    className="overflow-x-auto border-b bg-white"
+                    className={`${COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS} border-b bg-white`}
                     onScroll={() => {
                       if (isSyncingScroll.current) return
                       const top = topScrollRef.current
@@ -2373,7 +4506,7 @@ function TruckingPageContent() {
 
                   <div
                     ref={bottomScrollRef}
-                    className="overflow-x-auto"
+                    className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
                     onScroll={() => {
                       if (isSyncingScroll.current) return
                       const top = topScrollRef.current
@@ -2386,25 +4519,23 @@ function TruckingPageContent() {
                       })
                     }}
                   >
-                    <div className="min-w-[1100px]">
-                      {/* Header */}
-                      <div
-                        className="grid gap-3 px-3 py-2 text-xs font-semibold text-gray-600 bg-gray-50 border-b sticky top-0 z-10"
-                        style={{
-                          gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} 320px`
-                        }}
-                      >
-                        <div />
+                    <table
+                      data-trucking-list-table
+                      className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS}`}
+                    >
+                      <thead>
+                      <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
                         {visibleColumns.map(col => {
                           const active = sortKey === col.id
-                          const filterActive = isColumnFilterActive(col.id)
-                          const filterType = getFilterTypeForColumn(col.id)
-                          const current = columnFilters[col.id]
+                          const opColClass = operationalTableColumnClass(
+                            getOperationalColumnLayout('trucking', col.id),
+                          )
 
                           return (
-                            <div
+                            <th
                               key={col.id}
-                              className={`relative min-w-0 cursor-move ${dragColId === col.id ? 'opacity-60' : ''}`}
+                              scope="col"
+                              className={`relative text-left align-top font-semibold cursor-move sticky top-0 z-20 bg-gray-50 ${CONTRACT_PERF_TABLE_CELL_PAD} ${opColClass} ${dragColId === col.id ? 'opacity-60' : ''}`}
                               draggable
                               onDragStart={(e) => {
                                 setDragColId(col.id)
@@ -2423,392 +4554,145 @@ function TruckingPageContent() {
                                 setDragColId(null)
                               }}
                             >
-                              <div className="flex items-center gap-1 min-w-0">
-                                <button
-                                  type="button"
-                                  className={`flex items-center gap-1 text-left min-w-0 ${col.sortable ? 'hover:text-gray-900' : ''}`}
-                                  onClick={() => {
-                                    if (col.sortable) {
-                                      if (sortKey === col.id) {
-                                        setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
-                                      } else {
-                                        setSortKey(col.id)
-                                        setSortDir('asc')
-                                      }
-                                      setPage(1)
-                                      fetchTruckingOperations(1)
-                                    }
-                                  }}
-                                  title={col.sortable ? 'Sort' : undefined}
-                                >
-                                  <span className="truncate">{col.label}</span>
-                                  {col.formulaHelp ? <FieldHelp text={col.formulaHelp} /> : null}
-                                  {col.sortable && active && (
-                                    sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                                  )}
-                                </button>
+                              <ContractPerfTableSortHeader
+                                label={col.label}
+                                formulaHelp={col.formulaHelp}
+                                sortable={col.sortable}
+                                activeSort={active}
+                                sortDir={sortDir}
+                                onSortClick={() => onSortHeaderClick(col)}
+                              />
 
-                                <button
-                                  type="button"
-                                  className={`p-1 rounded hover:bg-gray-100 ${filterActive ? 'text-blue-700' : 'text-gray-500'}`}
-                                  title="Filter"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setOpenHeaderFilterId(prev => (prev === col.id ? null : col.id))
-                                  }}
-                                >
-                                  <Filter className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
 
-                              {openHeaderFilterId === col.id && (
-                                <div
-                                  ref={headerFilterPopoverRef}
-                                  className="absolute left-0 top-full mt-2 w-[280px] bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-30"
-                                  onClick={(e) => e.stopPropagation()}
-                                  onMouseDown={(e) => e.stopPropagation()}
-                                >
-                                  <div className="flex items-center justify-between mb-2">
-                                    <div className="text-xs font-semibold text-gray-700 truncate">{col.label} Filter</div>
-                                    <button
-                                      type="button"
-                                      className="text-xs text-gray-500 hover:text-gray-800"
-                                      onClick={() => setOpenHeaderFilterId(null)}
-                                    >
-                                      Close
-                                    </button>
-                                  </div>
-
-                                  {/* Text filter */}
-                                  {filterType === 'text' && (
-                                    <div className="space-y-2">
-                                      <Input
-                                        value={(current?.type === 'text' && current.value) ? current.value : ''}
-                                        onChange={(e) => {
-                                          const value = e.target.value
-                                          setOrClearFilter(col.id, {
-                                            type: 'text',
-                                            value,
-                                            exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                            emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
-                                            notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
-                                          })
-                                        }}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') {
-                                            e.preventDefault()
-                                            setPage(1)
-                                            fetchTruckingOperations(1)
-                                          }
-                                        }}
-                                        placeholder="Type to filter (contains)"
-                                        className="h-8 text-sm"
-                                      />
-                                      <div className="flex flex-col gap-2">
-                                        <label className="flex items-center gap-2 text-xs text-gray-700">
-                                          <Checkbox
-                                            checked={current?.type === 'text' ? Boolean(current.exact) : false}
-                                            onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
-                                              setOrClearFilter(col.id, {
-                                                type: 'text',
-                                                value,
-                                                exact: Boolean(checked),
-                                                emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
-                                              })
-                                            }}
-                                          />
-                                          Exact match
-                                        </label>
-                                        <label className="flex items-center gap-2 text-xs text-gray-700">
-                                          <Checkbox
-                                            checked={Boolean(current?.emptyOnly)}
-                                            onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
-                                              setOrClearFilter(col.id, {
-                                                type: 'text',
-                                                value,
-                                                exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                                emptyOnly: Boolean(checked),
-                                                notBlankOnly: current?.type === 'text' ? Boolean((current as any).notBlankOnly) : false,
-                                              })
-                                            }}
-                                          />
-                                          Only blanks
-                                        </label>
-                                        <label className="flex items-center gap-2 text-xs text-gray-700">
-                                          <Checkbox
-                                            checked={Boolean((current as any)?.notBlankOnly)}
-                                            onCheckedChange={(checked) => {
-                                              const value = current?.type === 'text' ? current.value : ''
-                                              setOrClearFilter(col.id, {
-                                                type: 'text',
-                                                value,
-                                                exact: current?.type === 'text' ? Boolean(current.exact) : false,
-                                                emptyOnly: current?.type === 'text' ? Boolean(current.emptyOnly) : false,
-                                                notBlankOnly: Boolean(checked),
-                                              })
-                                            }}
-                                          />
-                                          Only not blanks
-                                        </label>
-                                      </div>
-                                    </div>
-                                  )}
-
-                                  {/* Number filter */}
-                                  {filterType === 'number' && (
-                                    <div className="space-y-2">
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <Input
-                                          value={(current?.type === 'number' && current.min) ? current.min : ''}
-                                          onChange={(e) => {
-                                            const min = e.target.value
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchTruckingOperations(1)
-                                            }
-                                          }}
-                                          placeholder="Min"
-                                          className="h-8 text-sm"
-                                        />
-                                        <Input
-                                          value={(current?.type === 'number' && current.max) ? current.max : ''}
-                                          onChange={(e) => {
-                                            const max = e.target.value
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchTruckingOperations(1)
-                                            }
-                                          }}
-                                          placeholder="Max"
-                                          className="h-8 text-sm"
-                                        />
-                                      </div>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean(current?.emptyOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                        />
-                                        Only blanks
-                                      </label>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean((current as any)?.notBlankOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const min = current?.type === 'number' ? current.min : ''
-                                            const max = current?.type === 'number' ? current.max : ''
-                                            setOrClearFilter(col.id, { type: 'number', min, max, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
-                                          }}
-                                        />
-                                        Only not blanks
-                                      </label>
-                                    </div>
-                                  )}
-
-                                  {/* Date filter */}
-                                  {filterType === 'date' && (
-                                    <div className="space-y-2">
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <Input
-                                          type="date"
-                                          value={(current?.type === 'date' && current.from) ? current.from : ''}
-                                          onChange={(e) => {
-                                            const from = e.target.value
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchTruckingOperations(1)
-                                            }
-                                          }}
-                                          className="h-8 text-sm"
-                                        />
-                                        <Input
-                                          type="date"
-                                          value={(current?.type === 'date' && current.to) ? current.to : ''}
-                                          onChange={(e) => {
-                                            const to = e.target.value
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault()
-                                              setPage(1)
-                                              fetchTruckingOperations(1)
-                                            }
-                                          }}
-                                          className="h-8 text-sm"
-                                        />
-                                      </div>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean(current?.emptyOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(checked), notBlankOnly: Boolean((current as any)?.notBlankOnly) })
-                                          }}
-                                        />
-                                        Only blanks
-                                      </label>
-                                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                                        <Checkbox
-                                          checked={Boolean((current as any)?.notBlankOnly)}
-                                          onCheckedChange={(checked) => {
-                                            const from = current?.type === 'date' ? current.from : ''
-                                            const to = current?.type === 'date' ? current.to : ''
-                                            setOrClearFilter(col.id, { type: 'date', from, to, emptyOnly: Boolean(current?.emptyOnly), notBlankOnly: Boolean(checked) })
-                                          }}
-                                        />
-                                        Only not blanks
-                                      </label>
-                                    </div>
-                                  )}
-
-                                  <div className="flex items-center justify-between mt-3 pt-2 border-t">
-                                    <button
-                                      type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
-                                      onClick={() => clearColumnFilter(col.id)}
-                                      disabled={!filterActive}
-                                    >
-                                      Clear
-                                    </button>
-                                    <div className="text-[11px] text-gray-500">
-                                      {filterActive ? 'Filtered' : 'No filter'}
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
+                            </th>
                           )
                         })}
-                        <div className="text-right sticky right-0 bg-gray-50 border-l pl-3 pr-2">Actions</div>
-                      </div>
+                        <th
+                          scope="col"
+                          className={`${COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS} text-center align-bottom font-semibold border-l border-gray-200 ${CONTRACT_PERF_TABLE_CELL_PAD}`}
+                          style={{ width: TRUCKING_ACTIONS_COL_WIDTH }}
+                        >
+                          Actions
+                        </th>
+                      </tr>
+                      </thead>
 
-                      {/* Rows */}
-                      <div className="divide-y">
-                        {sortedOperations.length === 0 ? (
-                          <div className="bg-white">
-                            <div className="px-4 py-10 text-center text-gray-500">
+                      <tbody
+                        className={`divide-y divide-gray-200 transition-opacity duration-200 ${
+                          (listFetching || tableScopeLoading) && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
+                        }`}
+                      >
+                        {section3TableLoading ? (
+                          <TableInitialLoadPlaceholder
+                            colSpan={visibleColumns.length + 1}
+                            icon={Truck}
+                          />
+                        ) : !section3TableLoading && sortedOperations.length === 0 ? (
+                          <tr className="bg-white">
+                            <td colSpan={visibleColumns.length + 1} className="px-4 py-10 text-center text-gray-500">
                               <Truck className="h-16 w-16 text-gray-400 mx-auto mb-4" />
                               <p>No trucking operations found</p>
                               {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
-                            </div>
-                          </div>
+                            </td>
+                          </tr>
                         ) : sortedOperations.map((operation, idx) => {
                           const isEditing = editingId === operation.id
+                          const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                           return (
-                            <div key={operation.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                              <div className="px-3 py-2">
-                                <div
-                                  className="grid gap-3 items-center"
-                                  style={{
-                                    gridTemplateColumns: `28px ${visibleColumns.map(c => getColumnWidth(c.id)).join(' ')} 320px`
-                                  }}
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleExpand(operation.id)}
-                                    className="p-1 text-gray-500 hover:text-gray-800"
-                                    title={expandedOperationIds.has(operation.id) ? 'Collapse' : 'Expand'}
-                                  >
-                                    {expandedOperationIds.has(operation.id) ? (
-                                      <ChevronDown className="h-5 w-5" />
-                                    ) : (
-                                      <ChevronRight className="h-5 w-5" />
-                                    )}
-                                  </button>
-
-                                  {visibleColumns.map(col => (
-                                    <div key={col.id} className="min-w-0">
+                              <tr key={operation.id} className={stripeClass}>
+                                {visibleColumns.map(col => {
+                                  const opColClass = operationalTableColumnClass(
+                                    getOperationalColumnLayout('trucking', col.id),
+                                  )
+                                  return (
+                                  <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}>
+                                    <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
                                       {col.id === 'status' && isEditing ? (
-                                        <select
-                                          value={editedData.status ?? operation.status ?? ''}
-                                          onChange={(e) => handleFieldChange('status', e.target.value)}
-                                          className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full bg-white"
-                                        >
-                                          <option value="">Select Status</option>
-                                          <option value="PLANNED">PLANNED</option>
-                                          <option value="IN_PROGRESS">IN_PROGRESS</option>
-                                          <option value="COMPLETED">COMPLETED</option>
-                                          <option value="CANCELLED">CANCELLED</option>
-                                        </select>
+                                        truckingDbStatus(operation) === 'CANCELLED' ? (
+                                          <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
+                                        ) : (
+                                          <select
+                                            value={editedData.status === 'CANCELLED' ? 'CANCELLED' : ''}
+                                            onChange={(e) => handleFieldChange('status', e.target.value)}
+                                            className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full bg-white"
+                                          >
+                                            <option value="">Select Status</option>
+                                            <option value="CANCELLED">CANCELLED</option>
+                                          </select>
+                                        )
                                       ) : (
                                         col.render(operation)
                                       )}
                                     </div>
-                                  ))}
-
-                                  <div className="flex items-center justify-end gap-2 sticky right-0 bg-white border-l pl-3 pr-2 shadow-[-8px_0_12px_-12px_rgba(0,0,0,0.35)]">
+                                  </td>
+                                  )
+                                })}
+                                <td
+                                  className={`sticky right-0 z-10 border-l border-gray-200 align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}
+                                >
+                                  <div className="flex items-center justify-end gap-2">
                                     {isEditing ? (
                                       <>
                                         <Button
                                           variant="outline"
-                                          size="sm"
+                                          size="icon"
                                           onClick={handleCancelEdit}
                                           disabled={saving}
+                                          title="Cancel"
                                         >
-                                          <X className="h-4 w-4 mr-1" />
-                                          Cancel
+                                          <X className="h-4 w-4" />
                                         </Button>
                                         <Button
-                                          size="sm"
+                                          size="icon"
                                           onClick={() => handleSave(operation.id)}
                                           disabled={saving}
-                                          className="bg-green-600 hover:bg-green-700"
+                                          title="Save"
+                                          className="bg-green-600 hover:bg-green-700 text-white"
                                         >
                                           {saving ? (
-                                            <>
-                                              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                                              Saving...
-                                            </>
+                                            <Loader2 className="h-4 w-4 animate-spin" />
                                           ) : (
-                                            <>
-                                              <Save className="h-4 w-4 mr-1" />
-                                              Save
-                                            </>
+                                            <Save className="h-4 w-4" />
                                           )}
                                         </Button>
                                       </>
                                     ) : (
                                       <>
+                                        <div className="hidden">
+                                          <Button
+                                            variant="outline"
+                                            size="icon"
+                                            onClick={() => handleEdit(operation)}
+                                            title="Edit"
+                                            className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                                          >
+                                            <Pencil className="h-4 w-4" />
+                                          </Button>
+                                        </div>
+                                        {isTruckingUnplanned(operation) ? (
+                                          <TruckTableAddTruckingButton
+                                            onAdd={() => handleOpenAddTruckingModal(operation)}
+                                          />
+                                        ) : (
+                                          <TruckTableEditTruckingButton
+                                            onEdit={() => handleOpenEditTruckingModal(operation)}
+                                            disabled={isTruckingEditDisabled(operation)}
+                                            disabledReason={truckingEditDisabledReason(operation)}
+                                            tooltip={truckingEditTooltip(operation)}
+                                          />
+                                        )}
                                         <Button
                                           variant="outline"
-                                          size="sm"
-                                          onClick={() => handleEdit(operation)}
-                                          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                                        >
-                                          <Edit2 className="h-4 w-4 mr-1" />
-                                          Edit
-                                        </Button>
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
+                                          size="icon"
                                           onClick={() => handleViewDocuments(operation)}
-                                          className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                          title={
+                                            isTruckingContractBacklogRow(operation)
+                                              ? 'Contract documents'
+                                              : 'Documents'
+                                          }
+                                          className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
                                         >
-                                          <Package className="h-4 w-4 mr-1" />
-                                          Docs
+                                          <FileText className="h-4 w-4" />
                                         </Button>
                                         <input
                                           id={`trucking-file-${operation.id}`}
@@ -2819,121 +4703,51 @@ function TruckingPageContent() {
                                         />
                                         <Button
                                           variant="outline"
-                                          size="sm"
+                                          size="icon"
                                           onClick={() => document.getElementById(`trucking-file-${operation.id}`)?.click()}
                                           disabled={uploadingId === operation.id}
-                                          className="bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100"
+                                          title={
+                                            isTruckingContractBacklogRow(operation)
+                                              ? 'Upload contract document'
+                                              : 'Upload'
+                                          }
+                                          className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
                                         >
                                           {uploadingId === operation.id ? (
-                                            <>
-                                              <span className="h-4 w-4 mr-2 inline-block border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
-                                              Uploading...
-                                            </>
+                                            <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
                                           ) : (
-                                            <>
-                                              <Upload className="h-4 w-4 mr-1" />
-                                              Upload
-                                            </>
+                                            <Upload className="h-4 w-4" />
                                           )}
                                         </Button>
                                       </>
                                     )}
                                   </div>
-                                </div>
-
-                                {/* Expanded Details */}
-                                {expandedOperationIds.has(operation.id) && (
-                                  <div className="mt-3 p-3 border rounded bg-white">
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3 pb-3 border-b">
-                                      <div>
-                                        <div className="text-gray-500">Buyer</div>
-                                        <div className="font-medium">{operation.buyer || '-'}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Group Name</div>
-                                        <div className="font-medium">{operation.group_name || '-'}</div>
-                                      </div>
-                                    </div>
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3 pb-3 border-b">
-                                      <div>
-                                        <div className="text-gray-500">Truck Loading Location</div>
-                                        <div className="font-medium">{operation.loading_location || operation.location || '-'}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Truck Discharge Location</div>
-                                        <div className="font-medium">{operation.unloading_location || '-'}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Quantity Delivery (Kg)</div>
-                                        <div className="font-medium">{formatKg(operation.quantity_delivered)}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Quantity Receive (Kg)</div>
-                                        <div className="font-medium">{formatKg(operation.quantity_receive || operation.quantity_delivered)}</div>
-                                      </div>
-                                    </div>
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3 pb-3 border-b">
-                                      <div>
-                                        <div className="text-gray-500">Trucking OA Budget</div>
-                                        <div className="font-medium">{formatNumber(operation.oa_budget)}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Trucking OA Actual</div>
-                                        <div className="font-medium">{formatNumber(operation.oa_actual)}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Estimated KM</div>
-                                        <div className="font-medium">{operation.estimated_km ? `${formatNumber(operation.estimated_km)} km` : '-'}</div>
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Gain/Loss %</div>
-                                        <div className="font-medium">{formatNumber(operation.gain_loss_percentage)}%</div>
-                                      </div>
-                                    </div>
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3 pb-3 border-b">
-                                      <div>
-                                        <div className="text-gray-500">Gain/Loss Amount (Kg)</div>
-                                        {isEditing ? (
-                                          <Input
-                                            type="number"
-                                            step="0.01"
-                                            value={editedData.gain_loss_amount ?? operation.gain_loss_amount ?? ''}
-                                            onChange={(e) => handleFieldChange('gain_loss_amount', parseFloat(e.target.value) || 0)}
-                                            className="h-8 text-sm mt-1"
-                                          />
-                                        ) : (
-                                          <div className="font-medium">{formatKg(operation.gain_loss_amount)}</div>
-                                        )}
-                                      </div>
-                                      <div>
-                                        <div className="text-gray-500">Cargo Readiness Date</div>
-                                        {isEditing ? (
-                                          <Input
-                                            type="date"
-                                            value={editedData.cargo_readiness_date ? editedData.cargo_readiness_date.split('T')[0] : (operation.cargo_readiness_date ? operation.cargo_readiness_date.split('T')[0] : '')}
-                                            onChange={(e) => handleFieldChange('cargo_readiness_date', e.target.value)}
-                                            className="h-8 text-sm mt-1"
-                                          />
-                                        ) : (
-                                          <div className="font-medium">{formatDate(operation.cargo_readiness_date)}</div>
-                                        )}
-                                      </div>
-                                    </div>
-                                    {/* Removed Due Date Delivery Start/End and Late Indicator from expanded view as requested */}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
+                                </td>
+                              </tr>
                           )
                         })}
-                      </div>
-                    </div>
+                      </tbody>
+                    </table>
                   </div>
                 </div>
 
                 {/* Mobile card view */}
-                <div className="lg:hidden space-y-4">
-                  {sortedOperations.map((operation) => {
+                <div
+                  className={`lg:hidden space-y-4 min-h-[480px] transition-opacity duration-200 ${
+                    (listFetching || tableScopeLoading) && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
+                  }`}
+                >
+                  {section3TableLoading ? (
+                    <div className="border rounded-lg bg-white">
+                      <TableInitialLoadPlaceholderContent icon={Truck} />
+                    </div>
+                  ) : !section3TableLoading && sortedOperations.length === 0 ? (
+                    <div className="text-center py-10 text-gray-500 border rounded-lg bg-white">
+                      <Truck className="h-12 w-12 text-gray-400 mx-auto mb-3" />
+                      <p>No trucking operations found</p>
+                      {searchTerm ? <p className="text-sm mt-2">Try adjusting your search filters</p> : null}
+                    </div>
+                  ) : sortedOperations.map((operation) => {
                   const isEditing = editingId === operation.id
                   const currentData = isEditing ? editedData : operation
 
@@ -2948,76 +4762,80 @@ function TruckingPageContent() {
                           <div className="flex items-center gap-3">
                             <h3 className="font-semibold text-lg">{operation.operation_id}</h3>
                             {isEditing ? (
-                              <select
-                                value={currentData.status}
-                                onChange={(e) => handleFieldChange('status', e.target.value)}
-                                className="px-2 py-1 border border-gray-300 rounded text-sm"
-                              >
-                                <option value="PLANNED">Planned</option>
-                                <option value="IN_PROGRESS">In Progress</option>
-                                <option value="COMPLETED">Completed</option>
-                                <option value="CANCELLED">Cancelled</option>
-                              </select>
+                              truckingDbStatus(operation) === 'CANCELLED' ? (
+                                <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
+                              ) : (
+                                <select
+                                  value={editedData.status === 'CANCELLED' ? 'CANCELLED' : ''}
+                                  onChange={(e) => handleFieldChange('status', e.target.value)}
+                                  className="px-2 py-1 border border-gray-300 rounded text-sm"
+                                >
+                                  <option value="">Select Status</option>
+                                  <option value="CANCELLED">Cancelled</option>
+                                </select>
+                              )
                             ) : (
                               <Badge className={getStatusColor(operation.status)}>
-                                {operation.status}
+                                {truckingStatusLabel(operation.status)}
                               </Badge>
                             )}
                           </div>
                           <div className="flex gap-2">
                             {isEditing ? (
                               <>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={handleCancelEdit}
-                                  disabled={saving}
-                                >
-                                  <X className="h-4 w-4 mr-1" />
-                                  Cancel
+                                <Button variant="outline" size="icon" onClick={handleCancelEdit} disabled={saving} title="Cancel">
+                                  <X className="h-4 w-4" />
                                 </Button>
                                 <Button
-                                  size="sm"
+                                  size="icon"
                                   onClick={() => handleSave(operation.id)}
                                   disabled={saving}
-                                  className="bg-green-600 hover:bg-green-700"
+                                  title="Save"
+                                  className="bg-green-600 hover:bg-green-700 text-white"
                                 >
-                                  {saving ? (
-                                    <>
-                                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                                      Saving...
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Save className="h-4 w-4 mr-1" />
-                                      Save
-                                    </>
-                                  )}
+                                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                                 </Button>
                               </>
                             ) : (
                               <>
+                                <div className="hidden">
+                                  <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() => handleEdit(operation)}
+                                    title="Edit"
+                                    className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                                  >
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                                {isTruckingUnplanned(operation) ? (
+                                  <TruckTableAddTruckingButton
+                                    onAdd={() => handleOpenAddTruckingModal(operation)}
+                                  />
+                                ) : (
+                                  <TruckTableEditTruckingButton
+                                    onEdit={() => handleOpenEditTruckingModal(operation)}
+                                    disabled={isTruckingEditDisabled(operation)}
+                                    disabledReason={truckingEditDisabledReason(operation)}
+                                    tooltip={truckingEditTooltip(operation)}
+                                  />
+                                )}
                                 <Button
                                   variant="outline"
-                                  size="sm"
-                                  onClick={() => handleEdit(operation)}
-                                  className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                                >
-                                  <Edit2 className="h-4 w-4 mr-1" />
-                                  Edit
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
+                                  size="icon"
                                   onClick={() => handleViewDocuments(operation)}
-                                  className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                  title={
+                                    isTruckingContractBacklogRow(operation)
+                                      ? 'Contract documents'
+                                      : 'Documents'
+                                  }
+                                  className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
                                 >
-                                  <Package className="h-4 w-4 mr-1" />
-                                  Documents
+                                  <FileText className="h-4 w-4" />
                                 </Button>
-                                {/* Upload Document */}
                                 <input
-                                  id={`trucking-file-${operation.id}`}
+                                  id={`trucking-file-mobile-${operation.id}`}
                                   type="file"
                                   accept="application/pdf,image/png,image/jpeg"
                                   className="hidden"
@@ -3025,21 +4843,20 @@ function TruckingPageContent() {
                                 />
                                 <Button
                                   variant="outline"
-                                  size="sm"
-                                  onClick={() => document.getElementById(`trucking-file-${operation.id}`)?.click()}
+                                  size="icon"
+                                  onClick={() => document.getElementById(`trucking-file-mobile-${operation.id}`)?.click()}
                                   disabled={uploadingId === operation.id}
-                                  className="bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100"
+                                  title={
+                                    isTruckingContractBacklogRow(operation)
+                                      ? 'Upload contract document'
+                                      : 'Upload'
+                                  }
+                                  className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
                                 >
                                   {uploadingId === operation.id ? (
-                                    <>
-                                      <span className="h-4 w-4 mr-2 inline-block border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
-                                      Uploading...
-                                    </>
+                                    <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
                                   ) : (
-                                    <>
-                                      <Upload className="h-4 w-4 mr-1" />
-                                      Upload
-                                    </>
+                                    <Upload className="h-4 w-4" />
                                   )}
                                 </Button>
                               </>
@@ -3051,19 +4868,19 @@ function TruckingPageContent() {
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3 pb-3 border-b">
                           <div>
                             <div className="text-gray-500">Contract Number</div>
-                            <div className="font-medium">{operation.contract_number || '-'}</div>
+                            <div className="font-medium">{formatSapDisplayValue(operation.contract_number)}</div>
                           </div>
                           <div>
                             <div className="text-gray-500">Supplier</div>
-                            <div className="font-medium">{operation.supplier || '-'}</div>
+                            <div className="font-medium">{formatSapDisplayValue(operation.supplier)}</div>
                           </div>
                           <div>
                             <div className="text-gray-500">Product</div>
-                            <div className="font-medium">{operation.product || '-'}</div>
+                            <div className="font-medium">{formatSapDisplayValue(operation.product)}</div>
                           </div>
                           <div>
                             <div className="text-gray-500">Group</div>
-                            <div className="font-medium">{operation.group_name || '-'}</div>
+                            <div className="font-medium">{formatSapDisplayValue(operation.group_name)}</div>
                           </div>
                         </div>
 
@@ -3078,7 +4895,7 @@ function TruckingPageContent() {
                                 className="h-8 text-sm"
                               />
                             ) : (
-                              <div className="font-medium">{operation.location || '-'}</div>
+                              <div className="font-medium">{formatSapDisplayValue(operation.location)}</div>
                             )}
                           </div>
                           <div>
@@ -3090,7 +4907,7 @@ function TruckingPageContent() {
                                 className="h-8 text-sm"
                               />
                             ) : (
-                              <div className="font-medium">{operation.trucking_owner || '-'}</div>
+                              <div className="font-medium">{formatSapDisplayValue(operation.trucking_owner)}</div>
                             )}
                           </div>
                           <div>
@@ -3108,7 +4925,7 @@ function TruckingPageContent() {
                             )}
                           </div>
                           <div>
-                            <div className="text-gray-500 mb-1">Quantity Delivered (Kg)</div>
+                            <div className="text-gray-500 mb-1">Delivery Qty (MT)</div>
                             {isEditing ? (
                               <Input
                                 type="number"
@@ -3118,8 +4935,14 @@ function TruckingPageContent() {
                                 className="h-8 text-sm"
                               />
                             ) : (
-                              <div className="font-medium">{formatNumber(operation.quantity_delivered)}</div>
+                              <div className="font-medium">{formatTruckingQtyMt(operation.quantity_delivered)}</div>
                             )}
+                          </div>
+                          <div>
+                            <div className="text-gray-500 mb-1">Received Qty (MT)</div>
+                            <div className="font-medium">
+                              {formatTruckingQtyMt(operation.quantity_receive ?? operation.quantity_delivered)}
+                            </div>
                           </div>
                         </div>
 
@@ -3219,19 +5042,58 @@ function TruckingPageContent() {
                 })}
               </div>
 
-                {hasMore && (
-                  <div className="flex justify-center pt-6">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={loading}
-                      onClick={() => setPage((p) => p + 1)}
-                    >
-                      {loading ? 'Loading…' : 'Load more'}
-                    </Button>
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-between pt-4 border-t mt-2">
+                    <div className="text-sm text-gray-700">
+                      Showing page {page} of {totalPages} ({tableHeaderCount.value.toLocaleString('en-US')} total {tableHeaderCount.noun})
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handlePageChange(page - 1)}
+                        disabled={page <= 1 || listFetching}
+                      >
+                        Previous
+                      </Button>
+                      <div className="flex items-center gap-1">
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                          let pageNum: number
+                          if (totalPages <= 5) {
+                            pageNum = i + 1
+                          } else if (page <= 3) {
+                            pageNum = i + 1
+                          } else if (page >= totalPages - 2) {
+                            pageNum = totalPages - 4 + i
+                          } else {
+                            pageNum = page - 2 + i
+                          }
+                          return (
+                            <Button
+                              key={pageNum}
+                              variant={page === pageNum ? 'default' : 'outline'}
+                              size="sm"
+                              onClick={() => handlePageChange(pageNum)}
+                              disabled={listFetching}
+                              className="min-w-[40px]"
+                            >
+                              {pageNum}
+                            </Button>
+                          )
+                        })}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handlePageChange(page + 1)}
+                        disabled={page >= totalPages || listFetching}
+                      >
+                        Next
+                      </Button>
+                    </div>
                   </div>
                 )}
-                </>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -3241,18 +5103,25 @@ function TruckingPageContent() {
       {/* Documents Modal */}
       {showDocs && selectedOperation && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg p-6 max-h-[80vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-semibold">Documents — {selectedOperation.operation_id}</h3>
-              <Button variant="ghost" onClick={() => setShowDocs(false)}>
+          <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="flex shrink-0 items-center justify-between border-b px-6 py-4">
+              <h3 className="text-xl font-semibold">
+                Documents — {truckingDocumentScopeLabel(selectedOperation)}
+              </h3>
+              <Button variant="ghost" size="icon" className="shrink-0" aria-label="Close" onClick={() => setShowDocs(false)}>
                 <X className="h-5 w-5" />
               </Button>
             </div>
 
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
             {docsLoading ? (
               <div className="text-sm text-gray-500 py-8 text-center">Loading documents...</div>
             ) : operationDocs.length === 0 ? (
-              <div className="text-sm text-gray-500 py-8 text-center">No documents uploaded for this operation.</div>
+              <div className="text-sm text-gray-500 py-8 text-center">
+                {isTruckingContractBacklogRow(selectedOperation)
+                  ? 'No documents uploaded for this contract yet.'
+                  : 'No documents uploaded for this operation.'}
+              </div>
             ) : (
               <div className="space-y-2">
                 {operationDocs.map((doc) => (
@@ -3275,18 +5144,53 @@ function TruckingPageContent() {
                 ))}
               </div>
             )}
+            </div>
           </div>
         </div>
       )}
 
-      <CreateTruckingOperationModal open={showCreateForm} onClose={() => setShowCreateForm(false)} onCreated={handleCreated} />
+      <CreateTruckingOperationModal
+        open={showCreateForm || editTruckingFromTable != null || plotTruckingFromTable != null}
+        mode={editTruckingFromTable ? 'edit' : 'add'}
+        plotOperationId={plotTruckingFromTable?.operationId ?? null}
+        editTruckingOperationId={editTruckingFromTable?.operationId ?? null}
+        initialContractId={
+          plotTruckingFromTable?.contractId ??
+          editTruckingFromTable?.contractId ??
+          createTruckingPrefill?.contractId ??
+          null
+        }
+        initialContractExtNo={
+          plotTruckingFromTable?.contractExtNo ??
+          editTruckingFromTable?.contractExtNo ??
+          createTruckingPrefill?.contractExtNo ??
+          null
+        }
+        initialPoNumber={
+          plotTruckingFromTable?.poNumber ??
+          editTruckingFromTable?.poNumber ??
+          createTruckingPrefill?.poNumber ??
+          null
+        }
+        onClose={handleCloseTruckingModal}
+        onCreated={handleCreated}
+      />
     </Layout>
   )
 }
 
 export default function TruckingPage() {
   return (
-    <Suspense fallback={<Layout><div className="flex items-center justify-center p-8"><div className="text-gray-500">Loading...</div></div></Layout>}>
+    <Suspense
+      fallback={
+        <Layout>
+          <div className="space-y-6">
+            <h1 className="text-3xl font-bold">Trucking Operations</h1>
+            <p className="text-sm text-gray-400">Loading…</p>
+          </div>
+        </Layout>
+      }
+    >
       <TruckingPageContent />
     </Suspense>
   )

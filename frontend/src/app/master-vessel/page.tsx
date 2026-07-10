@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -8,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
-import { Plus, Upload, Edit2 } from 'lucide-react'
+import { Plus, Upload, Edit2, Trash2 } from 'lucide-react'
 
 interface MasterVessel {
   id: string
@@ -28,16 +29,18 @@ export default function MasterVesselPage() {
   const [items, setItems] = useState<MasterVessel[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [editing, setEditing] = useState<MasterVessel | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [form, setForm] = useState<Partial<MasterVessel>>({})
+  const [isAdmin, setIsAdmin] = useState(false)
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async (searchQuery: string) => {
     try {
       setLoading(true)
       const params = new URLSearchParams()
-      if (search.trim().length >= 2) {
-        params.set('search', search.trim())
+      if (searchQuery.length >= 2) {
+        params.set('search', searchQuery)
       }
       const res = await api.get('/master-vessels', { params })
       setItems(res.data?.data?.items || [])
@@ -47,12 +50,20 @@ export default function MasterVesselPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
-    fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    try {
+      const u = JSON.parse(localStorage.getItem('user') || 'null')
+      setIsAdmin(String(u?.role || '').toUpperCase() === 'ADMIN')
+    } catch {
+      setIsAdmin(false)
+    }
   }, [])
+
+  useEffect(() => {
+    void fetchData(debouncedSearch)
+  }, [debouncedSearch, fetchData])
 
   const openNew = () => {
     setEditing(null)
@@ -105,7 +116,7 @@ export default function MasterVesselPage() {
       setEditing(null)
       setForm({})
       setIsFormOpen(false)
-      fetchData()
+      void fetchData(debouncedSearch)
     } catch (err: any) {
       console.error('Save master vessel error', err)
       const msg = err?.response?.data?.error?.message || 'Failed to save master vessel'
@@ -186,12 +197,26 @@ export default function MasterVesselPage() {
 
       await api.post('/master-vessels/upload', { rows: payloadRows })
       alert('Master vessel data uploaded')
-      fetchData()
+      void fetchData(debouncedSearch)
     } catch (err) {
       console.error('Upload master vessel file error', err)
       alert('Failed to parse or upload file. Please upload CSV exported from Master Vessel.xlsx')
     } finally {
       e.target.value = ''
+    }
+  }
+
+  const handleDelete = async (v: MasterVessel) => {
+    if (!isAdmin) return
+    const ok = confirm(`Delete vessel?\n\n${v.vessel_code} - ${v.vessel_name}`)
+    if (!ok) return
+    try {
+      await api.delete(`/master-vessels/${v.id}`)
+      await fetchData(debouncedSearch)
+    } catch (err: any) {
+      console.error('Delete master vessel error', err)
+      const msg = err?.response?.data?.error?.message || 'Failed to delete master vessel'
+      alert(msg)
     }
   }
 
@@ -236,9 +261,6 @@ export default function MasterVesselPage() {
                 onChange={(e) => setSearch(e.target.value)}
                 className="max-w-sm"
               />
-              <Button variant="outline" size="sm" onClick={fetchData} disabled={loading}>
-                Apply
-              </Button>
             </div>
           </CardContent>
         </Card>
@@ -391,14 +413,18 @@ export default function MasterVesselPage() {
                         <td className="px-3 py-2">{v.heating == null ? '-' : (v.heating ? 'Yes' : 'No')}</td>
                         <td className="px-3 py-2">{v.lambung_type || '-'}</td>
                         <td className="px-3 py-2 text-right">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openEdit(v)}
-                          >
-                            <Edit2 className="h-4 w-4 mr-1" />
-                            Edit
-                          </Button>
+                          <div className="inline-flex gap-2">
+                            <Button variant="outline" size="sm" onClick={() => openEdit(v)}>
+                              <Edit2 className="h-4 w-4 mr-1" />
+                              Edit
+                            </Button>
+                            {isAdmin && (
+                              <Button variant="destructive" size="sm" onClick={() => handleDelete(v)}>
+                                <Trash2 className="h-4 w-4 mr-1" />
+                                Delete
+                              </Button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}

@@ -3,15 +3,45 @@
 export const FIELD_HELP = {
   contractAging: `Days from today to Due Date Delivery End (or delivery window). Overdue shows in red when past the end date.`,
 
+  /** Matches `showUrgentFlag` in contracts/page.tsx */
+  contractUrgentFlag: `Red flag when the contract is within the delivery window and expected logistics rows are still missing.
+
+• Due Date Delivery Start must be set; otherwise no flag.
+• Shown only when that start date is in 14 days or less from today (includes overdue starts).
+• SEA: flag if there are no shipments and no STOs (both counts zero).
+• LAND: flag if there is no trucking (count zero).
+• MIX: flag if shipments/STOs are missing OR trucking is missing.
+• Other transport modes: flag only if both shipments/STOs and trucking are missing.`,
+
   overUnderDelivery: `When contract status is Close: compares Outstanding Quantity vs 0 — "Over Delivery" when outstanding < 0, "Under Delivery" when outstanding > 0, or "Passed" when outstanding = 0. Open contracts show "-".`,
 
-  logCycle: `Land: Cargo Readiness Date → latest Trucking Last Receive (Close) or today (Open). SEA: Cargo Readiness Date → latest ATA Vessel Complete Discharge (Close) or today (Open).`,
+  logCycle: `Land: Cargo Readiness → Trucking Last Receive (Close) or Open completion end. SEA: Cargo Readiness → ATA Vessel Complete Discharge (Close) or Open completion end. Open: today only when standard ETA is empty; if standard ETA exists, completion date is required (no today substitute).`,
 
-  tradeCycle: `Closed: latest receive/discharge → Due Date Delivery End (Land: Trucking Last Receive; SEA: ATA Vessel Complete Discharge). Open: Land uses latest Daily Planning Deliverables date; SEA uses ETA Vessel Complete Discharge.`,
+  tradeCycle: `Closed: completion receive/discharge → Due Date Delivery End. Open Condition A (standard ETA set): completion planning/discharge → due end. Open Condition B (standard ETA empty): today → due end. Trade cycle ≤ 0 counts as on time for Section 2/3 (Condition A); Condition B treats 0 days as late.`,
 
-  cashCycle: `Closed: latest receive/discharge → Payoff Date (Land: Trucking Last Receive; SEA: ATA Vessel Complete Discharge). Open: Land uses latest Daily Planning Deliverables date; SEA uses ETA Vessel Complete Discharge.`,
+  statusCardAvgDp: `Average DP Cycle (days) for Open or Close contracts in scope. Only contracts with a valid SAP DP Date and computable cycle are included; if none qualify, the card shows "- days" (not 0 days).`,
 
-  outstandingQty: `Contract Quantity minus Total STO Quantity from SAP (can be negative if overshipped).`,
+  statusCardAvgLog: `Average Log Cycle (days) for Open or Close contracts in scope. Only contracts with cargo readiness and a valid completion end are included; if none qualify, the card shows "- days" (not 0 days).`,
+
+  cashCycle: `Requires SAP Payoff Date (no payments-table fallback). Closed: completion receive/discharge → Payoff. Open: Payoff → completion end; if standard ETA is empty, completion end is today; if standard ETA exists, completion end must be planning/discharge (no today substitute). Missing Payoff or completion → no value.`,
+
+  dpCycle: `Requires SAP DP Date (no payments-table fallback). Closed: completion receive/discharge → DP Date. Open: DP Date → completion end (same Open ETA/today rules as Cash Cycle). Missing DP or completion → no value.`,
+
+  /** Contract Performance — concise header tooltips (view table + contract detail modal). */
+  contractPerfOutstandingQty: `Contract Qty vs SAP Receive/Delivery by incoterm. Over-delivery: +MT (green). Remaining outstanding: MT (black).`,
+  contractPerfTradeCycle: `Completion Date vs Due Date Delivery End`,
+  contractPerfDpCycle: `Completion Date vs DP Date`,
+  contractPerfCashCycle: `Completion Date vs Payoff Date`,
+  contractPerfLogCycle: `Completion Date vs Cargo Readiness Date`,
+
+  outstandingQty: `Remaining quantity yet to be delivered. Green = Over Delivered (+MT); black = Still Outstanding.`,
+
+  receivedQty: `Actual quantity received based on contract data (quantity_receive). For sea shipments: received at destination. For land shipments: quantity delivered to plant/site.`,
+
+  outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (SAP). Over-delivery shows +MT (green); remaining outstanding shows MT (black).`,
+  shipmentOutstandingQtyMt: `STO Qty minus fulfilled SAP quantity by incoterm (same rules as Contract page): CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery; others use receive or delivery. Green = Over Delivered (+MT); black = Still Outstanding.`,
+  shipmentSfalQtyMt: `Ship Figure After Loading (SFAL) from shipment data, displayed in MT (stored as kg in the database).`,
+  shipmentSfbdQtyMt: `Ship Figure Before Discharge (SFBD) from shipment data, displayed in MT (stored as kg in the database).`,
 
   companyName: `From Buyer in latest SAP data. For B2B "origin" contracts (empty Contract Reff PO), Company Name may follow linked B2B child contracts per business rules.`,
 
@@ -29,18 +59,76 @@ export const FIELD_HELP = {
   dashboardKpiFinance: `Payment totals and overdue amounts aggregate payments linked to contracts in filter scope.`,
 
   // Trucking
-  lateIndicator: `On Time / Late is calculated by comparing actual dates vs ETA/Due Date (when available). If required dates are missing, this shows "-".`,
+  lateIndicator: `On Time / Late compares Due Date Delivery End vs ATA/ETA Trucking Last Receive Date (actual first, then ETA; same calendar day = On Time). Shows "-" if Due Date Delivery End is missing.`,
   gainLossPct: `Calculated as (Delivered - Sent) / Sent × 100%. Positive means gain, negative means loss.`,
   gainLossAmount: `Calculated as Delivered - Sent (in Kg). Positive means gain, negative means loss.`,
   truckingOaBudget: `OA Budget is the planned operational allowance (budget) for the trucking leg.`,
   truckingOaActual: `OA Actual is the realized operational allowance (actual cost) for the trucking leg.`,
   etaVsDueDelivery: `ETA fields are planned dates; Due Date Delivery Start/End come from the contract delivery window. Use these to assess schedule risk and lateness.`,
+  truckingStatusUnplanned: `Unplanned view table rows: open contracts without a trucking operation, plus unplanned trucking operations (no Daily Planning and not yet started/completed). The badge count matches the table row total.`,
+  truckingStatusPlanned: `Open contract with at least one ETA or Daily Planning entry (Add New Trucking). Trucking Start Receive Date is not set yet.`,
+  truckingStatusInProgress: `Trucking shipment (STO/Operation) with Daily Planning and a valid Trucking Start Receive Date (SAP AV). Stays In Progress until GR PO/STO is Close, or until Outstanding Qty is within tolerance while GR is still Open.`,
+  truckingStatusCompleted: `Trucking shipment (STO/Operation) is Complete when GR PO Status (FRC/CIF) or GR STO Status (LCO/FOB) is Close — no OS Qty check required. Alternatively, when GR is still Open, Complete applies if Outstanding Qty is within tolerance (kg, after WB actual qty when uploaded). Trucking Last Receive Date is informational only.`,
+  truckingStatusCancelled: `Operation was set to Cancelled manually and is excluded from active execution. Use the Status filter below to view cancelled operations only.`,
+  truckingOutstandingQtyMt: `Outstanding Qty by incoterm: FRC = Contract Qty − Received Qty; LCO = Contract Qty − Delivered Qty. Displayed in MT. Green = over delivered (+MT); black = still outstanding. Other incoterms show —.`,
+
+  // Oil Loss
+  oilLossAmount: `Formula: Qty Receive − Qty Delivery (displayed in MT). Qty Delivery follows SAP UAT incoterm rules (Trucking for FRC/LCO; Vessel for FOB/CIF; MIX sums by transport). Negative values indicate oil loss.`,
+  oilLossPct: `Formula: (Qty Receive − Qty Delivery) ÷ Qty Delivery × 100%. Qty Delivery uses SAP UAT Quantity Delivery Trucking/Vessel matrix. Negative values indicate oil loss.`,
+
+  // Shipping Performance
+  shipmentTotalDelta: `Sum of all delay gaps in days: (Loading ETA−ETR) + (Loading ETA−ETB) + (Loading ETB−ETC) + (Discharge ETA−ETB) + (Discharge ETB−ETC). Positive = late, negative = ahead of schedule.`,
+
+  shipmentStoQty: `STO Quantity from the linked contract in SAP (in MT). Represents the planned quantity allocated to this shipment.`,
+  shipmentReceivedQty: `Actual quantity received at destination (actual_vessel_qty_receive or BL quantity as fallback), in MT.`,
+  shipmentOutstandingQtyActual: `Contract Qty minus STO-scoped Qty Receive/Delivered (per incoterm) for this STO. Same rules as Shipping Performance view table. Uses SAP fulfillment on this STO only — not global contract qty_move.`,
+  shipmentOutstandingQtyPlanning: `Contract Qty minus SAP STO Qty (planning via SAP) minus Shipment Planning Qty (KLIP daily deliverables on shipment + linked trucking for the STO). Net aggregate at STO level — over-planning on one PO can offset another. Displayed in MT.`,
+  shipmentPlanningQty: `KLIP shipment planning qty — sum of daily deliverables on the shipment calendar plus linked trucking daily deliverables for the same STO.`,
+  /** @deprecated Use shipmentOutstandingQtyActual */
+  shipmentOutstandingQty: `SAP STO Qty minus Qty Receive/Delivered (per incoterm) for this shipment/STO. Same for Open and Close; Close = status COMPLETED.`,
 
   // Shipments
-  shipmentLateIndicator: `On Time / Late is based on SLA days and actual vessel milestone dates. If key dates are missing, this shows "-".`,
+  shipmentLateIndicator: `On Time / Late compares Due Date Delivery End vs ATA/ETA Vessel Complete Discharge (actual first, then ETA; same calendar day = On Time). Shows "-" if Due Date Delivery End is missing.`,
   shipmentSlaDays: `SLA Days is the target duration for the shipment/leg. Used to flag delayed shipments when actual duration exceeds SLA.`,
   vesselOaBudget: `Vessel OA Budget is the planned operational allowance (budget) for the vessel/shipment leg.`,
   vesselOaActual: `Vessel OA Actual is the realized operational allowance (actual cost) for the vessel/shipment leg.`,
+
+  /** Shipments page — ETA Loading / Discharge status cards (grouped by STO). */
+  shipmentEtaLoadingScope: `Counts grouped STOs in loading phase only (Unplanned, Planned, In Progress, Loading). Completed and Cancelled are excluded. One count per STO group.`,
+  shipmentEtaDischargeScope: `Counts grouped STOs in discharge phase only (In Transit, Arrived, Unloading). Completed and Cancelled are excluded. One count per STO group.`,
+  shipmentEtaDayDiff: `Day diff = ETA calendar date − today (midnight to midnight). When several ETA milestones exist, bucket priority is: Delay → D → D-2 → >7D (gaps of 3–7 days are not shown on any card).`,
+
+  shipmentEtaLoadingMoreThan7D: `ETA Loading > 7D — no Delay/D/D-2 milestone; at least one loading ETA has day diff > 7.
+
+Loading ETAs: Arrival at Loading Port, Berthed at Loading Port, Start Loading, Completed Loading, Sailed from Loading Port.`,
+  shipmentEtaLoadingDMinus2: `ETA Loading D-2 — no Delay or D milestone; at least one loading ETA has day diff of 1 or 2 (tomorrow or the day after).
+
+Loading ETAs: Arrival at Loading Port, Berthed at Loading Port, Start Loading, Completed Loading, Sailed from Loading Port.`,
+  shipmentEtaLoadingD: `ETA Loading D — no Delay milestone; at least one loading ETA is today (day diff = 0).
+
+Loading ETAs: Arrival at Loading Port, Berthed at Loading Port, Start Loading, Completed Loading, Sailed from Loading Port.`,
+  shipmentEtaLoadingDelay: `ETA Loading Delay — at least one loading ETA date is before today (day diff < 0).
+
+Loading ETAs: Arrival at Loading Port, Berthed at Loading Port, Start Loading, Completed Loading, Sailed from Loading Port.`,
+  shipmentEtaLoadingNoEta: `No ETA (Loading) — all loading ETA milestones are empty for this STO group.
+
+Loading ETAs checked: Arrival at Loading Port, Berthed at Loading Port, Start Loading, Completed Loading, Sailed from Loading Port.`,
+
+  shipmentEtaDischargeMoreThan7D: `ETA Discharge > 7D — no Delay/D/D-2 milestone; at least one discharge ETA has day diff > 7.
+
+Discharge ETAs: Arrival at Discharge Port, Berthed at Discharge Port, Start Discharging, Complete Discharge.`,
+  shipmentEtaDischargeDMinus2: `ETA Discharge D-2 — no Delay or D milestone; at least one discharge ETA has day diff of 1 or 2 (tomorrow or the day after).
+
+Discharge ETAs: Arrival at Discharge Port, Berthed at Discharge Port, Start Discharging, Complete Discharge.`,
+  shipmentEtaDischargeD: `ETA Discharge D — no Delay milestone; at least one discharge ETA is today (day diff = 0).
+
+Discharge ETAs: Arrival at Discharge Port, Berthed at Discharge Port, Start Discharging, Complete Discharge.`,
+  shipmentEtaDischargeDelay: `ETA Discharge Delay — at least one discharge ETA date is before today (day diff < 0).
+
+Discharge ETAs: Arrival at Discharge Port, Berthed at Discharge Port, Start Discharging, Complete Discharge.`,
+  shipmentEtaDischargeNoEta: `No ETA (Discharge) — all discharge ETA milestones are empty for this STO group.
+
+Discharge ETAs checked: Arrival at Discharge Port, Berthed at Discharge Port, Start Discharging, Complete Discharge.`,
 
   // Finance
   financeTotalAmount: `Total Amount is the sum of payment_amount across the current finance dataset (subject to any page filters).`,
@@ -55,3 +143,15 @@ export const FIELD_HELP = {
 } as const
 
 export type FieldHelpKey = keyof typeof FIELD_HELP
+
+/** Row-level tooltip for Outstanding Qty (MT) on the Trucking page. */
+export function truckingOutstandingQtyFormulaTooltip(incoterm?: string | null): string {
+  const ic = String(incoterm ?? '').trim().toUpperCase()
+  if (ic === 'FRC') {
+    return 'Formula: Contract Qty − Received Qty (displayed in MT). Green = over delivered; red = still outstanding.'
+  }
+  if (ic === 'LCO') {
+    return 'Formula: Contract Qty − Delivered Qty (displayed in MT). Green = over delivered; red = still outstanding.'
+  }
+  return FIELD_HELP.truckingOutstandingQtyMt
+}

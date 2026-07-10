@@ -9,7 +9,8 @@
 │  │         Next.js 14 + React 18 + TypeScript           │   │
 │  │                                                       │   │
 │  │  ┌────────┐  ┌────────┐  ┌────────┐  ┌──────────┐  │   │
-│  │  │Dashboard│  │Contracts│ │Shipments│ │Finance   │  │   │
+│  │  │Dashboard│  │Contracts│ │Shipments│ │Shipping  │  │   │
+│  │  │         │  │         │ │         │ │Performance│  │   │
 │  │  └────────┘  └────────┘  └────────┘  └──────────┘  │   │
 │  │                                                       │   │
 │  │  UI Components: shadcn/ui + Tailwind CSS             │   │
@@ -78,6 +79,7 @@ frontend/
 │   │   ├── dashboard/          # Main dashboard
 │   │   ├── contracts/          # Contract management
 │   │   ├── shipments/          # Shipment tracking
+│   │   ├── shipping-performance/# Shipment performance analytics
 │   │   ├── finance/            # Payment management
 │   │   ├── documents/          # Document repository
 │   │   ├── users/              # User management
@@ -349,9 +351,19 @@ Key metrics to monitor:
 
 #### Shipments
 - GET `/api/shipments` - List shipments
+- GET `/api/shipments/performance` - Shipping performance metrics (SEA/MIX)
 - GET `/api/shipments/:id` - Get shipment details
 - POST `/api/shipments` - Create shipment
 - PUT `/api/shipments/:id` - Update shipment
+
+#### Shipping Performance Design Notes
+- Dataset is derived from `shipments` + `contracts` + `vessel_loading_ports` (+ latest `sap_processed_data` for `contract_ext_no`).
+- Loading/Discharge delta metrics are computed server-side and returned as day-difference fields.
+- Late Performance drilldown on UI uses hierarchy: `Total -> Incoterm -> Product -> Plant`.
+- Late/On-time filter semantics:
+  - `LATE` => `total_delta_days > 0`
+  - `ON_TIME` => `total_delta_days <= 0`
+- Table UX follows Contracts/Shipments patterns: configurable columns, header filter popovers, sortable headers, and drag-reorder.
 
 #### Finance
 - GET `/api/finance/payments` - List payments
