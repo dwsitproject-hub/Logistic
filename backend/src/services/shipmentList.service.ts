@@ -20,6 +20,7 @@ import {
   mergeShipmentVesselFromSapRow,
   queueShipmentVesselSapBackfill,
 } from './shipmentVesselFromSap.service';
+import { ListCacheKeepWarm } from '../utils/listCacheKeepWarm';
 
 /**
  * Shipments compact list API:
@@ -68,6 +69,11 @@ const SUMMARY_CACHE = new Map<
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const CACHE_VERSION = 'shipment-list-v28';
 const MAX_CACHE_ENTRIES = 80;
+
+// Re-runs recent page loads in the background (refresh-ahead + re-warm after edits)
+// so users are served from the cache instead of paying the full query cost. Does not
+// change responses — it only re-runs the identical loader off the request path.
+const PAGE_KEEP_WARM = new ListCacheKeepWarm({ cacheTtlMs: CACHE_TTL_MS });
 
 function stableColumnFiltersKey(colFilters: Record<string, unknown>): string {
   const keys = Object.keys(colFilters).sort();
@@ -310,6 +316,9 @@ export function invalidateShipmentsListCache(): void {
   COUNT_CACHE.clear();
   SUMMARY_CACHE.clear();
   markPipelineDailySummaryStale(['shipment']).catch(() => {});
+  // Rebuild the recently used pages in the background so the next viewer after an
+  // edit is served from memory instead of paying the full query cost.
+  PAGE_KEEP_WARM.rewarmRecentlyUsed();
 }
 
 export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentListRow[] {
@@ -577,6 +586,33 @@ export function buildShipmentListPageQueryWithoutInlineCount(
   return { text, params: ctx.usesStoKeyPaging ? baseParams : [...baseParams, limit, offset] };
 }
 
+// The SAP-hydrated variant (skipSapJoin=false) is a background refresh that can run
+// for a minute or more. Rapid filter changes used to fire one per filter combination
+// CONCURRENTLY, monopolizing DB connections/CPU so even the fast compact queries
+// queued behind them. Serialize these hydration loads (concurrency 1) and share one
+// execution per cache key. Pure scheduling — each request still gets the exact same
+// result its query would have produced.
+const HYDRATE_INFLIGHT = new Map<string, Promise<{ rows: ShipmentListRow[]; total: number }>>();
+let hydrateChain: Promise<unknown> = Promise.resolve();
+
+function loadShipmentListPageSerialized(
+  ctx: ShipmentListQueryContext,
+  page: number,
+  limit: number,
+): Promise<{ rows: ShipmentListRow[]; total: number }> {
+  const existing = HYDRATE_INFLIGHT.get(ctx.cacheKey);
+  if (existing) return existing;
+  const run = hydrateChain
+    .catch(() => {})
+    .then(() => runShipmentListPageQuery(ctx, page, limit))
+    .finally(() => {
+      HYDRATE_INFLIGHT.delete(ctx.cacheKey);
+    });
+  HYDRATE_INFLIGHT.set(ctx.cacheKey, run);
+  hydrateChain = run.catch(() => {});
+  return run;
+}
+
 async function loadShipmentListPage(
   ctx: ShipmentListQueryContext,
   page: number,
@@ -587,6 +623,24 @@ async function loadShipmentListPage(
     return { rows: cached.rows, total: cached.total };
   }
   if (cached) PAGE_CACHE.delete(ctx.cacheKey);
+
+  if (!ctx.skipSapJoin) {
+    return loadShipmentListPageSerialized(ctx, page, limit);
+  }
+  return runShipmentListPageQuery(ctx, page, limit);
+}
+
+async function runShipmentListPageQuery(
+  ctx: ShipmentListQueryContext,
+  page: number,
+  limit: number,
+): Promise<{ rows: ShipmentListRow[]; total: number }> {
+  // A queued hydration may have been satisfied by an identical run that finished
+  // while it waited; serve the cache instead of re-running the query.
+  const cached = PAGE_CACHE.get(ctx.cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return { rows: cached.rows, total: cached.total };
+  }
 
   const offset = (page - 1) * limit;
   const cachedTotal = getCachedFilteredTotal(ctx.filterCacheKey);
@@ -612,6 +666,13 @@ async function loadShipmentListPage(
 
   PAGE_CACHE.set(ctx.cacheKey, { rows, total, expiresAt: Date.now() + CACHE_TTL_MS });
   evictMapIfNeeded(PAGE_CACHE, MAX_CACHE_ENTRIES);
+  // Remember how to re-run this exact load so the background warmer can refresh it
+  // ahead of expiry / after invalidation. `ctx` is a plain built query context.
+  PAGE_KEEP_WARM.register(ctx.cacheKey, async () => {
+    PAGE_CACHE.delete(ctx.cacheKey);
+    COUNT_CACHE.delete(ctx.filterCacheKey);
+    await loadShipmentListPage(ctx, page, limit);
+  });
   return { rows, total };
 }
 
@@ -623,6 +684,8 @@ export async function resolveShipmentsListForRequest(
   const pageNum = Math.max(1, Number(page) || 1);
   const limitNum = Math.max(1, Math.min(500, Number(limit) || 20));
 
+  // Request-path access only (the background refresher must not keep itself alive).
+  PAGE_KEEP_WARM.touch(ctx.cacheKey);
   const { rows, total } = await loadShipmentListPage(ctx, pageNum, limitNum);
 
   return {

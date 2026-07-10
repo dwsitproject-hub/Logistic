@@ -18,6 +18,7 @@ import { appendTruckingPipelineStageFilter, normalizeTruckingPagePipelineStagePa
 import { truckingPageListScopeWhereSql } from '../utils/truckingIncotermScope';
 import { buildListOrderByWithSapStoPriority } from '../utils/listSapStoPrioritySql';
 import { wrapTruckingListQueryWithStoExpansion, buildTruckingExpansionKeysCountSql } from '../utils/truckingListStoExpandSql';
+import { ListCacheKeepWarm } from '../utils/listCacheKeepWarm';
 import {
   buildTruckingExpansionKeyOrderBy,
   canUseTruckingStoKeyPaging,
@@ -103,6 +104,11 @@ const UNPLANNED_BACKLOG_CACHE = new Map<string, { count: number; expiresAt: numb
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const CACHE_VERSION = 'trucking-list-v31';
 const MAX_CACHE_ENTRIES = 80;
+
+// Re-runs recent page loads in the background (refresh-ahead + re-warm after edits)
+// so users are served from the cache instead of paying the full query cost. Does not
+// change responses — it only re-runs the identical loader off the request path.
+const PAGE_KEEP_WARM = new ListCacheKeepWarm({ cacheTtlMs: CACHE_TTL_MS });
 
 const SORT_FIELD_BY_KEY: Record<string, string> = {
   created_at: 'created_at',
@@ -271,6 +277,9 @@ export function invalidateTruckingListCache(): void {
   MERGED_SUMMARY_CACHE.clear();
   UNPLANNED_BACKLOG_CACHE.clear();
   markPipelineDailySummaryStale(['trucking']).catch(() => {});
+  // Rebuild the recently used pages in the background so the next viewer after an
+  // edit is served from memory instead of paying the full query cost.
+  PAGE_KEEP_WARM.rewarmRecentlyUsed();
 }
 
 function buildPipelineDailyFilterInput(req: AuthRequest): PipelineDailySummaryFilterInput {
@@ -998,6 +1007,13 @@ async function loadTruckingListPage(
 
   PAGE_CACHE.set(built.cacheKey, { rows, total, expiresAt: Date.now() + CACHE_TTL_MS });
   evictMapIfNeeded(PAGE_CACHE, MAX_CACHE_ENTRIES);
+  // Remember how to re-run this exact load so the background warmer can refresh it
+  // ahead of expiry / after invalidation. `built` is a plain built query context.
+  PAGE_KEEP_WARM.register(built.cacheKey, async () => {
+    PAGE_CACHE.delete(built.cacheKey);
+    COUNT_CACHE.delete(built.filterCacheKey);
+    await loadTruckingListPage(built, sortKey, sortDir, page, limit, stageFilter);
+  });
   return { rows, total };
 }
 
@@ -1092,6 +1108,8 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
     };
   }
 
+  // Request-path access only (the background refresher must not keep itself alive).
+  PAGE_KEEP_WARM.touch(listBuilt.cacheKey);
   const { rows, total } = await loadTruckingListPage(
     listBuilt,
     sortKey,
