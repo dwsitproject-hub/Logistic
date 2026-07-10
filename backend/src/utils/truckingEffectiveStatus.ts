@@ -1,5 +1,11 @@
-import { sqlRealizationEndDate, sqlRealizationStartDate } from './truckingRealizationSql';
+import { sqlRealizationStartDate } from './truckingRealizationSql';
 import { isContractDeliveryClosed, sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import {
+  isTruckingPipelineCompleted,
+  sqlTruckingListBaseOutstandingQtyExpr,
+  sqlTruckingPipelineIsCompletedExpr,
+  sqlTruckingOutstandingWithinToleranceExpr,
+} from './truckingQuantitySql';
 
 export type TruckingEffectiveStatus =
   | 'UNPLANNED'
@@ -33,43 +39,53 @@ export function hasTruckingSto(stoNumber: unknown): boolean {
   return String(stoNumber ?? '').trim().length > 0;
 }
 
+export function isTruckingCompletedByGrAndOs(
+  contractImportStatus: unknown,
+  outstandingQtyKg: number | null | undefined,
+): boolean {
+  return isTruckingPipelineCompleted(contractImportStatus, outstandingQtyKg);
+}
+
 /**
- * Effective status: IN_PROGRESS / COMPLETED from realization layer only (extension + SAP).
+ * Effective status: COMPLETED from GR Close or OS Qty (tolerance when GR Open); IN_PROGRESS from start receive.
  * PLANNED / UNPLANNED from KLIP planning; open SAP without planning → UNPLANNED (STO not required).
  */
 export function sqlTruckingEffectiveStatus(
   contractAlias = 'c',
   _stoExpr?: string,
+  outstandingQtyExpr?: string,
 ): string {
+  const isCompleted = sqlTruckingPipelineIsCompletedExpr(contractAlias, outstandingQtyExpr);
   return `CASE
     WHEN COALESCE(t.status, '') = 'CANCELLED' THEN 'CANCELLED'
-    WHEN ${sqlIsContractSapClosedExpr(contractAlias)} THEN 'COMPLETED'
-    WHEN ${sqlRealizationEndDate(contractAlias)} IS NOT NULL THEN 'COMPLETED'
+    WHEN ${isCompleted} THEN 'COMPLETED'
     WHEN ${sqlRealizationStartDate(contractAlias)} IS NOT NULL THEN 'IN_PROGRESS'
     WHEN ${sqlHasTruckingKlipPlanning('t')} THEN 'PLANNED'
     WHEN NOT (${sqlIsContractSapClosedExpr(contractAlias)}) THEN 'UNPLANNED'
-    ELSE 'COMPLETED'
+    ELSE 'PLANNED'
   END`;
 }
 
 export function deriveTruckingEffectiveStatus(
   dbStatus: unknown,
   realizationStartDate: unknown,
-  realizationEndDate: unknown,
+  _realizationEndDate: unknown,
   options?: {
     dailyDeliverables?: unknown;
     stoNumber?: unknown;
     contractImportStatus?: unknown;
+    outstandingQtyKg?: number | null;
   },
 ): TruckingEffectiveStatus {
   const status = String(dbStatus ?? '').trim().toUpperCase();
   if (status === 'CANCELLED') return 'CANCELLED';
-  if (isContractDeliveryClosed(options?.contractImportStatus)) return 'COMPLETED';
-  if (hasDateValue(realizationEndDate)) return 'COMPLETED';
+  if (isTruckingPipelineCompleted(options?.contractImportStatus, options?.outstandingQtyKg)) {
+    return 'COMPLETED';
+  }
   if (hasDateValue(realizationStartDate)) return 'IN_PROGRESS';
   if (hasTruckingKlipPlanning(options?.dailyDeliverables)) return 'PLANNED';
   if (!isContractDeliveryClosed(options?.contractImportStatus)) return 'UNPLANNED';
-  return 'COMPLETED';
+  return 'PLANNED';
 }
 
 function hasDateValue(v: unknown): boolean {
@@ -158,8 +174,9 @@ export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
   SET
     status = CASE
       WHEN t.status = 'CANCELLED' THEN t.status
-      WHEN ${sqlIsContractSapClosedExpr('c')} THEN 'COMPLETED'
-      WHEN u.realization_end_date IS NOT NULL THEN 'COMPLETED'
+      WHEN ${sqlIsContractSapClosedExpr('c')}
+        OR ${sqlTruckingOutstandingWithinToleranceExpr(sqlTruckingListBaseOutstandingQtyExpr('c'))}
+        THEN 'COMPLETED'
       WHEN u.realization_start_date IS NOT NULL THEN 'IN_PROGRESS'
       ELSE COALESCE(t.status, 'PLANNED')
     END,

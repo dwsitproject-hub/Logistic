@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isTruckingPipelineCompleted,
   sqlNormalizeSapTruckingQtyToKg,
+  sqlTruckingExpandedStoLineQtyKgExpr,
   sqlTruckingOutstandingQtyByIncoterm,
+  sqlTruckingOutstandingWithinToleranceExpr,
+  sqlTruckingPipelineIsCompletedExpr,
   sqlTruckingPreferWbResolvedQty,
   sqlTruckingQuantityDeliveredCoalesce,
 } from './truckingQuantitySql';
@@ -32,5 +36,29 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('trucking_daily_actuals');
     expect(sql).toContain('e.quantity_delivered');
     expect(sql).toContain('sap_per_sto');
+  });
+
+  it('sqlTruckingExpandedStoLineQtyKgExpr resolves SAP STO qty per expanded line', () => {
+    const sql = sqlTruckingExpandedStoLineQtyKgExpr();
+    expect(sql).toContain("data->'contract'->>'sto_quantity'");
+    expect(sql).toContain('e.sto_line_resolved');
+    expect(sql).toContain('e.contract_qty');
+  });
+
+  it('sqlTruckingOutstandingWithinToleranceExpr allows band around zero', () => {
+    const sql = sqlTruckingOutstandingWithinToleranceExpr('os.outstanding');
+    expect(sql).toContain('os.outstanding');
+    expect(sql).toContain('ABS');
+  });
+
+  it('sqlTruckingPipelineIsCompletedExpr uses OR between GR Close and OS tolerance', () => {
+    const sql = sqlTruckingPipelineIsCompletedExpr('c');
+    expect(sql).toContain(' OR ');
+  });
+
+  it('isTruckingPipelineCompleted accepts GR Close or OS tolerance', () => {
+    expect(isTruckingPipelineCompleted('Close', 5000)).toBe(true);
+    expect(isTruckingPipelineCompleted('Open', 0)).toBe(true);
+    expect(isTruckingPipelineCompleted('Open', 5000)).toBe(false);
   });
 });

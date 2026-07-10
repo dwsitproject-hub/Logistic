@@ -50,8 +50,45 @@ export function shippingPerfOperationalStoKeyExpr(
   )), '')`;
 }
 
-/** @deprecated Use shippingPerfOperationalStoKeyExpr — kept as alias for imports. */
-export const SHIPPING_PERF_STO_GROUP_KEY_EXPR = shippingPerfOperationalStoKeyExpr('c', 's');
+/**
+ * STO key for qty metrics + SAP joins — prefers numeric SAP STO per shipment row so a
+ * shared KLIP operation_id across multiple SAP STOs does not merge unrelated PO totals.
+ */
+export function shippingPerfStoMetricsKeyExpr(
+  contractAlias = 'c',
+  shipmentAlias = 's',
+): string {
+  const planned = shippingPerfHasKlipPlanningSql(shipmentAlias);
+  const skipMismatchedShipId = `(
+    NOT (${planned})
+    AND NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '') ~ '^[0-9]+$'
+    AND NULLIF(TRIM(${contractAlias}.sto_number::text), '') IS NOT NULL
+    AND TRIM(${shipmentAlias}.shipment_id::text) <> TRIM(${contractAlias}.sto_number::text)
+  )`;
+  const shipmentId = `NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '')`;
+  const pureNumericShipmentId = `(CASE WHEN ${shipmentId} ~ '^[0-9]+$' THEN ${shipmentId} ELSE NULL END)`;
+
+  return `NULLIF(TRIM(COALESCE(
+    ${pureNumericShipmentId},
+    NULLIF(TRIM(${contractAlias}.sto_number::text), ''),
+    (
+      SELECT NULLIF(TRIM(cs.sto_number::text), '')
+      FROM contract_stos cs
+      WHERE cs.contract_id = ${contractAlias}.id
+        AND NULLIF(TRIM(cs.sto_number::text), '') IS NOT NULL
+      ORDER BY cs.updated_at DESC NULLS LAST
+      LIMIT 1
+    ),
+    CASE WHEN ${planned} THEN NULLIF(TRIM(${shipmentAlias}.operation_id::text), '') ELSE NULL END,
+    CASE WHEN ${planned} THEN ${shipmentId} ELSE NULL END,
+    CASE WHEN ${skipMismatchedShipId} THEN NULL ELSE ${shipmentId} END,
+    NULLIF(TRIM(${shipmentAlias}.operation_id::text), ''),
+    ${shipmentAlias}.id::text
+  )), '')`;
+}
+
+/** UI row grouping + sto_metrics join — numeric SAP STO before shared operation_id. */
+export const SHIPPING_PERF_STO_GROUP_KEY_EXPR = shippingPerfStoMetricsKeyExpr('c', 's');
 
 function isSyntheticStoKey(value: string): boolean {
   const v = value.trim().toUpperCase();

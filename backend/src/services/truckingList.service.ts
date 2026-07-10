@@ -101,7 +101,7 @@ const MERGED_SUMMARY_CACHE = new Map<
 >();
 const UNPLANNED_BACKLOG_CACHE = new Map<string, { count: number; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v28';
+const CACHE_VERSION = 'trucking-list-v31';
 const MAX_CACHE_ENTRIES = 80;
 
 const SORT_FIELD_BY_KEY: Record<string, string> = {
@@ -401,6 +401,8 @@ export function buildTruckingListSummaryFromRows(rows: TruckingListRow[]) {
               dailyDeliverables: row.daily_deliverables,
               stoNumber: row.sto_number ?? row.sto_numbers,
               contractImportStatus: row.contract_import_status,
+              outstandingQtyKg:
+                row.outstanding_quantity != null ? Number(row.outstanding_quantity) : null,
             },
           );
 
@@ -671,7 +673,7 @@ export function buildTruckingListQuery(
 export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text: string; params: unknown[] } {
   const innerSql = `${built.preOuterQuery}${built.outerSql}`;
   const expanded = wrapTruckingListQueryWithStoExpansion(innerSql, {
-    selectOutstanding: false,
+    selectOutstanding: true,
     skipSapJoin: built.skipSapJoin,
   });
   const text = `
@@ -1052,7 +1054,7 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
     String((req.query as { includeSummary?: string }).includeSummary ?? 'true').toLowerCase() !== 'false';
 
   const summaryBuilt = buildTruckingListQuery(req, {
-    skipSapJoin: true,
+    skipSapJoin: false,
     omitStatusFilter: true,
   });
 

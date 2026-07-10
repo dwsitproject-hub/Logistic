@@ -77,6 +77,16 @@ import {
 } from '@/lib/shippingPerformancePorts'
 import { cn } from '@/lib/utils'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
+import {
+  mergeShippingPerfColumnOrder,
+  mergeShippingPerfVisibleColumns,
+  parseShippingPerfColumnPrefsFromApiValue,
+  readShippingPerfColumnPrefsFromStorage,
+  SHIPPING_PERF_COLUMN_PREFS_USER_KEY,
+  writeShippingPerfColumnPrefsToStorage,
+  type ShippingPerfColumnPrefs,
+  type ShippingPerfColumnPrefsByMode,
+} from '@/lib/shippingPerformanceColumnPrefs'
 import { resolveShipmentApiLookupKey } from '@/lib/shipmentStoDisplay'
 
 interface ShippingPerformanceRow {
@@ -943,6 +953,56 @@ function applyAllShipmentsColumnDefaults(): {
   }
 }
 
+function defaultVisibleForKey(key: string, tableViewMode: TableViewMode): boolean {
+  const col = COLUMN_MAP[key]
+  if (!col) return false
+  return columnDefaultVisible(col, tableViewMode)
+}
+
+function normalizeColumnPrefsForMode(
+  order: readonly ShippingPerfColumnKey[],
+  visible: Record<string, boolean>,
+  tableViewMode: TableViewMode,
+): ShippingPerfColumnPrefs {
+  const allKeys = COLUMN_DEFS.map((col) => String(col.key))
+  return {
+    columnOrder: mergeShippingPerfColumnOrder(order, allKeys, (merged) =>
+      ensureTableColumnOrder(merged as ShippingPerfColumnKey[], tableViewMode),
+    ),
+    visibleColumns: mergeShippingPerfVisibleColumns(visible, allKeys, (key) =>
+      defaultVisibleForKey(key, tableViewMode),
+    ),
+  }
+}
+
+function buildColumnPrefsForMode(
+  mode: TableViewMode,
+  saved: Partial<ShippingPerfColumnPrefs> | undefined,
+): ShippingPerfColumnPrefs {
+  const allDefaults = applyAllShipmentsColumnDefaults()
+  const baseOrder =
+    saved?.columnOrder && saved.columnOrder.length > 0 ? saved.columnOrder : allDefaults.order
+  const baseVisible =
+    saved?.visibleColumns && Object.keys(saved.visibleColumns).length > 0
+      ? saved.visibleColumns
+      : mode === 'by_vessel'
+        ? applyByVesselColumnDefaults(allDefaults.visible)
+        : allDefaults.visible
+  return normalizeColumnPrefsForMode(
+    baseOrder as ShippingPerfColumnKey[],
+    baseVisible,
+    mode,
+  )
+}
+
+function buildInitialColumnPrefsByMode(): ShippingPerfColumnPrefsByMode {
+  const stored = readShippingPerfColumnPrefsFromStorage()
+  return {
+    all: buildColumnPrefsForMode('all', stored?.all),
+    by_vessel: buildColumnPrefsForMode('by_vessel', stored?.by_vessel),
+  }
+}
+
 const COLUMN_MAP = Object.fromEntries(COLUMN_DEFS.map((col) => [col.key, col])) as Record<string, ColumnDef>
 
 function isColumnEligibleForView(key: string, tableViewMode: TableViewMode): boolean {
@@ -1144,11 +1204,13 @@ function ShippingPerformancePageContent() {
     }
   }, [canViewPage, router])
   const [showColumnManager, setShowColumnManager] = useState(false)
+  const columnPrefsRef = useRef(buildInitialColumnPrefsByMode())
+  const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [columnOrder, setColumnOrder] = useState<ShippingPerfColumnKey[]>(
-    () => applyAllShipmentsColumnDefaults().order,
+    () => columnPrefsRef.current.all.columnOrder as ShippingPerfColumnKey[],
   )
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(
-    () => applyAllShipmentsColumnDefaults().visible,
+    () => ({ ...columnPrefsRef.current.all.visibleColumns }),
   )
   const [dragColId, setDragColId] = useState<string | null>(null)
   const [draggingColumn, setDraggingColumn] = useState<string | null>(null)
@@ -1456,30 +1518,88 @@ function ShippingPerformancePageContent() {
     setCurrentPage(1)
   }, [perfCardFilter, globalFilterEffectKey])
 
+  const switchTableViewMode = useCallback(
+    (nextMode: TableViewMode) => {
+      if (tableViewMode === nextMode) {
+        setCurrentPage(1)
+        return
+      }
+      columnPrefsRef.current[tableViewMode] = normalizeColumnPrefsForMode(
+        columnOrder,
+        visibleColumns,
+        tableViewMode,
+      )
+      writeShippingPerfColumnPrefsToStorage(columnPrefsRef.current)
+      const nextPrefs = columnPrefsRef.current[nextMode]
+      setTableViewMode(nextMode)
+      setColumnOrder(nextPrefs.columnOrder as ShippingPerfColumnKey[])
+      setVisibleColumns({ ...nextPrefs.visibleColumns })
+      setCurrentPage(1)
+    },
+    [columnOrder, visibleColumns, tableViewMode],
+  )
+
   useEffect(() => {
-    const allKeys = COLUMN_DEFS.map((col) => col.key)
-    if (tableViewMode === 'by_vessel') {
-      setColumnOrder((prev) => {
-        const deduped = prev.filter((key) => allKeys.includes(key))
-        const missing = allKeys.filter((key) => !deduped.includes(key))
-        const next = ensureByVesselTableColumnOrder([...deduped, ...missing])
-        if (prev.length === next.length && prev.every((key, index) => key === next[index])) return prev
-        return next
-      })
-      setVisibleColumns((prev) => applyByVesselColumnDefaults(prev))
-      return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await api.get(
+          `/user-preferences/me?key=${encodeURIComponent(SHIPPING_PERF_COLUMN_PREFS_USER_KEY)}`,
+        )
+        const parsed = parseShippingPerfColumnPrefsFromApiValue(res.data?.data?.value)
+        if (cancelled || !parsed) return
+        const next: ShippingPerfColumnPrefsByMode = {
+          all: buildColumnPrefsForMode('all', parsed.all ?? columnPrefsRef.current.all),
+          by_vessel: buildColumnPrefsForMode(
+            'by_vessel',
+            parsed.by_vessel ?? columnPrefsRef.current.by_vessel,
+          ),
+        }
+        columnPrefsRef.current = next
+        writeShippingPerfColumnPrefsToStorage(next)
+        setTableViewMode((activeMode) => {
+          const active = next[activeMode]
+          setColumnOrder(active.columnOrder as ShippingPerfColumnKey[])
+          setVisibleColumns({ ...active.visibleColumns })
+          return activeMode
+        })
+      } catch {
+        // keep localStorage bootstrap
+      }
+    })()
+    return () => {
+      cancelled = true
     }
-    const { order, visible } = applyAllShipmentsColumnDefaults()
-    setColumnOrder(order)
-    setVisibleColumns(visible)
-  }, [tableViewMode, perfCardFilter])
+  }, [])
+
+  useEffect(() => {
+    columnPrefsRef.current[tableViewMode] = normalizeColumnPrefsForMode(
+      columnOrder,
+      visibleColumns,
+      tableViewMode,
+    )
+    writeShippingPerfColumnPrefsToStorage(columnPrefsRef.current)
+
+    if (typeof window === 'undefined') return
+    if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
+    saveViewTimerRef.current = setTimeout(() => {
+      void api
+        .post('/user-preferences/me', {
+          key: SHIPPING_PERF_COLUMN_PREFS_USER_KEY,
+          value: columnPrefsRef.current,
+        })
+        .catch(() => {
+          /* localStorage fallback */
+        })
+    }, 500)
+    return () => {
+      if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
+    }
+  }, [columnOrder, visibleColumns, tableViewMode])
 
   const activateByVesselTableView = useCallback(() => {
-    setTableViewMode('by_vessel')
-    setColumnOrder((prev) => ensureTableColumnOrder(prev, 'by_vessel'))
-    setVisibleColumns((prev) => applyByVesselColumnDefaults(prev))
-    setCurrentPage(1)
-  }, [])
+    switchTableViewMode('by_vessel')
+  }, [switchTableViewMode])
 
   useEffect(() => {
     const onDocClick = (ev: MouseEvent) => {
@@ -2241,7 +2361,7 @@ function ShippingPerformancePageContent() {
               <div className="inline-flex rounded-lg border bg-white p-1">
                 <button
                   type="button"
-                  onClick={() => { setTableViewMode('all'); setCurrentPage(1) }}
+                  onClick={() => switchTableViewMode('all')}
                   className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tableViewMode === 'all' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
                 >
                   All Shipment

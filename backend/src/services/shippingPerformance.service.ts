@@ -11,8 +11,8 @@ import {
   SHIPPING_PERF_STO_GROUP_KEY_EXPR,
 } from '../utils/shippingPerformanceStoMetricsSql';
 import {
-  shippingPerfOperationalStoKeyExpr,
   shippingPerfStoGroupKeyFromRow,
+  shippingPerfStoMetricsKeyExpr,
 } from '../utils/shippingPerformanceStoSql';
 import {
   sqlSapVesselNameFromSpdJsonb,
@@ -70,17 +70,7 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const ROW_CACHE_KEY = 'shipping-performance-rows-v26';
-
-// Background warming keeps the (expensive) row cache populated so page loads are
-// served from memory instead of paying the full SQL cost. This does not change what
-// the query returns — it only pre-runs the identical query off the request path.
-const KEEP_WARM_CHECK_MS = 60 * 1000; // how often the warmer wakes up
-const KEEP_WARM_REFRESH_AFTER_MS = 4 * 60 * 1000; // renew cache once it is this old (< TTL)
-const KEEP_WARM_MAX_IDLE_MS = 15 * 60 * 1000; // stop warming when nobody is using the page
-let lastAccessedAt = 0;
-let refreshInFlight: Promise<Record<string, unknown>[]> | null = null;
-let keepWarmTimer: NodeJS.Timeout | null = null;
+const ROW_CACHE_KEY = 'shipping-performance-rows-v28';
 
 // Background warming keeps the (expensive) row cache populated so page loads are
 // served from memory instead of paying the full SQL cost. This does not change what
@@ -212,7 +202,7 @@ const SHIPPING_PERFORMANCE_SQL = `
         SELECT
           s.id AS shipment_pk,
           c.contract_id,
-          ${shippingPerfOperationalStoKeyExpr('c', 's')} AS sto_key
+          ${shippingPerfStoMetricsKeyExpr('c', 's')} AS sto_key
         FROM shipments s
         INNER JOIN contracts c ON s.contract_id = c.id
         WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')

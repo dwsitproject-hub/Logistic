@@ -1,3 +1,9 @@
+import { sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
+import { isContractDeliveryClosed, sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+
+/** OS Qty within this band (kg) counts as fulfilled for trucking COMPLETED status. */
+export const TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG = 1;
+
 /**
  * SAP trucking quantity fields are often exported in MT while contracts.quantity_ordered is kg.
  * When the SAP value is clearly MT-scale, normalize to kg for API consumers and UI MT formatting.
@@ -107,4 +113,80 @@ export function sqlTruckingOutstandingQtyByIncoterm(
       ELSE NULL
     END
   )`;
+}
+
+export function isTruckingOutstandingWithinToleranceKg(
+  outstandingKg: number | null | undefined,
+  toleranceKg = TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
+): boolean {
+  if (outstandingKg === null || outstandingKg === undefined || !Number.isFinite(outstandingKg)) {
+    return false;
+  }
+  return Math.abs(outstandingKg) <= toleranceKg;
+}
+
+/**
+ * COMPLETED when GR PO/STO Close (incoterm), OR GR Open and |OS Qty| within tolerance (kg).
+ */
+export function isTruckingPipelineCompleted(
+  contractImportStatus: unknown,
+  outstandingQtyKg: number | null | undefined,
+): boolean {
+  return (
+    isContractDeliveryClosed(contractImportStatus) ||
+    isTruckingOutstandingWithinToleranceKg(outstandingQtyKg)
+  );
+}
+
+/** @deprecated Use isTruckingPipelineCompleted */
+export const isTruckingCompletedByGrAndOs = isTruckingPipelineCompleted;
+
+/** True when |outstanding qty| is within tolerance (kg); NULL outstanding does not qualify. */
+export function sqlTruckingOutstandingWithinToleranceExpr(
+  outstandingExpr: string,
+  toleranceKg = TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
+): string {
+  return `(
+    ${outstandingExpr} IS NOT NULL
+    AND ABS((${outstandingExpr})::numeric) <= ${toleranceKg}
+  )`;
+}
+
+/** Pipeline COMPLETED: GR PO/STO Close (incoterm) OR GR Open with OS Qty within tolerance. */
+export function sqlTruckingPipelineIsCompletedExpr(
+  contractAlias = 'c',
+  outstandingQtyExpr?: string,
+): string {
+  const outstanding =
+    outstandingQtyExpr ?? sqlTruckingListBaseOutstandingQtyExpr(contractAlias);
+  return `(
+    ${sqlIsContractSapClosedExpr(contractAlias)}
+    OR ${sqlTruckingOutstandingWithinToleranceExpr(outstanding)}
+  )`;
+}
+
+/** Trucking list (non-STO-expand) OS Qty — WB sync updates t.quantity_delivered before SAP fallback. */
+export function sqlTruckingListBaseOutstandingQtyExpr(contractAlias = 'c'): string {
+  return sqlTruckingOutstandingQtyByIncoterm(
+    sqlTruckingQuantityDeliveredCoalesce(),
+    sqlTruckingQuantityReceiveCoalesce(),
+    `COALESCE(${contractAlias}.quantity_ordered, 0)`,
+    `${contractAlias}.incoterm`,
+  );
+}
+
+/** Per-STO SAP qty (kg) for STO-expanded trucking rows; falls back to full contract qty. */
+export function sqlTruckingExpandedStoLineQtyKgExpr(
+  contractNumberExpr = 'e.contract_number',
+  poNumberExpr = 'e.po_number',
+  contractQtyExpr = 'e.contract_qty',
+  stoKeyExpr = 'e.sto_line_resolved',
+): string {
+  const stoQty = sqlPoStoSapQtyKg({
+    contractNumberExpr,
+    poNumberExpr,
+    contractQtyExpr,
+    stoKeyExpr,
+  });
+  return `COALESCE(NULLIF((${stoQty}), 0), ${contractQtyExpr})`;
 }

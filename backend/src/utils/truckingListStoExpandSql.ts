@@ -3,6 +3,7 @@ import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
 import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql';
 import { TRUCKING_REALIZATIONS_JOIN } from './truckingRealizationSql';
 import {
+  sqlTruckingExpandedStoLineQtyKgExpr,
   sqlTruckingOutstandingQtyByIncoterm,
   sqlTruckingPreferWbResolvedQty,
 } from './truckingQuantitySql';
@@ -67,12 +68,14 @@ function buildQuantitySelects(skipSapJoin: boolean): {
   qtyDelivered: string;
   qtyReceive: string;
   outstanding: string;
+  stoLineQty: string;
 } {
   if (skipSapJoin) {
     return {
       qtyDelivered: 'e.quantity_delivered',
       qtyReceive: 'e.quantity_receive',
       outstanding: 'e.outstanding_quantity',
+      stoLineQty: 'e.contract_qty',
     };
   }
 
@@ -111,10 +114,11 @@ function buildQuantitySelects(skipSapJoin: boolean): {
     qtyDeliveredPerStoSap,
   );
   const qtyReceive = sqlTruckingPreferWbResolvedQty('e.quantity_receive', qtyReceivePerStoSap);
+  const stoLineQty = sqlTruckingExpandedStoLineQtyKgExpr();
   const outstanding = sqlTruckingOutstandingQtyByIncoterm(
     qtyDelivered,
     qtyReceive,
-    'e.contract_qty',
+    stoLineQty,
     'e.incoterm',
   );
 
@@ -122,6 +126,7 @@ function buildQuantitySelects(skipSapJoin: boolean): {
     qtyDelivered,
     qtyReceive,
     outstanding,
+    stoLineQty,
   };
 }
 
@@ -262,6 +267,7 @@ export function buildTruckingListExpansionSql(
         ${sqlTruckingPagePipelineStageExpr(
           'c',
           `NULLIF(TRIM(e.sto_line_resolved::text), '')`,
+          qty.outstanding,
         )} AS status,
         e.created_at,
         e.updated_at,
@@ -269,7 +275,7 @@ export function buildTruckingListExpansionSql(
         e.po_number,
         e.sto_line_resolved AS sto_number,
         e.sto_numbers,
-        e.contract_qty AS sto_quantity,
+        ${qty.stoLineQty} AS sto_quantity,
         e.contract_qty,
         e.contract_date,
         e.delivery_start_date,

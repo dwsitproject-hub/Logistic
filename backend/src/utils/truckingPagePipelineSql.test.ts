@@ -21,10 +21,11 @@ describe('truckingPagePipelineSql', () => {
     expect(sql).not.toContain('t.trucking_completion_date');
   });
 
-  it('uses SAP receive dates for completion before UNPLANNED', () => {
+  it('completes from GR Close or OS tolerance', () => {
     const sql = sqlTruckingPagePipelineStageExpr('c', 'sto.sto');
-    expect(sql).toContain('Trucking Last Receive Date');
+    expect(sql).not.toContain('Trucking Last Receive Date');
     expect(sql).toContain("'COMPLETED'");
+    expect(sql).toContain(' OR ');
     expect(sql).toMatch(/WHEN.*COMPLETED.*WHEN.*UNPLANNED/s);
   });
 
@@ -37,11 +38,11 @@ describe('truckingPagePipelineSql', () => {
     expect(sql).toContain("'CANCELLED'");
   });
 
-  it('does not classify closed contracts as UNPLANNED in the fallback branch', () => {
+  it('does not classify non-completed closed rows as UNPLANNED in the fallback branch', () => {
     const sql = sqlTruckingPagePipelineStageExpr('c', 'sto.sto');
-    expect(sql).not.toMatch(/ELSE 'UNPLANNED'/);
-    expect(sql).not.toMatch(/ELSE CASE[\s\S]*'UNPLANNED'/);
-    expect(sql).toContain("ELSE 'COMPLETED'");
+    expect(sql).not.toMatch(/ELSE 'COMPLETED'/);
+    expect(sql).toContain("ELSE CASE");
+    expect(sql).toContain("'IN_PROGRESS'");
   });
 
   it('requires open SAP contract/PO for Unplanned predicate (STO not required)', () => {

@@ -3,7 +3,10 @@
  */
 
 import { sqlUserStoQtyAssignedToKgSql } from './userStoAssignmentQty';
-import { SHIPPING_PERF_STO_GROUP_KEY_EXPR } from './shippingPerformanceStoSql';
+import {
+  SHIPPING_PERF_STO_GROUP_KEY_EXPR,
+  shippingPerfStoMetricsKeyExpr,
+} from './shippingPerformanceStoSql';
 import {
   sqlShipmentListOutstandingKgExpr,
 } from './shipmentListQtySql';
@@ -81,7 +84,7 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
       ),
       all_sto_contract_links AS (
-        SELECT DISTINCT
+        SELECT DISTINCT ON (sto_key, contract_id)
           sto_key,
           contract_uuid,
           contract_id,
@@ -132,10 +135,7 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           UNION ALL
 
           SELECT
-            TRIM(COALESCE(
-              NULLIF(TRIM(sh.shipment_id), ''),
-              NULLIF(TRIM(sh.operation_id), '')
-            )) AS sto_key,
+            ${shippingPerfStoMetricsKeyExpr('cc', 'sh')} AS sto_key,
             cc.id,
             cc.contract_id,
             cc.po_number,
@@ -145,12 +145,10 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           FROM shipments sh
           INNER JOIN contracts cc ON cc.id = sh.contract_id
           WHERE COALESCE(sh.status, '') <> 'CANCELLED'
-            AND TRIM(COALESCE(
-              NULLIF(TRIM(sh.shipment_id), ''),
-              NULLIF(TRIM(sh.operation_id), '')
-            )) != ''
+            AND ${shippingPerfStoMetricsKeyExpr('cc', 'sh')} IS NOT NULL
         ) raw_links
         WHERE sto_key IS NOT NULL AND TRIM(sto_key) != ''
+        ORDER BY sto_key, contract_id, contract_uuid
       ),
       latest_spd_by_sto_contract AS (
         SELECT DISTINCT ON (${stoExpr}, spd.contract_number)

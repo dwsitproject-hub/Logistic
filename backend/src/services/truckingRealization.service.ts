@@ -328,15 +328,14 @@ export async function upsertTruckingDailyActualRows(
   });
 }
 
-/** Derive DB status column from realization dates only (not planning). */
+/** Derive DB status column from realization dates only (not planning). Last receive alone does not complete. */
 export function deriveDbStatusFromRealization(
   currentStatus: unknown,
   realizationStart: unknown,
-  realizationEnd: unknown,
+  _realizationEnd: unknown,
 ): string {
   const status = String(currentStatus ?? '').trim().toUpperCase();
   if (status === 'CANCELLED') return 'CANCELLED';
-  if (realizationEnd != null && String(realizationEnd).trim() !== '') return 'COMPLETED';
   if (realizationStart != null && String(realizationStart).trim() !== '') return 'IN_PROGRESS';
   return status || 'PLANNED';
 }

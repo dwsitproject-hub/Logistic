@@ -5,7 +5,10 @@
 
 import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
 import { sqlHasTruckingKlipPlanning } from './truckingEffectiveStatus';
-import { sqlRealizationEndDate, sqlRealizationStartDate } from './truckingRealizationSql';
+import { sqlRealizationStartDate } from './truckingRealizationSql';
+import {
+  sqlTruckingPipelineIsCompletedExpr,
+} from './truckingQuantitySql';
 
 export const TRUCKING_PAGE_PIPELINE_STAGES = [
   'UNPLANNED',
@@ -53,19 +56,23 @@ export function sqlTruckingPageUnplannedPredicate(
   contractAlias = 'c',
   _stoExpr?: string,
   truckingAlias = 't',
+  outstandingQtyExpr?: string,
 ): string {
   const contractOpen = `NOT (${sqlIsContractSapClosedExpr(contractAlias)})`;
-  const realizationEnd = sqlRealizationEndDate(contractAlias);
-  const notCompleted = `(
-    ${realizationEnd} IS NULL
-    AND NOT (${sqlIsContractSapClosedExpr(contractAlias)})
-    AND UPPER(COALESCE(${truckingAlias}.status, '')) NOT IN ('COMPLETED', 'CLOSE', 'CLOSED')
-  )`;
+  const notCompleted = `NOT (${sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr)})`;
   return `(
     ${contractOpen}
     AND NOT (${sqlTruckingPageHasEtaOrPlanning(truckingAlias)})
     AND ${notCompleted}
   )`;
+}
+
+/** COMPLETED = GR PO/STO Close (incoterm) OR GR Open with OS Qty within tolerance. */
+export function sqlTruckingPageIsCompletedExpr(
+  contractAlias = 'c',
+  outstandingQtyExpr?: string,
+): string {
+  return sqlTruckingPipelineIsCompletedExpr(contractAlias, outstandingQtyExpr);
 }
 
 /**
@@ -74,31 +81,30 @@ export function sqlTruckingPageUnplannedPredicate(
 export function sqlTruckingPagePipelineStageExpr(
   contractAlias = 'c',
   stoExpr?: string,
+  outstandingQtyExpr?: string,
 ): string {
   const stoCheck = stoExpr ?? `NULLIF(TRIM(${contractAlias}.sto_number::text), '')`;
   const realizationStart = sqlRealizationStartDate(contractAlias);
-  const realizationEnd = sqlRealizationEndDate(contractAlias);
-  const notCompleted = `(
-    ${realizationEnd} IS NULL
-    AND NOT (${sqlIsContractSapClosedExpr(contractAlias)})
-    AND UPPER(COALESCE(t.status, '')) NOT IN ('COMPLETED', 'CLOSE', 'CLOSED')
-  )`;
+  const isCompleted = sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr);
+  const notCompleted = `NOT (${isCompleted})`;
   const contractOpen = `NOT (${sqlIsContractSapClosedExpr(contractAlias)})`;
   return `CASE
     WHEN COALESCE(t.status, '') = 'CANCELLED' THEN 'CANCELLED'
-    WHEN ${realizationEnd} IS NOT NULL THEN 'COMPLETED'
-    WHEN ${sqlIsContractSapClosedExpr(contractAlias)} THEN 'COMPLETED'
-    WHEN UPPER(COALESCE(t.status, '')) IN ('COMPLETED', 'CLOSE', 'CLOSED') THEN 'COMPLETED'
+    WHEN ${isCompleted} THEN 'COMPLETED'
     WHEN ${sqlHasTruckingKlipPlanning('t')}
       AND ${realizationStart} IS NOT NULL
-      AND ${realizationEnd} IS NULL
+      AND ${notCompleted}
       THEN 'IN_PROGRESS'
     WHEN ${contractOpen}
       AND ${sqlTruckingPageHasEtaOrPlanning('t')}
       AND ${notCompleted}
       THEN 'PLANNED'
-    WHEN ${sqlTruckingPageUnplannedPredicate(contractAlias, stoCheck)} THEN 'UNPLANNED'
-    ELSE 'COMPLETED'
+    WHEN ${sqlTruckingPageUnplannedPredicate(contractAlias, stoCheck, 't', outstandingQtyExpr)} THEN 'UNPLANNED'
+    ELSE CASE
+      WHEN ${realizationStart} IS NOT NULL THEN 'IN_PROGRESS'
+      WHEN ${sqlTruckingPageHasEtaOrPlanning('t')} THEN 'PLANNED'
+      ELSE 'UNPLANNED'
+    END
   END`;
 }
 
@@ -113,7 +119,7 @@ export function appendTruckingPipelineStageFilter(
     return { sql: '', params: [], nextIndex: startIndex };
   }
   return {
-    sql: ` AND ${sqlTruckingPagePipelineStageExpr('c', stoExpr)} = $${startIndex}`,
+    sql: ` AND ${sqlTruckingPagePipelineStageExpr('c', stoExpr, undefined)} = $${startIndex}`,
     params: [normalized],
     nextIndex: startIndex + 1,
   };

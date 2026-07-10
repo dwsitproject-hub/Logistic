@@ -21,15 +21,15 @@ const NULL_CONTRACT_DATE = `DATE '1970-01-01'`;
 function buildTruckingExecutionSourceSql(): string {
   const innerSql = `
       SELECT
-        ${buildTruckingListSelectClause(true)}
-      ${buildTruckingListFromClause(true)}
+        ${buildTruckingListSelectClause(false)}
+      ${buildTruckingListFromClause(false)}
       WHERE 1=1
-        ${truckingListB2bExcludeSql(true)}
+        ${truckingListB2bExcludeSql(false)}
         ${truckingPageListScopeWhereSql}
     `;
   return wrapTruckingListQueryWithStoExpansion(innerSql, {
-    selectOutstanding: false,
-    skipSapJoin: true,
+    selectOutstanding: true,
+    skipSapJoin: false,
   });
 }
 

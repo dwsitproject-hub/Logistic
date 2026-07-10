@@ -17,6 +17,9 @@ import logger from '../utils/logger';
 
 export type PipelineSummaryModule = 'trucking' | 'shipment';
 
+/** Bump when trucking pipeline status SQL changes — forces daily summary refresh. */
+export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 4;
+
 export interface PipelineDailySummaryScope {
   dateFrom?: string;
   dateTo?: string;
@@ -165,19 +168,28 @@ function buildDailySummaryWhere(scope: PipelineDailySummaryScope): {
 async function getRefreshMeta(module: PipelineSummaryModule): Promise<{
   refreshed_at: Date;
   is_stale: boolean;
+  logic_version: number;
 } | null> {
   const res = await query(
-    `SELECT refreshed_at, is_stale FROM pipeline_summary_refresh_meta WHERE module = $1`,
+    `SELECT refreshed_at, is_stale, COALESCE(logic_version, 1)::int AS logic_version
+     FROM pipeline_summary_refresh_meta WHERE module = $1`,
     [module],
   );
   if (res.rows.length === 0) return null;
-  const row = res.rows[0] as { refreshed_at: Date; is_stale: boolean };
+  const row = res.rows[0] as { refreshed_at: Date; is_stale: boolean; logic_version: number };
   return row;
 }
 
 export async function isPipelineDailySummaryFresh(module: PipelineSummaryModule): Promise<boolean> {
   const meta = await getRefreshMeta(module);
-  return Boolean(meta && !meta.is_stale);
+  if (!meta || meta.is_stale) return false;
+  if (
+    module === 'trucking' &&
+    meta.logic_version < TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export async function markPipelineDailySummaryStale(
@@ -206,15 +218,18 @@ async function upsertRefreshMeta(
   rowCount: number,
   durationMs: number,
 ): Promise<void> {
+  const logicVersion =
+    module === 'trucking' ? TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION : 1;
   await query(
-    `INSERT INTO pipeline_summary_refresh_meta (module, refreshed_at, is_stale, row_count, duration_ms)
-     VALUES ($1, NOW(), FALSE, $2, $3)
+    `INSERT INTO pipeline_summary_refresh_meta (module, refreshed_at, is_stale, row_count, duration_ms, logic_version)
+     VALUES ($1, NOW(), FALSE, $2, $3, $4)
      ON CONFLICT (module) DO UPDATE SET
        refreshed_at = EXCLUDED.refreshed_at,
        is_stale = FALSE,
        row_count = EXCLUDED.row_count,
-       duration_ms = EXCLUDED.duration_ms`,
-    [module, rowCount, durationMs],
+       duration_ms = EXCLUDED.duration_ms,
+       logic_version = EXCLUDED.logic_version`,
+    [module, rowCount, durationMs, logicVersion],
   );
 }
 
