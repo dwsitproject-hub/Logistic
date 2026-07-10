@@ -10,7 +10,7 @@ import {
   buildShipmentListFilterCacheKey,
   buildShipmentSummaryCacheKey,
   invalidateShipmentsListCache,
-  loadShipmentListSummary,
+  loadShipmentSummaryBundle,
   normalizeShipmentListRows,
   resolveShipmentsListForRequest,
 } from '../services/shipmentList.service';
@@ -1010,25 +1010,23 @@ ${contractMetaSelectCore}
         scopeStatusParam,
       );
       const tSum0 = performance.now();
-      const [loaded, unplannedBd] = await Promise.all([
-        loadShipmentListSummary(
-          summaryCountQuery,
-          [...section1SummaryFilterParams, ...summaryScopeParams],
-          summaryCacheKey,
-        ),
-        loadSection1UnplannedBreakdown(),
-      ]);
-      const sr = loaded.summaryRow;
-      const tc = loaded.totalCount;
-      const unplannedBreakdownForSummary = unplannedBd;
+      const summaryBundle = await loadShipmentSummaryBundle(req, {
+        summaryCountQuery,
+        params: [...section1SummaryFilterParams, ...summaryScopeParams],
+        cacheKey: summaryCacheKey,
+        loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+      });
+      const { summaryRow: sr, totalCount: tc, unplannedBreakdown: unplannedBreakdownForSummary, source: summarySource } =
+        summaryBundle;
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
-        path: 'summaryOnly-compact-sql',
+        path: summarySource === 'daily' ? 'summaryOnly-compact-daily' : 'summaryOnly-compact-sql',
         compact,
         page: Number(page),
         limit: Number(limit),
         summaryCacheKey,
+        summarySource,
       });
       return res.json({
         success: true,
@@ -1097,12 +1095,17 @@ ${contractMetaSelectCore}
             shipmentListFilterCacheKey,
             scopeStatusParam,
           );
-          const { summaryRow: sr, totalCount: tc } = await loadShipmentListSummary(
+          const summaryBundle = await loadShipmentSummaryBundle(req, {
             summaryCountQuery,
-            [...section1SummaryFilterParams, ...summaryScopeParams],
-            summaryCacheKey,
+            params: [...section1SummaryFilterParams, ...summaryScopeParams],
+            cacheKey: summaryCacheKey,
+            loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+          });
+          hybridSummary = shipmentListSummaryPayload(
+            summaryBundle.totalCount,
+            summaryBundle.summaryRow,
+            hybrid.unplannedBreakdown,
           );
-          hybridSummary = shipmentListSummaryPayload(tc, sr, hybrid.unplannedBreakdown);
         }
         timingsMs.total = performance.now() - tReq0;
         emitShipmentListTimings(res, timingsMs, {
@@ -1132,21 +1135,13 @@ ${contractMetaSelectCore}
           shipmentListFilterCacheKey,
           scopeStatusParam,
         );
-        const loadSummaryBundle = async () => {
-          const [loaded, unplannedBd] = await Promise.all([
-            loadShipmentListSummary(
-              summaryCountQuery,
-              [...section1SummaryFilterParams, ...summaryScopeParams],
-              summaryCacheKey,
-            ),
-            loadSection1UnplannedBreakdown(),
-          ]);
-          return {
-            summaryRow: loaded.summaryRow,
-            totalCount: loaded.totalCount,
-            unplannedBreakdownForSummary: unplannedBd,
-          };
-        };
+        const loadSummaryBundle = () =>
+          loadShipmentSummaryBundle(req, {
+            summaryCountQuery,
+            params: [...section1SummaryFilterParams, ...summaryScopeParams],
+            cacheKey: summaryCacheKey,
+            loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+          });
 
         const [data, summaryBundle] = await Promise.all([
           resolveShipmentsListForRequest(req, {
@@ -1162,10 +1157,22 @@ ${contractMetaSelectCore}
           }),
           loadSummaryBundle(),
         ]);
-        const { summaryRow: sr, totalCount: tc, unplannedBreakdownForSummary } = summaryBundle;
+        const {
+          summaryRow: sr,
+          totalCount: tc,
+          unplannedBreakdown: unplannedBreakdownForSummary,
+          source: summarySource,
+        } = summaryBundle;
         timingsMs.total = performance.now() - tReq0;
         emitShipmentListTimings(res, timingsMs, {
-          path: skipSapJoin ? 'list-page-shell-with-summary' : 'list-page-sap-with-summary',
+          path:
+            summarySource === 'daily'
+              ? skipSapJoin
+                ? 'list-page-shell-with-summary-daily'
+                : 'list-page-sap-with-summary-daily'
+              : skipSapJoin
+                ? 'list-page-shell-with-summary'
+                : 'list-page-sap-with-summary',
           compact,
           skipSapJoin,
           includeSummary,
@@ -1174,6 +1181,7 @@ ${contractMetaSelectCore}
           limit: Number(limit),
           rowCount: data.shipments.length,
           cacheKey,
+          summarySource,
         });
         return res.json({
           success: true,
@@ -1224,24 +1232,29 @@ ${contractMetaSelectCore}
         scopeStatusParam,
       );
       const tSum0 = performance.now();
-      const [{ summaryRow: sr, totalCount: tc }, unplannedBreakdownForSummary] = await Promise.all([
-        loadShipmentListSummary(
-          summaryCountQuery,
-          [...section1SummaryFilterParams, ...summaryScopeParams],
-          summaryCacheKey,
-        ),
-        loadSection1UnplannedBreakdown(),
-      ]);
+      const summaryBundle = await loadShipmentSummaryBundle(req, {
+        summaryCountQuery,
+        params: [...section1SummaryFilterParams, ...summaryScopeParams],
+        cacheKey: summaryCacheKey,
+        loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+      });
+      const {
+        summaryRow: sr,
+        totalCount: tc,
+        unplannedBreakdown: unplannedBreakdownForSummary,
+        source: summarySource,
+      } = summaryBundle;
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
-        path: 'summaryOnly',
+        path: summarySource === 'daily' ? 'summaryOnly-daily' : 'summaryOnly',
         compact,
         skipSapJoin,
         effectiveListStoPaging,
         page: Number(page),
         limit: Number(limit),
         summaryCacheKey,
+        summarySource,
       });
       return res.json({
         success: true,
@@ -1358,20 +1371,28 @@ ${contractMetaSelectCore}
 
     let summaryRow: Record<string, unknown> = {};
     let unplannedBreakdownForSummary: UnplannedHybridBreakdown | null = null;
+    let summarySource: string | undefined;
     if (includeSummary) {
       const tSa0 = performance.now();
-      const [summaryResult, unplannedBd] = await Promise.all([
-        query(summaryCountQuery, [...section1SummaryFilterParams, ...summaryScopeParams]),
-        loadSection1UnplannedBreakdown(),
-      ]);
-      summaryRow = summaryResult.rows[0] || {};
-      unplannedBreakdownForSummary = unplannedBd;
+      const summaryCacheKey = buildShipmentSummaryCacheKey(
+        shipmentListFilterCacheKey,
+        scopeStatusParam,
+      );
+      const summaryBundle = await loadShipmentSummaryBundle(req, {
+        summaryCountQuery,
+        params: [...section1SummaryFilterParams, ...summaryScopeParams],
+        cacheKey: summaryCacheKey,
+        loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+      });
+      summaryRow = summaryBundle.summaryRow;
+      unplannedBreakdownForSummary = summaryBundle.unplannedBreakdown;
+      summarySource = summaryBundle.source;
       timingsMs.dbSummaryAgg = performance.now() - tSa0;
     }
 
     timingsMs.total = performance.now() - tReq0;
     emitShipmentListTimings(res, timingsMs, {
-      path: 'list',
+      path: includeSummary && summarySource === 'daily' ? 'list-daily-summary' : 'list',
       compact,
       skipSapJoin,
       effectiveListStoPaging,
@@ -1379,6 +1400,7 @@ ${contractMetaSelectCore}
       page: Number(page),
       limit: Number(limit),
       rowCount: result.rows.length,
+      ...(summarySource ? { summarySource } : {}),
     });
 
     return res.json({

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildQtyMoveCte,
+  buildQtyMoveFromSnapshotCte,
+  buildContractQtyMoveSnapshotRefreshSql,
   sqlContractGlobalOutstandingExpr,
 } from './contractGlobalOutstandingSql';
 
@@ -51,5 +53,19 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('wb_resolved_qty_kg');
     expect(sql).toContain("IN ('FRC', 'LCO')");
     expect(sql).toContain("LIKE 'LAND%'");
+  });
+
+  it('buildQtyMoveFromSnapshotCte reads contract_qty_move_snapshot scoped to list', () => {
+    const sql = buildQtyMoveFromSnapshotCte('contract_scope');
+    expect(sql).toContain('contract_qty_move_snapshot');
+    expect(sql).toContain('INNER JOIN contract_scope');
+    expect(sql).toContain('quantity_delivery');
+  });
+
+  it('buildContractQtyMoveSnapshotRefreshSql reuses live qty_move builder', () => {
+    const sql = buildContractQtyMoveSnapshotRefreshSql();
+    expect(sql).toContain('INSERT INTO contract_qty_move_snapshot');
+    expect(sql).toContain('qty_move AS');
+    expect(sql).toContain('trucking_wb_overlay');
   });
 });

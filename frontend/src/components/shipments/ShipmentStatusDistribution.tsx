@@ -21,13 +21,7 @@ export interface ShipmentStatusDistributionProps {
   loadingPortBreakdown: LoadingPortBreakdown
   dischargePortBreakdown: DischargePortBreakdown
   onStageClick: (stage: ShipmentPagePipelineStage) => void
-  vesselIdleCount: number
-  vesselIdleLoading?: boolean
-  onVesselIdleClick: () => void
 }
-
-const VESSEL_IDLE_TOOLTIP =
-  'Master vessels with no SAP STO assignment, no planned ETA shipment, and no on-going shipment. Opens the idle vessel list — does not filter the table.'
 
 export function ShipmentStatusDistribution({
   loading,
@@ -36,9 +30,6 @@ export function ShipmentStatusDistribution({
   loadingPortBreakdown,
   dischargePortBreakdown,
   onStageClick,
-  vesselIdleCount,
-  vesselIdleLoading = false,
-  onVesselIdleClick,
 }: ShipmentStatusDistributionProps) {
   const renderPipelineCard = (card: (typeof SHIPMENT_PAGE_PIPELINE_CARDS)[number]) => {
     const isActive = statusFilter === card.status
@@ -91,22 +82,6 @@ export function ShipmentStatusDistribution({
     )
   }
 
-  const vesselIdleButton = (
-    <button
-      type="button"
-      title={VESSEL_IDLE_TOOLTIP}
-      onClick={onVesselIdleClick}
-      className="relative flex h-24 w-24 cursor-pointer items-center justify-center rounded-full border-2 border-white bg-amber-100 shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl md:h-28 md:w-28"
-    >
-      <div className="absolute -right-3 -top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-amber-600 text-xs font-bold text-white shadow-lg md:h-9 md:w-9 md:text-sm">
-        {vesselIdleLoading ? '…' : vesselIdleCount}
-      </div>
-      <span className="px-2 text-center text-xs font-semibold leading-tight text-amber-900 md:text-sm">
-        Vessel Idle
-      </span>
-    </button>
-  )
-
   return (
     <Card>
       <CardHeader>
@@ -120,47 +95,43 @@ export function ShipmentStatusDistribution({
           ) : null}
         </CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="px-0 pb-0 pt-0 sm:px-6 sm:pb-6 sm:pt-0">
         <div
-          className={`flex items-center justify-center gap-3 overflow-x-auto px-4 py-4 transition-opacity duration-200 md:gap-6 ${
-            loading ? 'opacity-65' : 'opacity-100'
-          }`}
+          className="overflow-x-auto overscroll-x-contain scroll-smooth [-webkit-overflow-scrolling:touch]"
+          aria-label="Shipment pipeline status — scroll horizontally on small screens"
         >
-          <div className="flex flex-shrink-0 items-center">
-            <Tooltip delayDuration={200}>
-              <TooltipTrigger asChild>{vesselIdleButton}</TooltipTrigger>
-              <TooltipContent side="bottom" className="max-w-xs whitespace-pre-wrap text-xs leading-relaxed">
-                {VESSEL_IDLE_TOOLTIP}
-              </TooltipContent>
-            </Tooltip>
+          <div
+            className={`mx-auto flex w-max min-w-full items-center gap-3 px-4 pb-4 pt-5 transition-opacity duration-200 md:gap-6 md:px-6 md:pb-6 md:pt-6 ${
+              loading ? 'opacity-65' : 'opacity-100'
+            }`}
+          >
+            {SHIPMENT_PAGE_PIPELINE_CARDS.map((card, index, array) => (
+              <div key={card.status} className="flex flex-shrink-0 items-center">
+                {renderPipelineCard(card)}
+                {index < array.length - 1 && (
+                  <div className="mx-2 flex-shrink-0 md:mx-3">
+                    <svg
+                      width="28"
+                      height="28"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="text-gray-400"
+                      aria-hidden
+                    >
+                      <path
+                        d="M9 18L15 12L9 6"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
-
-          {SHIPMENT_PAGE_PIPELINE_CARDS.map((card, index, array) => (
-            <div key={card.status} className="flex flex-shrink-0 items-center">
-              {renderPipelineCard(card)}
-              {index < array.length - 1 && (
-                <div className="mx-2 flex-shrink-0 md:mx-3">
-                  <svg
-                    width="28"
-                    height="28"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="text-gray-400"
-                    aria-hidden
-                  >
-                    <path
-                      d="M9 18L15 12L9 6"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </div>
-              )}
-            </div>
-          ))}
         </div>
       </CardContent>
     </Card>

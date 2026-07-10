@@ -8,7 +8,9 @@ import {
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
-import { CONTRACTS_QTY_MOVE_CTE } from '../controllers/contractsQtyMoveSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
+import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
+import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
 import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL } from '../controllers/contractSqlFragments';
 import { appendContractPerfProductSubstringSql } from '../utils/contractPerfProductFilterSql';
 import {
@@ -137,10 +139,10 @@ export function parseLatePerformanceFilters(
   };
 }
 
-export function buildLatePerformanceQuery(filters: LatePerformanceFilters): {
+export async function buildLatePerformanceQuery(filters: LatePerformanceFilters): Promise<{
   queryText: string;
   queryParams: any[];
-} {
+}> {
   const {
     scope,
     effectiveDateFrom,
@@ -173,6 +175,12 @@ export function buildLatePerformanceQuery(filters: LatePerformanceFilters): {
     paramIndex++;
   }
 
+  const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte] = await Promise.all([
+    resolveContractsQtyMoveCte('contract_scope'),
+    resolveContractsStoAggCte('contract_scope'),
+    resolveContractsLatestSpdCte('contract_scope'),
+  ]);
+
   let queryText = `
       WITH contract_scope AS (
         SELECT DISTINCT c.contract_id
@@ -180,36 +188,9 @@ export function buildLatePerformanceQuery(filters: LatePerformanceFilters): {
         WHERE 1=1
         ${contractScopeWhere}
       ),
-      latest_spd AS (
-        SELECT DISTINCT ON (spd.contract_number) spd.contract_number, spd.data, spd.created_at
-        FROM sap_processed_data spd
-        INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      ),
-      ${CONTRACTS_QTY_MOVE_CTE},
-      sto_agg AS (
-        SELECT x.contract_number,
-          SUM(x.sto_quantity_num) AS total_sto_quantity
-        FROM (
-          SELECT DISTINCT ON (spd.contract_number, effective_sto)
-            spd.contract_number,
-            effective_sto,
-            sto_quantity_num
-          FROM (
-            SELECT spd.contract_number,
-              NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') AS effective_sto,
-              CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', '0'), ',', ''), ' ', '') AS NUMERIC) AS sto_quantity_num,
-              spd.created_at
-            FROM sap_processed_data spd
-            INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
-            WHERE ((spd.sto_number IS NOT NULL AND spd.sto_number::text != '') OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') IS NOT NULL)
-              AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-          ) spd
-          WHERE effective_sto IS NOT NULL AND effective_sto != ''
-          ORDER BY contract_number, effective_sto, created_at DESC NULLS LAST
-        ) x
-        GROUP BY x.contract_number
-      ),
+      ${contractsLatestSpdCte},
+      ${contractsQtyMoveCte},
+      ${contractsStoAggCte},
       base AS (
         SELECT
           c.contract_id,
@@ -475,7 +456,7 @@ export async function loadLatePerformanceRows(filters: LatePerformanceFilters): 
     ROW_CACHE.delete(filters.cacheKey);
   }
 
-  const { queryText, queryParams } = buildLatePerformanceQuery(filters);
+  const { queryText, queryParams } = await buildLatePerformanceQuery(filters);
   const result = await query(queryText, queryParams);
   const rows = result.rows as any[];
   ROW_CACHE.set(filters.cacheKey, { rows, expiresAt: Date.now() + CACHE_TTL_MS });

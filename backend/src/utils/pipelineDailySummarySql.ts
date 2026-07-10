@@ -3,6 +3,10 @@
  */
 
 import { groupPlantExpr } from './groupPlantSql';
+import {
+  sqlPipelineIncotermKey,
+  sqlPipelineProductKey,
+} from './pipelineDailySummaryToolbarScope';
 import { truckingPageListScopeWhereSql } from './truckingIncotermScope';
 import {
   buildTruckingListFromClause,
@@ -37,6 +41,8 @@ export function buildTruckingExecutionDailySummaryInsertSql(): string {
     INSERT INTO trucking_pipeline_daily_summary (
       group_plant,
       contract_date,
+      product,
+      incoterm,
       total_count,
       unplanned_execution_count,
       planned_count,
@@ -51,6 +57,8 @@ export function buildTruckingExecutionDailySummaryInsertSql(): string {
       SELECT
         ${plant} AS group_plant,
         COALESCE(c.contract_date, src.contract_date, ${NULL_CONTRACT_DATE})::date AS contract_date,
+        ${sqlPipelineProductKey('c.product')} AS product,
+        ${sqlPipelineIncotermKey('c.incoterm')} AS incoterm,
         src.status,
         src.status_db
       FROM (${expanded}) src
@@ -59,6 +67,8 @@ export function buildTruckingExecutionDailySummaryInsertSql(): string {
     SELECT
       group_plant,
       contract_date,
+      product,
+      incoterm,
       COUNT(*)::bigint,
       COUNT(*) FILTER (WHERE status = 'UNPLANNED')::bigint,
       COUNT(*) FILTER (WHERE status = 'PLANNED')::bigint,
@@ -69,7 +79,7 @@ export function buildTruckingExecutionDailySummaryInsertSql(): string {
       COUNT(*) FILTER (WHERE status = 'COMPLETED')::bigint,
       COUNT(*) FILTER (WHERE status = 'CANCELLED')::bigint
     FROM execution_rows
-    GROUP BY group_plant, contract_date`;
+    GROUP BY group_plant, contract_date, product, incoterm`;
 }
 
 export function buildTruckingBacklogDailySummaryUpsertSql(): string {

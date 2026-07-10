@@ -1,5 +1,6 @@
 import { groupPlantExpr } from '../utils/groupPlantSql';
 import { sqlContractOutstandingSignedExpr } from '../utils/sapIncotermMetrics';
+import { buildContractsListOuterCycleFieldSelectSql } from '../utils/contractsListCycleSql';
 
 const CONTRACT_LIST_OUTSTANDING_SQL = sqlContractOutstandingSignedExpr({
   contractQtyExpr: 'base.quantity_ordered',
@@ -8,12 +9,7 @@ const CONTRACT_LIST_OUTSTANDING_SQL = sqlContractOutstandingSignedExpr({
   deliveryExpr: 'base.quantity_delivery_sap',
 });
 
-/**
- * Outer projection for GET /contracts list rows.
- * `base` must be the page slice (e.g. FROM page AS base) so payment/doc subqueries run only for returned rows.
- */
-export const CONTRACTS_LIST_OUTER_SQL = `
-      SELECT
+const CONTRACTS_LIST_ROW_PROJECTION = `
         base.contract_id,
         base.id,
         base.buyer,
@@ -82,6 +78,34 @@ export const CONTRACTS_LIST_OUTER_SQL = `
         base.last_eta_vessel_complete_discharge,
         NULLIF(TRIM(base.last_vessel_name), '') AS vessel_name,
         base.last_eta_vessel_completed_loading AS eta_vessel_completed_loading,
-        base.last_eta_vessel_complete_discharge AS eta_vessel_complete_discharge
+        base.last_eta_vessel_complete_discharge AS eta_vessel_complete_discharge,
+        base.open_standard_eta_trucking,
+        base.open_standard_eta_vessel_loading`;
+
+/**
+ * Outer projection for GET /contracts list rows.
+ * When deferCycleFromBase=true, cycle/milestone fields are computed for page rows only.
+ */
+export function buildContractsListOuterSql(deferCycleFromBase = false): string {
+  if (!deferCycleFromBase) {
+    return `
+      SELECT
+${CONTRACTS_LIST_ROW_PROJECTION}
       FROM page AS base
 `;
+  }
+
+  return `
+      SELECT
+${CONTRACTS_LIST_ROW_PROJECTION}
+      FROM (
+        SELECT
+          p.*,
+          ${buildContractsListOuterCycleFieldSelectSql().replace(/\bbase\./g, 'p.')}
+        FROM page AS p
+      ) AS base
+`;
+}
+
+/** Legacy export — cycle fields come from base CTE (full scope). */
+export const CONTRACTS_LIST_OUTER_SQL = buildContractsListOuterSql(false);

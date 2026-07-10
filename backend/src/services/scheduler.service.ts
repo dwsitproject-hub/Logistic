@@ -170,6 +170,15 @@ export class SchedulerService {
           break;
         case 'pipeline_daily_summary':
           await PipelineDailySummaryService.refreshAll();
+          await import('./contractQtyMoveSnapshot.service').then(({ ContractQtyMoveSnapshotService }) =>
+            ContractQtyMoveSnapshotService.refreshAll(),
+          );
+          await import('./contractStoAggSnapshot.service').then(({ ContractStoAggSnapshotService }) =>
+            ContractStoAggSnapshotService.refreshAll(),
+          );
+          await import('./contractLatestSpdSnapshot.service').then(({ ContractLatestSpdSnapshotService }) =>
+            ContractLatestSpdSnapshotService.refreshAll(),
+          );
           result = { success: true, totalRecords: 0, processedRecords: 0, failedRecords: 0 };
           break;
         default:
@@ -200,6 +209,15 @@ export class SchedulerService {
       setImmediate(() => {
         FinanceMaterializedViewService.refreshContractPaymentDates().catch(() => {});
         PipelineDailySummaryService.refreshAll().catch(() => {});
+        import('./contractQtyMoveSnapshot.service')
+          .then(({ ContractQtyMoveSnapshotService }) => ContractQtyMoveSnapshotService.refreshAll())
+          .catch(() => {});
+        import('./contractStoAggSnapshot.service')
+          .then(({ ContractStoAggSnapshotService }) => ContractStoAggSnapshotService.refreshAll())
+          .catch(() => {});
+        import('./contractLatestSpdSnapshot.service')
+          .then(({ ContractLatestSpdSnapshotService }) => ContractLatestSpdSnapshotService.refreshAll())
+          .catch(() => {});
       });
       
     } catch (error) {

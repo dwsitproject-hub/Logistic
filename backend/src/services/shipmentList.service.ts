@@ -1,7 +1,14 @@
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
-import { markPipelineDailySummaryStale } from './pipelineDailySummary.service';
+import {
+  isPipelineDailySummaryEligible,
+  loadShipmentSummaryFromDaily,
+  markPipelineDailySummaryStale,
+  toPipelineDailySummaryScope,
+  type PipelineDailySummaryFilterInput,
+} from './pipelineDailySummary.service';
+import { parseColumnFiltersQuery } from '../utils/shipmentListFilters';
 import { resolveContractLogisticsStoNumber } from '../utils/contractLogisticsStoDisplay';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
 import {
@@ -148,6 +155,60 @@ export function buildShipmentSummaryCacheKey(filterCacheKey: string, scopeStatus
   return `${filterCacheKey}:summary:${scopeStatus ?? ''}`;
 }
 
+export type ShipmentSummaryUnplannedBreakdown = {
+  contractRows: number;
+  shipmentRows: number;
+  totalTableRows: number;
+};
+
+export type ShipmentSummaryLoadSource = 'cache' | 'daily' | 'live';
+
+export function buildShipmentPipelineDailyFilterInput(req: AuthRequest): PipelineDailySummaryFilterInput {
+  const {
+    status,
+    vessel,
+    port,
+    dateFrom,
+    dateTo,
+    delayed,
+    sto,
+    contract,
+    plant,
+  } = req.query;
+  const globalSearch =
+    typeof (req.query as { search?: string }).search === 'string'
+      ? (req.query as { search?: string }).search!.trim()
+      : '';
+  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
+  const lateIndicatorParam = (req.query as { lateIndicator?: string }).lateIndicator;
+  const viewOptionParam = (req.query as { viewOption?: string }).viewOption;
+  const viewQueryParam = (req.query as { viewQuery?: string }).viewQuery;
+  const scopeStatusParam = (req.query as { scopeStatus?: string }).scopeStatus;
+  const etaLoadingParam = (req.query as { etaLoading?: string }).etaLoading;
+  const etaDischargeParam = (req.query as { etaDischarge?: string }).etaDischarge;
+  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  return {
+    dateFrom: dateFrom != null ? String(dateFrom) : undefined,
+    dateTo: dateTo != null ? String(dateTo) : undefined,
+    plants,
+    globalSearch,
+    colFilters,
+    lateIndicator: lateIndicatorParam != null ? String(lateIndicatorParam) : undefined,
+    viewOption: viewOptionParam != null ? String(viewOptionParam) : undefined,
+    viewQuery: viewQueryParam != null ? String(viewQueryParam) : undefined,
+    scopeStatus: scopeStatusParam != null ? String(scopeStatusParam) : undefined,
+    status: status != null ? String(status) : undefined,
+    etaLoading: etaLoadingParam != null ? String(etaLoadingParam) : undefined,
+    etaDischarge: etaDischargeParam != null ? String(etaDischargeParam) : undefined,
+    vessel: vessel != null ? String(vessel) : undefined,
+    port: port != null ? String(port) : undefined,
+    sto: sto != null ? String(sto) : undefined,
+    contract: contract != null ? String(contract) : undefined,
+    delayed: delayed != null ? String(delayed) : undefined,
+  };
+}
+
 export async function loadShipmentListSummary(
   summaryCountQuery: string,
   params: unknown[],
@@ -169,6 +230,66 @@ export async function loadShipmentListSummary(
   });
   evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
   return { summaryRow, totalCount };
+}
+
+/**
+ * Section 1 summary: daily table when toolbar-only + fresh; else live SQL + hybrid unplanned breakdown.
+ */
+export async function loadShipmentSummaryBundle(
+  req: AuthRequest,
+  opts: {
+    summaryCountQuery: string;
+    params: unknown[];
+    cacheKey: string;
+    loadUnplannedBreakdown: () => Promise<ShipmentSummaryUnplannedBreakdown>;
+  },
+): Promise<{
+  summaryRow: Record<string, unknown>;
+  totalCount: number;
+  unplannedBreakdown: ShipmentSummaryUnplannedBreakdown;
+  source: ShipmentSummaryLoadSource;
+}> {
+  const filters = buildShipmentPipelineDailyFilterInput(req);
+  if (isPipelineDailySummaryEligible(filters)) {
+    const fromDaily = await loadShipmentSummaryFromDaily(toPipelineDailySummaryScope(filters));
+    if (fromDaily) {
+      SUMMARY_CACHE.set(opts.cacheKey, {
+        summaryRow: fromDaily.summaryRow,
+        totalCount: fromDaily.totalCount,
+        expiresAt: Date.now() + CACHE_TTL_MS,
+      });
+      evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+      return {
+        summaryRow: fromDaily.summaryRow,
+        totalCount: fromDaily.totalCount,
+        unplannedBreakdown: fromDaily.unplannedBreakdown,
+        source: 'daily',
+      };
+    }
+  }
+
+  const cached = SUMMARY_CACHE.get(opts.cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    const unplannedBreakdown = await opts.loadUnplannedBreakdown();
+    return {
+      summaryRow: cached.summaryRow,
+      totalCount: cached.totalCount,
+      unplannedBreakdown,
+      source: 'cache',
+    };
+  }
+  if (cached) SUMMARY_CACHE.delete(opts.cacheKey);
+
+  const [loaded, unplannedBreakdown] = await Promise.all([
+    loadShipmentListSummary(opts.summaryCountQuery, opts.params, opts.cacheKey),
+    opts.loadUnplannedBreakdown(),
+  ]);
+  return {
+    summaryRow: loaded.summaryRow,
+    totalCount: loaded.totalCount,
+    unplannedBreakdown,
+    source: 'live',
+  };
 }
 
 function evictMapIfNeeded(map: Map<string, { expiresAt: number }>, max: number): void {

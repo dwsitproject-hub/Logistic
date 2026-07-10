@@ -5,5 +5,8 @@
 export {
   CONTRACTS_QTY_MOVE_CTE,
   buildQtyMoveCte,
+  buildQtyMoveFromSnapshotCte,
+  buildContractQtyMoveSnapshotRefreshSql,
+  buildContractQtyMoveSnapshotUpsertSql,
   sqlContractGlobalOutstandingExpr,
 } from '../utils/contractGlobalOutstandingSql';

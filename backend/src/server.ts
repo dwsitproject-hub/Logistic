@@ -15,6 +15,9 @@ import { notFoundHandler } from './middleware/notFoundHandler';
 import logger from './utils/logger';
 import { SchedulerService } from './services/scheduler.service';
 import { PipelineDailySummaryService, isPipelineDailySummaryFresh } from './services/pipelineDailySummary.service';
+import { ContractQtyMoveSnapshotService, isContractQtyMoveSnapshotFresh } from './services/contractQtyMoveSnapshot.service';
+import { ContractStoAggSnapshotService, isContractStoAggSnapshotFresh } from './services/contractStoAggSnapshot.service';
+import { ContractLatestSpdSnapshotService, isContractLatestSpdSnapshotFresh } from './services/contractLatestSpdSnapshot.service';
 import { ensureUserStoContractAssignmentsTable } from './database/ensureUserStoContractAssignments';
 
 // Import routes
@@ -162,13 +165,29 @@ if (process.env.NODE_ENV !== 'test') {
 
     setImmediate(async () => {
       try {
-        const [truckingFresh, shipmentFresh] = await Promise.all([
+        const [truckingFresh, shipmentFresh, qtySnapshotFresh, stoAggSnapshotFresh, latestSpdSnapshotFresh] =
+          await Promise.all([
           isPipelineDailySummaryFresh('trucking'),
           isPipelineDailySummaryFresh('shipment'),
+          isContractQtyMoveSnapshotFresh(),
+          isContractStoAggSnapshotFresh(),
+          isContractLatestSpdSnapshotFresh(),
         ]);
         if (!truckingFresh || !shipmentFresh) {
           logger.info('Pipeline daily summaries stale — refreshing in background');
           await PipelineDailySummaryService.refreshAll();
+        }
+        if (!qtySnapshotFresh) {
+          logger.info('Contract qty_move snapshot stale — refreshing in background');
+          await ContractQtyMoveSnapshotService.refreshAll();
+        }
+        if (!stoAggSnapshotFresh) {
+          logger.info('Contract sto_agg snapshot stale — refreshing in background');
+          await ContractStoAggSnapshotService.refreshAll();
+        }
+        if (!latestSpdSnapshotFresh) {
+          logger.info('Contract latest_spd snapshot stale — refreshing in background');
+          await ContractLatestSpdSnapshotService.refreshAll();
         }
       } catch (error) {
         logger.warn('Pipeline daily summary startup refresh skipped', { error });

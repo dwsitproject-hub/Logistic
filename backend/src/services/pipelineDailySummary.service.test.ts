@@ -21,13 +21,31 @@ describe('isPipelineDailySummaryEligible', () => {
     ).toBe(false);
   });
 
-  it('rejects column filters', () => {
+  it('rejects column filters other than toolbar product/incoterm', () => {
+    expect(
+      isPipelineDailySummaryEligible({
+        plants: [],
+        colFilters: { supplier: { type: 'multi', values: ['ACME'] } },
+      }),
+    ).toBe(false);
+  });
+
+  it('allows product toolbar column filter', () => {
     expect(
       isPipelineDailySummaryEligible({
         plants: [],
         colFilters: { product: { type: 'multi', values: ['CPO'] } },
       }),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it('allows incoterm toolbar column filter', () => {
+    expect(
+      isPipelineDailySummaryEligible({
+        plants: [],
+        colFilters: { incoterm: { type: 'multi', values: ['FRC'] } },
+      }),
+    ).toBe(true);
   });
 
   it('rejects pipeline status card filter', () => {

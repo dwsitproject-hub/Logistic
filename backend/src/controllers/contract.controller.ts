@@ -11,8 +11,12 @@ import {
   appendGlobalSearchBase,
   parseColumnFiltersQuery,
 } from '../utils/contractListFilters';
-import { CONTRACTS_LIST_OUTER_SQL } from './contractsListOuterSql';
-import { CONTRACTS_QTY_MOVE_CTE, buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractsQtyMoveSql';
+import { buildContractsListOuterSql } from './contractsListOuterSql';
+import { buildContractsListBaseCycleFieldSelectSql } from '../utils/contractsListCycleSql';
+import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractsQtyMoveSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
+import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
+import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
 import {
   resolveContractActualQtySubtractedTs,
   sqlContractOutstandingSignedExpr,
@@ -53,7 +57,6 @@ import {
 import { sqlContractImportStatusExpr, sqlContractImportStatusIsClosedExpr, sqlContractImportStatusIsOpenExpr, sqlContractListImportStatusAggExpr, normalizeContractDeliveryStatusForDisplay } from '../utils/contractDeliveryStatus';
 import {
   sqlMaxTruckingRealizationEndForContract,
-  sqlMinTruckingRealizationStartForContract,
   sqlSapTruckingLastReceiveDateForLookupKeys,
   sqlSapTruckingLastReceiveDateForStoKey,
   sqlSapTruckingStartReceiveDateForStoKey,
@@ -92,6 +95,14 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     );
     const offset = (Number(page) - 1) * Number(limit);
 
+    const cycleSortKeys = new Set(['log_cycle_days', 'trade_cycle_days', 'cash_cycle_days']);
+    const wantCycleSort = cycleSortKeys.has(sortKeyRaw);
+    const lateOnTimeFilterRaw = String((req.query as any).lateOnTimeFilter || 'ALL').toUpperCase();
+    const wantLateFilter = lateOnTimeFilterRaw === 'LATE' || lateOnTimeFilterRaw === 'ON_TIME';
+    const wantExcludeUnscheduled = String((req.query as any).excludeUnscheduled || 'false') === 'true';
+    const deferCycleFieldsToPage = !wantCycleSort && !wantLateFilter && !wantExcludeUnscheduled;
+    const baseCycleFieldsSql = deferCycleFieldsToPage ? '' : `,${buildContractsListBaseCycleFieldSelectSql()}`;
+
     const queryParams: any[] = [];
     let paramIndex = 1;
     let contractScopeWhere = '';
@@ -111,6 +122,12 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
+    const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte] = await Promise.all([
+      resolveContractsQtyMoveCte('contract_scope'),
+      resolveContractsStoAggCte('contract_scope'),
+      resolveContractsLatestSpdCte('contract_scope'),
+    ]);
+
     // contract_scope narrows contracts + sap_processed_data work when date / contract_id filters are present (default YTD on UI).
     let queryText = `
       WITH contract_scope AS (
@@ -119,38 +136,9 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         WHERE 1=1
         ${contractScopeWhere}
       ),
-      latest_spd AS (
-        SELECT DISTINCT ON (spd.contract_number) spd.contract_number, spd.data, spd.created_at
-        FROM sap_processed_data spd
-        INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      ),
-      ${CONTRACTS_QTY_MOVE_CTE},
-      sto_agg AS (
-        SELECT x.contract_number,
-          STRING_AGG(DISTINCT x.effective_sto, ', ' ORDER BY x.effective_sto) AS sto_numbers,
-          SUM(x.sto_quantity_num) AS total_sto_quantity,
-          COUNT(DISTINCT x.effective_sto) AS sto_count
-        FROM (
-          SELECT DISTINCT ON (spd.contract_number, effective_sto)
-            spd.contract_number,
-            effective_sto,
-            sto_quantity_num
-          FROM (
-            SELECT spd.contract_number,
-              NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') AS effective_sto,
-              CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', '0'), ',', ''), ' ', '') AS NUMERIC) AS sto_quantity_num,
-              spd.created_at
-            FROM sap_processed_data spd
-            INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
-            WHERE ((spd.sto_number IS NOT NULL AND spd.sto_number::text != '') OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') IS NOT NULL)
-              AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-          ) spd
-          WHERE effective_sto IS NOT NULL AND effective_sto != ''
-          ORDER BY contract_number, effective_sto, created_at DESC NULLS LAST
-        ) x
-        GROUP BY x.contract_number
-      ),
+      ${contractsLatestSpdCte},
+      ${contractsQtyMoveCte},
+      ${contractsStoAggCte},
       base AS (
         SELECT
           c.contract_id,
@@ -193,103 +181,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           )}) AS quantity_delivery,
           (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
           (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery_sap,
-          COUNT(DISTINCT c.po_number) FILTER (WHERE c.po_number IS NOT NULL) AS po_count,
-          -- For Log Cycle calculation (LAND): earliest and latest trucking realization dates (SAP AV/AW — not planning columns)
-          ${sqlMinTruckingRealizationStartForContract(
-            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
-            '(array_agg(c.contract_id ORDER BY c.created_at DESC))[1]',
-          )} AS first_trucking_start_date,
-          ${sqlMaxTruckingRealizationEndForContract(
-            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
-            '(array_agg(c.contract_id ORDER BY c.created_at DESC))[1]',
-          )} AS last_trucking_completion_date,
-          -- For Trade/Cash Cycle calculation (LAND open): latest date in daily_deliverables JSONB
-          (
-            SELECT MAX((dd->>'date')::date)
-            FROM trucking_operations tdd
-            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(tdd.daily_deliverables, '[]'::jsonb)) AS dd
-            WHERE tdd.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-              AND (dd->>'date') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-          ) AS last_trucking_daily_deliverable_date,
-          -- Open standard ETA (LAND): from trucking ETA columns
-          (
-            SELECT MAX(COALESCE(t.eta_trucking_completion_date::date, t.eta_delivery_end_date::date))
-            FROM trucking_operations t
-            WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS open_standard_eta_trucking,
-          -- For Log Cycle calculation (SEA): earliest ATA loading complete and latest ATA discharge complete
-          (SELECT MIN(s2.ata_loading_complete::date) FROM shipments s2 WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1] AND s2.ata_loading_complete IS NOT NULL) AS first_ata_vessel_completed_loading,
-          (
-            SELECT MAX(
-              COALESCE(
-                s2.ata_discharge_complete::date,
-                s2.arrival_date::date,
-                s2.eta_discharge_complete::date
-              )
-            )
-            FROM shipments s2
-            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_ata_vessel_complete_discharge,
-          -- Latest vessel name (SEA contracts; for list display)
-          (
-            SELECT s2.vessel_name
-            FROM shipments s2
-            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-              AND NULLIF(TRIM(s2.vessel_name), '') IS NOT NULL
-            ORDER BY s2.updated_at DESC NULLS LAST, s2.created_at DESC NULLS LAST
-            LIMIT 1
-          ) AS last_vessel_name,
-          -- Latest ETA vessel completed loading (loading port)
-          (
-            SELECT MAX(
-              COALESCE(
-                s2.eta_loading_complete::date,
-                (
-                  SELECT vlpd.eta_loading_completed::date
-                  FROM vessel_loading_ports vlpd
-                  WHERE vlpd.shipment_id = s2.id
-                    AND COALESCE(vlpd.is_discharge_port, false) = false
-                  ORDER BY vlpd.updated_at DESC NULLS LAST, vlpd.created_at DESC NULLS LAST
-                  LIMIT 1
-                )
-              )
-            )
-            FROM shipments s2
-            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_eta_vessel_completed_loading,
-          -- Open standard ETA (SEA): from first loading-port ETA vessel arrival
-          (
-            SELECT MAX(
-              (
-                SELECT vlp.eta_vessel_arrival::date
-                FROM vessel_loading_ports vlp
-                WHERE vlp.shipment_id = s2.id
-                  AND COALESCE(vlp.is_discharge_port, false) = false
-                ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.updated_at DESC NULLS LAST, vlp.created_at DESC NULLS LAST
-                LIMIT 1
-              )
-            )
-            FROM shipments s2
-            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS open_standard_eta_vessel_loading,
-          -- For Trade/Cash Cycle calculation (SEA open): latest ETA vessel complete discharge
-          (
-            SELECT MAX(
-              COALESCE(
-                s2.eta_discharge_complete::date,
-                (
-                  SELECT vlpd.eta_vessel_complete_discharge::date
-                  FROM vessel_loading_ports vlpd
-                  WHERE vlpd.shipment_id = s2.id
-                    AND vlpd.is_discharge_port = true
-                  ORDER BY vlpd.updated_at DESC NULLS LAST, vlpd.created_at DESC NULLS LAST
-                  LIMIT 1
-                )
-              )
-            )
-            FROM shipments s2
-            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_eta_vessel_complete_discharge
+          COUNT(DISTINCT c.po_number) FILTER (WHERE c.po_number IS NOT NULL) AS po_count${baseCycleFieldsSql}
         FROM contract_scope cs
         INNER JOIN contracts c ON c.contract_id = cs.contract_id
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
@@ -453,18 +345,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const sortKey = allowedSort[sortKeyRaw] ? sortKeyRaw : 'contract_date';
     const orderExpr = allowedSort[sortKey] || 'contract_date::date';
 
-    // Detect cycle sort / late filter BEFORE building the query so we can inject SQL-level filtering.
-    const cycleSortKeys = new Set(['log_cycle_days', 'trade_cycle_days', 'cash_cycle_days']);
-    const wantCycleSort = cycleSortKeys.has(sortKeyRaw);
-    const lateOnTimeFilterRaw = String((req.query as any).lateOnTimeFilter || 'ALL').toUpperCase();
-    const wantLateFilter = lateOnTimeFilterRaw === 'LATE' || lateOnTimeFilterRaw === 'ON_TIME';
-
-    // When true (Method 1 / Apply mode): exclude contracts that are not counted in the
-    // performance drilldown tree — i.e. no delivery_end_date, or Closed without a completion
-    // date. This makes Section 3 row count exactly match Section 2 drilldown node count.
-    const wantExcludeUnscheduled = String((req.query as any).excludeUnscheduled || 'false') === 'true';
-
-    // Reusable SQL fragments that mirror latePerformance.service.ts inclusion rules.
+    // Detect cycle sort / late filter (flags computed above before base CTE).
     // Use incoterm-aware import_status (UAT) — same as Open/Close filters and tree aggregation.
     const _statusExpr = `UPPER(TRIM(COALESCE(NULLIF(TRIM(import_status), ''), NULLIF(TRIM(status), ''), '')))`;
     const _transportExpr = `UPPER(TRIM(COALESCE(transport_mode, '')))`;
@@ -549,7 +430,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         LIMIT $${limitParam} OFFSET $${offsetParam}
       )
 `;
-    const listQuery = queryText + filteredClosedAndPage + CONTRACTS_LIST_OUTER_SQL;
+    const listQuery = queryText + filteredClosedAndPage + buildContractsListOuterSql(deferCycleFieldsToPage);
     const listParams = [...queryParams, Number(limit), offset];
 
     const countQuery = wantExcludeUnscheduled
@@ -559,20 +440,24 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         : `${queryText}) SELECT COUNT(*)::int AS count FROM filtered`;
     const countParams = [...queryParams];
 
-    const countResult = await query(countQuery, countParams);
-    const totalCount = Number(countResult.rows[0]?.count ?? 0);
-
+    let totalCount = 0;
     let result: any;
     if (!wantCycleSort && !wantLateFilter && !wantExcludeUnscheduled) {
-      // Fast path: SQL handles everything, fetch only the page slice.
-      result = await query(listQuery, listParams);
-    } else if (useSqlLateFilter) {
-      // SQL late filter: also fetch only the page slice (SQL already filtered).
-      result = await query(listQuery, listParams);
+      const [countResult, listResult] = await Promise.all([
+        query(countQuery, countParams),
+        query(listQuery, listParams),
+      ]);
+      totalCount = Number(countResult.rows[0]?.count ?? 0);
+      result = listResult;
     } else {
-      // Cycle sort (or combined late+cycle): fetch all matching rows in Node for JS sort.
-      const cap = Math.min(totalCount, 10000);
-      result = await query(listQuery, [...queryParams, cap, 0]);
+      const countResult = await query(countQuery, countParams);
+      totalCount = Number(countResult.rows[0]?.count ?? 0);
+      if (useSqlLateFilter) {
+        result = await query(listQuery, listParams);
+      } else {
+        const cap = Math.min(totalCount, 10000);
+        result = await query(listQuery, [...queryParams, cap, 0]);
+      }
     }
 
     const due = (d: unknown): Date | null => {
@@ -995,6 +880,12 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
+    const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte] = await Promise.all([
+      resolveContractsQtyMoveCte('contract_scope'),
+      resolveContractsStoAggCte('contract_scope'),
+      resolveContractsLatestSpdCte('contract_scope'),
+    ]);
+
     let queryText = `
       WITH contract_scope AS (
         SELECT DISTINCT c.contract_id
@@ -1002,36 +893,9 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         WHERE 1=1
         ${contractScopeWhere}
       ),
-      latest_spd AS (
-        SELECT DISTINCT ON (spd.contract_number) spd.contract_number, spd.data, spd.created_at
-        FROM sap_processed_data spd
-        INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      ),
-      ${CONTRACTS_QTY_MOVE_CTE},
-      sto_agg AS (
-        SELECT x.contract_number,
-          SUM(x.sto_quantity_num) AS total_sto_quantity
-        FROM (
-          SELECT DISTINCT ON (spd.contract_number, effective_sto)
-            spd.contract_number,
-            effective_sto,
-            sto_quantity_num
-          FROM (
-            SELECT spd.contract_number,
-              NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') AS effective_sto,
-              CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', '0'), ',', ''), ' ', '') AS NUMERIC) AS sto_quantity_num,
-              spd.created_at
-            FROM sap_processed_data spd
-            INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
-            WHERE ((spd.sto_number IS NOT NULL AND spd.sto_number::text != '') OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') IS NOT NULL)
-              AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-          ) spd
-          WHERE effective_sto IS NOT NULL AND effective_sto != ''
-          ORDER BY contract_number, effective_sto, created_at DESC NULLS LAST
-        ) x
-        GROUP BY x.contract_number
-      ),
+      ${contractsLatestSpdCte},
+      ${contractsQtyMoveCte},
+      ${contractsStoAggCte},
       base AS (
         SELECT
           c.contract_id,

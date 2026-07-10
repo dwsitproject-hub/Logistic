@@ -4,6 +4,10 @@
 
 import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
 import { groupPlantExpr } from './groupPlantSql';
+import {
+  sqlPipelineIncotermKey,
+  sqlPipelineProductKey,
+} from './pipelineDailySummaryToolbarScope';
 import { buildShipmentListAtaSelectSql, SHIPMENT_ATA_OVERRIDES_JOIN } from './shipmentAtaOverrideSql';
 import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
 import { sqlShipmentListPrimaryIdAgg } from './shipmentListPrimaryShipmentSql';
@@ -105,6 +109,8 @@ function buildShipmentDailyBaseCteSql(): string {
           MAX(s.eta_discharge_start) AS eta_discharge_start,
           MAX(s.eta_discharge_complete) AS eta_vessel_complete_discharge,
           MAX(c.contract_date) AS contract_date,
+          MAX(c.product) AS product,
+          MAX(c.incoterm) AS incoterm,
           BOOL_OR(${sqlIsContractSapClosedExpr('c')}) AS is_contract_sap_closed,
           ${ataSelect}
           ''::text AS contract_numbers_from_join,
@@ -145,6 +151,8 @@ export function buildShipmentExecutionDailySummaryInsertSql(): string {
     INSERT INTO shipment_pipeline_daily_summary (
       group_plant,
       contract_date,
+      product,
+      incoterm,
       total_count,
       planned_count,
       at_loading_port_count,
@@ -178,6 +186,8 @@ export function buildShipmentExecutionDailySummaryInsertSql(): string {
         ${eff} AS effective_status,
         COALESCE(f.plant_site, 'Blank') AS group_plant,
         COALESCE(f.contract_date, ${NULL_CONTRACT_DATE})::date AS contract_date_key,
+        ${sqlPipelineProductKey('f.product')} AS product_key,
+        ${sqlPipelineIncotermKey('f.incoterm')} AS incoterm_key,
         (
           f.eta_arrival IS NULL AND f.eta_berthed IS NULL AND f.eta_loading_start IS NULL
           AND f.eta_loading_complete IS NULL AND f.eta_sailed IS NULL
@@ -243,6 +253,8 @@ export function buildShipmentExecutionDailySummaryInsertSql(): string {
     SELECT
       group_plant,
       contract_date_key,
+      product_key AS product,
+      incoterm_key AS incoterm,
       COUNT(*)::bigint,
       ${shipmentPagePipelineSummarySelectSql().trim()},
       COUNT(*) FILTER (WHERE ${unplannedPred})::bigint,
@@ -257,26 +269,28 @@ export function buildShipmentExecutionDailySummaryInsertSql(): string {
       COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND discharge_delay)::bigint,
       COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND discharge_no_eta)::bigint
     FROM enriched e
-    GROUP BY group_plant, contract_date_key`;
+    GROUP BY group_plant, contract_date_key, product_key, incoterm_key`;
 }
 
 /** UPSERT open contract backlog grouped by group_plant + contract_date. */
 export function buildShipmentBacklogDailySummaryUpsertSql(): string {
   const plant = groupPlantExpr('c.plant_code', 'c.company_name');
   return `
-    INSERT INTO shipment_pipeline_daily_summary (group_plant, contract_date, unplanned_contract_backlog)
+    INSERT INTO shipment_pipeline_daily_summary (group_plant, contract_date, product, incoterm, unplanned_contract_backlog)
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
     backlog AS (
       SELECT
         ${plant} AS group_plant,
         COALESCE(c.contract_date, DATE '1970-01-01')::date AS contract_date,
+        ${sqlPipelineProductKey('c.product')} AS product,
+        ${sqlPipelineIncotermKey('c.incoterm')} AS incoterm,
         COUNT(*)::bigint AS unplanned_contract_backlog
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       WHERE ${unplannedContractBacklogBaseWhereSql('c', 'l')}
-      GROUP BY 1, 2
+      GROUP BY 1, 2, 3, 4
     )
-    SELECT group_plant, contract_date, unplanned_contract_backlog FROM backlog
-    ON CONFLICT (group_plant, contract_date) DO UPDATE SET
+    SELECT group_plant, contract_date, product, incoterm, unplanned_contract_backlog FROM backlog
+    ON CONFLICT (group_plant, contract_date, product, incoterm) DO UPDATE SET
       unplanned_contract_backlog = EXCLUDED.unplanned_contract_backlog`;
 }

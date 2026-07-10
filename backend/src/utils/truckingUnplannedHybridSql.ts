@@ -6,6 +6,10 @@ import { sqlIsContractSapClosedExpr, SQL_CONTRACT_IMPORT_STATUS } from './contra
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
 import { appendGroupPlantFilter, groupPlantExpr } from './groupPlantSql';
+import {
+  sqlPipelineIncotermKey,
+  sqlPipelineProductKey,
+} from './pipelineDailySummaryToolbarScope';
 import { contractExtNoSubquery } from './portDisplaySql';
 import { buildTruckingPageIncotermScopeSql } from './truckingIncotermScope';
 
@@ -305,20 +309,22 @@ export function buildTruckingUnplannedBacklogSummaryCountQuery(
 export function buildTruckingUnplannedBacklogDailySummarySql(): string {
   const plant = groupPlantExpr('c.plant_code', 'c.company_name');
   return `
-    INSERT INTO trucking_pipeline_daily_summary (group_plant, contract_date, unplanned_contract_backlog)
+    INSERT INTO trucking_pipeline_daily_summary (group_plant, contract_date, product, incoterm, unplanned_contract_backlog)
     WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
     backlog AS (
       SELECT
         ${plant} AS group_plant,
         COALESCE(c.contract_date, DATE '1970-01-01')::date AS contract_date,
+        ${sqlPipelineProductKey('c.product')} AS product,
+        ${sqlPipelineIncotermKey('c.incoterm')} AS incoterm,
         COUNT(*)::bigint AS unplanned_contract_backlog
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       WHERE ${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}
-      GROUP BY 1, 2
+      GROUP BY 1, 2, 3, 4
     )
-    SELECT group_plant, contract_date, unplanned_contract_backlog FROM backlog
-    ON CONFLICT (group_plant, contract_date) DO UPDATE SET
+    SELECT group_plant, contract_date, product, incoterm, unplanned_contract_backlog FROM backlog
+    ON CONFLICT (group_plant, contract_date, product, incoterm) DO UPDATE SET
       unplanned_contract_backlog = EXCLUDED.unplanned_contract_backlog`;
 }
 

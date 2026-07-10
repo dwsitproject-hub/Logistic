@@ -426,6 +426,17 @@ export class SapMasterV2ImportService {
 
       if (processedRecords > 0) {
         invalidateShipmentsListCache();
+        setImmediate(() => {
+          import('./contractQtyMoveSnapshot.service')
+            .then(({ ContractQtyMoveSnapshotService }) => ContractQtyMoveSnapshotService.refreshAll())
+            .catch(() => {});
+          import('./contractStoAggSnapshot.service')
+            .then(({ ContractStoAggSnapshotService }) => ContractStoAggSnapshotService.refreshAll())
+            .catch(() => {});
+          import('./contractLatestSpdSnapshot.service')
+            .then(({ ContractLatestSpdSnapshotService }) => ContractLatestSpdSnapshotService.refreshAll())
+            .catch(() => {});
+        });
       }
       
       logger.info('SAP MASTER v2 import completed', {

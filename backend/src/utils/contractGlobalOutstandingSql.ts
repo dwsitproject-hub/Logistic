@@ -249,6 +249,79 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
 
 export const CONTRACTS_QTY_MOVE_CTE = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
 
+/** Fast read path: join pre-computed snapshot scoped to list CTE (same columns as qty_move). */
+export function buildQtyMoveFromSnapshotCte(scopeCteName = 'contract_scope'): string {
+  return `
+      qty_move AS (
+        SELECT
+          s.contract_number,
+          s.quantity_delivery_trucking,
+          s.quantity_delivery_vessel,
+          s.quantity_receive,
+          s.quantity_delivery
+        FROM contract_qty_move_snapshot s
+        INNER JOIN ${scopeCteName} cs ON cs.contract_id = s.contract_number
+      )`;
+}
+
+/** SQL to refresh snapshot rows using live qty_move logic (all contracts). */
+export function buildContractQtyMoveSnapshotRefreshSql(): string {
+  return `
+    WITH ${buildQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_id FROM contracts' })}
+    INSERT INTO contract_qty_move_snapshot (
+      contract_number,
+      quantity_delivery_trucking,
+      quantity_delivery_vessel,
+      quantity_receive,
+      quantity_delivery,
+      refreshed_at
+    )
+    SELECT
+      qm.contract_number,
+      COALESCE(qm.quantity_delivery_trucking, 0),
+      COALESCE(qm.quantity_delivery_vessel, 0),
+      COALESCE(qm.quantity_receive, 0),
+      COALESCE(qm.quantity_delivery, 0),
+      NOW()
+    FROM qty_move qm
+    WHERE qm.contract_number IS NOT NULL
+    ON CONFLICT (contract_number) DO UPDATE SET
+      quantity_delivery_trucking = EXCLUDED.quantity_delivery_trucking,
+      quantity_delivery_vessel = EXCLUDED.quantity_delivery_vessel,
+      quantity_receive = EXCLUDED.quantity_receive,
+      quantity_delivery = EXCLUDED.quantity_delivery,
+      refreshed_at = EXCLUDED.refreshed_at`;
+}
+
+/** Refresh snapshot for specific contract numbers (after SAP row / WB upload). */
+export function buildContractQtyMoveSnapshotUpsertSql(): string {
+  return `
+    WITH ${buildQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_id FROM contracts WHERE contract_id = ANY($1)' })}
+    INSERT INTO contract_qty_move_snapshot (
+      contract_number,
+      quantity_delivery_trucking,
+      quantity_delivery_vessel,
+      quantity_receive,
+      quantity_delivery,
+      refreshed_at
+    )
+    SELECT
+      qm.contract_number,
+      COALESCE(qm.quantity_delivery_trucking, 0),
+      COALESCE(qm.quantity_delivery_vessel, 0),
+      COALESCE(qm.quantity_receive, 0),
+      COALESCE(qm.quantity_delivery, 0),
+      NOW()
+    FROM qty_move qm
+    WHERE qm.contract_number IS NOT NULL
+    ON CONFLICT (contract_number) DO UPDATE SET
+      quantity_delivery_trucking = EXCLUDED.quantity_delivery_trucking,
+      quantity_delivery_vessel = EXCLUDED.quantity_delivery_vessel,
+      quantity_receive = EXCLUDED.quantity_receive,
+      quantity_delivery = EXCLUDED.quantity_delivery,
+      refreshed_at = EXCLUDED.refreshed_at`;
+}
+
 export function sqlContractGlobalOutstandingExpr(opts: {
   contractQtyExpr: string;
   incotermExpr: string;

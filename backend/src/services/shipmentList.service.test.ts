@@ -1,12 +1,28 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import {
   buildShipmentListCacheKey,
   buildShipmentListEmptyCountQuery,
   buildShipmentListPageQuery,
   buildShipmentListPageQueryWithoutInlineCount,
+  buildShipmentPipelineDailyFilterInput,
   getCachedFilteredTotal,
   invalidateShipmentsListCache,
+  loadShipmentSummaryBundle,
 } from './shipmentList.service';
+import {
+  isPipelineDailySummaryEligible,
+  loadShipmentSummaryFromDaily,
+} from './pipelineDailySummary.service';
+
+vi.mock('./pipelineDailySummary.service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./pipelineDailySummary.service')>();
+  return {
+    ...actual,
+    isPipelineDailySummaryEligible: vi.fn(actual.isPipelineDailySummaryEligible),
+    loadShipmentSummaryFromDaily: vi.fn(actual.loadShipmentSummaryFromDaily),
+    markPipelineDailySummaryStale: vi.fn(actual.markPipelineDailySummaryStale),
+  };
+});
 
 const baseCtx = {
   shipmentBaseCteSql: 'WITH shipment_base_core AS (SELECT 1)',
@@ -119,5 +135,64 @@ describe('shipmentList.service', () => {
   it('getCachedFilteredTotal returns null when cache is empty', () => {
     invalidateShipmentsListCache();
     expect(getCachedFilteredTotal('missing-filter-key')).toBeNull();
+  });
+
+  it('buildShipmentPipelineDailyFilterInput maps toolbar query params', () => {
+    const req = {
+      query: {
+        dateFrom: '2026-01-01',
+        dateTo: '2026-06-30',
+        plant: ['PRC Karawang'],
+        status: 'ALL',
+        scopeStatus: 'ALL',
+        etaLoading: 'ALL',
+        etaDischarge: 'ALL',
+        search: '',
+      },
+    } as Parameters<typeof buildShipmentPipelineDailyFilterInput>[0];
+    const filters = buildShipmentPipelineDailyFilterInput(req);
+    expect(filters.dateFrom).toBe('2026-01-01');
+    expect(filters.plants).toEqual(['PRC Karawang']);
+    expect(isPipelineDailySummaryEligible(filters)).toBe(true);
+  });
+
+  it('buildShipmentPipelineDailyFilterInput rejects card filters for daily eligibility', () => {
+    const req = {
+      query: { status: 'PLANNED', dateFrom: '2026-01-01' },
+    } as Parameters<typeof buildShipmentPipelineDailyFilterInput>[0];
+    expect(isPipelineDailySummaryEligible(buildShipmentPipelineDailyFilterInput(req))).toBe(false);
+  });
+
+  describe('loadShipmentSummaryBundle', () => {
+    beforeEach(() => {
+      invalidateShipmentsListCache();
+      vi.mocked(isPipelineDailySummaryEligible).mockReturnValue(true);
+      vi.mocked(loadShipmentSummaryFromDaily).mockReset();
+    });
+
+    it('uses daily summary without calling hybrid unplanned breakdown', async () => {
+      vi.mocked(loadShipmentSummaryFromDaily).mockResolvedValue({
+        summaryRow: { planned_count: 10, total_count: 20 },
+        totalCount: 20,
+        unplannedBreakdown: { contractRows: 3, shipmentRows: 2, totalTableRows: 5 },
+      });
+      const loadUnplannedBreakdown = vi.fn();
+      const req = { query: { dateFrom: '2026-01-01', dateTo: '2026-06-30' } } as Parameters<
+        typeof loadShipmentSummaryBundle
+      >[0];
+
+      const result = await loadShipmentSummaryBundle(req, {
+        summaryCountQuery: 'SELECT 1',
+        params: [],
+        cacheKey: 'test-daily-bundle',
+        loadUnplannedBreakdown,
+      });
+
+      expect(result.source).toBe('daily');
+      expect(result.totalCount).toBe(20);
+      expect(result.unplannedBreakdown.totalTableRows).toBe(5);
+      expect(loadUnplannedBreakdown).not.toHaveBeenCalled();
+      expect(loadShipmentSummaryFromDaily).toHaveBeenCalledOnce();
+    });
   });
 });

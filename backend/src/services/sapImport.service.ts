@@ -159,6 +159,15 @@ export class SapImportService {
         import('./pipelineDailySummary.service')
           .then(({ PipelineDailySummaryService }) => PipelineDailySummaryService.refreshAll())
           .catch(() => {});
+        import('./contractQtyMoveSnapshot.service')
+          .then(({ ContractQtyMoveSnapshotService }) => ContractQtyMoveSnapshotService.refreshAll())
+          .catch(() => {});
+        import('./contractStoAggSnapshot.service')
+          .then(({ ContractStoAggSnapshotService }) => ContractStoAggSnapshotService.refreshAll())
+          .catch(() => {});
+        import('./contractLatestSpdSnapshot.service')
+          .then(({ ContractLatestSpdSnapshotService }) => ContractLatestSpdSnapshotService.refreshAll())
+          .catch(() => {});
       });
       
       logger.info(`SAP import completed: ${importId}`, {

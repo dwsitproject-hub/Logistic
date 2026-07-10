@@ -2,6 +2,10 @@ import { query } from '../database/connection';
 import { appendGroupPlantFilter } from '../utils/groupPlantSql';
 import type { ColumnFilterPayload } from '../utils/contractListFilters';
 import {
+  extractToolbarScopeFromColumnFilters,
+  hasNonToolbarColumnFilters,
+} from '../utils/pipelineDailySummaryToolbarScope';
+import {
   buildTruckingBacklogDailySummaryUpsertSql,
   buildTruckingExecutionDailySummaryInsertSql,
 } from '../utils/pipelineDailySummarySql';
@@ -17,6 +21,10 @@ export interface PipelineDailySummaryScope {
   dateFrom?: string;
   dateTo?: string;
   plants: string[];
+  products?: string[];
+  incoterms?: string[];
+  includeBlankProduct?: boolean;
+  includeBlankIncoterm?: boolean;
 }
 
 export interface PipelineDailySummaryFilterInput extends PipelineDailySummaryScope {
@@ -43,14 +51,25 @@ const STALE_REFRESH_DEBOUNCE_MS = 60_000;
 let lastStaleRefreshAt = 0;
 
 function hasColumnFilters(colFilters?: ColumnFilterPayload): boolean {
-  if (!colFilters) return false;
-  return Object.keys(colFilters).some((k) => {
-    const raw = colFilters[k];
-    return raw != null && typeof raw === 'object';
-  });
+  return hasNonToolbarColumnFilters(colFilters);
 }
 
-/** Daily summary applies only when filters are date range + group plant (toolbar scope). */
+export function toPipelineDailySummaryScope(
+  filters: PipelineDailySummaryFilterInput,
+): PipelineDailySummaryScope {
+  const toolbar = extractToolbarScopeFromColumnFilters(filters.colFilters);
+  return {
+    dateFrom: filters.dateFrom,
+    dateTo: filters.dateTo,
+    plants: filters.plants,
+    products: toolbar.products,
+    incoterms: toolbar.incoterms,
+    includeBlankProduct: toolbar.includeBlankProduct,
+    includeBlankIncoterm: toolbar.includeBlankIncoterm,
+  };
+}
+
+/** Daily summary applies when filters are toolbar scope (date, plant, product, incoterm). */
 export function isPipelineDailySummaryEligible(
   filters: PipelineDailySummaryFilterInput,
 ): boolean {
@@ -66,6 +85,34 @@ export function isPipelineDailySummaryEligible(
   if (filters.delayed === 'true') return false;
   if (filters.location || filters.loadingLocation || filters.unloadingLocation) return false;
   return true;
+}
+
+function appendDimensionScopeFilter(
+  parts: string[],
+  params: unknown[],
+  idx: number,
+  column: 'product' | 'incoterm',
+  values: string[] | undefined,
+  includeBlank: boolean | undefined,
+): number {
+  const list = (values ?? []).filter(Boolean);
+  const wantBlank = Boolean(includeBlank);
+  if (list.length === 0 && !wantBlank) return idx;
+
+  const clauses: string[] = [];
+  if (list.length > 0) {
+    clauses.push(`${column} = ANY($${idx++}::text[])`);
+    params.push(list);
+  }
+  if (wantBlank) {
+    clauses.push(`${column} = 'Blank'`);
+  }
+  if (clauses.length === 1) {
+    parts.push(clauses[0]);
+  } else if (clauses.length > 1) {
+    parts.push(`(${clauses.join(' OR ')})`);
+  }
+  return idx;
 }
 
 function buildDailySummaryWhere(scope: PipelineDailySummaryScope): {
@@ -89,8 +136,25 @@ function buildDailySummaryWhere(scope: PipelineDailySummaryScope): {
     if (plantFilter.sql) {
       parts.push(plantFilter.sql.replace(/^ AND /, ''));
       params.push(...plantFilter.params);
+      idx += plantFilter.params.length;
     }
   }
+  idx = appendDimensionScopeFilter(
+    parts,
+    params,
+    idx,
+    'product',
+    scope.products,
+    scope.includeBlankProduct,
+  );
+  idx = appendDimensionScopeFilter(
+    parts,
+    params,
+    idx,
+    'incoterm',
+    scope.incoterms,
+    scope.includeBlankIncoterm,
+  );
 
   return {
     sql: parts.length > 0 ? `WHERE ${parts.join(' AND ')}` : '',

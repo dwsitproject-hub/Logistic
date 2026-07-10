@@ -287,6 +287,13 @@ export async function replaceTruckingDailyActuals(
   }
 
   await syncTruckingQuantityDeliveredFromDailyActuals(executor, truckingOperationId);
+  setImmediate(() => {
+    import('./contractQtyMoveSnapshot.service')
+      .then(({ ContractQtyMoveSnapshotService }) =>
+        ContractQtyMoveSnapshotService.refreshForTruckingOperationIds([truckingOperationId]),
+      )
+      .catch(() => {});
+  });
 }
 
 export async function upsertTruckingDailyActualRows(
@@ -312,6 +319,13 @@ export async function upsertTruckingDailyActualRows(
   }
 
   await syncTruckingQuantityDeliveredFromDailyActuals(executor, truckingOperationId);
+  setImmediate(() => {
+    import('./contractQtyMoveSnapshot.service')
+      .then(({ ContractQtyMoveSnapshotService }) =>
+        ContractQtyMoveSnapshotService.refreshForTruckingOperationIds([truckingOperationId]),
+      )
+      .catch(() => {});
+  });
 }
 
 /** Derive DB status column from realization dates only (not planning). */

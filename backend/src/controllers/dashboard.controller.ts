@@ -2,7 +2,8 @@ import { Response } from 'express';
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
-import { CONTRACTS_QTY_MOVE_CTE } from './contractsQtyMoveSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
+import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
 import { diffCalendarDays } from '../utils/calendarDays';
 import { shipmentIsLateSql } from '../utils/shipmentListFilters';
 import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
@@ -300,36 +301,16 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
     // Also break down delivered/outstanding by payoff status:
     // - paid: has at least one non-empty payoff_date
     // - outstanding payment: has at least one empty payoff_date
+    const contractsQtyMoveCte = await resolveContractsQtyMoveCte('contract_scope');
+    const contractsStoAggCte = await resolveContractsStoAggCte('contract_scope');
     const outstandingStats = await query(`
       WITH contract_scope AS (
         SELECT DISTINCT c.contract_id
         FROM contracts c
         WHERE 1=1 ${contractFilter}
       ),
-      ${CONTRACTS_QTY_MOVE_CTE},
-      sto_agg AS (
-        SELECT x.contract_number,
-          SUM(x.sto_quantity_num) AS total_sto_quantity
-        FROM (
-          SELECT DISTINCT ON (spd.contract_number, effective_sto)
-            spd.contract_number,
-            effective_sto,
-            sto_quantity_num
-          FROM (
-            SELECT spd.contract_number,
-              NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') AS effective_sto,
-              CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', '0'), ',', ''), ' ', '') AS NUMERIC) AS sto_quantity_num,
-              spd.created_at
-            FROM sap_processed_data spd
-            INNER JOIN contract_scope cs ON cs.contract_id = spd.contract_number
-            WHERE ((spd.sto_number IS NOT NULL AND spd.sto_number::text != '') OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number', spd.data->'shipment'->>'sto_no', spd.data->'contract'->>'sto_no')), '') IS NOT NULL)
-              AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-          ) spd
-          WHERE effective_sto IS NOT NULL AND effective_sto != ''
-          ORDER BY contract_number, effective_sto, created_at DESC NULLS LAST
-        ) x
-        GROUP BY x.contract_number
-      ),
+      ${contractsQtyMoveCte},
+      ${contractsStoAggCte},
       contract_qty AS (
         SELECT 
           c.id AS contract_pk,

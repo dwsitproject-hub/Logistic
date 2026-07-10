@@ -30,6 +30,7 @@ import {
 import {
   isPipelineDailySummaryEligible,
   loadTruckingSummaryFromDaily,
+  toPipelineDailySummaryScope,
   markPipelineDailySummaryStale,
   type PipelineDailySummaryFilterInput,
 } from './pipelineDailySummary.service';
@@ -893,11 +894,7 @@ export async function loadTruckingListSummary(
   if (req) {
     const filters = buildPipelineDailyFilterInput(req);
     if (isPipelineDailySummaryEligible(filters)) {
-      const fromDaily = await loadTruckingSummaryFromDaily({
-        dateFrom: filters.dateFrom,
-        dateTo: filters.dateTo,
-        plants: filters.plants,
-      });
+      const fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
       if (fromDaily) {
         SUMMARY_CACHE.set(summaryCacheKey, {
           summary: fromDaily,
@@ -930,11 +927,7 @@ export async function loadTruckingListSummaryWithBacklog(
 
   const filters = buildPipelineDailyFilterInput(req);
   if (isPipelineDailySummaryEligible(filters)) {
-    const fromDaily = await loadTruckingSummaryFromDaily({
-      dateFrom: filters.dateFrom,
-      dateTo: filters.dateTo,
-      plants: filters.plants,
-    });
+    const fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
     if (fromDaily) {
       MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
         summary: fromDaily,
