@@ -82,6 +82,16 @@ let lastAccessedAt = 0;
 let refreshInFlight: Promise<Record<string, unknown>[]> | null = null;
 let keepWarmTimer: NodeJS.Timeout | null = null;
 
+// Background warming keeps the (expensive) row cache populated so page loads are
+// served from memory instead of paying the full SQL cost. This does not change what
+// the query returns — it only pre-runs the identical query off the request path.
+const KEEP_WARM_CHECK_MS = 60 * 1000; // how often the warmer wakes up
+const KEEP_WARM_REFRESH_AFTER_MS = 4 * 60 * 1000; // renew cache once it is this old (< TTL)
+const KEEP_WARM_MAX_IDLE_MS = 15 * 60 * 1000; // stop warming when nobody is using the page
+let lastAccessedAt = 0;
+let refreshInFlight: Promise<Record<string, unknown>[]> | null = null;
+let keepWarmTimer: NodeJS.Timeout | null = null;
+
 /** One row per STO / shipment operation (not per PO). */
 export function shippingPerfStoGroupKey(row: Record<string, unknown>): string {
   return shippingPerfStoGroupKeyFromRow(row);

@@ -81,7 +81,7 @@ export const FIELD_HELP = {
 
   shipmentStoQty: `STO Quantity from the linked contract in SAP (in MT). Represents the planned quantity allocated to this shipment.`,
   shipmentReceivedQty: `Actual quantity received at destination (actual_vessel_qty_receive or BL quantity as fallback), in MT.`,
-  shipmentOutstandingQtyActual: `SAP STO Qty minus actual Qty Receive/Delivered (per incoterm) for this shipment/STO. Uses SAP/manual fulfillment only — not planning calendar.`,
+  shipmentOutstandingQtyActual: `Contract Qty minus STO-scoped Qty Receive/Delivered (per incoterm) for this STO. Same rules as Shipping Performance view table. Uses SAP fulfillment on this STO only — not global contract qty_move.`,
   shipmentOutstandingQtyPlanning: `Contract Qty minus SAP STO Qty (planning via SAP) minus Shipment Planning Qty (KLIP daily deliverables on shipment + linked trucking for the STO). Net aggregate at STO level — over-planning on one PO can offset another. Displayed in MT.`,
   shipmentPlanningQty: `KLIP shipment planning qty — sum of daily deliverables on the shipment calendar plus linked trucking daily deliverables for the same STO.`,
   /** @deprecated Use shipmentOutstandingQtyActual */

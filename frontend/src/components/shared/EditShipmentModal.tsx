@@ -1766,7 +1766,7 @@ export function EditShipmentModal({
                           <span title="SAP STO quantity">STO Qty (MT)</span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="Global per PO — incoterm-aware">OS Qty (MT)</span>
+                          <span title="Contract qty minus STO-scoped SAP receive/delivery (incoterm-aware) — same as Shipping Performance">OS Qty (MT)</span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
                           <span title="Global per PO — contract − SAP STO − all plans">OS Qty (Plan) (MT)</span>
