@@ -72,6 +72,16 @@ const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const ROW_CACHE_KEY = 'shipping-performance-rows-v26';
 
+// Background warming keeps the (expensive) row cache populated so page loads are
+// served from memory instead of paying the full SQL cost. This does not change what
+// the query returns — it only pre-runs the identical query off the request path.
+const KEEP_WARM_CHECK_MS = 60 * 1000; // how often the warmer wakes up
+const KEEP_WARM_REFRESH_AFTER_MS = 4 * 60 * 1000; // renew cache once it is this old (< TTL)
+const KEEP_WARM_MAX_IDLE_MS = 15 * 60 * 1000; // stop warming when nobody is using the page
+let lastAccessedAt = 0;
+let refreshInFlight: Promise<Record<string, unknown>[]> | null = null;
+let keepWarmTimer: NodeJS.Timeout | null = null;
+
 /** One row per STO / shipment operation (not per PO). */
 export function shippingPerfStoGroupKey(row: Record<string, unknown>): string {
   return shippingPerfStoGroupKeyFromRow(row);
@@ -159,6 +169,12 @@ export function dedupeShippingPerformanceRows(
 
 export function invalidateShippingPerformanceRowCache(): void {
   ROW_CACHE.delete(ROW_CACHE_KEY);
+  // If the page is in active use, rebuild the cache in the background so the next
+  // viewer after an edit is served from memory instead of paying the full query cost.
+  // Off the request path; falls back to a normal cold load if it fails.
+  if (Date.now() - lastAccessedAt <= KEEP_WARM_MAX_IDLE_MS) {
+    void warmShippingPerformanceRowCache();
+  }
 }
 
 const SHIPPING_PERFORMANCE_SQL = `
@@ -589,16 +605,70 @@ function buildRemarksList(rows: Record<string, unknown>[]): ShippingPerfRemark[]
     .sort((a, b) => a.vessel_name.localeCompare(b.vessel_name) || a.shipment_id.localeCompare(b.shipment_id));
 }
 
+/** Run the query and repopulate the cache. Concurrent callers share one execution. */
+function refreshShippingPerformanceRows(): Promise<Record<string, unknown>[]> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      const result = await query(SHIPPING_PERFORMANCE_SQL);
+      const rows = aggregateShippingPerformanceRowsBySto(result.rows as Record<string, unknown>[]);
+      ROW_CACHE.set(ROW_CACHE_KEY, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
+      return rows;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
+}
+
 async function loadShippingPerformanceRows(): Promise<Record<string, unknown>[]> {
+  lastAccessedAt = Date.now();
   const cached = ROW_CACHE.get(ROW_CACHE_KEY);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.rows;
   }
 
-  const result = await query(SHIPPING_PERFORMANCE_SQL);
-  const rows = aggregateShippingPerformanceRowsBySto(result.rows as Record<string, unknown>[]);
-  ROW_CACHE.set(ROW_CACHE_KEY, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
-  return rows;
+  // Cold (empty/expired) cache: run now and return fresh rows, exactly as before.
+  // Concurrent cold requests are de-duplicated so they don't stampede the DB.
+  return refreshShippingPerformanceRows();
+}
+
+/** Pre-populate the row cache off the request path (startup + background warmer). */
+export async function warmShippingPerformanceRowCache(): Promise<void> {
+  try {
+    await refreshShippingPerformanceRows();
+  } catch {
+    // Warming is best-effort; a failed warm just means the next request runs cold.
+  }
+}
+
+/**
+ * Start a lightweight background warmer so the first visitor after a restart or an
+ * idle gap does not pay the full query cost. It only refreshes while the page is in
+ * active use, and renews the cache shortly before its TTL so users are always served
+ * from memory. Data freshness is unchanged (cache is still at most CACHE_TTL_MS old).
+ */
+export function startShippingPerformanceCacheWarmer(): void {
+  void warmShippingPerformanceRowCache();
+  if (keepWarmTimer) return;
+  keepWarmTimer = setInterval(() => {
+    if (Date.now() - lastAccessedAt > KEEP_WARM_MAX_IDLE_MS) return;
+    if (refreshInFlight) return;
+    const cached = ROW_CACHE.get(ROW_CACHE_KEY);
+    const ageMs = cached ? CACHE_TTL_MS - (cached.expiresAt - Date.now()) : Number.POSITIVE_INFINITY;
+    if (ageMs >= KEEP_WARM_REFRESH_AFTER_MS) {
+      void warmShippingPerformanceRowCache();
+    }
+  }, KEEP_WARM_CHECK_MS);
+  // Do not keep the event loop alive solely for the warmer.
+  keepWarmTimer.unref?.();
+}
+
+export function stopShippingPerformanceCacheWarmer(): void {
+  if (keepWarmTimer) {
+    clearInterval(keepWarmTimer);
+    keepWarmTimer = null;
+  }
 }
 
 function distinctValues(rows: Record<string, unknown>[], key: string): string[] {

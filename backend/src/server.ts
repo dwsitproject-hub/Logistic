@@ -19,6 +19,10 @@ import { ContractQtyMoveSnapshotService, isContractQtyMoveSnapshotFresh } from '
 import { ContractStoAggSnapshotService, isContractStoAggSnapshotFresh } from './services/contractStoAggSnapshot.service';
 import { ContractLatestSpdSnapshotService, isContractLatestSpdSnapshotFresh } from './services/contractLatestSpdSnapshot.service';
 import { ensureUserStoContractAssignmentsTable } from './database/ensureUserStoContractAssignments';
+import {
+  startShippingPerformanceCacheWarmer,
+  stopShippingPerformanceCacheWarmer,
+} from './services/shippingPerformance.service';
 
 // Import routes
 import authRoutes from './routes/auth.routes';
@@ -193,6 +197,15 @@ if (process.env.NODE_ENV !== 'test') {
         logger.warn('Pipeline daily summary startup refresh skipped', { error });
       }
     });
+
+    // Warm the Shipping Performance row cache so the first visitor after a restart
+    // is served from memory instead of paying the full query cost.
+    try {
+      startShippingPerformanceCacheWarmer();
+      logger.info('🔥 Shipping Performance cache warmer started');
+    } catch (error) {
+      logger.warn('Failed to start Shipping Performance cache warmer', { error });
+    }
   });
 }
 
@@ -200,12 +213,14 @@ if (process.env.NODE_ENV !== 'test') {
 process.on('SIGTERM', () => {
   logger.info('SIGTERM received, shutting down gracefully...');
   SchedulerService.shutdown();
+  stopShippingPerformanceCacheWarmer();
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   logger.info('SIGINT received, shutting down gracefully...');
   SchedulerService.shutdown();
+  stopShippingPerformanceCacheWarmer();
   process.exit(0);
 });
 
