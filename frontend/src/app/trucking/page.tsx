@@ -22,6 +22,10 @@ import { format } from 'date-fns'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { TruckingOutstandingQtyWithTooltip } from '@/components/trucking/TruckingOutstandingQtyWithTooltip'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
+import {
+  TruckingStatusDistribution,
+  type TruckingStatusCardKey,
+} from '@/components/trucking/TruckingStatusDistribution'
 import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
@@ -1090,7 +1094,7 @@ function TruckingPageContent() {
   const [totalCount, setTotalCount] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [hasMore, setHasMore] = useState<boolean>(true)
-  /** Section 1 status circles — toolbar scope only (excludes status card filter). */
+  /** Section 1 status cards — toolbar scope only (excludes status card filter). */
   const [truckingSection1Summary, setTruckingSection1Summary] = useState<any>(null)
   /** Stale-while-revalidate: true while summary API is in flight; keeps prior card counts. */
   const [summaryFetching, setSummaryFetching] = useState(false)
@@ -2619,8 +2623,8 @@ function TruckingPageContent() {
     setHasMore(true)
   }, [defaultContractDateRange, resetUserScopeFilters])
 
-  /** Section 1 status circles — toggles Section 2 dropdown + Section 3 API `status` param. */
-  const handleStatusCardClick = useCallback((status: string) => {
+  /** Section 2 status cards — toggles Section 3 API `status` param. */
+  const handleStatusCardClick = useCallback((status: TruckingStatusCardKey) => {
     beginTableScopeRefresh()
     setPage(1)
     setHasMore(true)
@@ -3630,93 +3634,12 @@ function TruckingPageContent() {
         </Card>
 
         {/* Section 2: Summary Trucking Status */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              Summary Trucking Status
-              {summaryFetching ? (
-                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
-              ) : null}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto py-4 px-4">
-              {[
-                {
-                  status: 'UNPLANNED',
-                  label: 'Unplanned',
-                  color: 'bg-slate-100',
-                  textColor: 'text-slate-800',
-                  badgeColor: 'bg-slate-600',
-                  help: FIELD_HELP.truckingStatusUnplanned,
-                },
-                {
-                  status: 'PLANNED',
-                  label: 'Planned',
-                  color: 'bg-blue-100',
-                  textColor: 'text-blue-800',
-                  badgeColor: 'bg-blue-600',
-                  help: FIELD_HELP.truckingStatusPlanned,
-                },
-                {
-                  status: 'IN_PROGRESS',
-                  label: 'In Progress',
-                  color: 'bg-yellow-100',
-                  textColor: 'text-yellow-800',
-                  badgeColor: 'bg-yellow-600',
-                  help: FIELD_HELP.truckingStatusInProgress,
-                },
-                {
-                  status: 'COMPLETED',
-                  label: 'Completed',
-                  color: 'bg-green-100',
-                  textColor: 'text-green-800',
-                  badgeColor: 'bg-green-600',
-                  help: FIELD_HELP.truckingStatusCompleted,
-                },
-                {
-                  status: 'CANCELLED',
-                  label: 'Cancelled',
-                  color: 'bg-red-100',
-                  textColor: 'text-red-800',
-                  badgeColor: 'bg-red-600',
-                  help: FIELD_HELP.truckingStatusCancelled,
-                },
-              ].map((statusInfo, index, array) => {
-                const isStatusActive = statusFilter === statusInfo.status
-                const count = truckingStatusCardCounts[statusInfo.status] ?? 0
-                return (
-                  <div key={statusInfo.status} className="flex items-center flex-shrink-0">
-                    <div className="relative">
-                      <button
-                        type="button"
-                        title={statusInfo.help}
-                        onClick={() => handleStatusCardClick(statusInfo.status)}
-                        className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg transition-all cursor-pointer hover:shadow-xl hover:scale-[1.02] ${
-                          isStatusActive ? 'ring-4 ring-blue-400 ring-offset-2' : ''
-                        }`}
-                      >
-                        <div className={`absolute -top-3 -right-3 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10`}>
-                          {count}
-                        </div>
-                        <span className={`text-xs md:text-sm font-semibold ${statusInfo.textColor} text-center px-2 leading-tight ${isStatusActive ? 'font-bold' : ''}`}>
-                          {statusInfo.label}
-                        </span>
-                      </button>
-                    </div>
-                    {index < array.length - 1 && (
-                      <div className="flex-shrink-0 mx-2 md:mx-3">
-                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-gray-400">
-                          <path d="M9 18L15 12L9 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </CardContent>
-        </Card>
+        <TruckingStatusDistribution
+          loading={summaryFetching}
+          statusFilter={statusFilter}
+          counts={truckingStatusCardCounts}
+          onStageClick={handleStatusCardClick}
+        />
 
         {/* Section 3: Main View Table — calendar or list tab below */}
 
