@@ -29,6 +29,16 @@ import {
   truckingListB2bExcludeSql,
 } from '../utils/truckingListSelectSql';
 import {
+  buildTruckingOutstandingQtyBacklogAggregateQuery,
+  buildTruckingOutstandingQtyExecutionAggregateQuery,
+  isTruckingOsStatusOutsideActiveScope,
+  mergeTruckingOutstandingQtySummaries,
+  normalizeTruckingOsStatusParam,
+  parseTruckingOutstandingQtySummaryRow,
+  shouldIncludeTruckingUnplannedBacklogForOs,
+  type TruckingOutstandingQtySummary,
+} from '../utils/truckingOutstandingQtySummarySql';
+import {
   isPipelineDailySummaryEligible,
   loadTruckingSummaryFromDaily,
   toPipelineDailySummaryScope,
@@ -76,6 +86,7 @@ export interface TruckingListResponseData {
       executionRows: number;
       totalTableRows: number;
     };
+    outstandingQty?: TruckingOutstandingQtySummary;
   };
   pagination: {
     total: number;
@@ -102,7 +113,7 @@ const MERGED_SUMMARY_CACHE = new Map<
 >();
 const UNPLANNED_BACKLOG_CACHE = new Map<string, { count: number; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v32';
+const CACHE_VERSION = 'trucking-list-v33';
 const MAX_CACHE_ENTRIES = 80;
 
 // Re-runs recent page loads in the background (refresh-ahead + re-warm after edits)
@@ -218,8 +229,8 @@ export function buildTruckingSummaryCacheKey(filterCacheKey: string): string {
   return `${filterCacheKey}:summary`;
 }
 
-function buildTruckingMergedSummaryCacheKey(filterCacheKey: string): string {
-  return `${filterCacheKey}:summary-unplanned-merged`;
+function buildTruckingMergedSummaryCacheKey(filterCacheKey: string, osStatus: string | null): string {
+  return `${filterCacheKey}:summary-unplanned-merged:os:${osStatus ?? 'ALL'}`;
 }
 
 function buildTruckingUnplannedBacklogCacheKey(req: AuthRequest): string {
@@ -925,33 +936,96 @@ export async function loadTruckingListSummary(
   return summary;
 }
 
+async function loadTruckingOutstandingQtyForRequest(
+  req: AuthRequest,
+  built: TruckingListBuiltQuery,
+  osStatus: string | null,
+): Promise<TruckingOutstandingQtySummary> {
+  if (isTruckingOsStatusOutsideActiveScope(osStatus)) {
+    return {
+      totalKg: 0,
+      thirdParty: { frcKg: 0, lcoKg: 0 },
+      interco: { frcKg: 0, lcoKg: 0 },
+    };
+  }
+
+  const executionBuilt: TruckingListBuiltQuery = {
+    ...built,
+    skipSapJoin: false,
+  };
+  const execQ = buildTruckingOutstandingQtyExecutionAggregateQuery(executionBuilt, osStatus);
+  const execPromise = query(execQ.text, execQ.params).then((res) =>
+    parseTruckingOutstandingQtySummaryRow((res.rows[0] || {}) as Record<string, unknown>),
+  );
+
+  if (!shouldIncludeTruckingUnplannedBacklogForOs(osStatus)) {
+    return execPromise;
+  }
+
+  const { dateFrom, dateTo, contract, plant } = req.query;
+  const globalSearch =
+    typeof (req.query as { search?: string }).search === 'string'
+      ? (req.query as { search?: string }).search!.trim()
+      : '';
+  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
+  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  const scope = buildTruckingUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
+  let idx = scope.params.length + 1;
+  const g = appendTruckingUnplannedBacklogGlobalSearch(globalSearch, idx);
+  idx = g.nextIndex;
+  const c = appendTruckingUnplannedBacklogColumnFilters(colFilters, idx);
+  const backlogText = buildTruckingOutstandingQtyBacklogAggregateQuery(
+    scope.sql,
+    `${g.sql}${c.sql}`,
+  );
+  const backlogParams = [...scope.params, ...g.params, ...c.params];
+
+  const [execution, backlog] = await Promise.all([
+    execPromise,
+    query(backlogText, backlogParams).then((res) =>
+      parseTruckingOutstandingQtySummaryRow((res.rows[0] || {}) as Record<string, unknown>),
+    ),
+  ]);
+  return mergeTruckingOutstandingQtySummaries(execution, backlog);
+}
+
 export async function loadTruckingListSummaryWithBacklog(
   req: AuthRequest,
   built: TruckingListBuiltQuery,
 ): Promise<TruckingListResponseData['summary']> {
-  const mergedCacheKey = buildTruckingMergedSummaryCacheKey(built.filterCacheKey);
+  const osStatus = normalizeTruckingOsStatusParam((req.query as { osStatus?: string }).osStatus);
+  const mergedCacheKey = buildTruckingMergedSummaryCacheKey(built.filterCacheKey, osStatus);
   const cachedMerged = MERGED_SUMMARY_CACHE.get(mergedCacheKey);
   if (cachedMerged && Date.now() < cachedMerged.expiresAt) {
     return cachedMerged.summary;
   }
   if (cachedMerged) MERGED_SUMMARY_CACHE.delete(mergedCacheKey);
 
+  const outstandingQtyPromise = loadTruckingOutstandingQtyForRequest(req, built, osStatus);
+
   const filters = buildPipelineDailyFilterInput(req);
   if (isPipelineDailySummaryEligible(filters)) {
     const fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
     if (fromDaily) {
+      const outstandingQty = await outstandingQtyPromise;
+      const merged: NonNullable<TruckingListResponseData['summary']> = {
+        ...fromDaily,
+        outstandingQty,
+      };
       MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
-        summary: fromDaily,
+        summary: merged,
         expiresAt: Date.now() + CACHE_TTL_MS,
       });
       evictMapIfNeeded(MERGED_SUMMARY_CACHE, MAX_CACHE_ENTRIES);
-      return fromDaily;
+      return merged;
     }
   }
 
-  const [base, contractRows] = await Promise.all([
+  const [base, contractRows, outstandingQty] = await Promise.all([
     loadTruckingListSummary(built, req),
     countTruckingUnplannedContractBacklogForRequest(req),
+    outstandingQtyPromise,
   ]);
   if (!base) return base;
 
@@ -961,12 +1035,17 @@ export async function loadTruckingListSummaryWithBacklog(
     executionRows,
     totalTableRows: contractRows + executionRows,
   });
+  if (!merged) return base;
+  const withOs: NonNullable<TruckingListResponseData['summary']> = {
+    ...merged,
+    outstandingQty,
+  };
   MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
-    summary: merged,
+    summary: withOs,
     expiresAt: Date.now() + CACHE_TTL_MS,
   });
   evictMapIfNeeded(MERGED_SUMMARY_CACHE, MAX_CACHE_ENTRIES);
-  return merged;
+  return withOs;
 }
 
 async function loadTruckingListPage(

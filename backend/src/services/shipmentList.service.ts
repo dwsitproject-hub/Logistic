@@ -21,6 +21,22 @@ import {
   queueShipmentVesselSapBackfill,
 } from './shipmentVesselFromSap.service';
 import { ListCacheKeepWarm } from '../utils/listCacheKeepWarm';
+import {
+  buildShipmentOutstandingQtyBacklogAggregateQuery,
+  buildShipmentOutstandingQtyExecutionAggregateQuery,
+  EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY,
+  isShipmentOsStatusOutsideActiveScope,
+  mergeShipmentOutstandingQtySummaries,
+  normalizeShipmentOsStatusParam,
+  parseShipmentOutstandingQtySummaryRow,
+  shouldIncludeShipmentUnplannedBacklogForOs,
+  type ShipmentOutstandingQtySummary,
+} from '../utils/shipmentOutstandingQtySummarySql';
+import {
+  appendUnplannedContractBacklogColumnFilters,
+  appendUnplannedContractBacklogGlobalSearch,
+  buildUnplannedContractToolbarScope,
+} from '../utils/shipmentUnplannedHybridSql';
 
 /**
  * Shipments compact list API:
@@ -67,8 +83,12 @@ const SUMMARY_CACHE = new Map<
   { summaryRow: Record<string, unknown>; totalCount: number; expiresAt: number }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'shipment-list-v28';
+const CACHE_VERSION = 'shipment-list-v29';
 const MAX_CACHE_ENTRIES = 80;
+const OUTSTANDING_QTY_CACHE = new Map<
+  string,
+  { summary: ShipmentOutstandingQtySummary; expiresAt: number }
+>();
 
 // Re-runs recent page loads in the background (refresh-ahead + re-warm after edits)
 // so users are served from the cache instead of paying the full query cost. Does not
@@ -159,6 +179,101 @@ export function buildShipmentListCountCacheKey(filterCacheKey: string): string {
 
 export function buildShipmentSummaryCacheKey(filterCacheKey: string, scopeStatus?: string): string {
   return `${filterCacheKey}:summary:${scopeStatus ?? ''}`;
+}
+
+export function buildShipmentOutstandingQtyCacheKey(
+  filterCacheKey: string,
+  osStatus: string | null,
+): string {
+  return `${filterCacheKey}:outstanding-qty:os:${osStatus ?? 'ALL'}`;
+}
+
+export type { ShipmentOutstandingQtySummary };
+
+/**
+ * Outstanding Qty strip for Section 1 (FOB/CIF × Interco / 3rd Party).
+ * Scoped by Global Filters + optional pipeline card (`osStatus`).
+ */
+export async function loadShipmentOutstandingQtyForRequest(
+  req: AuthRequest,
+  opts: {
+    shipmentBaseCteSql: string;
+    toolbarOuterSql: string;
+    innerParams: unknown[];
+    toolbarOuterParams: unknown[];
+    filterCacheKey: string;
+  },
+): Promise<ShipmentOutstandingQtySummary> {
+  const osStatus = normalizeShipmentOsStatusParam((req.query as { osStatus?: string }).osStatus);
+  const cacheKey = buildShipmentOutstandingQtyCacheKey(opts.filterCacheKey, osStatus);
+  const cached = OUTSTANDING_QTY_CACHE.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.summary;
+  }
+  if (cached) OUTSTANDING_QTY_CACHE.delete(cacheKey);
+
+  if (isShipmentOsStatusOutsideActiveScope(osStatus)) {
+    OUTSTANDING_QTY_CACHE.set(cacheKey, {
+      summary: EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+    evictMapIfNeeded(OUTSTANDING_QTY_CACHE, MAX_CACHE_ENTRIES);
+    return EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY;
+  }
+
+  const baseParams = [...opts.innerParams, ...opts.toolbarOuterParams];
+  const execQ = buildShipmentOutstandingQtyExecutionAggregateQuery(
+    opts.shipmentBaseCteSql,
+    opts.toolbarOuterSql,
+    baseParams,
+    osStatus,
+  );
+  const execPromise = query(execQ.text, execQ.params).then((res) =>
+    parseShipmentOutstandingQtySummaryRow((res.rows[0] || {}) as Record<string, unknown>),
+  );
+
+  if (!shouldIncludeShipmentUnplannedBacklogForOs(osStatus)) {
+    const execution = await execPromise;
+    OUTSTANDING_QTY_CACHE.set(cacheKey, {
+      summary: execution,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+    evictMapIfNeeded(OUTSTANDING_QTY_CACHE, MAX_CACHE_ENTRIES);
+    return execution;
+  }
+
+  const { dateFrom, dateTo, contract, plant } = req.query;
+  const globalSearch =
+    typeof (req.query as { search?: string }).search === 'string'
+      ? (req.query as { search?: string }).search!.trim()
+      : '';
+  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
+  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
+  let idx = scope.params.length + 1;
+  const g = appendUnplannedContractBacklogGlobalSearch(globalSearch, idx);
+  idx = g.nextIndex;
+  const c = appendUnplannedContractBacklogColumnFilters(colFilters, idx);
+  const backlogText = buildShipmentOutstandingQtyBacklogAggregateQuery(
+    scope.sql,
+    `${g.sql}${c.sql}`,
+  );
+  const backlogParams = [...scope.params, ...g.params, ...c.params];
+
+  const [execution, backlog] = await Promise.all([
+    execPromise,
+    query(backlogText, backlogParams).then((res) =>
+      parseShipmentOutstandingQtySummaryRow((res.rows[0] || {}) as Record<string, unknown>),
+    ),
+  ]);
+  const merged = mergeShipmentOutstandingQtySummaries(execution, backlog);
+  OUTSTANDING_QTY_CACHE.set(cacheKey, {
+    summary: merged,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
+  evictMapIfNeeded(OUTSTANDING_QTY_CACHE, MAX_CACHE_ENTRIES);
+  return merged;
 }
 
 export type ShipmentSummaryUnplannedBreakdown = {
@@ -315,6 +430,7 @@ export function invalidateShipmentsListCache(): void {
   PAGE_CACHE.clear();
   COUNT_CACHE.clear();
   SUMMARY_CACHE.clear();
+  OUTSTANDING_QTY_CACHE.clear();
   markPipelineDailySummaryStale(['shipment']).catch(() => {});
   // Rebuild the recently used pages in the background so the next viewer after an
   // edit is served from memory instead of paying the full query cost.

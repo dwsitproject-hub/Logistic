@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   applyHPlusOnePlanningPromotions,
+  getCalendarFilledQtyDateBounds,
+  getCalendarFilledQtyDaysInMonth,
   getHPlusOneIsoDate,
   resolveCalendarCellQtyKg,
   shouldAutoPromoteHPlusOnePlanning,
@@ -54,5 +56,25 @@ describe('truckingCalendarActuals', () => {
     )
     expect(upsert).toHaveBeenCalledWith('op-1', tomorrow, 25000)
     expect(rows[0].daily_actuals).toEqual([{ date: tomorrow, quantity_delivered: 25000 }])
+  })
+
+  it('computes filled qty date bounds across rows (min start = earliest filled day)', () => {
+    const rows = [
+      {
+        id: 'a',
+        daily_deliverables: [{ date: '2026-06-05', quantity_delivered: 1000 }],
+        daily_actuals: [],
+      },
+      {
+        id: 'b',
+        daily_deliverables: [{ date: '2026-06-03', quantity_delivered: 2000 }],
+        daily_actuals: [],
+      },
+    ]
+    expect(getCalendarFilledQtyDateBounds(rows)).toEqual({
+      start: '2026-06-03',
+      end: '2026-06-05',
+    })
+    expect(getCalendarFilledQtyDaysInMonth(rows, new Date(2026, 5, 1))).toEqual([3, 4, 5])
   })
 })

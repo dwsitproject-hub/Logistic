@@ -11,11 +11,14 @@ import {
   buildShipmentPipelineDailyFilterInput,
   buildShipmentSummaryCacheKey,
   invalidateShipmentsListCache,
+  loadShipmentOutstandingQtyForRequest,
   loadShipmentSummaryBundle,
   normalizeShipmentListRows,
   resolveShipmentsListForRequest,
   seedShipmentListFilteredTotal,
+  type ShipmentOutstandingQtySummary,
 } from '../services/shipmentList.service';
+import { EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY } from '../utils/shipmentOutstandingQtySummarySql';
 import {
   isPipelineDailySummaryEligible,
   loadShipmentStagePageFromSnapshot,
@@ -286,6 +289,7 @@ function shipmentListSummaryPayload(
   totalCount: number,
   summaryRow: Record<string, unknown>,
   unplannedBreakdown?: UnplannedHybridBreakdown | null,
+  outstandingQty?: ShipmentOutstandingQtySummary | null,
 ) {
   const unplannedContractRows = unplannedBreakdown
     ? unplannedBreakdown.contractRows
@@ -348,6 +352,7 @@ function shipmentListSummaryPayload(
       shipmentRows: unplannedShipmentRows,
       totalTableRows: unplannedTableTotal,
     },
+    outstandingQty: outstandingQty ?? EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY,
   };
 }
 
@@ -999,6 +1004,15 @@ ${contractMetaSelectCore}
     const loadSection1UnplannedBreakdown = () =>
       countUnplannedHybridBreakdown(section1UnplannedHybridCtx);
 
+    const loadSection1OutstandingQty = () =>
+      loadShipmentOutstandingQtyForRequest(req, {
+        shipmentBaseCteSql: shipmentBaseCteSqlSummary,
+        toolbarOuterSql: section1SummaryFilterSql,
+        innerParams,
+        toolbarOuterParams,
+        filterCacheKey: shipmentListFilterCacheKey,
+      });
+
     const summaryCountQuery = `${shipmentBaseCteSqlSummary}
       ${buildUnplannedContractBacklogTableCountCte(contractScopeSql)}
       , filtered_shipments AS (
@@ -1095,12 +1109,15 @@ ${contractMetaSelectCore}
         scopeStatusParam,
       );
       const tSum0 = performance.now();
-      const summaryBundle = await loadShipmentSummaryBundle(req, {
-        summaryCountQuery,
-        params: [...section1SummaryFilterParams, ...summaryScopeParams],
-        cacheKey: summaryCacheKey,
-        loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
-      });
+      const [summaryBundle, outstandingQty] = await Promise.all([
+        loadShipmentSummaryBundle(req, {
+          summaryCountQuery,
+          params: [...section1SummaryFilterParams, ...summaryScopeParams],
+          cacheKey: summaryCacheKey,
+          loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+        }),
+        loadSection1OutstandingQty(),
+      ]);
       const { summaryRow: sr, totalCount: tc, unplannedBreakdown: unplannedBreakdownForSummary, source: summarySource } =
         summaryBundle;
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
@@ -1117,7 +1134,7 @@ ${contractMetaSelectCore}
         success: true,
         data: {
           shipments: [],
-          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary),
+          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary, outstandingQty),
           pagination: {
             total: tc,
             page: Number(page),
@@ -1317,12 +1334,15 @@ ${contractMetaSelectCore}
         scopeStatusParam,
       );
       const tSum0 = performance.now();
-      const summaryBundle = await loadShipmentSummaryBundle(req, {
-        summaryCountQuery,
-        params: [...section1SummaryFilterParams, ...summaryScopeParams],
-        cacheKey: summaryCacheKey,
-        loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
-      });
+      const [summaryBundle, outstandingQty] = await Promise.all([
+        loadShipmentSummaryBundle(req, {
+          summaryCountQuery,
+          params: [...section1SummaryFilterParams, ...summaryScopeParams],
+          cacheKey: summaryCacheKey,
+          loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+        }),
+        loadSection1OutstandingQty(),
+      ]);
       const {
         summaryRow: sr,
         totalCount: tc,
@@ -1345,7 +1365,7 @@ ${contractMetaSelectCore}
         success: true,
         data: {
           shipments: [],
-          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary),
+          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary, outstandingQty),
           pagination: {
             total: tc,
             page: Number(page),

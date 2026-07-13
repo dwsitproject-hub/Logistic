@@ -63,10 +63,9 @@ const SEGMENT_UI: Record<
   },
 }
 
-/** Display MT with suffix (segment card primary value). */
+/** Display quantity as whole MT without unit suffix (unit noted under section header). */
 export function formatSegmentCardQtyMt(kg: number): string {
-  const mt = (kg / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 })
-  return `${mt} MT`
+  return (kg / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 })
 }
 
 export function formatSegmentCardAvgTrade(days: number | null): string {

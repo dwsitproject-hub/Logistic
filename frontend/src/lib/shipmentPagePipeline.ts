@@ -57,6 +57,11 @@ export type ShipmentPagePipelineSummary = {
     shipmentRows: number
     totalTableRows: number
   }
+  outstandingQty?: {
+    totalKg: number
+    thirdParty: { fobKg: number; cifKg: number }
+    interco: { fobKg: number; cifKg: number }
+  }
 }
 
 export interface ShipmentPipelineCardConfig {

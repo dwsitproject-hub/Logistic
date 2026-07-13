@@ -154,14 +154,25 @@ export function formatTemplateQtyMtFromKg(kg: unknown, opts?: { maxFractionDigit
   })
 }
 
-/** @deprecated Use formatTemplateQtyMtFromKg */
-export function formatTemplateOutstandingQtyKg(kg: unknown): string {
-  return formatTemplateQtyMtFromKg(kg)
+/**
+ * OS Qty (MT) on Download Template — nearest whole MT
+ * (e.g. 24.05 → 24, 24.55 → 25).
+ */
+export function formatTemplateOsQtyMtFromKg(kg: unknown): string {
+  if (kg === null || kg === undefined || kg === '') return ''
+  const n = typeof kg === 'string' ? Number(String(kg).replace(/,/g, '')) : Number(kg)
+  if (!Number.isFinite(n)) return ''
+  return String(Math.round(n / 1000))
 }
 
 /** @deprecated Use formatTemplateQtyMtFromKg */
+export function formatTemplateOutstandingQtyKg(kg: unknown): string {
+  return formatTemplateOsQtyMtFromKg(kg)
+}
+
+/** @deprecated Use formatTemplateOsQtyMtFromKg */
 export function formatTemplateOutstandingQtyMt(kg: unknown): string {
-  return formatTemplateQtyMtFromKg(kg)
+  return formatTemplateOsQtyMtFromKg(kg)
 }
 
 /** Detect qty unit from wide planning template metadata headers. */
@@ -431,7 +442,7 @@ export function buildActualsTemplateMatrix(
         formatContractDateForTemplate(row.contract_date),
         ext,
         po,
-        formatTemplateQtyMtFromKg(row.outstanding_quantity),
+        formatTemplateOsQtyMtFromKg(row.outstanding_quantity),
         computePlanQtyMtFromDeliverables(row),
         ...qtyCells,
       ])

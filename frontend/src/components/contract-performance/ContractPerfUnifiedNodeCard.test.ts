@@ -6,8 +6,8 @@ import {
 } from './ContractPerfUnifiedNodeCard'
 
 describe('ContractPerfUnifiedNodeCard formatters', () => {
-  it('formatSegmentCardQtyMt shows MT with grouping', () => {
-    expect(formatSegmentCardQtyMt(1_235_702_000)).toBe('1,235,702 MT')
+  it('formatSegmentCardQtyMt shows grouped whole MT without unit suffix', () => {
+    expect(formatSegmentCardQtyMt(1_235_702_000)).toBe('1,235,702')
   })
 
   it('buildSegmentCardTooltip includes contract count and avg trade', () => {

@@ -69,6 +69,71 @@ export function resolveCalendarCellQtyKg(
   return getPlanningQtyKgForDate(row, date)
 }
 
+/** First/last ISO dates with resolved qty > 0 (planning or actual). */
+export function getRowFilledQtyDateBounds(
+  row: TruckingCalendarQtyRow,
+  tomorrowIso = getHPlusOneIsoDate(),
+): { start: string; end: string } | null {
+  const candidates = new Set<string>()
+  for (const x of row.daily_deliverables || []) {
+    const d = (x?.date || '').slice(0, 10)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) candidates.add(d)
+  }
+  for (const x of row.daily_actuals || []) {
+    const d = (x?.date || '').slice(0, 10)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) candidates.add(d)
+  }
+  const filled: string[] = []
+  for (const d of candidates) {
+    if (resolveCalendarCellQtyKg(row, d, tomorrowIso) > 0) filled.push(d)
+  }
+  if (filled.length === 0) return null
+  filled.sort()
+  return { start: filled[0]!, end: filled[filled.length - 1]! }
+}
+
+/** Min start / max end of filled qty dates across rows (e.g. calendar day-column span). */
+export function getCalendarFilledQtyDateBounds(
+  rows: TruckingCalendarQtyRow[],
+  tomorrowIso = getHPlusOneIsoDate(),
+): { start: string; end: string } | null {
+  let min: string | null = null
+  let max: string | null = null
+  for (const row of rows) {
+    const bounds = getRowFilledQtyDateBounds(row, tomorrowIso)
+    if (!bounds) continue
+    if (!min || bounds.start < min) min = bounds.start
+    if (!max || bounds.end > max) max = bounds.end
+  }
+  return min && max ? { start: min, end: max } : null
+}
+
+/**
+ * Day-of-month numbers to show in the calendar grid for `month`,
+ * clipped to the filled-qty span across rows (inclusive).
+ */
+export function getCalendarFilledQtyDaysInMonth(
+  rows: TruckingCalendarQtyRow[],
+  month: Date,
+  tomorrowIso = getHPlusOneIsoDate(),
+): number[] {
+  const bounds = getCalendarFilledQtyDateBounds(rows, tomorrowIso)
+  if (!bounds) return []
+  const yyyy = month.getFullYear()
+  const mm = month.getMonth()
+  const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
+  const prefix = `${yyyy}-${String(mm + 1).padStart(2, '0')}-`
+  const monthStart = `${prefix}01`
+  const monthEnd = `${prefix}${String(daysInMonth).padStart(2, '0')}`
+  if (bounds.end < monthStart || bounds.start > monthEnd) return []
+  const startIso = bounds.start > monthStart ? bounds.start : monthStart
+  const endIso = bounds.end < monthEnd ? bounds.end : monthEnd
+  const startDay = Number(startIso.slice(8, 10))
+  const endDay = Number(endIso.slice(8, 10))
+  if (!Number.isFinite(startDay) || !Number.isFinite(endDay) || startDay > endDay) return []
+  return Array.from({ length: endDay - startDay + 1 }, (_, i) => startDay + i)
+}
+
 export async function applyHPlusOnePlanningPromotions<T extends TruckingCalendarQtyRow & { id: string }>(
   rows: T[],
   upsertActual: (

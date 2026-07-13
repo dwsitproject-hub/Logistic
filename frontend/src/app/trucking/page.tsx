@@ -26,6 +26,7 @@ import {
   TruckingStatusDistribution,
   type TruckingStatusCardKey,
 } from '@/components/trucking/TruckingStatusDistribution'
+import { TruckingOutstandingQtySummary } from '@/components/trucking/TruckingOutstandingQtySummary'
 import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
@@ -56,7 +57,9 @@ import {
 import { formatQtyMtFromKg } from '@/lib/utils'
 import {
   applyHPlusOnePlanningPromotions,
+  getCalendarFilledQtyDaysInMonth,
   getHPlusOneIsoDate,
+  getRowFilledQtyDateBounds,
   isDateInDueWindow,
   resolveCalendarCellQtyKg,
 } from '@/lib/truckingCalendarActuals'
@@ -532,12 +535,11 @@ const CALENDAR_NUMERIC_SORT_COLS = new Set([
 function getTruckingCalendarSortValue(
   row: TruckingCalendarRow,
   sortKey: string,
-  cellDrafts: Record<string, string>,
+  _cellDrafts: Record<string, string> = {},
 ): string | number {
   if (sortKey.startsWith('day:')) {
     const date = sortKey.slice(4)
-    const qtyMt = parseDailyPlanningMtDraft(cellDrafts[`${row.id}:${date}`] ?? '')
-    return qtyMt === 'invalid' ? 0 : qtyMt
+    return resolveCalendarCellQtyKg(row, date) / 1000
   }
 
   switch (sortKey) {
@@ -552,9 +554,9 @@ function getTruckingCalendarSortValue(
     case 'owner':
       return row.trucking_owner || ''
     case 'due_start':
-      return row.delivery_start_date || ''
+      return getRowFilledQtyDateBounds(row)?.start || ''
     case 'due_end':
-      return row.delivery_end_date || ''
+      return getRowFilledQtyDateBounds(row)?.end || ''
     case 'source_type':
       return row.source_type || ''
     case 'lt_spot':
@@ -619,31 +621,24 @@ function CalendarDeliverablesTable({
   month,
   rows,
   loading,
-  savingAll,
-  cellDrafts,
-  cellBaseline,
-  formatQty,
   visibleMetaCols,
   metaOrderIds,
   onReorderMetaCols,
-  onCellChange,
 }: {
   month: Date
   rows: TruckingCalendarRow[]
   loading: boolean
-  savingAll: boolean
-  cellDrafts: Record<string, string>
-  cellBaseline: Record<string, string>
-  formatQty: (n: number) => string
   visibleMetaCols: Set<string>
   metaOrderIds: string[]
   onReorderMetaCols: (dragId: string, dropId: string) => void
-  onCellChange: (id: string, date: string, value: string) => void
 }) {
   const yyyy = month.getFullYear()
   const mm = month.getMonth()
-  const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
-  const days = Array.from({ length: daysInMonth }, (_, i) => i + 1)
+  const tomorrowIso = getHPlusOneIsoDate()
+  const days = useMemo(
+    () => getCalendarFilledQtyDaysInMonth(rows, month, tomorrowIso),
+    [rows, month, tomorrowIso],
+  )
   const operationColW = 220
   const opShown = visibleMetaCols.has('operation_id')
   const stickyContractCols = CALENDAR_STICKY_CONTRACT_COL_IDS.filter((id) => visibleMetaCols.has(id))
@@ -664,9 +659,6 @@ function CalendarDeliverablesTable({
   const scrollTopRef = useRef<HTMLDivElement | null>(null)
   const scrollBottomRef = useRef<HTMLDivElement | null>(null)
   const isSyncing = useRef(false)
-  const editInputRef = useRef<HTMLInputElement | null>(null)
-  const [editingQtyCellKey, setEditingQtyCellKey] = useState<string | null>(null)
-  const editingQtyValueRef = useRef<string>('')
   const dayIso = (day: number) => {
     const m = String(mm + 1).padStart(2, '0')
     const d = String(day).padStart(2, '0')
@@ -686,34 +678,12 @@ function CalendarDeliverablesTable({
     if (!rows.length) return rows
     return [...rows].sort((a, b) =>
       compareCalendarSortValues(
-        getTruckingCalendarSortValue(a, sortKey, cellDrafts),
-        getTruckingCalendarSortValue(b, sortKey, cellDrafts),
+        getTruckingCalendarSortValue(a, sortKey, {}),
+        getTruckingCalendarSortValue(b, sortKey, {}),
         sortDir,
       ),
     )
-  }, [rows, sortKey, sortDir, cellDrafts])
-
-  useEffect(() => {
-    if (editingQtyCellKey) {
-      editInputRef.current?.focus()
-      editInputRef.current?.select()
-    }
-  }, [editingQtyCellKey])
-
-  const startInlineQtyEdit = useCallback((key: string, current: string) => {
-    if (savingAll) return
-    editingQtyValueRef.current = current
-    setEditingQtyCellKey(key)
-  }, [savingAll])
-
-  const commitInlineQtyEdit = useCallback((rowId: string, date: string) => {
-    onCellChange(rowId, date, editingQtyValueRef.current)
-    setEditingQtyCellKey(null)
-  }, [onCellChange])
-
-  const cancelInlineQtyEdit = useCallback(() => {
-    setEditingQtyCellKey(null)
-  }, [])
+  }, [rows, sortKey, sortDir])
 
   const orderedMetaCols = useMemo(() => {
     const all = [
@@ -758,7 +728,7 @@ function CalendarDeliverablesTable({
       top.removeEventListener('scroll', onTop)
       bottom.removeEventListener('scroll', onBottom)
     }
-  }, [rows.length, daysInMonth, opShown, stickyContractCols, visibleMetaCols])
+  }, [rows.length, days.length, opShown, stickyContractCols, visibleMetaCols])
 
   return (
     <div>
@@ -768,9 +738,9 @@ function CalendarDeliverablesTable({
         <div className="text-center py-10 text-gray-500">No trucking operations in this month window</div>
       ) : (
         <>
-        <p className="text-xs text-gray-500 mb-2">Daily quantity values are in MT.</p>
+        <p className="text-xs text-gray-500 mb-2">Daily quantity values are in MT (readonly).</p>
         <div ref={scrollTopRef} className="overflow-x-auto border rounded-md bg-white">
-          <div className="h-3" style={{ width: `${2000 + daysInMonth * 48}px` }} />
+          <div className="h-3" style={{ width: `${2000 + Math.max(days.length, 1) * 48}px` }} />
         </div>
         <div ref={scrollBottomRef} className="overflow-x-auto mt-2">
         <table className="min-w-[2000px] w-full text-xs border-separate border-spacing-0">
@@ -872,12 +842,9 @@ function CalendarDeliverablesTable({
               const contractExtLabel = formatOperationalTableTextDisplay(r.contract_ext_no || r.contract_number)
               const stoLabel = formatOperationalTableTextDisplay(r.sto_number)
               const supplierLabel = formatOperationalTableTextDisplay(r.supplier)
-              const dueStart = r.delivery_start_date
-                ? formatDateDMY(r.delivery_start_date || '')
-                : '-'
-              const dueEnd = r.delivery_end_date
-                ? formatDateDMY(r.delivery_end_date || '')
-                : '-'
+              const filledBounds = getRowFilledQtyDateBounds(r, tomorrowIso)
+              const dueStart = filledBounds ? formatDateDMY(filledBounds.start) : '-'
+              const dueEnd = filledBounds ? formatDateDMY(filledBounds.end) : '-'
               const qtySent = Number(r.quantity_sent || 0)
               const qtyDel = Number(r.quantity_delivered || 0)
               const qtyRecv = Number(r.quantity_receive ?? 0)
@@ -968,51 +935,22 @@ function CalendarDeliverablesTable({
                   })}
                   {days.map((d) => {
                     const date = dayIso(d)
-                    const key = `${r.id}:${date}`
-                    const draftValue = cellDrafts[key] ?? ''
-                    const isDirty = (draftValue ?? '') !== (cellBaseline[key] ?? '')
-                    const isEditingThisCell = editingQtyCellKey === key
+                    const qtyKg = resolveCalendarCellQtyKg(r, date, tomorrowIso)
+                    const display =
+                      qtyKg > 0
+                        ? formatQtyMtFromKg(qtyKg).replace(/\s*MT$/i, '')
+                        : '0.00'
                     return (
                       <td
                         key={date}
-                        className={`px-2 py-1.5 border-b border-gray-100 text-right tabular-nums ${isDirty ? 'bg-amber-50/50' : ''}`}
+                        className="px-2 py-1.5 border-b border-gray-100 text-right tabular-nums"
                       >
-                        {isEditingThisCell ? (
-                          <input
-                            ref={editInputRef}
-                            key={key}
-                            defaultValue={draftValue}
-                            onChange={(e) => {
-                              editingQtyValueRef.current = e.target.value
-                            }}
-                            onBlur={() => commitInlineQtyEdit(r.id, date)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault()
-                                commitInlineQtyEdit(r.id, date)
-                              } else if (e.key === 'Escape') {
-                                e.preventDefault()
-                                cancelInlineQtyEdit()
-                              }
-                            }}
-                            disabled={savingAll}
-                            className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-white text-right text-xs focus:border-blue-400 focus:ring-1 focus:ring-blue-200 disabled:opacity-60"
-                            placeholder="0"
-                            title={date}
-                          />
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => startInlineQtyEdit(key, draftValue)}
-                            disabled={savingAll}
-                            className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-gray-50 text-right text-xs text-gray-700 hover:bg-white disabled:opacity-60"
-                            title={`Click to edit ${date}`}
-                          >
-                            {draftValue
-                              ? formatDailyPlanningQtyMtDisplay(draftValue)
-                              : '0.00'}
-                          </button>
-                        )}
+                        <span
+                          className="inline-flex w-[64px] h-7 items-center justify-end px-2 rounded border border-gray-100 bg-gray-50 text-xs text-gray-700"
+                          title={date}
+                        >
+                          {display}
+                        </span>
                       </td>
                     )
                   })}
@@ -1021,6 +959,11 @@ function CalendarDeliverablesTable({
             })}
           </tbody>
         </table>
+        {days.length === 0 ? (
+          <div className="text-center py-6 text-gray-500 text-sm">
+            No filled daily quantities in this month for the current rows.
+          </div>
+        ) : null}
         </div>
         </>
       )}
@@ -2011,6 +1954,12 @@ function TruckingPageContent() {
       summaryParams.set('summaryOnly', 'true')
       summaryParams.set('page', '1')
       summaryParams.set('limit', '1')
+      const osStatus = String(fetchStatusFilter ?? '').trim().toUpperCase()
+      if (osStatus && osStatus !== 'ALL') {
+        summaryParams.set('osStatus', osStatus)
+      } else {
+        summaryParams.delete('osStatus')
+      }
       const summaryUrl = `/trucking?${summaryParams.toString()}`
       const summaryCacheKey = buildCacheKey('GET', summaryUrl)
       const summaryForce = options?.force || section1SummaryForceNextFetchRef.current
@@ -3641,6 +3590,11 @@ function TruckingPageContent() {
           onStageClick={handleStatusCardClick}
         />
 
+        <TruckingOutstandingQtySummary
+          loading={summaryFetching}
+          data={truckingSection1Summary?.outstandingQty}
+        />
+
         {/* Section 3: Main View Table — calendar or list tab below */}
 
         {activeTab === 'calendar' && (
@@ -3670,12 +3624,6 @@ function TruckingPageContent() {
                     </>
                   ) : null}
                 </p>
-                <div className="text-xs text-gray-600 mt-1 max-w-xl">
-                  Planned qty from Add Trucking is shown until actual qty is recorded via cell edit, CSV upload, or auto-conversion on H+1 (tomorrow).
-                  Edit cells or upload CSV/Excel — qty saved as actual delivery (validation: due date range, quantity caps).
-                  {' '}
-                  Enter qty only on days within each row&apos;s Due Start – Due End (gray days are blocked). Amber = unsaved; click Save.
-                </div>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 {truckingViewToggle}
@@ -3731,45 +3679,6 @@ function TruckingPageContent() {
                       </div>
                     ) : null}
                   </div>
-                  <Button type="button" variant="outline" size="sm" onClick={downloadDailyPlanningTemplate}>
-                    <Download className="h-4 w-4 mr-1" />
-                    Template
-                  </Button>
-                  <input
-                    ref={planningFileInputRef}
-                    type="file"
-                    accept=".csv,.xlsx,.xls,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
-                    className="hidden"
-                    onChange={handleDailyPlanningFileChange}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={planningUploading}
-                    onClick={() => planningFileInputRef.current?.click()}
-                  >
-                    {planningUploading ? (
-                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                    ) : (
-                      <Upload className="h-4 w-4 mr-1" />
-                    )}
-                    Upload
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={!calendarHasUnsavedChanges || calendarSavingAll || calendarLoading}
-                    onClick={() => void saveAllCalendarDrafts()}
-                    className="bg-green-600 hover:bg-green-700 text-white"
-                  >
-                    {calendarSavingAll ? (
-                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                    ) : (
-                      <Save className="h-4 w-4 mr-1" />
-                    )}
-                    Save
-                  </Button>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -3834,17 +3743,9 @@ function TruckingPageContent() {
                 month={calendarMonth}
                 rows={calendarRows}
                 loading={calendarLoading}
-                savingAll={calendarSavingAll}
-                cellDrafts={calendarCellDrafts}
-                cellBaseline={calendarSavedBaseline}
-                formatQty={formatTruckingQtyPlain}
                 visibleMetaCols={calendarVisibleMetaCols}
                 metaOrderIds={calendarMetaOrderIds}
                 onReorderMetaCols={reorderCalendarMetaCols}
-                onCellChange={(id, date, value) => {
-                  const key = `${id}:${date}`
-                  setCalendarCellDrafts((prev) => ({ ...prev, [key]: value }))
-                }}
               />
             </CardContent>
           </Card>

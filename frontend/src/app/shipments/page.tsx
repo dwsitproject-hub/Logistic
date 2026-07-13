@@ -117,6 +117,7 @@ import {
   type ShipmentPagePipelineVesselNames,
 } from '@/lib/shipmentPagePipeline'
 import { ShipmentStatusDistribution } from '@/components/shipments/ShipmentStatusDistribution'
+import { ShipmentOutstandingQtySummary } from '@/components/shipments/ShipmentOutstandingQtySummary'
 import { VesselIdleInsightChip } from '@/components/shipments/VesselIdleInsightChip'
 import { VesselIdleModal, type VesselIdleListRow } from '@/components/shipments/VesselIdleModal'
 import VesselHistoryModal, {
@@ -842,6 +843,11 @@ function ShipmentsPageContent() {
       shipmentRows?: number
       totalTableRows?: number
     }
+    outstandingQty?: {
+      totalKg: number
+      thirdParty: { fobKg: number; cifKg: number }
+      interco: { fobKg: number; cifKg: number }
+    }
     etaLoading?: Record<string, number>
     etaDischarge?: Record<string, number>
   } | null>(null)
@@ -1518,6 +1524,12 @@ function ShipmentsPageContent() {
       summaryParams.set('summaryOnly', 'true')
       summaryParams.set('page', '1')
       summaryParams.set('limit', '1')
+      const osStatus = String(statusFilter ?? '').trim().toUpperCase()
+      if (osStatus && osStatus !== 'ALL') {
+        summaryParams.set('osStatus', osStatus)
+      } else {
+        summaryParams.delete('osStatus')
+      }
       const summaryUrl = `/shipments?${summaryParams.toString()}`
       const summaryCacheKey = buildCacheKey('GET', summaryUrl)
       const summaryForce = options?.force || section1SummaryForceNextFetchRef.current
@@ -1607,30 +1619,25 @@ function ShipmentsPageContent() {
       if (!listRevalidating) {
         setListFetching(false)
       }
-      if (isUnplannedHybridList && !listEnvelope?.data?.summary) {
-        setSummaryFetching(false)
-      }
 
       /** Summary cards after table shell — avoids competing with list query on DB/CPU. */
       const scheduleSummaryFetches = () => {
         if (listGen !== listFetchGenRef.current) return
 
-        if (!isUnplannedHybridList) {
-          void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
-            force: summaryForce,
-            onRevalidate: (fresh) => {
-              if (listGen !== listFetchGenRef.current) return
-              applySummaryEnvelope(fresh)
-            },
+        void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+          force: summaryForce,
+          onRevalidate: (fresh) => {
+            if (listGen !== listFetchGenRef.current) return
+            applySummaryEnvelope(fresh)
+          },
+        })
+          .then(({ data }) => {
+            if (listGen !== listFetchGenRef.current) return
+            applySummaryEnvelope(data)
           })
-            .then(({ data }) => {
-              if (listGen !== listFetchGenRef.current) return
-              applySummaryEnvelope(data)
-            })
-            .catch(() => {
-              if (listGen === listFetchGenRef.current) setSummaryFetching(false)
-            })
-        }
+          .catch(() => {
+            if (listGen === listFetchGenRef.current) setSummaryFetching(false)
+          })
 
         if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && statusFilter !== 'ALL') {
           const section2Params = new URLSearchParams(params.toString())
@@ -5395,6 +5402,11 @@ function ShipmentsPageContent() {
           onOpenChange={(open) => { if (!open) setBulkUploadResult(null) }}
           title="Shipment bulk upload result"
           result={bulkUploadResult}
+        />
+
+        <ShipmentOutstandingQtySummary
+          loading={summaryFetching}
+          data={shipmentsSection1Summary?.outstandingQty}
         />
 
         {/* Shipments List */}

@@ -1182,11 +1182,6 @@ function ContractsPageContent() {
     [contractPerfPlantFilter],
   )
 
-  const sortedContractPerfGroupPlants = useMemo(
-    () => [...availableGroupPlants].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })),
-    [availableGroupPlants],
-  )
-
   /** Section 1 card totals — toolbar only; never tied to Open/Close tab selection. */
   const contractPerfToolbarGlobal = useMemo(
     () =>
@@ -3751,27 +3746,6 @@ function ContractsPageContent() {
                     ))}
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-700 shrink-0">Select Plant:</span>
-                  <div className="inline-flex items-center rounded-lg border bg-white p-1">
-                    <select
-                      value={contractPerfPlantFilter}
-                      onChange={(e) => {
-                        lockSection1FilterChange()
-                        setContractPerfPlantFilter(e.target.value)
-                      }}
-                      className="min-w-[10rem] max-w-[14rem] h-8 px-3 rounded-md border-0 bg-transparent text-sm font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-200 cursor-pointer"
-                      aria-label="Select group plant"
-                    >
-                      <option value="All">All</option>
-                      {sortedContractPerfGroupPlants.map((plant) => (
-                        <option key={plant} value={plant}>
-                          {plant}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
               </div>
               <button
                 type="button"
@@ -3959,6 +3933,7 @@ function ContractsPageContent() {
                           ) : (
                             <span className="ml-1 text-gray-600">· Section 3 uses global filters only</span>
                           )}
+                          <span className="ml-1 text-gray-600">· Quantity in MT</span>
                         </div>
                       </div>
                     </div>
