@@ -52,6 +52,7 @@ const CONTRACT_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> 
   company_name: 'wrap',
   contract_qty: 'short',
   received_qty: 'short',
+  delivery_qty: 'short',
   outstanding_qty: 'short',
   outstanding_qty_mt: 'short',
   contract_aging: 'short',

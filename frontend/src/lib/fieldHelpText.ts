@@ -36,6 +36,8 @@ export const FIELD_HELP = {
 
   outstandingQty: `Remaining quantity yet to be delivered. Green = Over Delivered (+MT); black = Still Outstanding.`,
 
+  deliveryQty: `Actual quantity delivered based on SAP (quantity_delivery). Uses trucking or vessel delivery by incoterm / transport mode.`,
+
   receivedQty: `Actual quantity received based on contract data (quantity_receive). For sea shipments: received at destination. For land shipments: quantity delivered to plant/site.`,
 
   outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (SAP). Over-delivery shows +MT (green); remaining outstanding shows MT (black).`,

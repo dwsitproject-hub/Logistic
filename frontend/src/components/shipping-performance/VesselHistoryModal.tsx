@@ -397,7 +397,7 @@ export default function VesselHistoryModal({
     { label: 'Owner Group', value: displayLabel(profile?.vessel_owner_group) },
     { label: 'Owner', value: displayLabel(profile?.vessel_owner) },
     {
-      label: 'Capacity (MT)',
+      label: 'Capacity',
       value:
         profile?.vessel_capacity_mt != null
           ? profile.vessel_capacity_mt.toLocaleString('en-US', { maximumFractionDigits: 2 })

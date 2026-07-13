@@ -214,8 +214,9 @@ export function buildTruckingExpansionKeysCountSql(
 
 /**
  * Expand trucking list rows — one row per contract STO (contract_stos + SAP FRC/LCO).
- * Delivery/receive prefer WB daily actuals when uploaded; else SAP per-STO. Outstanding
- * follows the same resolved qty (contract − delivered/receive by incoterm).
+ * Delivery/receive prefer WB daily actuals when uploaded and GR PO/STO is Open;
+ * when GR is Close, SAP per-STO qty is used. Outstanding follows the same resolved qty
+ * (contract − delivered/receive by incoterm).
  */
 export function buildTruckingListExpansionSql(
   innerSql: string,

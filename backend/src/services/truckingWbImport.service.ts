@@ -1,5 +1,10 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { query } from '../database/connection';
+import {
+  isContractDeliveryClosed,
+  SQL_CONTRACT_IMPORT_STATUS,
+} from '../utils/contractDeliveryStatus';
+import { usesGrStoStatus } from '../utils/sapIncotermMetrics';
 import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 import {
   aggregateWbRekapTickets,
@@ -215,6 +220,27 @@ async function applyAggregatedRow(
   }
 
   const op = ops[0];
+  const statusRes = await runQuery<{ import_status: string | null }>(
+    db,
+    `SELECT ${SQL_CONTRACT_IMPORT_STATUS} AS import_status
+     FROM trucking_operations t
+     LEFT JOIN contracts c ON t.contract_id = c.id
+     WHERE t.id = $1::uuid
+     LIMIT 1`,
+    [op.id],
+  );
+  const importStatus = statusRes.rows[0]?.import_status ?? null;
+  if (isContractDeliveryClosed(importStatus)) {
+    const grLabel = usesGrStoStatus(op.incoterm) ? 'GR STO Status' : 'GR PO Status';
+    operationFailures.push({
+      po_number: row.poNumber,
+      progress_date: row.progressDateIso,
+      reason: `Cannot update quantity from WB: ${grLabel} is Close — quantity delivery/receive remain from SAP`,
+      operation_ids: [String(op.operation_id ?? op.id)],
+    });
+    return { updated: false, upserted: 0 };
+  }
+
   const qtyResult = resolveWbActualQtyKg(
     String(op.incoterm ?? ''),
     row.sumNettoPksKg,

@@ -61,15 +61,27 @@ describe('shippingPerformanceTableUi — All Shipments preset', () => {
     expect(visible.outstanding_qty_planning).toBe(false)
   })
 
-  it('places preset columns first then extras in definition order', () => {
-    expect(ensureAllShipmentsPresetColumnOrder(allKeys, allKeys).slice(0, 16)).toEqual([
-      ...ALL_SHIPMENTS_PRESET_COLUMN_ORDER,
-    ])
-    expect(ensureAllShipmentsPresetColumnOrder(allKeys, allKeys)).toEqual([
-      ...ALL_SHIPMENTS_PRESET_COLUMN_ORDER,
-      'contract_ext_no',
+  it('preserves saved user order and appends missing keys', () => {
+    expect(
+      ensureAllShipmentsPresetColumnOrder(
+        ['delivered_qty', 'vessel_name', 'sto_number'],
+        allKeys,
+      ),
+    ).toEqual([
       'delivered_qty',
+      'vessel_name',
+      'sto_number',
+      ...ALL_SHIPMENTS_PRESET_COLUMN_ORDER.filter(
+        (key) => key !== 'vessel_name' && key !== 'sto_number',
+      ),
+      'contract_ext_no',
       'outstanding_qty_planning',
+    ])
+  })
+
+  it('uses preset order when saved order is empty', () => {
+    expect(ensureAllShipmentsPresetColumnOrder([], allKeys).slice(0, 16)).toEqual([
+      ...ALL_SHIPMENTS_PRESET_COLUMN_ORDER,
     ])
   })
 })

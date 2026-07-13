@@ -78,18 +78,22 @@ export function sqlTruckingQuantityReceiveCoalesce(): string {
 
 /**
  * Prefer KLIP-resolved qty (WB daily actuals synced to trucking_operations) over SAP per-STO
- * when trucking_daily_actuals exist for the operation.
+ * when trucking_daily_actuals exist AND GR PO/STO is still Open (FRC→GR PO, LCO→GR STO).
+ * When GR is Close, always prefer SAP so delivery/receive stay SAP-sourced.
  */
 export function sqlTruckingPreferWbResolvedQty(
   innerQtyExpr: string,
   sapPerStoQtyExpr: string,
   operationIdExpr = 'e.id',
+  contractAlias = 'c',
 ): string {
+  const grClosed = sqlIsContractSapClosedExpr(contractAlias);
   return `CASE
     WHEN EXISTS (
       SELECT 1 FROM trucking_daily_actuals da
       WHERE da.trucking_operation_id = ${operationIdExpr}
-    ) THEN COALESCE(${innerQtyExpr}, 0)
+    ) AND NOT (${grClosed}) THEN COALESCE(${innerQtyExpr}, 0)
+    WHEN (${grClosed}) THEN COALESCE(${sapPerStoQtyExpr}, 0)
     ELSE COALESCE(${sapPerStoQtyExpr}, ${innerQtyExpr}, 0)
   END`;
 }

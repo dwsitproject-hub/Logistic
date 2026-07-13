@@ -48,12 +48,18 @@ describe('shipmentColumns', () => {
     expect(visible.map((c) => c.id)).toEqual(['contract_date', 'vessel_name'])
   })
 
-  it('mergeShipmentColumnOrder keeps primary block first', () => {
-    const allIds = ['late_indicator', 'vessel_name', 'contract_date', 'loading_port']
-    expect(mergeShipmentColumnOrder(['contract_date', 'loading_port'], allIds)).toEqual([
-      'late_indicator',
+  it('mergeShipmentColumnOrder preserves user order including non-primary columns', () => {
+    const allIds = ['late_indicator', 'vessel_name', 'quantity_delivered', 'quantity_receive', 'contract_date']
+    expect(
+      mergeShipmentColumnOrder(
+        ['quantity_delivered', 'vessel_name', 'quantity_receive', 'late_indicator'],
+        allIds,
+      ),
+    ).toEqual([
+      'quantity_delivered',
       'vessel_name',
-      'loading_port',
+      'quantity_receive',
+      'late_indicator',
       'contract_date',
     ])
   })

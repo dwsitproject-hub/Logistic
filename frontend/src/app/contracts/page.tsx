@@ -169,6 +169,7 @@ const CLIENT_ONLY_SORT_COLUMN_IDS = new Set([
   'delivery_status',
   'status_overall',
   'unusual_status',
+  'delivery_qty',
   'received_qty',
   'over_under_delivery_status',
   'month_delivery_end',
@@ -371,6 +372,7 @@ const CONTRACTS_DEFAULT_COLUMN_ORDER: string[] = [
   'supplier',
   'company_name',
   'contract_qty',
+  'delivery_qty',
   'outstanding_qty_mt',
 ]
 
@@ -1817,10 +1819,10 @@ function ContractsPageContent() {
 
   const columnStorageKey = isContractPerformance
     ? 'contract-performance.compact.visibleColumns.v16'
-    : 'contracts.compact.visibleColumns.v8'
+    : 'contracts.compact.visibleColumns.v9'
   const columnOrderStorageKey = isContractPerformance
     ? 'contract-performance.compact.columnOrder.v12'
-    : 'contracts.compact.columnOrder.v9'
+    : 'contracts.compact.columnOrder.v10'
   // v4: default column order puts Contract Date first (ignore stale v3 saved order).
   // Bumped so saved "created_at" default does not fight API order (newest contract_date first).
   const sortStorageKey = isContractPerformance ? 'contract-performance.compact.sort' : 'contracts.compact.sort.v2'
@@ -2523,7 +2525,7 @@ function ContractsPageContent() {
   }
 
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
-    if (colId === 'contract_qty' || colId === 'outstanding_qty' || colId === 'contract_aging' || colId === 'received_qty' || colId === 'outstanding_qty_mt') return 'number'
+    if (colId === 'contract_qty' || colId === 'outstanding_qty' || colId === 'contract_aging' || colId === 'delivery_qty' || colId === 'received_qty' || colId === 'outstanding_qty_mt') return 'number'
     if (colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'created_at') return 'date'
     if (colId === 'product' || colId === 'status' || colId === 'company_name' || colId === 'lt_spot' || colId === 'group_name' || colId === 'supplier') return 'multi'
     if (colId === 'month_delivery_end') return 'text'
@@ -2562,6 +2564,8 @@ function ContractsPageContent() {
         return typeof c.quantity_ordered === 'number' ? c.quantity_ordered : null
       case 'outstanding_qty':
         return typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : null
+      case 'delivery_qty':
+        return typeof c.quantity_delivery === 'number' ? c.quantity_delivery : null
       case 'received_qty':
         return typeof c.quantity_receive === 'number' ? c.quantity_receive : null
       case 'outstanding_qty_mt':
@@ -2890,7 +2894,7 @@ function ContractsPageContent() {
     },
     {
       id: 'contract_qty',
-      label: isContractPerformance ? 'Contract Qty' : 'Contract Qty (MT)',
+      label: 'Contract Qty',
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => typeof c.quantity_ordered === 'number' ? c.quantity_ordered : 0,
@@ -2901,8 +2905,21 @@ function ContractsPageContent() {
       )
     },
     {
+      id: 'delivery_qty',
+      label: 'Delivery Qty',
+      formulaHelp: FIELD_HELP.deliveryQty,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (c) => typeof c.quantity_delivery === 'number' ? c.quantity_delivery : 0,
+      render: (c) => (
+        <span className="text-sm truncate">
+          {formatSapQtyMtDisplay(c.quantity_delivery)}
+        </span>
+      )
+    },
+    {
       id: 'received_qty',
-      label: isContractPerformance ? 'Received Qty' : 'Received Qty (MT)',
+      label: 'Received Qty',
       formulaHelp: FIELD_HELP.receivedQty,
       defaultVisible: false,
       sortable: true,
@@ -2931,7 +2948,7 @@ function ContractsPageContent() {
     },
     {
       id: 'outstanding_qty_mt',
-      label: isContractPerformance ? 'Outstanding Qty' : 'Outstanding Qty (MT)',
+      label: 'Outstanding Qty',
       formulaHelp: isContractPerformance ? FIELD_HELP.contractPerfOutstandingQty : FIELD_HELP.outstandingQtyMt,
       defaultVisible: true,
       sortable: true,
@@ -2942,7 +2959,7 @@ function ContractsPageContent() {
         }
         return (
           <span
-            className={`text-sm truncate font-medium tabular-nums ${outstandingQtyMtColorClass(c.outstanding_quantity)}`}
+            className={`text-sm truncate tabular-nums ${outstandingQtyMtColorClass(c.outstanding_quantity)}`}
           >
             {formatSapOutstandingQtyMtDisplay(c.outstanding_quantity)}
           </span>

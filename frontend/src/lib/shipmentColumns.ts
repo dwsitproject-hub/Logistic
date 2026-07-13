@@ -3,7 +3,7 @@
  * Matches Contract Performance compact header sizing behavior.
  */
 
-import { migrateSavedColumnLayout } from '@/lib/columnLayoutMigration'
+import { migrateSavedColumnLayout, mergePreservedColumnOrder } from '@/lib/columnLayoutMigration'
 import {
   buildCompactTableColumnWidthTracks,
   resolveCompactColumnWidthPx,
@@ -119,27 +119,7 @@ export function shipmentCompactColumnFallbackOrder(allIds: string[]): string[] {
 }
 
 export function mergeShipmentColumnOrder(saved: string[], allIds: string[]): string[] {
-  const canonical = shipmentCompactColumnFallbackOrder(allIds)
-  if (saved.length === 0) return canonical
-
-  const primary = SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS.filter((id) => allIds.includes(id))
-  const primarySet = new Set(primary)
-  const extras: string[] = []
-  const seen = new Set<string>()
-
-  for (const id of saved) {
-    if (allIds.includes(id) && !primarySet.has(id) && !seen.has(id)) {
-      extras.push(id)
-      seen.add(id)
-    }
-  }
-  for (const id of canonical) {
-    if (!primarySet.has(id) && !seen.has(id)) {
-      extras.push(id)
-      seen.add(id)
-    }
-  }
-  return [...primary, ...extras]
+  return mergePreservedColumnOrder(saved, allIds, shipmentCompactColumnFallbackOrder(allIds))
 }
 
 export function buildShipmentVisibleColumns<T extends { id: string }>(
@@ -171,6 +151,7 @@ export function buildShipmentColumnWidthTracks(
 export function migrateShipmentColumnLayout(
   visibleColumnIds: readonly string[],
   columnOrderIds: readonly string[],
+  allColumnIds?: readonly string[],
 ): { visibleColumnIds: string[]; columnOrderIds: string[] } {
   const migrated = migrateSavedColumnLayout({
     visibleColumnIds,
@@ -178,11 +159,12 @@ export function migrateShipmentColumnLayout(
     obsoleteColumnIds: SHIPMENT_OBSOLETE_COLUMN_IDS,
     ensureVisibleIds: ['loading_port', 'discharge_port'],
   })
+  const allIds =
+    allColumnIds && allColumnIds.length > 0
+      ? [...allColumnIds]
+      : [...new Set([...migrated.visibleColumnIds, ...migrated.columnOrderIds])]
   return {
     visibleColumnIds: migrated.visibleColumnIds,
-    columnOrderIds: mergeShipmentColumnOrder(migrated.columnOrderIds, [
-      ...migrated.visibleColumnIds,
-      ...migrated.columnOrderIds,
-    ]),
+    columnOrderIds: mergeShipmentColumnOrder(migrated.columnOrderIds, allIds),
   }
 }

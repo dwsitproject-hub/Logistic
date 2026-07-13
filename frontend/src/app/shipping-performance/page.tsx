@@ -82,6 +82,7 @@ import {
   mergeShippingPerfVisibleColumns,
   parseShippingPerfColumnPrefsFromApiValue,
   readShippingPerfColumnPrefsFromStorage,
+  SHIPPING_PERF_COLUMN_PREFS_STORAGE_KEY,
   SHIPPING_PERF_COLUMN_PREFS_USER_KEY,
   writeShippingPerfColumnPrefsToStorage,
   type ShippingPerfColumnPrefs,
@@ -838,21 +839,21 @@ const COLUMN_DEFS: ColumnDef[] = [
   { key: 'vessel_name', label: 'Vessel', type: 'text', defaultVisible: false, byVesselDefaultVisible: true },
   {
     key: 'by_vessel_qty_contract',
-    label: 'Qty Contract (MT)',
+    label: 'Qty Contract',
     type: 'number',
     byVesselOnly: true,
     byVesselDefaultVisible: true,
   },
   {
     key: 'by_vessel_qty_delivery',
-    label: 'Qty Delivery (MT)',
+    label: 'Qty Delivery',
     type: 'number',
     byVesselOnly: true,
     byVesselDefaultVisible: true,
   },
   {
     key: 'by_vessel_qty_receive',
-    label: 'Qty Receive (MT)',
+    label: 'Qty Receive',
     type: 'number',
     byVesselOnly: true,
     byVesselDefaultVisible: true,
@@ -883,7 +884,7 @@ const COLUMN_DEFS: ColumnDef[] = [
   {
     key: 'outstanding_qty_actual',
     label: 'Outstanding Qty',
-    byVesselLabel: 'Qty Outstanding Actual (MT)',
+    byVesselLabel: 'Qty Outstanding Actual',
     type: 'number',
     defaultVisible: false,
     byVesselDefaultVisible: true,
@@ -892,7 +893,7 @@ const COLUMN_DEFS: ColumnDef[] = [
   {
     key: 'outstanding_qty_planning',
     label: 'Outstanding Qty (Planning)',
-    byVesselLabel: 'Qty Outstanding Planning (MT)',
+    byVesselLabel: 'Qty Outstanding Planning',
     type: 'number',
     defaultVisible: false,
     byVesselDefaultVisible: true,
@@ -948,7 +949,7 @@ function applyAllShipmentsColumnDefaults(): {
 } {
   const allKeys = COLUMN_DEFS.map((col) => col.key)
   return {
-    order: ensureAllShipmentsPresetColumnOrder(allKeys, allKeys) as ShippingPerfColumnKey[],
+    order: ensureAllShipmentsPresetColumnOrder([], allKeys) as ShippingPerfColumnKey[],
     visible: buildAllShipmentsPresetVisibleColumns(allKeys),
   }
 }
@@ -1061,26 +1062,12 @@ function buildShippingPerfColumnManagerKeys(
   return [...visibleInOrder, ...hiddenSorted]
 }
 
-const BY_VESSEL_AFTER_VESSEL_COLUMN_KEYS: ShippingPerfColumnKey[] = [
-  'by_vessel_qty_contract',
-  'by_vessel_qty_delivery',
-  'by_vessel_qty_receive',
-  'contract_ext_no',
-]
-
-/** Keep By Vessel qty columns + Contract Ext No immediately after Vessel. */
+/** Preserve user column order; append any missing definition keys. */
 function ensureByVesselTableColumnOrder(order: ShippingPerfColumnKey[]): ShippingPerfColumnKey[] {
   const defOrder = COLUMN_DEFS.map((c) => c.key)
   const deduped = order.filter((key) => defOrder.includes(key))
   const missing = defOrder.filter((key) => !deduped.includes(key))
-  const merged: ShippingPerfColumnKey[] = [...deduped, ...missing]
-  const vesselIdx = merged.indexOf('vessel_name')
-  if (vesselIdx < 0) return merged
-
-  const withoutAnchors = merged.filter((key) => !BY_VESSEL_AFTER_VESSEL_COLUMN_KEYS.includes(key))
-  const anchors = BY_VESSEL_AFTER_VESSEL_COLUMN_KEYS.filter((key) => merged.includes(key))
-  withoutAnchors.splice(vesselIdx + 1, 0, ...anchors)
-  return withoutAnchors
+  return [...deduped, ...missing]
 }
 
 /** All Shipments view table — preset column order (On Going / Close share keys; ATA labels are display-only). */
@@ -1541,13 +1528,23 @@ function ShippingPerformancePageContent() {
 
   useEffect(() => {
     let cancelled = false
+    const hadLocalPrefs = (() => {
+      try {
+        const raw = localStorage.getItem(SHIPPING_PERF_COLUMN_PREFS_STORAGE_KEY)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as unknown
+        return Boolean(parsed && typeof parsed === 'object')
+      } catch {
+        return Boolean(localStorage.getItem(SHIPPING_PERF_COLUMN_PREFS_STORAGE_KEY))
+      }
+    })()
     ;(async () => {
       try {
         const res = await api.get(
           `/user-preferences/me?key=${encodeURIComponent(SHIPPING_PERF_COLUMN_PREFS_USER_KEY)}`,
         )
         const parsed = parseShippingPerfColumnPrefsFromApiValue(res.data?.data?.value)
-        if (cancelled || !parsed) return
+        if (cancelled || !parsed || hadLocalPrefs) return
         const next: ShippingPerfColumnPrefsByMode = {
           all: buildColumnPrefsForMode('all', parsed.all ?? columnPrefsRef.current.all),
           by_vessel: buildColumnPrefsForMode(

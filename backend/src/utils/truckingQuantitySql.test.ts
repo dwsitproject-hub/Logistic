@@ -31,11 +31,12 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('qty_del');
   });
 
-  it('sqlTruckingPreferWbResolvedQty checks trucking_daily_actuals before SAP per-STO', () => {
+  it('sqlTruckingPreferWbResolvedQty prefers WB only when GR Open; Closed uses SAP', () => {
     const sql = sqlTruckingPreferWbResolvedQty('e.quantity_delivered', 'sap_per_sto');
     expect(sql).toContain('trucking_daily_actuals');
     expect(sql).toContain('e.quantity_delivered');
     expect(sql).toContain('sap_per_sto');
+    expect(sql).toContain('AND NOT (');
   });
 
   it('sqlTruckingExpandedStoLineQtyKgExpr resolves SAP STO qty per expanded line', () => {

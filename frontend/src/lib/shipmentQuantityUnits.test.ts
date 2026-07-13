@@ -26,13 +26,23 @@ describe('sapContractDetailQtyToKg', () => {
 })
 
 describe('resolveShipmentListDeliveredKg', () => {
-  it('prefers manual shipment qty when it differs from SAP', () => {
+  it('prefers manual shipment qty when raised above SAP', () => {
     expect(
       resolveShipmentListDeliveredKg({
         quantity_delivered: 1_005_000,
         quantity_delivered_sap: 1_000_000,
       }),
     ).toBe(1_005_000)
+  })
+
+  it('uses SAP when manual shell is a partial multi-PO total', () => {
+    // STO 1006018900: one shipment row 208360 vs SAP sum 4_000_000
+    expect(
+      resolveShipmentListDeliveredKg({
+        quantity_delivered: 208_360,
+        quantity_delivered_sap: 4_000_000,
+      }),
+    ).toBe(4_000_000)
   })
 
   it('uses SAP when manual is 0 but SAP has delivery', () => {
@@ -58,13 +68,22 @@ describe('resolveShipmentListDeliveredKg', () => {
 })
 
 describe('resolveShipmentListReceiveKg', () => {
-  it('prefers actual_vessel_qty_receive when it differs from SAP', () => {
+  it('prefers actual_vessel_qty_receive when raised above SAP', () => {
     expect(
       resolveShipmentListReceiveKg({
-        actual_vessel_qty_receive: 990_000,
+        actual_vessel_qty_receive: 1_010_000,
         quantity_receive: 1_000_000,
       }),
-    ).toBe(990_000)
+    ).toBe(1_010_000)
+  })
+
+  it('uses SAP when vessel receive is a partial multi-PO total', () => {
+    expect(
+      resolveShipmentListReceiveKg({
+        actual_vessel_qty_receive: 208_360,
+        quantity_receive: 4_000_000,
+      }),
+    ).toBe(4_000_000)
   })
 
   it('uses SAP receive when manual row is 0', () => {

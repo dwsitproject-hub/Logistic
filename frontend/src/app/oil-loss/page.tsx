@@ -52,6 +52,10 @@ import {
   hasOilLossDrilldownSelection,
   type OilLossDrilldownFilters,
 } from '@/lib/oilLossDrilldown'
+import {
+  OIL_LOSS_COLUMN_PREFS_USER_KEY,
+  parseOilLossColumnPrefsFromApiValue,
+} from '@/lib/oilLossColumnPrefs'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
@@ -263,7 +267,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
     },
     {
       id: 'gain_loss_amount',
-      label: 'Oil Loss (MT)',
+      label: 'Oil Loss',
       formulaHelp: FIELD_HELP.oilLossAmount,
       defaultVisible: true,
       sortable: true,
@@ -442,7 +446,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
     },
     {
       id: 'gain_loss_amount',
-      label: 'Oil Loss (MT)',
+      label: 'Oil Loss',
       formulaHelp: FIELD_HELP.oilLossAmount,
       defaultVisible: true,
       sortable: true,
@@ -731,7 +735,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
     },
     {
       id: 'gain_loss_amount',
-      label: 'Oil Loss (MT)',
+      label: 'Oil Loss',
       formulaHelp: FIELD_HELP.oilLossAmount,
       defaultVisible: true,
       sortable: true,
@@ -996,138 +1000,85 @@ function toGroupHistoryContractRow(row: OilLossSourceRow): OilLossGroupHistoryCo
   }
 }
 
-function loadAllContractColumnPrefs(allIds: string[]): ViewColumnPrefs {
-  if (typeof window === 'undefined') {
-    return {
-      visibleIds: new Set(oilLossAllContractDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossAllContractCompactColumnFallbackOrder(allIds),
-      sortKey: 'contract_date',
-      sortDir: 'desc',
-    }
-  }
-  const version = window.localStorage.getItem(OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION_KEY)
-  if (version !== OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION) {
-    return {
-      visibleIds: new Set(oilLossAllContractDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossAllContractCompactColumnFallbackOrder(allIds),
-      sortKey: 'contract_date',
-      sortDir: 'desc',
-    }
-  }
+function readSavedOilLossColumns(
+  visibleKey: string,
+  orderKey: string,
+  allIds: string[],
+  defaultVisible: string[],
+  mergeOrder: (saved: string[], allIds: string[]) => string[],
+): { visibleIds: Set<string>; orderIds: string[] } {
   try {
-    const savedVisible = JSON.parse(window.localStorage.getItem('oil-loss.all-contract.visibleColumns') || '[]') as string[]
-    const savedOrder = JSON.parse(window.localStorage.getItem('oil-loss.all-contract.columnOrder') || '[]') as string[]
-    const visibleIds = new Set(
-      savedVisible.filter((id) => allIds.includes(id)).length > 0
-        ? savedVisible.filter((id) => allIds.includes(id))
-        : oilLossAllContractDefaultVisibleColumnIds(allIds),
-    )
+    const savedVisible = JSON.parse(window.localStorage.getItem(visibleKey) || '[]') as string[]
+    const savedOrder = JSON.parse(window.localStorage.getItem(orderKey) || '[]') as string[]
+    const filteredVisible = savedVisible.filter((id) => allIds.includes(id))
+    const visibleIds = new Set(filteredVisible.length > 0 ? filteredVisible : defaultVisible)
     return {
       visibleIds,
-      orderIds: mergeOilLossAllContractColumnOrder(savedOrder, allIds),
-      sortKey: 'contract_date',
-      sortDir: 'desc',
+      orderIds: mergeOrder(savedOrder, allIds),
     }
   } catch {
     return {
-      visibleIds: new Set(oilLossAllContractDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossAllContractCompactColumnFallbackOrder(allIds),
-      sortKey: 'contract_date',
-      sortDir: 'desc',
+      visibleIds: new Set(defaultVisible),
+      orderIds: mergeOrder([], allIds),
     }
   }
+}
+
+function loadAllContractColumnPrefs(allIds: string[]): ViewColumnPrefs {
+  const defaults: ViewColumnPrefs = {
+    visibleIds: new Set(oilLossAllContractDefaultVisibleColumnIds(allIds)),
+    orderIds: oilLossAllContractCompactColumnFallbackOrder(allIds),
+    sortKey: 'contract_date',
+    sortDir: 'desc',
+  }
+  if (typeof window === 'undefined') return defaults
+  const loaded = readSavedOilLossColumns(
+    'oil-loss.all-contract.visibleColumns',
+    'oil-loss.all-contract.columnOrder',
+    allIds,
+    oilLossAllContractDefaultVisibleColumnIds(allIds),
+    mergeOilLossAllContractColumnOrder,
+  )
+  if (loaded.visibleIds.size === 0) return defaults
+  return { ...defaults, ...loaded }
 }
 
 function loadByTransporterColumnPrefs(allIds: string[]): ViewColumnPrefs {
-  if (typeof window === 'undefined') {
-    return {
-      visibleIds: new Set(oilLossByTransporterDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossByTransporterCompactColumnFallbackOrder(allIds),
-      sortKey: 'transporter',
-      sortDir: 'asc',
-    }
+  const defaults: ViewColumnPrefs = {
+    visibleIds: new Set(oilLossByTransporterDefaultVisibleColumnIds(allIds)),
+    orderIds: oilLossByTransporterCompactColumnFallbackOrder(allIds),
+    sortKey: 'transporter',
+    sortDir: 'asc',
   }
-  const version = window.localStorage.getItem(OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION_KEY)
-  if (version !== OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION) {
-    return {
-      visibleIds: new Set(oilLossByTransporterDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossByTransporterCompactColumnFallbackOrder(allIds),
-      sortKey: 'transporter',
-      sortDir: 'asc',
-    }
-  }
-  try {
-    const savedVisible = JSON.parse(
-      window.localStorage.getItem('oil-loss.by-transporter.visibleColumns') || '[]',
-    ) as string[]
-    const savedOrder = JSON.parse(
-      window.localStorage.getItem('oil-loss.by-transporter.columnOrder') || '[]',
-    ) as string[]
-    const visibleIds = new Set(
-      savedVisible.filter((id) => allIds.includes(id)).length > 0
-        ? savedVisible.filter((id) => allIds.includes(id))
-        : oilLossByTransporterDefaultVisibleColumnIds(allIds),
-    )
-    return {
-      visibleIds,
-      orderIds: mergeOilLossByTransporterColumnOrder(savedOrder, allIds),
-      sortKey: 'transporter',
-      sortDir: 'asc',
-    }
-  } catch {
-    return {
-      visibleIds: new Set(oilLossByTransporterDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossByTransporterCompactColumnFallbackOrder(allIds),
-      sortKey: 'transporter',
-      sortDir: 'asc',
-    }
-  }
+  if (typeof window === 'undefined') return defaults
+  const loaded = readSavedOilLossColumns(
+    'oil-loss.by-transporter.visibleColumns',
+    'oil-loss.by-transporter.columnOrder',
+    allIds,
+    oilLossByTransporterDefaultVisibleColumnIds(allIds),
+    mergeOilLossByTransporterColumnOrder,
+  )
+  if (loaded.visibleIds.size === 0) return defaults
+  return { ...defaults, ...loaded }
 }
 
 function loadBySupplierColumnPrefs(allIds: string[]): ViewColumnPrefs {
-  if (typeof window === 'undefined') {
-    return {
-      visibleIds: new Set(oilLossBySupplierDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossBySupplierCompactColumnFallbackOrder(allIds),
-      sortKey: 'supplier',
-      sortDir: 'asc',
-    }
+  const defaults: ViewColumnPrefs = {
+    visibleIds: new Set(oilLossBySupplierDefaultVisibleColumnIds(allIds)),
+    orderIds: oilLossBySupplierCompactColumnFallbackOrder(allIds),
+    sortKey: 'supplier',
+    sortDir: 'asc',
   }
-  const version = window.localStorage.getItem(OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION_KEY)
-  if (version !== OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION) {
-    return {
-      visibleIds: new Set(oilLossBySupplierDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossBySupplierCompactColumnFallbackOrder(allIds),
-      sortKey: 'supplier',
-      sortDir: 'asc',
-    }
-  }
-  try {
-    const savedVisible = JSON.parse(
-      window.localStorage.getItem('oil-loss.by-supplier.visibleColumns') || '[]',
-    ) as string[]
-    const savedOrder = JSON.parse(
-      window.localStorage.getItem('oil-loss.by-supplier.columnOrder') || '[]',
-    ) as string[]
-    const visibleIds = new Set(
-      savedVisible.filter((id) => allIds.includes(id)).length > 0
-        ? savedVisible.filter((id) => allIds.includes(id))
-        : oilLossBySupplierDefaultVisibleColumnIds(allIds),
-    )
-    return {
-      visibleIds,
-      orderIds: mergeOilLossBySupplierColumnOrder(savedOrder, allIds),
-      sortKey: 'supplier',
-      sortDir: 'asc',
-    }
-  } catch {
-    return {
-      visibleIds: new Set(oilLossBySupplierDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossBySupplierCompactColumnFallbackOrder(allIds),
-      sortKey: 'supplier',
-      sortDir: 'asc',
-    }
-  }
+  if (typeof window === 'undefined') return defaults
+  const loaded = readSavedOilLossColumns(
+    'oil-loss.by-supplier.visibleColumns',
+    'oil-loss.by-supplier.columnOrder',
+    allIds,
+    oilLossBySupplierDefaultVisibleColumnIds(allIds),
+    mergeOilLossBySupplierColumnOrder,
+  )
+  if (loaded.visibleIds.size === 0) return defaults
+  return { ...defaults, ...loaded }
 }
 
 export default function OilLossPage() {
@@ -1428,6 +1379,114 @@ export default function OilLossPage() {
       JSON.stringify(columnPrefsByView.by_supplier.orderIds),
     )
   }, [columnPrefsByView, viewMode])
+
+  // Load per-user column prefs when localStorage has no saved layout for a view.
+  useEffect(() => {
+    let cancelled = false
+    const hadLocal = (visibleKey: string) => {
+      try {
+        const raw = localStorage.getItem(visibleKey)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as unknown
+        return Array.isArray(parsed) && parsed.length > 0
+      } catch {
+        return Boolean(localStorage.getItem(visibleKey))
+      }
+    }
+    ;(async () => {
+      try {
+        const res = await api.get(
+          `/user-preferences/me?key=${encodeURIComponent(OIL_LOSS_COLUMN_PREFS_USER_KEY)}`,
+        )
+        const parsed = parseOilLossColumnPrefsFromApiValue(res.data?.data?.value)
+        if (cancelled || !parsed) return
+        setColumnPrefsByView((prev) => {
+          const next = { ...prev }
+          if (parsed.all_contract && !hadLocal('oil-loss.all-contract.visibleColumns')) {
+            next.all_contract = {
+              ...prev.all_contract,
+              visibleIds: new Set(
+                parsed.all_contract.visibleColumnIds.length > 0
+                  ? parsed.all_contract.visibleColumnIds
+                  : [...prev.all_contract.visibleIds],
+              ),
+              orderIds: mergeOilLossAllContractColumnOrder(
+                parsed.all_contract.columnOrderIds,
+                allContractColumnIds,
+              ),
+            }
+          }
+          if (parsed.by_transporter && !hadLocal('oil-loss.by-transporter.visibleColumns')) {
+            next.by_transporter = {
+              ...prev.by_transporter,
+              visibleIds: new Set(
+                parsed.by_transporter.visibleColumnIds.length > 0
+                  ? parsed.by_transporter.visibleColumnIds
+                  : [...prev.by_transporter.visibleIds],
+              ),
+              orderIds: mergeOilLossByTransporterColumnOrder(
+                parsed.by_transporter.columnOrderIds,
+                transporterColumnIds,
+              ),
+            }
+          }
+          if (parsed.by_supplier && !hadLocal('oil-loss.by-supplier.visibleColumns')) {
+            next.by_supplier = {
+              ...prev.by_supplier,
+              visibleIds: new Set(
+                parsed.by_supplier.visibleColumnIds.length > 0
+                  ? parsed.by_supplier.visibleColumnIds
+                  : [...prev.by_supplier.visibleIds],
+              ),
+              orderIds: mergeOilLossBySupplierColumnOrder(
+                parsed.by_supplier.columnOrderIds,
+                supplierColumnIds,
+              ),
+            }
+          }
+          return next
+        })
+      } catch {
+        // keep localStorage bootstrap
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const saveOilLossViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (saveOilLossViewTimerRef.current) clearTimeout(saveOilLossViewTimerRef.current)
+    saveOilLossViewTimerRef.current = setTimeout(() => {
+      void api
+        .post('/user-preferences/me', {
+          key: OIL_LOSS_COLUMN_PREFS_USER_KEY,
+          value: {
+            all_contract: {
+              visibleColumnIds: [...columnPrefsByView.all_contract.visibleIds],
+              columnOrderIds: columnPrefsByView.all_contract.orderIds,
+            },
+            by_transporter: {
+              visibleColumnIds: [...columnPrefsByView.by_transporter.visibleIds],
+              columnOrderIds: columnPrefsByView.by_transporter.orderIds,
+            },
+            by_supplier: {
+              visibleColumnIds: [...columnPrefsByView.by_supplier.visibleIds],
+              columnOrderIds: columnPrefsByView.by_supplier.orderIds,
+            },
+          },
+        })
+        .catch(() => {
+          /* localStorage fallback */
+        })
+    }, 600)
+    return () => {
+      if (saveOilLossViewTimerRef.current) clearTimeout(saveOilLossViewTimerRef.current)
+    }
+  }, [columnPrefsByView])
 
   const hasActiveOilLossFilters =
     globalPeriod !== 'MTD' ||

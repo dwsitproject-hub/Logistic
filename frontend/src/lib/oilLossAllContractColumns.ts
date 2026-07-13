@@ -3,7 +3,9 @@
  * Scoped to `/oil-loss` when viewMode === 'all_contract' only.
  */
 
-export const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION = 'oil-loss-all-contract-v1'
+import { mergePreservedColumnOrder } from '@/lib/columnLayoutMigration'
+
+export const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION = 'oil-loss-all-contract-v2'
 export const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION_KEY =
   'oil-loss.all-contract.compact.columnLayoutVersion'
 
@@ -256,27 +258,7 @@ export function oilLossAllContractCompactColumnFallbackOrder(allIds: string[]): 
 }
 
 export function mergeOilLossAllContractColumnOrder(saved: string[], allIds: string[]): string[] {
-  const canonical = oilLossAllContractCompactColumnFallbackOrder(allIds)
-  if (saved.length === 0) return canonical
-
-  const primary = OIL_LOSS_ALL_CONTRACT_DEFAULT_VISIBLE_COLUMN_IDS.filter((id) => allIds.includes(id))
-  const primarySet = new Set(primary)
-  const extras: string[] = []
-  const seen = new Set<string>()
-
-  for (const id of saved) {
-    if (allIds.includes(id) && !primarySet.has(id) && !seen.has(id)) {
-      extras.push(id)
-      seen.add(id)
-    }
-  }
-  for (const id of canonical) {
-    if (!primarySet.has(id) && !seen.has(id)) {
-      extras.push(id)
-      seen.add(id)
-    }
-  }
-  return [...primary, ...extras]
+  return mergePreservedColumnOrder(saved, allIds, oilLossAllContractCompactColumnFallbackOrder(allIds))
 }
 
 export function buildOilLossAllContractVisibleColumns<T extends { id: string }>(

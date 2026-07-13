@@ -3010,7 +3010,7 @@ function ShipmentsPageContent() {
     }
   }, [columnOrderIds])
 
-  // Load per-user saved view (columns + order). Falls back to localStorage/defaults.
+  // Load per-user saved view (columns + order). LocalStorage wins when present.
   useEffect(() => {
     let cancelled = false
     const hadSavedVisibleAtOpen = (() => {
@@ -3023,6 +3023,16 @@ function ShipmentsPageContent() {
         return Boolean(localStorage.getItem(columnStorageKey))
       }
     })()
+    const hadSavedOrderAtOpen = (() => {
+      try {
+        const raw = localStorage.getItem(columnOrderStorageKey)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as unknown
+        return Array.isArray(parsed) && parsed.length > 0
+      } catch {
+        return Boolean(localStorage.getItem(columnOrderStorageKey))
+      }
+    })()
     ;(async () => {
       try {
         const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(userViewPrefKey)}`)
@@ -3030,19 +3040,21 @@ function ShipmentsPageContent() {
         if (cancelled) return
         const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
         const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
+        const allIds = compactColumns.map((c) => c.id)
         if (Array.isArray(cols) && cols.length > 0) {
           const migrated = migrateShipmentColumnLayout(
             cols.map((x: unknown) => String(x)),
             Array.isArray(order) ? order.map((x: unknown) => String(x)) : [],
+            allIds,
           )
           if (!hadSavedVisibleAtOpen) {
             setVisibleColumnIds(new Set(migrated.visibleColumnIds))
           }
-          if (!hadSavedVisibleAtOpen && migrated.columnOrderIds.length > 0) {
+          if (!hadSavedOrderAtOpen && migrated.columnOrderIds.length > 0) {
             setColumnOrderIds(migrated.columnOrderIds)
           }
-        } else if (Array.isArray(order) && order.length > 0 && !hadSavedVisibleAtOpen) {
-          setColumnOrderIds(order.map((x: unknown) => String(x)))
+        } else if (Array.isArray(order) && order.length > 0 && !hadSavedOrderAtOpen) {
+          setColumnOrderIds(mergeShipmentColumnOrder(order.map((x: unknown) => String(x)), allIds))
         }
       } catch {
         // ignore
@@ -3255,7 +3267,7 @@ function ShipmentsPageContent() {
     },
     {
       id: 'sto_quantity',
-      label: 'STO Qty (MT)',
+      label: 'STO Qty',
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => resolveShipmentListStoKg(s) ?? 0,
@@ -3267,7 +3279,7 @@ function ShipmentsPageContent() {
     },
     {
       id: 'quantity_delivered',
-      label: 'Delivery Qty (MT)',
+      label: 'Delivery Qty',
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => resolveShipmentListDeliveredKg(s) ?? 0,
@@ -3279,7 +3291,7 @@ function ShipmentsPageContent() {
     },
     {
       id: 'quantity_receive',
-      label: 'Received Qty (MT)',
+      label: 'Received Qty',
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => resolveShipmentListReceiveKg(s) ?? 0,
@@ -3670,7 +3682,7 @@ function ShipmentsPageContent() {
     }
 
     const applyMigratedLayout = (visible: string[], order: string[]) => {
-      const migrated = migrateShipmentColumnLayout(visible, order)
+      const migrated = migrateShipmentColumnLayout(visible, order, allIds)
       const nextOrder = mergeShipmentColumnOrder(migrated.columnOrderIds, allIds)
       setVisibleColumnIds(new Set(migrated.visibleColumnIds))
       setColumnOrderIds(nextOrder)

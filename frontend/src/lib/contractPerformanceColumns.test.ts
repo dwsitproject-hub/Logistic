@@ -43,7 +43,7 @@ describe('contractPerformanceColumns', () => {
   })
 
   it('keeps CONTRACT_PERF_COLUMN_ORDER length', () => {
-    expect(CONTRACT_PERF_COLUMN_ORDER.length).toBe(14)
+    expect(CONTRACT_PERF_COLUMN_ORDER.length).toBe(15)
   })
 
   it('uses compact fixed widths for default visible columns', () => {
@@ -87,6 +87,7 @@ describe('contractPerformanceColumns', () => {
       'product',
       'status_overall',
       'contract_qty',
+      'delivery_qty',
       'outstanding_qty_mt',
       'trade_cycle_days',
       'dp_cycle_days',

@@ -56,17 +56,38 @@ export function buildAllShipmentsPresetVisibleColumns(
   return visible
 }
 
-/** Preset column order first, then remaining columns in definition order. */
+/** Preset used only when no saved order exists; otherwise preserve user order and append missing. */
 export function ensureAllShipmentsPresetColumnOrder(
   order: readonly string[],
   allColumnKeys: readonly string[],
 ): string[] {
   const known = new Set(allColumnKeys)
-  const preset = ALL_SHIPMENTS_PRESET_COLUMN_ORDER.filter((key) => known.has(key))
-  const presetSet = new Set<string>(preset)
-  const trailingFromOrder = order.filter((key) => known.has(key) && !presetSet.has(key))
-  const trailingMissing = allColumnKeys.filter((key) => !presetSet.has(key) && !trailingFromOrder.includes(key))
-  return [...preset, ...trailingFromOrder, ...trailingMissing]
+  if (order.length === 0) {
+    const preset = ALL_SHIPMENTS_PRESET_COLUMN_ORDER.filter((key) => known.has(key))
+    const trailing = allColumnKeys.filter((key) => !preset.includes(key as AllShipmentsPresetColumnKey))
+    return [...preset, ...trailing]
+  }
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const key of order) {
+    if (known.has(key) && !seen.has(key)) {
+      out.push(key)
+      seen.add(key)
+    }
+  }
+  for (const key of ALL_SHIPMENTS_PRESET_COLUMN_ORDER) {
+    if (known.has(key) && !seen.has(key)) {
+      out.push(key)
+      seen.add(key)
+    }
+  }
+  for (const key of allColumnKeys) {
+    if (!seen.has(key)) {
+      out.push(key)
+      seen.add(key)
+    }
+  }
+  return out
 }
 
 export function isAllShipmentsPresetVisibleColumn(key: string): boolean {

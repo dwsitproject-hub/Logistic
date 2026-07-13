@@ -79,6 +79,7 @@ import {
   TRUCKING_COLUMN_LAYOUT_VERSION_KEY,
   buildTruckingVisibleColumns,
   mergeTruckingColumnOrder,
+  migrateTruckingColumnLayout,
   truckingCompactColumnFallbackOrder,
   truckingDefaultVisibleColumnIds,
 } from '@/lib/truckingColumns'
@@ -517,11 +518,11 @@ const CALENDAR_META_COL_LABELS: Record<string, string> = {
   lt_spot: 'LT/SPOT',
   product: 'Product',
   group_name: 'Group Name',
-  outstanding_quantity: 'Outstanding Qty (MT)',
-  qty_sent: 'Qty Sent (MT)',
-  qty_sent_planning: 'Qty Sent planning (MT)',
-  qty_delivered: 'Delivery Qty (MT)',
-  qty_received: 'Received Qty (MT)',
+  outstanding_quantity: 'Outstanding Qty',
+  qty_sent: 'Qty Sent',
+  qty_sent_planning: 'Qty Sent planning',
+  qty_delivered: 'Delivery Qty',
+  qty_received: 'Received Qty',
 }
 
 const CALENDAR_NUMERIC_SORT_COLS = new Set([
@@ -2879,7 +2880,7 @@ function TruckingPageContent() {
     },
     {
       id: 'contract_qty',
-      label: 'Contract Qty (MT)',
+      label: 'Contract Qty',
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.contract_qty || 0,
@@ -2891,7 +2892,7 @@ function TruckingPageContent() {
     },
     {
       id: 'sto_quantity',
-      label: 'STO Qty (MT)',
+      label: 'STO Qty',
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.sto_quantity || 0,
@@ -2903,7 +2904,7 @@ function TruckingPageContent() {
     },
     {
       id: 'quantity_delivered',
-      label: 'Delivery Qty (MT)',
+      label: 'Delivery Qty',
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => parseTruckingQtyKg(o.quantity_delivered) ?? 0,
@@ -2915,7 +2916,7 @@ function TruckingPageContent() {
     },
     {
       id: 'quantity_receive',
-      label: 'Received Qty (MT)',
+      label: 'Received Qty',
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => parseTruckingQtyKg(o.quantity_receive ?? o.quantity_delivered) ?? 0,
@@ -2927,7 +2928,7 @@ function TruckingPageContent() {
     },
     {
       id: 'outstanding_qty_mt',
-      label: 'Outstanding Qty (MT)',
+      label: 'Outstanding Qty',
       formulaHelp: FIELD_HELP.truckingOutstandingQtyMt,
       defaultVisible: true,
       sortable: true,
@@ -3154,35 +3155,66 @@ function TruckingPageContent() {
   useEffect(() => {
     const allIds = compactColumns.map((c) => c.id)
     const canonical = truckingCompactColumnFallbackOrder(allIds)
-    let forceLayoutReset = false
+    let needsLayoutMigration = false
     if (typeof window !== 'undefined') {
       try {
-        if (localStorage.getItem(TRUCKING_COLUMN_LAYOUT_VERSION_KEY) !== TRUCKING_COLUMN_LAYOUT_VERSION) {
-          forceLayoutReset = true
-          localStorage.setItem(TRUCKING_COLUMN_LAYOUT_VERSION_KEY, TRUCKING_COLUMN_LAYOUT_VERSION)
-          localStorage.setItem(columnOrderStorageKey, JSON.stringify(canonical))
-          localStorage.setItem(columnStorageKey, JSON.stringify(truckingDefaultVisibleColumnIds(allIds)))
-        }
+        needsLayoutMigration =
+          localStorage.getItem(TRUCKING_COLUMN_LAYOUT_VERSION_KEY) !== TRUCKING_COLUMN_LAYOUT_VERSION
       } catch {
-        forceLayoutReset = true
+        needsLayoutMigration = true
       }
     }
 
-    if (forceLayoutReset) {
-      const defaultVis = truckingDefaultVisibleColumnIds(allIds)
-      setVisibleColumnIds(new Set(defaultVis))
-      setColumnOrderIds(canonical)
+    const applyMigratedLayout = (visible: string[], order: string[]) => {
+      const migrated = migrateTruckingColumnLayout(visible, order, allIds)
+      setVisibleColumnIds(new Set(migrated.visibleColumnIds))
+      setColumnOrderIds(migrated.columnOrderIds)
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(TRUCKING_COLUMN_LAYOUT_VERSION_KEY, TRUCKING_COLUMN_LAYOUT_VERSION)
+          localStorage.setItem(columnOrderStorageKey, JSON.stringify(migrated.columnOrderIds))
+          localStorage.setItem(columnStorageKey, JSON.stringify(migrated.visibleColumnIds))
+        } catch {
+          // ignore
+        }
+      }
       void api
         .post('/user-preferences/me', {
           key: userViewPrefKey,
           value: {
-            visibleColumnIds: defaultVis,
-            columnOrderIds: canonical,
+            visibleColumnIds: migrated.visibleColumnIds,
+            columnOrderIds: migrated.columnOrderIds,
           },
         })
         .catch(() => {
           /* localStorage already updated */
         })
+    }
+
+    if (needsLayoutMigration) {
+      let savedVisible: string[] = []
+      let savedOrder: string[] = []
+      if (typeof window !== 'undefined') {
+        try {
+          const rawVis = localStorage.getItem(columnStorageKey)
+          if (rawVis) {
+            const parsed = JSON.parse(rawVis) as unknown
+            if (Array.isArray(parsed)) savedVisible = parsed.map(String)
+          }
+          const rawOrder = localStorage.getItem(columnOrderStorageKey)
+          if (rawOrder) {
+            const parsed = JSON.parse(rawOrder) as unknown
+            if (Array.isArray(parsed)) savedOrder = parsed.map(String)
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (savedVisible.length === 0) {
+        applyMigratedLayout(truckingDefaultVisibleColumnIds(allIds), canonical)
+      } else {
+        applyMigratedLayout(savedVisible, savedOrder)
+      }
       return
     }
 
@@ -3196,6 +3228,26 @@ function TruckingPageContent() {
 
   useEffect(() => {
     let cancelled = false
+    const hadSavedVisibleAtOpen = (() => {
+      try {
+        const raw = localStorage.getItem(columnStorageKey)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as unknown
+        return Array.isArray(parsed) && parsed.length > 0
+      } catch {
+        return Boolean(localStorage.getItem(columnStorageKey))
+      }
+    })()
+    const hadSavedOrderAtOpen = (() => {
+      try {
+        const raw = localStorage.getItem(columnOrderStorageKey)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as unknown
+        return Array.isArray(parsed) && parsed.length > 0
+      } catch {
+        return Boolean(localStorage.getItem(columnOrderStorageKey))
+      }
+    })()
     ;(async () => {
       try {
         const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(userViewPrefKey)}`)
@@ -3203,8 +3255,12 @@ function TruckingPageContent() {
         if (cancelled) return
         const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
         const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
-        if (Array.isArray(cols) && cols.length > 0) setVisibleColumnIds(new Set(cols.map((x: any) => String(x))))
-        if (Array.isArray(order) && order.length > 0) setColumnOrderIds(order.map((x: any) => String(x)))
+        if (Array.isArray(cols) && cols.length > 0 && !hadSavedVisibleAtOpen) {
+          setVisibleColumnIds(new Set(cols.map((x: unknown) => String(x))))
+        }
+        if (Array.isArray(order) && order.length > 0 && !hadSavedOrderAtOpen) {
+          setColumnOrderIds(order.map((x: unknown) => String(x)))
+        }
       } catch {
         // ignore
       }
@@ -3652,8 +3708,8 @@ function TruckingPageContent() {
                             { id: 'due_end', label: 'Due End' },
                             { id: 'qty_sent', label: 'Qty Sent' },
                             { id: 'qty_sent_planning', label: 'Qty Sent (planning)' },
-                            { id: 'qty_delivered', label: 'Delivery Qty (MT)' },
-                            { id: 'qty_received', label: 'Received Qty (MT)' },
+                            { id: 'qty_delivered', label: 'Delivery Qty' },
+                            { id: 'qty_received', label: 'Received Qty' },
                             { id: 'source_type', label: 'Source Type' },
                             { id: 'lt_spot', label: 'LT/SPOT' },
                             { id: 'product', label: 'Product' },

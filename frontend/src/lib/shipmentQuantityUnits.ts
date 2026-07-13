@@ -97,7 +97,12 @@ export function mergeShipmentQtyOverridesOnContractRows<
   return rows
 }
 
-/** Shipments list table — kg for display. Prefer KLIP manual row when it differs from SAP. */
+/**
+ * Shipments list table — kg for display.
+ * Prefer SAP when present. Only prefer KLIP manual when the user raised vessel qty
+ * above the SAP total (same rule as multi-PO mergeShipmentQtyOverridesOnContractRows).
+ * Partial shell totals (one PO line of a multi-PO STO) must not override SAP.
+ */
 export function resolveShipmentListDeliveredKg(shipment: {
   quantity_delivered?: number | string | null
   total_quantity_delivered?: number | string | null
@@ -110,7 +115,7 @@ export function resolveShipmentListDeliveredKg(shipment: {
   if (
     isMeaningfulManualShipmentQtyKg(manual)
     && sap !== null
-    && Math.abs(manual! - sap) > 0.5
+    && manual! > sap + 0.5
   ) {
     return manual
   }
@@ -127,7 +132,7 @@ export function resolveShipmentListReceiveKg(shipment: {
   if (
     isMeaningfulManualShipmentQtyKg(manual)
     && sap !== null
-    && Math.abs(manual! - sap) > 0.5
+    && manual! > sap + 0.5
   ) {
     return manual
   }
