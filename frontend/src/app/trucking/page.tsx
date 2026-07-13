@@ -337,19 +337,32 @@ function mergeTruckingSapFields(
   hydrated: TruckingOperation[],
 ): TruckingOperation[] {
   if (!hydrated.length) return base
-  const byId = new Map<string, TruckingOperation>()
+  // STO-expanded rows share the operation id (one row per STO line), so hydrated rows
+  // must be matched by (id, sto line) — an id-only map let one line's quantities and
+  // STO number overwrite every sibling line of the same operation.
+  const byRowKey = new Map<string, TruckingOperation>()
+  const idRowCount = new Map<string, number>()
+  const soleById = new Map<string, TruckingOperation>()
   for (const row of hydrated) {
-    if (row.id) byId.set(String(row.id), row)
+    if (!row.id) continue
+    const id = String(row.id)
+    const line = String(row.sto_number ?? '').trim()
+    byRowKey.set(`${id}|${line}`, row)
+    idRowCount.set(id, (idRowCount.get(id) ?? 0) + 1)
+    if (idRowCount.get(id) === 1) soleById.set(id, row)
+    else soleById.delete(id)
   }
   return base.map((row) => {
-    const match = row.id ? byId.get(String(row.id)) : undefined
+    if (!row.id) return row
+    const id = String(row.id)
+    const line = String(row.sto_number ?? '').trim()
+    const match = byRowKey.get(`${id}|${line}`) ?? soleById.get(id)
     if (!match) return row
     return {
       ...row,
       status: match.status ?? row.status,
       status_db: match.status_db ?? row.status_db,
       contract_ext_no: match.contract_ext_no ?? row.contract_ext_no,
-      sto_number: match.sto_number ?? row.sto_number,
       sto_numbers: match.sto_numbers ?? row.sto_numbers,
       quantity_sent: match.quantity_sent ?? row.quantity_sent,
       quantity_delivered: match.quantity_delivered ?? row.quantity_delivered,
@@ -1049,6 +1062,8 @@ function TruckingPageContent() {
   } | null>(null)
   const truckingSummaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const listFetchGenRef = useRef(0)
+  /** Generation of the rows currently in state — older async writers must not clobber newer rows. */
+  const listRowsGenRef = useRef(0)
   const summaryFetchGenRef = useRef(0)
   const section1SummaryForceNextFetchRef = useRef(true)
 
@@ -1995,6 +2010,8 @@ function TruckingPageContent() {
           }
         }
       }) => {
+        if (listGen < listRowsGenRef.current) return
+        listRowsGenRef.current = listGen
         const items = envelope?.data?.truckingOperations || []
         setTruckingOperations(items)
         const total = Number(envelope?.data?.pagination?.total ?? 0)
@@ -2078,6 +2095,7 @@ function TruckingPageContent() {
           force: options?.force,
           onRevalidate: (fresh) => {
             if (listGen !== listFetchGenRef.current) return
+            if (listGen !== listRowsGenRef.current) return
             const hydrated = fresh?.data?.truckingOperations || []
             if (hydrated.length) {
               setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
@@ -2086,6 +2104,7 @@ function TruckingPageContent() {
         })
           .then(({ data }) => {
             if (listGen !== listFetchGenRef.current) return
+            if (listGen !== listRowsGenRef.current) return
             const hydrated = data?.data?.truckingOperations || []
             if (hydrated.length) {
               setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
@@ -4478,8 +4497,11 @@ function TruckingPageContent() {
                         ) : sortedOperations.map((operation, idx) => {
                           const isEditing = editingId === operation.id
                           const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                          // STO-expanded rows repeat operation.id (one row per STO line);
+                          // duplicate keys corrupt React list reconciliation and leave
+                          // stale rows in the DOM when the list shrinks (e.g. search).
                           return (
-                              <tr key={operation.id} className={stripeClass}>
+                              <tr key={`${operation.id}|${operation.sto_number ?? ''}|${idx}`} className={stripeClass}>
                                 {visibleColumns.map(col => {
                                   const opColClass = operationalTableColumnClass(
                                     getOperationalColumnLayout('trucking', col.id),
@@ -4627,13 +4649,13 @@ function TruckingPageContent() {
                       <p>No trucking operations found</p>
                       {searchTerm ? <p className="text-sm mt-2">Try adjusting your search filters</p> : null}
                     </div>
-                  ) : sortedOperations.map((operation) => {
+                  ) : sortedOperations.map((operation, idx) => {
                   const isEditing = editingId === operation.id
                   const currentData = isEditing ? editedData : operation
 
                   return (
                     <div
-                      key={operation.id}
+                      key={`${operation.id}|${operation.sto_number ?? ''}|${idx}`}
                       className={`border rounded-lg transition-colors ${isEditing ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
                     >
                       <div className="p-4">

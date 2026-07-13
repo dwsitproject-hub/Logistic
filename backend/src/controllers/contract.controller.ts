@@ -1956,7 +1956,16 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         sk.sto_key AS sto_key,
         tp.operation_id,
         tp.status,
-        c.quantity_ordered AS sto_quantity,
+        COALESCE(
+          (
+            SELECT NULLIF(cs.sto_quantity, 0)::numeric
+            FROM contract_stos cs
+            WHERE cs.contract_id = c.id
+              AND TRIM(cs.sto_number::text) = sk.sto_key
+            LIMIT 1
+          ),
+          c.quantity_ordered
+        ) AS sto_quantity,
         COALESCE(tp.quantity_delivered, 0) AS quantity_receive_db,
         COALESCE(tp.quantity_delivered, 0) AS quantity_delivered_db,
         COALESCE((

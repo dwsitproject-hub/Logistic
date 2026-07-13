@@ -44,8 +44,13 @@ export function sqlTruckingStoHasSapMovement(contractAlias = 'c', stoLineExpr: s
 /**
  * Eligible STO lines for list expansion (shell = no SAP subqueries).
  * - Primary STO on contracts.sto_number
- * - Sole STO on contract_stos
- * - Full SAP mode: any STO with SAP trucking movement
+ * - Any STO registered on contract_stos for the contract
+ * - Full SAP mode: additionally, any STO with SAP trucking movement
+ *
+ * Registered lines must be eligible in BOTH variants: the Summary Trucking Status
+ * circles aggregate the full expansion, so the previous shell-only restriction
+ * ("primary or sole STO") made multi-STO contracts show fewer table rows than the
+ * circles counted (e.g. contract 1004030828: circles 2 Unplanned, table 1 row).
  */
 export function sqlTruckingEligibleStoLineWhere(
   contractAlias = 'c',
@@ -53,22 +58,17 @@ export function sqlTruckingEligibleStoLineWhere(
   skipSapJoin: boolean,
 ): string {
   const primaryMatch = `TRIM(${stoLineExpr}) = NULLIF(TRIM(${contractAlias}.sto_number::text), '')`;
-  const soleSto = `(
-    SELECT COUNT(*)::int
-    FROM contract_stos cs_n
-    WHERE cs_n.contract_id = ${contractAlias}.id
-      AND NULLIF(TRIM(cs_n.sto_number::text), '') IS NOT NULL
-  ) = 1 AND TRIM(${stoLineExpr}) = (
-    SELECT TRIM(cs_one.sto_number::text)
-    FROM contract_stos cs_one
-    WHERE cs_one.contract_id = ${contractAlias}.id
-      AND NULLIF(TRIM(cs_one.sto_number::text), '') IS NOT NULL
-    LIMIT 1
+  const registeredSto = `EXISTS (
+    SELECT 1
+    FROM contract_stos cs_reg
+    WHERE cs_reg.contract_id = ${contractAlias}.id
+      AND NULLIF(TRIM(cs_reg.sto_number::text), '') IS NOT NULL
+      AND TRIM(cs_reg.sto_number::text) = TRIM(${stoLineExpr})
   )`;
 
   if (skipSapJoin) {
-    return `(${primaryMatch} OR ${soleSto})`;
+    return `(${primaryMatch} OR ${registeredSto})`;
   }
 
-  return `(${primaryMatch} OR ${soleSto} OR ${sqlTruckingStoHasSapMovement(contractAlias, stoLineExpr)})`;
+  return `(${primaryMatch} OR ${registeredSto} OR ${sqlTruckingStoHasSapMovement(contractAlias, stoLineExpr)})`;
 }

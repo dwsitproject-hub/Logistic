@@ -467,17 +467,26 @@ function shipmentQuantityValuesEqual(a: unknown, b: unknown): boolean {
 
 function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipment[] {
   if (!hydrated.length) return base
-  const byId = new Map<string, Shipment>()
+  // Rows are one-per-STO-key but can share a primary shipment id, so match by STO
+  // key first — an id-first lookup could stamp one STO's fields onto another.
+  const byStoKey = new Map<string, Shipment>()
+  const idRowCount = new Map<string, number>()
+  const soleById = new Map<string, Shipment>()
   for (const row of hydrated) {
-    if (row.id) byId.set(String(row.id), row)
     const stoKey = row.sto_key ?? row.sto_number
-    if (stoKey) byId.set(String(stoKey), row)
+    if (stoKey) byStoKey.set(String(stoKey), row)
+    if (row.id) {
+      const id = String(row.id)
+      idRowCount.set(id, (idRowCount.get(id) ?? 0) + 1)
+      if (idRowCount.get(id) === 1) soleById.set(id, row)
+      else soleById.delete(id)
+    }
   }
   return base.map((row) => {
     const match =
-      (row.id ? byId.get(String(row.id)) : undefined) ??
-      (row.sto_key ? byId.get(String(row.sto_key)) : undefined) ??
-      (row.sto_number ? byId.get(String(row.sto_number)) : undefined)
+      (row.sto_key ? byStoKey.get(String(row.sto_key)) : undefined) ??
+      (row.sto_number ? byStoKey.get(String(row.sto_number)) : undefined) ??
+      (row.id ? soleById.get(String(row.id)) : undefined)
     if (!match) return row
     return {
       ...row,
@@ -5775,7 +5784,9 @@ function ShipmentsPageContent() {
                               stripeIdx += 1
                               const isStoChildRow = isMultiStoGroup
                               nodes.push(
-                            <Fragment key={shipment.id}>
+                            // STO-expanded rows can repeat shipment.id across STO groups;
+                            // duplicate keys corrupt list reconciliation and leave stale rows.
+                            <Fragment key={`${group.stoKey}|${shipment.id}`}>
                               <tr className={`${rowBg} ${isStoChildRow ? 'border-l-2 border-slate-200' : ''}`}>
                                 <td className={`align-middle w-10 ${CONTRACT_PERF_TABLE_CELL_PAD}`}>
                                   {isStoChildRow ? (
@@ -6158,7 +6169,7 @@ function ShipmentsPageContent() {
                     const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
                     nodes.push(
                       <div
-                        key={shipment.id}
+                        key={`${group.stoKey}|${shipment.id}`}
                         className={`border rounded-lg transition-colors ${isMultiStoGroup ? 'ml-3 border-l-2 border-slate-200' : ''} ${tableInlineEditActive ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
                       >
                         <div className="p-4">
