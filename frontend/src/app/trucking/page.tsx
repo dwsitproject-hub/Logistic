@@ -2770,7 +2770,7 @@ function TruckingPageContent() {
     }
     if (
       statusCardTotalFromList &&
-      summaryFetching &&
+      String(statusFilter ?? '').trim().toUpperCase() === statusCardTotalFromList.status &&
       Object.prototype.hasOwnProperty.call(counts, statusCardTotalFromList.status)
     ) {
       counts[statusCardTotalFromList.status] = statusCardTotalFromList.total
@@ -2780,7 +2780,7 @@ function TruckingPageContent() {
     truckingSection1Summary,
     unplannedTableBreakdown?.totalTableRows,
     statusCardTotalFromList,
-    summaryFetching,
+    statusFilter,
   ])
 
   const tableHeaderCount = useMemo(() => {
@@ -4299,8 +4299,8 @@ function TruckingPageContent() {
                   {statusFilter === 'UNPLANNED' && unplannedTableBreakdown ? (
                     <>
                       {' · '}
-                      ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')} without trucking ·{' '}
-                      {unplannedTableBreakdown.executionRows.toLocaleString('en-US')} ops)
+                      ({unplannedTableBreakdown.executionRows.toLocaleString('en-US')} Contract and{' '}
+                      {unplannedTableBreakdown.contractRows.toLocaleString('en-US')} STO without Planning)
                     </>
                   ) : statusFilter !== 'UNPLANNED' ? (
                     <> · {totalCount.toLocaleString('en-US')} rows</>

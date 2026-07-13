@@ -65,12 +65,19 @@ export type ShippingPerfVesselModalAggregatedRow = {
 }
 
 const PLANNED_STATUSES = new Set(['PLANNED'])
+/** Matches Shipments module ATA ladder + legacy aliases (shipmentStatus.ts). */
 const ON_GOING_ACTIVE_STATUSES = new Set([
   'IN_PROGRESS',
   'LOADING',
   'IN_TRANSIT',
   'ARRIVED',
   'UNLOADING',
+  'ARRIVED_LP',
+  'BERTHED_LP',
+  'COMPLETED_LOADING',
+  'SAILED',
+  'ARRIVED_DP',
+  'BERTHED_DP',
 ])
 const HISTORY_STATUSES = new Set(['COMPLETED', 'CANCELLED', 'CANCELED'])
 

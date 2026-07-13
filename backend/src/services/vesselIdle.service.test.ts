@@ -9,6 +9,7 @@ describe('vesselIdle.service', () => {
     expect(sql).toContain('most_loading');
     expect(sql).toContain('most_discharge');
     expect(sql).toContain('master_vessels');
-    expect(sql).toContain('effective_sto');
+    expect(sql).toContain('spd.effective_sto');
+    expect(sql).toMatch(/busy_vessel_ids[\s\S]*spd\.effective_sto/);
   });
 });

@@ -102,7 +102,7 @@ const MERGED_SUMMARY_CACHE = new Map<
 >();
 const UNPLANNED_BACKLOG_CACHE = new Map<string, { count: number; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v31';
+const CACHE_VERSION = 'trucking-list-v32';
 const MAX_CACHE_ENTRIES = 80;
 
 // Re-runs recent page loads in the background (refresh-ahead + re-warm after edits)
@@ -1025,12 +1025,21 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
   const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'asc').toLowerCase();
   const sortDir: 'ASC' | 'DESC' = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
 
-  // Pipeline status is computed per expanded STO row — filter only after expansion.
-  const built = buildTruckingListQuery(req, { omitStatusFilter: true });
-  const pageNum = Math.max(1, Number(page) || 1);
-  const limitNum = Math.max(1, Math.min(500, Number(limit) || 20));
   const stageFilter = typeof status === 'string' ? status : undefined;
   const isUnplannedHybrid = String(status ?? '').trim().toUpperCase() === 'UNPLANNED';
+  /** Status cards need full SAP (GR/OS) — same path as Section 1 summary. */
+  const statusScopedList =
+    Boolean(stageFilter) &&
+    !isUnplannedHybrid &&
+    String(stageFilter).trim().toUpperCase() !== 'ALL';
+
+  // Pipeline status is computed per expanded STO row — filter only after expansion.
+  const built = buildTruckingListQuery(req, {
+    omitStatusFilter: true,
+    ...(statusScopedList ? { skipSapJoin: false } : {}),
+  });
+  const pageNum = Math.max(1, Number(page) || 1);
+  const limitNum = Math.max(1, Math.min(500, Number(limit) || 20));
 
   const globalSearch =
     typeof (req.query as { search?: string }).search === 'string'

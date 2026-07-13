@@ -1,7 +1,15 @@
 import { query } from '../database/connection';
 import { sqlIsContractSapClosedExpr } from '../utils/contractDeliveryStatus';
-import { shipmentHasAnyEtaExpr } from '../utils/shipmentListFilters';
 import { sapStoNumberKeyExpr } from '../utils/shipmentStoTypeSql';
+
+/** ETA milestones on raw `shipments` rows (not grouped `shipment_base` aliases). */
+function shipmentTableHasAnyEtaExpr(alias: string): string {
+  const f = alias;
+  return `(
+    ${f}.eta_arrival IS NOT NULL OR ${f}.eta_berthed IS NOT NULL OR ${f}.eta_loading_start IS NOT NULL OR ${f}.eta_loading_complete IS NOT NULL OR ${f}.eta_sailed IS NOT NULL
+    OR ${f}.eta_discharge_arrival IS NOT NULL OR ${f}.eta_discharge_berthed IS NOT NULL OR ${f}.eta_discharge_start IS NOT NULL OR ${f}.eta_discharge_complete IS NOT NULL
+  )`;
+}
 
 export interface VesselIdleRow {
   vessel_code: string;
@@ -38,7 +46,7 @@ function sqlShipmentRowEffectiveStatusExpr(alias: string, contractAlias = 'c'): 
       WHEN ${s}.ata_loading_start IS NOT NULL THEN 'LOADING'
       WHEN ${s}.ata_berthed IS NOT NULL THEN 'BERTHED_LP'
       WHEN ${s}.ata_arrival IS NOT NULL THEN 'ARRIVED_LP'
-      WHEN ${shipmentHasAnyEtaExpr(s)} THEN 'PLANNED'
+      WHEN ${shipmentTableHasAnyEtaExpr(s)} THEN 'PLANNED'
       ELSE 'UNPLANNED'
     END
   )`;
@@ -65,17 +73,21 @@ function sqlShipmentRowActiveEngagementExpr(alias: string, contractAlias = 'c'):
   )`;
 }
 
-function sqlShipmentRowHasSapStoExpr(contractAlias = 'c', spdAlias = 'spd'): string {
+/** Uses `latest_spd.effective_sto` — not sap_processed_data JSON (alias may be latest_spd CTE). */
+function sqlShipmentRowHasSapStoFromLatestSpdExpr(
+  contractAlias = 'c',
+  latestSpdAlias = 'spd',
+): string {
   return `NULLIF(TRIM(COALESCE(
     NULLIF(TRIM(${contractAlias}.sto_number::text), ''),
-    ${sapStoNumberKeyExpr(spdAlias)},
+    ${latestSpdAlias}.effective_sto,
     ''
   )), '') IS NOT NULL`;
 }
 
 export function buildVesselIdleListQuery(): string {
   const vesselMatch = sqlVesselMasterShipmentMatch('mv', 's');
-  const hasSapSto = sqlShipmentRowHasSapStoExpr('c', 'spd');
+  const hasSapSto = sqlShipmentRowHasSapStoFromLatestSpdExpr('c', 'spd');
   const isPlanned = sqlShipmentRowPlannedExpr('s', 'c');
   const isOngoing = sqlShipmentRowOngoingExpr('s', 'c');
 

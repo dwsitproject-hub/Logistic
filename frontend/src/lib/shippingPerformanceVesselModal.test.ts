@@ -50,6 +50,18 @@ describe('shippingPerformanceVesselModal', () => {
     expect(history.map((r) => r.id)).toEqual(['4', '5'])
   })
 
+  it('maps granular shipment pipeline statuses to on-going', () => {
+    const rows = [
+      { ...baseRow, id: 'lp', status: 'ARRIVED_LP' },
+      { ...baseRow, id: 'sail', status: 'SAILED' },
+      { ...baseRow, id: 'hist', status: 'COMPLETED' },
+    ]
+    const { nextShipment, onGoing, history } = partitionShippingPerfVesselModalRows(rows)
+    expect(nextShipment).toHaveLength(0)
+    expect(onGoing.map((r) => r.id)).toEqual(['lp', 'sail'])
+    expect(history.map((r) => r.id)).toEqual(['hist'])
+  })
+
   it('groups multiple PO rows under the same STO', () => {
     const rows = [
       { ...baseRow, id: '1', po_number: 'PO-1', delivered_qty: 1000 },

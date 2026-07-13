@@ -1,5 +1,6 @@
 'use client'
 
+import { useMemo } from 'react'
 import { Loader2, Ship, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
@@ -12,6 +13,8 @@ export interface VesselIdleListRow {
   most_discharge_port: string | null
 }
 
+const PRIORITY_COMPANY = 'LMI GROUP'
+
 type VesselIdleModalProps = {
   open: boolean
   loading: boolean
@@ -22,7 +25,28 @@ type VesselIdleModalProps = {
 
 function displayText(value: string | null | undefined): string {
   const text = String(value ?? '').trim()
-  return text || '-'
+  if (!text) return '-'
+  return text.toUpperCase()
+}
+
+function normalizeCompanyKey(company: string | null | undefined): string {
+  return String(company ?? '').trim().toUpperCase()
+}
+
+export function compareVesselIdleRows(a: VesselIdleListRow, b: VesselIdleListRow): number {
+  const companyA = normalizeCompanyKey(a.company)
+  const companyB = normalizeCompanyKey(b.company)
+  const aIsPriority = companyA === PRIORITY_COMPANY
+  const bIsPriority = companyB === PRIORITY_COMPANY
+  if (aIsPriority !== bIsPriority) return aIsPriority ? -1 : 1
+
+  const companyCmp = companyA.localeCompare(companyB)
+  if (companyCmp !== 0) return companyCmp
+
+  return String(a.vessel_name ?? '')
+    .trim()
+    .toUpperCase()
+    .localeCompare(String(b.vessel_name ?? '').trim().toUpperCase())
 }
 
 function formatCapacityMt(value: number | null | undefined): string {
@@ -37,6 +61,11 @@ export function VesselIdleModal({
   onClose,
   onVesselNameClick,
 }: VesselIdleModalProps) {
+  const sortedVessels = useMemo(
+    () => [...vessels].sort(compareVesselIdleRows),
+    [vessels],
+  )
+
   if (!open) return null
 
   return (
@@ -71,43 +100,40 @@ export function VesselIdleModal({
             </div>
           ) : (
             <div className="max-h-[calc(85vh-8rem)] overflow-auto rounded-lg border border-gray-200">
-              <table className="w-full min-w-[900px] text-sm">
+              <table className="w-full min-w-[640px] text-sm">
                 <thead className="sticky top-0 z-[1] bg-gray-100">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium text-gray-600">Vessel Code</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-600">Vessel Name</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-600">Company</th>
                     <th className="px-3 py-2 text-right font-medium text-gray-600">Capacity</th>
-                    <th className="px-3 py-2 text-left font-medium text-gray-600">Most Loading Port</th>
-                    <th className="px-3 py-2 text-left font-medium text-gray-600">Most Discharge Port</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {vessels.map((row) => {
-                    const vesselName = displayText(row.vessel_name)
+                  {sortedVessels.map((row) => {
+                    const vesselNameDisplay = displayText(row.vessel_name)
+                    const vesselNameRaw = String(row.vessel_name ?? '').trim()
                     const rowKey = `${row.vessel_code}-${row.vessel_name}`
                     return (
                       <tr key={rowKey} className="hover:bg-gray-50">
-                        <td className="whitespace-nowrap px-3 py-2">{displayText(row.vessel_code)}</td>
-                        <td className="whitespace-nowrap px-3 py-2">
-                          {vesselName === '-' ? (
+                        <td className="whitespace-nowrap px-3 py-2 uppercase">{displayText(row.vessel_code)}</td>
+                        <td className="whitespace-nowrap px-3 py-2 uppercase">
+                          {vesselNameDisplay === '-' ? (
                             <span className="text-gray-400">-</span>
                           ) : (
                             <button
                               type="button"
                               className="text-left font-medium text-blue-700 hover:text-blue-900 hover:underline"
-                              onClick={() => onVesselNameClick(vesselName)}
+                              onClick={() => onVesselNameClick(vesselNameRaw)}
                             >
-                              {vesselName}
+                              {vesselNameDisplay}
                             </button>
                           )}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-2">{displayText(row.company)}</td>
+                        <td className="whitespace-nowrap px-3 py-2 uppercase">{displayText(row.company)}</td>
                         <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                           {formatCapacityMt(row.capacity_mt)}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-2">{displayText(row.most_loading_port)}</td>
-                        <td className="whitespace-nowrap px-3 py-2">{displayText(row.most_discharge_port)}</td>
                       </tr>
                     )
                   })}

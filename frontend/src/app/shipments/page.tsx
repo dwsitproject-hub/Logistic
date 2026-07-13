@@ -5421,8 +5421,8 @@ function ShipmentsPageContent() {
                       {statusFilter === 'UNPLANNED' && unplannedTableBreakdown ? (
                         <>
                           {' · '}
-                          ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')} without shipment ·{' '}
-                          {unplannedTableBreakdown.shipmentRows.toLocaleString('en-US')} STO groups)
+                          ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')} contract and{' '}
+                          {unplannedTableBreakdown.shipmentRows.toLocaleString('en-US')} STO without ETA)
                         </>
                       ) : null}
                     </span>
