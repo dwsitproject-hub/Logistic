@@ -61,7 +61,11 @@ export async function countTruckingUnplannedHybridBreakdown(
   const { contractScopeSql, params: contractParams, toolbarSql } = buildContractQueryParts(ctx);
   const executionExpanded = wrapTruckingListQueryWithStoExpansion(
     `${ctx.executionBuilt.preOuterQuery}${ctx.executionBuilt.outerSql}`,
-    { selectOutstanding: false, skipSapJoin: ctx.executionBuilt.skipSapJoin },
+    {
+      selectOutstanding: false,
+      skipSapJoin: ctx.executionBuilt.skipSapJoin,
+      useStageSnapshot: ctx.executionBuilt.useStageSnapshot === true,
+    },
   );
   const executionParams = [...ctx.executionBuilt.innerParams, ...ctx.executionBuilt.outerParams, 'UNPLANNED'];
 

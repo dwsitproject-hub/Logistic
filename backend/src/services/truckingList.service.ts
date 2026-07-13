@@ -40,10 +40,13 @@ import {
 } from '../utils/truckingOutstandingQtySummarySql';
 import {
   isPipelineDailySummaryEligible,
+  loadTruckingStagePageFromSnapshot,
   loadTruckingSummaryFromDaily,
   toPipelineDailySummaryScope,
   markPipelineDailySummaryStale,
   type PipelineDailySummaryFilterInput,
+  type PipelineDailySummaryScope,
+  isPipelineDailySummaryFresh,
 } from './pipelineDailySummary.service';
 
 /**
@@ -65,6 +68,8 @@ export interface TruckingListBuiltQuery {
   /** Toolbar-only fast path: page expansion keys before full STO expansion. */
   usesStoKeyPaging?: boolean;
   expansionPaging?: { limit: number; offset: number; orderBySql: string };
+  /** Resolve row stages from trucking_list_stage_snapshot (circles-consistent). */
+  useStageSnapshot?: boolean;
 }
 
 export interface TruckingListResponseData {
@@ -727,6 +732,7 @@ function buildTruckingFilteredExpansionSql(built: TruckingListBuiltQuery): strin
   return wrapTruckingListQueryWithStoExpansion(innerSql, {
     selectOutstanding: !built.skipSapJoin,
     skipSapJoin: built.skipSapJoin,
+    useStageSnapshot: built.useStageSnapshot === true,
     expansionPaging: built.expansionPaging,
   });
 }
@@ -1096,6 +1102,76 @@ async function loadTruckingListPage(
   return { rows, total };
 }
 
+/**
+ * Status-card page served from the stage snapshot: row keys + total come from the
+ * same daily refresh that computes the circles, so the filtered table total always
+ * equals the clicked circle; only the visible page is enriched (full expansion).
+ */
+async function loadTruckingStageSnapshotPage(
+  built: TruckingListBuiltQuery,
+  scope: PipelineDailySummaryScope,
+  stage: string,
+  sortDir: 'ASC' | 'DESC',
+  page: number,
+  limit: number,
+): Promise<{ rows: TruckingListRow[]; total: number } | null> {
+  const cached = PAGE_CACHE.get(built.cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return { rows: cached.rows, total: cached.total };
+  }
+  if (cached) PAGE_CACHE.delete(built.cacheKey);
+
+  const snapshotPage = await loadTruckingStagePageFromSnapshot(
+    scope,
+    stage,
+    sortDir,
+    limit,
+    (page - 1) * limit,
+  );
+  if (!snapshotPage) return null;
+
+  let rows: TruckingListRow[] = [];
+  if (snapshotPage.keys.length > 0) {
+    // Full-variant expansion restricted to the page keys (SAP-derived quantities so
+    // row fields match what the circles were computed from).
+    const expanded = wrapTruckingListQueryWithStoExpansion(
+      `${built.preOuterQuery}${built.outerSql}`,
+      {
+        selectOutstanding: true,
+        skipSapJoin: false,
+        useStageSnapshot: true,
+        resolvedExpansionKeys: snapshotPage.keys,
+      },
+    );
+    const orderBy = buildListOrderByWithSapStoPriority(
+      'tf.sto_number',
+      `${SORT_FIELD_BY_KEY['supplier'] || 'supplier'} ${sortDir} NULLS LAST, created_at DESC`,
+      stage,
+    );
+    const text = `
+      WITH trucking_filtered AS (
+        SELECT * FROM (
+          ${expanded}
+        ) expanded_sub
+      )
+      SELECT tf.* FROM trucking_filtered tf
+      ORDER BY ${orderBy}`;
+    const result = await query(text, [...built.innerParams, ...built.outerParams]);
+    rows = normalizeTruckingListRows(result.rows as TruckingListRow[]);
+  }
+
+  const total = snapshotPage.total;
+  cacheFilteredTotal(built.filterCacheKey, total);
+  PAGE_CACHE.set(built.cacheKey, { rows, total, expiresAt: Date.now() + CACHE_TTL_MS });
+  evictMapIfNeeded(PAGE_CACHE, MAX_CACHE_ENTRIES);
+  PAGE_KEEP_WARM.register(built.cacheKey, async () => {
+    PAGE_CACHE.delete(built.cacheKey);
+    COUNT_CACHE.delete(built.filterCacheKey);
+    await loadTruckingStageSnapshotPage(built, scope, stage, sortDir, page, limit);
+  });
+  return { rows, total };
+}
+
 export async function resolveTruckingListForRequest(req: AuthRequest): Promise<TruckingListResponseData> {
   const { page = 1, limit = 20, status } = req.query;
   const summaryOnly =
@@ -1113,10 +1189,15 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
     String(stageFilter).trim().toUpperCase() !== 'ALL';
 
   // Pipeline status is computed per expanded STO row — filter only after expansion.
+  // Status-scoped requests force the full SAP variant (circle-consistent fallback).
   const built = buildTruckingListQuery(req, {
     omitStatusFilter: true,
     ...(statusScopedList ? { skipSapJoin: false } : {}),
   });
+  // Resolve row stages from the daily-refresh snapshot when it is fresh so status
+  // clicks are served in ~2s from the same source as the circles; when stale, the
+  // full-SAP path above still keeps the totals circle-consistent (just slower).
+  const useStageSnapshot = await isPipelineDailySummaryFresh('trucking');
   const pageNum = Math.max(1, Number(page) || 1);
   const limitNum = Math.max(1, Math.min(500, Number(limit) || 20));
 
@@ -1144,6 +1225,9 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
 
   const listBuilt: TruckingListBuiltQuery = {
     ...built,
+    useStageSnapshot,
+    cacheKey: `${built.cacheKey}:stagesnap=${useStageSnapshot ? 1 : 0}`,
+    filterCacheKey: `${built.filterCacheKey}:sap=${built.skipSapJoin ? 0 : 1}:stagesnap=${useStageSnapshot ? 1 : 0}`,
     usesStoKeyPaging: listUsesStoPaging,
     expansionPaging: listUsesStoPaging
       ? {
@@ -1157,10 +1241,13 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
   const includeSummary =
     String((req.query as { includeSummary?: string }).includeSummary ?? 'true').toLowerCase() !== 'false';
 
-  const summaryBuilt = buildTruckingListQuery(req, {
-    skipSapJoin: false,
-    omitStatusFilter: true,
-  });
+  const summaryBuilt: TruckingListBuiltQuery = {
+    ...buildTruckingListQuery(req, {
+      skipSapJoin: false,
+      omitStatusFilter: true,
+    }),
+    useStageSnapshot,
+  };
 
   if (summaryOnly) {
     const summary = await loadTruckingListSummaryWithBacklog(req, summaryBuilt);
@@ -1181,7 +1268,9 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
       buildTruckingUnplannedHybridContext,
       resolveTruckingUnplannedHybridList,
     } = await import('./truckingUnplannedHybridList.service');
-    const ctx = buildTruckingUnplannedHybridContext(req, sortKey, sortDir);
+    const ctx = buildTruckingUnplannedHybridContext(req, sortKey, sortDir, {
+      executionBuilt: listBuilt,
+    });
     const hybrid = await resolveTruckingUnplannedHybridList(req, ctx);
     let summary: TruckingListResponseData['summary'];
     if (includeSummary) {
@@ -1198,14 +1287,35 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
 
   // Request-path access only (the background refresher must not keep itself alive).
   PAGE_KEEP_WARM.touch(listBuilt.cacheKey);
-  const { rows, total } = await loadTruckingListPage(
-    listBuilt,
-    sortKey,
-    sortDir,
-    pageNum,
-    limitNum,
-    stageFilter,
-  );
+
+  // Status-card clicks: serve keys + total from the stage snapshot so the filtered
+  // table always equals the circle the user clicked. Applies to toolbar-only scope
+  // with the default sort; anything else (or a stale snapshot) uses the live path.
+  let snapshotServed: { rows: TruckingListRow[]; total: number } | null = null;
+  const normalizedStageForSnapshot = normalizeTruckingPagePipelineStageParam(stageFilter);
+  if (
+    useStageSnapshot &&
+    normalizedStageForSnapshot &&
+    !isUnplannedHybrid &&
+    sortKey === 'supplier' &&
+    !listUsesStoPaging
+  ) {
+    const dailyFilters = buildPipelineDailyFilterInput(req);
+    if (isPipelineDailySummaryEligible({ ...dailyFilters, status: 'ALL' })) {
+      snapshotServed = await loadTruckingStageSnapshotPage(
+        listBuilt,
+        toPipelineDailySummaryScope(dailyFilters),
+        normalizedStageForSnapshot,
+        sortDir,
+        pageNum,
+        limitNum,
+      );
+    }
+  }
+
+  const { rows, total } =
+    snapshotServed ??
+    (await loadTruckingListPage(listBuilt, sortKey, sortDir, pageNum, limitNum, stageFilter));
 
   let summary: TruckingListResponseData['summary'];
   if (includeSummary) {

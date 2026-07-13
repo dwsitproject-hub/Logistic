@@ -8,6 +8,7 @@ import {
 import {
   buildTruckingBacklogDailySummaryUpsertSql,
   buildTruckingExecutionDailySummaryInsertSql,
+  buildTruckingStageSnapshotInsertSql,
 } from '../utils/pipelineDailySummarySql';
 import {
   buildShipmentBacklogDailySummaryUpsertSql,
@@ -239,10 +240,12 @@ export class PipelineDailySummaryService {
   static async refreshTruckingPipelineDailySummary(): Promise<number> {
     const start = Date.now();
     await query('TRUNCATE trucking_pipeline_daily_summary');
+    await query('TRUNCATE trucking_list_stage_snapshot');
     const execRes = await query(buildTruckingExecutionDailySummaryInsertSql());
     const backlogRes = await query(buildTruckingBacklogDailySummaryUpsertSql());
+    const stageSnapshotRes = await query(buildTruckingStageSnapshotInsertSql());
     const rowCount =
-      (execRes.rowCount ?? 0) + (backlogRes.rowCount ?? 0);
+      (execRes.rowCount ?? 0) + (backlogRes.rowCount ?? 0) + (stageSnapshotRes.rowCount ?? 0);
     const durationMs = Date.now() - start;
     await upsertRefreshMeta('trucking', rowCount, durationMs);
     logger.info('Pipeline daily summary refreshed: trucking', { rowCount, durationMs });
@@ -346,6 +349,54 @@ export async function loadTruckingSummaryFromDaily(
  * Returns null when the snapshot is stale (caller falls back to the live query).
  * Freshness/staleness matches the status cards themselves (same refresh cycle).
  */
+/**
+ * Page trucking expanded-row keys for a status-card list request from the stage
+ * snapshot (populated by the same refresh as the circles, so totals match them).
+ * Returns null when the snapshot is stale; ordering is the default list sort
+ * (supplier, newest first) with deterministic tiebreakers.
+ */
+export async function loadTruckingStagePageFromSnapshot(
+  scope: PipelineDailySummaryScope,
+  stage: string,
+  sortDir: 'ASC' | 'DESC',
+  limit: number,
+  offset: number,
+): Promise<{ keys: Array<{ operationId: string; stoLine: string }>; total: number } | null> {
+  if (!(await isPipelineDailySummaryFresh('trucking'))) return null;
+
+  const { sql, params } = buildDailySummaryWhere(scope);
+  const stageIdx = params.length + 1;
+  const whereSql = sql ? `${sql} AND stage = $${stageIdx}` : `WHERE stage = $${stageIdx}`;
+  const dir = sortDir === 'DESC' ? 'DESC' : 'ASC';
+  const pageRes = await query(
+    `SELECT
+      operation_id,
+      sto_line,
+      COUNT(*) OVER ()::bigint AS filtered_total
+    FROM trucking_list_stage_snapshot
+    ${whereSql}
+    ORDER BY supplier ${dir} NULLS LAST, created_at DESC NULLS LAST, operation_id, sto_line
+    LIMIT $${stageIdx + 1} OFFSET $${stageIdx + 2}`,
+    [...params, stage, limit, offset],
+  );
+
+  if (pageRes.rows.length > 0) {
+    return {
+      keys: pageRes.rows.map((r) => ({
+        operationId: String((r as { operation_id: unknown }).operation_id),
+        stoLine: String((r as { sto_line: unknown }).sto_line ?? ''),
+      })),
+      total: Number((pageRes.rows[0] as { filtered_total?: unknown }).filtered_total || 0),
+    };
+  }
+
+  const countRes = await query(
+    `SELECT COUNT(*)::bigint AS c FROM trucking_list_stage_snapshot ${whereSql}`,
+    [...params, stage],
+  );
+  return { keys: [], total: Number((countRes.rows[0] as { c?: unknown })?.c || 0) };
+}
+
 export async function loadShipmentStagePageFromSnapshot(
   scope: PipelineDailySummaryScope,
   stage: string,

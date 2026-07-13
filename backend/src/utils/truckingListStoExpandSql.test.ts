@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { wrapTruckingListQueryWithStoExpansion } from './truckingListStoExpandSql';
+import {
+  buildTruckingListExpansionSql,
+  wrapTruckingListQueryWithStoExpansion,
+} from './truckingListStoExpandSql';
 
 describe('truckingListStoExpandSql', () => {
   it('wrapTruckingListQueryWithStoExpansion expands by contract_stos with WB-prefer qty', () => {
@@ -37,5 +40,18 @@ describe('truckingListStoExpandSql', () => {
     });
     expect(sql).toContain('WHERE rn > 20 AND rn <= 30');
     expect(sql).toContain('INNER JOIN paged_expansion pe');
+  });
+
+  it('resolves row stage from trucking_list_stage_snapshot only when enabled', () => {
+    const inner = 'SELECT 1 AS id, 2 AS contract_id';
+    const withSnap = buildTruckingListExpansionSql(inner, {
+      skipSapJoin: true,
+      useStageSnapshot: true,
+    });
+    expect(withSnap).toContain('LEFT JOIN trucking_list_stage_snapshot sn');
+    expect(withSnap).toContain('COALESCE(sn.stage,');
+
+    const withoutSnap = buildTruckingListExpansionSql(inner, { skipSapJoin: true });
+    expect(withoutSnap).not.toContain('trucking_list_stage_snapshot');
   });
 });

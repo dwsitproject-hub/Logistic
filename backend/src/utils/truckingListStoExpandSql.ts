@@ -24,6 +24,19 @@ export interface TruckingListStoExpansionOptions {
   skipSapJoin?: boolean;
   /** Pre-page expansion keys before SAP qty joins (toolbar-only fast path). */
   expansionPaging?: TruckingListStoExpansionPaging;
+  /**
+   * Read each row's pipeline stage from trucking_list_stage_snapshot (populated by the
+   * same daily refresh that feeds the Summary Trucking Status circles) so status
+   * filters, totals and row badges agree with the circles regardless of skipSapJoin.
+   * Callers must gate this on the trucking daily summary being fresh, and it must stay
+   * OFF for the refresh source query itself (which defines the snapshot).
+   */
+  useStageSnapshot?: boolean;
+  /**
+   * Restrict the expansion to an already-resolved page of row keys (from the stage
+   * snapshot). Bypasses expansion_keys/ranked_expansion; the caller supplies totals.
+   */
+  resolvedExpansionKeys?: Array<{ operationId: string; stoLine: string }>;
 }
 
 export function buildContractStoLinesCte(skipSapJoin: boolean): string {
@@ -130,6 +143,30 @@ function buildQuantitySelects(skipSapJoin: boolean): {
   };
 }
 
+/** paged_expansion from explicit keys (stage-snapshot fast path). Quotes are escaped. */
+function buildResolvedExpansionKeysCte(
+  keys: Array<{ operationId: string; stoLine: string }>,
+): string {
+  if (keys.length === 0) {
+    return `
+      paged_expansion AS (
+        SELECT NULL::uuid AS operation_id, NULL::text AS sto_line WHERE FALSE
+      ),`;
+  }
+  const values = keys
+    .map((k) => {
+      const op = String(k.operationId).replace(/'/g, "''");
+      const line = String(k.stoLine ?? '').replace(/'/g, "''");
+      return `('${op}'::uuid, '${line}')`;
+    })
+    .join(', ');
+  return `
+      paged_expansion AS (
+        SELECT v.operation_id, v.sto_line
+        FROM (VALUES ${values}) v(operation_id, sto_line)
+      ),`;
+}
+
 function buildExpansionPagingCtes(paging: TruckingListStoExpansionPaging): string {
   const limit = Math.max(1, paging.limit);
   const offset = Math.max(0, paging.offset);
@@ -184,7 +221,7 @@ function buildExpandedJoinSql(usePaging: boolean): string {
         LEFT JOIN contract_sto_lines csl ON csl.contract_uuid = ts.contract_id
         INNER JOIN paged_expansion pe
           ON pe.operation_id = ts.id
-          AND TRIM(pe.sto_line) = TRIM(COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')))
+          AND COALESCE(TRIM(pe.sto_line), '') = COALESCE(TRIM(COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), ''))), '')
       )`;
 }
 
@@ -224,9 +261,15 @@ export function buildTruckingListExpansionSql(
 ): string {
   const skipSapJoin = opts?.skipSapJoin === true;
   const selectOutstanding = opts?.selectOutstanding !== false;
-  const paging = opts?.expansionPaging;
+  const useStageSnapshot = opts?.useStageSnapshot === true;
+  const resolvedKeys = opts?.resolvedExpansionKeys;
+  const paging = resolvedKeys ? undefined : opts?.expansionPaging;
   const qty = buildQuantitySelects(skipSapJoin);
-  const pagingBlock = paging ? buildExpansionPagingCtes(paging) : '';
+  const pagingBlock = resolvedKeys
+    ? buildResolvedExpansionKeysCte(resolvedKeys)
+    : paging
+      ? buildExpansionPagingCtes(paging)
+      : '';
   const filterTotalCol = paging
     ? ',\n        (SELECT COUNT(*)::bigint FROM expansion_keys) AS __filter_total'
     : '';
@@ -236,7 +279,7 @@ export function buildTruckingListExpansionSql(
         ${innerSql}
       ),
       ${buildContractStoLinesCte(skipSapJoin)},${pagingBlock}
-      ${buildExpandedJoinSql(Boolean(paging))}
+      ${buildExpandedJoinSql(Boolean(paging) || Boolean(resolvedKeys))}
       SELECT
         e.id,
         e.operation_id,
@@ -265,11 +308,19 @@ export function buildTruckingListExpansionSql(
         e.oa_budget,
         e.oa_actual,
         e.status_db,
-        ${sqlTruckingPagePipelineStageExpr(
-          'c',
-          `NULLIF(TRIM(e.sto_line_resolved::text), '')`,
-          qty.outstanding,
-        )} AS status,
+        ${
+          useStageSnapshot
+            ? `COALESCE(sn.stage, ${sqlTruckingPagePipelineStageExpr(
+                'c',
+                `NULLIF(TRIM(e.sto_line_resolved::text), '')`,
+                qty.outstanding,
+              )})`
+            : sqlTruckingPagePipelineStageExpr(
+                'c',
+                `NULLIF(TRIM(e.sto_line_resolved::text), '')`,
+                qty.outstanding,
+              )
+        } AS status,
         e.created_at,
         e.updated_at,
         e.contract_number,
@@ -293,7 +344,14 @@ export function buildTruckingListExpansionSql(
         e.contract_import_status${filterTotalCol}
       FROM expanded e
       INNER JOIN contracts c ON c.id = e.contract_id
-      INNER JOIN trucking_operations t ON t.id = e.id
+      INNER JOIN trucking_operations t ON t.id = e.id${
+        useStageSnapshot
+          ? `
+      LEFT JOIN trucking_list_stage_snapshot sn
+        ON sn.operation_id = e.id
+        AND sn.sto_line = COALESCE(NULLIF(TRIM(e.sto_line_resolved::text), ''), '')`
+          : ''
+      }
       ${TRUCKING_REALIZATIONS_JOIN}`;
 }
 

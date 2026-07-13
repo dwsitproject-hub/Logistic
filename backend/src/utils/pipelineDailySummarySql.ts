@@ -85,3 +85,32 @@ export function buildTruckingExecutionDailySummaryInsertSql(): string {
 export function buildTruckingBacklogDailySummaryUpsertSql(): string {
   return buildTruckingUnplannedBacklogDailySummarySql();
 }
+
+/**
+ * INSERT the pipeline stage per expanded (operation, STO line) row, from the SAME
+ * source query the circle counts aggregate — so the list can read circles-consistent
+ * stages. Must never itself read from trucking_list_stage_snapshot (useStageSnapshot
+ * stays off in buildTruckingExecutionSourceSql).
+ */
+export function buildTruckingStageSnapshotInsertSql(): string {
+  const expanded = buildTruckingExecutionSourceSql();
+  const plant = groupPlantExpr('c.plant_code', 'c.company_name');
+  return `
+    INSERT INTO trucking_list_stage_snapshot (
+      operation_id, sto_line, stage, group_plant, contract_date, product, incoterm, supplier, created_at
+    )
+    SELECT
+      src.id,
+      COALESCE(NULLIF(TRIM(src.sto_number::text), ''), ''),
+      src.status,
+      COALESCE(${plant}, 'Blank'),
+      COALESCE(c.contract_date, src.contract_date, ${NULL_CONTRACT_DATE})::date,
+      ${sqlPipelineProductKey('c.product')},
+      ${sqlPipelineIncotermKey('c.incoterm')},
+      NULLIF(TRIM(COALESCE(src.supplier, c.supplier)), ''),
+      src.created_at
+    FROM (${expanded}) src
+    INNER JOIN contracts c ON c.id = src.contract_id
+    WHERE src.id IS NOT NULL AND src.status IS NOT NULL
+    ON CONFLICT (operation_id, sto_line) DO NOTHING`;
+}
