@@ -39,6 +39,33 @@ export function canUseShipmentStoKeyPaging(input: ShipmentStoPagingFilterInput):
   return true;
 }
 
+/** Pre-aggregated contract/PO/supplier links for the paged STO keys (shared by both pagers). */
+const STO_LINK_AGG_CTE_SQL = `
+      sto_link_agg AS (
+        SELECT
+          m.sto_key,
+          STRING_AGG(DISTINCT m.contract_id, ', ' ORDER BY m.contract_id) AS contract_numbers,
+          STRING_AGG(DISTINCT m.po_number, ', ' ORDER BY m.po_number)
+            FILTER (WHERE m.po_number IS NOT NULL AND TRIM(m.po_number) <> '') AS po_numbers,
+          COUNT(DISTINCT m.contract_id)::int AS contract_count,
+          STRING_AGG(DISTINCT m.supplier, ', ' ORDER BY m.supplier)
+            FILTER (WHERE m.supplier IS NOT NULL AND TRIM(m.supplier) <> '') AS suppliers_linked
+        FROM (
+          SELECT TRIM(cs.sto_number::text) AS sto_key, c.contract_id, c.po_number, c.supplier
+          FROM paged_sto ps
+          JOIN contract_stos cs ON TRIM(cs.sto_number::text) = TRIM(ps.sto_key::text)
+          JOIN contracts c ON c.id = cs.contract_id
+          WHERE c.contract_id IS NOT NULL AND TRIM(c.contract_id) <> ''
+          UNION
+          SELECT TRIM(c.sto_number::text), c.contract_id, c.po_number, c.supplier
+          FROM paged_sto ps
+          JOIN contracts c ON TRIM(c.sto_number::text) = TRIM(ps.sto_key::text)
+          WHERE c.contract_id IS NOT NULL AND TRIM(c.contract_id) <> ''
+            AND NULLIF(TRIM(c.sto_number::text), '') IS NOT NULL
+        ) m
+        GROUP BY m.sto_key
+      ),`;
+
 export function buildRankedStoCtes(
   stoKeyExpr: string,
   coreWhereSql: string,
@@ -65,31 +92,45 @@ export function buildRankedStoCtes(
         SELECT sto_key FROM ranked_sto
         ORDER BY mx DESC
         LIMIT __STO_PAGE_LIMIT__ OFFSET __STO_PAGE_OFFSET__
-      ),
-      sto_link_agg AS (
-        SELECT
-          m.sto_key,
-          STRING_AGG(DISTINCT m.contract_id, ', ' ORDER BY m.contract_id) AS contract_numbers,
-          STRING_AGG(DISTINCT m.po_number, ', ' ORDER BY m.po_number)
-            FILTER (WHERE m.po_number IS NOT NULL AND TRIM(m.po_number) <> '') AS po_numbers,
-          COUNT(DISTINCT m.contract_id)::int AS contract_count,
-          STRING_AGG(DISTINCT m.supplier, ', ' ORDER BY m.supplier)
-            FILTER (WHERE m.supplier IS NOT NULL AND TRIM(m.supplier) <> '') AS suppliers_linked
-        FROM (
-          SELECT TRIM(cs.sto_number::text) AS sto_key, c.contract_id, c.po_number, c.supplier
-          FROM paged_sto ps
-          JOIN contract_stos cs ON TRIM(cs.sto_number::text) = TRIM(ps.sto_key::text)
-          JOIN contracts c ON c.id = cs.contract_id
-          WHERE c.contract_id IS NOT NULL AND TRIM(c.contract_id) <> ''
-          UNION
-          SELECT TRIM(c.sto_number::text), c.contract_id, c.po_number, c.supplier
-          FROM paged_sto ps
-          JOIN contracts c ON TRIM(c.sto_number::text) = TRIM(ps.sto_key::text)
-          WHERE c.contract_id IS NOT NULL AND TRIM(c.contract_id) <> ''
-            AND NULLIF(TRIM(c.sto_number::text), '') IS NOT NULL
-        ) m
-        GROUP BY m.sto_key
-      ),`;
+      ),${STO_LINK_AGG_CTE_SQL}`;
+}
+
+/**
+ * Paging CTEs for an already-resolved key page (e.g. from the stage snapshot).
+ * Preserves the given key order and satisfies the same CTE contract as
+ * buildRankedStoCtes (ranked_sto / paged_sto / sto_link_agg).
+ */
+export function buildResolvedStoKeyPageCtes(stoKeys: string[]): string {
+  const values =
+    stoKeys.length > 0
+      ? stoKeys
+          .map((key, i) => `('${String(key).replace(/'/g, "''")}', ${i})`)
+          .join(', ')
+      : null;
+  const rankedSto = values
+    ? `ranked_sto AS (
+        SELECT v.sto_key::text AS sto_key, v.ord
+        FROM (VALUES ${values}) v(sto_key, ord)
+      )`
+    : `ranked_sto AS (
+        SELECT NULL::text AS sto_key, 0 AS ord WHERE FALSE
+      )`;
+  return `
+      ${rankedSto},
+      paged_sto AS (
+        SELECT sto_key FROM ranked_sto ORDER BY ord
+      ),${STO_LINK_AGG_CTE_SQL}`;
+}
+
+/**
+ * Stage-snapshot paging applies to status-card list requests whose remaining filters
+ * are toolbar scope only (the same conditions as STO-key paging, except that a
+ * grouped pipeline status IS selected). Unplanned uses the hybrid path instead.
+ */
+export function canUseShipmentStageSnapshotPaging(input: ShipmentStoPagingFilterInput): boolean {
+  const status = String(input.status ?? 'ALL').trim().toUpperCase();
+  if (!status || status === 'ALL' || status === 'UNPLANNED') return false;
+  return canUseShipmentStoKeyPaging({ ...input, status: 'ALL' });
 }
 
 export function injectShipmentStoKeyPaging(

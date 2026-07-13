@@ -534,6 +534,11 @@ function cacheFilteredTotal(filterCacheKey: string, total: number): void {
   evictMapIfNeeded(COUNT_CACHE, MAX_CACHE_ENTRIES);
 }
 
+/** Seed the filtered total from a pre-resolved source (e.g. the stage snapshot). */
+export function seedShipmentListFilteredTotal(filterCacheKey: string, total: number): void {
+  cacheFilteredTotal(filterCacheKey, total);
+}
+
 /** Reuse filtered total from a recent shell/hydrate request (same toolbar scope). */
 export function getCachedFilteredTotal(filterCacheKey: string): number | null {
   const key = buildShipmentListCountCacheKey(filterCacheKey);

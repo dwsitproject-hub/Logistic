@@ -100,6 +100,7 @@ function buildShipmentDailyBaseCteSql(): string {
           ${sqlShipmentListPrimaryIdAgg(listStoKeySql, 'c', 'l', 's', 'cs_sto')} AS id,
           MAX(s.status) AS status,
           MAX(NULLIF(TRIM(s.vessel_name), '')) AS vessel_name,
+          MAX(s.created_at) AS created_at,
           MAX(${plantSite}) AS plant_site,
           MAX(s.eta_arrival) AS eta_arrival,
           MAX(s.eta_berthed) AS eta_berthed,
@@ -272,6 +273,59 @@ export function buildShipmentExecutionDailySummaryInsertSql(): string {
       COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND discharge_no_eta)::bigint
     FROM enriched e
     GROUP BY group_plant, contract_date_key, product_key, incoterm_key`;
+}
+
+/** Grouped pipeline-card stage for an enriched row alias (NULL when no stage applies). */
+function shipmentPipelineStageCaseSql(alias: string, unplannedPred: string): string {
+  const e = alias;
+  return `CASE
+        WHEN ${unplannedPred} THEN 'UNPLANNED'
+        WHEN ${e}.effective_status = 'PLANNED' THEN 'PLANNED'
+        WHEN ${e}.effective_status IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') THEN 'AT_LOADING_PORT'
+        WHEN ${e}.effective_status = 'SAILED' THEN 'SAILED'
+        WHEN ${e}.effective_status IN ('ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') THEN 'AT_DISCHARGE_PORT'
+        WHEN ${e}.effective_status = 'COMPLETED' THEN 'COMPLETED'
+        WHEN ${e}.effective_status = 'CANCELLED' THEN 'CANCELLED'
+        ELSE NULL
+      END`;
+}
+
+/**
+ * INSERT one row per STO key with its derived pipeline stage + toolbar dims, used to
+ * page status-filtered list requests without re-deriving status for every row.
+ */
+export function buildShipmentStageSnapshotInsertSql(): string {
+  const base = buildShipmentDailyBaseCteSql();
+  const eff = shipmentEffectiveStatusExpr('f');
+  const unplannedPred = shipmentPagePipelineUnplannedRowPredicate('e');
+  const stageCase = shipmentPipelineStageCaseSql('e', unplannedPred);
+  return `
+    INSERT INTO shipment_list_stage_snapshot (
+      sto_key, stage, group_plant, contract_date, product, incoterm, last_created_at
+    )
+    ${base},
+    enriched AS (
+      SELECT
+        f.*,
+        ${eff} AS effective_status,
+        COALESCE(f.plant_site, 'Blank') AS group_plant,
+        COALESCE(f.contract_date, ${NULL_CONTRACT_DATE})::date AS contract_date_key,
+        ${sqlPipelineProductKey('f.product')} AS product_key,
+        ${sqlPipelineIncotermKey('f.incoterm')} AS incoterm_key
+      FROM shipment_base f
+    )
+    SELECT
+      TRIM(e.sto_key::text),
+      ${stageCase} AS stage,
+      e.group_plant,
+      e.contract_date_key,
+      e.product_key,
+      e.incoterm_key,
+      e.created_at
+    FROM enriched e
+    WHERE NULLIF(TRIM(e.sto_key::text), '') IS NOT NULL
+      AND (${stageCase}) IS NOT NULL
+    ON CONFLICT (sto_key) DO NOTHING`;
 }
 
 /**
