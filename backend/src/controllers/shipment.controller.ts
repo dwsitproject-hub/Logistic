@@ -8,12 +8,19 @@ import { runShippingPerformance, invalidateShippingPerformanceRowCache } from '.
 import {
   buildShipmentListCacheKey,
   buildShipmentListFilterCacheKey,
+  buildShipmentPipelineDailyFilterInput,
   buildShipmentSummaryCacheKey,
   invalidateShipmentsListCache,
   loadShipmentSummaryBundle,
   normalizeShipmentListRows,
   resolveShipmentsListForRequest,
+  seedShipmentListFilteredTotal,
 } from '../services/shipmentList.service';
+import {
+  isPipelineDailySummaryEligible,
+  loadShipmentStagePageFromSnapshot,
+  toPipelineDailySummaryScope,
+} from '../services/pipelineDailySummary.service';
 import {
   buildShipmentUnplannedHybridListContext,
   countUnplannedHybridBreakdown,
@@ -51,13 +58,16 @@ import {
 import {
   SHIPMENT_BASE_CORE_GROUP_BY_MARKER,
   buildRankedStoCtes,
+  buildResolvedStoKeyPageCtes,
   buildShipmentShellEnrichWithStoLinkAgg,
+  canUseShipmentStageSnapshotPaging,
   canUseShipmentStoKeyPaging,
   injectShipmentStoKeyPaging,
 } from '../utils/shipmentListStoPaging';
 import {
   appendShipmentPipelineScopeStageFilter,
   appendShipmentPipelineStageFilter,
+  normalizeShipmentPagePipelineStageParam,
   shipmentPagePipelineSummarySelectSql,
   shipmentPagePipelineUnplannedRowPredicate,
   shipmentPagePipelineVesselNamesSelectSql,
@@ -884,10 +894,64 @@ ${contractMetaSelectCore}
     }
 
     /** If string replace failed, fall back to full scan (correctness over fast path). */
-    const effectiveListStoPaging =
+    let effectiveListStoPaging =
       listUsesStoPaging && shipmentBaseCteSqlList.includes('ranked_sto AS');
     if (listUsesStoPaging && !effectiveListStoPaging) {
       shipmentBaseCteSqlList = skipSapJoin ? shipmentBaseCteSqlShell : shipmentBaseCteSqlFull;
+    }
+
+    /**
+     * Status-card list requests: page STO keys from the stage snapshot (same refresh
+     * cycle as the status cards) so the expensive per-row derivation/enrichment runs
+     * only for the visible page. Falls back to the live full-scan path whenever the
+     * snapshot is stale or the request carries non-toolbar filters.
+     */
+    if (
+      compact &&
+      !summaryOnly &&
+      !isUnplannedHybridList &&
+      canUseShipmentStageSnapshotPaging({
+        summaryOnly,
+        stoIsSet,
+        status: typeof status === 'string' ? status : 'ALL',
+        etaLoading: etaLoadingBucket,
+        etaDischarge: etaDischargeBucket,
+        lateIndicator: lateIndicatorParam,
+        globalSearch,
+        colFilters,
+        viewOption: viewOptionParam,
+        viewQuery: viewQueryParam,
+        unplannedHybrid: isUnplannedHybridList,
+      })
+    ) {
+      const stageForSnapshot = normalizeShipmentPagePipelineStageParam(
+        typeof status === 'string' ? status : undefined,
+      );
+      const dailyFilters = { ...buildShipmentPipelineDailyFilterInput(req), status: 'ALL' };
+      if (stageForSnapshot && isPipelineDailySummaryEligible(dailyFilters)) {
+        const snapshotPage = await loadShipmentStagePageFromSnapshot(
+          toPipelineDailySummaryScope(dailyFilters),
+          stageForSnapshot,
+          listLimit,
+          listOffset,
+        );
+        if (snapshotPage) {
+          const pagingBase = skipSapJoin ? shipmentBaseCteSqlShell : shipmentBaseCteSqlFull;
+          const injected = injectShipmentStoKeyPaging(
+            pagingBase,
+            listStoKeySql,
+            buildResolvedStoKeyPageCtes(snapshotPage.stoKeys),
+          );
+          if (injected) {
+            shipmentBaseCteSqlList = injected.replace(
+              shipmentBaseShellEnrichCte,
+              shellEnrichWithStoLink,
+            );
+            effectiveListStoPaging = true;
+            seedShipmentListFilteredTotal(shipmentListFilterCacheKey, snapshotPage.total);
+          }
+        }
+      }
     }
 
     const shipmentBaseCteForList = effectiveListStoPaging

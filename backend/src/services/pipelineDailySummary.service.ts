@@ -12,6 +12,7 @@ import {
 import {
   buildShipmentBacklogDailySummaryUpsertSql,
   buildShipmentExecutionDailySummaryInsertSql,
+  buildShipmentStageSnapshotInsertSql,
   buildShipmentVesselStageDailyInsertSql,
 } from '../utils/shipmentPipelineDailySummarySql';
 import logger from '../utils/logger';
@@ -252,11 +253,16 @@ export class PipelineDailySummaryService {
     const start = Date.now();
     await query('TRUNCATE shipment_pipeline_daily_summary');
     await query('TRUNCATE shipment_pipeline_vessel_stage_daily');
+    await query('TRUNCATE shipment_list_stage_snapshot');
     const execRes = await query(buildShipmentExecutionDailySummaryInsertSql());
     const backlogRes = await query(buildShipmentBacklogDailySummaryUpsertSql());
     const vesselRes = await query(buildShipmentVesselStageDailyInsertSql());
+    const stageSnapshotRes = await query(buildShipmentStageSnapshotInsertSql());
     const rowCount =
-      (execRes.rowCount ?? 0) + (backlogRes.rowCount ?? 0) + (vesselRes.rowCount ?? 0);
+      (execRes.rowCount ?? 0) +
+      (backlogRes.rowCount ?? 0) +
+      (vesselRes.rowCount ?? 0) +
+      (stageSnapshotRes.rowCount ?? 0);
     const durationMs = Date.now() - start;
     await upsertRefreshMeta('shipment', rowCount, durationMs);
     logger.info('Pipeline daily summary refreshed: shipment', { rowCount, durationMs });
@@ -333,6 +339,48 @@ export async function loadTruckingSummaryFromDaily(
       totalTableRows,
     },
   };
+}
+
+/**
+ * Page STO keys for a status-card list request from the stage snapshot.
+ * Returns null when the snapshot is stale (caller falls back to the live query).
+ * Freshness/staleness matches the status cards themselves (same refresh cycle).
+ */
+export async function loadShipmentStagePageFromSnapshot(
+  scope: PipelineDailySummaryScope,
+  stage: string,
+  limit: number,
+  offset: number,
+): Promise<{ stoKeys: string[]; total: number } | null> {
+  if (!(await isPipelineDailySummaryFresh('shipment'))) return null;
+
+  const { sql, params } = buildDailySummaryWhere(scope);
+  const stageIdx = params.length + 1;
+  const whereSql = sql ? `${sql} AND stage = $${stageIdx}` : `WHERE stage = $${stageIdx}`;
+  const pageRes = await query(
+    `SELECT
+      sto_key,
+      COUNT(*) OVER ()::bigint AS filtered_total
+    FROM shipment_list_stage_snapshot
+    ${whereSql}
+    ORDER BY last_created_at DESC NULLS LAST, sto_key
+    LIMIT $${stageIdx + 1} OFFSET $${stageIdx + 2}`,
+    [...params, stage, limit, offset],
+  );
+
+  if (pageRes.rows.length > 0) {
+    return {
+      stoKeys: pageRes.rows.map((r) => String((r as { sto_key: unknown }).sto_key)),
+      total: Number((pageRes.rows[0] as { filtered_total?: unknown }).filtered_total || 0),
+    };
+  }
+
+  // Page beyond the end (or empty stage): still need the accurate total.
+  const countRes = await query(
+    `SELECT COUNT(*)::bigint AS c FROM shipment_list_stage_snapshot ${whereSql}`,
+    [...params, stage],
+  );
+  return { stoKeys: [], total: Number((countRes.rows[0] as { c?: unknown })?.c || 0) };
 }
 
 export async function loadShipmentSummaryFromDaily(
