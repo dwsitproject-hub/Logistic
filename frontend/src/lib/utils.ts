@@ -35,7 +35,9 @@ export function formatQtyMtFromKg(kg: number | string | null | undefined, opts?:
     typeof kg === 'string' ? kg.replace(/,/g, '').replace(/\s+/g, '').trim() : kg
   const n = typeof raw === 'string' ? Number(raw) : raw
   if (!Number.isFinite(n)) return '-'
-  const maxFractionDigits = opts?.maxFractionDigits ?? 2
+  // MT quantities display as whole numbers (no decimals). Callers can still opt into
+  // decimals by passing maxFractionDigits explicitly.
+  const maxFractionDigits = opts?.maxFractionDigits ?? 0
   return `${(n / 1000).toLocaleString('en-US', { maximumFractionDigits: maxFractionDigits })} MT`
 }
 
@@ -45,10 +47,11 @@ export function formatOutstandingQtyMtFromKg(kg: number | string | null | undefi
   const n = typeof kg === 'string' ? Number(kg) : kg
   if (!Number.isFinite(n)) return '-'
   const mt = n / 1000
-  const absFmt = Math.abs(mt).toLocaleString('en-US', { maximumFractionDigits: 2 })
+  // Whole-number MT (no decimals) across all pages.
+  const absFmt = Math.abs(mt).toLocaleString('en-US', { maximumFractionDigits: 0 })
   if (n < 0) return `+${absFmt} MT`
   if (n > 0) return `${absFmt} MT`
-  return `${(0).toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+  return `${(0).toLocaleString('en-US', { maximumFractionDigits: 0 })} MT`
 }
 
 /** View-table text color for outstanding qty (kg): green over-delivery, black remaining, gray zero. */

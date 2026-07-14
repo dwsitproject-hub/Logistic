@@ -5235,7 +5235,7 @@ function ShipmentsPageContent() {
                         const kgToMt = (kg: number) => kg / 1000
                         const fmtMt = (mt: number) =>
                           Number.isFinite(mt)
-                            ? mt.toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: mt === 0 ? 0 : 2 })
+                            ? mt.toLocaleString('en-US', { maximumFractionDigits: 0 })
                             : '—'
                         const dueStart = r.delivery_start_date ? formatDateDMY(r.delivery_start_date) : '-'
                         const dueEnd = r.delivery_end_date ? formatDateDMY(r.delivery_end_date) : '-'

@@ -961,9 +961,15 @@ export function EditShipmentModal({
         setEditContext(editContext)
         setSelectedAddPoOption(null)
 
-        const displaySto = resolveShipmentDisplayStoNumber(
-          row.contract_sto_number ?? row.sto_number,
-        )
+        // Show the STO the user actually clicked in the list (preferredStoNumber = the row's
+        // sto_key). The list keys a shipment by its numeric shipment_id when that differs from
+        // the contract's sto_number, but the edit-payload derives sto_number from the contract —
+        // so without this the modal would show a different STO than the clicked row.
+        const preferredDisplaySto = resolveShipmentDisplayStoNumber(preferredStoNumber)
+        const displaySto =
+          preferredDisplaySto !== '-'
+            ? preferredDisplaySto
+            : resolveShipmentDisplayStoNumber(row.contract_sto_number ?? row.sto_number)
 
         const detailsData = Array.isArray(payload.contractDetails) ? payload.contractDetails : []
         let contractDetails = await buildContractDetailRows(

@@ -122,6 +122,8 @@ export function buildVesselIdleListQuery(): string {
         mv.vessel_capacity_mt AS capacity_mt
       FROM master_vessels mv
       WHERE mv.id NOT IN (SELECT id FROM busy_vessel_ids)
+        -- Vessel idle is charter-relevant only for Time Charter (T/C) vessels.
+        AND UPPER(TRIM(COALESCE(mv.terms, ''))) = 'T/C'
     ),
     port_usage AS (
       SELECT
