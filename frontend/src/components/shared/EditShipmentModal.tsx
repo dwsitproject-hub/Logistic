@@ -114,18 +114,18 @@ const INFO_VALUE_CLASS = 'text-sm font-medium text-gray-900'
 const VESSEL_MODAL_TABLE_QTY_VALUE_CLASS = 'text-xs font-normal tabular-nums text-gray-900'
 
 const LOADING_ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
-  { key: 'etaVesselArrivalAtLoadingPort', label: 'ETA Vessel Arrival at Loading Port' },
-  { key: 'etaVesselBerthedAtLoadingPort', label: 'ETA Vessel Berthed at Loading Port' },
-  { key: 'etaVesselStartLoading', label: 'ETA Vessel Start Loading' },
-  { key: 'etaVesselCompletedLoading', label: 'ETA Vessel Completed Loading' },
-  { key: 'etaVesselSailedFromLoadingPort', label: 'ETA Vessel Sailed from Loading Port' },
+  { key: 'etaVesselArrivalAtLoadingPort', label: 'Estimation Vessel Arrival at Loading Port' },
+  { key: 'etaVesselBerthedAtLoadingPort', label: 'Estimation Vessel Berthed at Loading Port' },
+  { key: 'etaVesselStartLoading', label: 'Estimation Vessel Start Loading' },
+  { key: 'etaVesselCompletedLoading', label: 'Estimation Vessel Completed Loading' },
+  { key: 'etaVesselSailedFromLoadingPort', label: 'Estimation Vessel Sailed from Loading Port' },
 ]
 
 const DISCHARGE_ETA_FIELD_ROWS: { key: keyof DischargeEtaFields; label: string }[] = [
-  { key: 'etaVesselArriveAtDischargePort', label: 'ETA Vessel Arrive at Discharge Port' },
-  { key: 'etaVesselBerthedAtDischargePort', label: 'ETA Vessel Berthed at Discharge Port' },
-  { key: 'etaVesselStartDischarging', label: 'ETA Vessel Start Discharging' },
-  { key: 'etaVesselCompleteDischarge', label: 'ETA Vessel Complete Discharge' },
+  { key: 'etaVesselArriveAtDischargePort', label: 'Estimation Vessel Arrive at Discharge Port' },
+  { key: 'etaVesselBerthedAtDischargePort', label: 'Estimation Vessel Berthed at Discharge Port' },
+  { key: 'etaVesselStartDischarging', label: 'Estimation Vessel Start Discharging' },
+  { key: 'etaVesselCompleteDischarge', label: 'Estimation Vessel Complete Discharge' },
 ]
 
 const ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
@@ -601,7 +601,7 @@ function formatActivityLabel(log: ActivityLogRow): string {
   const action = log.action?.toUpperCase() ?? 'UPDATE'
   if (action === 'UPDATE' && log.entity_type === 'SHIPMENT') return `Updated Shipment — ${user}`
   if (action === 'CREATE' && log.entity_type === 'LOADING_PORT') return `Added Loading Port — ${user}`
-  if (action === 'UPDATE' && log.entity_type === 'LOADING_PORT') return `Updated ETA / Port — ${user}`
+  if (action === 'UPDATE' && log.entity_type === 'LOADING_PORT') return `Updated Estimation / Port — ${user}`
   if (action === 'CANCEL' && log.entity_type === 'LOADING_PORT') return `Cancelled Port Activity — ${user}`
   if (action === 'CANCEL' && log.entity_type === 'SHIPMENT') return `Cancelled Shipment — ${user}`
   return `${action} ${entity} — ${user}`
@@ -1262,7 +1262,7 @@ export function EditShipmentModal({
       ? etaBlocks.find((b) => b.portSequence === 1) ?? etaBlocks[0]
       : etaBlocks.find((b) => b.status === 'active')
     if (!activeBlock) {
-      setNotification({ type: 'error', message: 'No active ETA block to save.' })
+      setNotification({ type: 'error', message: 'No active Estimation block to save.' })
       return
     }
 
@@ -1276,7 +1276,7 @@ export function EditShipmentModal({
     if (requiresEditRemark && !editRemark.trim()) {
       setNotification({
         type: 'error',
-        message: 'Remark is required when editing ETA, Quantity Delivered, or Quantity Receive.',
+        message: 'Remark is required when editing Estimation, Quantity Delivered, or Quantity Receive.',
       })
       return
     }
@@ -1490,8 +1490,8 @@ export function EditShipmentModal({
                       ? `STO ${stoNumber} — read-only shipment execution details`
                       : 'Read-only view of shipment execution details'
                     : stoNumber
-                      ? `STO ${stoNumber} — edit ETA schedule and manual ATA (SAP reference preserved)`
-                      : 'Update vessel, quantities, ETA schedule, and manual ATA'}
+                      ? `STO ${stoNumber} — edit Estimation schedule and manual ATA (SAP reference preserved)`
+                      : 'Update vessel, quantities, Estimation schedule, and manual ATA'}
                 </p>
               </div>
             </div>
@@ -1957,7 +1957,7 @@ export function EditShipmentModal({
                   <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100">
                     <Clock className="h-3.5 w-3.5 text-blue-600" />
                   </div>
-                  <h4 className="text-sm font-semibold text-gray-800">3. ETA + Loading Port</h4>
+                  <h4 className="text-sm font-semibold text-gray-800">3. Estimation + Loading Port</h4>
                 </div>
                 {isMultiPortLoading && canModifyShipment && (
                   <Button
@@ -2009,7 +2009,7 @@ export function EditShipmentModal({
                     <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3">
                       <div className="mb-3 flex items-center gap-2">
                         <Badge variant="outline" className="border-indigo-300 text-[10px] text-indigo-700">
-                          Shared discharge ETA
+                          Shared discharge Estimation
                         </Badge>
                         <span className="text-xs text-gray-600">
                           One vessel timeline — unloading is the same for all loading ports
@@ -2049,7 +2049,7 @@ export function EditShipmentModal({
                             : 'bg-blue-600 text-white text-[10px]'
                         }
                       >
-                        {activeEtaBlock.isDraft ? 'New ETA' : 'Active ETA'}
+                        {activeEtaBlock.isDraft ? 'New Estimation' : 'Active Estimation'}
                       </Badge>
                       {canModifyShipment && (
                       <div className="flex gap-2">
@@ -2150,7 +2150,7 @@ export function EditShipmentModal({
                   <div key={block.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 opacity-80">
                     <div className="mb-2 flex items-center gap-2">
                       <Badge variant="outline" className="text-[10px]">
-                        Previous ETA (historical)
+                        Previous Estimation (historical)
                       </Badge>
                       <span className="text-xs text-gray-500">{block.loadingPort || '—'}</span>
                     </div>
@@ -2394,7 +2394,7 @@ export function EditShipmentModal({
                   <p className="text-sm text-gray-500">
                     {readOnly
                       ? 'No remarks recorded for this shipment yet.'
-                      : 'No remarks yet. A remark is required when you change ETA, Quantity Delivered, or Quantity Receive.'}
+                      : 'No remarks yet. A remark is required when you change Estimation, Quantity Delivered, or Quantity Receive.'}
                   </p>
                 ) : (
                   <ul className="space-y-3">
@@ -2475,11 +2475,11 @@ export function EditShipmentModal({
                 rows={2}
                 value={editRemark}
                 onChange={(e) => setEditRemark(e.target.value)}
-                placeholder="Explain why ETA or quantities were changed…"
+                placeholder="Explain why Estimation or quantities were changed…"
                 className="w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-amber-400 focus:outline-none focus:ring-1 focus:ring-amber-300"
               />
               <p className="mt-1 text-[11px] text-amber-800">
-                Required when changing ETA, Quantity Delivered, or Quantity Receive.
+                Required when changing Estimation, Quantity Delivered, or Quantity Receive.
               </p>
             </div>
           ) : null}
@@ -2494,7 +2494,7 @@ export function EditShipmentModal({
               disabled={saving || loading || !shipmentId || !canModifyShipment || editRemarkMissing}
               title={
                 editRemarkMissing
-                  ? 'Enter a remark before saving ETA or quantity changes'
+                  ? 'Enter a remark before saving Estimation or quantity changes'
                   : undefined
               }
             >

@@ -27,18 +27,38 @@ export function canCancelKlipShipment(shipment: {
   sto_key?: string | null
   operation_id?: string | null
 }): boolean {
+  return cancelKlipShipmentDisabledReason(shipment) == null
+}
+
+/** Human-readable reason when Cancel is not allowed; `null` when eligible. */
+export function cancelKlipShipmentDisabledReason(shipment: {
+  status?: string | null
+  row_kind?: string | null
+  sto_number?: string | null
+  sto_key?: string | null
+  operation_id?: string | null
+}): string | null {
   const status = normalizeShipmentStatusKey(shipment.status)
-  if (status === 'CANCELLED') return false
-  if (String(shipment.row_kind ?? '').trim() === 'contract_backlog') return false
+  if (status === 'CANCELLED') return 'Shipment is already cancelled'
+
+  if (String(shipment.row_kind ?? '').trim() === 'contract_backlog') {
+    return 'Unplanned backlog rows cannot be cancelled'
+  }
 
   const displaySto = resolveShipmentDisplayStoNumber(shipment.sto_number)
-  if (displaySto !== '-') return false
+  if (displaySto !== '-') {
+    return 'Only KLIP shipments without an SAP STO can be cancelled'
+  }
 
   const stoKey = String(shipment.sto_key ?? '').trim()
-  if (/^\d+$/.test(stoKey)) return false
+  if (/^\d+$/.test(stoKey)) {
+    return 'Only KLIP shipments without an SAP STO can be cancelled'
+  }
 
   const operationId = String(shipment.operation_id ?? '').trim()
-  if (/^\d+$/.test(operationId)) return false
+  if (/^\d+$/.test(operationId)) {
+    return 'Only KLIP shipments without an SAP STO can be cancelled'
+  }
 
-  return true
+  return null
 }

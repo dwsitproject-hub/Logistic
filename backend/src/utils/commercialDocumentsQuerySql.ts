@@ -124,6 +124,19 @@ export function buildCommercialDocumentsBaseCte(): string {
     ),
     doc_flags AS (
       SELECT
+        NULLIF(TRIM(po_number), '') AS po_number,
+        ${sqlDocFlag(documentTypesForCategory('contract'))} AS doc_contract,
+        ${sqlDocFlag(documentTypesForCategory('addendum_contract'))} AS doc_addendum_contract,
+        ${sqlDocFlag(documentTypesForCategory('invoice_fp_dp'))} AS doc_invoice_fp_dp,
+        ${sqlDocFlag(documentTypesForCategory('invoice_fp_payoff'))} AS doc_invoice_fp_payoff,
+        ${sqlDocFlag(documentTypesForCategory('invoice_fp_full'))} AS doc_invoice_fp_full,
+        COUNT(*)::int AS uploaded_count
+      FROM commercial_document_files
+      WHERE NULLIF(TRIM(po_number), '') IS NOT NULL
+      GROUP BY NULLIF(TRIM(po_number), '')
+    ),
+    legacy_doc_flags AS (
+      SELECT
         contract_ext_no,
         ${sqlDocFlag(documentTypesForCategory('contract'))} AS doc_contract,
         ${sqlDocFlag(documentTypesForCategory('addendum_contract'))} AS doc_addendum_contract,
@@ -132,19 +145,23 @@ export function buildCommercialDocumentsBaseCte(): string {
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_full'))} AS doc_invoice_fp_full,
         COUNT(*)::int AS uploaded_count
       FROM commercial_document_files
+      WHERE NULLIF(TRIM(po_number), '') IS NULL
       GROUP BY contract_ext_no
     ),
     enriched AS (
       SELECT
         cr.*,
-        COALESCE(df.doc_contract, false) AS doc_contract,
-        COALESCE(df.doc_addendum_contract, false) AS doc_addendum_contract,
-        COALESCE(df.doc_invoice_fp_dp, false) AS doc_invoice_fp_dp,
-        COALESCE(df.doc_invoice_fp_payoff, false) AS doc_invoice_fp_payoff,
-        COALESCE(df.doc_invoice_fp_full, false) AS doc_invoice_fp_full,
-        COALESCE(df.uploaded_count, 0) AS uploaded_count
+        COALESCE(df.doc_contract, ldf.doc_contract, false) AS doc_contract,
+        COALESCE(df.doc_addendum_contract, ldf.doc_addendum_contract, false) AS doc_addendum_contract,
+        COALESCE(df.doc_invoice_fp_dp, ldf.doc_invoice_fp_dp, false) AS doc_invoice_fp_dp,
+        COALESCE(df.doc_invoice_fp_payoff, ldf.doc_invoice_fp_payoff, false) AS doc_invoice_fp_payoff,
+        COALESCE(df.doc_invoice_fp_full, ldf.doc_invoice_fp_full, false) AS doc_invoice_fp_full,
+        COALESCE(df.uploaded_count, ldf.uploaded_count, 0) AS uploaded_count
       FROM contract_rows cr
-      LEFT JOIN doc_flags df ON df.contract_ext_no = cr.contract_ext_no
+      LEFT JOIN doc_flags df ON df.po_number = NULLIF(TRIM(cr.po_number), '')
+      LEFT JOIN legacy_doc_flags ldf
+        ON ldf.contract_ext_no = cr.contract_ext_no
+       AND df.po_number IS NULL
     )
   `;
 }

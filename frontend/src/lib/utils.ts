@@ -28,7 +28,7 @@ export function formatKgFromMt(mt: number | string | null | undefined) {
   return `${formatNumber(toKgFromMt(mt))} Kg`
 }
 
-/** Contract/shipment quantities are stored in kg; display as MT. */
+/** Contract/shipment quantities are stored in kg; display as whole MT (no decimals by default). */
 export function formatQtyMtFromKg(kg: number | string | null | undefined, opts?: { maxFractionDigits?: number }) {
   if (kg === null || kg === undefined || kg === '') return '-'
   const raw =
@@ -42,16 +42,20 @@ export function formatQtyMtFromKg(kg: number | string | null | undefined, opts?:
 }
 
 /** Outstanding qty in kg; over-delivery (negative kg) shows +MT; remaining (positive kg) shows MT without minus. */
-export function formatOutstandingQtyMtFromKg(kg: number | string | null | undefined) {
+export function formatOutstandingQtyMtFromKg(
+  kg: number | string | null | undefined,
+  opts?: { maxFractionDigits?: number },
+) {
   if (kg === null || kg === undefined || kg === '') return '-'
   const n = typeof kg === 'string' ? Number(kg) : kg
   if (!Number.isFinite(n)) return '-'
+  const maxFractionDigits = opts?.maxFractionDigits ?? 0
   const mt = n / 1000
-  // Whole-number MT (no decimals) across all pages.
-  const absFmt = Math.abs(mt).toLocaleString('en-US', { maximumFractionDigits: 0 })
+  // Whole-number MT (no decimals) across all pages (override via maxFractionDigits).
+  const absFmt = Math.abs(mt).toLocaleString('en-US', { maximumFractionDigits: maxFractionDigits })
   if (n < 0) return `+${absFmt} MT`
   if (n > 0) return `${absFmt} MT`
-  return `${(0).toLocaleString('en-US', { maximumFractionDigits: 0 })} MT`
+  return `${(0).toLocaleString('en-US', { maximumFractionDigits: maxFractionDigits })} MT`
 }
 
 /** View-table text color for outstanding qty (kg): green over-delivery, black remaining, gray zero. */

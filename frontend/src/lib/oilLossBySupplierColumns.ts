@@ -10,6 +10,7 @@ import type { OilLossByTransporterRow } from '@/lib/oilLossByTransporterColumns'
 import {
   OIL_LOSS_BY_TRANSPORTER_COLUMN_WIDTH_PX,
   mergeDistinctTokens,
+  oilLossByTransporterTableColumnWidthPx,
 } from '@/lib/oilLossByTransporterColumns'
 import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
 
@@ -180,4 +181,13 @@ export function buildOilLossBySupplierVisibleColumns<T extends { id: string }>(
     if (col) out.push(col)
   }
   return out
+}
+
+/** Same width resolver as By Transporter (shared column width map). */
+export function oilLossBySupplierTableColumnWidthPx(
+  colId: string,
+  headerLabel?: string,
+  options?: { hasFormulaHelp?: boolean },
+): number {
+  return oilLossByTransporterTableColumnWidthPx(colId, headerLabel, options)
 }

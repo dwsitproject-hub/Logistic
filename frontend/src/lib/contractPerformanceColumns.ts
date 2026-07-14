@@ -155,7 +155,7 @@ export function getContractPerfTableColumnLayout(colId: string): OperationalColu
 /** Section 3 compact table — fixed px widths (Contract Performance only). */
 export const CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   contract_date: 88,
-  supplier: 112,
+  supplier: 152,
   contract_ext_no: 96,
   po_number: 80,
   source_type: 72,

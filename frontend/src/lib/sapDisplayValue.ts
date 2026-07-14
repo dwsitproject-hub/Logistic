@@ -108,6 +108,9 @@ export function formatSapQtyMtDisplay(
 }
 
 /** SAP outstanding quantity in kg — display as MT with over-delivery styling context; null → "-". */
-export function formatSapOutstandingQtyMtDisplay(kg: number | string | null | undefined): string {
-  return formatOutstandingQtyMtFromKg(kg)
+export function formatSapOutstandingQtyMtDisplay(
+  kg: number | string | null | undefined,
+  opts?: { maxFractionDigits?: number },
+): string {
+  return formatOutstandingQtyMtFromKg(kg, opts)
 }

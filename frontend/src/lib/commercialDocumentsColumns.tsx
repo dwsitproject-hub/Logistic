@@ -11,6 +11,7 @@ import {
   COMMERCIAL_TOTAL_PRICE_FORMULA_HELP,
 } from '@/lib/commercialDocumentsFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
 import { Check } from 'lucide-react'
 
 const DOC_STATUS_COLUMN_IDS = new Set<CommercialDocsColumnId>([
@@ -233,3 +234,44 @@ export const COMMERCIAL_DOCS_ALL_COLUMNS = buildCommercialDocsColumns()
 export const COMMERCIAL_DOCS_COLUMN_BY_ID = Object.fromEntries(
   COMMERCIAL_DOCS_ALL_COLUMNS.map((c) => [c.id, c]),
 ) as Record<CommercialDocsColumnId, CommercialDocsColumnMeta>
+
+/** Compact fixed px widths — header longest-word logic may expand via resolveCompactColumnWidthPx. */
+export const COMMERCIAL_DOCS_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
+  contract_date: 100,
+  contract_ext_no: 120,
+  po_number: 88,
+  supplier: 112,
+  incoterm: 72,
+  product: 96,
+  payment_due_date: 108,
+  dp_due_date: 96,
+  contract_qty: 96,
+  unit_price: 96,
+  total_price: 104,
+  doc_contract: 88,
+  doc_addendum_contract: 104,
+  doc_invoice_fp_dp: 104,
+  doc_invoice_fp_payoff: 112,
+  doc_invoice_fp_full: 104,
+  buyer: 88,
+  plant_site: 96,
+  transport_mode: 88,
+  b2b_flag: 64,
+}
+
+export const COMMERCIAL_DOCS_ACTIONS_COL_WIDTH_PX = 148
+
+const COMMERCIAL_DOCS_DEFAULT_COLUMN_WIDTH_PX = 96
+
+/** Match Contract/Shipping Performance: base map + header longest-word floor. */
+export function commercialDocsTableColumnWidthPx(
+  colId: string,
+  headerLabel?: string,
+  options?: { hasFormulaHelp?: boolean },
+): number {
+  const base = COMMERCIAL_DOCS_COLUMN_WIDTH_PX[colId] ?? COMMERCIAL_DOCS_DEFAULT_COLUMN_WIDTH_PX
+  return resolveCompactColumnWidthPx(base, headerLabel, {
+    hasFormulaHelp: options?.hasFormulaHelp,
+    hasSort: true,
+  })
+}

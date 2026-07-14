@@ -20,8 +20,8 @@ import {
 const router = express.Router();
 
 router.get('/', authenticateToken, getCommercialDocuments);
-router.get('/history/:contractExtNo', authenticateToken, getCommercialDocumentHistory);
-router.get('/files/:contractExtNo', authenticateToken, getCommercialDocumentFiles);
+router.get('/history/:poNumber', authenticateToken, getCommercialDocumentHistory);
+router.get('/files/:poNumber', authenticateToken, getCommercialDocumentFiles);
 router.post('/upload', authenticateToken, commercialDocumentUpload.single('file'), uploadCommercialDocument);
 router.post(
   '/ocr/settlement-invoice',
@@ -29,7 +29,7 @@ router.post(
   settlementInvoiceOcrUpload,
   ocrSettlementInvoice,
 );
-router.get('/settlement-invoice/:contractExtNo', authenticateToken, getSettlementInvoiceSummary);
+router.get('/settlement-invoice/:poNumber', authenticateToken, getSettlementInvoiceSummary);
 router.put('/settlement-invoice', authenticateToken, upsertSettlementInvoiceSummary);
 router.get('/file/:id/view', authenticateToken, viewCommercialDocument);
 router.get('/file/:id/download', authenticateToken, downloadCommercialDocument);

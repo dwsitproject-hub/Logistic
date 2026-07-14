@@ -145,15 +145,15 @@ const ETA_FIELD_ROWS: {
   shortLabel: string
   errorSuffix: string
 }[] = [
-  { key: 'etaVesselArrivalAtLoadingPort', label: 'ETA Vessel Arrival at Loading Port', shortLabel: 'Arr. @ LP', errorSuffix: 'arrival' },
-  { key: 'etaVesselBerthedAtLoadingPort', label: 'ETA Vessel Berthed at Loading Port', shortLabel: 'Berthed LP', errorSuffix: 'berthed' },
-  { key: 'etaVesselStartLoading', label: 'ETA Vessel Start Loading', shortLabel: 'Start Load', errorSuffix: 'startLoading' },
-  { key: 'etaVesselCompletedLoading', label: 'ETA Vessel Completed Loading', shortLabel: 'Done Load', errorSuffix: 'completedLoading' },
-  { key: 'etaVesselSailedFromLoadingPort', label: 'ETA Vessel Sailed from Loading Port', shortLabel: 'Sail LP', errorSuffix: 'sailed' },
-  { key: 'etaVesselArriveAtDischargePort', label: 'ETA Vessel Arrive at Discharge Port', shortLabel: 'Arr. @ DP', errorSuffix: 'arriveDischarge' },
-  { key: 'etaVesselBerthedAtDischargePort', label: 'ETA Vessel Berthed at Discharge Port', shortLabel: 'Berthed DP', errorSuffix: 'berthedDischarge' },
-  { key: 'etaVesselStartDischarging', label: 'ETA Vessel Start Discharging', shortLabel: 'Start Disch', errorSuffix: 'startDischarging' },
-  { key: 'etaVesselCompleteDischarge', label: 'ETA Vessel Complete Discharge', shortLabel: 'Done Disch', errorSuffix: 'completeDischarge' },
+  { key: 'etaVesselArrivalAtLoadingPort', label: 'Estimation Vessel Arrival at Loading Port', shortLabel: 'Arr. @ LP', errorSuffix: 'arrival' },
+  { key: 'etaVesselBerthedAtLoadingPort', label: 'Estimation Vessel Berthed at Loading Port', shortLabel: 'Berthed LP', errorSuffix: 'berthed' },
+  { key: 'etaVesselStartLoading', label: 'Estimation Vessel Start Loading', shortLabel: 'Start Load', errorSuffix: 'startLoading' },
+  { key: 'etaVesselCompletedLoading', label: 'Estimation Vessel Completed Loading', shortLabel: 'Done Load', errorSuffix: 'completedLoading' },
+  { key: 'etaVesselSailedFromLoadingPort', label: 'Estimation Vessel Sailed from Loading Port', shortLabel: 'Sail LP', errorSuffix: 'sailed' },
+  { key: 'etaVesselArriveAtDischargePort', label: 'Estimation Vessel Arrive at Discharge Port', shortLabel: 'Arr. @ DP', errorSuffix: 'arriveDischarge' },
+  { key: 'etaVesselBerthedAtDischargePort', label: 'Estimation Vessel Berthed at Discharge Port', shortLabel: 'Berthed DP', errorSuffix: 'berthedDischarge' },
+  { key: 'etaVesselStartDischarging', label: 'Estimation Vessel Start Discharging', shortLabel: 'Start Disch', errorSuffix: 'startDischarging' },
+  { key: 'etaVesselCompleteDischarge', label: 'Estimation Vessel Complete Discharge', shortLabel: 'Done Disch', errorSuffix: 'completeDischarge' },
 ]
 
 function etaDetailHasAnyDate(d: EtaDetailFields): boolean {
@@ -207,7 +207,8 @@ function resolveShipmentPlanQtyMaxMt(
 }
 
 const ETA_DELIVERY_START_BUFFER_DAYS = 60
-const ETA_DELIVERY_END_BUFFER_DAYS = 60
+/** Allowed ETA/ATA dates may run up to this many days after due delivery end. */
+const ETA_DELIVERY_END_BUFFER_DAYS = 180
 
 function shiftIsoDate(isoDate: string, days: number): string {
   const d = new Date(`${isoDate}T12:00:00`)
@@ -1201,7 +1202,7 @@ export function AddNewShipmentModal({
         showNotification(
           'success',
           'Partial AI suggestion applied',
-          `${vesselSourceLabel}${vesselCached}.${charterPart} Vessel and ports updated where available; complete missing ports to calculate ETA.`,
+          `${vesselSourceLabel}${vesselCached}.${charterPart} Vessel and ports updated where available; complete missing ports to calculate Estimation.`,
         )
         return
       }
@@ -1246,15 +1247,15 @@ export function AddNewShipmentModal({
           updateEtaDetailBlock(block.id, { loadingPort: finalLoadingPort })
           clearFieldError(`eta_${block.id}_loadingPort`)
           etaErrorMessage =
-            error instanceof Error ? error.message : 'AI ETA suggestion failed'
+            error instanceof Error ? error.message : 'AI Estimation suggestion failed'
         }
       }
 
       if (etaApplied > 0) {
         const etaPart =
           transitDays != null
-            ? ` ETA from ${etaSourceLabel} (~${transitDays} days transit) applied to ${etaApplied} schedule(s).`
-            : ` ETA applied to ${etaApplied} schedule(s).`
+            ? ` Estimation from ${etaSourceLabel} (~${transitDays} days transit) applied to ${etaApplied} schedule(s).`
+            : ` Estimation applied to ${etaApplied} schedule(s).`
         showNotification(
           'success',
           'AI shipment plan applied',
@@ -1263,8 +1264,8 @@ export function AddNewShipmentModal({
       } else if (etaErrorMessage) {
         showNotification(
           'warning',
-          'Vessel applied; ETA unavailable',
-          `${vesselSourceLabel}${vesselCached}. Loading port set but ETA could not be calculated: ${etaErrorMessage}`,
+          'Vessel applied; Estimation unavailable',
+          `${vesselSourceLabel}${vesselCached}. Loading port set but Estimation could not be calculated: ${etaErrorMessage}`,
         )
       }
     } catch (error) {
@@ -2007,7 +2008,7 @@ export function AddNewShipmentModal({
           const contractErrorKey = firstBlock ? `eta_${firstBlock.id}_contract` : 'contractNumbers'
           if (!errors[contractErrorKey]) {
             errors[contractErrorKey] =
-              'Assign all POs and complete every ETA milestone in Section 3'
+              'Assign all POs and complete every Estimation milestone in Section 3'
           }
         }
       }
@@ -2044,7 +2045,7 @@ export function AddNewShipmentModal({
         setSaving(true)
         const primaryBlock = etaDetails[0]
         if (!primaryBlock) {
-          showNotification('error', 'No ETA details to save')
+          showNotification('error', 'No Estimation details to save')
           return
         }
         await onSubmit({
@@ -2263,10 +2264,10 @@ export function AddNewShipmentModal({
                 </h3>
                 <p className="text-xs text-gray-500">
                   {isEditMode
-                    ? 'Only ETA schedule dates can be changed'
+                    ? 'Only Estimation schedule dates can be changed'
                     : isPlotMode
-                      ? 'Register vessel and ETA planning for this SAP STO'
-                      : 'Fill in contract, vessel, and ETA details'}
+                      ? 'Register vessel and Estimation planning for this SAP STO'
+                      : 'Fill in contract, vessel, and Estimation details'}
                 </p>
               </div>
             </div>
@@ -2288,7 +2289,7 @@ export function AddNewShipmentModal({
             {[
               { num: 1, label: 'Contract & PO', done: step1Done, icon: <FileText className="h-3.5 w-3.5" /> },
               { num: 2, label: 'Vessel Detail', done: step2Done, icon: <Anchor className="h-3.5 w-3.5" /> },
-              { num: 3, label: 'ETA Schedule + Loading Port', done: step3Done, icon: <Clock className="h-3.5 w-3.5" /> },
+              { num: 3, label: 'Estimation Schedule + Loading Port', done: step3Done, icon: <Clock className="h-3.5 w-3.5" /> },
             ].map((s, i) => (
               <div key={s.num} className="flex items-center">
                 <div className="flex items-center gap-1.5">
@@ -2377,7 +2378,7 @@ export function AddNewShipmentModal({
               <div className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2.5 text-xs text-blue-700">
                 <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
                 <span>
-                  <strong>Required:</strong> at least one PO &nbsp;•&nbsp; <strong>Optional:</strong> port, plant/site, ETA &nbsp;•&nbsp;
+                  <strong>Required:</strong> at least one PO &nbsp;•&nbsp; <strong>Optional:</strong> port, plant/site, Estimation &nbsp;•&nbsp;
                   <strong>Note:</strong> Operation ID is auto-generated; STO will be filled from SAP when available
                   {hasSapSto ? (
                     <>
@@ -2788,7 +2789,7 @@ export function AddNewShipmentModal({
                     disabled={newShipment.contractNumbers.length === 0}
                     label="AI Klip Agent"
                     className="h-10 shrink-0 self-start"
-                    title="Suggest vessel, charter type, ports, loading port, and all ETA milestones"
+                    title="Suggest vessel, charter type, ports, loading port, and all Estimation milestones"
                   />
                   <div className="min-w-0 flex-1 space-y-1.5 text-xs leading-relaxed text-gray-600">
                     {aiAppliedPatternContext ? (
@@ -2810,7 +2811,7 @@ export function AddNewShipmentModal({
                             Supplier, Buyer, Product, and Incoterm
                           </span>{' '}
                           from the PO(s) you selected in Section 1. It then fills in the vessel,
-                          charter type, discharge port, loading port, and full ETA schedule. All
+                          charter type, discharge port, loading port, and full Estimation schedule. All
                           fields remain editable.
                         </p>
                         {newShipment.contractNumbers.length === 0 ? (
@@ -2954,7 +2955,7 @@ export function AddNewShipmentModal({
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-100">
                 <Clock className="h-3.5 w-3.5 text-violet-600" />
               </div>
-              <h4 className="text-sm font-semibold text-gray-800">3. ETA Schedule + Loading Port</h4>
+              <h4 className="text-sm font-semibold text-gray-800">3. Estimation Schedule + Loading Port</h4>
               {step3Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
             </div>
             <div className="p-4 space-y-3">
@@ -2964,7 +2965,7 @@ export function AddNewShipmentModal({
                   <div className="min-w-0 space-y-1.5">
                     <p className="font-medium text-blue-900">Official contract delivery timeframe (from SAP)</p>
                     <p className="text-blue-800/90">
-                      ETA from Arr. @ LP through Done Disch may be up to {ETA_DELIVERY_START_BUFFER_DAYS} days before
+                      Estimation from Arr. @ LP through Done Disch may be up to {ETA_DELIVERY_START_BUFFER_DAYS} days before
                       Due Date Delivery (Start) and up to {ETA_DELIVERY_END_BUFFER_DAYS} days after Due Date Delivery
                       (End).
                     </p>
@@ -2993,20 +2994,20 @@ export function AddNewShipmentModal({
 
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-medium text-gray-500">
-                  All ETA milestones are required <span className="text-red-500">*</span> to create a shipment
+                  All Estimation milestones are required <span className="text-red-500">*</span> to create a shipment
                 </p>
                 {!isEditMode &&
                   (selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') &&
                   newShipment.contractNumbers.length > 0 && (
                     <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={addEtaDetailBlock}>
                       <Plus className="h-3.5 w-3.5 mr-1" />
-                      Add ETA row
+                      Add Estimation row
                     </Button>
                   )}
               </div>
 
               {selectedTransportMode === null && (
-                <p className="text-xs text-gray-400 italic">Add a contract in Section 1 to see ETA fields.</p>
+                <p className="text-xs text-gray-400 italic">Add a contract in Section 1 to see Estimation fields.</p>
               )}
 
               {(selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') && (
@@ -3016,7 +3017,7 @@ export function AddNewShipmentModal({
                   )}
 
                   {newShipment.contractNumbers.length === 0 && (
-                    <p className="text-xs text-gray-400 italic">Add PO in Section 1 before adding ETA.</p>
+                    <p className="text-xs text-gray-400 italic">Add PO in Section 1 before adding Estimation.</p>
                   )}
 
                   <div className="space-y-2">
@@ -3027,12 +3028,12 @@ export function AddNewShipmentModal({
                       return (
                         <div key={block.id} className="rounded-md border border-gray-200 overflow-hidden text-xs">
                           <div className="flex items-center justify-between bg-gray-50 px-2 py-1 border-b">
-                            <span className="font-semibold text-gray-600">ETA #{index + 1}</span>
+                            <span className="font-semibold text-gray-600">Estimation #{index + 1}</span>
                             {!isEditMode && (
                               <button
                                 type="button"
                                 className="text-gray-400 hover:text-gray-600 p-0.5"
-                                aria-label="Remove ETA row"
+                                aria-label="Remove Estimation row"
                                 onClick={() => removeEtaDetailBlock(block.id)}
                               >
                                 <X className="h-3.5 w-3.5" />
@@ -3096,7 +3097,7 @@ export function AddNewShipmentModal({
                                     }`}
                                     title={
                                       isSelectedElsewhere
-                                        ? 'This PO is already assigned to another ETA block'
+                                        ? 'This PO is already assigned to another Estimation block'
                                         : undefined
                                     }
                                   >
@@ -3124,7 +3125,7 @@ export function AddNewShipmentModal({
                               </p>
                             ) : block.contractIds.length > 0 ? (
                               <p className="px-2 pt-2 text-[10px] text-amber-700">
-                                Select POs with valid due delivery start/end dates to enable ETA range limits.
+                                Select POs with valid due delivery start/end dates to enable Estimation range limits.
                               </p>
                             ) : null}
                             <table className="w-full text-xs border-collapse min-w-[52rem]">

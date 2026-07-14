@@ -37,6 +37,13 @@ function defaultYtdRange(): { dateFrom: string; dateTo: string } {
   return { dateFrom: `${y}-01-01`, dateTo: `${y}-${m}-${day}` };
 }
 
+/** Prefer PO; fall back to contract_id for rows without PO. */
+function resolveCommercialDocumentPoKey(rawPo: unknown, fallback?: unknown): string {
+  const po = String(rawPo ?? '').trim();
+  if (po) return po;
+  return String(fallback ?? '').trim();
+}
+
 function mapRow(row: Record<string, unknown>) {
   const qty = Number(row.quantity_ordered) || 0;
   const unitPrice = Number(row.unit_price) || 0;
@@ -157,17 +164,23 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
 
 export const getCommercialDocumentHistory = async (req: AuthRequest, res: Response) => {
   try {
-    const contractExtNo = String(req.params.contractExtNo || '').trim();
-    if (!contractExtNo) {
-      return res.status(400).json({ success: false, error: { message: 'contract_ext_no is required' } });
+    const poNumber = resolveCommercialDocumentPoKey(req.params.poNumber);
+    const contractExtNo = String(req.query.contract_ext_no || '').trim();
+    if (!poNumber) {
+      return res.status(400).json({ success: false, error: { message: 'po_number is required' } });
     }
     const result = await query(
-      `SELECT id, contract_ext_no, document_type, action_type, file_name, user_name, created_at
+      `SELECT id, contract_ext_no, po_number, document_type, action_type, file_name, user_name, created_at
        FROM commercial_document_history
-       WHERE contract_ext_no = $1
+       WHERE NULLIF(TRIM(po_number), '') = $1
+          OR (
+            NULLIF(TRIM(po_number), '') IS NULL
+            AND $2 <> ''
+            AND TRIM(contract_ext_no) = $2
+          )
        ORDER BY created_at DESC
        LIMIT 200`,
-      [contractExtNo],
+      [poNumber, contractExtNo],
     );
     return res.json({
       success: true,
@@ -184,16 +197,22 @@ export const getCommercialDocumentHistory = async (req: AuthRequest, res: Respon
 
 export const getCommercialDocumentFiles = async (req: AuthRequest, res: Response) => {
   try {
-    const contractExtNo = String(req.params.contractExtNo || '').trim();
-    if (!contractExtNo) {
-      return res.status(400).json({ success: false, error: { message: 'contract_ext_no is required' } });
+    const poNumber = resolveCommercialDocumentPoKey(req.params.poNumber);
+    const contractExtNo = String(req.query.contract_ext_no || '').trim();
+    if (!poNumber) {
+      return res.status(400).json({ success: false, error: { message: 'po_number is required' } });
     }
     const result = await query(
-      `SELECT id, contract_ext_no, document_type, file_name, file_path, checked, created_at, updated_at
+      `SELECT id, contract_ext_no, po_number, document_type, file_name, file_path, checked, created_at, updated_at
        FROM commercial_document_files
-       WHERE contract_ext_no = $1
+       WHERE NULLIF(TRIM(po_number), '') = $1
+          OR (
+            NULLIF(TRIM(po_number), '') IS NULL
+            AND $2 <> ''
+            AND TRIM(contract_ext_no) = $2
+          )
        ORDER BY document_type ASC, created_at ASC`,
-      [contractExtNo],
+      [poNumber, contractExtNo],
     );
     return res.json({
       success: true,
@@ -241,17 +260,14 @@ export const commercialDocumentUpload = multer({
   },
 });
 
-async function loadExistingFileNames(
-  contractExtNo: string,
-  documentType: string,
-): Promise<string[]> {
+async function loadExistingFileNames(poNumber: string, documentType: string): Promise<string[]> {
   const types = isCommercialDocumentType(documentType)
     ? documentTypesForCategory(documentType)
     : [documentType];
   const result = await query(
     `SELECT file_name FROM commercial_document_files
-     WHERE contract_ext_no = $1 AND document_type = ANY($2::text[])`,
-    [contractExtNo, types],
+     WHERE NULLIF(TRIM(po_number), '') = $1 AND document_type = ANY($2::text[])`,
+    [poNumber, types],
   );
   return result.rows.map((r) => String(r.file_name || ''));
 }
@@ -262,18 +278,35 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
     const contractExtNo = String(req.body?.contract_ext_no || '').trim();
     const documentType = String(req.body?.document_type || '').trim();
     const buyerName = String(req.body?.buyer_name || req.body?.supplier_name || '').trim();
-    const poNumber = String(req.body?.po_number || '').trim();
+    const poNumber = resolveCommercialDocumentPoKey(
+      req.body?.po_number,
+      req.body?.contract_id,
+    );
 
     if (!file) {
       return res.status(400).json({ success: false, error: { message: 'File is required' } });
     }
-    if (!contractExtNo || !isCommercialDocumentType(documentType)) {
+    if (!poNumber || !isCommercialDocumentType(documentType)) {
       try {
         fs.unlinkSync(file.path);
       } catch {
         /* ignore */
       }
-      return res.status(400).json({ success: false, error: { message: 'Invalid contract_ext_no or document_type' } });
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Invalid po_number or document_type' },
+      });
+    }
+    if (!contractExtNo) {
+      try {
+        fs.unlinkSync(file.path);
+      } catch {
+        /* ignore */
+      }
+      return res.status(400).json({
+        success: false,
+        error: { message: 'contract_ext_no is required for audit trail' },
+      });
     }
 
     try {
@@ -296,7 +329,7 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
       return res.status(503).json({ success: false, error: { message: 'Virus scanner unavailable' } });
     }
 
-    const existingFileNames = await loadExistingFileNames(contractExtNo, documentType);
+    const existingFileNames = await loadExistingFileNames(poNumber, documentType);
     const storedName = buildCommercialDocumentStoredName({
       buyerName,
       documentType,
@@ -326,24 +359,24 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
 
     const insertResult = await query(
       `INSERT INTO commercial_document_files
-        (contract_ext_no, document_type, file_path, file_name, file_size, mime_type, checked, uploaded_by)
-       VALUES ($1,$2,$3,$4,$5,$6,true,$7)
+        (contract_ext_no, po_number, document_type, file_path, file_name, file_size, mime_type, checked, uploaded_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8)
        RETURNING *`,
-      [contractExtNo, documentType, relativePath, storedName, file.size, file.mimetype, userId],
+      [contractExtNo, poNumber, documentType, relativePath, storedName, file.size, file.mimetype, userId],
     );
     const savedFile = insertResult.rows[0];
 
     await query(
       `INSERT INTO commercial_document_history
-        (contract_ext_no, document_type, action_type, file_path, file_name, user_id, user_name)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [contractExtNo, documentType, actionType, relativePath, storedName, userId, userName],
+        (contract_ext_no, po_number, document_type, action_type, file_path, file_name, user_id, user_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [contractExtNo, poNumber, documentType, actionType, relativePath, storedName, userId, userName],
     );
 
     return res.json({
       success: true,
       message: actionType === 'ADD' ? 'Document uploaded' : 'New document version uploaded',
-      data: { actionType, file_name: storedName, file_id: savedFile.id },
+      data: { actionType, file_name: storedName, file_id: savedFile.id, po_number: poNumber },
     });
   } catch (err) {
     logger.error('uploadCommercialDocument error:', err);

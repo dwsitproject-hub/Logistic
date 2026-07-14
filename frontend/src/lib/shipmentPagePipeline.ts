@@ -104,7 +104,7 @@ export const SHIPMENT_PAGE_PIPELINE_CARDS: readonly ShipmentPipelineCardConfig[]
   },
   {
     status: 'SAILED',
-    label: 'Sailed',
+    label: 'Sailed to Disc Port',
     color: 'bg-purple-100',
     textColor: 'text-purple-800',
     badgeColor: 'bg-purple-600',

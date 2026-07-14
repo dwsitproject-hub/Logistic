@@ -18,6 +18,7 @@ import {
   sqlSapVesselNameFromSpdJsonb,
   sqlShipmentDisplayVesselName,
 } from '../utils/sapVesselFields';
+import { SQL_CONTRACT_IMPORT_STATUS } from '../utils/contractDeliveryStatus';
 
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
@@ -70,7 +71,7 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const ROW_CACHE_KEY = 'shipping-performance-rows-v28';
+const ROW_CACHE_KEY = 'shipping-performance-rows-v29';
 
 // Background warming keeps the (expensive) row cache populated so page loads are
 // served from memory instead of paying the full SQL cost. This does not change what
@@ -135,6 +136,7 @@ function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<stri
       (pick.contract_numbers as string | undefined) ??
       (joinDistinctValues(rows, 'contract_number') || pick.contract_number),
     contract_ext_no: joinDistinctValues(rows, 'contract_ext_no') || pick.contract_ext_no,
+    source_type: joinDistinctValues(rows, 'source_type') || pick.source_type,
     contract_qty: metrics.contractQty,
     sto_qty: metrics.stoQty,
     received_qty: metrics.receivedQty,
@@ -305,7 +307,9 @@ const SHIPPING_PERFORMANCE_SQL = `
         c.contract_date::date AS contract_date,
         c.incoterm,
         c.product,
+        c.source_type,
         c.supplier,
+        ${SQL_CONTRACT_IMPORT_STATUS} AS import_status,
         COALESCE(sm.contract_qty, 0)::numeric AS contract_qty,
         ${sqlShipmentDisplayVesselName('sa.vessel_name_sap', 's.vessel_name')} AS vessel_name,
         s.status,

@@ -39,6 +39,11 @@ import { formatOperationalTableTextDisplay, formatSapDisplayValue, formatSapOuts
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import {
+  CONTRACTS_LIST_TRUNCATE_TOOLTIP_COLUMN_IDS,
+  operationalRowFieldTooltipText,
+  shouldApplyOperationalTruncateTooltip,
+} from '@/lib/operationalTableTruncateUi'
+import {
   TableInitialLoadPlaceholder,
   TableInitialLoadPlaceholderContent,
 } from '@/components/performance/TableInitialLoadPlaceholder'
@@ -2944,7 +2949,11 @@ function ContractsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => c.supplier || '',
-      render: (c) => <span className="text-sm">{formatOperationalTableTextDisplay(c.supplier)}</span>,
+      render: (c) => (
+        <span className="text-sm truncate block" title={c.supplier || undefined}>
+          {formatOperationalTableTextDisplay(c.supplier)}
+        </span>
+      ),
     },
     {
       id: 'outstanding_qty_mt',
@@ -2981,7 +2990,7 @@ function ContractsPageContent() {
             className={
               isContractPerformance
                 ? `${cycleSizeClass} ${signedCycleDaysClass(c.trade_cycle_days)}`
-                : `${cycleSizeClass} font-semibold ${signedCycleDaysClass(c.trade_cycle_days)}`
+                : `${cycleSizeClass} ${signedCycleDaysClass(c.trade_cycle_days)}`
             }
           >
             {isContractPerformance
@@ -3007,7 +3016,7 @@ function ContractsPageContent() {
             className={
               isContractPerformance
                 ? `${cycleSizeClass} ${signedCycleDaysClass(c.cash_cycle_days)}`
-                : `${cycleSizeClass} font-semibold ${signedCycleDaysClass(c.cash_cycle_days)}`
+                : `${cycleSizeClass} ${signedCycleDaysClass(c.cash_cycle_days)}`
             }
           >
             {isContractPerformance
@@ -3054,7 +3063,7 @@ function ContractsPageContent() {
             className={
               isContractPerformance
                 ? `${cycleSizeClass} ${logCycleDaysClass(c.log_cycle_days, c.trade_cycle_days)}`
-                : `${cycleSizeClass} font-semibold ${logCycleDaysClass(c.log_cycle_days, c.trade_cycle_days)}`
+                : `${cycleSizeClass} ${logCycleDaysClass(c.log_cycle_days, c.trade_cycle_days)}`
             }
           >
             {isContractPerformance
@@ -3073,7 +3082,7 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => c.over_under_delivery_status || '',
       render: (c) => (
-        <span className="text-xs font-semibold">
+        <span className="text-xs">
           {formatSapDisplayValue(c.over_under_delivery_status)}
         </span>
       ),
@@ -4679,26 +4688,24 @@ function ContractsPageContent() {
                         className={cn(
                           COMPACT_OPERATIONAL_TABLE_CLASS,
                           COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
-                          isContractPerformance && 'klip-compact-table--perf-narrow-cols',
+                          'klip-compact-table--perf-narrow-cols',
                         )}
                       >
-                      {isContractPerformance ? (
-                        <colgroup>
-                          {visibleColumns.map((col) => (
-                            <col
-                              key={col.id}
-                              style={{
-                                width: compactTableColWidthCss(
-                                  contractPerfTableColumnWidthPx(col.id, col.label, {
-                                    hasFormulaHelp: Boolean(col.formulaHelp),
-                                  }),
-                                ),
-                              }}
-                            />
-                          ))}
-                          <col style={{ width: COMPACT_TABLE_ACTIONS_COL_WIDTH_PX }} />
-                        </colgroup>
-                      ) : null}
+                      <colgroup>
+                        {visibleColumns.map((col) => (
+                          <col
+                            key={col.id}
+                            style={{
+                              width: compactTableColWidthCss(
+                                contractPerfTableColumnWidthPx(col.id, col.label, {
+                                  hasFormulaHelp: Boolean(col.formulaHelp),
+                                }),
+                              ),
+                            }}
+                          />
+                        ))}
+                        <col style={{ width: COMPACT_TABLE_ACTIONS_COL_WIDTH_PX }} />
+                      </colgroup>
                       {/* Header */}
                       <thead>
                       <tr
@@ -5118,14 +5125,21 @@ function ContractsPageContent() {
                                   const layout = isContractPerformance
                                     ? getContractPerfTableColumnLayout(col.id)
                                     : getOperationalColumnLayout('contracts', col.id)
-                                  const useTruncateTooltip =
-                                    isContractPerformance &&
-                                    CONTRACT_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS.has(col.id) &&
-                                    (layout === 'wrap' ||
-                                      layout === 'truncate' ||
-                                      layout === 'short')
+                                  const truncateAllowlist = isContractPerformance
+                                    ? CONTRACT_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS
+                                    : CONTRACTS_LIST_TRUNCATE_TOOLTIP_COLUMN_IDS
+                                  const useTruncateTooltip = shouldApplyOperationalTruncateTooltip(
+                                    col.id,
+                                    layout,
+                                    truncateAllowlist,
+                                  )
                                   const tooltip = useTruncateTooltip
-                                    ? contractPerfCellTooltipText(col.id, contract)
+                                    ? isContractPerformance
+                                      ? contractPerfCellTooltipText(col.id, contract)
+                                      : operationalRowFieldTooltipText(
+                                          col.id,
+                                          contract as unknown as Record<string, unknown>,
+                                        ) ?? contractPerfCellTooltipText(col.id, contract)
                                     : null
                                   const rendered = col.render(contract)
                                   const opColClass = operationalTableColumnClass(layout)

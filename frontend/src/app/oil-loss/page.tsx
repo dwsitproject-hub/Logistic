@@ -70,6 +70,7 @@ import {
   COMPACT_OPERATIONAL_TABLE_CLASS,
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+  compactTableColWidthCss,
 } from '@/lib/compactTableUi'
 import {
   OperationalNowrapCell,
@@ -78,6 +79,12 @@ import {
   getOperationalColumnLayout,
   operationalTableColumnClass,
 } from '@/lib/operationalTableLayout'
+import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
+import {
+  OIL_LOSS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+  operationalRowFieldTooltipText,
+  shouldApplyOperationalTruncateTooltip,
+} from '@/lib/operationalTableTruncateUi'
 import {
   OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION,
   OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION_KEY,
@@ -87,6 +94,7 @@ import {
   mergeOilLossAllContractColumnOrder,
   oilLossAllContractCompactColumnFallbackOrder,
   oilLossAllContractDefaultVisibleColumnIds,
+  oilLossAllContractTableColumnWidthPx,
   type OilLossAllContractRow,
   type OilLossSourceRow,
 } from '@/lib/oilLossAllContractColumns'
@@ -99,6 +107,7 @@ import {
   mergeOilLossByTransporterColumnOrder,
   oilLossByTransporterCompactColumnFallbackOrder,
   oilLossByTransporterDefaultVisibleColumnIds,
+  oilLossByTransporterTableColumnWidthPx,
   type OilLossByTransporterRow,
 } from '@/lib/oilLossByTransporterColumns'
 import {
@@ -110,6 +119,7 @@ import {
   mergeOilLossBySupplierColumnOrder,
   oilLossBySupplierCompactColumnFallbackOrder,
   oilLossBySupplierDefaultVisibleColumnIds,
+  oilLossBySupplierTableColumnWidthPx,
   type OilLossBySupplierRow,
 } from '@/lib/oilLossBySupplierColumns'
 import TransporterHistoryModal, {
@@ -2270,10 +2280,31 @@ export default function OilLossPage() {
                       className={cn(
                         COMPACT_OPERATIONAL_TABLE_CLASS,
                         COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
-                        (viewMode === 'by_transporter' || viewMode === 'by_supplier') &&
-                          'klip-compact-table--intrinsic-token-cols',
+                        'klip-compact-table--perf-narrow-cols',
                       )}
                     >
+                      <colgroup>
+                        {visibleColumns.map((col) => {
+                          const widthPx =
+                            viewMode === 'by_transporter'
+                              ? oilLossByTransporterTableColumnWidthPx(col.id, col.label, {
+                                  hasFormulaHelp: Boolean(col.formulaHelp),
+                                })
+                              : viewMode === 'by_supplier'
+                                ? oilLossBySupplierTableColumnWidthPx(col.id, col.label, {
+                                    hasFormulaHelp: Boolean(col.formulaHelp),
+                                  })
+                                : oilLossAllContractTableColumnWidthPx(col.id, col.label, {
+                                    hasFormulaHelp: Boolean(col.formulaHelp),
+                                  })
+                          return (
+                            <col
+                              key={col.id}
+                              style={{ width: compactTableColWidthCss(widthPx) }}
+                            />
+                          )
+                        })}
+                      </colgroup>
                       <thead>
                         <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
                           {visibleColumns.map((col) => {
@@ -2346,25 +2377,34 @@ export default function OilLossPage() {
                             return (
                               <tr key={row.id} className={stripeClass}>
                                 {visibleColumns.map((col) => {
-                                  const opColClass = operationalTableColumnClass(
-                                    getOperationalColumnLayout(operationalTableType, col.id),
-                                  )
-                                  return (
-                                    <td
-                                      key={col.id}
-                                      className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}
-                                    >
-                                      <div
-                                        className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}
-                                      >
-                                        {col.id === 'transporter' && viewMode === 'by_transporter' ? (
+                                  const layout = getOperationalColumnLayout(operationalTableType, col.id)
+                                  const opColClass = operationalTableColumnClass(layout)
+                                  const isLinkCell =
+                                    (col.id === 'transporter' && viewMode === 'by_transporter') ||
+                                    (col.id === 'supplier' && viewMode === 'by_supplier')
+                                  const useTruncateTooltip =
+                                    !isLinkCell &&
+                                    shouldApplyOperationalTruncateTooltip(
+                                      col.id,
+                                      layout,
+                                      OIL_LOSS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+                                    )
+                                  const truncateTooltip = useTruncateTooltip
+                                    ? operationalRowFieldTooltipText(
+                                        col.id,
+                                        row as unknown as Record<string, unknown>,
+                                      )
+                                    : null
+                                  const cellContent =
+                                    col.id === 'transporter' && viewMode === 'by_transporter' ? (
                                           (() => {
                                             const transporterRow = row as OilLossByTransporterRow
                                             const name = formatOperationalTableTextDisplay(transporterRow.transporter)
                                             return (
                                               <button
                                                 type="button"
-                                                className="block w-max max-w-none whitespace-nowrap text-left text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
+                                                className="block w-full min-w-0 truncate text-left text-sm text-blue-700 hover:text-blue-900 hover:underline"
+                                                title={name === '-' ? undefined : name}
                                                 onClick={(e) => {
                                                   e.stopPropagation()
                                                   openTransporterModal(transporterRow)
@@ -2381,7 +2421,8 @@ export default function OilLossPage() {
                                             return (
                                               <button
                                                 type="button"
-                                                className="block w-max max-w-none whitespace-nowrap text-left text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
+                                                className="block w-full min-w-0 truncate text-left text-sm text-blue-700 hover:text-blue-900 hover:underline"
+                                                title={name === '-' ? undefined : name}
                                                 onClick={(e) => {
                                                   e.stopPropagation()
                                                   openSupplierModal(supplierRow)
@@ -2393,6 +2434,21 @@ export default function OilLossPage() {
                                           })()
                                         ) : (
                                           col.render(row)
+                                        )
+                                  return (
+                                    <td
+                                      key={col.id}
+                                      className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}
+                                    >
+                                      <div
+                                        className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}
+                                      >
+                                        {useTruncateTooltip ? (
+                                          <ContractPerfTruncatedCell tooltip={truncateTooltip} className="w-full">
+                                            {cellContent}
+                                          </ContractPerfTruncatedCell>
+                                        ) : (
+                                          cellContent
                                         )}
                                       </div>
                                     </td>

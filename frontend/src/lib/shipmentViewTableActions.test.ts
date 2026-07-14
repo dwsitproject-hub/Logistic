@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canCancelKlipShipment, resolveShipmentTablePrimaryAction, shipmentRowHasRegisteredPlanning } from './shipmentViewTableActions'
+import { canCancelKlipShipment, cancelKlipShipmentDisabledReason, resolveShipmentTablePrimaryAction, shipmentRowHasRegisteredPlanning } from './shipmentViewTableActions'
 
 describe('resolveShipmentTablePrimaryAction', () => {
   it('maps Unplanned to add', () => {
@@ -69,5 +69,34 @@ describe('canCancelKlipShipment', () => {
         operation_id: 'OP-1',
       }),
     ).toBe(false)
+  })
+})
+
+describe('cancelKlipShipmentDisabledReason', () => {
+  it('returns null when eligible', () => {
+    expect(
+      cancelKlipShipmentDisabledReason({
+        status: 'PLANNED',
+        sto_number: null,
+        sto_key: 'OP-1',
+        operation_id: 'OP-1',
+      }),
+    ).toBeNull()
+  })
+
+  it('explains SAP STO and cancelled cases', () => {
+    expect(
+      cancelKlipShipmentDisabledReason({
+        status: 'PLANNED',
+        sto_number: '1006018854',
+      }),
+    ).toMatch(/SAP STO/i)
+    expect(
+      cancelKlipShipmentDisabledReason({
+        status: 'CANCELLED',
+        sto_number: null,
+        operation_id: 'OP-1',
+      }),
+    ).toMatch(/already cancelled/i)
   })
 })

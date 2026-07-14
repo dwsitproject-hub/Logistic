@@ -5,6 +5,7 @@
 
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 import { mergePreservedColumnOrder } from '@/lib/columnLayoutMigration'
+import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
 import { sumR4OilLossPctByContract } from '@/lib/oilLossSummary'
 import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
 
@@ -239,4 +240,20 @@ export function buildOilLossByTransporterVisibleColumns<T extends { id: string }
     if (col) out.push(col)
   }
   return out
+}
+
+const OIL_LOSS_BY_TRANSPORTER_DEFAULT_COLUMN_WIDTH_PX = 96
+
+/** Match Contract/Shipping Performance: base map + header longest-word floor. */
+export function oilLossByTransporterTableColumnWidthPx(
+  colId: string,
+  headerLabel?: string,
+  options?: { hasFormulaHelp?: boolean },
+): number {
+  const base =
+    OIL_LOSS_BY_TRANSPORTER_COLUMN_WIDTH_PX[colId] ?? OIL_LOSS_BY_TRANSPORTER_DEFAULT_COLUMN_WIDTH_PX
+  return resolveCompactColumnWidthPx(base, headerLabel, {
+    hasFormulaHelp: options?.hasFormulaHelp,
+    hasSort: true,
+  })
 }

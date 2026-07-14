@@ -1,11 +1,10 @@
-/** Oil Loss display — always 2 decimal places for MT and %. */
+/** Oil Loss display — MT qty as whole numbers; % keeps 2 decimals. */
 
 export function formatOilLossMtFromKg(kg: number | null | undefined): string {
   if (kg === null || kg === undefined || !Number.isFinite(Number(kg))) return '—'
   const mt = Number(kg) / 1000
   return mt.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    maximumFractionDigits: 0,
     useGrouping: true,
   })
 }
@@ -23,8 +22,7 @@ export function formatOilLossPct(value: number | null | undefined): string {
 export function formatOilLossAvgMt(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—'
   return value.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    maximumFractionDigits: 0,
     useGrouping: true,
   })
 }

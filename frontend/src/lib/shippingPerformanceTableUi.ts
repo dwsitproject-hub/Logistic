@@ -274,7 +274,7 @@ export function shippingPerfCellTooltipText(
       }
       if (raw === null || raw === undefined) return null
       const mt = Number(raw) / 1000
-      return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+      return `${mt.toLocaleString('en-US', { maximumFractionDigits: 0 })} MT`
     }
     case 'outstanding_qty_actual':
     case 'outstanding_qty_planning':
