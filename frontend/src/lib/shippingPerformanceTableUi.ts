@@ -39,6 +39,8 @@ export const ALL_SHIPMENTS_PRESET_COLUMN_ORDER = [
   'discharge_delta_eta_etb_days',
   'discharge_delta_etb_etc_days',
   'total_delta_days',
+  'lp_flow_rate',
+  'dp_flow_rate',
 ] as const
 
 export type AllShipmentsPresetColumnKey = (typeof ALL_SHIPMENTS_PRESET_COLUMN_ORDER)[number]
@@ -161,6 +163,8 @@ export const SHIPPING_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   discharge_delta_eta_etb_days: 80,
   discharge_delta_etb_etc_days: 80,
   total_delta_days: 56,
+  lp_flow_rate: 88,
+  dp_flow_rate: 88,
 }
 
 const DEFAULT_COLUMN_WIDTH_PX = 88

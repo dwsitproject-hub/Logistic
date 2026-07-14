@@ -25,6 +25,9 @@ import {
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { formatShipmentStatusLabel, shipmentStatusBadgeClass } from '@/lib/shipmentStatusDisplay'
 import { cn } from '@/lib/utils'
+import { computeROilLossSummary } from '@/lib/oilLossSummary'
+import { filterOilLossEligibleRows } from '@/lib/oilLossEligibility'
+import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 import { Anchor, Loader2, Ship, X } from 'lucide-react'
 
 export type VesselHistoryModalSelection = {
@@ -116,6 +119,43 @@ function avgAtaDelta(
   if (vals.length === 0) return null
   const avg = vals.reduce((sum, v) => sum + v, 0) / vals.length
   return Math.round(avg * 10) / 10
+}
+
+/** Port flow rate for one row = shipped MT / berth→complete days (actual). FOB→Delivered, else→Received. */
+function rowPortFlowRate(row: VesselHistoryShipmentRow, port: 'lp' | 'dp'): number | null {
+  const isFob = String(row.incoterm ?? '').trim().toUpperCase() === 'FOB'
+  const numeratorKg = isFob ? row.delivered_qty : row.received_qty
+  const delta =
+    port === 'lp' ? row.ata_loading_delta_etb_etc_days : row.ata_discharge_delta_etb_etc_days
+  const days = typeof delta === 'number' && Number.isFinite(delta) ? -delta : null
+  if (days === null || days <= 0) return null
+  if (typeof numeratorKg !== 'number' || !Number.isFinite(numeratorKg)) return null
+  return numeratorKg / 1000 / days
+}
+
+/** Vessel average of the per-shipment flow rate (nulls excluded). */
+function avgVesselFlowRate(rows: VesselHistoryShipmentRow[], port: 'lp' | 'dp'): number | null {
+  const vals = rows
+    .map((r) => rowPortFlowRate(r, port))
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+  if (vals.length === 0) return null
+  return Math.round((vals.reduce((sum, v) => sum + v, 0) / vals.length) * 10) / 10
+}
+
+function formatFlowRate1(v: number | null): string {
+  return v == null || !Number.isFinite(v)
+    ? '-'
+    : v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+}
+
+function formatPct1(v: number | null): string {
+  return v == null || !Number.isFinite(v) ? '-' : `${v.toFixed(1)}%`
+}
+
+function formatMt1(v: number | null): string {
+  return v == null || !Number.isFinite(v)
+    ? '-'
+    : `${v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} MT`
 }
 
 function renderDeltaDaysCell(days: number | null) {
@@ -332,6 +372,8 @@ export default function VesselHistoryModal({
 }: VesselHistoryModalProps) {
   const [profile, setProfile] = useState<MasterVesselProfile | null>(null)
   const [profileLoading, setProfileLoading] = useState(false)
+  const [oilLossRows, setOilLossRows] = useState<OilLossSourceRow[]>([])
+  const [oilLossLoading, setOilLossLoading] = useState(false)
 
   const vesselRows = useMemo(() => {
     if (!selection) return []
@@ -339,6 +381,25 @@ export default function VesselHistoryModal({
       (row) => normalizeVesselKey(row.vessel_name) === selection.vesselKey,
     )
   }, [sourceRows, selection])
+
+  // Vessel-average LP/DP flow rate (self-contained; matches the By-Vessel / table columns).
+  const avgLpFlowRate = useMemo(() => avgVesselFlowRate(vesselRows, 'lp'), [vesselRows])
+  const avgDpFlowRate = useMemo(() => avgVesselFlowRate(vesselRows, 'dp'), [vesselRows])
+
+  // Per-vessel oil-loss R1-R4 (% and MT), from the same /api/oil-loss data the Oil Loss page uses.
+  const vesselOilLoss = useMemo(() => {
+    const target = normalizeVesselNameForMatch(selection?.vesselName)
+    const rows = target
+      ? oilLossRows.filter((r) => normalizeVesselNameForMatch(r.vessel_name) === target)
+      : []
+    return {
+      rowCount: rows.length,
+      r1: computeROilLossSummary(rows, 'r1'),
+      r2: computeROilLossSummary(rows, 'r2'),
+      r3: computeROilLossSummary(rows, 'r3'),
+      r4: computeROilLossSummary(rows, 'r4'),
+    }
+  }, [oilLossRows, selection])
 
   const { nextShipmentRows, onGoingRows, historyRows, historySourceRows } = useMemo(() => {
     const partitioned = partitionShippingPerfVesselModalRows(vesselRows)
@@ -388,6 +449,29 @@ export default function VesselHistoryModal({
     if (!open || !selection) return
     void fetchVesselProfile(selection.vesselName)
   }, [open, selection, fetchVesselProfile])
+
+  // Load closed-contract oil-loss data once per open; filtered to the vessel client-side.
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setOilLossLoading(true)
+    api
+      .get('/oil-loss')
+      .then((r) => {
+        if (cancelled) return
+        const raw = Array.isArray(r.data?.data) ? (r.data.data as OilLossSourceRow[]) : []
+        setOilLossRows(filterOilLossEligibleRows(raw))
+      })
+      .catch((error) => {
+        console.error('Failed to load oil loss for vessel modal:', error)
+      })
+      .finally(() => {
+        if (!cancelled) setOilLossLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
 
   if (!open || !selection) return null
 
@@ -475,6 +559,50 @@ export default function VesselHistoryModal({
                 </div>
                 <VesselAtaAveragesGrid historyShipments={historySourceRows} />
               </div>
+            </div>
+            <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50/40 p-4">
+              <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-gray-500">
+                Flow rate &amp; oil loss (vessel average)
+                {oilLossLoading ? <Loader2 className="h-3 w-3 animate-spin text-gray-400" /> : null}
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3 lg:grid-cols-6">
+                {[
+                  { label: 'Avg LP Flow Rate', value: formatFlowRate1(avgLpFlowRate) },
+                  { label: 'Avg DP Flow Rate', value: formatFlowRate1(avgDpFlowRate) },
+                  {
+                    label: 'Avg R1 Oil Loss',
+                    value: `${formatPct1(vesselOilLoss.r1.avgPct)} · ${formatMt1(vesselOilLoss.r1.avgMt)}`,
+                  },
+                  {
+                    label: 'Avg R2 Oil Loss',
+                    value: `${formatPct1(vesselOilLoss.r2.avgPct)} · ${formatMt1(vesselOilLoss.r2.avgMt)}`,
+                  },
+                  {
+                    label: 'Avg R3 Oil Loss',
+                    value: `${formatPct1(vesselOilLoss.r3.avgPct)} · ${formatMt1(vesselOilLoss.r3.avgMt)}`,
+                  },
+                  {
+                    label: 'Avg R4 Oil Loss',
+                    value: `${formatPct1(vesselOilLoss.r4.avgPct)} · ${formatMt1(vesselOilLoss.r4.avgMt)}`,
+                  },
+                ].map((metric) => (
+                  <div key={metric.label} className="flex min-w-0 flex-col gap-0.5">
+                    <span
+                      className="truncate text-[10px] leading-tight text-gray-500"
+                      title={metric.label}
+                    >
+                      {metric.label}
+                    </span>
+                    <span className="text-[11px] font-bold tabular-nums text-gray-900">
+                      {metric.value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-[10px] leading-snug text-gray-400">
+                Flow rate = MT ÷ berth→complete days (FOB: Delivered, CIF/CFR: Received).
+                Oil loss shown as avg % · avg MT across the vessel&apos;s closed contracts.
+              </p>
             </div>
           </section>
 

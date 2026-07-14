@@ -18,6 +18,7 @@ import VesselHistoryModal, {
   type VesselHistoryModalSelection,
 } from '@/components/shipping-performance/VesselHistoryModal'
 import {
+  normalizeScopeGroupKey,
   rowMatchesGlobalSearch,
   rowMatchesToolbarMultiFilters,
 } from '@/lib/globalScopeFilters'
@@ -156,6 +157,10 @@ interface ShippingPerformanceRow {
   ata_discharge_delta_eta_etb_days?: number | null
   ata_discharge_delta_etb_etc_days?: number | null
   ata_total_delta_days?: number | null
+  /** Computed: numerator MT / loading berth→complete days (actual). Null when N/A. */
+  lp_flow_rate?: number | null
+  /** Computed: numerator MT / discharge berth→complete days (actual). Null when N/A. */
+  dp_flow_rate?: number | null
 }
 
 type TableViewMode = 'all' | 'by_vessel'
@@ -241,6 +246,42 @@ function excludeUnplannedShippingRows(rows: ShippingPerformanceRow[]): ShippingP
  * When false: UI is hidden (not removed) and the filter pipeline is bypassed.
  */
 const SHIPPING_PERF_GLOBAL_FILTERS_ENABLED = false
+
+/**
+ * Port flow rate = shipped MT / berth→complete duration (days, actual dates).
+ * `deltaBerthedMinusCompleted` is the row's ATA "ETB - ETC" delta (berthed − completed),
+ * so the duration is its negation. Returns null when duration is missing/≤0 or qty missing.
+ */
+function computePortFlowRate(
+  numeratorKg: number | null | undefined,
+  deltaBerthedMinusCompleted: number | null | undefined,
+): number | null {
+  const days =
+    typeof deltaBerthedMinusCompleted === 'number' && Number.isFinite(deltaBerthedMinusCompleted)
+      ? -deltaBerthedMinusCompleted
+      : null
+  if (days === null || days <= 0) return null
+  if (typeof numeratorKg !== 'number' || !Number.isFinite(numeratorKg)) return null
+  return numeratorKg / 1000 / days
+}
+
+/** LP/DP flow rate for one shipment row. FOB uses Delivered Qty; everything else uses Received Qty. */
+function computeRowFlowRates(row: ShippingPerformanceRow): {
+  lp_flow_rate: number | null
+  dp_flow_rate: number | null
+} {
+  const isFob = String(row.incoterm ?? '').trim().toUpperCase() === 'FOB'
+  const numeratorKg = isFob ? row.delivered_qty : row.received_qty
+  return {
+    lp_flow_rate: computePortFlowRate(numeratorKg, row.ata_loading_delta_etb_etc_days),
+    dp_flow_rate: computePortFlowRate(numeratorKg, row.ata_discharge_delta_etb_etc_days),
+  }
+}
+
+/** Materialize lp_flow_rate/dp_flow_rate on each row so render + sort + averaging read a field. */
+function materializeFlowRates(rows: ShippingPerformanceRow[]): ShippingPerformanceRow[] {
+  return rows.map((row) => ({ ...row, ...computeRowFlowRates(row) }))
+}
 
 function avgMetric(rows: ShippingPerformanceRow[], key: TableColumnKey): number | null {
   const vals = rows
@@ -373,6 +414,9 @@ function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceR
       ata_discharge_delta_eta_etb_days: deltas.ata_discharge_delta_eta_etb_days,
       ata_discharge_delta_etb_etc_days: deltas.ata_discharge_delta_etb_etc_days,
       ata_total_delta_days: deltas.ata_total_delta_days,
+      // By Vessel = average of the per-shipment flow rates (same as the delta columns).
+      lp_flow_rate: avgMetric(vesselRows, 'lp_flow_rate'),
+      dp_flow_rate: avgMetric(vesselRows, 'dp_flow_rate'),
       cargo_readiness_date: null,
       loading_eta_arrival: null,
       loading_eta_berthed: null,
@@ -451,6 +495,17 @@ function rowHasAta(row: ShippingPerformanceRow): boolean {
   return ATA_DATE_FIELDS.some((key) => hasPresentDate(row[key]))
 }
 
+/** A shipment whose status is Completed/Cancelled is closed regardless of ATA-date presence. */
+function isClosedShippingStatus(status: unknown): boolean {
+  const s = String(status ?? '').trim().toUpperCase()
+  return s === 'COMPLETED' || s === 'CANCELLED' || s === 'CANCELED'
+}
+
+/** Treat a row as "closed" (belongs to the Close card, never On-Going) by ATA dates OR status. */
+function rowIsClosed(row: ShippingPerformanceRow): boolean {
+  return rowHasAta(row) || isClosedShippingStatus(row.status)
+}
+
 function normalizeGroupKey(value: unknown, fallback = 'Blank'): string {
   const trimmed = String(value ?? '').trim()
   return trimmed || fallback
@@ -478,7 +533,9 @@ function getContractActivityByContract(rows: ShippingPerformanceRow[]): Map<stri
     if (!contractNumber) continue
     let acc = byContract.get(contractNumber)
     if (!acc) acc = { hasOpenEtaRow: false, hasOpenNoEtaRow: false, hasAtaRow: false }
-    if (rowHasAta(row)) acc.hasAtaRow = true
+    // Status-aware: a Completed/Cancelled shipment counts as closed even if its ATA dates
+    // are unpopulated, so it never classifies its contract as On-Going.
+    if (rowIsClosed(row)) acc.hasAtaRow = true
     else if (rowHasEta(row)) acc.hasOpenEtaRow = true
     else acc.hasOpenNoEtaRow = true
     byContract.set(contractNumber, acc)
@@ -576,9 +633,14 @@ function applyPerfCardFilter(
 ): ShippingPerformanceRow[] {
   if (card === 'all') return rows
   const eligible = getEligibleContractIds(rows, card)
+  const isOngoingCard = card === 'ongoingWithEta' || card === 'ongoingNoEta'
   return rows.filter((row) => {
     const contractNumber = String(row.contract_number || '').trim()
-    return contractNumber.length > 0 && eligible.has(contractNumber)
+    if (contractNumber.length === 0 || !eligible.has(contractNumber)) return false
+    // Row-level guard: a Completed/Cancelled shipment must never show under an On-Going card
+    // (it belongs to Close), even if a sibling shipment made the contract eligible.
+    if (isOngoingCard && isClosedShippingStatus(row.status)) return false
+    return true
   })
 }
 
@@ -940,6 +1002,26 @@ const COLUMN_DEFS: ColumnDef[] = [
     type: 'number',
     defaultVisible: false,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.total_delta_days,
+  },
+  {
+    key: 'lp_flow_rate',
+    label: 'LP Flow Rate',
+    type: 'number',
+    defaultVisible: true,
+    byVesselDefaultVisible: true,
+    tooltip:
+      'Loading-port flow rate (MT/day) = shipped MT ÷ loading berth→complete days (actual). ' +
+      'FOB uses Delivered Qty; CIF/CFR use Received Qty. "-" when the duration is missing or ≤ 0.',
+  },
+  {
+    key: 'dp_flow_rate',
+    label: 'DP Flow Rate',
+    type: 'number',
+    defaultVisible: true,
+    byVesselDefaultVisible: true,
+    tooltip:
+      'Discharge-port flow rate (MT/day) = shipped MT ÷ discharge berth→complete days (actual). ' +
+      'FOB uses Delivered Qty; CIF/CFR use Received Qty. "-" when the duration is missing or ≤ 0.',
   },
 ]
 
@@ -1317,49 +1399,66 @@ function ShippingPerformancePageContent() {
     void fetchShippingPerformanceDashboard()
   }, [authReady, canViewPage, fetchShippingPerformanceDashboard])
 
-  // Step A: exclude UNPLANNED at base — single source of truth for Sections 1–3
-  const baseFilteredRows = useMemo(() => excludeUnplannedShippingRows(rows), [rows])
+  // Step A: exclude UNPLANNED at base — single source of truth for Sections 1–3.
+  // Materialize LP/DP flow rate here so every downstream consumer (table render, sort,
+  // By-Vessel averaging) reads a real row field.
+  const baseFilteredRows = useMemo(
+    () => materializeFlowRates(excludeUnplannedShippingRows(rows)),
+    [rows],
+  )
 
-  const availableIncoterms = useMemo(
-    () =>
-      SHIPPING_PERF_GLOBAL_FILTERS_ENABLED
-        ? distinctFieldValues(baseFilteredRows, 'incoterm')
-        : [],
+  // Options use the SAME normalization as the matcher (rowMatchesToolbarMultiFilters) so a
+  // selected value always matches its rows. Always populated (the 3 toolbar filters above the
+  // cards are always active, independent of SHIPPING_PERF_GLOBAL_FILTERS_ENABLED).
+  const distinctScopeOptions = useCallback(
+    (field: 'incoterm' | 'product' | 'plant_site'): string[] =>
+      [...new Set(baseFilteredRows.map((r) => normalizeScopeGroupKey(r[field])))].sort((a, b) =>
+        a.localeCompare(b),
+      ),
     [baseFilteredRows],
   )
+  const availableIncoterms = useMemo(() => distinctScopeOptions('incoterm'), [distinctScopeOptions])
   const availableGroupPlants = useMemo(
-    () =>
-      SHIPPING_PERF_GLOBAL_FILTERS_ENABLED
-        ? distinctFieldValues(baseFilteredRows, 'plant_site')
-        : [],
-    [baseFilteredRows],
+    () => distinctScopeOptions('plant_site'),
+    [distinctScopeOptions],
   )
-  const availableProducts = useMemo(
-    () =>
-      SHIPPING_PERF_GLOBAL_FILTERS_ENABLED
-        ? distinctFieldValues(baseFilteredRows, 'product')
-        : [],
-    [baseFilteredRows],
-  )
+  const availableProducts = useMemo(() => distinctScopeOptions('product'), [distinctScopeOptions])
   const availableVessels = useMemo(
     () =>
       SHIPPING_PERF_GLOBAL_FILTERS_ENABLED ? distinctVesselNames(baseFilteredRows) : [],
     [baseFilteredRows],
   )
 
-  // Step B: apply global filters (incoterm, group plant, vessel, status, contract date)
+  // Step B: apply global filters. The 3 toolbar filters above the cards (Group Plant, Product,
+  // Incoterm) are always active and feed BOTH the card counts and the table. The rest of the
+  // legacy global-filter set stays gated behind SHIPPING_PERF_GLOBAL_FILTERS_ENABLED.
   const globallyFilteredRows = useMemo(() => {
-    if (!SHIPPING_PERF_GLOBAL_FILTERS_ENABLED) return baseFilteredRows
-    return applyGlobalFiltersToRows(baseFilteredRows, {
-      selectedIncoterms,
-      selectedProducts,
-      selectedGroupPlants,
-      selectedVessels,
-      statusFilter,
-      dateFrom,
-      dateTo,
-      searchTerm,
-    })
+    if (SHIPPING_PERF_GLOBAL_FILTERS_ENABLED) {
+      return applyGlobalFiltersToRows(baseFilteredRows, {
+        selectedIncoterms,
+        selectedProducts,
+        selectedGroupPlants,
+        selectedVessels,
+        statusFilter,
+        dateFrom,
+        dateTo,
+        searchTerm,
+      })
+    }
+    if (
+      selectedIncoterms.length === 0 &&
+      selectedProducts.length === 0 &&
+      selectedGroupPlants.length === 0
+    ) {
+      return baseFilteredRows
+    }
+    return baseFilteredRows.filter((row) =>
+      rowMatchesToolbarMultiFilters(row, {
+        selectedIncoterms,
+        selectedProducts,
+        selectedGroupPlants,
+      }),
+    )
   }, [
     baseFilteredRows,
     selectedIncoterms,
@@ -2009,6 +2108,54 @@ function ShippingPerformancePageContent() {
                 >
                   Reset selection
                 </button>
+              </div>
+              {/* Toolbar filters — scope the cards AND the All Shipments table. */}
+              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+                <div className="flex w-full min-w-[12rem] flex-col gap-1 sm:w-56">
+                  <SearchableMultiSelect
+                    label="Group Plant"
+                    options={availableGroupPlants}
+                    selected={selectedGroupPlants}
+                    onChange={setSelectedGroupPlants}
+                    placeholder="Select group plant(s)"
+                    emptyMessage="No group plants"
+                  />
+                </div>
+                <div className="flex w-full min-w-[12rem] flex-col gap-1 sm:w-56">
+                  <SearchableMultiSelect
+                    label="Product"
+                    options={availableProducts}
+                    selected={selectedProducts}
+                    onChange={setSelectedProducts}
+                    placeholder="Select product(s)"
+                    emptyMessage="No products"
+                  />
+                </div>
+                <div className="flex w-full min-w-[12rem] flex-col gap-1 sm:w-56">
+                  <SearchableMultiSelect
+                    label="Incoterm"
+                    options={availableIncoterms}
+                    selected={selectedIncoterms}
+                    onChange={setSelectedIncoterms}
+                    placeholder="Select incoterm(s)"
+                    emptyMessage="No incoterms"
+                  />
+                </div>
+                {(selectedGroupPlants.length > 0 ||
+                  selectedProducts.length > 0 ||
+                  selectedIncoterms.length > 0) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedGroupPlants([])
+                      setSelectedProducts([])
+                      setSelectedIncoterms([])
+                    }}
+                    className="text-sm text-blue-700 hover:underline sm:pb-2"
+                  >
+                    Clear filters
+                  </button>
+                )}
               </div>
               <div className="flex w-full flex-col gap-4 xl:flex-row xl:items-stretch">
                 <button
@@ -2716,6 +2863,18 @@ function ShippingPerformancePageContent() {
                             ) {
                               const text = asDisplayValue(rawValue)
                               cellContent = <span className="text-sm">{text}</span>
+                            } else if (colKey === 'lp_flow_rate' || colKey === 'dp_flow_rate') {
+                              cellContent =
+                                rawValue === null || rawValue === undefined ? (
+                                  <span className="text-sm text-gray-400">-</span>
+                                ) : (
+                                  <span className="text-sm font-normal tabular-nums">
+                                    {Number(rawValue).toLocaleString('en-US', {
+                                      minimumFractionDigits: 1,
+                                      maximumFractionDigits: 1,
+                                    })}
+                                  </span>
+                                )
                             } else if (col.type === 'number') {
                               cellContent = (
                                 <NumberCell

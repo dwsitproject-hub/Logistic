@@ -243,6 +243,7 @@ export function buildOilLossMainSql(): string {
       product,
       group_name,
       plant_site,
+      COALESCE(NULLIF(TRIM(vessel_name_raw), ''), '') AS vessel_name,
       COALESCE(
         TO_CHAR(contract_date_db, 'YYYY-MM-DD'),
         operation_date
