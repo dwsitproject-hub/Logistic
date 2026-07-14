@@ -432,6 +432,11 @@ export function invalidateShipmentsListCache(): void {
   SUMMARY_CACHE.clear();
   OUTSTANDING_QTY_CACHE.clear();
   markPipelineDailySummaryStale(['shipment']).catch(() => {});
+  // Oil Loss reads shipment quantities (sfal/sfbd/delivered/receive) — refresh its
+  // cache after any shipment mutation so the page reflects the edit immediately.
+  import('./oilLoss.service')
+    .then(({ invalidateOilLossCache }) => invalidateOilLossCache())
+    .catch(() => {});
   // Rebuild the recently used pages in the background so the next viewer after an
   // edit is served from memory instead of paying the full query cost.
   PAGE_KEEP_WARM.rewarmRecentlyUsed();

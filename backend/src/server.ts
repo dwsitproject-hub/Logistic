@@ -23,6 +23,7 @@ import {
   startShippingPerformanceCacheWarmer,
   stopShippingPerformanceCacheWarmer,
 } from './services/shippingPerformance.service';
+import { startOilLossCacheWarmer } from './services/oilLoss.service';
 
 // Import routes
 import authRoutes from './routes/auth.routes';
@@ -205,6 +206,14 @@ if (process.env.NODE_ENV !== 'test') {
       logger.info('🔥 Shipping Performance cache warmer started');
     } catch (error) {
       logger.warn('Failed to start Shipping Performance cache warmer', { error });
+    }
+
+    // Warm the Oil Loss cache (two full sap_processed_data JSONB scans) for the same reason.
+    try {
+      startOilLossCacheWarmer();
+      logger.info('🔥 Oil Loss cache warmer started');
+    } catch (error) {
+      logger.warn('Failed to start Oil Loss cache warmer', { error });
     }
   });
 }
