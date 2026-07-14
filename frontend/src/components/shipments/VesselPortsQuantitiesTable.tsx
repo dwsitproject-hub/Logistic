@@ -42,7 +42,7 @@ function resolveRowQty(
 function formatMtRight(kg: number | null | undefined): string {
   const parsed = parseKg(kg)
   if (parsed === null) return '—'
-  return formatQtyMtFromKg(parsed)
+  return formatQtyMtFromKg(parsed, { maxFractionDigits: 0 })
 }
 
 function sumRowsMt(

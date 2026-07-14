@@ -10,6 +10,7 @@ describe('truckingListStoExpandSql', () => {
     expect(sql).toContain('contract_stos');
     expect(sql).toContain('expanded');
     expect(sql).toContain('trucking_daily_actuals');
+    expect(sql).toContain('Quantity Delivery Trucking');
     expect(sql).toContain("= 'FRC'");
     expect(sql).toContain("= 'LCO'");
   });

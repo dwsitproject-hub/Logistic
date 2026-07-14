@@ -40,13 +40,13 @@ function BucketColumn({
         <div className="flex items-baseline justify-between gap-3">
           <span>FOB</span>
           <span className={cn('font-semibold tabular-nums', outstandingQtyMtColorClass(bucket.fobKg))}>
-            {formatOutstandingQtyMtFromKg(bucket.fobKg)}
+            {formatOutstandingQtyMtFromKg(bucket.fobKg, { maxFractionDigits: 0 })}
           </span>
         </div>
         <div className="flex items-baseline justify-between gap-3">
           <span>CIF</span>
           <span className={cn('font-semibold tabular-nums', outstandingQtyMtColorClass(bucket.cifKg))}>
-            {formatOutstandingQtyMtFromKg(bucket.cifKg)}
+            {formatOutstandingQtyMtFromKg(bucket.cifKg, { maxFractionDigits: 0 })}
           </span>
         </div>
       </div>
@@ -92,7 +92,7 @@ export function ShipmentOutstandingQtySummary({
                   outstandingQtyMtColorClass(summary.totalKg),
                 )}
               >
-                {formatOutstandingQtyMtFromKg(summary.totalKg)}
+                {formatOutstandingQtyMtFromKg(summary.totalKg, { maxFractionDigits: 0 })}
               </div>
               <p className="mt-1 text-[11px] leading-snug text-gray-500">
                 FOB + CIF · Unplanned / Planned / At LP / Sailed / At DP

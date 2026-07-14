@@ -40,10 +40,18 @@ export function SettlementInvoiceUploadModal({
   const [banner, setBanner] = useState<OcrBanner | null>(null)
 
   const loadExistingSummary = useCallback(async () => {
+    const poNumber = String(row.po_number || row.contract_id || '').trim()
+    if (!poNumber) {
+      setLoadingSummary(false)
+      return
+    }
     setLoadingSummary(true)
     try {
+      const qs = row.contract_ext_no
+        ? `?contract_ext_no=${encodeURIComponent(row.contract_ext_no)}`
+        : ''
       const res = await api.get(
-        `/commercial-documents/settlement-invoice/${encodeURIComponent(row.contract_ext_no)}`,
+        `/commercial-documents/settlement-invoice/${encodeURIComponent(poNumber)}${qs}`,
       )
       const data = res.data?.data
       if (data) {
@@ -54,7 +62,7 @@ export function SettlementInvoiceUploadModal({
     } finally {
       setLoadingSummary(false)
     }
-  }, [row.contract_ext_no])
+  }, [row.po_number, row.contract_id, row.contract_ext_no])
 
   useEffect(() => {
     void loadExistingSummary()
@@ -99,13 +107,18 @@ export function SettlementInvoiceUploadModal({
 
   const handleSubmit = async () => {
     if (!selectedFile) return
+    const poNumber = String(row.po_number || row.contract_id || '').trim()
+    if (!poNumber) {
+      setBanner({ type: 'error', message: 'PO number is required to save this document.' })
+      return
+    }
     setSubmitting(true)
     setBanner(null)
     try {
       const form = new FormData()
       form.append('contract_ext_no', row.contract_ext_no)
       form.append('document_type', 'invoice_fp_full')
-      form.append('po_number', row.po_number || row.contract_id || 'UNKNOWN')
+      form.append('po_number', poNumber)
       form.append('buyer_name', row.buyer || '')
       form.append('contract_date', row.contract_date || '')
       form.append('file', selectedFile)
@@ -117,6 +130,7 @@ export function SettlementInvoiceUploadModal({
 
       await api.put('/commercial-documents/settlement-invoice', {
         contract_ext_no: row.contract_ext_no,
+        po_number: poNumber,
         contract_id: row.id || null,
         commercial_document_file_id: fileId || null,
         ...fields,
@@ -143,7 +157,10 @@ export function SettlementInvoiceUploadModal({
         <div className="flex items-center justify-between border-b px-6 py-4 shrink-0">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Invoice + FP (Full Receive)</h2>
-            <p className="text-xs text-gray-500 mt-0.5 truncate">{row.contract_ext_no}</p>
+            <p className="text-xs text-gray-500 mt-0.5 truncate">
+              PO {row.po_number || row.contract_id || '-'}
+              {row.contract_ext_no ? ` · ${row.contract_ext_no}` : ''}
+            </p>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose} disabled={submitting} title="Close">
             <X className="h-5 w-5" />

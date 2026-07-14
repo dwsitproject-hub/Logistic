@@ -41,7 +41,7 @@ export const TRUCKING_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   contract_date: 100,
   contract_ext_no: 120,
   po_number: 72,
-  supplier: 88,
+  supplier: 152,
   status: 80,
   sto_number: 72,
   product: 88,
@@ -130,14 +130,28 @@ export function buildTruckingVisibleColumns<T extends { id: string }>(
   return orderedIds.map((id) => byId.get(id)!).filter((c) => visibleIds.has(c.id))
 }
 
+const TRUCKING_DEFAULT_COLUMN_WIDTH_PX = 96
+
+/** Match Contract/Shipping Performance: base map + header longest-word floor. */
+export function truckingTableColumnWidthPx(
+  colId: string,
+  headerLabel?: string,
+  options?: { hasFormulaHelp?: boolean },
+): number {
+  const base = TRUCKING_COLUMN_WIDTH_PX[colId] ?? TRUCKING_DEFAULT_COLUMN_WIDTH_PX
+  return resolveCompactColumnWidthPx(base, headerLabel, {
+    hasFormulaHelp: options?.hasFormulaHelp,
+    hasSort: true,
+  })
+}
+
 export function buildTruckingColumnWidthTracks(
   visibleColumns: ReadonlyArray<string | CompactTableColumnWidthInput>,
   labelById?: ReadonlyMap<string, string>,
 ): Record<string, string> {
   return buildCompactTableColumnWidthTracks(visibleColumns, (id, label, formulaHelp) =>
-    resolveCompactColumnWidthPx(TRUCKING_COLUMN_WIDTH_PX[id] ?? 96, label ?? labelById?.get(id), {
+    truckingTableColumnWidthPx(id, label ?? labelById?.get(id), {
       hasFormulaHelp: Boolean(formulaHelp),
-      hasSort: true,
     }),
   )
 }

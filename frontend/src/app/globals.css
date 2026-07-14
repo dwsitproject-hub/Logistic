@@ -226,6 +226,34 @@
     max-width: 32rem;
   }
 
+  /* Supplier-style names: width from <colgroup>, wrap to max 2 lines */
+  .klip-compact-table--operational th.klip-op-col--two-line,
+  .klip-compact-table--operational td.klip-op-col--two-line {
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: break-word;
+    overflow: hidden;
+    vertical-align: middle;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--two-line .klip-compact-table-cell-inner {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .klip-two-line-clamp {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: break-word;
+  }
+
   /* Long text columns — cap width; cell content uses truncate + title tooltip */
   .klip-compact-table--operational th.klip-op-col--truncate,
   .klip-compact-table--operational td.klip-op-col--truncate {
@@ -267,8 +295,10 @@
   }
 
   /*
-   * Contract Performance + Shipping Performance Section 3 — narrower columns with
+   * Operational / performance view tables (Contracts, Contract Performance, Shipments,
+   * Trucking, Shipping Performance, Oil Loss, Commercial Docs) — narrower columns with
    * word-boundary header wrap and single-line truncated cells.
+   * Driven by per-column <colgroup> widths from compactTableUi resolvers.
    */
   .klip-compact-table--perf-narrow-cols {
     table-layout: fixed;
@@ -299,6 +329,20 @@
     width: 100%;
     min-width: 0;
     max-width: 6.5rem;
+    overflow: hidden;
+  }
+
+  .klip-compact-table--perf-narrow-cols th.klip-op-col--two-line,
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--two-line {
+    max-width: none;
+    overflow: hidden;
+    white-space: normal;
+  }
+
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--two-line .klip-compact-table-cell-inner {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
     overflow: hidden;
   }
 

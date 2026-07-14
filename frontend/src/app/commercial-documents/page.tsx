@@ -49,11 +49,20 @@ import {
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
   COMPACT_TABLE_HEADER_LABEL_CLASS,
+  compactTableColWidthCss,
 } from '@/lib/compactTableUi'
 import { operationalTableColumnClass, getOperationalColumnLayout } from '@/lib/operationalTableLayout'
+import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import {
+  COMMERCIAL_DOCS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+  operationalRowFieldTooltipText,
+  shouldApplyOperationalTruncateTooltip,
+} from '@/lib/operationalTableTruncateUi'
+import {
+  COMMERCIAL_DOCS_ACTIONS_COL_WIDTH_PX,
   COMMERCIAL_DOCS_ALL_COLUMNS,
   COMMERCIAL_DOCS_COLUMN_BY_ID,
+  commercialDocsTableColumnWidthPx,
   type CommercialDocsColumnId,
   type CommercialDocsColumnMeta,
   isCommercialDocStatusColumn,
@@ -716,7 +725,22 @@ function CommercialDocumentsPageContent() {
                 requestAnimationFrame(() => { isSyncingScroll.current = false })
               }}
             >
-              <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--commercial-docs`}>
+              <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--commercial-docs klip-compact-table--perf-narrow-cols`}>
+                <colgroup>
+                  {visibleColumns.map((col) => (
+                    <col
+                      key={col.id}
+                      style={{
+                        width: compactTableColWidthCss(
+                          commercialDocsTableColumnWidthPx(col.id, col.label, {
+                            hasFormulaHelp: Boolean(col.formulaHelp),
+                          }),
+                        ),
+                      }}
+                    />
+                  ))}
+                  <col style={{ width: COMMERCIAL_DOCS_ACTIONS_COL_WIDTH_PX }} />
+                </colgroup>
                 <thead>
                   <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
                     {visibleColumns.map((col) => {
@@ -796,6 +820,20 @@ function CommercialDocumentsPageContent() {
                             const columnLayout = getOperationalColumnLayout('commercial_documents', col.id)
                             const opColClass = operationalTableColumnClass(columnLayout)
                             const centerCell = col.centerCell || isCommercialDocStatusColumn(col.id)
+                            const useTruncateTooltip =
+                              !centerCell &&
+                              shouldApplyOperationalTruncateTooltip(
+                                col.id,
+                                columnLayout,
+                                COMMERCIAL_DOCS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+                              )
+                            const truncateTooltip = useTruncateTooltip
+                              ? operationalRowFieldTooltipText(
+                                  col.id,
+                                  row as unknown as Record<string, unknown>,
+                                )
+                              : null
+                            const rendered = col.render(row)
                             return (
                               <td
                                 key={col.id}
@@ -818,7 +856,13 @@ function CommercialDocumentsPageContent() {
                                         ),
                                   )}
                                 >
-                                  {col.render(row)}
+                                  {useTruncateTooltip ? (
+                                    <ContractPerfTruncatedCell tooltip={truncateTooltip} className="w-full">
+                                      {rendered}
+                                    </ContractPerfTruncatedCell>
+                                  ) : (
+                                    rendered
+                                  )}
                                 </div>
                               </td>
                             )

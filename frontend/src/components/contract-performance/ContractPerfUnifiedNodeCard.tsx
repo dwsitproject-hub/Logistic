@@ -77,6 +77,24 @@ export function buildSegmentCardTooltip(metrics: UnifiedPerfSegment): string {
   return `Total Contract: ${metrics.count.toLocaleString('en-US')}\nAvg Trade: ${formatSegmentCardAvgTrade(metrics.avgTradeDays)}`
 }
 
+/**
+ * On Time / Late share for drilldown child cards.
+ * Denominator = On Time + Late only (All / unscheduled excluded).
+ */
+export function onTimeLateSharePercents(
+  onTimeValue: number,
+  lateValue: number,
+): { onTimeLabel: string; lateLabel: string } {
+  const on = Number.isFinite(onTimeValue) ? Math.max(0, onTimeValue) : 0
+  const late = Number.isFinite(lateValue) ? Math.max(0, lateValue) : 0
+  const total = on + late
+  if (total <= 0) return { onTimeLabel: 'N/A', lateLabel: 'N/A' }
+  return {
+    onTimeLabel: `${Math.round((on / total) * 100)}%`,
+    lateLabel: `${Math.round((late / total) * 100)}%`,
+  }
+}
+
 function SegmentBlock({
   segment,
   metrics,
@@ -121,7 +139,7 @@ function SegmentBlock({
   )
 }
 
-/** Flat drilldown row — label + compact 3-column segment grid (All | On Time | Late). */
+/** Flat drilldown row — label + On Time/Late % badges + compact 3-column segment grid. */
 export function ContractPerfUnifiedNodeCard({
   node,
   level,
@@ -140,6 +158,11 @@ export function ContractPerfUnifiedNodeCard({
   onSegmentSelect: (segment: PerfSegmentFilter) => void
 }) {
   const levelBorder = LEVEL_CARD_BORDER[level]
+  // Share of On Time vs Late only (exclude All / unscheduled).
+  const { onTimeLabel, lateLabel } = onTimeLateSharePercents(
+    node.onTime.totalQtyKg,
+    node.late.totalQtyKg,
+  )
 
   return (
     <div
@@ -148,17 +171,27 @@ export function ContractPerfUnifiedNodeCard({
         selected ? levelBorder.selected : levelBorder.idle,
       )}
     >
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => onSegmentSelect(activeSegment)}
-        className={cn(
-          'text-sm font-semibold text-gray-900 truncate text-left w-full',
-          disabled ? 'cursor-not-allowed' : 'cursor-pointer hover:text-gray-700',
-        )}
-      >
-        {node.label}
-      </button>
+      <div className="flex items-start justify-between gap-2 min-w-0">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onSegmentSelect(activeSegment)}
+          className={cn(
+            'text-sm font-semibold text-gray-900 truncate text-left min-w-0 flex-1',
+            disabled ? 'cursor-not-allowed' : 'cursor-pointer hover:text-gray-700',
+          )}
+        >
+          {node.label}
+        </button>
+        <div className="flex flex-wrap items-center justify-end gap-1 shrink-0 pt-0.5">
+          <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] leading-none font-medium bg-sky-50 text-sky-700 border border-sky-100">
+            On Time {onTimeLabel}
+          </span>
+          <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] leading-none font-medium bg-amber-50 text-amber-800 border border-amber-100">
+            Late {lateLabel}
+          </span>
+        </div>
+      </div>
       <div className="grid grid-cols-3 gap-1 mt-1">
         {SEGMENTS.map((segment) => (
           <SegmentBlock

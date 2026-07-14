@@ -45,7 +45,7 @@ export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   shipment_id: 72,
   loading_port: 100,
   discharge_port: 100,
-  supplier: 96,
+  supplier: 152,
   incoterm: 72,
   product: 88,
   status: 80,
@@ -135,17 +135,34 @@ export function buildShipmentVisibleColumns<T extends { id: string }>(
   return orderedIds.map((id) => byId.get(id)!).filter((c) => visibleIds.has(c.id))
 }
 
+const SHIPMENT_DEFAULT_COLUMN_WIDTH_PX = 96
+
+/** Match Contract/Shipping Performance: base map + header longest-word floor. */
+export function shipmentTableColumnWidthPx(
+  colId: string,
+  headerLabel?: string,
+  options?: { hasFormulaHelp?: boolean },
+): number {
+  const base = SHIPMENT_COLUMN_WIDTH_PX[colId] ?? SHIPMENT_DEFAULT_COLUMN_WIDTH_PX
+  return resolveCompactColumnWidthPx(base, headerLabel, {
+    hasFormulaHelp: options?.hasFormulaHelp,
+    hasSort: true,
+  })
+}
+
 export function buildShipmentColumnWidthTracks(
   visibleColumns: ReadonlyArray<string | CompactTableColumnWidthInput>,
   labelById?: ReadonlyMap<string, string>,
 ): Record<string, string> {
   return buildCompactTableColumnWidthTracks(visibleColumns, (id, label, formulaHelp) =>
-    resolveCompactColumnWidthPx(SHIPMENT_COLUMN_WIDTH_PX[id] ?? 96, label ?? labelById?.get(id), {
+    shipmentTableColumnWidthPx(id, label ?? labelById?.get(id), {
       hasFormulaHelp: Boolean(formulaHelp),
-      hasSort: true,
     }),
   )
 }
+
+/** Expand/collapse spacer before data columns (Tailwind w-10). */
+export const SHIPMENT_EXPAND_COL_WIDTH_PX = 40
 
 /** Migrate saved shipment column prefs: drop raw port columns, ensure SAP port columns visible. */
 export function migrateShipmentColumnLayout(

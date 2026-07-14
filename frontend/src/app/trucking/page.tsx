@@ -53,6 +53,7 @@ import {
   COMPACT_OPERATIONAL_TABLE_CLASS,
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+  compactTableColWidthCss,
 } from '@/lib/compactTableUi'
 import { formatQtyMtFromKg } from '@/lib/utils'
 import {
@@ -82,6 +83,7 @@ import {
   migrateTruckingColumnLayout,
   truckingCompactColumnFallbackOrder,
   truckingDefaultVisibleColumnIds,
+  truckingTableColumnWidthPx,
 } from '@/lib/truckingColumns'
 import {
   OperationalNowrapCell,
@@ -89,6 +91,12 @@ import {
   getOperationalColumnLayout,
   operationalTableColumnClass,
 } from '@/lib/operationalTableLayout'
+import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
+import {
+  TRUCKING_TRUNCATE_TOOLTIP_COLUMN_IDS,
+  operationalRowFieldTooltipText,
+  shouldApplyOperationalTruncateTooltip,
+} from '@/lib/operationalTableTruncateUi'
 import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
 
 const TRUCKING_ACTIONS_COL_WIDTH = 140
@@ -112,12 +120,18 @@ function parseTruckingQtyKg(value: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/** Shipments / Trucking view-table qty — round to whole MT (no decimals). */
+const SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS = { maxFractionDigits: 0 } as const
+
 /** Display trucking qty stored in kg as MT (table, calendar, mobile). */
-function formatTruckingQtyMt(value: unknown): string {
+function formatTruckingQtyMt(
+  value: unknown,
+  opts: { maxFractionDigits?: number } = SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS,
+): string {
   const kg = parseTruckingQtyKg(value)
   if (kg === null) return '—'
   if (kg === 0) return '0 MT'
-  return formatQtyMtFromKg(kg)
+  return formatQtyMtFromKg(kg, opts)
 }
 
 /** API daily_deliverables.quantity_delivered is kg; calendar drafts/edits are MT. */
@@ -871,7 +885,7 @@ function CalendarDeliverablesTable({
                       className="sticky z-10 bg-white px-3 py-2 border-b border-gray-100 align-top"
                       style={{ left: 0, minWidth: operationColW, maxWidth: operationColW }}
                     >
-                      <div className="font-semibold text-gray-900 truncate" title={opLabel}>{opLabel}</div>
+                      <div className="text-gray-900 truncate" title={opLabel}>{opLabel}</div>
                       <div className="text-[10px] text-gray-500 truncate" title={`${r.loading_location || ''} → ${r.unloading_location || ''}`}>
                         {formatOperationalTableTextDisplay(r.loading_location)} → {formatOperationalTableTextDisplay(r.unloading_location)}
                       </div>
@@ -893,7 +907,7 @@ function CalendarDeliverablesTable({
                         style={{ left, minWidth: colW, maxWidth: colW }}
                       >
                         <div
-                          className="font-medium text-gray-900 whitespace-normal break-words leading-snug"
+                          className="text-gray-900 whitespace-normal break-words leading-snug"
                           title={label}
                         >
                           {label}
@@ -2867,7 +2881,11 @@ function TruckingPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.supplier || '',
-      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.supplier)}</span>
+      render: (o) => (
+        <span className="text-sm truncate block" title={o.supplier || undefined}>
+          {formatOperationalTableTextDisplay(o.supplier)}
+        </span>
+      ),
     },
     {
       id: 'status',
@@ -3477,7 +3495,7 @@ function TruckingPageContent() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Trucking Operations</h1>
+            <h1 className="text-3xl font-bold">Trucking</h1>
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -4180,7 +4198,7 @@ function TruckingPageContent() {
           <CardHeader className="space-y-3">
             <div>
               <CardTitle className="flex items-center gap-2">
-                All Trucking Operations
+                All Trucking
                 {listFetching ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                 ) : null}
@@ -4420,8 +4438,23 @@ function TruckingPageContent() {
                   >
                     <table
                       data-trucking-list-table
-                      className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS}`}
+                      className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols`}
                     >
+                      <colgroup>
+                        {visibleColumns.map((col) => (
+                          <col
+                            key={col.id}
+                            style={{
+                              width: compactTableColWidthCss(
+                                truckingTableColumnWidthPx(col.id, col.label, {
+                                  hasFormulaHelp: Boolean(col.formulaHelp),
+                                }),
+                              ),
+                            }}
+                          />
+                        ))}
+                        <col style={{ width: TRUCKING_ACTIONS_COL_WIDTH }} />
+                      </colgroup>
                       <thead>
                       <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
                         {visibleColumns.map(col => {
@@ -4503,13 +4536,24 @@ function TruckingPageContent() {
                           return (
                               <tr key={`${operation.id}|${operation.sto_number ?? ''}|${idx}`} className={stripeClass}>
                                 {visibleColumns.map(col => {
-                                  const opColClass = operationalTableColumnClass(
-                                    getOperationalColumnLayout('trucking', col.id),
-                                  )
-                                  return (
-                                  <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}>
-                                    <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
-                                      {col.id === 'status' && isEditing ? (
+                                  const layout = getOperationalColumnLayout('trucking', col.id)
+                                  const opColClass = operationalTableColumnClass(layout)
+                                  const isStatusEdit = col.id === 'status' && isEditing
+                                  const useTruncateTooltip =
+                                    !isStatusEdit &&
+                                    shouldApplyOperationalTruncateTooltip(
+                                      col.id,
+                                      layout,
+                                      TRUCKING_TRUNCATE_TOOLTIP_COLUMN_IDS,
+                                    )
+                                  const truncateTooltip = useTruncateTooltip
+                                    ? operationalRowFieldTooltipText(
+                                        col.id,
+                                        operation as unknown as Record<string, unknown>,
+                                      )
+                                    : null
+                                  const cellContent =
+                                    isStatusEdit ? (
                                         truckingDbStatus(operation) === 'CANCELLED' ? (
                                           <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
                                         ) : (
@@ -4524,6 +4568,16 @@ function TruckingPageContent() {
                                         )
                                       ) : (
                                         col.render(operation)
+                                      )
+                                  return (
+                                  <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}>
+                                    <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
+                                      {useTruncateTooltip ? (
+                                        <ContractPerfTruncatedCell tooltip={truncateTooltip} className="w-full">
+                                          {cellContent}
+                                        </ContractPerfTruncatedCell>
+                                      ) : (
+                                        cellContent
                                       )}
                                     </div>
                                   </td>
@@ -5087,7 +5141,7 @@ export default function TruckingPage() {
       fallback={
         <Layout>
           <div className="space-y-6">
-            <h1 className="text-3xl font-bold">Trucking Operations</h1>
+            <h1 className="text-3xl font-bold">Trucking</h1>
             <p className="text-sm text-gray-400">Loading…</p>
           </div>
         </Layout>

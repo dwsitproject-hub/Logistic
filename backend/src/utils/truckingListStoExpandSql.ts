@@ -94,6 +94,9 @@ function buildQuantitySelects(skipSapJoin: boolean): {
 
   const qtyDeliveredPerStoSap = `(
     SELECT SUM(NULLIF(regexp_replace(COALESCE(
+      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery Trucking'), ''),
+      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered Trucking'), ''),
+      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered via Trucking'), ''),
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered'), ''),
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery'), ''),
       ''
@@ -102,6 +105,9 @@ function buildQuantitySelects(skipSapJoin: boolean): {
     WHERE spd.contract_number = e.contract_number
       AND ${SPD_EFFECTIVE_STO} = TRIM(e.sto_line_resolved::text)
       AND NULLIF(TRIM(COALESCE(
+        spd.data->'raw'->>'Quantity Delivery Trucking',
+        spd.data->'raw'->>'Quantity Delivered Trucking',
+        spd.data->'raw'->>'Quantity Delivered via Trucking',
         spd.data->'raw'->>'Quantity Delivered',
         spd.data->'raw'->>'Quantity Delivery'
       )), '') IS NOT NULL

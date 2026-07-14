@@ -28,16 +28,21 @@ describe('formatRupiah', () => {
 });
 
 describe('formatOutstandingQtyMtFromKg', () => {
-  it('shows +MT for over-delivery (negative kg)', () => {
-    expect(formatOutstandingQtyMtFromKg(-2500)).toBe('+2.5 MT');
+  it('shows +MT for over-delivery (negative kg), rounded to whole MT by default', () => {
+    expect(formatOutstandingQtyMtFromKg(-2500)).toBe('+3 MT');
   });
 
-  it('shows MT without minus for remaining outstanding (positive kg)', () => {
-    expect(formatOutstandingQtyMtFromKg(1500)).toBe('1.5 MT');
+  it('shows MT without minus for remaining outstanding (positive kg), rounded by default', () => {
+    expect(formatOutstandingQtyMtFromKg(1500)).toBe('2 MT');
   });
 
   it('shows zero MT for fully delivered', () => {
     expect(formatOutstandingQtyMtFromKg(0)).toBe('0 MT');
+  });
+
+  it('supports decimal display when maxFractionDigits is passed', () => {
+    expect(formatOutstandingQtyMtFromKg(1500, { maxFractionDigits: 2 })).toBe('1.5 MT');
+    expect(formatOutstandingQtyMtFromKg(-2500, { maxFractionDigits: 2 })).toBe('+2.5 MT');
   });
 });
 

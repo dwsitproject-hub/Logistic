@@ -37,8 +37,8 @@ export function TruckingOutstandingQtyWithTooltip({
   return (
     <Tooltip delayDuration={200}>
       <TooltipTrigger asChild>
-        <span className={`text-sm break-words tabular-nums font-medium ${colorClass} ${triggerClass}`}>
-          {formatOutstandingQtyMtFromKg(n)}
+        <span className={`text-sm break-words tabular-nums ${colorClass} ${triggerClass}`}>
+          {formatOutstandingQtyMtFromKg(n, { maxFractionDigits: 0 })}
         </span>
       </TooltipTrigger>
       <TooltipContent side="top" className="text-xs leading-relaxed max-w-xs whitespace-pre-wrap">

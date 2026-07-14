@@ -40,13 +40,13 @@ function BucketColumn({
         <div className="flex items-baseline justify-between gap-3">
           <span>FRC</span>
           <span className={cn('font-semibold tabular-nums', outstandingQtyMtColorClass(bucket.frcKg))}>
-            {formatOutstandingQtyMtFromKg(bucket.frcKg)}
+            {formatOutstandingQtyMtFromKg(bucket.frcKg, { maxFractionDigits: 0 })}
           </span>
         </div>
         <div className="flex items-baseline justify-between gap-3">
           <span>LCO</span>
           <span className={cn('font-semibold tabular-nums', outstandingQtyMtColorClass(bucket.lcoKg))}>
-            {formatOutstandingQtyMtFromKg(bucket.lcoKg)}
+            {formatOutstandingQtyMtFromKg(bucket.lcoKg, { maxFractionDigits: 0 })}
           </span>
         </div>
       </div>
@@ -92,7 +92,7 @@ export function TruckingOutstandingQtySummary({
                   outstandingQtyMtColorClass(summary.totalKg),
                 )}
               >
-                {formatOutstandingQtyMtFromKg(summary.totalKg)}
+                {formatOutstandingQtyMtFromKg(summary.totalKg, { maxFractionDigits: 0 })}
               </div>
               <p className="mt-1 text-[11px] leading-snug text-gray-500">
                 FRC + LCO · after WB · Unplanned / Planned / In Progress

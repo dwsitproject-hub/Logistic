@@ -108,6 +108,7 @@ export type CommercialDocumentsSummary = Record<CommercialDocumentType, Commerci
 export type CommercialDocumentHistoryEntry = {
   id: string
   contract_ext_no: string
+  po_number?: string | null
   document_type: string
   document_type_label?: string
   action_type: 'ADD' | 'EDIT'
@@ -119,6 +120,7 @@ export type CommercialDocumentHistoryEntry = {
 export type CommercialDocumentFileRecord = {
   id: string
   contract_ext_no: string
+  po_number?: string | null
   document_type: string
   document_type_label?: string
   file_name: string

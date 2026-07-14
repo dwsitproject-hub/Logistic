@@ -6,50 +6,51 @@ import {
 } from '@/lib/compactTableUi'
 import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
 
-export type OperationalColumnLayout = 'short' | 'token' | 'stack' | 'wrap' | 'truncate'
+export type OperationalColumnLayout = 'short' | 'token' | 'stack' | 'wrap' | 'truncate' | 'two_line'
 
 export const COMPACT_TABLE_NOWRAP_CLASS = 'klip-compact-table-nowrap'
 export const COMPACT_TABLE_STACK_CLASS = 'klip-compact-table-stack'
 
 const SHIPMENT_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
   late_indicator: 'short',
-  vessel_name: 'wrap',
+  vessel_name: 'truncate',
   shipment_id: 'token',
-  loading_port: 'wrap',
-  discharge_port: 'wrap',
+  loading_port: 'truncate',
+  discharge_port: 'truncate',
+  supplier: 'truncate',
   status: 'short',
   contract_qty: 'short',
   outstanding_qty_planning: 'short',
   contract_date: 'short',
-  product: 'wrap',
+  product: 'truncate',
   incoterm: 'short',
   sto_quantity: 'short',
   quantity_delivered: 'short',
   quantity_receive: 'short',
   ata_vessel_completed_loading: 'short',
   ata_vessel_complete_discharge: 'short',
-  contract_ext_no: 'stack',
-  po_numbers: 'stack',
+  contract_ext_no: 'truncate',
+  po_numbers: 'truncate',
   operation_id: 'token',
-  contract_numbers: 'stack',
-  contract_reference_po: 'stack',
+  contract_numbers: 'truncate',
+  contract_reference_po: 'truncate',
   delivery_start: 'short',
   delivery_end: 'short',
   b2b_flag: 'short',
-  port_of_loading: 'wrap',
-  port_of_discharge: 'wrap',
+  port_of_loading: 'truncate',
+  port_of_discharge: 'truncate',
   vessel_code: 'token',
 }
 
 const CONTRACT_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
   contract_date: 'short',
   contract_id: 'token',
-  contract_ext_no: 'stack',
+  contract_ext_no: 'truncate',
   po_number: 'token',
-  product: 'wrap',
+  product: 'truncate',
   incoterm: 'short',
-  supplier: 'wrap',
-  company_name: 'wrap',
+  supplier: 'truncate',
+  company_name: 'truncate',
   contract_qty: 'short',
   received_qty: 'short',
   delivery_qty: 'short',
@@ -63,16 +64,16 @@ const CONTRACT_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> 
   trade_cycle_days: 'short',
   cash_cycle_days: 'short',
   dp_cycle_days: 'short',
-  over_under_delivery_status: 'wrap',
-  group_name: 'wrap',
+  over_under_delivery_status: 'truncate',
+  group_name: 'truncate',
   lt_spot: 'short',
-  source_type: 'short',
+  source_type: 'truncate',
   sto_number: 'token',
   delivery_start: 'short',
   delivery_end: 'short',
   month_delivery_end: 'short',
   cargo_readiness_date: 'short',
-  vessel_name: 'wrap',
+  vessel_name: 'truncate',
   eta_vessel_completed_loading: 'short',
   eta_vessel_complete_discharge: 'short',
   created_at: 'short',
@@ -87,9 +88,9 @@ const OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT: Readonly<Record<string, OperationalCol
   quantity_received: 'short',
   gain_loss_amount: 'short',
   gain_loss_percentage: 'short',
-  loading_location: 'wrap',
-  unloading_location: 'wrap',
-  contract_ext_no: 'stack',
+  loading_location: 'truncate',
+  unloading_location: 'truncate',
+  contract_ext_no: 'truncate',
   sto_number: 'stack',
   contract_date: 'short',
   po_number: 'stack',
@@ -97,10 +98,10 @@ const OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT: Readonly<Record<string, OperationalCol
   incoterm: 'truncate',
   status: 'short',
   transport_mode: 'short',
-  group_name: 'wrap',
-  transporter: 'wrap',
-  buyer: 'wrap',
-  plant_site: 'wrap',
+  group_name: 'truncate',
+  transporter: 'truncate',
+  buyer: 'truncate',
+  plant_site: 'truncate',
   operation_id: 'token',
   contract_number: 'token',
   quantity_sfal: 'short',
@@ -114,9 +115,9 @@ const OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT: Readonly<Record<string, Operational
   quantity_received: 'short',
   gain_loss_amount: 'short',
   gain_loss_percentage: 'short',
-  loading_location: 'wrap',
-  unloading_location: 'wrap',
-  contract_ext_no: 'stack',
+  loading_location: 'truncate',
+  unloading_location: 'truncate',
+  contract_ext_no: 'truncate',
   sto_number: 'stack',
   contract_date: 'short',
   po_number: 'stack',
@@ -124,10 +125,10 @@ const OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT: Readonly<Record<string, Operational
   incoterm: 'truncate',
   status: 'short',
   transport_mode: 'short',
-  group_name: 'wrap',
-  supplier: 'wrap',
-  buyer: 'wrap',
-  plant_site: 'wrap',
+  group_name: 'truncate',
+  supplier: 'truncate',
+  buyer: 'truncate',
+  plant_site: 'truncate',
   operation_id: 'token',
   contract_number: 'token',
   quantity_sfal: 'short',
@@ -136,7 +137,7 @@ const OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT: Readonly<Record<string, Operational
 
 const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
   contract_date: 'short',
-  contract_ext_no: 'stack',
+  contract_ext_no: 'truncate',
   po_number: 'stack',
   sto_number: 'stack',
   product: 'truncate',
@@ -148,10 +149,10 @@ const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT: Readonly<Record<string, OperationalCo
   gain_loss_percentage: 'short',
   status: 'short',
   transport_mode: 'short',
-  group_name: 'wrap',
-  supplier: 'wrap',
-  buyer: 'wrap',
-  plant_site: 'wrap',
+  group_name: 'truncate',
+  supplier: 'truncate',
+  buyer: 'truncate',
+  plant_site: 'truncate',
   operation_id: 'token',
   contract_number: 'token',
   quantity_sfal: 'short',
@@ -194,12 +195,12 @@ const SHIPPING_PERF_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayo
 const TRUCKING_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
   late_indicator: 'short',
   contract_date: 'short',
-  contract_ext_no: 'stack',
+  contract_ext_no: 'truncate',
   po_number: 'token',
-  supplier: 'wrap',
+  supplier: 'truncate',
   status: 'short',
   sto_number: 'token',
-  product: 'wrap',
+  product: 'truncate',
   incoterm: 'short',
   contract_qty: 'short',
   sto_quantity: 'short',
@@ -208,10 +209,10 @@ const TRUCKING_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> 
   trucking_start_date: 'short',
   trucking_completion_date: 'short',
   operation_id: 'token',
-  location: 'wrap',
-  loading_location: 'wrap',
-  unloading_location: 'wrap',
-  trucking_owner: 'wrap',
+  location: 'truncate',
+  loading_location: 'truncate',
+  unloading_location: 'truncate',
+  trucking_owner: 'truncate',
   quantity_sent: 'short',
   delivery_start_date: 'short',
   delivery_end_date: 'short',
@@ -220,18 +221,18 @@ const TRUCKING_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> 
 
 const COMMERCIAL_DOCS_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
   contract_date: 'short',
-  contract_ext_no: 'stack',
+  contract_ext_no: 'truncate',
   po_number: 'token',
-  supplier: 'wrap',
+  supplier: 'truncate',
   incoterm: 'short',
-  product: 'wrap',
+  product: 'truncate',
   payment_due_date: 'short',
   dp_due_date: 'short',
   contract_qty: 'short',
   unit_price: 'short',
   total_price: 'short',
-  buyer: 'wrap',
-  plant_site: 'wrap',
+  buyer: 'truncate',
+  plant_site: 'truncate',
   transport_mode: 'short',
   b2b_flag: 'short',
   doc_contract: 'short',
@@ -282,6 +283,8 @@ export function operationalTableColumnClass(layout: OperationalColumnLayout): st
       return 'klip-op-col--stack'
     case 'truncate':
       return 'klip-op-col--truncate'
+    case 'two_line':
+      return 'klip-op-col--two-line'
     default:
       return 'klip-op-col--wrap'
   }
@@ -349,6 +352,9 @@ export function resolveOperationalColumnMinWidthPx(opts: {
     }
     case 'truncate':
       return Math.max(headerMin, Math.min(estimateTokenWidthPx(24), 200 + CELL_PAD_PX), opts.basePx)
+    case 'two_line':
+      // Width fits ~half a long name so long values wrap to at most two lines.
+      return Math.max(headerMin, Math.min(Math.max(cellPx, opts.basePx), 168 + CELL_PAD_PX))
     case 'token':
     case 'stack':
       return Math.max(headerMin, cellPx, opts.basePx)
@@ -443,6 +449,29 @@ export function OperationalTruncatedCell({
       className={`${className} truncate block ${maxWidthClass}`}
       title={title ?? display}
     >
+      {display}
+    </span>
+  )
+}
+
+/** Wrap long names to at most two lines; full value on hover via native title. */
+export function OperationalTwoLineCell({
+  value,
+  className = 'text-sm',
+  title,
+  fallback = '-',
+}: {
+  value?: string | null
+  className?: string
+  title?: string
+  fallback?: string
+}) {
+  const display = formatOperationalTableTextDisplay(value, fallback)
+  if (display === fallback) {
+    return <span className={className}>{fallback}</span>
+  }
+  return (
+    <span className={`${className} klip-two-line-clamp block`} title={title ?? display}>
       {display}
     </span>
   )

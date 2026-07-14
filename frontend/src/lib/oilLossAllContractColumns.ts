@@ -4,6 +4,7 @@
  */
 
 import { mergePreservedColumnOrder } from '@/lib/columnLayoutMigration'
+import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
 
 export const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION = 'oil-loss-all-contract-v2'
 export const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION_KEY =
@@ -277,4 +278,19 @@ export function buildOilLossAllContractVisibleColumns<T extends { id: string }>(
     if (col) out.push(col)
   }
   return out
+}
+
+const OIL_LOSS_ALL_CONTRACT_DEFAULT_COLUMN_WIDTH_PX = 96
+
+/** Match Contract/Shipping Performance: base map + header longest-word floor. */
+export function oilLossAllContractTableColumnWidthPx(
+  colId: string,
+  headerLabel?: string,
+  options?: { hasFormulaHelp?: boolean },
+): number {
+  const base = OIL_LOSS_ALL_CONTRACT_COLUMN_WIDTH_PX[colId] ?? OIL_LOSS_ALL_CONTRACT_DEFAULT_COLUMN_WIDTH_PX
+  return resolveCompactColumnWidthPx(base, headerLabel, {
+    hasFormulaHelp: options?.hasFormulaHelp,
+    hasSort: true,
+  })
 }

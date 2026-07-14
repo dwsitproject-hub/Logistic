@@ -76,19 +76,25 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
   }, [])
 
   const loadModalData = useCallback(async () => {
-    if (!row?.contract_ext_no) return
+    const current = row
+    const poNumber = String(current?.po_number || current?.contract_id || '').trim()
+    const contractExtNo = String(current?.contract_ext_no || '').trim()
+    if (!current || !poNumber) return
     setLoading(true)
     try {
+      const qs = contractExtNo
+        ? `?contract_ext_no=${encodeURIComponent(contractExtNo)}`
+        : ''
       const [filesRes, historyRes] = await Promise.all([
-        api.get(`/commercial-documents/files/${encodeURIComponent(row.contract_ext_no)}`),
-        api.get(`/commercial-documents/history/${encodeURIComponent(row.contract_ext_no)}`),
+        api.get(`/commercial-documents/files/${encodeURIComponent(poNumber)}${qs}`),
+        api.get(`/commercial-documents/history/${encodeURIComponent(poNumber)}${qs}`),
       ])
       setFiles(filesRes.data?.data || [])
       setHistory(historyRes.data?.data || [])
 
-      if (row.id && isContractB2bOrigin(row)) {
+      if (current.id && isContractB2bOrigin(current)) {
         try {
-          const b2bRes = await api.get(`/contracts/${row.id}/b2b-parties`)
+          const b2bRes = await api.get(`/contracts/${current.id}/b2b-parties`)
           setB2bParties(b2bRes.data?.data?.parties || b2bRes.data?.data || [])
         } catch {
           setB2bParties([])
@@ -113,7 +119,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
 
   useEffect(() => {
     closePdfPreview()
-  }, [row?.contract_ext_no, closePdfPreview])
+  }, [row?.po_number, row?.contract_id, row?.contract_ext_no, closePdfPreview])
 
   const versionsForType = (type: CommercialDocumentType) => filesForDocumentCategory(files, type)
 
@@ -124,12 +130,14 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
 
   const handleUpload = async (type: CommercialDocumentType, file: File) => {
     if (!row) return
+    const poNumber = String(row.po_number || row.contract_id || '').trim()
+    if (!poNumber) return
     setUploadingType(type)
     try {
       const form = new FormData()
       form.append('contract_ext_no', row.contract_ext_no)
       form.append('document_type', type)
-      form.append('po_number', row.po_number || row.contract_id || 'UNKNOWN')
+      form.append('po_number', poNumber)
       form.append('buyer_name', row.buyer || '')
       form.append('contract_date', row.contract_date || '')
       form.append('file', file)
@@ -196,7 +204,10 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
         <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white px-6 py-4">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Document Checking</h2>
-            <p className="text-xs text-gray-500 mt-0.5 truncate">{row.contract_ext_no}</p>
+            <p className="text-xs text-gray-500 mt-0.5 truncate">
+              PO {formatSapDisplayValue(row.po_number || row.contract_id)}
+              {row.contract_ext_no ? ` · ${row.contract_ext_no}` : ''}
+            </p>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose} title="Close">
             <X className="h-5 w-5" />

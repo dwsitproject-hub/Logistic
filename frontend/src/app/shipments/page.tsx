@@ -82,16 +82,23 @@ import {
   COMPACT_OPERATIONAL_TABLE_CLASS,
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+  COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
+  compactTableColWidthCss,
 } from '@/lib/compactTableUi'
-import { formatQtyMtFromKg, formatNumber, formatOutstandingQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
+import { formatQtyMtFromKg, formatNumber, outstandingQtyMtColorClass } from '@/lib/utils'
+
+/** Shipments page qty display — whole MT (no decimals). */
+const SHIPMENT_QTY_MT_DISPLAY_OPTS = { maxFractionDigits: 0 } as const
 import {
   SHIPMENT_COLUMN_LAYOUT_VERSION,
   SHIPMENT_COLUMN_LAYOUT_VERSION_KEY,
+  SHIPMENT_EXPAND_COL_WIDTH_PX,
   buildShipmentVisibleColumns,
   mergeShipmentColumnOrder,
   migrateShipmentColumnLayout,
   shipmentCompactColumnFallbackOrder,
   shipmentDefaultVisibleColumnIds,
+  shipmentTableColumnWidthPx,
 } from '@/lib/shipmentColumns'
 import {
   resolveShipmentListDischargePorts,
@@ -137,6 +144,12 @@ import {
   getOperationalColumnLayout,
   operationalTableColumnClass,
 } from '@/lib/operationalTableLayout'
+import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
+import {
+  SHIPMENTS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+  operationalRowFieldTooltipText,
+  shouldApplyOperationalTruncateTooltip,
+} from '@/lib/operationalTableTruncateUi'
 import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { format } from 'date-fns'
@@ -815,7 +828,7 @@ function ShipmentMtQuantityField({
           </span>
         </div>
       ) : (
-        <div className="font-medium">{formatQtyMtFromKg(kg)}</div>
+        <div className="font-medium">{formatQtyMtFromKg(kg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}</div>
       )}
     </div>
   )
@@ -3217,12 +3230,14 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => resolveShipmentListSuppliers(s),
-      render: (s) => (
-        <OperationalStackedCommaCell
-          value={resolveShipmentListSuppliers(s)}
-          title={resolveShipmentListSuppliers(s) || ''}
-        />
-      ),
+      render: (s) => {
+        const supplier = resolveShipmentListSuppliers(s)
+        return (
+          <span className="text-sm truncate block" title={supplier || undefined}>
+            {formatOperationalTableTextDisplay(supplier)}
+          </span>
+        )
+      },
     },
     {
       id: 'vessel_name',
@@ -3270,7 +3285,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => shipmentStoredQtyKg(s.contract_qty) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(s.contract_qty)}
+          {formatSapQtyMtDisplay(s.contract_qty, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
         </span>
       ),
     },
@@ -3282,7 +3297,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => resolveShipmentListStoKg(s) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(resolveShipmentListStoKg(s))}
+          {formatSapQtyMtDisplay(resolveShipmentListStoKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)}
         </span>
       )
     },
@@ -3294,7 +3309,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => resolveShipmentListDeliveredKg(s) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(resolveShipmentListDeliveredKg(s))}
+          {formatSapQtyMtDisplay(resolveShipmentListDeliveredKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)}
         </span>
       )
     },
@@ -3306,7 +3321,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => resolveShipmentListReceiveKg(s) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(resolveShipmentListReceiveKg(s))}
+          {formatSapQtyMtDisplay(resolveShipmentListReceiveKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)}
         </span>
       )
     },
@@ -3321,9 +3336,9 @@ function ShipmentsPageContent() {
         const kg = shipmentStoredQtyKg(s.outstanding_quantity)
         return (
           <span
-            className={`text-sm break-words tabular-nums font-medium ${outstandingQtyMtColorClass(kg)}`}
+            className={`text-sm break-words tabular-nums ${outstandingQtyMtColorClass(kg)}`}
           >
-            {formatSapOutstandingQtyMtDisplay(s.outstanding_quantity)}
+            {formatSapOutstandingQtyMtDisplay(s.outstanding_quantity, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
           </span>
         )
       }
@@ -3339,9 +3354,9 @@ function ShipmentsPageContent() {
         const kg = shipmentStoredQtyKg(s.outstanding_qty_planning)
         return (
           <span
-            className={`text-sm break-words tabular-nums font-medium ${outstandingQtyMtColorClass(kg)}`}
+            className={`text-sm break-words tabular-nums ${outstandingQtyMtColorClass(kg)}`}
           >
-            {formatSapOutstandingQtyMtDisplay(s.outstanding_qty_planning)}
+            {formatSapOutstandingQtyMtDisplay(s.outstanding_qty_planning, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
           </span>
         )
       },
@@ -3355,7 +3370,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => shipmentStoredQtyKg(s.sfal_qty) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(s.sfal_qty)}
+          {formatSapQtyMtDisplay(s.sfal_qty, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
         </span>
       )
     },
@@ -3368,7 +3383,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => shipmentStoredQtyKg(s.sfbd_qty) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(s.sfbd_qty)}
+          {formatSapQtyMtDisplay(s.sfbd_qty, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
         </span>
       )
     },
@@ -3816,6 +3831,12 @@ function ShipmentsPageContent() {
   const stoGroupedShipments = useMemo(
     () => groupShipmentsBySto(paginatedShipments),
     [paginatedShipments],
+  )
+
+  /** Left expand/chevron column only when STO grouping needs collapse (otherwise it looks like empty left gap). */
+  const showStoExpandColumn = useMemo(
+    () => stoGroupedShipments.some((group) => group.rows.length > 1),
+    [stoGroupedShipments],
   )
 
   const toggleStoGroupCollapse = useCallback((stoKey: string) => {
@@ -5275,14 +5296,14 @@ function ShipmentsPageContent() {
                         return (
                           <tr key={r.id} className="hover:bg-gray-50">
                             <td className="sticky left-0 z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[220px] align-top">
-                              <div className="font-semibold text-gray-900 truncate" title={r.shipment_id}>{r.shipment_id}</div>
+                              <div className="text-gray-900 truncate" title={r.shipment_id}>{r.shipment_id}</div>
                               <div className="text-[10px] text-gray-500 truncate" title={r.sto_number || ''}>
                                 STO: {resolveShipmentDisplayStoNumber(r.sto_number)}
                               </div>
                               <div className="text-[10px] text-gray-500 truncate" title={r.vessel_name || ''}>Vessel: {r.vessel_name || '—'}</div>
                             </td>
                             <td className="sticky left-[220px] z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[260px] align-top">
-                              <div className="font-medium text-gray-900 whitespace-normal break-words" title={r.contract_ext_no || ''}>{r.contract_ext_no || '—'}</div>
+                              <div className="text-gray-900 whitespace-normal break-words" title={r.contract_ext_no || ''}>{r.contract_ext_no || '—'}</div>
                               <div className="text-[10px] text-gray-500 whitespace-normal break-words" title={resolveShipmentListSuppliers(r) || ''}>{resolveShipmentListSuppliers(r) || '—'}</div>
                             </td>
                             {shipCalendarMetaOrderIds.map((id) => {
@@ -5346,7 +5367,7 @@ function ShipmentsPageContent() {
                                       {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-500" /> : null}
                                     </div>
                                   ) : qtyKg ? (
-                                    <span className="font-medium text-slate-900">{fmtMt(qtyMt)}</span>
+                                    <span className="text-slate-900">{fmtMt(qtyMt)}</span>
                                   ) : (
                                     <span className="text-gray-300">—</span>
                                   )}
@@ -5636,14 +5657,33 @@ function ShipmentsPageContent() {
                       })
                     }}
                   >
-                      <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS}`}>
+                      <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols`}>
+                        <colgroup>
+                          {showStoExpandColumn ? (
+                            <col style={{ width: SHIPMENT_EXPAND_COL_WIDTH_PX }} />
+                          ) : null}
+                          {visibleColumns.map((col) => (
+                            <col
+                              key={col.id}
+                              style={{
+                                width: compactTableColWidthCss(
+                                  shipmentTableColumnWidthPx(col.id, col.label, {
+                                    hasFormulaHelp: Boolean(col.formulaHelp),
+                                  }),
+                                ),
+                              }}
+                            />
+                          ))}
+                          <col style={{ width: COMPACT_TABLE_ACTIONS_COL_WIDTH_PX }} />
+                        </colgroup>
                         <thead>
                         <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
-                          <th
-                            scope="col"
-                            className={`w-10 align-bottom sticky top-0 z-20 bg-gray-50 ${CONTRACT_PERF_TABLE_CELL_PAD}`}
-                          />
-                        {visibleColumns.map(col => {
+                          {showStoExpandColumn ? (
+                            <th
+                              scope="col"
+                              className="w-10 align-bottom sticky top-0 z-20 bg-gray-50 px-1 py-1.5"
+                            />
+                          ) : null}                        {visibleColumns.map(col => {
                           const active = sortKey === col.id
                           const opColClass = operationalTableColumnClass(
                             getOperationalColumnLayout('shipments', col.id),
@@ -5702,12 +5742,12 @@ function ShipmentsPageContent() {
                       {/* Rows */}
                         {section3TableLoading || (listFetching && shipments.length === 0) ? (
                           <TableInitialLoadPlaceholder
-                            colSpan={visibleColumns.length + 2}
+                            colSpan={visibleColumns.length + 1 + (showStoExpandColumn ? 1 : 0)}
                             icon={Package}
                           />
                         ) : !(listFetching || tableScopeLoading) && sortedShipments.length === 0 ? (
                           <tr>
-                            <td colSpan={visibleColumns.length + 2} className="px-4 py-10 text-center text-gray-500 bg-white">
+                            <td colSpan={visibleColumns.length + 1 + (showStoExpandColumn ? 1 : 0)} className="px-4 py-10 text-center text-gray-500 bg-white">
                               <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />
                               <p>No shipments found</p>
                               {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
@@ -5726,22 +5766,23 @@ function ShipmentsPageContent() {
                                   key={`sto-group-${group.stoKey}`}
                                   className="bg-slate-100 border-y border-slate-200"
                                 >
-                                  <td className={`align-middle w-10 ${CONTRACT_PERF_TABLE_CELL_PAD}`}>
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleStoGroupCollapse(group.stoKey)}
-                                      className="p-1 text-slate-600 hover:text-slate-900"
-                                      title={stoGroupCollapsed ? 'Expand STO group' : 'Collapse STO group'}
-                                      aria-expanded={!stoGroupCollapsed}
-                                    >
-                                      {stoGroupCollapsed ? (
-                                        <ChevronRight className="h-5 w-5" />
-                                      ) : (
-                                        <ChevronDown className="h-5 w-5" />
-                                      )}
-                                    </button>
-                                  </td>
-                                  {visibleColumns.map((col) => {
+                                  {showStoExpandColumn ? (
+                                    <td className="align-middle w-10 px-1 py-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleStoGroupCollapse(group.stoKey)}
+                                        className="p-1 text-slate-600 hover:text-slate-900"
+                                        title={stoGroupCollapsed ? 'Expand STO group' : 'Collapse STO group'}
+                                        aria-expanded={!stoGroupCollapsed}
+                                      >
+                                        {stoGroupCollapsed ? (
+                                          <ChevronRight className="h-5 w-5" />
+                                        ) : (
+                                          <ChevronDown className="h-5 w-5" />
+                                        )}
+                                      </button>
+                                    </td>
+                                  ) : null}                                  {visibleColumns.map((col) => {
                                     const opColClass = operationalTableColumnClass(
                                       getOperationalColumnLayout('shipments', col.id),
                                     )
@@ -5752,7 +5793,7 @@ function ShipmentsPageContent() {
                                           className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
                                         >
                                           <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
-                                            <span className="text-sm font-semibold text-slate-900">{group.stoDisplay}</span>
+                                            <span className="text-sm text-slate-900">{group.stoDisplay}</span>
                                             <Badge variant="outline" className="ml-2 text-xs font-normal">
                                               {group.rows.length} rows
                                             </Badge>
@@ -5788,35 +5829,41 @@ function ShipmentsPageContent() {
                             // duplicate keys corrupt list reconciliation and leave stale rows.
                             <Fragment key={`${group.stoKey}|${shipment.id}`}>
                               <tr className={`${rowBg} ${isStoChildRow ? 'border-l-2 border-slate-200' : ''}`}>
-                                <td className={`align-middle w-10 ${CONTRACT_PERF_TABLE_CELL_PAD}`}>
-                                  {isStoChildRow ? (
-                                    <span className="inline-block w-5" aria-hidden />
-                                  ) : (
-                                  <div className="hidden">
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleExpanded(shipment.id)}
-                                      className="p-1 text-gray-500 hover:text-gray-800"
-                                      title={expandedShipmentIds.has(shipment.id) ? 'Collapse' : 'Expand'}
-                                    >
-                                      {expandedShipmentIds.has(shipment.id) ? (
-                                        <ChevronDown className="h-5 w-5" />
-                                      ) : (
-                                        <ChevronRight className="h-5 w-5" />
-                                      )}
-                                    </button>
-                                  </div>
-                                  )}
-                                </td>
+                                {showStoExpandColumn ? (
+                                  <td className="align-middle w-10 px-1 py-1.5">
+                                    {isStoChildRow ? (
+                                      <span className="inline-block w-5" aria-hidden />
+                                    ) : null}
+                                  </td>
+                                ) : null}
 
-                                  {visibleColumns.map(col => {
-                                    const opColClass = operationalTableColumnClass(
-                                      getOperationalColumnLayout('shipments', col.id),
-                                    )
-                                    return (
-                                    <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
-                                      <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
-                                      {col.id === 'vessel_name' && tableInlineEditActive ? (
+                                  {visibleColumns.map(col => {                                    const layout = getOperationalColumnLayout('shipments', col.id)
+                                    const opColClass = operationalTableColumnClass(layout)
+                                    const isInteractiveEdit =
+                                      tableInlineEditActive &&
+                                      (col.id === 'vessel_name' ||
+                                        col.id === 'vessel_code' ||
+                                        col.id === 'vessel_owner' ||
+                                        col.id === 'vessel_capacity' ||
+                                        col.id === 'vessel_hull_type' ||
+                                        col.id === 'port_of_loading' ||
+                                        col.id === 'status')
+                                    const useTruncateTooltip =
+                                      !isInteractiveEdit &&
+                                      !(isStoChildRow && col.id === 'shipment_id') &&
+                                      shouldApplyOperationalTruncateTooltip(
+                                        col.id,
+                                        layout,
+                                        SHIPMENTS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+                                      )
+                                    const truncateTooltip = useTruncateTooltip
+                                      ? operationalRowFieldTooltipText(
+                                          col.id,
+                                          shipment as unknown as Record<string, unknown>,
+                                        )
+                                      : null
+                                    const cellContent =
+                                      col.id === 'vessel_name' && tableInlineEditActive ? (
                                         <div className="relative">
                                           <Input
                                             value={editedData.vessel_name ?? shipment.vessel_name ?? ''}
@@ -5941,6 +5988,16 @@ function ShipmentsPageContent() {
                                         <span className="text-xs text-gray-400">—</span>
                                       ) : (
                                         col.render(shipment)
+                                      )
+                                    return (
+                                    <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
+                                      <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
+                                      {useTruncateTooltip ? (
+                                        <ContractPerfTruncatedCell tooltip={truncateTooltip} className="w-full">
+                                          {cellContent}
+                                        </ContractPerfTruncatedCell>
+                                      ) : (
+                                        cellContent
                                       )}
                                       </div>
                                     </td>
@@ -5992,7 +6049,7 @@ function ShipmentsPageContent() {
                               </tr>
                               {false && expandedShipmentIds.has(shipment.id) && (
                                 <tr key={`${shipment.id}-expanded`} className={rowBg}>
-                                  <td colSpan={visibleColumns.length + 2} className="px-3 py-3">
+                                  <td colSpan={visibleColumns.length + 1 + (showStoExpandColumn ? 1 : 0)} className="px-3 py-3">
                                   <div className="p-3 border rounded bg-white">
                                     {/* Basic Info */}
                                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mb-4 pb-4 border-b">
@@ -6153,7 +6210,7 @@ function ShipmentsPageContent() {
                               <ChevronDown className="h-5 w-5" />
                             )}
                           </button>
-                          <span className="text-sm font-semibold text-slate-900">{group.stoDisplay}</span>
+                          <span className="text-sm text-slate-900">{group.stoDisplay}</span>
                           <Badge variant="outline" className="text-xs font-normal">
                             {group.rows.length} rows
                           </Badge>
