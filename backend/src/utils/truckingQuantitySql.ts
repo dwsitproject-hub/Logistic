@@ -77,9 +77,11 @@ export function sqlTruckingQuantityReceiveCoalesce(): string {
 }
 
 /**
- * Prefer KLIP-resolved qty (WB daily actuals synced to trucking_operations) over SAP per-STO
- * when trucking_daily_actuals exist AND GR PO/STO is still Open (FRC→GR PO, LCO→GR STO).
- * When GR is Close, always prefer SAP so delivery/receive stay SAP-sourced.
+ * Prefer per-STO SAP qty when present; else KLIP/WB (`trucking_operations`) qty when GR is still Open
+ * and daily actuals exist. When GR is Close, always use SAP so fulfillment stays SAP-sourced.
+ *
+ * Previously Open+WB always preferred op-level WB over SAP, which inflated OS Qty when SAP
+ * `Quantity Delivery Trucking` was complete but WB was only partial / shared across STOs.
  */
 export function sqlTruckingPreferWbResolvedQty(
   innerQtyExpr: string,
@@ -92,7 +94,7 @@ export function sqlTruckingPreferWbResolvedQty(
     WHEN EXISTS (
       SELECT 1 FROM trucking_daily_actuals da
       WHERE da.trucking_operation_id = ${operationIdExpr}
-    ) AND NOT (${grClosed}) THEN COALESCE(${innerQtyExpr}, 0)
+    ) AND NOT (${grClosed}) THEN COALESCE(NULLIF((${sapPerStoQtyExpr}), 0), ${innerQtyExpr}, 0)
     WHEN (${grClosed}) THEN COALESCE(${sapPerStoQtyExpr}, 0)
     ELSE COALESCE(${sapPerStoQtyExpr}, ${innerQtyExpr}, 0)
   END`;

@@ -31,11 +31,11 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('qty_del');
   });
 
-  it('sqlTruckingPreferWbResolvedQty prefers WB only when GR Open; Closed uses SAP', () => {
+  it('sqlTruckingPreferWbResolvedQty prefers non-zero SAP over WB when GR Open', () => {
     const sql = sqlTruckingPreferWbResolvedQty('e.quantity_delivered', 'sap_per_sto');
     expect(sql).toContain('trucking_daily_actuals');
+    expect(sql).toContain('NULLIF((sap_per_sto), 0)');
     expect(sql).toContain('e.quantity_delivered');
-    expect(sql).toContain('sap_per_sto');
     expect(sql).toContain('AND NOT (');
   });
 
