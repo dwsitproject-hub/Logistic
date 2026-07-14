@@ -1620,6 +1620,8 @@ function ShippingPerformancePageContent() {
     setPerfCardFilter('all')
     setSourceFilter('All')
     setProductTab('All')
+    setSelectedGroupPlants([])
+    setSelectedIncoterms([])
     setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
     setCurrentPage(1)
   }, [])
@@ -2011,6 +2013,28 @@ function ShippingPerformancePageContent() {
                   ))}
                 </div>
               </div>
+              <div className="flex items-end gap-3">
+                <div className="w-48">
+                  <SearchableMultiSelect
+                    label="Group Plant"
+                    options={availableGroupPlants}
+                    selected={selectedGroupPlants}
+                    onChange={setSelectedGroupPlants}
+                    placeholder="All group plants"
+                    emptyMessage="No group plants"
+                  />
+                </div>
+                <div className="w-48">
+                  <SearchableMultiSelect
+                    label="Incoterm"
+                    options={availableIncoterms}
+                    selected={selectedIncoterms}
+                    onChange={setSelectedIncoterms}
+                    placeholder="All incoterms"
+                    emptyMessage="No incoterms"
+                  />
+                </div>
+              </div>
             </div>
             <button
               type="button"
@@ -2030,54 +2054,6 @@ function ShippingPerformancePageContent() {
                 (summaryLoading || summaryFetching) && rows.length > 0 ? 'opacity-65' : 'opacity-100'
               }`}
             >
-              {/* Toolbar filters — scope the cards AND the All Shipments table. */}
-              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-                <div className="flex w-full min-w-[12rem] flex-col gap-1 sm:w-56">
-                  <SearchableMultiSelect
-                    label="Group Plant"
-                    options={availableGroupPlants}
-                    selected={selectedGroupPlants}
-                    onChange={setSelectedGroupPlants}
-                    placeholder="Select group plant(s)"
-                    emptyMessage="No group plants"
-                  />
-                </div>
-                <div className="flex w-full min-w-[12rem] flex-col gap-1 sm:w-56">
-                  <SearchableMultiSelect
-                    label="Product"
-                    options={availableProducts}
-                    selected={selectedProducts}
-                    onChange={setSelectedProducts}
-                    placeholder="Select product(s)"
-                    emptyMessage="No products"
-                  />
-                </div>
-                <div className="flex w-full min-w-[12rem] flex-col gap-1 sm:w-56">
-                  <SearchableMultiSelect
-                    label="Incoterm"
-                    options={availableIncoterms}
-                    selected={selectedIncoterms}
-                    onChange={setSelectedIncoterms}
-                    placeholder="Select incoterm(s)"
-                    emptyMessage="No incoterms"
-                  />
-                </div>
-                {(selectedGroupPlants.length > 0 ||
-                  selectedProducts.length > 0 ||
-                  selectedIncoterms.length > 0) && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedGroupPlants([])
-                      setSelectedProducts([])
-                      setSelectedIncoterms([])
-                    }}
-                    className="text-sm text-blue-700 hover:underline sm:pb-2"
-                  >
-                    Clear filters
-                  </button>
-                )}
-              </div>
               <div className="flex w-full flex-col gap-4 xl:flex-row xl:items-stretch">
                 <button
                   type="button"
