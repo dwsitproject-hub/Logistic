@@ -3,6 +3,16 @@ import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 
+/** Charter terms accept only V/C or T/C (case-insensitive); anything else stores NULL. */
+const normalizeTerms = (value: unknown): string | null => {
+  const s = String(value ?? '').trim().toUpperCase();
+  return s === 'V/C' || s === 'T/C' ? s : null;
+};
+
+/** Coerce heating from boolean or "Yes"/"YES" string; anything else is false. */
+const normalizeHeating = (value: unknown): boolean =>
+  typeof value === 'boolean' ? value : value === 'Yes' || value === 'YES';
+
 export const listMasterVessels = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { search, page = 1, limit = 50 } = req.query as any;
@@ -18,10 +28,10 @@ export const listMasterVessels = async (req: AuthRequest, res: Response): Promis
 
     const listSql = `
       SELECT id, vessel_code, vessel_name, vessel_capacity_mt, vessel_owner, vessel_owner_group,
-             hull_type, year_of_creation, heating, lambung_type, created_at, updated_at
+             hull_type, year_of_creation, heating, lambung_type, terms, created_at, updated_at
       FROM master_vessels
       ${where}
-      ORDER BY vessel_code
+      ORDER BY vessel_name ASC, vessel_code ASC
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
     const countSql = `
@@ -66,13 +76,14 @@ export const createMasterVessel = async (req: AuthRequest, res: Response): Promi
       year_of_creation,
       heating,
       lambung_type,
+      terms,
     } = req.body;
 
     const insertSql = `
       INSERT INTO master_vessels (
         vessel_code, vessel_name, vessel_capacity_mt, vessel_owner, vessel_owner_group,
-        hull_type, year_of_creation, heating, lambung_type
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        hull_type, year_of_creation, heating, lambung_type, terms
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
       RETURNING *
     `;
     const result = await query(insertSql, [
@@ -83,8 +94,9 @@ export const createMasterVessel = async (req: AuthRequest, res: Response): Promi
       vessel_owner_group ?? null,
       hull_type ?? null,
       year_of_creation ?? null,
-      typeof heating === 'boolean' ? heating : heating === 'Yes' || heating === 'YES',
+      normalizeHeating(heating),
       lambung_type ?? null,
+      normalizeTerms(terms),
     ]);
 
     res.status(201).json({ success: true, data: result.rows[0] });
@@ -113,6 +125,7 @@ export const updateMasterVessel = async (req: AuthRequest, res: Response): Promi
       year_of_creation,
       heating,
       lambung_type,
+      terms,
     } = req.body;
 
     const updateSql = `
@@ -127,8 +140,9 @@ export const updateMasterVessel = async (req: AuthRequest, res: Response): Promi
         year_of_creation = COALESCE($7, year_of_creation),
         heating = COALESCE($8, heating),
         lambung_type = COALESCE($9, lambung_type),
+        terms = COALESCE($10, terms),
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $10
+      WHERE id = $11
       RETURNING *
     `;
 
@@ -140,8 +154,9 @@ export const updateMasterVessel = async (req: AuthRequest, res: Response): Promi
       vessel_owner_group ?? null,
       hull_type ?? null,
       year_of_creation ?? null,
-      typeof heating === 'boolean' ? heating : heating === 'Yes' || heating === 'YES',
+      normalizeHeating(heating),
       lambung_type ?? null,
+      normalizeTerms(terms),
       id,
     ]);
 
@@ -185,6 +200,7 @@ export const bulkUploadMasterVessels = async (req: AuthRequest, res: Response): 
         year_of_creation,
         heating,
         lambung_type,
+        terms,
       } = row;
 
       if (!vessel_code || !vessel_name) {
@@ -194,8 +210,8 @@ export const bulkUploadMasterVessels = async (req: AuthRequest, res: Response): 
       const upsertSql = `
         INSERT INTO master_vessels (
           vessel_code, vessel_name, vessel_capacity_mt, vessel_owner, vessel_owner_group,
-          hull_type, year_of_creation, heating, lambung_type
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          hull_type, year_of_creation, heating, lambung_type, terms
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         ON CONFLICT (vessel_code) DO UPDATE SET
           vessel_name = EXCLUDED.vessel_name,
           vessel_capacity_mt = EXCLUDED.vessel_capacity_mt,
@@ -205,6 +221,7 @@ export const bulkUploadMasterVessels = async (req: AuthRequest, res: Response): 
           year_of_creation = EXCLUDED.year_of_creation,
           heating = EXCLUDED.heating,
           lambung_type = EXCLUDED.lambung_type,
+          terms = EXCLUDED.terms,
           updated_at = CURRENT_TIMESTAMP
         RETURNING xmax = 0 AS inserted
       `;
@@ -217,8 +234,9 @@ export const bulkUploadMasterVessels = async (req: AuthRequest, res: Response): 
         vessel_owner_group ?? null,
         hull_type ?? null,
         year_of_creation ?? null,
-        typeof heating === 'boolean' ? heating : heating === 'Yes' || heating === 'YES',
+        normalizeHeating(heating),
         lambung_type ?? null,
+        normalizeTerms(terms),
       ]);
 
       if (result.rows[0]?.inserted) inserted += 1;

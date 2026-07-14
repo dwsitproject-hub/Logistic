@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
-import { Plus, Upload, Edit2, Trash2 } from 'lucide-react'
+import { Plus, Upload, Download, Edit2, Trash2 } from 'lucide-react'
 
 interface MasterVessel {
   id: string
@@ -22,13 +22,18 @@ interface MasterVessel {
   year_of_creation: number | null
   heating: boolean | null
   lambung_type: string | null
+  terms: string | null
 }
+
+const TERMS_OPTIONS = ['V/C', 'T/C'] as const
+const PAGE_SIZE = 50
 
 export default function MasterVesselPage() {
   const router = useRouter()
   const [items, setItems] = useState<MasterVessel[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [editing, setEditing] = useState<MasterVessel | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
@@ -42,8 +47,11 @@ export default function MasterVesselPage() {
       if (searchQuery.length >= 2) {
         params.set('search', searchQuery)
       }
+      // Load the full (server-sorted by Vessel Name) set and paginate client-side.
+      params.set('limit', '10000')
       const res = await api.get('/master-vessels', { params })
       setItems(res.data?.data?.items || [])
+      setPage(1)
     } catch (err) {
       console.error('Failed to load master vessels', err)
       alert('Failed to load master vessels')
@@ -78,6 +86,7 @@ export default function MasterVesselPage() {
       year_of_creation: null,
       heating: null,
       lambung_type: '',
+      terms: '',
     })
   }
 
@@ -107,6 +116,7 @@ export default function MasterVesselPage() {
         year_of_creation: form.year_of_creation,
         heating: form.heating,
         lambung_type: form.lambung_type,
+        terms: form.terms || null,
       }
       if (editing) {
         await api.put(`/master-vessels/${editing.id}`, payload)
@@ -192,6 +202,7 @@ export default function MasterVesselPage() {
           year_of_creation: yearRaw ? Number(yearRaw) : null,
           heating: (get('heating') || '').toLowerCase() === 'yes',
           lambung_type: get('lambung type') || null,
+          terms: get('terms') || null,
         }
       })
 
@@ -203,6 +214,54 @@ export default function MasterVesselPage() {
       alert('Failed to parse or upload file. Please upload CSV exported from Master Vessel.xlsx')
     } finally {
       e.target.value = ''
+    }
+  }
+
+  // Download a CSV pre-filled with ALL current vessels. The header names match what
+  // handleUpload expects, so a downloaded file can be edited and re-uploaded as-is.
+  const handleDownloadTemplate = async () => {
+    try {
+      // Pull the full dataset (unfiltered/unpaged) so the template carries every vessel.
+      const res = await api.get('/master-vessels', { params: { limit: 100000 } })
+      const all: MasterVessel[] = res.data?.data?.items || []
+
+      const headers = [
+        'Vessel Code', 'Vessel Name', 'Vessel Capacity (MT)', 'Vessel Owner',
+        'Vessel Owner Group', 'Hull Type', 'Year of Creation', 'Heating',
+        'Lambung Type', 'Terms',
+      ]
+      const esc = (val: unknown): string => {
+        const s = val == null ? '' : String(val)
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+      }
+      const lines = [headers.join(',')]
+      for (const v of all) {
+        lines.push([
+          v.vessel_code,
+          v.vessel_name,
+          v.vessel_capacity_mt ?? '',
+          v.vessel_owner ?? '',
+          v.vessel_owner_group ?? '',
+          v.hull_type ?? '',
+          v.year_of_creation ?? '',
+          v.heating == null ? '' : (v.heating ? 'Yes' : 'No'),
+          v.lambung_type ?? '',
+          v.terms ?? '',
+        ].map(esc).join(','))
+      }
+      const csv = '﻿' + lines.join('\r\n') // BOM so Excel reads UTF-8 correctly
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'Master Vessel Template.csv'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Download master vessel template error', err)
+      alert('Failed to download template')
     }
   }
 
@@ -219,6 +278,11 @@ export default function MasterVesselPage() {
       alert(msg)
     }
   }
+
+  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const pageItems = items.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+  const goToPage = (p: number) => { if (p >= 1 && p <= totalPages) setPage(p) }
 
   return (
     <Layout>
@@ -242,6 +306,10 @@ export default function MasterVesselPage() {
               className="hidden"
               onChange={handleUpload}
             />
+            <Button variant="outline" size="sm" onClick={handleDownloadTemplate}>
+              <Download className="h-4 w-4 mr-2" />
+              Download Template
+            </Button>
             <Button size="sm" onClick={openNew}>
               <Plus className="h-4 w-4 mr-2" />
               New Vessel
@@ -361,6 +429,19 @@ export default function MasterVesselPage() {
                     <option value="SHDB">SHDB</option>
                   </select>
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Terms</label>
+                  <select
+                    className="border rounded-md px-3 py-2 w-full text-sm"
+                    value={form.terms || ''}
+                    onChange={(e) => handleChange('terms', e.target.value || null)}
+                  >
+                    <option value="">Select...</option>
+                    {TERMS_OPTIONS.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
               <div className="flex justify-end gap-2">
                 <Button variant="ghost" onClick={() => { setEditing(null); setForm({}); setIsFormOpen(false) }}>
@@ -384,6 +465,7 @@ export default function MasterVesselPage() {
             ) : items.length === 0 ? (
               <div className="py-8 text-center text-gray-500">No vessels found</div>
             ) : (
+              <>
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead>
@@ -397,11 +479,12 @@ export default function MasterVesselPage() {
                       <th className="text-left px-3 py-2 font-medium">Year</th>
                       <th className="text-left px-3 py-2 font-medium">Heating</th>
                       <th className="text-left px-3 py-2 font-medium">Lambgung Type</th>
+                      <th className="text-left px-3 py-2 font-medium">Terms</th>
                       <th className="text-right px-3 py-2 font-medium">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {items.map((v, idx) => (
+                    {pageItems.map((v, idx) => (
                       <tr key={v.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                         <td className="px-3 py-2 font-medium">{v.vessel_code}</td>
                         <td className="px-3 py-2">{v.vessel_name}</td>
@@ -412,6 +495,7 @@ export default function MasterVesselPage() {
                         <td className="px-3 py-2">{v.year_of_creation || '-'}</td>
                         <td className="px-3 py-2">{v.heating == null ? '-' : (v.heating ? 'Yes' : 'No')}</td>
                         <td className="px-3 py-2">{v.lambung_type || '-'}</td>
+                        <td className="px-3 py-2">{v.terms || '-'}</td>
                         <td className="px-3 py-2 text-right">
                           <div className="inline-flex gap-2">
                             <Button variant="outline" size="sm" onClick={() => openEdit(v)}>
@@ -431,6 +515,32 @@ export default function MasterVesselPage() {
                   </tbody>
                 </table>
               </div>
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between mt-4">
+                  <div className="text-sm text-gray-600">
+                    Showing page {currentPage} of {totalPages} ({items.length} vessels)
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => goToPage(currentPage - 1)}
+                      disabled={currentPage <= 1}
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => goToPage(currentPage + 1)}
+                      disabled={currentPage >= totalPages}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              )}
+              </>
             )}
           </CardContent>
         </Card>
