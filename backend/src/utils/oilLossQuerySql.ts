@@ -104,8 +104,12 @@ export const OIL_LOSS_LOOKUP_CTES = `
 `;
 
 export function buildOilLossMainSql(): string {
+  // MATERIALIZED: PG14 inlines single-reference CTEs, which pushed these JSONB key
+  // expressions into nested-loop join filters — re-parsing the large spd.data blob
+  // millions of times (measured 44.7s). Materializing computes each key once per row
+  // and lets the planner hash-join on real row counts (~9s). Results are identical.
   return `
-    WITH parsed AS (
+    WITH parsed AS MATERIALIZED (
       SELECT
         spd.id,
         COALESCE(NULLIF(TRIM(spd.sto_number::text), ''), NULLIF(TRIM(spd.data->'raw'->>'STO No'), '')) AS sto_key,
@@ -243,6 +247,7 @@ export function buildOilLossMainSql(): string {
       product,
       group_name,
       plant_site,
+      COALESCE(NULLIF(TRIM(vessel_name_raw), ''), '') AS vessel_name,
       COALESCE(
         TO_CHAR(contract_date_db, 'YYYY-MM-DD'),
         operation_date
@@ -274,13 +279,16 @@ export function buildOilLossMainSql(): string {
     FROM with_qty
     WHERE ${OIL_LOSS_ELIGIBILITY_WHERE_SQL}
       AND qty_receive_resolved < qty_delivery_resolved
-    ORDER BY (qty_receive_resolved - qty_delivery_resolved) ASC
+    -- id tiebreaker: the loss amount has duplicate values, so without it row order
+    -- among ties is plan-dependent (nondeterministic). Ties keep a stable order now.
+    ORDER BY (qty_receive_resolved - qty_delivery_resolved) ASC, id ASC
   `;
 }
 
 export function buildOilLossGainSql(): string {
+  // MATERIALIZED for the same reason as buildOilLossMainSql (identical single-row result).
   return `
-    WITH parsed AS (
+    WITH parsed AS MATERIALIZED (
       SELECT
         ${SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC} AS qty_trucking,
         ${SAP_OIL_LOSS_QTY_VESSEL_NUMERIC} AS qty_vessel,

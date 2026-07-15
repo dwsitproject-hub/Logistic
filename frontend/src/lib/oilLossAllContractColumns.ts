@@ -67,6 +67,7 @@ export type OilLossSourceRow = {
   product?: string | null
   group_name?: string | null
   plant_site?: string | null
+  vessel_name?: string | null
   incoterm?: string | null
   group_plant?: string | null
   quantity_contract?: number | null

@@ -18,6 +18,7 @@ import VesselHistoryModal, {
   type VesselHistoryModalSelection,
 } from '@/components/shipping-performance/VesselHistoryModal'
 import {
+  normalizeScopeGroupKey,
   rowMatchesGlobalSearch,
   rowMatchesToolbarMultiFilters,
 } from '@/lib/globalScopeFilters'
@@ -176,6 +177,10 @@ interface ShippingPerformanceRow {
   ata_discharge_delta_eta_etb_days?: number | null
   ata_discharge_delta_etb_etc_days?: number | null
   ata_total_delta_days?: number | null
+  /** Computed: numerator MT / loading berth→complete days (actual). Null when N/A. */
+  lp_flow_rate?: number | null
+  /** Computed: numerator MT / discharge berth→complete days (actual). Null when N/A. */
+  dp_flow_rate?: number | null
 }
 
 type TableViewMode = 'all' | 'by_vessel'
@@ -261,6 +266,42 @@ function excludeUnplannedShippingRows(rows: ShippingPerformanceRow[]): ShippingP
  * When false: UI is hidden (not removed) and the filter pipeline is bypassed.
  */
 const SHIPPING_PERF_GLOBAL_FILTERS_ENABLED = false
+
+/**
+ * Port flow rate = shipped MT / berth→complete duration (days, actual dates).
+ * `deltaBerthedMinusCompleted` is the row's ATA "ETB - ETC" delta (berthed − completed),
+ * so the duration is its negation. Returns null when duration is missing/≤0 or qty missing.
+ */
+function computePortFlowRate(
+  numeratorKg: number | null | undefined,
+  deltaBerthedMinusCompleted: number | null | undefined,
+): number | null {
+  const days =
+    typeof deltaBerthedMinusCompleted === 'number' && Number.isFinite(deltaBerthedMinusCompleted)
+      ? -deltaBerthedMinusCompleted
+      : null
+  if (days === null || days <= 0) return null
+  if (typeof numeratorKg !== 'number' || !Number.isFinite(numeratorKg)) return null
+  return numeratorKg / 1000 / days
+}
+
+/** LP/DP flow rate for one shipment row. FOB uses Delivered Qty; everything else uses Received Qty. */
+function computeRowFlowRates(row: ShippingPerformanceRow): {
+  lp_flow_rate: number | null
+  dp_flow_rate: number | null
+} {
+  const isFob = String(row.incoterm ?? '').trim().toUpperCase() === 'FOB'
+  const numeratorKg = isFob ? row.delivered_qty : row.received_qty
+  return {
+    lp_flow_rate: computePortFlowRate(numeratorKg, row.ata_loading_delta_etb_etc_days),
+    dp_flow_rate: computePortFlowRate(numeratorKg, row.ata_discharge_delta_etb_etc_days),
+  }
+}
+
+/** Materialize lp_flow_rate/dp_flow_rate on each row so render + sort + averaging read a field. */
+function materializeFlowRates(rows: ShippingPerformanceRow[]): ShippingPerformanceRow[] {
+  return rows.map((row) => ({ ...row, ...computeRowFlowRates(row) }))
+}
 
 function avgMetric(rows: ShippingPerformanceRow[], key: TableColumnKey): number | null {
   const vals = rows
@@ -393,6 +434,9 @@ function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceR
       ata_discharge_delta_eta_etb_days: deltas.ata_discharge_delta_eta_etb_days,
       ata_discharge_delta_etb_etc_days: deltas.ata_discharge_delta_etb_etc_days,
       ata_total_delta_days: deltas.ata_total_delta_days,
+      // By Vessel = average of the per-shipment flow rates (same as the delta columns).
+      lp_flow_rate: avgMetric(vesselRows, 'lp_flow_rate'),
+      dp_flow_rate: avgMetric(vesselRows, 'dp_flow_rate'),
       cargo_readiness_date: null,
       loading_eta_arrival: null,
       loading_eta_berthed: null,
@@ -854,6 +898,26 @@ const COLUMN_DEFS: ColumnDef[] = [
     defaultVisible: false,
     tooltip: SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS.total_delta_days,
   },
+  {
+    key: 'lp_flow_rate',
+    label: 'LP Flow Rate',
+    type: 'number',
+    defaultVisible: true,
+    byVesselDefaultVisible: true,
+    tooltip:
+      'Loading-port flow rate (MT/day) = shipped MT ÷ loading berth→complete days (actual). ' +
+      'FOB uses Delivered Qty; CIF/CFR use Received Qty. "-" when the duration is missing or ≤ 0.',
+  },
+  {
+    key: 'dp_flow_rate',
+    label: 'DP Flow Rate',
+    type: 'number',
+    defaultVisible: true,
+    byVesselDefaultVisible: true,
+    tooltip:
+      'Discharge-port flow rate (MT/day) = shipped MT ÷ discharge berth→complete days (actual). ' +
+      'FOB uses Delivered Qty; CIF/CFR use Received Qty. "-" when the duration is missing or ≤ 0.',
+  },
 ]
 
 function applyAllShipmentsColumnDefaults(): {
@@ -1233,8 +1297,13 @@ function ShippingPerformancePageContent() {
     void fetchShippingPerformanceDashboard()
   }, [authReady, canViewPage, fetchShippingPerformanceDashboard])
 
-  // Step A: exclude UNPLANNED at base — single source of truth for Sections 1–3
-  const baseFilteredRows = useMemo(() => excludeUnplannedShippingRows(rows), [rows])
+  // Step A: exclude UNPLANNED at base — single source of truth for Sections 1–3.
+  // Materialize LP/DP flow rate here so every downstream consumer (table render, sort,
+  // By-Vessel averaging) reads a real row field.
+  const baseFilteredRows = useMemo(
+    () => materializeFlowRates(excludeUnplannedShippingRows(rows)),
+    [rows],
+  )
 
   // Step A2: Source / Product pill scope (client-side only; no refetch / no cache-key change)
   const scopeFilteredRows = useMemo(
@@ -1242,46 +1311,58 @@ function ShippingPerformancePageContent() {
     [baseFilteredRows, sourceFilter, productTab],
   )
 
-  const availableIncoterms = useMemo(
-    () =>
-      SHIPPING_PERF_GLOBAL_FILTERS_ENABLED
-        ? distinctFieldValues(scopeFilteredRows, 'incoterm')
-        : [],
+  // Options for the 3 toolbar filters (Group Plant/Product/Incoterm) — always populated from the
+  // current pill scope, normalized the same way rowMatchesToolbarMultiFilters matches so a
+  // selection always matches its rows.
+  const distinctScopeOptions = useCallback(
+    (field: 'incoterm' | 'product' | 'plant_site'): string[] =>
+      [...new Set(scopeFilteredRows.map((r) => normalizeScopeGroupKey(r[field])))].sort((a, b) =>
+        a.localeCompare(b),
+      ),
     [scopeFilteredRows],
   )
+  const availableIncoterms = useMemo(() => distinctScopeOptions('incoterm'), [distinctScopeOptions])
   const availableGroupPlants = useMemo(
-    () =>
-      SHIPPING_PERF_GLOBAL_FILTERS_ENABLED
-        ? distinctFieldValues(scopeFilteredRows, 'plant_site')
-        : [],
-    [scopeFilteredRows],
+    () => distinctScopeOptions('plant_site'),
+    [distinctScopeOptions],
   )
-  const availableProducts = useMemo(
-    () =>
-      SHIPPING_PERF_GLOBAL_FILTERS_ENABLED
-        ? distinctFieldValues(scopeFilteredRows, 'product')
-        : [],
-    [scopeFilteredRows],
-  )
+  const availableProducts = useMemo(() => distinctScopeOptions('product'), [distinctScopeOptions])
   const availableVessels = useMemo(
     () =>
       SHIPPING_PERF_GLOBAL_FILTERS_ENABLED ? distinctVesselNames(scopeFilteredRows) : [],
     [scopeFilteredRows],
   )
 
-  // Step B: apply global filters (incoterm, group plant, vessel, status, contract date)
+  // Step B: apply global filters. The 3 toolbar filters above the cards (Group Plant, Product,
+  // Incoterm) are always active and feed BOTH the card counts and the table. The rest of the
+  // legacy global-filter set stays gated behind SHIPPING_PERF_GLOBAL_FILTERS_ENABLED.
   const globallyFilteredRows = useMemo(() => {
-    if (!SHIPPING_PERF_GLOBAL_FILTERS_ENABLED) return scopeFilteredRows
-    return applyGlobalFiltersToRows(scopeFilteredRows, {
-      selectedIncoterms,
-      selectedProducts,
-      selectedGroupPlants,
-      selectedVessels,
-      statusFilter,
-      dateFrom,
-      dateTo,
-      searchTerm,
-    })
+    if (SHIPPING_PERF_GLOBAL_FILTERS_ENABLED) {
+      return applyGlobalFiltersToRows(scopeFilteredRows, {
+        selectedIncoterms,
+        selectedProducts,
+        selectedGroupPlants,
+        selectedVessels,
+        statusFilter,
+        dateFrom,
+        dateTo,
+        searchTerm,
+      })
+    }
+    if (
+      selectedIncoterms.length === 0 &&
+      selectedProducts.length === 0 &&
+      selectedGroupPlants.length === 0
+    ) {
+      return scopeFilteredRows
+    }
+    return scopeFilteredRows.filter((row) =>
+      rowMatchesToolbarMultiFilters(row, {
+        selectedIncoterms,
+        selectedProducts,
+        selectedGroupPlants,
+      }),
+    )
   }, [
     scopeFilteredRows,
     selectedIncoterms,
@@ -1539,6 +1620,8 @@ function ShippingPerformancePageContent() {
     setPerfCardFilter('all')
     setSourceFilter('All')
     setProductTab('All')
+    setSelectedGroupPlants([])
+    setSelectedIncoterms([])
     setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
     setCurrentPage(1)
   }, [])
@@ -1928,6 +2011,28 @@ function ShippingPerformancePageContent() {
                       {tab}
                     </button>
                   ))}
+                </div>
+              </div>
+              <div className="flex items-end gap-3">
+                <div className="w-48">
+                  <SearchableMultiSelect
+                    label="Group Plant"
+                    options={availableGroupPlants}
+                    selected={selectedGroupPlants}
+                    onChange={setSelectedGroupPlants}
+                    placeholder="All group plants"
+                    emptyMessage="No group plants"
+                  />
+                </div>
+                <div className="w-48">
+                  <SearchableMultiSelect
+                    label="Incoterm"
+                    options={availableIncoterms}
+                    selected={selectedIncoterms}
+                    onChange={setSelectedIncoterms}
+                    placeholder="All incoterms"
+                    emptyMessage="No incoterms"
+                  />
                 </div>
               </div>
             </div>
@@ -2649,6 +2754,18 @@ function ShippingPerformancePageContent() {
                             ) {
                               const text = asDisplayValue(rawValue)
                               cellContent = <span className="text-sm">{text}</span>
+                            } else if (colKey === 'lp_flow_rate' || colKey === 'dp_flow_rate') {
+                              cellContent =
+                                rawValue === null || rawValue === undefined ? (
+                                  <span className="text-sm text-gray-400">-</span>
+                                ) : (
+                                  <span className="text-sm font-normal tabular-nums">
+                                    {Number(rawValue).toLocaleString('en-US', {
+                                      minimumFractionDigits: 1,
+                                      maximumFractionDigits: 1,
+                                    })}
+                                  </span>
+                                )
                             } else if (col.type === 'number') {
                               cellContent = (
                                 <NumberCell
