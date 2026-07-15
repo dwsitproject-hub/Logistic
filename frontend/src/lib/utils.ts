@@ -41,6 +41,18 @@ export function formatQtyMtFromKg(kg: number | string | null | undefined, opts?:
   return `${(n / 1000).toLocaleString('en-US', { maximumFractionDigits: maxFractionDigits })} MT`
 }
 
+/** Parse absolute MT already formatted via toLocaleString (grouping commas stripped). */
+function outstandingDisplayedAbsMt(
+  kg: number,
+  maxFractionDigits: number,
+): number {
+  const absFmt = Math.abs(kg / 1000).toLocaleString('en-US', {
+    maximumFractionDigits: maxFractionDigits,
+  })
+  const parsed = Number(absFmt.replace(/,/g, ''))
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
 /** Outstanding qty in kg; over-delivery (negative kg) shows +MT; remaining (positive kg) shows MT without minus. */
 export function formatOutstandingQtyMtFromKg(
   kg: number | string | null | undefined,
@@ -50,19 +62,29 @@ export function formatOutstandingQtyMtFromKg(
   const n = typeof kg === 'string' ? Number(kg) : kg
   if (!Number.isFinite(n)) return '-'
   const maxFractionDigits = opts?.maxFractionDigits ?? 0
-  const mt = n / 1000
-  // Whole-number MT (no decimals) across all pages (override via maxFractionDigits).
-  const absFmt = Math.abs(mt).toLocaleString('en-US', { maximumFractionDigits: maxFractionDigits })
+  const displayedAbs = outstandingDisplayedAbsMt(n, maxFractionDigits)
+  const absFmt = displayedAbs.toLocaleString('en-US', {
+    maximumFractionDigits: maxFractionDigits,
+  })
+  // After whole-MT rounding, residual kg (e.g. -60 kg → 0.06 MT) must show as plain 0 MT.
+  if (displayedAbs === 0) {
+    return `${(0).toLocaleString('en-US', { maximumFractionDigits: maxFractionDigits })} MT`
+  }
   if (n < 0) return `+${absFmt} MT`
-  if (n > 0) return `${absFmt} MT`
-  return `${(0).toLocaleString('en-US', { maximumFractionDigits: maxFractionDigits })} MT`
+  return `${absFmt} MT`
 }
 
 /** View-table text color for outstanding qty (kg): green over-delivery, black remaining, gray zero. */
-export function outstandingQtyMtColorClass(kg: number | string | null | undefined): string {
+export function outstandingQtyMtColorClass(
+  kg: number | string | null | undefined,
+  opts?: { maxFractionDigits?: number },
+): string {
   if (kg === null || kg === undefined || kg === '') return 'text-gray-400'
   const n = typeof kg === 'string' ? Number(kg) : kg
   if (!Number.isFinite(n)) return 'text-gray-400'
+  const maxFractionDigits = opts?.maxFractionDigits ?? 0
+  // Color follows the rounded display value, not raw kg residual.
+  if (outstandingDisplayedAbsMt(n, maxFractionDigits) === 0) return 'text-gray-500'
   if (n < 0) return 'text-green-600'
   if (n > 0) return 'text-gray-900'
   return 'text-gray-500'

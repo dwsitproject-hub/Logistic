@@ -11,7 +11,7 @@ import { AuthRequest } from '../middleware/auth';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
 import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
-import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL } from '../controllers/contractSqlFragments';
+import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from '../controllers/contractSqlFragments';
 import { appendContractPerfProductSubstringSql } from '../utils/contractPerfProductFilterSql';
 import {
   sqlContractImportStatusIsClosedExpr,
@@ -342,6 +342,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
       ) pna ON TRUE
       WHERE 1=1
       ${B2B_CHILD_EXCLUSION_SQL}
+      ${PO_PLACEHOLDER_EXCLUSION_SQL}
     `;
 
   if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {

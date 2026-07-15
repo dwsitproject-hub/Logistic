@@ -23,7 +23,7 @@ import {
   sqlIncotermQuantityDeliveryCase,
   sqlTransportModeFromContractAndJson,
 } from '../utils/sapIncotermMetrics';
-import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL } from './contractSqlFragments';
+import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { isTruckingPageIncoterm, contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 import {
@@ -47,12 +47,16 @@ import {
   SHIPMENT_SAP_STO_DETAIL_SQL,
   SPD_EFFECTIVE_STO_SQL,
   TRUCKING_SAP_STO_DETAIL_SQL,
+  sqlSapQtyDeliveredForStoKeyExpr,
   sqlSapQtyDeliveredKgFromSpd,
+  sqlSapQtyReceiveForStoKeyExpr,
+  sqlSapStoQtyForContractPoExpr,
 } from '../utils/contractLogisticsStoDetailSql';
 import {
   resolveContractLogisticsOperationId,
   resolveContractLogisticsStoNumber,
   resolveContractLogisticsStoStatus,
+  summarizeContractLogisticsStoQty,
 } from '../utils/contractLogisticsStoDisplay';
 import { sqlContractImportStatusExpr, sqlContractImportStatusIsClosedExpr, sqlContractImportStatusIsOpenExpr, sqlContractListImportStatusAggExpr, normalizeContractDeliveryStatusForDisplay } from '../utils/contractDeliveryStatus';
 import {
@@ -64,7 +68,7 @@ import {
 } from '../utils/truckingSapDates';
 import { TRUCKING_REALIZATIONS_JOIN } from '../utils/truckingRealizationSql';
 
-export { B2B_CHILD_EXCLUSION_SQL };
+export { B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL };
 
 function expandLogisticsLookupKeys(...values: (string | null | undefined)[]): string[] {
   return [
@@ -194,6 +198,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         SELECT * FROM base
         WHERE 1=1
         ${isSingleContractLookup ? '' : B2B_CHILD_EXCLUSION_SQL}
+        ${isSingleContractLookup ? '' : PO_PLACEHOLDER_EXCLUSION_SQL}
     `;
 
     const statusNorm = typeof status === 'string' ? status.trim() : '';
@@ -1003,6 +1008,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       ) pna ON TRUE
       WHERE 1=1
       ${B2B_CHILD_EXCLUSION_SQL}
+      ${PO_PLACEHOLDER_EXCLUSION_SQL}
     `;
 
     const statusNorm = scope === 'filtered' && typeof status === 'string' ? status.trim() : '';
@@ -1872,8 +1878,8 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         sb.sto_number,
         sb.operation_id,
         sb.status,
-        -- Prefer STO quantity from SAP (by STO), else from latest contract row quantity_ordered via contract UUID.
-        COALESCE((
+        -- Prefer STO quantity from SAP (by STO), else SAP STO Qty by PO for Operation ID rows.
+        COALESCE(NULLIF((
           SELECT SUM(NULLIF(regexp_replace(COALESCE(
             NULLIF(TRIM(spd.data->'contract'->>'sto_quantity'), ''),
             NULLIF(TRIM(spd.data->'shipment'->>'sto_quantity'), ''),
@@ -1883,7 +1889,10 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           ), '[^0-9\\.-]', '', 'g'), '')::numeric)
           FROM sap_processed_data spd
           WHERE NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number')), '') = TRIM(sb.sto_key::text)
-        ), 0) AS sto_quantity,
+        ), 0), ${sqlSapStoQtyForContractPoExpr({
+          contractAlias: 'c_po',
+          stoKeyExpr: 'sb.sto_key',
+        })}, 0) AS sto_quantity,
         -- Quantities: if shipment row is synthetic (OP-SEA-*), pull from SAP by contract_number; otherwise from SAP by STO.
         COALESCE((
           SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', '(SELECT quantity_ordered FROM contracts WHERE id = $1)')})
@@ -1910,15 +1919,18 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         sb.ata_discharge_complete,
         sb.eta_discharge_complete
       FROM shipment_base sb
+      CROSS JOIN contracts c_po
+      WHERE c_po.id = $1
       ORDER BY sb.sto_key
     `;
     const shipmentRows = includeShipments
       ? await query(shipmentStosQuery, [id])
       : { rows: [] };
 
-    // Trucking STOs: one row per STO (contract_stos + SAP FRC/LCO), shared contract qty + global SAP movement
+    // Trucking STOs: SAP/contract STOs first; if none, fall back to Operation ID rows.
+    // STO Qty always from SAP STO Quantity (by STO or by PO) — never Contract/PO Qty.
     const truckingStosQuery = `
-      WITH sto_keys AS (
+      WITH real_sto_keys AS (
         SELECT DISTINCT TRIM(sto.sto_number) AS sto_key
         FROM (
           SELECT TRIM(cs.sto_number::text) AS sto_number
@@ -1943,15 +1955,45 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
               spd.data->'shipment'->>'sto_no',
               spd.data->'contract'->>'sto_no'
             )) != ''
+          UNION
+          -- Also match SAP by PO when contract_number on SAP row is empty/orphan
+          SELECT TRIM(COALESCE(
+            spd.sto_number::text,
+            spd.data->'raw'->>'STO No.',
+            spd.data->'raw'->>'STO Number',
+            spd.data->'shipment'->>'sto_no',
+            spd.data->'contract'->>'sto_no'
+          )) AS sto_number
+          FROM sap_processed_data spd
+          INNER JOIN contracts c3 ON c3.id = $1
+          WHERE NULLIF(TRIM(c3.po_number::text), '') IS NOT NULL
+            AND TRIM(COALESCE(
+              spd.po_number::text,
+              spd.data->'raw'->>'PO No',
+              spd.data->'raw'->>'PO No.',
+              ''
+            )) = TRIM(c3.po_number::text)
+            AND TRIM(COALESCE(
+              spd.sto_number::text,
+              spd.data->'raw'->>'STO No.',
+              spd.data->'raw'->>'STO Number',
+              spd.data->'shipment'->>'sto_no',
+              spd.data->'contract'->>'sto_no'
+            )) != ''
         ) sto
         WHERE sto.sto_number IS NOT NULL AND TRIM(sto.sto_number) != ''
       ),
-      trucking_pick AS (
-        SELECT t.*
+      op_fallback_keys AS (
+        SELECT DISTINCT TRIM(t.operation_id::text) AS sto_key
         FROM trucking_operations t
         WHERE t.contract_id = $1
-        ORDER BY t.created_at DESC NULLS LAST
-        LIMIT 1
+          AND NULLIF(TRIM(t.operation_id::text), '') IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM real_sto_keys)
+      ),
+      sto_keys AS (
+        SELECT sto_key FROM real_sto_keys
+        UNION
+        SELECT sto_key FROM op_fallback_keys
       )
       SELECT
         sk.sto_key AS sto_number,
@@ -1959,43 +2001,30 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         tp.operation_id,
         tp.status,
         COALESCE(
-          (
+          NULLIF((
             SELECT NULLIF(cs.sto_quantity, 0)::numeric
             FROM contract_stos cs
             WHERE cs.contract_id = c.id
               AND TRIM(cs.sto_number::text) = sk.sto_key
             LIMIT 1
-          ),
-          c.quantity_ordered
+          ), 0),
+          NULLIF(${sqlSapStoQtyForContractPoExpr({
+            contractAlias: 'c',
+            stoKeyExpr: 'sk.sto_key',
+          })}, 0),
+          0
         ) AS sto_quantity,
         COALESCE(tp.quantity_delivered, 0) AS quantity_receive_db,
         COALESCE(tp.quantity_delivered, 0) AS quantity_delivered_db,
-        COALESCE((
-          SELECT SUM(NULLIF(regexp_replace(COALESCE(
-            NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
-            NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
-            ''
-          ), '[^0-9\\.-]', '', 'g'), '')::numeric)
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-            AND TRIM(COALESCE(
-              spd.sto_number::text,
-              spd.data->'raw'->>'STO No.',
-              spd.data->'raw'->>'STO Number',
-              spd.data->'shipment'->>'sto_no'
-            )) = sk.sto_key
-        ), 0) AS quantity_receive_sap,
-        COALESCE((
-          SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', 'c.quantity_ordered')})
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-            AND TRIM(COALESCE(
-              spd.sto_number::text,
-              spd.data->'raw'->>'STO No.',
-              spd.data->'raw'->>'STO Number',
-              spd.data->'shipment'->>'sto_no'
-            )) = sk.sto_key
-        ), 0) AS quantity_delivered_sap,
+        ${sqlSapQtyReceiveForStoKeyExpr({
+          contractAlias: 'c',
+          stoKeyExpr: 'sk.sto_key',
+        })} AS quantity_receive_sap,
+        ${sqlSapQtyDeliveredForStoKeyExpr({
+          contractAlias: 'c',
+          stoKeyExpr: 'sk.sto_key',
+          contractQtyExpr: 'c.quantity_ordered',
+        })} AS quantity_delivered_sap,
         COALESCE((
           SELECT SUM(NULLIF(regexp_replace(COALESCE(
             NULLIF(TRIM(spd.data->'contract'->>'sto_quantity'), ''),
@@ -2023,7 +2052,19 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         ) AS trucking_start_date
       FROM sto_keys sk
       CROSS JOIN contracts c
-      LEFT JOIN trucking_pick tp ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT t.*
+        FROM trucking_operations t
+        WHERE t.contract_id = $1
+          AND (
+            (sk.sto_key ~ '^(OP-|MNL-|MSEA-)' AND TRIM(t.operation_id::text) = sk.sto_key)
+            OR (sk.sto_key !~ '^(OP-|MNL-|MSEA-)')
+          )
+        ORDER BY
+          CASE WHEN TRIM(COALESCE(t.operation_id::text, '')) = sk.sto_key THEN 0 ELSE 1 END,
+          t.created_at DESC NULLS LAST
+        LIMIT 1
+      ) tp ON TRUE
       WHERE c.id = $1
       ORDER BY sk.sto_key
     `;
@@ -2083,8 +2124,13 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           },
         }),
         sto_quantity: toSapDisplayNumber(r.sto_quantity),
-        quantity_receive: toSapDisplayNumber(r.quantity_receive_sap ?? r.quantity_receive_db),
-        quantity_delivered: toSapDisplayNumber(r.quantity_delivered_sap ?? r.quantity_delivered_db),
+        // Prefer SAP; treat 0 as missing so Operation ID rows can fall back to trucking DB qty.
+        quantity_receive: toSapDisplayNumber(
+          Number(r.quantity_receive_sap) > 0 ? r.quantity_receive_sap : r.quantity_receive_db,
+        ),
+        quantity_delivered: toSapDisplayNumber(
+          Number(r.quantity_delivered_sap) > 0 ? r.quantity_delivered_sap : r.quantity_delivered_db,
+        ),
         trucking_owner: r.trucking_owner || null,
         eta_trucking_completion_date: r.eta_trucking_completion_date || null,
         trucking_completion_date: r.trucking_completion_date || null,
@@ -2164,7 +2210,8 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       });
 
     const stos = [...shipmentStos, ...truckingStos, ...sapOnlyStos];
-    return res.json({ success: true, data: { stos } });
+    const summary = summarizeContractLogisticsStoQty(stos);
+    return res.json({ success: true, data: { stos, summary } });
   } catch (error) {
     logger.error('Get contract STO information error:', error);
     return res.status(500).json({
@@ -2373,26 +2420,66 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
         t.loading_location,
         t.unloading_location,
         c.quantity_ordered AS contract_qty,
-        COALESCE((
-          SELECT SUM(NULLIF(regexp_replace(COALESCE(
-            NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered'), ''),
-            NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery'), ''),
-            ''
-          ), '[^0-9\\.-]', '', 'g'), '')::numeric)
+        COALESCE(NULLIF((
+          SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', 'c.quantity_ordered')})
           FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-            AND ${SPD_EFFECTIVE_STO_SQL} = ANY($2::text[])
-        ), t.quantity_delivered) AS quantity_delivered,
-        COALESCE((
+          WHERE (
+            spd.contract_number = c.contract_id
+            OR (
+              NULLIF(TRIM(c.po_number::text), '') IS NOT NULL
+              AND TRIM(COALESCE(spd.po_number::text, spd.data->'raw'->>'PO No', spd.data->'raw'->>'PO No.', '')) = TRIM(c.po_number::text)
+            )
+          )
+            AND (
+              ${SPD_EFFECTIVE_STO_SQL} = ANY($2::text[])
+              OR (
+                EXISTS (
+                  SELECT 1 FROM unnest($2::text[]) AS k(key)
+                  WHERE TRIM(k.key) ~ '^(OP-|MNL-|MSEA-)'
+                )
+                AND (
+                  NULLIF(TRIM(COALESCE(
+                    spd.data->'raw'->>'Operation ID',
+                    spd.data->'trucking'->0->'data'->>'operation_id',
+                    ''
+                  )), '') = ANY($2::text[])
+                  OR ${SPD_EFFECTIVE_STO_SQL} IS NULL
+                )
+              )
+            )
+        ), 0), t.quantity_delivered) AS quantity_delivered,
+        COALESCE(NULLIF((
           SELECT SUM(NULLIF(regexp_replace(COALESCE(
             NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
             NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
             ''
           ), '[^0-9\\.-]', '', 'g'), '')::numeric)
           FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-            AND ${SPD_EFFECTIVE_STO_SQL} = ANY($2::text[])
-        ), t.quantity_delivered) AS quantity_receive,
+          WHERE (
+            spd.contract_number = c.contract_id
+            OR (
+              NULLIF(TRIM(c.po_number::text), '') IS NOT NULL
+              AND TRIM(COALESCE(spd.po_number::text, spd.data->'raw'->>'PO No', spd.data->'raw'->>'PO No.', '')) = TRIM(c.po_number::text)
+            )
+          )
+            AND (
+              ${SPD_EFFECTIVE_STO_SQL} = ANY($2::text[])
+              OR (
+                EXISTS (
+                  SELECT 1 FROM unnest($2::text[]) AS k(key)
+                  WHERE TRIM(k.key) ~ '^(OP-|MNL-|MSEA-)'
+                )
+                AND (
+                  NULLIF(TRIM(COALESCE(
+                    spd.data->'raw'->>'Operation ID',
+                    spd.data->'trucking'->0->'data'->>'operation_id',
+                    ''
+                  )), '') = ANY($2::text[])
+                  OR ${SPD_EFFECTIVE_STO_SQL} IS NULL
+                )
+              )
+            )
+        ), 0), t.quantity_delivered) AS quantity_receive,
         ${sqlContractGlobalOutstandingExpr({
           contractQtyExpr: 'c.quantity_ordered',
           incotermExpr: contractEffectiveIncotermExpr('c'),

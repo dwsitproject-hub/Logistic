@@ -3,6 +3,7 @@ import {
   resolveContractLogisticsOperationId,
   resolveContractLogisticsStoNumber,
   resolveContractLogisticsStoStatus,
+  summarizeContractLogisticsStoQty,
 } from './contractLogisticsStoDisplay';
 
 describe('contractLogisticsStoDisplay', () => {
@@ -28,6 +29,25 @@ describe('contractLogisticsStoDisplay', () => {
       resolveContractLogisticsOperationId(null, 'OP-SEA-030620260001'),
     ).toBe('OP-SEA-030620260001');
     expect(resolveContractLogisticsOperationId(null, '1586004692')).toBeNull();
+  });
+
+  it('summarizes real STO qtys without using contract/PO qty', () => {
+    const summary = summarizeContractLogisticsStoQty([
+      { sto_number: '1006018144', operation_id: 'OP-A', sto_quantity: 500_000 },
+      { sto_number: '1006018145', operation_id: 'OP-B', sto_quantity: 250_000 },
+      { sto_number: '1006018144', operation_id: 'OP-C', sto_quantity: 400_000 },
+    ]);
+    expect(summary.sto_count).toBe(2);
+    expect(summary.total_sto_quantity).toBe(750_000);
+  });
+
+  it('falls back to Operation ID count and deduped SAP STO qty by PO', () => {
+    const summary = summarizeContractLogisticsStoQty([
+      { sto_number: '-', operation_id: 'OP-LAND-1', sto_quantity: 150_000 },
+      { sto_number: '-', operation_id: 'OP-LAND-2', sto_quantity: 150_000 },
+    ]);
+    expect(summary.sto_count).toBe(2);
+    expect(summary.total_sto_quantity).toBe(150_000);
   });
 
   it('shows COMPLETED when contract SAP Close without ATA milestones', () => {

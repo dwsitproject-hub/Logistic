@@ -212,8 +212,9 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           SUM((${sqlShipmentListOutstandingKgExpr({
             contractQtyExpr: 'po.contract_qty',
             incotermExpr: 'po.incoterm',
-            receiveExpr: 'po.receive_kg',
-            deliveryExpr: 'po.delivery_kg',
+            // Missing SAP movement means no delivery/receive yet, not unknown OS.
+            receiveExpr: 'COALESCE(po.receive_kg, 0)',
+            deliveryExpr: 'COALESCE(po.delivery_kg, 0)',
             clampAtZero: true,
           })})::numeric) AS outstanding_qty_actual,
           SUM((

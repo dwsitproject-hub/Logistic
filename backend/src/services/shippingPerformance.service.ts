@@ -137,6 +137,8 @@ function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<stri
       (joinDistinctValues(rows, 'contract_number') || pick.contract_number),
     contract_ext_no: joinDistinctValues(rows, 'contract_ext_no') || pick.contract_ext_no,
     source_type: joinDistinctValues(rows, 'source_type') || pick.source_type,
+    // Multi-PO / multi-contract ops can have several suppliers — keep one row, comma-joined.
+    supplier: joinDistinctValues(rows, 'supplier') || pick.supplier,
     contract_qty: metrics.contractQty,
     sto_qty: metrics.stoQty,
     received_qty: metrics.receivedQty,

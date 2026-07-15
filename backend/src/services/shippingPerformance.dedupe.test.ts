@@ -98,4 +98,44 @@ describe('aggregateShippingPerformanceRowsBySto', () => {
     expect(rows[0]?.contract_qty).toBe(1_600_000);
     expect(rows[0]?.po_number).toBe('1641000216, 1641000217');
   });
+
+  it('joins distinct suppliers with commas when collapsing multi-PO operation rows', () => {
+    const rows = aggregateShippingPerformanceRowsBySto([
+      {
+        id: 'a',
+        operation_id: 'OP-1004028834-01552127',
+        shipment_id: 'MNL-02121754-1004028985',
+        sto_key: 'OP-1004028834-01552127',
+        po_number: '1001028985',
+        contract_number: '1004028985',
+        supplier: 'SUPPLIER ALPHA',
+        contract_qty: 700_000,
+        outstanding_qty_actual: 700_000,
+      },
+      {
+        id: 'b',
+        operation_id: 'OP-1004028834-01552127',
+        shipment_id: 'MNL-02121754-1004028986',
+        sto_key: 'OP-1004028834-01552127',
+        po_number: '1001028986',
+        contract_number: '1004028986',
+        supplier: 'SUPPLIER BETA',
+        contract_qty: 200_000,
+        outstanding_qty_actual: 200_000,
+      },
+      {
+        id: 'c',
+        operation_id: 'OP-1004028834-01552127',
+        shipment_id: 'MNL-02121754-1004029122',
+        sto_key: 'OP-1004028834-01552127',
+        po_number: '1001029122',
+        contract_number: '1004029122',
+        supplier: 'SUPPLIER ALPHA',
+        contract_qty: 300_000,
+        outstanding_qty_actual: 300_000,
+      },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.supplier).toBe('SUPPLIER ALPHA, SUPPLIER BETA');
+  });
 });

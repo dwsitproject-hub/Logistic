@@ -3004,7 +3004,9 @@ function ContractsPageContent() {
           <span
             className={`text-sm truncate ${outstandingQtyMtColorClass(c.outstanding_quantity)}`}
           >
-            {formatContractOutstandingQtyMtDisplay(c.outstanding_quantity)}
+            {isContractPerformance
+              ? formatSapOutstandingQtyMtDisplay(c.outstanding_quantity)
+              : formatContractOutstandingQtyMtDisplay(c.outstanding_quantity)}
           </span>
         )
       }

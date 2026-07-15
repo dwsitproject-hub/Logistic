@@ -387,6 +387,10 @@ export function ContractDetailModal({
   const [selectedContractDocs, setSelectedContractDocs] = useState<DocumentItem[]>([])
   const [stoInfoLoading, setStoInfoLoading] = useState(false)
   const [stoInfo, setStoInfo] = useState<StoInfoRow[]>([])
+  const [stoQtySummary, setStoQtySummary] = useState<{
+    sto_count: number
+    total_sto_quantity: number
+  } | null>(null)
   const [stoDetailRow, setStoDetailRow] = useState<StoInfoRow | null>(null)
   const [stoDetailData, setStoDetailData] = useState<Record<string, unknown> | null>(null)
   const [stoDetailLoading, setStoDetailLoading] = useState(false)
@@ -460,19 +464,33 @@ export function ContractDetailModal({
   useEffect(() => {
     if (!contract?.id) {
       setStoInfo([])
+      setStoQtySummary(null)
       return
     }
     let cancelled = false
     setStoInfoLoading(true)
     setStoInfo([])
+    setStoQtySummary(null)
     api
       .get(`/contracts/${contract.id}/sto-information`)
       .then((res) => {
         if (cancelled || !res.data?.data?.stos) return
         setStoInfo(res.data.data.stos)
+        const summary = res.data.data.summary as
+          | { sto_count?: number; total_sto_quantity?: number }
+          | undefined
+        if (summary && typeof summary.sto_count === 'number') {
+          setStoQtySummary({
+            sto_count: summary.sto_count,
+            total_sto_quantity: Number(summary.total_sto_quantity) || 0,
+          })
+        }
       })
       .catch(() => {
-        if (!cancelled) setStoInfo([])
+        if (!cancelled) {
+          setStoInfo([])
+          setStoQtySummary(null)
+        }
       })
       .finally(() => {
         if (!cancelled) setStoInfoLoading(false)
@@ -700,6 +718,11 @@ export function ContractDetailModal({
 
   if (!contract) return null
 
+  // Logistics endpoint summary uses SAP STO Qty by STO/PO (Operation ID fallback for list).
+  const displayStoCount = stoQtySummary?.sto_count ?? contract.sto_count ?? 0
+  const displayTotalStoQty =
+    stoQtySummary != null ? stoQtySummary.total_sto_quantity : contract.total_sto_quantity
+
   return (
     <>
       <div
@@ -742,6 +765,12 @@ export function ContractDetailModal({
                     </div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
+                    <div className="text-gray-500">GR STO Status</div>
+                    <div className="mt-1">
+                      <GrStatusValue status={contract.gr_sto_status} />
+                    </div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">Unusual Flag</div>
                     <div className="mt-1">
                       {(() => {
@@ -755,12 +784,6 @@ export function ContractDetailModal({
                           <Badge className="bg-gray-100 text-gray-700 hover:bg-gray-100">Normal</Badge>
                         )
                       })()}
-                    </div>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded">
-                    <div className="text-gray-500">GR STO Status</div>
-                    <div className="mt-1">
-                      <GrStatusValue status={contract.gr_sto_status} />
                     </div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
@@ -1071,9 +1094,9 @@ export function ContractDetailModal({
                   </div>
                   <div className="p-3 bg-blue-50 rounded border-2 border-blue-200">
                     <div className="text-gray-500">
-                      Total STO Quantity ({contract.sto_count || 0} STO{contract.sto_count > 1 ? 's' : ''})
+                      Total STO Quantity ({displayStoCount} STO{displayStoCount !== 1 ? 's' : ''})
                     </div>
-                    <div className="font-medium mt-1 text-base">{formatQtyMtFromKg(contract.total_sto_quantity)}</div>
+                    <div className="font-medium mt-1 text-base">{formatQtyMtFromKg(displayTotalStoQty)}</div>
                   </div>
                   <div
                     className={cn(

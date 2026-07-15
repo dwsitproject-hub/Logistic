@@ -535,7 +535,24 @@ export class SapDataDistributionService {
   ): Promise<string> {
     const contractNumber = contractData.contract_no != null ? String(contractData.contract_no).trim() || null : null;
     const poNumber = contractData.po_no != null ? String(contractData.po_no).trim() || null : null;
-    const effectiveContractId = contractNumber || (poNumber ? `PO-${poNumber}` : null);
+
+    // Prefer an existing real contract for this PO when SAP row has no contract_number.
+    // Otherwise imports recreate PO-{po} placeholders that show Delivery/Receive = 0.
+    let effectiveContractId = contractNumber || (poNumber ? `PO-${poNumber}` : null);
+    if (!contractNumber && poNumber) {
+      const existingReal = await client.query(
+        `SELECT contract_id
+         FROM contracts
+         WHERE TRIM(po_number::text) = $1
+           AND contract_id !~ '^PO-'
+         ORDER BY created_at ASC NULLS LAST
+         LIMIT 1`,
+        [poNumber],
+      );
+      if (existingReal.rows.length > 0) {
+        effectiveContractId = String(existingReal.rows[0].contract_id);
+      }
+    }
 
     if (!effectiveContractId) {
       throw new Error('Contract number or PO number is required');
@@ -547,6 +564,9 @@ export class SapDataDistributionService {
     // When we have a proper contract_no, reconcile PO-prefixed placeholder rows for the same PO.
     if (contractNumber && poNumber) {
       await this.reconcilePoPlaceholder(client, contractNumber, poNumber);
+    } else if (!contractNumber && poNumber && effectiveContractId !== `PO-${poNumber}`) {
+      // Also fold leftover placeholders if we resolved to a real contract by PO.
+      await this.reconcilePoPlaceholder(client, effectiveContractId, poNumber);
     }
 
     const quantity = this.parseNumber(contractData.contract_quantity);

@@ -35,3 +35,20 @@ export const B2B_CHILD_EXCLUSION_SQL = `
       base.latest_spd_data->'raw'->>'CONTRACT REFF PO'
     )), '') IS NOT NULL
   )`;
+
+/**
+ * Hide PO-prefixed placeholder contracts when a real contract_id already exists for the same PO.
+ * Placeholders (PO-{po}) are created when SAP arrives without contract_number and otherwise
+ * show Delivery/Receive = 0 beside the valid contract row.
+ */
+export const PO_PLACEHOLDER_EXCLUSION_SQL = `
+  AND NOT (
+    base.contract_id ~ '^PO-'
+    AND EXISTS (
+      SELECT 1
+      FROM contracts c_real
+      WHERE NULLIF(TRIM(c_real.po_number::text), '') IS NOT NULL
+        AND TRIM(c_real.po_number::text) = TRIM(SUBSTRING(base.contract_id FROM 4))
+        AND c_real.contract_id !~ '^PO-'
+    )
+  )`;
