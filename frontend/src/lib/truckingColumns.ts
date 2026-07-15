@@ -33,8 +33,11 @@ export const TRUCKING_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
 /** Soft-hide on layout version bump (still available via Columns menu). */
 export const TRUCKING_SOFT_HIDE_COLUMN_IDS: readonly string[] = ['sto_quantity']
 
+/** Removed from the table and Columns menu while retaining the source field elsewhere. */
+export const TRUCKING_REMOVED_COLUMN_IDS: readonly string[] = ['quantity_sent']
+
 /** Bump when default column order/visibility changes — soft-migrates saved layouts. */
-export const TRUCKING_COLUMN_LAYOUT_VERSION = 'trucking-columns-v5'
+export const TRUCKING_COLUMN_LAYOUT_VERSION = 'trucking-columns-v6'
 
 export const TRUCKING_COLUMN_LAYOUT_VERSION_KEY = 'trucking.compact.columnLayoutVersion'
 
@@ -110,6 +113,7 @@ export function migrateTruckingColumnLayout(
   const migrated = migrateSavedColumnLayout({
     visibleColumnIds,
     columnOrderIds,
+    obsoleteColumnIds: TRUCKING_REMOVED_COLUMN_IDS,
   })
   const visibleRaw =
     migrated.visibleColumnIds.length > 0

@@ -41,6 +41,7 @@ import {
   TableInitialLoadPlaceholder,
   TableInitialLoadPlaceholderContent,
 } from '@/components/performance/TableInitialLoadPlaceholder'
+import { QtyLoadingDots } from '@/components/shared/QtyLoadingDots'
 import {
   COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
   CONTRACT_PERF_TABLE_CELL_PAD,
@@ -2964,7 +2965,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.sto_quantity || 0,
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
-          {qtyFieldsReady ? formatQtyMtFromKg(o.sto_quantity) : '—'}
+          {qtyFieldsReady ? formatQtyMtFromKg(o.sto_quantity) : <QtyLoadingDots />}
         </span>
       )
     },
@@ -2976,7 +2977,7 @@ function TruckingPageContent() {
       getSortValue: (o) => parseTruckingQtyKg(o.quantity_delivered) ?? 0,
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
-          {qtyFieldsReady ? formatTruckingQtyMt(o.quantity_delivered) : '—'}
+          {qtyFieldsReady ? formatTruckingQtyMt(o.quantity_delivered) : <QtyLoadingDots />}
         </span>
       )
     },
@@ -2990,7 +2991,7 @@ function TruckingPageContent() {
         <span className="text-sm break-words tabular-nums">
           {qtyFieldsReady
             ? formatTruckingQtyMt(o.quantity_receive ?? o.quantity_delivered)
-            : '—'}
+            : <QtyLoadingDots />}
         </span>
       )
     },
@@ -3008,7 +3009,7 @@ function TruckingPageContent() {
             incoterm={o.incoterm}
           />
         ) : (
-          <span className="text-sm text-gray-400 tabular-nums">—</span>
+          <QtyLoadingDots />
         )
     },
     {
@@ -3070,18 +3071,6 @@ function TruckingPageContent() {
       sortable: true,
       getSortValue: (o) => o.trucking_owner || '',
       render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.trucking_owner)}</span>
-    },
-    {
-      id: 'quantity_sent',
-      label: 'Qty Sent (Kg)',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (o) => o.quantity_sent || 0,
-      render: (o) => (
-        <span className="text-sm break-words">
-          {formatKg(o.quantity_sent)}
-        </span>
-      )
     },
     {
       id: 'gain_loss_percentage',
@@ -3506,6 +3495,9 @@ function TruckingPageContent() {
       </button>
     </div>
   )
+  const dailyPlanningUploadEligible =
+    isUnplannedPlanningTemplateMode(statusFilter) ||
+    isPlannedPlanningTemplateMode(statusFilter)
 
   return (
     <Layout>
@@ -3551,28 +3543,30 @@ function TruckingPageContent() {
                 </>
               )}
             </Button>
-            {(isUnplannedPlanningTemplateMode(statusFilter) ||
-              isPlannedPlanningTemplateMode(statusFilter)) ? (
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
-                onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
-                disabled={bulkCreateUploading || listFetching}
-              >
-                {bulkCreateUploading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4 mr-2" />
-                    Upload Daily Planning
-                  </>
-                )}
-              </Button>
-            ) : null}
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-red-600 text-red-700 hover:bg-red-50 disabled:border-red-200 disabled:bg-red-50/40 disabled:text-red-300 disabled:opacity-100 disabled:pointer-events-none"
+              onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+              disabled={!dailyPlanningUploadEligible || bulkCreateUploading || listFetching}
+              title={
+                dailyPlanningUploadEligible
+                  ? 'Upload Daily Planning'
+                  : 'Upload Daily Planning tersedia pada status Unplanned atau Planned'
+              }
+            >
+              {bulkCreateUploading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Upload Daily Planning
+                </>
+              )}
+            </Button>
             {TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED ? (
               <>
                 {!isUnplannedPlanningTemplateMode(statusFilter) ? (

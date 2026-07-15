@@ -122,7 +122,7 @@ const MERGED_SUMMARY_CACHE = new Map<
 >();
 const UNPLANNED_BACKLOG_CACHE = new Map<string, { count: number; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v33';
+const CACHE_VERSION = 'trucking-list-v34';
 const MAX_CACHE_ENTRIES = 80;
 
 // Re-runs recent page loads in the background (refresh-ahead + re-warm after edits)

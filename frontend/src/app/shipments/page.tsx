@@ -70,6 +70,7 @@ import {
   TableInitialLoadPlaceholder,
   TableInitialLoadPlaceholderContent,
 } from '@/components/performance/TableInitialLoadPlaceholder'
+import { QtyLoadingDots } from '@/components/shared/QtyLoadingDots'
 import {
   COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
   CONTRACT_PERF_TABLE_CELL_PAD,
@@ -849,6 +850,8 @@ function ShipmentsPageContent() {
   const [listFetching, setListFetching] = useState(false)
   /** Immediate table skeleton when status / ETA scope changes (not pagination). */
   const [tableScopeLoading, setTableScopeLoading] = useState(false)
+  /** SAP-derived qty columns show a loading indicator ("...") until hydrate merges real values. */
+  const [qtyFieldsReady, setQtyFieldsReady] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize] = useState(20)
   const [totalCount, setTotalCount] = useState(0)
@@ -1468,6 +1471,7 @@ function ShipmentsPageContent() {
     if (!hadRows) setLoading(true)
     setListFetching(true)
     setSummaryFetching(true)
+    setQtyFieldsReady(false)
     try {
       const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
@@ -1719,6 +1723,7 @@ function ShipmentsPageContent() {
             if (hydrated.length) {
               setShipments((prev) => mergeShipmentSapFields(prev, hydrated))
             }
+            setQtyFieldsReady(true)
           },
         })
           .then(({ data }) => {
@@ -1727,9 +1732,11 @@ function ShipmentsPageContent() {
             if (hydrated.length) {
               setShipments((prev) => mergeShipmentSapFields(prev, hydrated))
             }
+            setQtyFieldsReady(true)
           })
           .catch((err) => {
             console.warn('Shipment SAP hydrate failed (table shows shell data):', err)
+            if (listGen === listFetchGenRef.current) setQtyFieldsReady(true)
           })
       }
       const runDeferredFetches = () => {
@@ -1763,6 +1770,7 @@ function ShipmentsPageContent() {
       setListFetching(false)
       setSummaryFetching(false)
       setTableScopeLoading(false)
+      setQtyFieldsReady(true)
     } finally {
       setLoading(false)
       setTableScopeLoading(false)
@@ -3297,7 +3305,9 @@ function ShipmentsPageContent() {
       getSortValue: (s) => resolveShipmentListStoKg(s) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(resolveShipmentListStoKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+          {qtyFieldsReady
+            ? formatSapQtyMtDisplay(resolveShipmentListStoKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            : <QtyLoadingDots />}
         </span>
       )
     },
@@ -3309,7 +3319,9 @@ function ShipmentsPageContent() {
       getSortValue: (s) => resolveShipmentListDeliveredKg(s) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(resolveShipmentListDeliveredKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+          {qtyFieldsReady
+            ? formatSapQtyMtDisplay(resolveShipmentListDeliveredKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            : <QtyLoadingDots />}
         </span>
       )
     },
@@ -3321,7 +3333,9 @@ function ShipmentsPageContent() {
       getSortValue: (s) => resolveShipmentListReceiveKg(s) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(resolveShipmentListReceiveKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+          {qtyFieldsReady
+            ? formatSapQtyMtDisplay(resolveShipmentListReceiveKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            : <QtyLoadingDots />}
         </span>
       )
     },
@@ -3333,6 +3347,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => shipmentStoredQtyKg(s.outstanding_quantity) ?? 0,
       render: (s) => {
+        if (!qtyFieldsReady) return <QtyLoadingDots />
         const kg = shipmentStoredQtyKg(s.outstanding_quantity)
         return (
           <span
@@ -3351,6 +3366,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => shipmentStoredQtyKg(s.outstanding_qty_planning) ?? 0,
       render: (s) => {
+        if (!qtyFieldsReady) return <QtyLoadingDots />
         const kg = shipmentStoredQtyKg(s.outstanding_qty_planning)
         return (
           <span
@@ -3677,7 +3693,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => s.ata_vessel_start_discharging || '',
       render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_start_discharging || '')}</span>,
     },
-  ], [])
+  ], [qtyFieldsReady])
 
   const defaultVisibleColumnIds = useMemo(() => {
     return compactColumns.filter(c => c.defaultVisible).map(c => c.id)

@@ -25,6 +25,14 @@ import { ViewTruckingOperationModal } from '@/components/trucking/ViewTruckingOp
 
 const CONTRACT_PAYMENT_INFO_PERMISSION = 'data.contract_payment_info'
 
+/** Payment status → badge color (aligned with Finance page). */
+const PAYMENT_STATUS_BADGE_CLASS: Record<string, string> = {
+  PENDING: 'bg-yellow-100 text-yellow-800',
+  PARTIAL: 'bg-blue-100 text-blue-800',
+  PAID: 'bg-green-100 text-green-800',
+  OVERDUE: 'bg-red-100 text-red-800',
+}
+
 export type ContractDetailModalContract = {
   id: string
   contract_id: string
@@ -716,6 +724,18 @@ export function ContractDetailModal({
                 <h3 className="text-lg font-semibold mb-3">Basic Information</h3>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div className="p-3 bg-gray-50 rounded">
+                    <div className="text-gray-500">PO</div>
+                    <div className="font-medium mt-1 break-words whitespace-normal">
+                      {formatSapDisplayValue(contract.po_numbers || contract.po_number)}
+                    </div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded">
+                    <div className="text-gray-500">Contract</div>
+                    <div className="font-medium mt-1 break-words whitespace-normal">
+                      {formatSapDisplayValue(contract.contract_id)}
+                    </div>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">GR PO Status</div>
                     <div className="mt-1">
                       <GrStatusValue status={contract.gr_po_status} />
@@ -1140,16 +1160,32 @@ export function ContractDetailModal({
                       <div className="font-medium mt-1">
                         {contractPaymentsLoading ? (
                           <span className="text-gray-400">Loading...</span>
-                        ) : contractPayments.length === 0 ? (
-                          '-'
-                        ) : (
-                          formatSapDisplayValue(
-                            contractPayments
-                              .map((p) => p.payment_status)
-                              .filter(Boolean)
-                              .join(', '),
+                        ) : (() => {
+                          const statuses = Array.from(
+                            new Set(
+                              contractPayments
+                                .map((p) => String(p.payment_status || '').trim())
+                                .filter(Boolean),
+                            ),
                           )
-                        )}
+                          if (statuses.length === 0) return '-'
+                          return (
+                            <div className="flex flex-wrap gap-1.5">
+                              {statuses.map((status) => (
+                                <Badge
+                                  key={status}
+                                  className={cn(
+                                    'hover:bg-inherit',
+                                    PAYMENT_STATUS_BADGE_CLASS[status.toUpperCase()] ??
+                                      'bg-gray-100 text-gray-800',
+                                  )}
+                                >
+                                  {formatSapDisplayValue(status)}
+                                </Badge>
+                              ))}
+                            </div>
+                          )
+                        })()}
                       </div>
                     </div>
                   </div>

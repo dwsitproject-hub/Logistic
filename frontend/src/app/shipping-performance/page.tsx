@@ -837,7 +837,6 @@ const COLUMN_DEFS: ColumnDef[] = [
   { key: 'sto_qty', label: 'STO Qty', type: 'number', defaultVisible: false },
   { key: 'received_qty', label: 'Received Qty', type: 'number', defaultVisible: false },
   { key: 'delivered_qty', label: 'Delivery Qty', type: 'number', defaultVisible: false },
-  { key: 'planning_qty', label: 'Shipment Planning Qty', type: 'number', defaultVisible: false },
   {
     key: 'outstanding_qty_actual',
     label: 'Outstanding Qty',
@@ -846,15 +845,6 @@ const COLUMN_DEFS: ColumnDef[] = [
     defaultVisible: false,
     byVesselDefaultVisible: true,
     tooltip: SHIPPING_PERF_OUTSTANDING_QTY_TOOLTIP,
-  },
-  {
-    key: 'outstanding_qty_planning',
-    label: 'Outstanding Qty (Planning)',
-    byVesselLabel: 'Qty Outstanding Planning',
-    type: 'number',
-    defaultVisible: false,
-    byVesselDefaultVisible: true,
-    tooltip: FIELD_HELP.shipmentOutstandingQtyPlanning,
   },
   {
     key: 'loading_delta_eta_etr_days',

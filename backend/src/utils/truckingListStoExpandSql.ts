@@ -97,6 +97,21 @@ function buildQuantitySelects(skipSapJoin: boolean): {
     };
   }
 
+  // Match SAP row by STO line when the operation has an STO identity; otherwise
+  // (no STO on the op nor in SAP — e.g. LAND FRC direct PO) fall back to PO match
+  // within the same contract so SAP qty is not lost. Contract scope already applies.
+  const spdStoOrPoMatch = `(
+    (
+      NULLIF(TRIM(e.sto_line_resolved::text), '') IS NOT NULL
+      AND ${SPD_EFFECTIVE_STO} = TRIM(e.sto_line_resolved::text)
+    )
+    OR (
+      NULLIF(TRIM(e.sto_line_resolved::text), '') IS NULL
+      AND NULLIF(TRIM(e.po_number::text), '') IS NOT NULL
+      AND TRIM(COALESCE(spd.po_number::text, spd.data->'raw'->>'PO No', spd.data->'raw'->>'PO No.', '')) = TRIM(e.po_number::text)
+    )
+  )`;
+
   const qtyDeliveredPerStoSap = `(
     SELECT SUM(NULLIF(regexp_replace(COALESCE(
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery Trucking'), ''),
@@ -108,7 +123,7 @@ function buildQuantitySelects(skipSapJoin: boolean): {
     ), '[^0-9\\.-]', '', 'g'), '')::numeric)
     FROM sap_processed_data spd
     WHERE spd.contract_number = e.contract_number
-      AND ${SPD_EFFECTIVE_STO} = TRIM(e.sto_line_resolved::text)
+      AND ${spdStoOrPoMatch}
       AND NULLIF(TRIM(COALESCE(
         spd.data->'raw'->>'Quantity Delivery Trucking',
         spd.data->'raw'->>'Quantity Delivered Trucking',
@@ -126,7 +141,7 @@ function buildQuantitySelects(skipSapJoin: boolean): {
     ), '[^0-9\\.-]', '', 'g'), '')::numeric)
     FROM sap_processed_data spd
     WHERE spd.contract_number = e.contract_number
-      AND ${SPD_EFFECTIVE_STO} = TRIM(e.sto_line_resolved::text)
+      AND ${spdStoOrPoMatch}
       AND NULLIF(TRIM(COALESCE(
         spd.data->'raw'->>'Quantity Receive',
         spd.data->'raw'->>'Qty Receive'

@@ -189,6 +189,22 @@ const CLIENT_ONLY_SORT_COLUMN_IDS = new Set([
   'sto_number',
 ])
 
+/**
+ * Temporarily hide SEA/LAND/MIX contracts-without-logistics cards.
+ * Keep the implementation available for re-enable, but disable rendering and
+ * every related API/list-filter path while this flag is false.
+ */
+const CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED = false
+
+/**
+ * Contracts Outstanding Qty display — no sign prefix.
+ * Over-delivery (kept green via outstandingQtyMtColorClass) and 0 MT (gray) show
+ * the plain value without a leading "+" or "-".
+ */
+function formatContractOutstandingQtyMtDisplay(kg: number | string | null | undefined): string {
+  return formatSapOutstandingQtyMtDisplay(kg).replace(/^[+-]/, '')
+}
+
 const DATE_SORT_COLUMN_IDS = new Set([
   'contract_date',
   'delivery_start',
@@ -367,6 +383,14 @@ function contractStatusBadgeClass(c: {
   }
   return getStatusColor(resolveContractStatusDisplay(c))
 }
+
+/** Hidden from the Contracts table and Visible Columns picker; retained for Contract Performance. */
+const CONTRACTS_HIDDEN_COLUMN_IDS = new Set([
+  'cash_cycle_days',
+  'log_cycle_days',
+  'trade_cycle_days',
+  'contract_aging',
+])
 
 /** Default left-to-right order on `/contracts` when no saved column order (Supplier & Buyer after PO Number). */
 const CONTRACTS_DEFAULT_COLUMN_ORDER: string[] = [
@@ -1347,7 +1371,9 @@ function ContractsPageContent() {
 
   /** Section 1 logistics cards — Open unassigned counts; hidden (0) when table status is Close. */
   const contractsLogisticsSection1Active =
-    !isContractPerformance && statusFilter !== 'Close'
+    CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED &&
+    !isContractPerformance &&
+    statusFilter !== 'Close'
   const displayUnassignedSeaCount = contractsLogisticsSection1Active ? unassignedSeaContracts : 0
   const displayUnassignedLandCount = contractsLogisticsSection1Active ? unassignedLandContracts : 0
   const displayUnassignedMixCount = contractsLogisticsSection1Active ? unassignedMixContracts : 0
@@ -1843,7 +1869,9 @@ function ContractsPageContent() {
   ) => {
     const fetchGen = ++contractsFetchGenRef.current
     let trackContractPerfTableLoad = false
-    const activeUnassignedFilter = unassignedFilter
+    const activeUnassignedFilter = CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED
+      ? unassignedFilter
+      : null
     try {
       if (!authReady) return
       if (isContractPerformance) {
@@ -2170,7 +2198,7 @@ function ContractsPageContent() {
 
   // Summary alert cards — always Open status; other toolbar filters sync counts to the table scope.
   const fetchUnassignedCounts = useCallback(async () => {
-    if (!authReady || !userScopeReady) return
+    if (!CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED || !authReady || !userScopeReady) return
     setUnassignedCountsFetching(true)
     try {
       const params = new URLSearchParams()
@@ -2221,12 +2249,16 @@ function ContractsPageContent() {
   ])
 
   useEffect(() => {
-    if (isContractPerformance || !userScopeReady) return
+    if (
+      !CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED ||
+      isContractPerformance ||
+      !userScopeReady
+    ) return
     fetchUnassignedCounts()
   }, [fetchUnassignedCounts, isContractPerformance, userScopeReady])
 
   const toggleContractsUnassignedFilter = useCallback((mode: ContractsUnassignedCardFilter) => {
-    if (statusFilter === 'Close') return
+    if (!CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED || statusFilter === 'Close') return
     setUnassignedFilter((prev) => {
       const next = prev === mode ? null : mode
       setCurrentPage(1)
@@ -2970,9 +3002,9 @@ function ContractsPageContent() {
         }
         return (
           <span
-            className={`text-sm truncate tabular-nums ${outstandingQtyMtColorClass(c.outstanding_quantity)}`}
+            className={`text-sm truncate ${outstandingQtyMtColorClass(c.outstanding_quantity)}`}
           >
-            {formatSapOutstandingQtyMtDisplay(c.outstanding_quantity)}
+            {formatContractOutstandingQtyMtDisplay(c.outstanding_quantity)}
           </span>
         )
       }
@@ -2985,7 +3017,7 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => c.trade_cycle_days ?? 0,
       render: (c) => {
-        const cycleSizeClass = isContractPerformance ? 'text-sm tabular-nums font-normal' : 'text-xs'
+        const cycleSizeClass = isContractPerformance ? 'text-sm font-normal' : 'text-xs'
         if (c.trade_cycle_days == null) return <span className={cycleSizeClass}>-</span>
         return (
           <span
@@ -3011,7 +3043,7 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => c.cash_cycle_days ?? 0,
       render: (c) => {
-        const cycleSizeClass = isContractPerformance ? 'text-sm tabular-nums font-normal' : 'text-xs'
+        const cycleSizeClass = isContractPerformance ? 'text-sm font-normal' : 'text-xs'
         if (c.cash_cycle_days == null) return <span className={cycleSizeClass}>-</span>
         return (
           <span
@@ -3041,7 +3073,7 @@ function ContractsPageContent() {
             render: (c: Contract) => {
               if (c.dp_cycle_days == null) return <span className="text-sm">-</span>
               return (
-                <span className={`text-sm tabular-nums font-normal ${signedCycleDaysClass(c.dp_cycle_days)}`}>
+                <span className={`text-sm font-normal ${signedCycleDaysClass(c.dp_cycle_days)}`}>
                   {formatSignedCycleDaysCompact(c.dp_cycle_days)}
                 </span>
               )
@@ -3058,7 +3090,7 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => c.log_cycle_days ?? 0,
       render: (c) => {
-        const cycleSizeClass = isContractPerformance ? 'text-sm tabular-nums font-normal' : 'text-xs'
+        const cycleSizeClass = isContractPerformance ? 'text-sm font-normal' : 'text-xs'
         if (c.log_cycle_days == null) return <span className={cycleSizeClass}>-</span>
         return (
           <span
@@ -3084,7 +3116,7 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => c.over_under_delivery_status || '',
       render: (c) => (
-        <span className="text-xs">
+        <span className="text-sm">
           {formatSapDisplayValue(c.over_under_delivery_status)}
         </span>
       ),
@@ -3197,7 +3229,7 @@ function ContractsPageContent() {
     if (isContractPerformance) {
       return orderContractPerformanceColumns(columns)
     }
-    return columns
+    return columns.filter((column) => !CONTRACTS_HIDDEN_COLUMN_IDS.has(column.id))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isContractPerformance, formatMonthDeliveryEnd, handleCargoReadinessCellChange, handleCargoReadinessCellSave])
 
@@ -4057,7 +4089,7 @@ function ContractsPageContent() {
           </Card>
         )}
 
-        {!isContractPerformance && (
+        {CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED && !isContractPerformance && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card
               className={`transition-all hover:shadow-md ${
@@ -4157,10 +4189,12 @@ function ContractsPageContent() {
         <Card>
           <CardContent className="pt-6">
             <div className="space-y-4">
-              <p className="text-xs text-gray-500">
-                Section 1 logistics cards always count <span className="font-medium text-gray-700">Open</span>{' '}
-                contracts. Status below controls the Section 3 table only (All / Open / Close).
-              </p>
+              {CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED ? (
+                <p className="text-xs text-gray-500">
+                  Section 1 logistics cards always count <span className="font-medium text-gray-700">Open</span>{' '}
+                  contracts. Status below controls the Section 3 table only (All / Open / Close).
+                </p>
+              ) : null}
               <div className="flex gap-4">
                 <div className="flex-1 relative">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -5314,7 +5348,7 @@ function ContractsPageContent() {
                                 <span className="text-gray-800">-</span>
                               ) : (
                                 <span className={`font-medium ${outstandingQtyMtColorClass(contract.outstanding_quantity)}`}>
-                                  {formatSapOutstandingQtyMtDisplay(contract.outstanding_quantity)}
+                                  {formatContractOutstandingQtyMtDisplay(contract.outstanding_quantity)}
                                 </span>
                               )}
                             </div>
@@ -5584,7 +5618,9 @@ function ContractsPageContent() {
               )
             }
             void fetchContracts(currentPage, undefined, undefined, undefined, { force: true })
-            void fetchUnassignedCounts()
+            if (CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED) {
+              void fetchUnassignedCounts()
+            }
           }}
           initialContractId={
             contractLogisticsUi?.kind === 'truck-create' || contractLogisticsUi?.kind === 'truck-edit'
@@ -5636,7 +5672,9 @@ function ContractsPageContent() {
               )
             }
             void fetchContracts(currentPage, undefined, undefined, undefined, { force: true })
-            void fetchUnassignedCounts()
+            if (CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED) {
+              void fetchUnassignedCounts()
+            }
           }}
         />
 

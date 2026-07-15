@@ -54,7 +54,7 @@ export const CONTRACT_PERF_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = CONTR
 export const CONTRACT_PERF_COLUMN_LAYOUT_VERSION = 'cp-columns-v6'
 
 /** Contracts list (/contracts) — separate from Contract Performance layout version. */
-export const CONTRACTS_COLUMN_LAYOUT_VERSION = 'contracts-columns-v2'
+export const CONTRACTS_COLUMN_LAYOUT_VERSION = 'contracts-columns-v3'
 
 export const CONTRACTS_COLUMN_LAYOUT_VERSION_KEY = 'contracts.compact.columnLayoutVersion'
 
