@@ -1,5 +1,9 @@
 import { groupPlantExpr } from '../utils/groupPlantSql';
-import { sqlContractOutstandingSignedExpr } from '../utils/sapIncotermMetrics';
+import {
+  sqlContractOutstandingSignedExpr,
+  sqlSapGrPoStatusFromJson,
+  sqlSapGrStoStatusFromJson,
+} from '../utils/sapIncotermMetrics';
 import { buildContractsListOuterCycleFieldSelectSql } from '../utils/contractsListCycleSql';
 
 const CONTRACT_LIST_OUTSTANDING_SQL = sqlContractOutstandingSignedExpr({
@@ -56,6 +60,8 @@ const CONTRACTS_LIST_ROW_PROJECTION = `
         ) AS contract_reference_po,
         COALESCE(base.latest_spd_data->'raw'->>'Contract Ext No', base.latest_spd_data->>'Contract Ext No') AS contract_ext_no,
         COALESCE(base.latest_spd_data->'contract'->>'ltc_spot', base.contract_type::text) AS lt_spot,
+        ${sqlSapGrPoStatusFromJson('base.latest_spd_data')} AS gr_po_status,
+        ${sqlSapGrStoStatusFromJson('base.latest_spd_data')} AS gr_sto_status,
         base.import_status,
         COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'due_date_payment'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Due Date Payment'), ''), NULLIF(trim(base.latest_spd_data->>'due date payment'), '')) AS due_date_payment_raw,
         COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date'), ''), NULLIF(trim(base.latest_spd_data->>'dp date'), '')) AS dp_date_raw,

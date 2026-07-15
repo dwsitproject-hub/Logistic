@@ -61,7 +61,9 @@ export function SearchableMultiSelect({
 
   return (
     <div ref={containerRef} className="relative w-full">
-      <label className="text-sm font-medium text-gray-700 mb-1 block">{label}</label>
+      {label ? (
+        <label className="text-sm font-medium text-gray-700 mb-1 block">{label}</label>
+      ) : null}
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

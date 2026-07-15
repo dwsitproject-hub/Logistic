@@ -264,6 +264,8 @@ interface Contract {
   contract_reference_po?: string
   lt_spot?: string
   import_status?: string
+  gr_po_status?: string | null
+  gr_sto_status?: string | null
   due_date_payment?: string
   dp_date?: string
   payoff_date?: string

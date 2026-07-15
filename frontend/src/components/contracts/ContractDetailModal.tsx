@@ -56,6 +56,8 @@ export type ContractDetailModalContract = {
   contract_reference_po?: string
   lt_spot?: string
   import_status?: string
+  gr_po_status?: string | null
+  gr_sto_status?: string | null
   due_date_payment?: string
   dp_date?: string
   payoff_date?: string
@@ -139,17 +141,15 @@ function getStatusColor(status: string) {
   }
 }
 
-function getContractOverallStatus(
-  c: Pick<ContractDetailModalContract, 'import_status' | 'status' | 'payment_status'>,
-): string {
-  const delivery = String(c.import_status || c.status || '').toUpperCase()
-  const paid = String(c.payment_status || '').toUpperCase() === 'PAID'
-  return delivery === 'CLOSE' && paid ? 'Close' : formatContractDeliveryStatusLabel(c.import_status || c.status)
-}
-
 function ContractStatusBadge({ status }: { status: string }) {
   const label = formatContractDeliveryStatusLabel(status) || formatSapDisplayValue(status)
   return <Badge className={getStatusColor(label)}>{label}</Badge>
+}
+
+function GrStatusValue({ status }: { status?: string | null }) {
+  const normalized = String(status || '').trim()
+  if (!normalized) return <span className="font-medium">-</span>
+  return <ContractStatusBadge status={normalized} />
 }
 
 /**
@@ -712,51 +712,13 @@ export function ContractDetailModal({
           </CardHeader>
           <CardContent className="min-h-0 flex-1 overflow-y-auto">
             <div className="space-y-6">
-              <div className="rounded-xl border-2 border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50/80 p-4 shadow-sm">
-                <h3 className="text-base font-semibold text-amber-900 mb-3 tracking-tight">Highlight Information</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
-                  <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Contract</div>
-                    <div className="font-semibold text-gray-900 mt-0.5 truncate" title={contract.contract_id || ''}>
-                      {formatSapDisplayValue(contract.contract_id)}
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Contract Ext No</div>
-                    <div className="font-semibold text-gray-900 mt-0.5 break-words whitespace-normal">
-                      {formatSapDisplayValue(contract.contract_ext_no)}
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5 sm:col-span-2 lg:col-span-1">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">
-                      PO Number{contract.po_count && contract.po_count > 1 ? ` (${contract.po_count})` : ''}
-                    </div>
-                    <div className="font-semibold text-gray-900 mt-0.5 break-words whitespace-normal">
-                      {formatSapDisplayValue(contract.po_numbers || contract.po_number)}
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Contract Qty</div>
-                    <div className="font-semibold text-gray-900 mt-0.5">{formatQtyMtFromKg(contract.quantity_ordered)}</div>
-                  </div>
-                  <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Incoterm</div>
-                    <div className="font-semibold text-gray-900 mt-0.5">{formatSapDisplayValue(contract.incoterm)}</div>
-                  </div>
-                  <div className="rounded-lg border border-amber-100 bg-white/90 px-3 py-2.5 sm:col-span-2 lg:col-span-1">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-amber-800/80">Product</div>
-                    <div className="font-semibold text-gray-900 mt-0.5 break-words">{formatSapDisplayValue(contract.product)}</div>
-                  </div>
-                </div>
-              </div>
-
               <div>
                 <h3 className="text-lg font-semibold mb-3">Basic Information</h3>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div className="p-3 bg-gray-50 rounded">
-                    <div className="text-gray-500">Status</div>
+                    <div className="text-gray-500">GR PO Status</div>
                     <div className="mt-1">
-                      <ContractStatusBadge status={getContractOverallStatus(contract)} />
+                      <GrStatusValue status={contract.gr_po_status} />
                     </div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
@@ -776,9 +738,9 @@ export function ContractDetailModal({
                     </div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
-                    <div className="text-gray-500">Delivery Status</div>
+                    <div className="text-gray-500">GR STO Status</div>
                     <div className="mt-1">
-                      <ContractStatusBadge status={contract.import_status || contract.status || ''} />
+                      <GrStatusValue status={contract.gr_sto_status} />
                     </div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">

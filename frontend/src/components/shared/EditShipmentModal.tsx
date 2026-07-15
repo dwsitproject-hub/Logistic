@@ -114,18 +114,18 @@ const INFO_VALUE_CLASS = 'text-sm font-medium text-gray-900'
 const VESSEL_MODAL_TABLE_QTY_VALUE_CLASS = 'text-xs font-normal tabular-nums text-gray-900'
 
 const LOADING_ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
-  { key: 'etaVesselArrivalAtLoadingPort', label: 'Estimation Vessel Arrival at Loading Port' },
-  { key: 'etaVesselBerthedAtLoadingPort', label: 'Estimation Vessel Berthed at Loading Port' },
-  { key: 'etaVesselStartLoading', label: 'Estimation Vessel Start Loading' },
-  { key: 'etaVesselCompletedLoading', label: 'Estimation Vessel Completed Loading' },
-  { key: 'etaVesselSailedFromLoadingPort', label: 'Estimation Vessel Sailed from Loading Port' },
+  { key: 'etaVesselArrivalAtLoadingPort', label: 'ETA at Loading Port' },
+  { key: 'etaVesselBerthedAtLoadingPort', label: 'ETB at Loading Port' },
+  { key: 'etaVesselStartLoading', label: 'ETS Loading' },
+  { key: 'etaVesselCompletedLoading', label: 'ETC Loading' },
+  { key: 'etaVesselSailedFromLoadingPort', label: 'ET Sailed to Discharge Port' },
 ]
 
 const DISCHARGE_ETA_FIELD_ROWS: { key: keyof DischargeEtaFields; label: string }[] = [
-  { key: 'etaVesselArriveAtDischargePort', label: 'Estimation Vessel Arrive at Discharge Port' },
-  { key: 'etaVesselBerthedAtDischargePort', label: 'Estimation Vessel Berthed at Discharge Port' },
-  { key: 'etaVesselStartDischarging', label: 'Estimation Vessel Start Discharging' },
-  { key: 'etaVesselCompleteDischarge', label: 'Estimation Vessel Complete Discharge' },
+  { key: 'etaVesselArriveAtDischargePort', label: 'ETA at Discharge Port' },
+  { key: 'etaVesselBerthedAtDischargePort', label: 'ETB at Discharge Port' },
+  { key: 'etaVesselStartDischarging', label: 'ETS at Discharge Port' },
+  { key: 'etaVesselCompleteDischarge', label: 'ETC at Discharge Port' },
 ]
 
 const ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
@@ -134,15 +134,15 @@ const ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
 ]
 
 const ATA_FIELD_ROWS: { key: ShipmentAtaApiField; label: string }[] = [
-  { key: 'ata_vessel_arrival_at_loading_port', label: 'Arrival at Loading Port' },
-  { key: 'ata_vessel_berthed_at_loading_port', label: 'Berthed at Loading Port' },
-  { key: 'ata_vessel_start_loading', label: 'Start Loading' },
-  { key: 'ata_vessel_completed_loading', label: 'Completed Loading' },
-  { key: 'ata_vessel_sailed_from_loading_port', label: 'Sailed from Loading Port' },
-  { key: 'ata_vessel_arrive_at_discharge_port', label: 'Arrive at Discharge Port' },
-  { key: 'ata_vessel_berthed_at_discharge_port', label: 'Berthed at Discharge Port' },
-  { key: 'ata_vessel_start_discharging', label: 'Start Discharging' },
-  { key: 'ata_vessel_complete_discharge', label: 'Complete Discharge' },
+  { key: 'ata_vessel_arrival_at_loading_port', label: 'ATA at Loading Port' },
+  { key: 'ata_vessel_berthed_at_loading_port', label: 'ATB at Loading Port' },
+  { key: 'ata_vessel_start_loading', label: 'ATS Loading' },
+  { key: 'ata_vessel_completed_loading', label: 'ATC Loading' },
+  { key: 'ata_vessel_sailed_from_loading_port', label: 'AT Sailed to Discharge Port' },
+  { key: 'ata_vessel_arrive_at_discharge_port', label: 'ATA at Discharge Port' },
+  { key: 'ata_vessel_berthed_at_discharge_port', label: 'ATB at Discharge Port' },
+  { key: 'ata_vessel_start_discharging', label: 'ATS Discharging' },
+  { key: 'ata_vessel_complete_discharge', label: 'ATC Discharge' },
 ]
 
 const LOADING_ATA_FIELD_ROWS = ATA_FIELD_ROWS.filter((row) => !row.key.includes('discharge'))
@@ -2212,7 +2212,7 @@ export function EditShipmentModal({
                               <ReadOnlyInfoField
                                 key={`${portRow.id ?? portRow.port_sequence}-${key}`}
                                 compact
-                                label={`ATA ${label}`}
+                                label={label}
                                 value={formatDateDMY(
                                   portAta[key as keyof ReturnType<typeof loadingAtaFromPortRow>],
                                 )}
@@ -2235,7 +2235,7 @@ export function EditShipmentModal({
                               {ataIsEditing && canModifyShipment ? (
                                 <>
                                   <label className="mb-1 block text-[10px] font-medium text-gray-600">
-                                    ATA {label}
+                                    {label}
                                   </label>
                                   <DateInputDdMmYyyy
                                     valueIso={ataFields[key]}
@@ -2248,7 +2248,7 @@ export function EditShipmentModal({
                               ) : (
                                 <ReadOnlyInfoField
                                   compact
-                                  label={`ATA ${label}`}
+                                  label={label}
                                   value={formatDateDMY(ataFields[key])}
                                 />
                               )}
@@ -2276,7 +2276,7 @@ export function EditShipmentModal({
                           {ataIsEditing && canModifyShipment ? (
                             <>
                               <label className="mb-1 block text-[10px] font-medium text-gray-600">
-                                ATA {label}
+                                {label}
                               </label>
                               <DateInputDdMmYyyy
                                 valueIso={ataFields[key]}
@@ -2289,7 +2289,7 @@ export function EditShipmentModal({
                           ) : (
                             <ReadOnlyInfoField
                               compact
-                              label={`ATA ${label}`}
+                              label={label}
                               value={formatDateDMY(ataFields[key])}
                             />
                           )}

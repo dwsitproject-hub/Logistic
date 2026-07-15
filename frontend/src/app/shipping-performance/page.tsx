@@ -1478,11 +1478,6 @@ function ShippingPerformancePageContent() {
     [drilldownFilteredRows],
   )
 
-  const cardScopeContractCount = useMemo(
-    () => countUniqueContractsFromRows(perfModeFilteredRows),
-    [perfModeFilteredRows],
-  )
-
   const hasActiveDrilldown = Boolean(
     drilldownFilters.product ||
       drilldownFilters.plant ||
@@ -1970,7 +1965,7 @@ function ShippingPerformancePageContent() {
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-6 flex-wrap">
               <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 shrink-0">Select Source:</span>
+                <span className="text-sm font-medium text-gray-700 shrink-0">Source:</span>
                 <div className="inline-flex rounded-lg border bg-white p-1 flex-wrap gap-1">
                   {CONTRACT_PERF_SOURCE_TABS.map((tab) => (
                     <button
@@ -1992,7 +1987,7 @@ function ShippingPerformancePageContent() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 shrink-0">Select Product:</span>
+                <span className="text-sm font-medium text-gray-700 shrink-0">Product:</span>
                 <div className="inline-flex rounded-lg border bg-white p-1 flex-wrap gap-1">
                   {CONTRACT_PERF_PRODUCT_TABS.map((tab) => (
                     <button
@@ -2013,10 +2008,11 @@ function ShippingPerformancePageContent() {
                   ))}
                 </div>
               </div>
-              <div className="flex items-end gap-3">
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium text-gray-700 shrink-0">Plant:</span>
                 <div className="w-48">
                   <SearchableMultiSelect
-                    label="Group Plant"
+                    label=""
                     options={availableGroupPlants}
                     selected={selectedGroupPlants}
                     onChange={setSelectedGroupPlants}
@@ -2024,9 +2020,12 @@ function ShippingPerformancePageContent() {
                     emptyMessage="No group plants"
                   />
                 </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium text-gray-700 shrink-0">Incoterm:</span>
                 <div className="w-48">
                   <SearchableMultiSelect
-                    label="Incoterm"
+                    label=""
                     options={availableIncoterms}
                     selected={selectedIncoterms}
                     onChange={setSelectedIncoterms}
@@ -2130,11 +2129,6 @@ function ShippingPerformancePageContent() {
                       </span>
                       {activeDatasetBundle.summary.vesselCount.toLocaleString('en-US')} unique vessels
                     </div>
-                    <p className="text-[11px] text-gray-500 mt-1 max-w-2xl">
-                      Contract totals here match Section 3. Product node counts are unique within that product only — do
-                      not add them together. Percentages show each node&apos;s share of the{' '}
-                      {cardScopeContractCount.toLocaleString('en-US')} contracts in the current card scope.
-                    </p>
                   </div>
                   <button
                     type="button"

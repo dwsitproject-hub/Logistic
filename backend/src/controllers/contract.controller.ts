@@ -558,6 +558,8 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       row.due_date_payment = due(row.due_date_payment_raw) ?? due(row.due_date_payment_fb) ?? row.due_date_payment;
       row.import_status = normalizeContractDeliveryStatusForDisplay(row.import_status || row.status) || row.import_status;
       row.status = normalizeContractDeliveryStatusForDisplay(row.status) || row.status;
+      row.gr_po_status = normalizeContractDeliveryStatusForDisplay(row.gr_po_status) || null;
+      row.gr_sto_status = normalizeContractDeliveryStatusForDisplay(row.gr_sto_status) || null;
       // DP / Payoff display: SAP raw only (payment JSON + raw columns) — no payments-table or deviation synthesis
       row.dp_date = due(row.dp_date_raw);
       row.payoff_date = due(row.payoff_date_raw);
