@@ -382,6 +382,10 @@ function mergeTruckingSapFields(
       quantity_delivered: match.quantity_delivered ?? row.quantity_delivered,
       quantity_receive: match.quantity_receive ?? row.quantity_receive,
       outstanding_quantity: match.outstanding_quantity ?? row.outstanding_quantity,
+      sto_quantity: match.sto_quantity ?? row.sto_quantity,
+      contract_qty: match.contract_qty ?? row.contract_qty,
+      trucking_start_date: match.trucking_start_date ?? row.trucking_start_date,
+      trucking_completion_date: match.trucking_completion_date ?? row.trucking_completion_date,
     }
   })
 }
@@ -1002,6 +1006,8 @@ function CalendarDeliverablesTable({
 function TruckingPageContent() {
   const searchParams = useSearchParams()
   const [truckingOperations, setTruckingOperations] = useState<TruckingOperation[]>([])
+  /** False until SAP hydrate (or status-scoped full-SAP list) — Delivery/Receive/OS show as —. */
+  const [qtyFieldsReady, setQtyFieldsReady] = useState(false)
   /** Stale-while-revalidate: true while list API is in flight; never clears existing rows. */
   const [listFetching, setListFetching] = useState(false)
   /** True while table scope filters change — shows loading shell without stale rows. */
@@ -1121,6 +1127,7 @@ function TruckingPageContent() {
     rowsUpserted: number
     rowParseFailures: Array<{ sheetName?: string; rowNumber: number; po_number: string; reason: string }>
     operationFailures: Array<{ po_number: string; progress_date?: string; reason: string; operation_ids?: string[] }>
+    operationWarnings?: Array<{ po_number: string; progress_date?: string; reason: string; operation_ids?: string[] }>
   } | null>(null)
 
   const [bulkCreateUploadOpen, setBulkCreateUploadOpen] = useState(false)
@@ -1582,6 +1589,7 @@ function TruckingPageContent() {
           rowsUpserted: Number(data.rowsUpserted ?? 0),
           rowParseFailures: data.rowParseFailures ?? [],
           operationFailures: data.operationFailures ?? [],
+          operationWarnings: data.operationWarnings ?? [],
         })
         setWbUploadOpen(true)
       }
@@ -1951,6 +1959,7 @@ function TruckingPageContent() {
   /** Reset visible rows so Section 3 shows loading when table scope filters change. */
   const beginTableScopeRefresh = useCallback(() => {
     setTruckingOperations([])
+    setQtyFieldsReady(false)
     setTableScopeLoading(true)
     setStatusCardTotalFromList(null)
     setTotalCount(0)
@@ -1966,6 +1975,7 @@ function TruckingPageContent() {
     const fetchStatusFilter = statusFilter
     setListFetching(true)
     setSummaryFetching(true)
+    setQtyFieldsReady(false)
     try {
       const effectivePage = forcedPage ?? page
       const params = buildTruckingListSearchParams({
@@ -1974,6 +1984,11 @@ function TruckingPageContent() {
         includeSummary: false,
         searchOverride,
       })
+
+      /** Backend forces full SAP for status cards (not ALL / UNPLANNED) — qty already correct on first paint. */
+      const stageUpper = String(fetchStatusFilter ?? '').trim().toUpperCase()
+      const listAlreadyFullSap =
+        Boolean(stageUpper) && stageUpper !== 'ALL' && stageUpper !== 'UNPLANNED'
 
       const listUrl = `/trucking?${params.toString()}`
       const listCacheKey = buildCacheKey('GET', listUrl)
@@ -2028,6 +2043,7 @@ function TruckingPageContent() {
         listRowsGenRef.current = listGen
         const items = envelope?.data?.truckingOperations || []
         setTruckingOperations(items)
+        if (listAlreadyFullSap) setQtyFieldsReady(true)
         const total = Number(envelope?.data?.pagination?.total ?? 0)
         const pages = Number(envelope?.data?.pagination?.totalPages || 1)
         setTotalCount(total)
@@ -2114,6 +2130,7 @@ function TruckingPageContent() {
             if (hydrated.length) {
               setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
             }
+            setQtyFieldsReady(true)
           },
         })
           .then(({ data }) => {
@@ -2123,9 +2140,11 @@ function TruckingPageContent() {
             if (hydrated.length) {
               setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
             }
+            setQtyFieldsReady(true)
           })
           .catch((err) => {
             console.warn('Trucking SAP hydrate failed (table shows shell data):', err)
+            if (listGen === listFetchGenRef.current) setQtyFieldsReady(true)
           })
       }
       if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
@@ -2723,6 +2742,13 @@ function TruckingPageContent() {
   const filteredOperations = useMemo(() => {
     if (!statusFilter || statusFilter === 'ALL') return truckingOperations
     const stage = statusFilter.trim().toUpperCase()
+    // Planned card includes In Progress rows (backend filter + client safety net).
+    if (stage === 'PLANNED') {
+      return truckingOperations.filter((op) => {
+        const s = String(op.status ?? '').trim().toUpperCase()
+        return s === 'PLANNED' || s === 'IN_PROGRESS'
+      })
+    }
     return truckingOperations.filter(
       (op) => String(op.status ?? '').trim().toUpperCase() === stage,
     )
@@ -2743,6 +2769,8 @@ function TruckingPageContent() {
   /** Section 2 card counts — summary SQL + instant patch for the active status from view-table total. */
   const truckingStatusCardCounts = useMemo(() => {
     const s = truckingSection1Summary?.status
+    const plannedOnly = Number(s?.planned ?? 0)
+    const inProgressOnly = Number(s?.inProgress ?? 0)
     const counts: Record<string, number> = {
       UNPLANNED: Number(
         unplannedTableBreakdown?.totalTableRows ??
@@ -2750,8 +2778,9 @@ function TruckingPageContent() {
           s?.unplanned ??
           0,
       ),
-      PLANNED: Number(s?.planned ?? 0),
-      IN_PROGRESS: Number(s?.inProgress ?? 0),
+      // Planned card total = Planned + In Progress (same scope as Planned card list filter).
+      PLANNED: plannedOnly + inProgressOnly,
+      IN_PROGRESS: inProgressOnly,
       COMPLETED: Number(s?.completed ?? 0),
       CANCELLED: Number(s?.cancelled ?? 0),
     }
@@ -2930,12 +2959,12 @@ function TruckingPageContent() {
     {
       id: 'sto_quantity',
       label: 'STO Qty',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.sto_quantity || 0,
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(o.sto_quantity)}
+          {qtyFieldsReady ? formatQtyMtFromKg(o.sto_quantity) : '—'}
         </span>
       )
     },
@@ -2947,7 +2976,7 @@ function TruckingPageContent() {
       getSortValue: (o) => parseTruckingQtyKg(o.quantity_delivered) ?? 0,
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
-          {formatTruckingQtyMt(o.quantity_delivered)}
+          {qtyFieldsReady ? formatTruckingQtyMt(o.quantity_delivered) : '—'}
         </span>
       )
     },
@@ -2959,7 +2988,9 @@ function TruckingPageContent() {
       getSortValue: (o) => parseTruckingQtyKg(o.quantity_receive ?? o.quantity_delivered) ?? 0,
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
-          {formatTruckingQtyMt(o.quantity_receive ?? o.quantity_delivered)}
+          {qtyFieldsReady
+            ? formatTruckingQtyMt(o.quantity_receive ?? o.quantity_delivered)
+            : '—'}
         </span>
       )
     },
@@ -2970,12 +3001,15 @@ function TruckingPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => typeof o.outstanding_quantity === 'number' ? o.outstanding_quantity : 0,
-      render: (o) => (
-        <TruckingOutstandingQtyWithTooltip
-          outstandingKg={o.outstanding_quantity}
-          incoterm={o.incoterm}
-        />
-      )
+      render: (o) =>
+        qtyFieldsReady ? (
+          <TruckingOutstandingQtyWithTooltip
+            outstandingKg={o.outstanding_quantity}
+            incoterm={o.incoterm}
+          />
+        ) : (
+          <span className="text-sm text-gray-400 tabular-nums">—</span>
+        )
     },
     {
       id: 'trucking_start_date',
@@ -3155,7 +3189,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.group_name || '',
       render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.group_name)}</span>
     }
-  ], [])
+  ], [qtyFieldsReady])
 
   const defaultVisibleColumnIds = useMemo(() => {
     return compactColumns
@@ -3991,6 +4025,19 @@ function TruckingPageContent() {
                     <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-2 p-2">
                       {wbUploadSummary.operationFailures.map((f, i) => (
                         <li key={`wb-of-${i}`} className="text-gray-800">
+                          <span className="font-semibold">PO {f.po_number}</span>
+                          {f.progress_date ? ` · ${f.progress_date}` : ''}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(wbUploadSummary.operationWarnings?.length ?? 0) > 0 ? (
+                  <div>
+                    <div className="font-medium text-amber-900 mb-2">Warnings (still saved)</div>
+                    <ul className="max-h-40 overflow-auto rounded border border-amber-200 bg-amber-50 text-xs space-y-2 p-2">
+                      {wbUploadSummary.operationWarnings?.map((f, i) => (
+                        <li key={`wb-ow-${i}`} className="text-amber-950">
                           <span className="font-semibold">PO {f.po_number}</span>
                           {f.progress_date ? ` · ${f.progress_date}` : ''}: {f.reason}
                         </li>

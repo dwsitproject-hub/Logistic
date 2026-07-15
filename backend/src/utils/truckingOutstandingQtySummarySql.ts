@@ -171,10 +171,14 @@ export function buildTruckingOutstandingQtyExecutionAggregateQuery(
     skipSapJoin: false,
   });
   const baseParams = [...built.innerParams, ...built.outerParams];
-  const stageClause = osStatus
-    ? ` AND tf.status = $${baseParams.length + 1}`
-    : '';
-  const params = osStatus ? [...baseParams, osStatus] : baseParams;
+  /** Planned card OS matches list filter: Planned + In Progress. */
+  const plannedCard = osStatus === 'PLANNED';
+  const stageClause = !osStatus
+    ? ''
+    : plannedCard
+      ? ` AND tf.status IN ('PLANNED', 'IN_PROGRESS')`
+      : ` AND tf.status = $${baseParams.length + 1}`;
+  const params = !osStatus || plannedCard ? baseParams : [...baseParams, osStatus];
 
   const text = `
     WITH trucking_filtered AS (

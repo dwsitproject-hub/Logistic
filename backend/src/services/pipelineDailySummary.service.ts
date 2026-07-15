@@ -21,7 +21,7 @@ import logger from '../utils/logger';
 export type PipelineSummaryModule = 'trucking' | 'shipment';
 
 /** Bump when trucking pipeline status SQL changes — forces daily summary refresh. */
-export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 4;
+export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 6;
 
 export interface PipelineDailySummaryScope {
   dateFrom?: string;
@@ -365,9 +365,21 @@ export async function loadTruckingStagePageFromSnapshot(
   if (!(await isPipelineDailySummaryFresh('trucking'))) return null;
 
   const { sql, params } = buildDailySummaryWhere(scope);
+  const isPlannedCard = String(stage ?? '').trim().toUpperCase() === 'PLANNED';
   const stageIdx = params.length + 1;
-  const whereSql = sql ? `${sql} AND stage = $${stageIdx}` : `WHERE stage = $${stageIdx}`;
+  const whereSql = isPlannedCard
+    ? sql
+      ? `${sql} AND stage IN ('PLANNED', 'IN_PROGRESS')`
+      : `WHERE stage IN ('PLANNED', 'IN_PROGRESS')`
+    : sql
+      ? `${sql} AND stage = $${stageIdx}`
+      : `WHERE stage = $${stageIdx}`;
   const dir = sortDir === 'DESC' ? 'DESC' : 'ASC';
+  const limitIdx = isPlannedCard ? params.length + 1 : stageIdx + 1;
+  const offsetIdx = limitIdx + 1;
+  const pageParams = isPlannedCard
+    ? [...params, limit, offset]
+    : [...params, stage, limit, offset];
   const pageRes = await query(
     `SELECT
       operation_id,
@@ -376,8 +388,8 @@ export async function loadTruckingStagePageFromSnapshot(
     FROM trucking_list_stage_snapshot
     ${whereSql}
     ORDER BY supplier ${dir} NULLS LAST, created_at DESC NULLS LAST, operation_id, sto_line
-    LIMIT $${stageIdx + 1} OFFSET $${stageIdx + 2}`,
-    [...params, stage, limit, offset],
+    LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    pageParams,
   );
 
   if (pageRes.rows.length > 0) {
@@ -390,9 +402,10 @@ export async function loadTruckingStagePageFromSnapshot(
     };
   }
 
+  const countParams = isPlannedCard ? [...params] : [...params, stage];
   const countRes = await query(
     `SELECT COUNT(*)::bigint AS c FROM trucking_list_stage_snapshot ${whereSql}`,
-    [...params, stage],
+    countParams,
   );
   return { keys: [], total: Number((countRes.rows[0] as { c?: unknown })?.c || 0) };
 }

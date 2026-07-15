@@ -8,9 +8,9 @@ import {
 import { SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
 import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql';
 import {
-  sqlTruckingOutstandingQtyByIncoterm,
-  sqlTruckingQuantityDeliveredCoalesce,
-  sqlTruckingQuantityReceiveCoalesce,
+  sqlTruckingListBaseOutstandingQtyExpr,
+  sqlTruckingListResolvedDeliveryQtyExpr,
+  sqlTruckingListResolvedReceiveQtyExpr,
   sqlTruckingQuantitySentCoalesce,
 } from './truckingQuantitySql';
 
@@ -158,8 +158,8 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.eta_delivery_start_date,
         t.eta_delivery_end_date,
         t.quantity_sent,
-        t.quantity_delivered,
-        t.quantity_delivered AS quantity_receive,
+        ${sqlTruckingListResolvedDeliveryQtyExpr()} AS quantity_delivered,
+        ${sqlTruckingListResolvedReceiveQtyExpr()} AS quantity_receive,
         t.gain_loss_percentage,
         t.gain_loss_amount,
         t.oa_budget,
@@ -186,10 +186,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         c.incoterm,
         c.group_name,
         c.source_type,
-        ${sqlTruckingOutstandingQtyByIncoterm(
-          'COALESCE(t.quantity_delivered, 0)',
-          'COALESCE(t.quantity_delivered, 0)',
-        )} AS outstanding_quantity,
+        ${sqlTruckingListBaseOutstandingQtyExpr()} AS outstanding_quantity,
         s.estimated_km,
         ${TRUCKING_LIST_CONTRACT_EXT_NO_FULL} AS contract_ext_no,
         ${SQL_CONTRACT_IMPORT_STATUS} AS contract_import_status`;
@@ -216,8 +213,8 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.eta_delivery_start_date,
         t.eta_delivery_end_date,
         ${sqlTruckingQuantitySentCoalesce()} AS quantity_sent,
-        ${sqlTruckingQuantityDeliveredCoalesce()} AS quantity_delivered,
-        ${sqlTruckingQuantityReceiveCoalesce()} AS quantity_receive,
+        ${sqlTruckingListResolvedDeliveryQtyExpr()} AS quantity_delivered,
+        ${sqlTruckingListResolvedReceiveQtyExpr()} AS quantity_receive,
         t.gain_loss_percentage,
         t.gain_loss_amount,
         t.oa_budget,
@@ -244,10 +241,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         c.incoterm,
         c.group_name,
         c.source_type,
-        ${sqlTruckingOutstandingQtyByIncoterm(
-          sqlTruckingQuantityDeliveredCoalesce(),
-          sqlTruckingQuantityReceiveCoalesce(),
-        )} AS outstanding_quantity,
+        ${sqlTruckingListBaseOutstandingQtyExpr()} AS outstanding_quantity,
         s.estimated_km,
         ${TRUCKING_LIST_CONTRACT_EXT_NO_FULL} AS contract_ext_no,
         ${SQL_CONTRACT_IMPORT_STATUS} AS contract_import_status`;

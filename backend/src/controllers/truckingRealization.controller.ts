@@ -93,7 +93,15 @@ export const getTruckingRealization = async (req: AuthRequest, res: Response) =>
       success: true,
       data: {
         ...row,
-        daily_actuals: dailyActuals,
+        daily_actuals: dailyActuals.map((a) => ({
+          date: a.progress_date,
+          progress_date: a.progress_date,
+          quantity_kg: a.quantity_kg,
+          quantity_delivered: a.quantity_kg,
+          quantity_delivery_kg:
+            a.quantity_delivery_kg != null ? a.quantity_delivery_kg : a.quantity_kg,
+          quantity_receive_kg: a.quantity_receive_kg,
+        })),
       },
     });
   } catch (err) {
@@ -599,6 +607,7 @@ export const bulkUploadWbRekap = async (req: AuthRequest, res: Response) => {
         rowsUpserted: result.rowsUpserted,
         rowParseFailures: result.rowParseFailures,
         operationFailures: result.operationFailures,
+        operationWarnings: result.operationWarnings,
       },
     });
   } catch (err) {

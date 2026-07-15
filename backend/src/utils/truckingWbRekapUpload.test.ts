@@ -24,7 +24,7 @@ const parseDate = (raw: unknown): string | null => {
 };
 
 describe('truckingWbRekapUpload', () => {
-  it('maps all sample workbook sheets to KLIP products', () => {
+  it('keeps optional legacy sheet→product hint map for known names', () => {
     const sampleSheets = [
       'CPO',
       'CPO-RSPO',
@@ -60,6 +60,7 @@ describe('truckingWbRekapUpload', () => {
     ];
     const { tickets } = parseWbRekapSheetMatrix('CPO', matrix, parseDate);
     expect(tickets).toHaveLength(3);
+    expect(tickets[0]?.klipProduct).toBe('CPO');
     const aggregated = aggregateWbRekapTickets(tickets);
     expect(aggregated).toHaveLength(2);
     const po1 = aggregated.find((a) => a.poNumber === '1001029784');
@@ -68,12 +69,15 @@ describe('truckingWbRekapUpload', () => {
     expect(po1?.ticketCount).toBe(2);
   });
 
-  it('skips unmapped sheets in workbook parse', () => {
+  it('parses sheets by PO header even when sheet name is not in the legacy product map', () => {
     const result = parseWbRekapWorkbook(
       [
         {
           sheetName: 'UNKNOWN_PRODUCT',
-          matrix: [['PO/SO', 'Tanggal Masuk'], ['PO-1', '01/06/2026']],
+          matrix: [
+            ['No.', 'PO/SO', 'Tanggal Masuk', 'Netto PKS', 'Netto EUP'],
+            [1, 'PO-1', '01/06/2026', 1000, 950],
+          ],
         },
         {
           sheetName: 'POME',
@@ -82,22 +86,40 @@ describe('truckingWbRekapUpload', () => {
             [1, '1001029508', '03/06/2026', 8080, 8100],
           ],
         },
+        {
+          sheetName: 'README',
+          matrix: [['Notes'], ['No WB columns here']],
+        },
       ],
       parseDate,
     );
-    expect(result.sheetsSkipped).toHaveLength(1);
-    expect(result.sheetsSkipped[0]?.sheetName).toBe('UNKNOWN_PRODUCT');
-    expect(result.sheetsProcessed).toEqual(['POME']);
-    expect(result.aggregated).toHaveLength(1);
+    expect(result.sheetsProcessed).toEqual(['UNKNOWN_PRODUCT', 'POME']);
+    expect(result.sheetsSkipped.map((s) => s.sheetName)).toEqual(['README']);
+    expect(result.aggregated).toHaveLength(2);
+    expect(result.tickets.find((t) => t.sheetName === 'UNKNOWN_PRODUCT')?.klipProduct).toBeNull();
   });
 
-  it('resolves qty by incoterm LCO vs FRC', () => {
+  it('resolves qty by incoterm LCO vs FRC and soft-warns when OS side is zero', () => {
     expect(resolveWbActualQtyKg('LCO', 1000, 900)).toEqual({ ok: true, quantityKg: 1000 });
     expect(resolveWbActualQtyKg('FRC', 1000, 900)).toEqual({ ok: true, quantityKg: 900 });
     expect(resolveWbActualQtyKg('FOB', 1000, 900).ok).toBe(false);
+
+    const lcoComplementary = resolveWbActualQtyKg('LCO', 0, 900);
+    expect(lcoComplementary.ok).toBe(true);
+    if (lcoComplementary.ok) {
+      expect(lcoComplementary.quantityKg).toBe(0);
+      expect(lcoComplementary.softWarning).toBeTruthy();
+    }
+
+    const frcComplementary = resolveWbActualQtyKg('FRC', 1000, 0);
+    expect(frcComplementary.ok).toBe(true);
+    if (frcComplementary.ok) {
+      expect(frcComplementary.quantityKg).toBe(0);
+      expect(frcComplementary.softWarning).toBeTruthy();
+    }
   });
 
-  it('parses sample WB rekap workbook CPO sheet when file is present', () => {
+  it('parses all sheets from sample WB rekap workbook when file is present', () => {
     const samplePath = path.resolve(
       __dirname,
       '../../../docs/Rekap INCOMING TIMB-EUP-BTG JUNI 2026.xlsx',
@@ -106,15 +128,25 @@ describe('truckingWbRekapUpload', () => {
 
     const buf = fs.readFileSync(samplePath);
     const wb = XLSX.read(buf, { type: 'buffer', cellDates: true });
-    const ws = wb.Sheets['CPO'];
-    expect(ws).toBeTruthy();
-    const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true }) as unknown[][];
-    expect(findWbRekapHeaderRowIndex(matrix)).toBe(8);
+    const sheets = wb.SheetNames.map((sheetName) => {
+      const ws = wb.Sheets[sheetName];
+      const matrix = XLSX.utils.sheet_to_json(ws, {
+        header: 1,
+        defval: '',
+        raw: true,
+      }) as unknown[][];
+      return { sheetName, matrix };
+    });
 
-    const { tickets } = parseWbRekapSheetMatrix('CPO', matrix, toIsoDate10FromCell);
-    expect(tickets.length).toBeGreaterThan(100);
-    const aggregated = aggregateWbRekapTickets(tickets);
-    expect(aggregated.length).toBeGreaterThan(0);
-    expect(aggregated.some((a) => a.poNumber === '1001029784')).toBe(true);
+    const result = parseWbRekapWorkbook(sheets, toIsoDate10FromCell);
+    // Every named sheet in the sample is either processed or skipped for structure — none for product name.
+    expect(result.sheetsProcessed.length + result.sheetsSkipped.length).toBe(wb.SheetNames.length);
+    expect(result.sheetsProcessed.length).toBeGreaterThan(0);
+    expect(result.rawTicketRows).toBeGreaterThan(100);
+
+    const cpoSheet = sheets.find((s) => s.sheetName === 'CPO');
+    expect(cpoSheet).toBeTruthy();
+    expect(findWbRekapHeaderRowIndex(cpoSheet!.matrix)).toBe(8);
+    expect(result.aggregated.some((a) => a.poNumber === '1001029784')).toBe(true);
   });
 });

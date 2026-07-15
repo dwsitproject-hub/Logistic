@@ -1,6 +1,6 @@
 /**
- * WB rekap sheet name → KLIP master product (products.product_name).
- * Sheets without mapping are skipped during import.
+ * Optional legacy sheet name → KLIP product hint only (not used as a parse gate).
+ * Matching / apply is by PO Number; product comes from SAP/contracts when needed.
  *
  * KLIP master products: CPO, PK, POME, SHELL (see supplier / product configuration).
  */
@@ -21,7 +21,8 @@ export const KLIP_TRUCKING_PRODUCTS = ['CPO', 'PK', 'POME', 'SHELL'] as const;
 
 export type WbRekapTicketRow = {
   sheetName: string;
-  klipProduct: string;
+  /** Optional legacy hint from sheet name; null when sheet is not in the legacy map. */
+  klipProduct: string | null;
   rowNumber: number;
   poNumber: string;
   progressDateIso: string;
@@ -97,6 +98,10 @@ export function findWbRekapHeaderRowIndex(matrix: unknown[][]): number {
   return -1;
 }
 
+/**
+ * Parse one worksheet. Any sheet with a WB header (PO/SO + Tanggal Masuk) is accepted —
+ * sheet name does not gate import.
+ */
 export function parseWbRekapSheetMatrix(
   sheetName: string,
   matrix: unknown[][],
@@ -105,10 +110,7 @@ export function parseWbRekapSheetMatrix(
   tickets: WbRekapTicketRow[];
   rowParseFailures: WbRekapParseFailure[];
 } {
-  const klipProduct = WB_REKAP_SHEET_TO_KLIP_PRODUCT[sheetName];
-  if (!klipProduct) {
-    return { tickets: [], rowParseFailures: [] };
-  }
+  const klipProduct = WB_REKAP_SHEET_TO_KLIP_PRODUCT[sheetName] ?? null;
 
   const headerIdx = findWbRekapHeaderRowIndex(matrix);
   if (headerIdx < 0) {
@@ -245,6 +247,10 @@ export function aggregateWbRekapTickets(tickets: WbRekapTicketRow[]): WbRekapAgg
 
 export type WbRekapWorkbookSheet = { sheetName: string; matrix: unknown[][] };
 
+/**
+ * Parse every worksheet. Sheets are skipped only when empty or missing WB header —
+ * never because of sheet product naming.
+ */
 export function parseWbRekapWorkbook(
   sheets: WbRekapWorkbookSheet[],
   parseDate: (raw: unknown) => string | null,
@@ -255,25 +261,24 @@ export function parseWbRekapWorkbook(
   const sheetsSkipped: Array<{ sheetName: string; reason: string }> = [];
 
   for (const { sheetName, matrix } of sheets) {
-    if (!WB_REKAP_SHEET_TO_KLIP_PRODUCT[sheetName]) {
-      sheetsSkipped.push({
-        sheetName,
-        reason: `Sheet not mapped to a KLIP product (${KLIP_TRUCKING_PRODUCTS.join(', ')}) — skipped`,
-      });
-      continue;
-    }
     if (!matrix || matrix.length === 0) {
       sheetsSkipped.push({ sheetName, reason: 'Empty sheet — skipped' });
       continue;
     }
 
     const parsed = parseWbRekapSheetMatrix(sheetName, matrix, parseDate);
-    if (parsed.tickets.length === 0 && parsed.rowParseFailures.some((f) => f.rowNumber === 0)) {
-      sheetsSkipped.push({
-        sheetName,
-        reason: parsed.rowParseFailures[0]?.reason ?? 'Could not parse sheet',
-      });
+    const structuralFail = parsed.rowParseFailures.find(
+      (f) =>
+        f.reason.includes('Header row with PO/SO') ||
+        f.reason.includes('Required columns PO/SO'),
+    );
+    if (structuralFail && parsed.tickets.length === 0) {
+      sheetsSkipped.push({ sheetName, reason: structuralFail.reason });
       rowParseFailures.push(...parsed.rowParseFailures);
+      continue;
+    }
+    if (parsed.tickets.length === 0 && parsed.rowParseFailures.length === 0) {
+      sheetsSkipped.push({ sheetName, reason: 'No ticket rows with Netto PKS/EUP — skipped' });
       continue;
     }
 
@@ -292,23 +297,48 @@ export function parseWbRekapWorkbook(
   };
 }
 
+/**
+ * Effective quantity_kg for OS/sync (LCO=Netto PKS delivery, FRC=Netto EUP receive).
+ * Always callable when either side has qty — complementary PKS/EUP are persisted separately.
+ */
 export function resolveWbActualQtyKg(
   incoterm: string,
   sumNettoPksKg: number,
   sumNettoEupKg: number,
-): { ok: true; quantityKg: number } | { ok: false; reason: string } {
+):
+  | { ok: true; quantityKg: number; softWarning?: string }
+  | { ok: false; reason: string } {
   const inc = String(incoterm ?? '').trim().toUpperCase();
+  const pks = Number(sumNettoPksKg) || 0;
+  const eup = Number(sumNettoEupKg) || 0;
+
   if (inc === 'LCO') {
-    if (sumNettoPksKg <= 0) {
-      return { ok: false, reason: 'LCO contract but aggregated Netto PKS is zero for this PO/date' };
+    if (pks <= 0 && eup <= 0) {
+      return { ok: false, reason: 'LCO contract but Netto PKS and Netto EUP are both zero for this PO/date' };
     }
-    return { ok: true, quantityKg: sumNettoPksKg };
+    if (pks <= 0) {
+      return {
+        ok: true,
+        quantityKg: 0,
+        softWarning:
+          'LCO: Netto PKS (Delivery) is zero — Qty Receive (EUP) stored as complementary; OS still uses Delivery/PKS',
+      };
+    }
+    return { ok: true, quantityKg: pks };
   }
   if (inc === 'FRC') {
-    if (sumNettoEupKg <= 0) {
-      return { ok: false, reason: 'FRC contract but aggregated Netto EUP is zero for this PO/date' };
+    if (pks <= 0 && eup <= 0) {
+      return { ok: false, reason: 'FRC contract but Netto PKS and Netto EUP are both zero for this PO/date' };
     }
-    return { ok: true, quantityKg: sumNettoEupKg };
+    if (eup <= 0) {
+      return {
+        ok: true,
+        quantityKg: 0,
+        softWarning:
+          'FRC: Netto EUP (Receive) is zero — Qty Delivery (PKS) stored as complementary; OS still uses Receive/EUP',
+      };
+    }
+    return { ok: true, quantityKg: eup };
   }
   return {
     ok: false,

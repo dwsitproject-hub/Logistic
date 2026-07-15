@@ -5,9 +5,9 @@
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
 import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql'
 import {
-  sqlTruckingOutstandingQtyByIncoterm,
-  sqlTruckingQuantityDeliveredCoalesce,
-  sqlTruckingQuantityReceiveCoalesce,
+  sqlTruckingListBaseOutstandingQtyExpr,
+  sqlTruckingListResolvedDeliveryQtyExpr,
+  sqlTruckingListResolvedReceiveQtyExpr,
 } from './truckingQuantitySql'
 
 export { parseColumnFiltersQuery }
@@ -52,12 +52,9 @@ const TRUCK_COL: Record<string, string> = {
   contract_qty: 'c.quantity_ordered',
   sto_quantity: 'c.quantity_ordered',
   quantity_sent: 't.quantity_sent',
-  quantity_delivered: `COALESCE(t.quantity_delivered, 0)`,
-  quantity_receive: sqlTruckingQuantityReceiveCoalesce(),
-  outstanding_quantity: sqlTruckingOutstandingQtyByIncoterm(
-    sqlTruckingQuantityDeliveredCoalesce(),
-    sqlTruckingQuantityReceiveCoalesce(),
-  ),
+  quantity_delivered: sqlTruckingListResolvedDeliveryQtyExpr(),
+  quantity_receive: sqlTruckingListResolvedReceiveQtyExpr(),
+  outstanding_quantity: sqlTruckingListBaseOutstandingQtyExpr(),
   oa_budget: 't.oa_budget',
   oa_actual: 't.oa_actual',
   estimated_km: 's.estimated_km',

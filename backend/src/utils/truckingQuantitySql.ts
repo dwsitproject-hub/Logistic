@@ -77,11 +77,108 @@ export function sqlTruckingQuantityReceiveCoalesce(): string {
 }
 
 /**
- * Prefer per-STO SAP qty when present; else KLIP/WB (`trucking_operations`) qty when GR is still Open
- * and daily actuals exist. When GR is Close, always use SAP so fulfillment stays SAP-sourced.
- *
- * Previously Open+WB always preferred op-level WB over SAP, which inflated OS Qty when SAP
- * `Quantity Delivery Trucking` was complete but WB was only partial / shared across STOs.
+ * SAP-only Qty Delivery (kg) — no coalesce with trucking_operations / WB.
+ * Null when SAP has no matching numeric field.
+ */
+export function sqlSapQtyDeliveryOnly(): string {
+  return sqlSapNumericSubquery(`
+    spd.data->'raw'->>'Quantity Delivery Trucking',
+    spd.data->'raw'->>'Quantity Delivered Trucking',
+    spd.data->'raw'->>'Quantity Delivered via Trucking',
+    spd.data->>'quantity_delivered_via_trucking',
+    spd.data->'raw'->>'Quantity Delivered',
+    spd.data->'raw'->>'Quantity Delivery',
+    spd.data->'raw'->>'Qty Delivery'
+  `);
+}
+
+/**
+ * SAP-only Qty Receive (kg) — no coalesce with trucking_operations / WB.
+ * Null when SAP has no matching numeric field.
+ */
+export function sqlSapQtyReceiveOnly(): string {
+  return sqlSapNumericSubquery(`
+    spd.data->'raw'->>'Quantity Receive',
+    spd.data->'raw'->>'Qty Receive'
+  `);
+}
+
+/** True when the trucking operation has at least one WB/daily actual row. */
+export function sqlTruckingHasDailyActualsExpr(operationIdExpr = 't.id'): string {
+  return `EXISTS (
+    SELECT 1 FROM trucking_daily_actuals da
+    WHERE da.trucking_operation_id = ${operationIdExpr}
+  )`;
+}
+
+/**
+ * Sum of WB Qty Delivery for an operation (Netto PKS).
+ * Legacy rows without quantity_delivery_kg fall back to quantity_kg.
+ */
+export function sqlWbActualDeliverySumKg(operationIdExpr = 't.id'): string {
+  return `(
+    SELECT COALESCE(SUM(COALESCE(da.quantity_delivery_kg, da.quantity_kg)), 0)::numeric
+    FROM trucking_daily_actuals da
+    WHERE da.trucking_operation_id = ${operationIdExpr}
+  )`;
+}
+
+/**
+ * Sum of WB Qty Receive for an operation (Netto EUP).
+ * Null receive columns count as 0.
+ */
+export function sqlWbActualReceiveSumKg(operationIdExpr = 't.id'): string {
+  return `(
+    SELECT COALESCE(SUM(COALESCE(da.quantity_receive_kg, 0)), 0)::numeric
+    FROM trucking_daily_actuals da
+    WHERE da.trucking_operation_id = ${operationIdExpr}
+  )`;
+}
+
+/**
+ * Delivery Qty for list/STO expand:
+ * - Open + WB actuals → WB delivery sum (op-level; repeated on every STO child)
+ * - Close → SAP (per-STO or contract-level expr)
+ * - else → COALESCE(SAP, op/KLIP qty)
+ */
+export function sqlTruckingResolvedDeliveryQty(
+  innerQtyExpr: string,
+  sapQtyExpr: string,
+  operationIdExpr = 't.id',
+  contractAlias = 'c',
+): string {
+  const grClosed = sqlIsContractSapClosedExpr(contractAlias);
+  const hasWb = sqlTruckingHasDailyActualsExpr(operationIdExpr);
+  const wbDelivery = sqlWbActualDeliverySumKg(operationIdExpr);
+  return `CASE
+    WHEN (${hasWb}) AND NOT (${grClosed}) THEN ${wbDelivery}
+    WHEN (${grClosed}) THEN COALESCE(${sapQtyExpr}, 0)
+    ELSE COALESCE(${sapQtyExpr}, ${innerQtyExpr}, 0)
+  END`;
+}
+
+/**
+ * Receive Qty for list/STO expand — same Open/Close rules as Delivery, using WB receive sum.
+ */
+export function sqlTruckingResolvedReceiveQty(
+  innerQtyExpr: string,
+  sapQtyExpr: string,
+  operationIdExpr = 't.id',
+  contractAlias = 'c',
+): string {
+  const grClosed = sqlIsContractSapClosedExpr(contractAlias);
+  const hasWb = sqlTruckingHasDailyActualsExpr(operationIdExpr);
+  const wbReceive = sqlWbActualReceiveSumKg(operationIdExpr);
+  return `CASE
+    WHEN (${hasWb}) AND NOT (${grClosed}) THEN ${wbReceive}
+    WHEN (${grClosed}) THEN COALESCE(${sapQtyExpr}, 0)
+    ELSE COALESCE(${sapQtyExpr}, ${innerQtyExpr}, 0)
+  END`;
+}
+
+/**
+ * @deprecated Prefer sqlTruckingResolvedDeliveryQty / sqlTruckingResolvedReceiveQty.
+ * Kept for callers that still pass a single qty series; Open+WB now uses WB delivery sum.
  */
 export function sqlTruckingPreferWbResolvedQty(
   innerQtyExpr: string,
@@ -89,15 +186,12 @@ export function sqlTruckingPreferWbResolvedQty(
   operationIdExpr = 'e.id',
   contractAlias = 'c',
 ): string {
-  const grClosed = sqlIsContractSapClosedExpr(contractAlias);
-  return `CASE
-    WHEN EXISTS (
-      SELECT 1 FROM trucking_daily_actuals da
-      WHERE da.trucking_operation_id = ${operationIdExpr}
-    ) AND NOT (${grClosed}) THEN COALESCE(NULLIF((${sapPerStoQtyExpr}), 0), ${innerQtyExpr}, 0)
-    WHEN (${grClosed}) THEN COALESCE(${sapPerStoQtyExpr}, 0)
-    ELSE COALESCE(${sapPerStoQtyExpr}, ${innerQtyExpr}, 0)
-  END`;
+  return sqlTruckingResolvedDeliveryQty(
+    innerQtyExpr,
+    sapPerStoQtyExpr,
+    operationIdExpr,
+    contractAlias,
+  );
 }
 
 /**
@@ -171,11 +265,37 @@ export function sqlTruckingPipelineIsCompletedExpr(
   )`;
 }
 
-/** Trucking list (non-STO-expand) OS Qty — WB sync updates t.quantity_delivered before SAP fallback. */
+/** Trucking list (non-STO-expand) resolved Delivery Qty (Open→WB / Close→SAP). */
+export function sqlTruckingListResolvedDeliveryQtyExpr(
+  operationIdExpr = 't.id',
+  contractAlias = 'c',
+): string {
+  return sqlTruckingResolvedDeliveryQty(
+    'COALESCE(t.quantity_delivered, 0)',
+    sqlSapQtyDeliveryOnly(),
+    operationIdExpr,
+    contractAlias,
+  );
+}
+
+/** Trucking list (non-STO-expand) resolved Receive Qty (Open→WB / Close→SAP). */
+export function sqlTruckingListResolvedReceiveQtyExpr(
+  operationIdExpr = 't.id',
+  contractAlias = 'c',
+): string {
+  return sqlTruckingResolvedReceiveQty(
+    'COALESCE(t.quantity_delivered, 0)',
+    sqlSapQtyReceiveOnly(),
+    operationIdExpr,
+    contractAlias,
+  );
+}
+
+/** Trucking list (non-STO-expand) OS Qty using Open→WB / Close→SAP Delivery & Receive. */
 export function sqlTruckingListBaseOutstandingQtyExpr(contractAlias = 'c'): string {
   return sqlTruckingOutstandingQtyByIncoterm(
-    sqlTruckingQuantityDeliveredCoalesce(),
-    sqlTruckingQuantityReceiveCoalesce(),
+    sqlTruckingListResolvedDeliveryQtyExpr('t.id', contractAlias),
+    sqlTruckingListResolvedReceiveQtyExpr('t.id', contractAlias),
     `COALESCE(${contractAlias}.quantity_ordered, 0)`,
     `${contractAlias}.incoterm`,
   );

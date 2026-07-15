@@ -68,7 +68,7 @@ export const FIELD_HELP = {
   truckingOaActual: `OA Actual is the realized operational allowance (actual cost) for the trucking leg.`,
   etaVsDueDelivery: `ETA fields are planned dates; Due Date Delivery Start/End come from the contract delivery window. Use these to assess schedule risk and lateness.`,
   truckingStatusUnplanned: `Unplanned view table rows: open contracts without a trucking operation, plus unplanned trucking operations (no Daily Planning and not yet started/completed). The badge count matches the table row total.`,
-  truckingStatusPlanned: `Open contract with at least one ETA or Daily Planning entry (Add New Trucking). Trucking Start Receive Date is not set yet.`,
+  truckingStatusPlanned: `Open contract with ETA or Daily Planning, plus In Progress rows. Card total = Planned + In Progress. List filter on this card shows both statuses.`,
   truckingStatusInProgress: `Trucking shipment (STO/Operation) with Daily Planning and a valid Trucking Start Receive Date (SAP AV). Stays In Progress until GR PO/STO is Close, or until Outstanding Qty is within tolerance while GR is still Open.`,
   truckingStatusCompleted: `Trucking shipment (STO/Operation) is Complete when GR PO Status (FRC/CIF) or GR STO Status (LCO/FOB) is Close — no OS Qty check required. Alternatively, when GR is still Open, Complete applies if Outstanding Qty is within tolerance (kg, after WB actual qty when uploaded). Trucking Last Receive Date is informational only.`,
   truckingStatusCancelled: `Operation was set to Cancelled manually and is excluded from active execution. Use the Status filter below to view cancelled operations only.`,

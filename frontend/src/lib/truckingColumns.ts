@@ -22,7 +22,7 @@ export const TRUCKING_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
   'product',
   'incoterm',
   'contract_qty',
-  'sto_quantity',
+  // sto_quantity kept in column picker only — list uses Contract Qty + Delivery/Receive.
   'quantity_delivered',
   'quantity_receive',
   'outstanding_qty_mt',
@@ -30,8 +30,11 @@ export const TRUCKING_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
   'trucking_completion_date',
 ] as const
 
+/** Soft-hide on layout version bump (still available via Columns menu). */
+export const TRUCKING_SOFT_HIDE_COLUMN_IDS: readonly string[] = ['sto_quantity']
+
 /** Bump when default column order/visibility changes — soft-migrates saved layouts. */
-export const TRUCKING_COLUMN_LAYOUT_VERSION = 'trucking-columns-v4'
+export const TRUCKING_COLUMN_LAYOUT_VERSION = 'trucking-columns-v5'
 
 export const TRUCKING_COLUMN_LAYOUT_VERSION_KEY = 'trucking.compact.columnLayoutVersion'
 
@@ -103,17 +106,25 @@ export function migrateTruckingColumnLayout(
   columnOrderIds: readonly string[],
   allColumnIds: readonly string[],
 ): { visibleColumnIds: string[]; columnOrderIds: string[] } {
+  const softHide = new Set(TRUCKING_SOFT_HIDE_COLUMN_IDS)
   const migrated = migrateSavedColumnLayout({
     visibleColumnIds,
     columnOrderIds,
   })
-  const visible =
+  const visibleRaw =
     migrated.visibleColumnIds.length > 0
       ? migrated.visibleColumnIds
       : truckingDefaultVisibleColumnIds([...allColumnIds])
+  const visible = visibleRaw.filter((id) => !softHide.has(id))
+  // Keep soft-hidden ids in order so Columns menu still lists them after the primary set.
+  const orderBase = mergeTruckingColumnOrder(migrated.columnOrderIds, [...allColumnIds])
+  const orderWithSoftHidden = mergeTruckingColumnOrder(
+    [...orderBase, ...TRUCKING_SOFT_HIDE_COLUMN_IDS],
+    [...allColumnIds],
+  )
   return {
     visibleColumnIds: visible,
-    columnOrderIds: mergeTruckingColumnOrder(migrated.columnOrderIds, [...allColumnIds]),
+    columnOrderIds: orderWithSoftHidden,
   }
 }
 

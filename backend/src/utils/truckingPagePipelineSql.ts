@@ -49,8 +49,9 @@ export function sqlTruckingPageHasSto(stoExpr: string): string {
 }
 
 /**
- * Open SAP contract/PO with no KLIP planning/ETA yet — trucking Unplanned backlog.
+ * Open SAP contract/PO with no KLIP planning/ETA and no Start Receive yet — Unplanned backlog.
  * STO is not required. Closed SAP status is never Unplanned.
+ * Requires trucking_realizations join alias `tr` (same as list/pipeline queries).
  */
 export function sqlTruckingPageUnplannedPredicate(
   contractAlias = 'c',
@@ -60,9 +61,11 @@ export function sqlTruckingPageUnplannedPredicate(
 ): string {
   const contractOpen = `NOT (${sqlIsContractSapClosedExpr(contractAlias)})`;
   const notCompleted = `NOT (${sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr)})`;
+  const noStartReceive = `${sqlRealizationStartDate(contractAlias)} IS NULL`;
   return `(
     ${contractOpen}
     AND NOT (${sqlTruckingPageHasEtaOrPlanning(truckingAlias)})
+    AND ${noStartReceive}
     AND ${notCompleted}
   )`;
 }
@@ -77,6 +80,7 @@ export function sqlTruckingPageIsCompletedExpr(
 
 /**
  * Mutually exclusive pipeline stage per trucking operation row (Section 2 + Section 3 filter).
+ * Start Receive (SAP AV or trucking_realizations / WB) → IN_PROGRESS without requiring daily planning.
  */
 export function sqlTruckingPagePipelineStageExpr(
   contractAlias = 'c',
@@ -91,8 +95,7 @@ export function sqlTruckingPagePipelineStageExpr(
   return `CASE
     WHEN COALESCE(t.status, '') = 'CANCELLED' THEN 'CANCELLED'
     WHEN ${isCompleted} THEN 'COMPLETED'
-    WHEN ${sqlHasTruckingKlipPlanning('t')}
-      AND ${realizationStart} IS NOT NULL
+    WHEN ${realizationStart} IS NOT NULL
       AND ${notCompleted}
       THEN 'IN_PROGRESS'
     WHEN ${contractOpen}
@@ -101,14 +104,15 @@ export function sqlTruckingPagePipelineStageExpr(
       THEN 'PLANNED'
     WHEN ${sqlTruckingPageUnplannedPredicate(contractAlias, stoCheck, 't', outstandingQtyExpr)} THEN 'UNPLANNED'
     ELSE CASE
-      WHEN ${realizationStart} IS NOT NULL THEN 'IN_PROGRESS'
       WHEN ${sqlTruckingPageHasEtaOrPlanning('t')} THEN 'PLANNED'
       ELSE 'UNPLANNED'
     END
   END`;
 }
 
-/** Filter list rows by pipeline card (same expression as summary). */
+/** Filter list rows by pipeline card (same expression as summary).
+ * Planned card is special: includes PLANNED + IN_PROGRESS (In Progress card stays exact).
+ */
 export function appendTruckingPipelineStageFilter(
   stage: string | undefined,
   stoExpr: string,
@@ -118,9 +122,49 @@ export function appendTruckingPipelineStageFilter(
   if (!normalized) {
     return { sql: '', params: [], nextIndex: startIndex };
   }
+  const stageExpr = sqlTruckingPagePipelineStageExpr('c', stoExpr, undefined);
+  if (normalized === 'PLANNED') {
+    return {
+      sql: ` AND ${stageExpr} IN ('PLANNED', 'IN_PROGRESS')`,
+      params: [],
+      nextIndex: startIndex,
+    };
+  }
   return {
-    sql: ` AND ${sqlTruckingPagePipelineStageExpr('c', stoExpr, undefined)} = $${startIndex}`,
+    sql: ` AND ${stageExpr} = $${startIndex}`,
     params: [normalized],
     nextIndex: startIndex + 1,
   };
+}
+
+/**
+ * Status-scoped WHERE for expanded list rows (`tf.status`).
+ * Planned card → PLANNED + IN_PROGRESS; other cards exact match.
+ */
+export function buildTruckingExpandedStatusFilterWhere(
+  statusColumnExpr: string,
+  stageFilter: string | null | undefined,
+  startIndex: number,
+): { sql: string; params: string[]; nextIndex: number } {
+  const normalized = normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined);
+  if (!normalized) {
+    return { sql: '', params: [], nextIndex: startIndex };
+  }
+  if (normalized === 'PLANNED') {
+    return {
+      sql: ` WHERE ${statusColumnExpr} IN ('PLANNED', 'IN_PROGRESS')`,
+      params: [],
+      nextIndex: startIndex,
+    };
+  }
+  return {
+    sql: ` WHERE ${statusColumnExpr} = $${startIndex}`,
+    params: [normalized],
+    nextIndex: startIndex + 1,
+  };
+}
+
+/** True when UI Planned card should show Planned + In Progress rows. */
+export function isTruckingPlannedCardStatusFilter(stage: string | null | undefined): boolean {
+  return normalizeTruckingPagePipelineStageParam(stage ?? undefined) === 'PLANNED';
 }

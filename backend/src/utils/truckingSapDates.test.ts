@@ -16,11 +16,17 @@ describe('truckingSapDates', () => {
     expect(sql).toContain('MM/DD/YYYY');
   });
 
-  it('sqlMinTruckingRealizationStartForContract uses extension then SAP AV', () => {
+  it('sqlMinTruckingRealizationStartForContract prefers SAP AV then WB/extension then op start', () => {
     const sql = sqlMinTruckingRealizationStartForContract('c.id', 'c.contract_id');
     expect(sql).toContain('realization_start_date');
     expect(sql).toContain('Trucking Start Receive Date');
-    expect(sql).not.toContain('t.trucking_start_date');
+    expect(sql).toContain('t.trucking_start_date');
+    // SAP subquery appears before tr.realization in COALESCE order
+    const sapIdx = sql.indexOf('Trucking Start Receive Date');
+    const trIdx = sql.indexOf('tr.realization_start_date');
+    expect(sapIdx).toBeGreaterThan(-1);
+    expect(trIdx).toBeGreaterThan(-1);
+    expect(sapIdx).toBeLessThan(trIdx);
   });
 
   it('sqlSapTruckingLastReceiveDateForStoKey scopes by effective STO', () => {

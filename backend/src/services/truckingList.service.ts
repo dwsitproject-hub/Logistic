@@ -14,7 +14,11 @@ import {
   buildTruckingUnplannedContractToolbarScope,
 } from '../utils/truckingUnplannedHybridSql';
 import { deriveTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
-import { appendTruckingPipelineStageFilter, normalizeTruckingPagePipelineStageParam } from '../utils/truckingPagePipelineSql';
+import {
+  appendTruckingPipelineStageFilter,
+  buildTruckingExpandedStatusFilterWhere,
+  normalizeTruckingPagePipelineStageParam,
+} from '../utils/truckingPagePipelineSql';
 import { truckingPageListScopeWhereSql } from '../utils/truckingIncotermScope';
 import { buildListOrderByWithSapStoPriority } from '../utils/listSapStoPrioritySql';
 import { wrapTruckingListQueryWithStoExpansion, buildTruckingExpansionKeysCountSql } from '../utils/truckingListStoExpandSql';
@@ -755,19 +759,21 @@ export function buildPaginatedListQuery(
 ): { text: string; params: unknown[] } {
   const field = SORT_FIELD_BY_KEY[sortKey] || 'created_at';
   const baseParams = [...built.innerParams, ...built.outerParams];
-  const normalizedStage = normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined);
-  const stageParamIdx = normalizedStage ? baseParams.length + 1 : null;
-  const stageWhereSql = normalizedStage && stageParamIdx
-    ? ` WHERE tf.status = $${stageParamIdx}`
-    : '';
-  const listParams = normalizedStage ? [...baseParams, normalizedStage] : [...baseParams];
+  const stageScoped = buildTruckingExpandedStatusFilterWhere(
+    'tf.status',
+    stageFilter,
+    baseParams.length + 1,
+  );
+  const stageWhereSql = stageScoped.sql;
+  const listParams =
+    stageScoped.params.length > 0 ? [...baseParams, ...stageScoped.params] : [...baseParams];
   const limitIdx = listParams.length + 1;
   const offsetIdx = listParams.length + 2;
   const expanded = buildTruckingFilteredExpansionSql(built);
   const orderBy = buildListOrderByWithSapStoPriority(
     'tf.sto_number',
     `${field} ${sortDir} NULLS LAST, created_at DESC`,
-    normalizedStage ?? stageFilter,
+    normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined) ?? stageFilter,
   );
   const truckingPageCte = built.usesStoKeyPaging
     ? `trucking_page AS (
@@ -812,19 +818,21 @@ export function buildTruckingListPageQueryWithoutInlineCount(
 ): { text: string; params: unknown[] } {
   const field = SORT_FIELD_BY_KEY[sortKey] || 'created_at';
   const baseParams = [...built.innerParams, ...built.outerParams];
-  const normalizedStage = normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined);
-  const stageParamIdx = normalizedStage ? baseParams.length + 1 : null;
-  const stageWhereSql = normalizedStage && stageParamIdx
-    ? ` WHERE tf.status = $${stageParamIdx}`
-    : '';
-  const listParams = normalizedStage ? [...baseParams, normalizedStage] : [...baseParams];
+  const stageScoped = buildTruckingExpandedStatusFilterWhere(
+    'tf.status',
+    stageFilter,
+    baseParams.length + 1,
+  );
+  const stageWhereSql = stageScoped.sql;
+  const listParams =
+    stageScoped.params.length > 0 ? [...baseParams, ...stageScoped.params] : [...baseParams];
   const limitIdx = listParams.length + 1;
   const offsetIdx = listParams.length + 2;
   const expanded = buildTruckingFilteredExpansionSql(built);
   const orderBy = buildListOrderByWithSapStoPriority(
     'tf.sto_number',
     `${field} ${sortDir} NULLS LAST, created_at DESC`,
-    normalizedStage ?? stageFilter,
+    normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined) ?? stageFilter,
   );
   const truckingPageCte = built.usesStoKeyPaging
     ? `trucking_page AS (
@@ -865,11 +873,12 @@ function buildFilteredCountQuery(
   }
   const expanded = buildTruckingFilteredExpansionSql(built);
   const baseParams = [...built.innerParams, ...built.outerParams];
-  const normalizedStage = normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined);
-  const stageParamIdx = normalizedStage ? baseParams.length + 1 : null;
-  const stageWhereSql = normalizedStage && stageParamIdx
-    ? ` WHERE tf.status = $${stageParamIdx}`
-    : '';
+  const stageScoped = buildTruckingExpandedStatusFilterWhere(
+    'tf.status',
+    stageFilter,
+    baseParams.length + 1,
+  );
+  const stageWhereSql = stageScoped.sql;
   const text = `
       WITH trucking_filtered AS (
         SELECT * FROM (
@@ -880,7 +889,8 @@ function buildFilteredCountQuery(
       FROM trucking_filtered tf${stageWhereSql}`;
   return {
     text,
-    params: normalizedStage && stageParamIdx ? [...baseParams, normalizedStage] : baseParams,
+    params:
+      stageScoped.params.length > 0 ? [...baseParams, ...stageScoped.params] : baseParams,
   };
 }
 

@@ -8,12 +8,14 @@ export const TRUCKING_REALIZATIONS_JOIN = `
   LEFT JOIN trucking_realizations tr ON tr.trucking_operation_id = t.id`;
 
 /**
- * Realization start (ATA): extension row, then SAP AV — never planning columns on trucking_operations.
+ * Start Receive Date for list / pipeline / detail:
+ * SAP Trucking Start Receive (AV) first; if null → WB/extension realization; if null → op start (legacy WB).
  */
 export function sqlRealizationStartDate(contractAlias = 'c'): string {
   return `COALESCE(
+    ${sqlSapTruckingStartReceiveDate(contractAlias)},
     tr.realization_start_date,
-    ${sqlSapTruckingStartReceiveDate(contractAlias)}
+    t.trucking_start_date
   )`;
 }
 
@@ -27,7 +29,10 @@ export function sqlRealizationEndDate(contractAlias = 'c'): string {
   )`;
 }
 
-/** Fast shell list — DB / extension only (no sap_processed_data). */
+/**
+ * Fast shell list — DB / extension only (no sap_processed_data).
+ * Prefer WB realization, then legacy op date; SAP filled on hydrate via {@link sqlRealizationStartDate}.
+ */
 export function sqlShellRealizationStartDate(): string {
   return `COALESCE(tr.realization_start_date, t.trucking_start_date)`;
 }

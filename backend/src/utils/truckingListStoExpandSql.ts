@@ -5,7 +5,8 @@ import { TRUCKING_REALIZATIONS_JOIN } from './truckingRealizationSql';
 import {
   sqlTruckingExpandedStoLineQtyKgExpr,
   sqlTruckingOutstandingQtyByIncoterm,
-  sqlTruckingPreferWbResolvedQty,
+  sqlTruckingResolvedDeliveryQty,
+  sqlTruckingResolvedReceiveQty,
 } from './truckingQuantitySql';
 
 const SPD_EFFECTIVE_STO = SPD_EFFECTIVE_STO_SQL;
@@ -80,15 +81,19 @@ export function buildContractStoLinesCte(skipSapJoin: boolean): string {
 function buildQuantitySelects(skipSapJoin: boolean): {
   qtyDelivered: string;
   qtyReceive: string;
+  /** Display column — null in shell so first paint does not show misleading op-level qty. */
   outstanding: string;
+  /** Pipeline stage still needs op-level OS until SAP hydrate (snapshot usually wins). */
+  outstandingForStage: string;
   stoLineQty: string;
 } {
   if (skipSapJoin) {
     return {
-      qtyDelivered: 'e.quantity_delivered',
-      qtyReceive: 'e.quantity_receive',
-      outstanding: 'e.outstanding_quantity',
-      stoLineQty: 'e.contract_qty',
+      qtyDelivered: 'NULL::numeric',
+      qtyReceive: 'NULL::numeric',
+      outstanding: 'NULL::numeric',
+      outstandingForStage: 'e.outstanding_quantity',
+      stoLineQty: 'NULL::numeric',
     };
   }
 
@@ -128,16 +133,24 @@ function buildQuantitySelects(skipSapJoin: boolean): {
       )), '') IS NOT NULL
   )`;
 
-  const qtyDelivered = sqlTruckingPreferWbResolvedQty(
-    'e.quantity_delivered',
+  const qtyDelivered = sqlTruckingResolvedDeliveryQty(
+    'COALESCE(e.quantity_delivered, 0)',
     qtyDeliveredPerStoSap,
+    'e.id',
+    'c',
   );
-  const qtyReceive = sqlTruckingPreferWbResolvedQty('e.quantity_receive', qtyReceivePerStoSap);
+  const qtyReceive = sqlTruckingResolvedReceiveQty(
+    'COALESCE(e.quantity_receive, e.quantity_delivered, 0)',
+    qtyReceivePerStoSap,
+    'e.id',
+    'c',
+  );
   const stoLineQty = sqlTruckingExpandedStoLineQtyKgExpr();
+  // OS Qty uses Contract Qty only (ignore STO Qty) − Delivery/Receive by incoterm.
   const outstanding = sqlTruckingOutstandingQtyByIncoterm(
     qtyDelivered,
     qtyReceive,
-    stoLineQty,
+    'COALESCE(e.contract_qty, 0)',
     'e.incoterm',
   );
 
@@ -145,6 +158,7 @@ function buildQuantitySelects(skipSapJoin: boolean): {
     qtyDelivered,
     qtyReceive,
     outstanding,
+    outstandingForStage: outstanding,
     stoLineQty,
   };
 }
@@ -257,9 +271,8 @@ export function buildTruckingExpansionKeysCountSql(
 
 /**
  * Expand trucking list rows — one row per contract STO (contract_stos + SAP FRC/LCO).
- * Delivery/receive prefer WB daily actuals when uploaded and GR PO/STO is Open;
- * when GR is Close, SAP per-STO qty is used. Outstanding follows the same resolved qty
- * (contract − delivered/receive by incoterm).
+ * Delivery/receive: Open + WB upload → op-level WB Delivery (PKS) / Receive (EUP) on every STO child;
+ * Close → SAP per-STO. Outstanding = Contract Qty − delivered/receive by incoterm (not STO Qty).
  */
 export function buildTruckingListExpansionSql(
   innerSql: string,
@@ -319,12 +332,12 @@ export function buildTruckingListExpansionSql(
             ? `COALESCE(sn.stage, ${sqlTruckingPagePipelineStageExpr(
                 'c',
                 `NULLIF(TRIM(e.sto_line_resolved::text), '')`,
-                qty.outstanding,
+                qty.outstandingForStage,
               )})`
             : sqlTruckingPagePipelineStageExpr(
                 'c',
                 `NULLIF(TRIM(e.sto_line_resolved::text), '')`,
-                qty.outstanding,
+                qty.outstandingForStage,
               )
         } AS status,
         e.created_at,

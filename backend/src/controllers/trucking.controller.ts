@@ -20,6 +20,8 @@ import {
   formatDDMMYYYY,
 } from '../utils/operationId';
 import {
+  sqlSapQtyDeliveryOnly,
+  sqlSapQtyReceiveOnly,
   sqlTruckingOutstandingQtyByIncoterm,
   sqlTruckingQuantityDeliveredCoalesce,
   sqlTruckingQuantityReceiveCoalesce,
@@ -31,6 +33,7 @@ import {
 } from '../utils/truckingIncotermScope';
 import { sqlContractGlobalOutstandingExpr } from '../utils/contractGlobalOutstandingSql';
 import { buildQtyMoveCte } from '../utils/contractGlobalOutstandingSql';
+import { listTruckingDailyActuals } from '../services/truckingRealization.service';
 import {
   sqlSapTruckingLastReceiveDate,
   sqlSapTruckingStartReceiveDate,
@@ -276,8 +279,13 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
         c.group_name,
         c.quantity_ordered,
         c.unit,
+        c.delivery_start_date,
+        c.delivery_end_date,
+        c.cargo_readiness_date AS contract_cargo_readiness_date,
         ${sqlSapTruckingStartReceiveDate('c')} AS sap_trucking_start_receive_date,
-        ${sqlSapTruckingLastReceiveDate('c')} AS sap_trucking_last_receive_date
+        ${sqlSapTruckingLastReceiveDate('c')} AS sap_trucking_last_receive_date,
+        ${sqlSapQtyDeliveryOnly()} AS sap_qty_delivery,
+        ${sqlSapQtyReceiveOnly()} AS sap_qty_receive
        FROM trucking_operations t
        LEFT JOIN contracts c ON t.contract_id = c.id
        LEFT JOIN shipments s ON t.shipment_id = s.id
@@ -294,9 +302,21 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
       });
     }
 
+    const dailyActuals = await listTruckingDailyActuals(id);
     return res.json({
       success: true,
-      data: result.rows[0],
+      data: {
+        ...result.rows[0],
+        daily_actuals: dailyActuals.map((a) => ({
+          date: a.progress_date,
+          progress_date: a.progress_date,
+          quantity_kg: a.quantity_kg,
+          quantity_delivered: a.quantity_kg,
+          quantity_delivery_kg:
+            a.quantity_delivery_kg != null ? a.quantity_delivery_kg : a.quantity_kg,
+          quantity_receive_kg: a.quantity_receive_kg,
+        })),
+      },
     });
   } catch (error) {
     logger.error('Get trucking operation by ID error:', error);

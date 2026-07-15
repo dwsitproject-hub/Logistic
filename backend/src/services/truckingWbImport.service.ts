@@ -53,6 +53,7 @@ export type WbImportApplyResult = {
   rowsUpserted: number;
   rowParseFailures: WbRekapParseFailure[];
   operationFailures: WbImportOperationFailure[];
+  operationWarnings: WbImportOperationFailure[];
 };
 
 type TruckingOpForWbRow = {
@@ -60,6 +61,8 @@ type TruckingOpForWbRow = {
   operation_id: string | null;
   status: string | null;
   incoterm: string | null;
+  /** SAP/contracts product for this PO — optional info, not a sheet-name gate. */
+  product: string | null;
 };
 
 async function findTruckingOpsByPoForWbImport(
@@ -73,7 +76,8 @@ async function findTruckingOpsByPoForWbImport(
        t.id,
        t.operation_id,
        t.status,
-       ${incotermExpr} AS incoterm
+       ${incotermExpr} AS incoterm,
+       NULLIF(TRIM(COALESCE(c.product::text, '')), '') AS product
      FROM trucking_operations t
      INNER JOIN contracts c ON c.id = t.contract_id
      WHERE COALESCE(t.status, '') <> 'CANCELLED'
@@ -98,17 +102,36 @@ async function upsertDailyActualWithWbImport(
   progressDate: string,
   quantityKg: number,
   wbImportId: string,
+  quantityDeliveryKg: number,
+  quantityReceiveKg: number,
 ): Promise<void> {
   await runQuery(
     db,
-    `INSERT INTO trucking_daily_actuals (trucking_operation_id, progress_date, quantity_kg, source, wb_import_id)
-     VALUES ($1, $2::date, $3::numeric, 'wb_rekap', $4::uuid)
+    `INSERT INTO trucking_daily_actuals (
+       trucking_operation_id,
+       progress_date,
+       quantity_kg,
+       quantity_delivery_kg,
+       quantity_receive_kg,
+       source,
+       wb_import_id
+     )
+     VALUES ($1, $2::date, $3::numeric, $5::numeric, $6::numeric, 'wb_rekap', $4::uuid)
      ON CONFLICT (trucking_operation_id, progress_date) DO UPDATE SET
        quantity_kg = EXCLUDED.quantity_kg,
+       quantity_delivery_kg = EXCLUDED.quantity_delivery_kg,
+       quantity_receive_kg = EXCLUDED.quantity_receive_kg,
        source = EXCLUDED.source,
        wb_import_id = EXCLUDED.wb_import_id,
        updated_at = CURRENT_TIMESTAMP`,
-    [truckingOperationId, progressDate, quantityKg, wbImportId],
+    [
+      truckingOperationId,
+      progressDate,
+      quantityKg,
+      wbImportId,
+      quantityDeliveryKg,
+      quantityReceiveKg,
+    ],
   );
 }
 
@@ -130,6 +153,30 @@ async function promoteOperationToInProgress(
          END,
          updated_at = CURRENT_TIMESTAMP
      WHERE id = $1::uuid`,
+    [truckingOperationId, earliestActualDate],
+  );
+  // Persist earliest WB actual date for Start Receive fallback when SAP AV is null.
+  await runQuery(
+    db,
+    `INSERT INTO trucking_realizations (
+       trucking_operation_id,
+       realization_start_date,
+       source,
+       updated_at
+     ) VALUES ($1::uuid, $2::date, 'wb_rekap', CURRENT_TIMESTAMP)
+     ON CONFLICT (trucking_operation_id) DO UPDATE SET
+       realization_start_date = CASE
+         WHEN trucking_realizations.realization_start_date IS NULL THEN EXCLUDED.realization_start_date
+         WHEN EXCLUDED.realization_start_date IS NULL THEN trucking_realizations.realization_start_date
+         ELSE LEAST(trucking_realizations.realization_start_date, EXCLUDED.realization_start_date)
+       END,
+       source = CASE
+         WHEN trucking_realizations.realization_start_date IS NULL
+           OR EXCLUDED.realization_start_date IS NOT NULL
+         THEN EXCLUDED.source
+         ELSE trucking_realizations.source
+       END,
+       updated_at = CURRENT_TIMESTAMP`,
     [truckingOperationId, earliestActualDate],
   );
 }
@@ -196,6 +243,7 @@ async function applyAggregatedRow(
   row: WbRekapAggregatedRow,
   wbImportId: string,
   operationFailures: WbImportOperationFailure[],
+  operationWarnings: WbImportOperationFailure[],
 ): Promise<{ updated: boolean; upserted: number; operationId?: string }> {
   const ops = await findTruckingOpsByPoForWbImport(db, row.poNumber);
   if (ops.length === 0) {
@@ -208,7 +256,11 @@ async function applyAggregatedRow(
   }
   if (ops.length > 1) {
     const labels = ops
-      .map((o) => (o.operation_id && String(o.operation_id).trim()) || o.id)
+      .map((o) => {
+        const id = (o.operation_id && String(o.operation_id).trim()) || o.id;
+        const prod = o.product ? ` / ${o.product}` : '';
+        return `${id}${prod}`;
+      })
       .join(', ');
     operationFailures.push({
       po_number: row.poNumber,
@@ -256,15 +308,29 @@ async function applyAggregatedRow(
     return { updated: false, upserted: 0 };
   }
 
+  // Always persist Netto PKS → delivery and Netto EUP → receive; quantity_kg stays OS-effective side.
   await upsertDailyActualWithWbImport(
     db,
     op.id,
     row.progressDateIso,
     qtyResult.quantityKg,
     wbImportId,
+    row.sumNettoPksKg,
+    row.sumNettoEupKg,
   );
   await syncTruckingQuantityDeliveredFromDailyActuals(db, op.id);
   await promoteOperationToInProgress(db, op.id, row.progressDateIso);
+
+  if (qtyResult.softWarning) {
+    const sapProductNote = op.product ? ` (SAP product: ${op.product})` : '';
+    operationWarnings.push({
+      po_number: row.poNumber,
+      progress_date: row.progressDateIso,
+      reason: `${qtyResult.softWarning}${sapProductNote}`,
+      operation_ids: [String(op.operation_id ?? op.id)],
+    });
+  }
+
   return { updated: true, upserted: 1, operationId: op.id };
 }
 
@@ -275,6 +341,7 @@ export async function processWbRekapWorkbookUpload(args: {
 }): Promise<WbImportApplyResult> {
   const parsed = parseWbRekapWorkbook(args.sheets, toIsoDate10FromCell);
   const operationFailures: WbImportOperationFailure[] = [];
+  const operationWarnings: WbImportOperationFailure[] = [];
   let operationsUpdated = 0;
   let rowsUpserted = 0;
 
@@ -296,7 +363,13 @@ export async function processWbRekapWorkbookUpload(args: {
   });
 
   for (const agg of parsed.aggregated) {
-    const result = await applyAggregatedRow(query, agg, importId, operationFailures);
+    const result = await applyAggregatedRow(
+      query,
+      agg,
+      importId,
+      operationFailures,
+      operationWarnings,
+    );
     if (result.updated) {
       rowsUpserted += result.upserted;
       if (result.operationId) touchedOpIds.add(result.operationId);
@@ -344,6 +417,7 @@ export async function processWbRekapWorkbookUpload(args: {
     rowsUpserted,
     rowParseFailures: parsed.rowParseFailures,
     operationFailures,
+    operationWarnings,
   };
 }
 

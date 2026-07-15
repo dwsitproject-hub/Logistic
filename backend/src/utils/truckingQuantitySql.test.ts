@@ -2,12 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
   isTruckingPipelineCompleted,
   sqlNormalizeSapTruckingQtyToKg,
+  sqlSapQtyDeliveryOnly,
+  sqlSapQtyReceiveOnly,
   sqlTruckingExpandedStoLineQtyKgExpr,
   sqlTruckingOutstandingQtyByIncoterm,
   sqlTruckingOutstandingWithinToleranceExpr,
   sqlTruckingPipelineIsCompletedExpr,
   sqlTruckingPreferWbResolvedQty,
   sqlTruckingQuantityDeliveredCoalesce,
+  sqlTruckingResolvedDeliveryQty,
+  sqlTruckingResolvedReceiveQty,
+  sqlWbActualDeliverySumKg,
+  sqlWbActualReceiveSumKg,
 } from './truckingQuantitySql';
 
 describe('truckingQuantitySql', () => {
@@ -23,6 +29,20 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('Quantity Delivered via Trucking');
   });
 
+  it('sqlSapQtyDeliveryOnly does not coalesce trucking_operations column', () => {
+    const sql = sqlSapQtyDeliveryOnly();
+    expect(sql).not.toContain('t.quantity_delivered');
+    expect(sql).toContain('Quantity Delivery Trucking');
+    expect(sql).toContain('Quantity Delivered via Trucking');
+  });
+
+  it('sqlSapQtyReceiveOnly reads receive keys only', () => {
+    const sql = sqlSapQtyReceiveOnly();
+    expect(sql).not.toContain('t.quantity_delivered');
+    expect(sql).toContain('Quantity Receive');
+    expect(sql).toContain('Qty Receive');
+  });
+
   it('sqlTruckingOutstandingQtyByIncoterm uses receive for FRC and delivered for LCO', () => {
     const sql = sqlTruckingOutstandingQtyByIncoterm('qty_del', 'qty_recv');
     expect(sql).toContain("= 'FRC'");
@@ -31,11 +51,47 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('qty_del');
   });
 
-  it('sqlTruckingPreferWbResolvedQty prefers non-zero SAP over WB when GR Open', () => {
-    const sql = sqlTruckingPreferWbResolvedQty('e.quantity_delivered', 'sap_per_sto');
+  it('sqlWbActualDeliverySumKg falls back to quantity_kg', () => {
+    const sql = sqlWbActualDeliverySumKg('e.id');
+    expect(sql).toContain('quantity_delivery_kg');
+    expect(sql).toContain('quantity_kg');
+    expect(sql).toContain('e.id');
+  });
+
+  it('sqlWbActualReceiveSumKg sums quantity_receive_kg', () => {
+    const sql = sqlWbActualReceiveSumKg('e.id');
+    expect(sql).toContain('quantity_receive_kg');
+    expect(sql).toContain('e.id');
+  });
+
+  it('sqlTruckingResolvedDeliveryQty uses WB delivery sum when Open+WB', () => {
+    const sql = sqlTruckingResolvedDeliveryQty(
+      'e.quantity_delivered',
+      'sap_per_sto',
+      'e.id',
+      'c',
+    );
+    expect(sql).toContain('quantity_delivery_kg');
     expect(sql).toContain('trucking_daily_actuals');
-    expect(sql).toContain('NULLIF((sap_per_sto), 0)');
-    expect(sql).toContain('e.quantity_delivered');
+    expect(sql).toContain('AND NOT (');
+    expect(sql).not.toContain('NULLIF((sap_per_sto), 0)');
+    expect(sql).toContain('sap_per_sto');
+  });
+
+  it('sqlTruckingResolvedReceiveQty uses WB receive sum when Open+WB', () => {
+    const sql = sqlTruckingResolvedReceiveQty(
+      'e.quantity_receive',
+      'sap_recv',
+      'e.id',
+      'c',
+    );
+    expect(sql).toContain('quantity_receive_kg');
+    expect(sql).toContain('sap_recv');
+  });
+
+  it('sqlTruckingPreferWbResolvedQty delegates to resolved delivery (Open→WB)', () => {
+    const sql = sqlTruckingPreferWbResolvedQty('e.quantity_delivered', 'sap_per_sto');
+    expect(sql).toContain('quantity_delivery_kg');
     expect(sql).toContain('AND NOT (');
   });
 

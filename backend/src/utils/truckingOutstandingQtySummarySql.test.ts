@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildTruckingOutstandingQtyExecutionAggregateQuery,
   isTruckingOsStatusOutsideActiveScope,
   mergeTruckingOutstandingQtySummaries,
   normalizeTruckingOsStatusParam,
@@ -28,6 +29,22 @@ describe('truckingOutstandingQtySummarySql', () => {
     expect(shouldIncludeTruckingUnplannedBacklogForOs('UNPLANNED')).toBe(true)
     expect(shouldIncludeTruckingUnplannedBacklogForOs('PLANNED')).toBe(false)
     expect(shouldIncludeTruckingUnplannedBacklogForOs('IN_PROGRESS')).toBe(false)
+  })
+
+  it('Planned card OS aggregates PLANNED + IN_PROGRESS (matches status card filter)', () => {
+    const built = {
+      preOuterQuery: 'WHERE 1=1',
+      outerSql: '',
+      innerParams: [],
+      outerParams: [],
+    }
+    const planned = buildTruckingOutstandingQtyExecutionAggregateQuery(built, 'PLANNED')
+    expect(planned.text).toContain("IN ('PLANNED', 'IN_PROGRESS')")
+    expect(planned.params).toEqual([])
+
+    const inProg = buildTruckingOutstandingQtyExecutionAggregateQuery(built, 'IN_PROGRESS')
+    expect(inProg.text).toMatch(/tf\.status = \$1/)
+    expect(inProg.params).toEqual(['IN_PROGRESS'])
   })
 
   it('parses and merges bucket rows', () => {

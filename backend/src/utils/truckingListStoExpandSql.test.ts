@@ -5,14 +5,18 @@ import {
 } from './truckingListStoExpandSql';
 
 describe('truckingListStoExpandSql', () => {
-  it('wrapTruckingListQueryWithStoExpansion expands by contract_stos with WB-prefer qty', () => {
+  it('wrapTruckingListQueryWithStoExpansion expands by contract_stos with Open→WB dual qty', () => {
     const sql = wrapTruckingListQueryWithStoExpansion('SELECT 1 AS id');
     expect(sql).toContain('contract_stos');
     expect(sql).toContain('expanded');
     expect(sql).toContain('trucking_daily_actuals');
+    expect(sql).toContain('quantity_delivery_kg');
+    expect(sql).toContain('quantity_receive_kg');
     expect(sql).toContain('Quantity Delivery Trucking');
     expect(sql).toContain("= 'FRC'");
     expect(sql).toContain("= 'LCO'");
+    // OS uses Contract Qty, not STO line qty
+    expect(sql).toContain('COALESCE(e.contract_qty, 0)');
   });
 
   it('recomputes pipeline status per expanded STO line (not passthrough)', () => {
@@ -30,7 +34,11 @@ describe('truckingListStoExpandSql', () => {
     const sql = wrapTruckingListQueryWithStoExpansion('SELECT 1 AS id', { skipSapJoin: true });
     expect(sql).toContain('contract_stos');
     expect(sql).not.toContain('qty_move');
-    expect(sql).toContain('e.quantity_delivered');
+    // Shell returns null qty/OS for display; stage still uses op-level outstanding.
+    expect(sql).toContain('NULL::numeric AS quantity_delivered');
+    expect(sql).toContain('NULL::numeric AS quantity_receive');
+    expect(sql).toContain('NULL::numeric AS outstanding_quantity');
+    expect(sql).toContain('e.outstanding_quantity');
     expect(sql).not.toMatch(/FROM sap_processed_data spd\s+WHERE spd\.contract_number = e\.contract_number/);
   });
 

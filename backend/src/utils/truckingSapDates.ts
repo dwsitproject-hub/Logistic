@@ -212,7 +212,7 @@ export function sqlMaxTruckingRealizationEndForContract(
 }
 
 /**
- * Min realization start across trucking ops — extension start, then SAP AV (never planning columns).
+ * Min realization start across trucking ops — SAP AV first, then WB/extension, then op start date.
  */
 export function sqlMinTruckingRealizationStartForContract(
   contractIdExpr: string,
@@ -220,7 +220,7 @@ export function sqlMinTruckingRealizationStartForContract(
 ): string {
   const sap = sqlSapTruckingStartReceiveDateByContractNumber(contractNumberExpr);
   return `(
-    SELECT MIN(COALESCE(tr.realization_start_date, (${sap})))
+    SELECT MIN(COALESCE((${sap}), tr.realization_start_date, t.trucking_start_date))
     FROM trucking_operations t
     LEFT JOIN trucking_realizations tr ON tr.trucking_operation_id = t.id
     WHERE t.contract_id = ${contractIdExpr}

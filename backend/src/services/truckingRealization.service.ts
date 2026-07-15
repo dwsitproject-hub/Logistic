@@ -89,13 +89,25 @@ export async function upsertTruckingRealization(
 export type TruckingDailyActualRow = {
   progress_date: string;
   quantity_kg: number;
+  quantity_delivery_kg?: number | null;
+  quantity_receive_kg?: number | null;
+};
+
+/** Input row for upsert/replace — only effective quantity_kg is required. */
+export type TruckingDailyActualInput = {
+  progress_date: string;
+  quantity_kg: number;
 };
 
 export async function listTruckingDailyActuals(
   truckingOperationId: string,
 ): Promise<TruckingDailyActualRow[]> {
   const result = await query(
-    `SELECT progress_date::text AS progress_date, quantity_kg::float8 AS quantity_kg
+    `SELECT
+       progress_date::text AS progress_date,
+       quantity_kg::float8 AS quantity_kg,
+       quantity_delivery_kg::float8 AS quantity_delivery_kg,
+       quantity_receive_kg::float8 AS quantity_receive_kg
      FROM trucking_daily_actuals
      WHERE trucking_operation_id = $1
      ORDER BY progress_date ASC`,
@@ -259,7 +271,7 @@ export async function resolveTruckingOperationIdByExtNoAndPo(
 export async function replaceTruckingDailyActuals(
   executor: Queryable,
   truckingOperationId: string,
-  rows: TruckingDailyActualRow[],
+  rows: TruckingDailyActualInput[],
   source = 'manual',
 ): Promise<void> {
   const normalized = rows
@@ -299,7 +311,7 @@ export async function replaceTruckingDailyActuals(
 export async function upsertTruckingDailyActualRows(
   executor: Queryable,
   truckingOperationId: string,
-  rows: TruckingDailyActualRow[],
+  rows: TruckingDailyActualInput[],
   source = 'manual',
 ): Promise<void> {
   for (const row of rows) {
