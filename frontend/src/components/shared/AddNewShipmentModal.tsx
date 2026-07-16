@@ -45,6 +45,7 @@ import type {
 import {
   fetchStoLinkedPurchaseOrderOptions,
   fetchStoSapPreview,
+  resolvePlotStoLookupKey,
 } from '@/components/shared/addNewShipmentTypes'
 import { EditShipmentModal } from '@/components/shared/EditShipmentModal'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
@@ -1604,7 +1605,9 @@ export function AddNewShipmentModal({
       setLoadingEdit(true)
       setEditShipmentId(null)
       try {
-        const stoHint = String(prefilledStoNumber ?? '').trim()
+        // Prefer STO from the Shipments list row (SAP group key). getShipmentById may return
+        // contracts.sto_number for a single child PO, which can differ from the list STO and
+        // would under-load sibling POs (e.g. 1 of 3).
         const [detailRes, portsRes] = await Promise.all([
           api.get(`/shipments/${shipmentId}`),
           api.get(`/shipments/${shipmentId}/loading-ports`).catch(() => null),
@@ -1615,13 +1618,20 @@ export function AddNewShipmentModal({
           return
         }
         const row = { ...shipment, id: shipmentId } as Record<string, unknown>
-        const sto =
-          String(shipment.sto_number ?? stoHint ?? '').trim() ||
-          String(shipment.operation_id ?? '').trim()
+        const sto = resolvePlotStoLookupKey({
+          listSto: prefilledStoNumber,
+          editStoNumber,
+          apiStoNumber: shipment.sto_number as string | null | undefined,
+          shipmentId: shipment.shipment_id as string | null | undefined,
+          operationId: shipment.operation_id as string | null | undefined,
+        })
+        const contractList = (prefilledContractNumbers ?? []).filter(Boolean)
 
         const [allPos, preview] = await Promise.all([
-          sto ? fetchStoLinkedPurchaseOrderOptions(sto, []) : Promise.resolve([]),
-          sto ? fetchStoSapPreview(sto) : Promise.resolve({ has_sap_sto: false, vessel_name: null, port_of_discharge: null }),
+          sto ? fetchStoLinkedPurchaseOrderOptions(sto, contractList) : Promise.resolve([]),
+          sto
+            ? fetchStoSapPreview(sto)
+            : Promise.resolve({ has_sap_sto: false, vessel_name: null, port_of_discharge: null }),
         ])
 
         if (preview.has_sap_sto) {
@@ -1701,6 +1711,7 @@ export function AddNewShipmentModal({
     },
     [
       applyStoLinkedPoOptionsToForm,
+      editStoNumber,
       hydrateShipmentEditForm,
       prefilledContractNumbers,
       prefilledStoNumber,
@@ -2131,8 +2142,6 @@ export function AddNewShipmentModal({
         contractNumbers,
         contractQtyAssigned: contractQtyAssignedPayload,
         poQtyAssigned: Object.keys(poQtyAssigned).length > 0 ? poQtyAssigned : undefined,
-        shipmentQtyKlipByContract: { ...contractQtyAssignedPayload },
-        shipmentQtyKlipByPo: Object.keys(poQtyAssigned).length > 0 ? { ...poQtyAssigned } : undefined,
         vesselName: newShipment.vesselName,
         vesselCode: newShipment.vesselCode,
         vesselOwner: newShipment.vesselOwner,
@@ -2383,7 +2392,7 @@ export function AddNewShipmentModal({
                   {hasSapSto ? (
                     <>
                       {' '}
-                      &nbsp;•&nbsp; <strong>SAP STO:</strong> Shipment Qty defaults from SAP (editable → saved as Shipment Plan Qty + Delivery Qty KLIP)
+                      &nbsp;•&nbsp; <strong>SAP STO:</strong> Shipment Qty defaults from SAP (editable → saved as Shipment Plan Qty)
                     </>
                   ) : null}
                 </span>

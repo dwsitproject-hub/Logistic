@@ -22,8 +22,35 @@ describe('deriveShipmentStatus', () => {
     ).toBe('COMPLETED');
   });
 
-  it('returns UNPLANNED when no ETA, ATA, or closed contract', () => {
+  it('returns UNPLANNED when no ETA, ATA, delivery qty, or closed contract', () => {
     expect(deriveShipmentStatus({})).toBe('UNPLANNED');
+  });
+
+  it('returns PLANNED when Delivery Qty present and all ATA are null', () => {
+    expect(
+      deriveShipmentStatus({
+        quantity_delivered_sap: 1_000_000,
+      }),
+    ).toBe('PLANNED');
+    expect(
+      deriveShipmentStatus({
+        quantity_delivered_klip: 500_000,
+      }),
+    ).toBe('PLANNED');
+    expect(
+      deriveShipmentStatus({
+        quantity_delivered: 250_000,
+      }),
+    ).toBe('PLANNED');
+  });
+
+  it('keeps ATA tier when Delivery Qty exists', () => {
+    expect(
+      deriveShipmentStatus({
+        quantity_delivered_sap: 1_000_000,
+        ata_arrival_at_loading_port: '2026-01-01',
+      }),
+    ).toBe('ARRIVED_LP');
   });
 
   it('maps loading-port ATA tiers', () => {

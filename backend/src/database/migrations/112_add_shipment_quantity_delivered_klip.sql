@@ -1,5 +1,5 @@
 -- Explicit KLIP Delivery Qty, separate from SAP-derived / legacy shipments.quantity_delivered.
--- Used when Open contracts take Shipment Qty from Add New Shipment (dual-written with planning).
+-- Populated by Edit Shipment / info modal (quantity_delivered), not by Add New Shipment planning qty.
 
 ALTER TABLE shipments
   ADD COLUMN IF NOT EXISTS quantity_delivered_klip NUMERIC(15, 2);

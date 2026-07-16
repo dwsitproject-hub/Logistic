@@ -5,6 +5,7 @@ import {
   buildUnplannedContractBacklogTableCountCte,
   appendContractScopeToolbarFilters,
   unplannedContractBacklogBaseWhereSql,
+  unplannedShipmentExecutionOuterSql,
 } from './shipmentUnplannedHybridSql';
 
 describe('shipmentUnplannedHybridSql', () => {
@@ -12,6 +13,11 @@ describe('shipmentUnplannedHybridSql', () => {
     const sql = unplannedContractBacklogBaseWhereSql('c', 'l');
     expect(sql).toContain('NOT EXISTS');
     expect(sql).toContain('s_ns.contract_id = c.id');
+  });
+
+  it('limits contract backlog to CIF/FOB/CFR incoterms', () => {
+    const sql = unplannedContractBacklogBaseWhereSql('c', 'l');
+    expect(sql).toContain("IN ('CIF', 'FOB', 'CFR')");
   });
 
   it('builds contract backlog count query', () => {
@@ -52,5 +58,12 @@ describe('shipmentUnplannedHybridSql', () => {
     );
     expect(sql).toContain('c.supplier');
     expect(params).toEqual([['PT ABC']]);
+  });
+
+  it('limits unplanned shipment execution to CIF/FOB/CFR', () => {
+    const sql = unplannedShipmentExecutionOuterSql('');
+    expect(sql).toContain("'CIF'");
+    expect(sql).toContain("'FOB'");
+    expect(sql).toContain("'CFR'");
   });
 });

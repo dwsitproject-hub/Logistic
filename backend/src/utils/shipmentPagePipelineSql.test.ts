@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   appendShipmentPipelineStageFilter,
+  buildShipmentPageUnplannedOpenContractsCte,
   normalizeShipmentPagePipelineStageParam,
   shipmentHasAnyDischargePortAtaExpr,
   shipmentHasAnyLoadingPortAtaExpr,
@@ -31,10 +32,12 @@ describe('shipmentPagePipelineSql', () => {
     expect(shipmentHasAnyDischargePortAtaExpr('f')).toContain('ata_vessel_start_discharging');
   });
 
-  it('filters unplanned rows without ETA or ATA', () => {
+  it('filters unplanned rows without ETA, ATA, or Delivery Qty', () => {
     const sql = shipmentPagePipelineUnplannedRowPredicate('sb');
     expect(sql).toContain('is_contract_sap_closed');
     expect(sql).toContain('eta_arrival');
+    expect(sql).toContain('quantity_delivered');
+    expect(sql).toContain('quantity_delivered_klip');
   });
 
   it('builds stage filter SQL for pipeline and unplanned', () => {
@@ -52,6 +55,16 @@ describe('shipmentPagePipelineSql', () => {
 
     const unplanned = appendShipmentPipelineStageFilter('UNPLANNED', 3);
     expect(unplanned.sql).toContain('is_contract_sap_closed');
+    expect(unplanned.sql).toContain("'CIF'");
+    expect(unplanned.sql).toContain("'FOB'");
+    expect(unplanned.sql).toContain("'CFR'");
     expect(unplanned.params).toEqual([]);
+  });
+
+  it('limits unplanned open-contracts CTE to CIF/FOB/CFR', () => {
+    const cte = buildShipmentPageUnplannedOpenContractsCte();
+    expect(cte).toContain("'CIF'");
+    expect(cte).toContain("'FOB'");
+    expect(cte).toContain("'CFR'");
   });
 });

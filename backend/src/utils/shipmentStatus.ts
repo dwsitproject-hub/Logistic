@@ -84,6 +84,10 @@ export type ShipmentMilestones = {
   ata_complete_discharge?: unknown;
   /** SAP import status or contracts.status — Close/Completed without ATA still resolves COMPLETED. */
   contract_import_status?: unknown;
+  /** Delivery qty signals (kg) — any > 0 can promote UNPLANNED → PLANNED when ATA are all null. */
+  quantity_delivered?: unknown;
+  quantity_delivered_klip?: unknown;
+  quantity_delivered_sap?: unknown;
 };
 
 const hasDate = (v: unknown): boolean => {
@@ -132,6 +136,35 @@ export function hasAnyEtaMilestone(m: Pick<ShipmentMilestones, keyof ShipmentMil
   );
 }
 
+export function hasAnyAtaMilestone(m: Pick<ShipmentMilestones, keyof ShipmentMilestones>): boolean {
+  return (
+    hasDate(m.ata_arrival_at_loading_port) ||
+    hasDate(m.ata_berthed_at_loading_port) ||
+    hasDate(m.ata_start_loading) ||
+    hasDate(m.ata_completed_loading) ||
+    hasDate(m.ata_sailed_from_loading_port) ||
+    hasDate(m.ata_arrive_at_discharge_port) ||
+    hasDate(m.ata_berthed_at_discharge_port) ||
+    hasDate(m.ata_start_discharging) ||
+    hasDate(m.ata_complete_discharge)
+  );
+}
+
+function positiveQtyKg(v: unknown): boolean {
+  if (v == null || v === '') return false;
+  const n = typeof v === 'number' ? v : Number(String(v).replace(/,/g, '').trim());
+  return Number.isFinite(n) && n > 0;
+}
+
+/** True when any Delivery Qty source (KLIP / SAP / legacy) has a positive value. */
+export function hasDeliveryQtySignal(m: Pick<ShipmentMilestones, keyof ShipmentMilestones>): boolean {
+  return (
+    positiveQtyKg(m.quantity_delivered_klip) ||
+    positiveQtyKg(m.quantity_delivered_sap) ||
+    positiveQtyKg(m.quantity_delivered)
+  );
+}
+
 export function normalizeShipmentDetailStatus(raw: string | null | undefined): ShipmentAutoStatus {
   const normalized = String(raw ?? '')
     .trim()
@@ -149,6 +182,7 @@ export function normalizeShipmentDetailStatus(raw: string | null | undefined): S
 /**
  * Derive SEA shipment status from milestones (latest ATA stage wins).
  * Maps 1:1 with summary breakdown tiers on the Shipments page.
+ * Delivery Qty (SAP/KLIP) with no ATA promotes to PLANNED (same as ETA-only planning).
  */
 export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus {
   if (isContractDeliveryClosed(m.contract_import_status)) return 'COMPLETED';
@@ -162,6 +196,7 @@ export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus 
   if (hasDate(m.ata_berthed_at_loading_port)) return 'BERTHED_LP';
   if (hasDate(m.ata_arrival_at_loading_port)) return 'ARRIVED_LP';
   if (hasAnyEtaMilestone(m)) return 'PLANNED';
+  if (!hasAnyAtaMilestone(m) && hasDeliveryQtySignal(m)) return 'PLANNED';
   return 'UNPLANNED';
 }
 

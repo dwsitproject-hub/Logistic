@@ -13,6 +13,10 @@ import {
   shipmentPagePipelineUnplannedRowPredicate,
   sqlContractHasNoRegisteredEtaExpr,
 } from './shipmentPagePipelineSql';
+import {
+  buildShipmentPageSeaIncotermColumnSql,
+  buildShipmentPageSeaIncotermScopeSql,
+} from './shipmentIncotermScope';
 import { buildShipmentSeaMixTransportSql } from './shipmentStoTypeSql';
 
 export { buildShipmentPageUnplannedOpenContractsCte };
@@ -151,10 +155,11 @@ export function appendContractScopeToolbarFilters(
   };
 }
 
-/** Shared WHERE for open SEA/MIX contracts without shipment and without registered ETA. */
+/** Shared WHERE for open SEA/MIX contracts (CIF/FOB/CFR) without shipment and without registered ETA. */
 export function unplannedContractBacklogBaseWhereSql(contractAlias = 'c', spdAlias = 'l'): string {
   return `
     ${buildShipmentSeaMixTransportSql(contractAlias)}
+    AND ${buildShipmentPageSeaIncotermScopeSql(contractAlias)}
     AND NOT (${sqlIsContractSapClosedExpr(contractAlias)})
     AND ${shipmentPageExcludeB2bChildCond(spdAlias)}
     AND ${sqlContractHasNoRegisteredEtaExpr(contractAlias)}
@@ -330,7 +335,7 @@ export function buildUnplannedContractBacklogPageQuery(
 
 /** Shipment-side unplanned filter (toolbar + unplanned execution predicate). */
 export function unplannedShipmentExecutionOuterSql(toolbarOuterSql: string): string {
-  return `${toolbarOuterSql} AND ${shipmentPagePipelineUnplannedRowPredicate('sb')}`;
+  return `${toolbarOuterSql} AND ${shipmentPagePipelineUnplannedRowPredicate('sb')} AND ${buildShipmentPageSeaIncotermColumnSql('sb.incoterm')}`;
 }
 
 export function buildUnplannedShipmentExecutionCountQuery(

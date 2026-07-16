@@ -4,12 +4,13 @@
  */
 
 import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
-import { shipmentEffectiveStatusExpr, shipmentHasAnyEtaExpr } from './shipmentListFilters';
+import { shipmentEffectiveStatusExpr, shipmentHasAnyEtaExpr, shipmentHasDeliveryQtyExpr } from './shipmentListFilters';
 import {
   SHIPMENT_AT_DISCHARGE_PORT_STATUSES,
   SHIPMENT_AT_LOADING_PORT_STATUSES,
   SHIPMENT_SAILED_STATUSES,
 } from './shipmentStatus';
+import { buildShipmentPageSeaIncotermColumnSql, buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
 import { buildShipmentSeaMixTransportSql } from './shipmentStoTypeSql';
 
 /** Pipeline stage keys used by GET /shipments?status=… (Shipments page only). */
@@ -128,17 +129,19 @@ export function shipmentPagePipelineStageExpr(alias: string): string {
       WHEN ${f}.ata_vessel_sailed_from_loading_port IS NOT NULL THEN 'SAILED'
       WHEN ${shipmentHasAnyLoadingPortAtaExpr(f)} THEN 'AT_LOADING_PORT'
       WHEN ${shipmentHasAnyEtaExpr(f)} THEN 'PLANNED'
+      WHEN ${shipmentHasDeliveryQtyExpr(f)} THEN 'PLANNED'
       ELSE NULL
     END
   )`;
 }
 
-/** Table filter for Unplanned card — open contract STO/operation row without ETA or ATA milestones. */
+/** Table filter for Unplanned card — open STO row without ETA/ATA and without Delivery Qty. */
 export function shipmentPagePipelineUnplannedRowPredicate(alias: string): string {
   const f = alias;
   return `(
     NOT COALESCE(${f}.is_contract_sap_closed, FALSE)
     AND NOT ${shipmentHasAnyEtaExpr(f)}
+    AND NOT ${shipmentHasDeliveryQtyExpr(f)}
     AND NOT ${shipmentHasAnyLoadingPortAtaExpr(f)}
     AND NOT ${shipmentHasAnyDischargePortAtaExpr(f)}
     AND ${f}.ata_vessel_sailed_from_loading_port IS NULL
@@ -184,7 +187,7 @@ export function shipmentPageExcludeB2bChildCond(lAlias = 'l'): string {
 }
 
 /**
- * CTE: count distinct open SEA/MIX contracts with no registered ETA (Unplanned card).
+ * CTE: count distinct open SEA/MIX contracts (CIF/FOB/CFR) with no registered ETA (Unplanned card).
  * `contractScopeSql` — additional AND clauses on `c` (date/plant/contract toolbar scope).
  */
 export function buildShipmentPageUnplannedOpenContractsCte(contractScopeSql = ''): string {
@@ -194,6 +197,7 @@ export function buildShipmentPageUnplannedOpenContractsCte(contractScopeSql = ''
         FROM contracts c
         LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
         WHERE ${buildShipmentSeaMixTransportSql('c')}
+          AND ${buildShipmentPageSeaIncotermScopeSql('c')}
           AND NOT (${sqlIsContractSapClosedExpr('c')})
           AND ${shipmentPageExcludeB2bChildCond('l')}
           AND ${sqlContractHasNoRegisteredEtaExpr('c')}
@@ -257,7 +261,7 @@ export function appendShipmentPipelineStageFilter(
 
   if (stage === 'UNPLANNED') {
     return {
-      sql: ` AND ${shipmentPagePipelineUnplannedRowPredicate('sb')}`,
+      sql: ` AND ${shipmentPagePipelineUnplannedRowPredicate('sb')} AND ${buildShipmentPageSeaIncotermColumnSql('sb.incoterm')}`,
       params: [],
       nextIndex: startIndex,
     };

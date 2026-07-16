@@ -501,6 +501,9 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
       contract_import_status: row.is_contract_sap_closed
         ? 'Close'
         : row.contract_import_status,
+      quantity_delivered: row.quantity_delivered,
+      quantity_delivered_klip: row.quantity_delivered_klip,
+      quantity_delivered_sap: row.quantity_delivered_sap,
     });
   }
   return rows;

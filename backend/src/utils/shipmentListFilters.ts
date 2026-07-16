@@ -367,6 +367,15 @@ export function shipmentHasAnyEtaExpr(alias: string): string {
 }
 
 /**
+ * Delivery Qty signal on grouped shipment_base rows (legacy + KLIP).
+ * quantity_delivered_sap is page-level only — list display also uses it via deriveShipmentStatus.
+ */
+export function shipmentHasDeliveryQtyExpr(alias: string): string {
+  const f = alias
+  return `(COALESCE(${f}.quantity_delivered, 0) > 0 OR COALESCE(${f}.quantity_delivered_klip, 0) > 0)`
+}
+
+/**
  * Effective SEA shipment status on grouped list rows (`shipment_base` / `filtered_shipments`).
  * Mirrors deriveShipmentStatus — granular ATA tiers for Shipments module.
  */
@@ -386,6 +395,7 @@ export function shipmentEffectiveStatusExpr(alias: string): string {
       WHEN ${f}.ata_vessel_berthed_at_loading_port IS NOT NULL THEN 'BERTHED_LP'
       WHEN ${f}.ata_vessel_arrival_at_loading_port IS NOT NULL THEN 'ARRIVED_LP'
       WHEN ${shipmentHasAnyEtaExpr(f)} THEN 'PLANNED'
+      WHEN ${shipmentHasDeliveryQtyExpr(f)} THEN 'PLANNED'
       ELSE 'UNPLANNED'
     END
   )`

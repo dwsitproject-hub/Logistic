@@ -26,16 +26,10 @@ export type CreateShipmentFormPayload = {
   operationId: string
   stoNumber: string
   contractNumbers: string[]
-  /** Planning allocation (MT) by contract key — also dual-written as Delivery Qty KLIP. */
+  /** Planning allocation (MT) by contract key — Shipment Plan Qty only (not Delivery Qty). */
   contractQtyAssigned: Record<string, string | number>
-  /** Planning allocation (MT) by contracts.id (PO line) — also dual-written as Delivery Qty KLIP. */
+  /** Planning allocation (MT) by contracts.id (PO line) — Shipment Plan Qty only (not Delivery Qty). */
   poQtyAssigned?: Record<string, string | number>
-  /**
-   * Explicit KLIP shipment qty (MT) mirror of the planning maps.
-   * Same keys/values as contractQtyAssigned / poQtyAssigned; backend persists as quantity_delivered_klip.
-   */
-  shipmentQtyKlipByContract?: Record<string, string | number>
-  shipmentQtyKlipByPo?: Record<string, string | number>
   vesselName: string
   vesselCode: string
   vesselOwner: string
@@ -189,6 +183,30 @@ export function dedupeShipmentPoOptions(options: ShipmentPoOption[]): ShipmentPo
     out.push(opt)
   }
   return out
+}
+
+/**
+ * Resolve STO key for Plot / Add from a list row.
+ * Prefer the Shipments table STO (SAP group) over getShipmentById's contract.sto_number,
+ * which can belong to a single child PO and miss siblings on the same list STO.
+ */
+export function resolvePlotStoLookupKey(input: {
+  listSto?: string | null
+  editStoNumber?: string | null
+  apiStoNumber?: string | null
+  shipmentId?: string | null
+  operationId?: string | null
+}): string {
+  const listSto =
+    String(input.listSto ?? '').trim() || String(input.editStoNumber ?? '').trim()
+  const shipmentId = String(input.shipmentId ?? '').trim()
+  const shipmentIdAsSto = /^\d+$/.test(shipmentId) ? shipmentId : ''
+  return (
+    listSto ||
+    shipmentIdAsSto ||
+    String(input.apiStoNumber ?? '').trim() ||
+    String(input.operationId ?? '').trim()
+  )
 }
 
 /** PO lines linked to a grouped STO row (multi-contract / multi-PO). */

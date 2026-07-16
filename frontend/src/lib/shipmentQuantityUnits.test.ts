@@ -46,6 +46,16 @@ describe('resolveShipmentListDeliveredKg', () => {
     ).toBe(4_000_000)
   })
 
+  it('Open with null KLIP (planning-only, no delivery edit) uses SAP', () => {
+    expect(
+      resolveShipmentListDeliveredKg({
+        quantity_delivered_klip: null,
+        quantity_delivered_sap: 2_500_000,
+        is_contract_sap_closed: false,
+      }),
+    ).toBe(2_500_000)
+  })
+
   it('Close always prefers SAP over KLIP', () => {
     expect(
       resolveShipmentListDeliveredKg({
