@@ -26,23 +26,34 @@ describe('sapContractDetailQtyToKg', () => {
 })
 
 describe('resolveShipmentListDeliveredKg', () => {
-  it('prefers manual shipment qty when raised above SAP', () => {
+  it('Open + KLIP qty present uses quantity_delivered_klip even if below SAP', () => {
     expect(
       resolveShipmentListDeliveredKg({
-        quantity_delivered: 1_005_000,
+        quantity_delivered_klip: 500_000,
         quantity_delivered_sap: 1_000_000,
+        is_contract_sap_closed: false,
       }),
-    ).toBe(1_005_000)
+    ).toBe(500_000)
   })
 
-  it('uses SAP when manual shell is a partial multi-PO total', () => {
-    // STO 1006018900: one shipment row 208360 vs SAP sum 4_000_000
+  it('Open without KLIP falls back to SAP', () => {
     expect(
       resolveShipmentListDeliveredKg({
         quantity_delivered: 208_360,
         quantity_delivered_sap: 4_000_000,
+        is_contract_sap_closed: false,
       }),
     ).toBe(4_000_000)
+  })
+
+  it('Close always prefers SAP over KLIP', () => {
+    expect(
+      resolveShipmentListDeliveredKg({
+        quantity_delivered_klip: 5_000_000,
+        quantity_delivered_sap: 4_002_486,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(4_002_486)
   })
 
   it('uses SAP when manual is 0 but SAP has delivery', () => {
@@ -54,11 +65,10 @@ describe('resolveShipmentListDeliveredKg', () => {
     ).toBe(497_115)
   })
 
-  it('uses SAP when manual matches or is absent', () => {
+  it('falls back to legacy quantity_delivered when KLIP and SAP are absent', () => {
     expect(
       resolveShipmentListDeliveredKg({
         quantity_delivered: 1_000_000,
-        quantity_delivered_sap: 1_000_000,
       }),
     ).toBe(1_000_000)
     expect(resolveShipmentListDeliveredKg({ quantity_delivered_sap: 500_000 })).toBe(500_000)

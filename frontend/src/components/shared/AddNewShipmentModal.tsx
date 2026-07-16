@@ -1923,7 +1923,7 @@ export function AddNewShipmentModal({
     const hasAnyQty = newShipment.contractNumbers.some((id) => parseFloat(contractQtyAssigned[id] ?? '') > 0)
     if (newShipment.contractNumbers.length > 0 && !hasAnyQty)
       errors.contractQty = hasSapSto
-        ? 'STO Qty must be filled for at least one PO'
+        ? 'Shipment Qty must be filled for at least one PO'
         : 'Contract Qty assign to STO must be filled for at least one contract'
     if (transportMode === 'sea' || transportMode === 'mixed') {
       if (!newShipment.vesselName.trim()) errors.vesselName = 'Vessel Name is required for Sea contracts'
@@ -2078,9 +2078,7 @@ export function AddNewShipmentModal({
       showNotification(
         'warning',
         'Quantity exceeds vessel capacity',
-        hasSapSto
-          ? 'Sum of STO Qty cannot exceed Vessel Capacity.'
-          : 'Sum of "Assign STO (MT)" cannot exceed Vessel Capacity.',
+        'Sum of Shipment Qty (MT) cannot exceed Vessel Capacity.',
       )
       return
     }
@@ -2133,6 +2131,8 @@ export function AddNewShipmentModal({
         contractNumbers,
         contractQtyAssigned: contractQtyAssignedPayload,
         poQtyAssigned: Object.keys(poQtyAssigned).length > 0 ? poQtyAssigned : undefined,
+        shipmentQtyKlipByContract: { ...contractQtyAssignedPayload },
+        shipmentQtyKlipByPo: Object.keys(poQtyAssigned).length > 0 ? { ...poQtyAssigned } : undefined,
         vesselName: newShipment.vesselName,
         vesselCode: newShipment.vesselCode,
         vesselOwner: newShipment.vesselOwner,
@@ -2383,7 +2383,7 @@ export function AddNewShipmentModal({
                   {hasSapSto ? (
                     <>
                       {' '}
-                      &nbsp;•&nbsp; <strong>SAP STO:</strong> STO Qty defaults from SAP (editable → saved as Shipment Plan Qty)
+                      &nbsp;•&nbsp; <strong>SAP STO:</strong> Shipment Qty defaults from SAP (editable → saved as Shipment Plan Qty + Delivery Qty KLIP)
                     </>
                   ) : null}
                 </span>
@@ -2549,7 +2549,7 @@ export function AddNewShipmentModal({
                               className={`${COMPACT_TH} text-right w-36`}
                               title={hasSapSto ? 'SAP STO quantity (MT); edits save as Shipment Plan Qty' : undefined}
                             >
-                              {hasSapSto ? 'STO Qty' : 'Assign STO (MT)'}
+                              Shipment Qty (MT)
                             </TableHead>
                             {!isEditMode && <TableHead className={`${COMPACT_TH} w-8`} />}
                           </TableRow>

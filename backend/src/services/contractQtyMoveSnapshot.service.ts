@@ -73,6 +73,23 @@ export class ContractQtyMoveSnapshotService {
       .filter(Boolean);
     return this.refreshForContracts(contractNumbers);
   }
+
+  /** Refresh snapshot for contracts linked to the given shipment UUIDs (after KLIP qty edits). */
+  static async refreshForShipmentIds(shipmentIds: string[]): Promise<number> {
+    const ids = shipmentIds.map((id) => String(id).trim()).filter(Boolean);
+    if (ids.length === 0) return 0;
+    const res = await query(
+      `SELECT DISTINCT c.contract_id
+       FROM shipments s
+       INNER JOIN contracts c ON c.id = s.contract_id
+       WHERE s.id = ANY($1::uuid[])`,
+      [ids],
+    );
+    const contractNumbers = res.rows
+      .map((r) => String((r as { contract_id?: string }).contract_id ?? '').trim())
+      .filter(Boolean);
+    return this.refreshForContracts(contractNumbers);
+  }
 }
 
 /** Pick snapshot join or live qty_move CTE (same output shape). */

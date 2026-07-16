@@ -99,28 +99,33 @@ export function mergeShipmentQtyOverridesOnContractRows<
 
 /**
  * Shipments list table — kg for display.
- * Prefer SAP when present. Only prefer KLIP manual when the user raised vessel qty
- * above the SAP total (same rule as multi-PO mergeShipmentQtyOverridesOnContractRows).
- * Partial shell totals (one PO line of a multi-PO STO) must not override SAP.
+ * Open + KLIP qty present → quantity_delivered_klip
+ * Open without KLIP → SAP fallback
+ * Close → SAP
+ * Legacy quantity_delivered is only a last-resort fallback when KLIP/SAP are both absent.
  */
 export function resolveShipmentListDeliveredKg(shipment: {
+  quantity_delivered_klip?: number | string | null
   quantity_delivered?: number | string | null
   total_quantity_delivered?: number | string | null
   quantity_delivered_sap?: number | string | null
+  is_contract_sap_closed?: boolean | null
 }): number | null {
-  const manual =
+  const closed = Boolean(shipment.is_contract_sap_closed)
+  const klip = shipmentStoredQtyKg(shipment.quantity_delivered_klip)
+  const sap = shipmentStoredQtyKg(shipment.quantity_delivered_sap)
+  const legacy =
     shipmentStoredQtyKg(shipment.quantity_delivered)
     ?? shipmentStoredQtyKg(shipment.total_quantity_delivered)
-  const sap = shipmentStoredQtyKg(shipment.quantity_delivered_sap)
-  if (
-    isMeaningfulManualShipmentQtyKg(manual)
-    && sap !== null
-    && manual! > sap + 0.5
-  ) {
-    return manual
+
+  if (closed) {
+    return sap ?? null
+  }
+  if (isMeaningfulManualShipmentQtyKg(klip)) {
+    return klip
   }
   if (sap !== null) return sap
-  return manual
+  return legacy
 }
 
 export function resolveShipmentListReceiveKg(shipment: {

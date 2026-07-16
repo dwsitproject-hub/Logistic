@@ -55,6 +55,28 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain("LIKE 'LAND%'");
   });
 
+  it('buildQtyMoveCte overlays SEA FOB/CIF qty from Open KLIP shipment actuals', () => {
+    const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
+    expect(sql).toContain('shipment_klip_overlay');
+    expect(sql).toContain('klip_delivery_kg');
+    expect(sql).toContain('klip_receive_kg');
+    expect(sql).toContain("IN ('FOB', 'CIF')");
+    expect(sql).toContain('quantity_delivered_klip');
+    expect(sql).toContain('actual_vessel_qty_receive');
+    expect(sql).toContain("COALESCE(s.status, '') <> 'CANCELLED'");
+    expect(sql).toContain('sk.klip_delivery_kg');
+    expect(sql).toContain('sk.klip_receive_kg');
+  });
+
+  it('buildQtyMoveCte shipment overlay remains in in_subquery (snapshot refresh path)', () => {
+    const sql = buildQtyMoveCte({
+      kind: 'in_subquery',
+      subquery: 'SELECT contract_id FROM contracts',
+    });
+    expect(sql).toContain('shipment_klip_overlay');
+    expect(sql).toContain('SELECT contract_id FROM contracts');
+  });
+
   it('buildQtyMoveFromSnapshotCte reads contract_qty_move_snapshot scoped to list', () => {
     const sql = buildQtyMoveFromSnapshotCte('contract_scope');
     expect(sql).toContain('contract_qty_move_snapshot');
@@ -67,5 +89,6 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('INSERT INTO contract_qty_move_snapshot');
     expect(sql).toContain('qty_move AS');
     expect(sql).toContain('trucking_wb_overlay');
+    expect(sql).toContain('shipment_klip_overlay');
   });
 });

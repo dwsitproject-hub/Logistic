@@ -278,6 +278,38 @@ async function upsertPoQtyAssignment(
   }
 }
 
+/**
+ * Dual-write Shipment Qty (MT) onto the matching shipment child as quantity_delivered_klip (kg).
+ * Matches one active row per contract (+ optional PO) so multi-PO totals are not multiplied.
+ */
+async function applyShipmentQtyDeliveredKlip(
+  shipmentIds: string[],
+  contractNumber: string,
+  poNumber: string | null,
+  qtyMt: number,
+): Promise<void> {
+  const qtyKg = stoQtyAssignedMtToKg(qtyMt);
+  if (qtyKg <= 0 || shipmentIds.length === 0) return;
+  const poKey = poNumber ? String(poNumber).trim() : '';
+  await query(
+    `
+    UPDATE shipments s
+    SET quantity_delivered_klip = $1::numeric,
+        updated_at = CURRENT_TIMESTAMP
+    FROM contracts c
+    WHERE s.id = ANY($2::uuid[])
+      AND s.contract_id = c.id
+      AND TRIM(c.contract_id) = TRIM($3)
+      AND (
+        $4 = ''
+        OR COALESCE(TRIM(c.po_number::text), '') = $4
+      )
+      AND COALESCE(s.status, '') <> 'CANCELLED'
+    `,
+    [qtyKg, shipmentIds, String(contractNumber).trim(), poKey],
+  );
+}
+
 /** pg text[] (or pre-parsed array) → sorted distinct display list. */
 function normalizeVesselNameList(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
@@ -714,6 +746,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.eta_discharge_complete) as eta_discharge_complete,
           COALESCE(SUM(s.quantity_shipped), 0) as quantity_shipped,
           COALESCE(SUM(s.quantity_delivered), 0) as quantity_delivered,
+          COALESCE(SUM(s.quantity_delivered_klip), 0) as quantity_delivered_klip,
           COALESCE(SUM(s.inbound_weight), 0) as inbound_weight,
           COALESCE(SUM(s.outbound_weight), 0) as outbound_weight,
           COALESCE(AVG(s.gain_loss_percentage), 0) as gain_loss_percentage,
@@ -2023,6 +2056,10 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       updateFields.push(`quantity_delivered = $${paramIndex}::numeric`);
       updateValues.push(updateData.quantity_delivered);
       paramIndex++;
+      // Keep explicit KLIP delivery source in sync with manual KLIP edits.
+      updateFields.push(`quantity_delivered_klip = $${paramIndex}::numeric`);
+      updateValues.push(updateData.quantity_delivered);
+      paramIndex++;
     }
 
     if (updateData.bl_quantity !== undefined && updateData.bl_quantity !== null) {
@@ -2246,6 +2283,15 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
     logger.info('Shipment updated:', { id, updatedFields: updateFields.length, autoStatus });
 
     invalidateShipmentsListCache();
+    setImmediate(() => {
+      import('../services/contractQtyMoveSnapshot.service')
+        .then(({ ContractQtyMoveSnapshotService }) =>
+          ContractQtyMoveSnapshotService.refreshForShipmentIds([shipmentId]),
+        )
+        .catch((err) => {
+          logger.warn('Contract qty_move snapshot refresh after shipment update failed', { err, shipmentId });
+        });
+    });
 
     return res.json({
       success: true,
@@ -3975,6 +4021,8 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       contractNumbers,
       contractQtyAssigned,
       poQtyAssigned,
+      shipmentQtyKlipByContract,
+      shipmentQtyKlipByPo,
       vesselName,
       vesselCode,
       voyageNo,
@@ -4053,7 +4101,7 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
     // Create shipment for each contract
     // All shipments will share the same operation_id (one transaction)
     // If STO is not provided (manual shipment), operation_id is used as the grouping key in list queries.
-    const shipmentIds = [];
+    const shipmentIds: string[] = [];
     const timestamp = Date.now().toString()
     
     // Vessel capacity vs plan qty validation temporarily disabled (incomplete master vessel data).
@@ -4274,6 +4322,18 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       poQtyAssigned && typeof poQtyAssigned === 'object' && Object.keys(poQtyAssigned as object).length > 0;
     const hasContractAssignments =
       contractQtyAssigned && typeof contractQtyAssigned === 'object' && Object.keys(contractQtyAssigned as object).length > 0;
+    const klipByPo =
+      shipmentQtyKlipByPo && typeof shipmentQtyKlipByPo === 'object'
+        ? (shipmentQtyKlipByPo as Record<string, unknown>)
+        : hasPoAssignments
+          ? (poQtyAssigned as Record<string, unknown>)
+          : null;
+    const klipByContract =
+      shipmentQtyKlipByContract && typeof shipmentQtyKlipByContract === 'object'
+        ? (shipmentQtyKlipByContract as Record<string, unknown>)
+        : hasContractAssignments
+          ? (contractQtyAssigned as Record<string, unknown>)
+          : null;
 
     if (hasPoAssignments || hasContractAssignments) {
       await ensureUserStoContractAssignmentsTable();
@@ -4299,6 +4359,15 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
             row.po_number ? String(row.po_number).trim() : null,
             n,
           );
+          const klipMt = parseFloat(String(klipByPo?.[rowId] ?? qty));
+          if (!Number.isNaN(klipMt) && klipMt > 0) {
+            await applyShipmentQtyDeliveredKlip(
+              shipmentIds,
+              String(row.contract_id).trim(),
+              row.po_number ? String(row.po_number).trim() : null,
+              klipMt,
+            );
+          }
         }
       } else if (hasContractAssignments) {
         for (const [rawKey, qty] of Object.entries(contractQtyAssigned as Record<string, any>)) {
@@ -4315,6 +4384,10 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
           }
           if (!contractNumber) continue;
           await upsertPoQtyAssignment(assignmentKey, contractNumber, poNumber, n);
+          const klipMt = parseFloat(String(klipByContract?.[rawKey] ?? qty));
+          if (!Number.isNaN(klipMt) && klipMt > 0) {
+            await applyShipmentQtyDeliveredKlip(shipmentIds, contractNumber, poNumber, klipMt);
+          }
         }
       }
     }
@@ -4330,6 +4403,20 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
     }
 
     invalidateShipmentsListCache();
+    if (shipmentIds.length > 0) {
+      setImmediate(() => {
+        import('../services/contractQtyMoveSnapshot.service')
+          .then(({ ContractQtyMoveSnapshotService }) =>
+            ContractQtyMoveSnapshotService.refreshForShipmentIds(shipmentIds),
+          )
+          .catch((err) => {
+            logger.warn('Contract qty_move snapshot refresh after shipment create failed', {
+              err,
+              shipmentIds,
+            });
+          });
+      });
+    }
 
     return res.json({
       success: true,

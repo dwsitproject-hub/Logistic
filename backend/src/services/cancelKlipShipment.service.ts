@@ -210,6 +210,15 @@ export async function cancelKlipShipmentGroup(
   const remarkIds = await insertShipmentCancelRemarks(cancelledIds, normalizedRemark, actorId);
 
   invalidateShipmentsListCache();
+  if (cancelledIds.length > 0) {
+    setImmediate(() => {
+      import('./contractQtyMoveSnapshot.service')
+        .then(({ ContractQtyMoveSnapshotService }) =>
+          ContractQtyMoveSnapshotService.refreshForShipmentIds(cancelledIds),
+        )
+        .catch(() => {});
+    });
+  }
 
   return {
     lookup_key: lookupKey,

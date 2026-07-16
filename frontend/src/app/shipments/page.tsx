@@ -228,6 +228,8 @@ interface Shipment {
   plant_site: string // Group Plant (resolved from master_plants via contract plant_code)
   quantity_shipped: number
   quantity_delivered: number
+  /** Explicit KLIP Delivery Qty (kg) from Shipment Qty / manual edit; independent of SAP. */
+  quantity_delivered_klip?: number | null
   inbound_weight: number
   outbound_weight: number
   gain_loss_percentage: number
@@ -293,6 +295,7 @@ interface Shipment {
   vlp_loading_port_name?: string
   vlp_discharge_port_name?: string
   quantity_delivered_sap?: number
+  is_contract_sap_closed?: boolean
   sfal_qty?: number | null
   sfbd_qty?: number | null
   // Basic ETA loading dates at shipment level
@@ -510,6 +513,8 @@ function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipmen
       sto_quantity: match.sto_quantity ?? row.sto_quantity,
       quantity_receive: match.quantity_receive ?? row.quantity_receive,
       quantity_delivered_sap: match.quantity_delivered_sap ?? row.quantity_delivered_sap,
+      quantity_delivered_klip: match.quantity_delivered_klip ?? row.quantity_delivered_klip,
+      is_contract_sap_closed: match.is_contract_sap_closed ?? row.is_contract_sap_closed,
       outstanding_quantity: match.outstanding_quantity ?? row.outstanding_quantity,
       outstanding_qty_planning: match.outstanding_qty_planning ?? row.outstanding_qty_planning,
       contract_qty: match.contract_qty ?? row.contract_qty,
@@ -1901,7 +1906,31 @@ function ShipmentsPageContent() {
         ? `${poNumber} - ${plantCode}`
         : poNumber
       : contractId
-    return { key, contractId, poNumber, plantCode, label }
+    return {
+      key,
+      contractId,
+      poNumber,
+      plantCode,
+      label,
+      contractData: {
+        contract_id: contractId,
+        po_number: poNumber,
+        quantity_ordered: shipment.contract_qty,
+        outstanding_quantity: shipment.outstanding_quantity,
+        outstanding_quantity_planning: shipment.outstanding_qty_planning ?? shipment.outstanding_quantity,
+        supplier: shipment.supplier,
+        buyer: shipment.buyer,
+        product: shipment.product,
+        incoterm: shipment.incoterm,
+        plant_code: plantCode,
+        plant_site: shipment.plant_site,
+        contract_ext_no: shipment.contract_ext_no,
+        delivery_start_date: shipment.delivery_start_date,
+        delivery_end_date: shipment.delivery_end_date,
+        port_of_loading: shipment.port_of_loading,
+        port_of_discharge: shipment.port_of_discharge,
+      },
+    }
   }
 
   const handleOpenAddShipmentForContractRow = (shipment: Shipment) => {

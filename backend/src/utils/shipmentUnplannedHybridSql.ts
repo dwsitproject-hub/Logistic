@@ -202,6 +202,7 @@ export function unplannedContractBacklogRowSelectSql(outstandingExpr: string): s
     NULL::date AS arrival_date,
     0::numeric AS quantity_shipped,
     0::numeric AS quantity_delivered,
+    NULL::numeric AS quantity_delivered_klip,
     0::numeric AS inbound_weight,
     0::numeric AS outbound_weight,
     0::numeric AS gain_loss_percentage,

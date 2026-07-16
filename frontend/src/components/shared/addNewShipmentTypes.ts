@@ -26,8 +26,16 @@ export type CreateShipmentFormPayload = {
   operationId: string
   stoNumber: string
   contractNumbers: string[]
+  /** Planning allocation (MT) by contract key — also dual-written as Delivery Qty KLIP. */
   contractQtyAssigned: Record<string, string | number>
+  /** Planning allocation (MT) by contracts.id (PO line) — also dual-written as Delivery Qty KLIP. */
   poQtyAssigned?: Record<string, string | number>
+  /**
+   * Explicit KLIP shipment qty (MT) mirror of the planning maps.
+   * Same keys/values as contractQtyAssigned / poQtyAssigned; backend persists as quantity_delivered_klip.
+   */
+  shipmentQtyKlipByContract?: Record<string, string | number>
+  shipmentQtyKlipByPo?: Record<string, string | number>
   vesselName: string
   vesselCode: string
   vesselOwner: string

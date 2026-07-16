@@ -2,8 +2,11 @@
  * Global contract outstanding qty — same rules as Contracts list (`qty_move` CTE).
  * LAND FRC/LCO: when trucking WB daily actuals exist, delivery/receive qty prefer
  * SUM(trucking_operations.quantity_delivered) synced from WB upload (aligns with Trucking list).
+ * SEA FOB/CIF Open: when KLIP shipment actuals exist, prefer those over SAP
+ * (mirrors trucking Open+actual → KLIP, Close → SAP).
  */
 
+import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
 import {
   sqlContractOutstandingFromFields,
   sqlParseSapNumeric,
@@ -92,6 +95,40 @@ function truckingWbOverlayCte(filter: QtyMoveContractFilter): string {
               WHERE da.trucking_operation_id = t.id
             )
           )
+        )`;
+}
+
+/**
+ * SEA FOB/CIF Open contracts with KLIP shipment actuals — override SAP vessel
+ * delivery with SUM(shipments.quantity_delivered_klip). Receive still uses
+ * actual_vessel_qty_receive when present (legacy KLIP receive).
+ * Mirror trucking: Open + actual → KLIP; Close (and Open without actual) stay on SAP.
+ */
+function shipmentKlipOverlayCte(filter: QtyMoveContractFilter): string {
+  const joinScope =
+    filter.kind === 'join_scope'
+      ? `INNER JOIN ${filter.scopeCteName} cs ON cs.contract_id = c.contract_id`
+      : '';
+  const contractFilter =
+    filter.kind === 'in_subquery' ? `AND c.contract_id IN (${filter.subquery})` : '';
+  const grClosed = sqlIsContractSapClosedExpr('c');
+
+  return `
+        shipment_klip_overlay AS (
+          SELECT
+            c.contract_id AS contract_number,
+            NULLIF(SUM(COALESCE(s.quantity_delivered_klip, 0)), 0)::numeric AS klip_delivery_kg,
+            NULLIF(SUM(COALESCE(s.actual_vessel_qty_receive, 0)), 0)::numeric AS klip_receive_kg
+          FROM contracts c
+          ${joinScope}
+          INNER JOIN shipments s ON s.contract_id = c.id
+          WHERE UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FOB', 'CIF')
+            AND NOT (${grClosed})
+            AND COALESCE(s.status, '') <> 'CANCELLED'
+            ${contractFilter}
+          GROUP BY c.contract_id
+          HAVING SUM(COALESCE(s.quantity_delivered_klip, 0)) > 0
+              OR SUM(COALESCE(s.actual_vessel_qty_receive, 0)) > 0
         )`;
 }
 
@@ -220,20 +257,31 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
           FROM sto_result sr
           FULL OUTER JOIN latest_no_sto ns ON ns.contract_number = sr.contract_number
         ),
-        ${truckingWbOverlayCte(filter)}
+        ${truckingWbOverlayCte(filter)},
+        ${shipmentKlipOverlayCte(filter)}
         SELECT
-          COALESCE(s.contract_number, w.contract_number) AS contract_number,
+          COALESCE(s.contract_number, w.contract_number, sk.contract_number) AS contract_number,
           CASE
             WHEN w.contract_number IS NOT NULL THEN w.wb_resolved_qty_kg
             ELSE s.quantity_delivery_trucking
           END AS quantity_delivery_trucking,
-          s.quantity_delivery_vessel,
           CASE
+            WHEN sk.klip_delivery_kg IS NOT NULL THEN sk.klip_delivery_kg
+            ELSE s.quantity_delivery_vessel
+          END AS quantity_delivery_vessel,
+          CASE
+            WHEN sk.klip_receive_kg IS NOT NULL THEN sk.klip_receive_kg
             WHEN w.contract_number IS NOT NULL THEN w.wb_resolved_qty_kg
             ELSE s.quantity_receive
           END AS quantity_receive,
           COALESCE(
-            NULLIF(s.quantity_delivery_vessel, 0),
+            NULLIF(
+              CASE
+                WHEN sk.klip_delivery_kg IS NOT NULL THEN sk.klip_delivery_kg
+                ELSE s.quantity_delivery_vessel
+              END,
+              0
+            ),
             NULLIF(
               CASE
                 WHEN w.contract_number IS NOT NULL THEN w.wb_resolved_qty_kg
@@ -244,6 +292,7 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
           ) AS quantity_delivery
         FROM qty_move_sap s
         FULL OUTER JOIN trucking_wb_overlay w ON w.contract_number = s.contract_number
+        FULL OUTER JOIN shipment_klip_overlay sk ON sk.contract_number = COALESCE(s.contract_number, w.contract_number)
       )`;
 }
 

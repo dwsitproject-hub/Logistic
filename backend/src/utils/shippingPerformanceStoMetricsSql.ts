@@ -162,6 +162,20 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           AND ${stoExpr} IS NOT NULL
         ORDER BY ${stoExpr}, spd.contract_number, spd.created_at DESC NULLS LAST
       ),
+      /*
+       * Fallback when shipment list key is Operation ID / synthetic and SAP has no STO:
+       * match movement qty by contract_number (latest row). Prefer sto-key match above.
+       */
+      latest_spd_by_contract AS (
+        SELECT DISTINCT ON (spd.contract_number)
+          spd.contract_number,
+          ${SPD_RECEIVE_KG} AS receive_kg,
+          ${SPD_DELIVER_KG} AS delivery_kg,
+          ${SPD_STO_QTY_KG} AS sto_qty_kg
+        FROM sap_processed_data spd
+        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      ),
       contract_sto_planning AS (
         SELECT
           TRIM(u.sto_number::text) AS sto_key,
@@ -182,10 +196,11 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           asp.po_number,
           asp.contract_qty,
           asp.incoterm,
-          lspd.receive_kg,
-          lspd.delivery_kg,
+          COALESCE(lspd.receive_kg, lspd_c.receive_kg) AS receive_kg,
+          COALESCE(lspd.delivery_kg, lspd_c.delivery_kg) AS delivery_kg,
           COALESCE(
             NULLIF(lspd.sto_qty_kg, 0),
+            NULLIF(lspd_c.sto_qty_kg, 0),
             asp.contract_sto_qty
           ) AS sto_qty_kg,
           csp.shipment_planning_kg
@@ -195,6 +210,8 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
         LEFT JOIN latest_spd_by_sto_contract lspd
           ON lspd.sto_key = asp.sto_key
           AND TRIM(lspd.contract_number) = TRIM(asp.contract_id)
+        LEFT JOIN latest_spd_by_contract lspd_c
+          ON TRIM(lspd_c.contract_number) = TRIM(asp.contract_id)
         LEFT JOIN contract_sto_planning csp
           ON csp.sto_key = asp.sto_key
           AND TRIM(csp.contract_id) = TRIM(asp.contract_id)
