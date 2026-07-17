@@ -25,8 +25,12 @@ export type WbRekapTicketRow = {
   klipProduct: string | null;
   rowNumber: number;
   poNumber: string;
+  /** STO from file column when present — used to split daily actuals per STO. */
+  stoNumber: string | null;
   progressDateIso: string;
+  /** Qty Delivery (Netto PKS / Timbangan Kebun Netto). */
   nettoPksKg: number;
+  /** Qty Receive (Netto EUP / Netto EOP / Timbangan SPC Netto). */
   nettoEupKg: number;
 };
 
@@ -37,12 +41,17 @@ export type WbRekapAggregatedRow = {
   sumNettoEupKg: number;
   ticketCount: number;
   sheetNames: string[];
+  /** STO for this aggregate row (empty = legacy PO-level / no STO on ticket). */
+  stoNumber: string;
+  /** Distinct STO values on tickets for this key (usually 0–1 after per-STO split). */
+  stoNumbers: string[];
 };
 
 export type WbRekapParseFailure = {
   sheetName: string;
   rowNumber: number;
   po_number: string;
+  sto_number?: string;
   reason: string;
 };
 
@@ -62,7 +71,86 @@ function normalizeHeader(value: unknown): string {
     .replace(/\s+/g, ' ');
 }
 
-function findColumnIndex(headers: string[], candidates: string[]): number {
+function isPoHeader(h: string): boolean {
+  if (!h) return false;
+  if (h === 'po/so' || h === 'po / so') return true;
+  if (h.includes('po/so')) return true;
+  // SPC combined column — check before plain "no po"
+  if (h.includes('no po/sto') || h.includes('no po / sto')) return true;
+  // Tj Pura / plant layouts: dedicated NO PO column (not "No PO/STO")
+  if (h === 'no po' || h === 'nomor po') return true;
+  return false;
+}
+
+function isDateHeader(h: string): boolean {
+  if (!h) return false;
+  if (h.includes('tanggal masuk')) return true;
+  // Tj Pura ticket sheets use Tanggal Laporan (not Tanggal Pengiriman / Tanggal 1st)
+  if (h === 'tanggal laporan') return true;
+  // SPC layout uses a plain TANGGAL column (avoid matching "Tanggal Muat/Bongkar/…")
+  if (h === 'tanggal') return true;
+  return false;
+}
+
+function isStoHeader(h: string): boolean {
+  if (!h) return false;
+  // Exact STO only — do not match "No PO/STO"
+  if (h === 'sto') return true;
+  if (h === 'no sto' || h === 'nomor sto') return true;
+  if (h.startsWith('sto ') || h.endsWith(' sto')) return true;
+  return false;
+}
+
+const WB_QTY_LABEL_TOKENS = new Set([
+  'nett',
+  'netto',
+  'berat kotor',
+  'tare',
+  'n. pks',
+  'n pks',
+  'n. pabrik',
+  'n pabrik',
+  'b. pks',
+  't. pks',
+  'b. pabrik',
+  't. pabrik',
+  'total',
+  'masuk',
+  'keluar',
+]);
+
+const WB_PO_LABEL_TOKENS = new Set([
+  'no po',
+  'nomor po',
+  'po/so',
+  'po / so',
+  'no po/sto',
+  'no po / sto',
+]);
+
+/** True when the row is a repeated header / qty sub-label under a multi-row WB header. */
+function looksLikeWbLabelOrSubheaderRow(
+  cells: unknown[],
+  cols: { poIdx: number; deliveryIdx: number; receiveIdx: number },
+): boolean {
+  const po = normalizeHeader(cells[cols.poIdx]);
+  if (WB_PO_LABEL_TOKENS.has(po)) return true;
+  const delivery =
+    cols.deliveryIdx >= 0 ? normalizeHeader(cells[cols.deliveryIdx]) : '';
+  const receive =
+    cols.receiveIdx >= 0 ? normalizeHeader(cells[cols.receiveIdx]) : '';
+  if (WB_QTY_LABEL_TOKENS.has(delivery) || WB_QTY_LABEL_TOKENS.has(receive)) return true;
+  return false;
+}
+
+function findColumnIndex(headers: string[], predicate: (h: string) => boolean): number {
+  for (let i = 0; i < headers.length; i += 1) {
+    if (predicate(headers[i] ?? '')) return i;
+  }
+  return -1;
+}
+
+function findColumnIndexByCandidates(headers: string[], candidates: string[]): number {
   for (let i = 0; i < headers.length; i += 1) {
     const h = headers[i] ?? '';
     for (const candidate of candidates) {
@@ -86,20 +174,131 @@ function normalizePoNumber(raw: unknown): string {
   return s;
 }
 
-/** Locate header row containing PO/SO and Tanggal Masuk (within first 40 rows). */
+/**
+ * Locate header row with a PO alias and a date alias (within first 40 rows).
+ * Supports EUP/EOP (PO/SO + Tanggal Masuk), SPC (No PO/STO + TANGGAL),
+ * and Tj Pura (NO PO + Tanggal Laporan).
+ */
 export function findWbRekapHeaderRowIndex(matrix: unknown[][]): number {
   const limit = Math.min(matrix.length, 40);
   for (let r = 0; r < limit; r += 1) {
     const headers = (matrix[r] ?? []).map(normalizeHeader);
-    const hasPo = headers.some((h) => h === 'po/so' || h === 'po / so' || h.includes('po/so'));
-    const hasDate = headers.some((h) => h.includes('tanggal masuk'));
+    const hasPo = headers.some(isPoHeader);
+    const hasDate = headers.some(isDateHeader);
     if (hasPo && hasDate) return r;
   }
   return -1;
 }
 
 /**
- * Parse one worksheet. Any sheet with a WB header (PO/SO + Tanggal Masuk) is accepted —
+ * Resolve Netto/NETT sub-column under a merged parent header (SPC / Tj Pura).
+ * Parent is on headerIdx; subheaders (Keluar/Masuk/Netto/NETT/TOTAL) on headerIdx+1.
+ */
+function findMergedNettoColumnIndex(
+  matrix: unknown[][],
+  headerIdx: number,
+  parentPredicate: (h: string) => boolean,
+): number {
+  const headerRow = matrix[headerIdx] ?? [];
+  const headers = headerRow.map(normalizeHeader);
+  const parentIdx = findColumnIndex(headers, parentPredicate);
+  if (parentIdx < 0) return -1;
+
+  const subRow = matrix[headerIdx + 1] ?? [];
+  // Walk forward from parent until next non-empty top-level header or end.
+  let end = headers.length;
+  for (let i = parentIdx + 1; i < headers.length; i += 1) {
+    if ((headers[i] ?? '').trim() !== '') {
+      end = i;
+      break;
+    }
+  }
+  for (let i = parentIdx; i < end; i += 1) {
+    const sub = normalizeHeader(subRow[i]);
+    if (sub === 'netto' || sub === 'nett') return i;
+  }
+  // Fallback: parent cell itself if no subheader row
+  return parentIdx;
+}
+
+type ResolvedWbColumns = {
+  poIdx: number;
+  stoIdx: number;
+  dateIdx: number;
+  deliveryIdx: number;
+  receiveIdx: number;
+  dataStartRow: number;
+};
+
+function resolveWbColumns(matrix: unknown[][], headerIdx: number): ResolvedWbColumns | null {
+  const headerRow = matrix[headerIdx] ?? [];
+  const headers = headerRow.map(normalizeHeader);
+  const poIdx = findColumnIndex(headers, isPoHeader);
+  const dateIdx = findColumnIndex(headers, isDateHeader);
+  if (poIdx < 0 || dateIdx < 0) return null;
+
+  const stoIdx = findColumnIndex(headers, isStoHeader);
+
+  // Simple single-row qty columns (EUP / EOP layouts)
+  let deliveryIdx = findColumnIndexByCandidates(headers, ['netto pks']);
+  let receiveIdx = findColumnIndexByCandidates(headers, ['netto eup', 'netto eop']);
+
+  // SPC 2-row: Timbangan Kebun / Timbangan SPC(kg) → Netto
+  // Tj Pura: Pihak Ketiga / Pabrik → NETT
+  const hasKebun = headers.some((h) => h.includes('timbangan kebun'));
+  const hasSpc = headers.some((h) => h.includes('timbangan spc'));
+  const hasPihakKetiga = headers.some((h) => h.includes('pihak ketiga'));
+  const hasPabrik = headers.some((h) => h === 'pabrik');
+  let dataStartRow = headerIdx + 1;
+  if (hasKebun || hasSpc || hasPihakKetiga || hasPabrik) {
+    if (hasKebun || hasSpc) {
+      const kebunNetto = findMergedNettoColumnIndex(matrix, headerIdx, (h) =>
+        h.includes('timbangan kebun'),
+      );
+      const spcNetto = findMergedNettoColumnIndex(matrix, headerIdx, (h) =>
+        h.includes('timbangan spc'),
+      );
+      if (kebunNetto >= 0) deliveryIdx = kebunNetto;
+      if (spcNetto >= 0) receiveIdx = spcNetto;
+    }
+    if (hasPihakKetiga || hasPabrik) {
+      const pihakNetto = findMergedNettoColumnIndex(matrix, headerIdx, (h) =>
+        h.includes('pihak ketiga'),
+      );
+      const pabrikNetto = findMergedNettoColumnIndex(matrix, headerIdx, (h) => h === 'pabrik');
+      if (pihakNetto >= 0) deliveryIdx = pihakNetto;
+      if (pabrikNetto >= 0) receiveIdx = pabrikNetto;
+    }
+    const subRow = matrix[headerIdx + 1] ?? [];
+    const subLooksLikeQty = subRow.some((c) => {
+      const s = normalizeHeader(c);
+      return (
+        s === 'netto' ||
+        s === 'nett' ||
+        s === 'masuk' ||
+        s === 'keluar' ||
+        s === 'total' ||
+        s === 'berat kotor' ||
+        s === 'tare'
+      );
+    });
+    if (subLooksLikeQty) dataStartRow = headerIdx + 2;
+  }
+
+  // Advance past repeated label rows (e.g. Tj Pura 3rd row: NO PO / N. PKS / N. PABRIK).
+  const colsForLabelCheck = { poIdx, deliveryIdx, receiveIdx };
+  while (
+    dataStartRow < matrix.length &&
+    looksLikeWbLabelOrSubheaderRow(matrix[dataStartRow] ?? [], colsForLabelCheck)
+  ) {
+    dataStartRow += 1;
+  }
+
+  return { poIdx, stoIdx, dateIdx, deliveryIdx, receiveIdx, dataStartRow };
+}
+
+/**
+ * Parse one worksheet. Any sheet with a WB header (PO alias + date alias) is accepted —
  * sheet name does not gate import.
  */
 export function parseWbRekapSheetMatrix(
@@ -121,20 +320,15 @@ export function parseWbRekapSheetMatrix(
           sheetName,
           rowNumber: 0,
           po_number: '-',
-          reason: 'Header row with PO/SO and Tanggal Masuk not found',
+          reason:
+            'Header row with PO (PO/SO, No PO/STO, or NO PO) and date (Tanggal Masuk, TANGGAL, or Tanggal Laporan) not found',
         },
       ],
     };
   }
 
-  const headerRow = matrix[headerIdx] ?? [];
-  const headers = headerRow.map(normalizeHeader);
-  const poIdx = findColumnIndex(headers, ['po/so', 'po / so']);
-  const dateIdx = findColumnIndex(headers, ['tanggal masuk']);
-  const nettoPksIdx = findColumnIndex(headers, ['netto pks']);
-  const nettoEupIdx = findColumnIndex(headers, ['netto eup']);
-
-  if (poIdx < 0 || dateIdx < 0) {
+  const cols = resolveWbColumns(matrix, headerIdx);
+  if (!cols) {
     return {
       tickets: [],
       rowParseFailures: [
@@ -142,7 +336,7 @@ export function parseWbRekapSheetMatrix(
           sheetName,
           rowNumber: headerIdx + 1,
           po_number: '-',
-          reason: 'Required columns PO/SO or Tanggal Masuk not found in header',
+          reason: 'Required columns PO or date not found in header',
         },
       ],
     };
@@ -151,27 +345,43 @@ export function parseWbRekapSheetMatrix(
   const tickets: WbRekapTicketRow[] = [];
   const rowParseFailures: WbRekapParseFailure[] = [];
 
-  for (let r = headerIdx + 1; r < matrix.length; r += 1) {
+  for (let r = cols.dataStartRow; r < matrix.length; r += 1) {
     const cells = matrix[r] ?? [];
     const rowNumber = r + 1;
-    const poNumber = normalizePoNumber(cells[poIdx]);
-    const dateRaw = cells[dateIdx];
-    const pksRaw = nettoPksIdx >= 0 ? cells[nettoPksIdx] : null;
-    const eupRaw = nettoEupIdx >= 0 ? cells[nettoEupIdx] : null;
+
+    // Skip repeated label / subheader rows under multi-row headers (Tj Pura, SPC).
+    if (looksLikeWbLabelOrSubheaderRow(cells, cols)) continue;
+
+    const poNumber = normalizePoNumber(cells[cols.poIdx]);
+    const stoNumber =
+      cols.stoIdx >= 0 ? normalizePoNumber(cells[cols.stoIdx]) || null : null;
+    const dateRaw = cells[cols.dateIdx];
+    const pksRaw = cols.deliveryIdx >= 0 ? cells[cols.deliveryIdx] : null;
+    const eupRaw = cols.receiveIdx >= 0 ? cells[cols.receiveIdx] : null;
 
     const hasAny =
       poNumber ||
+      stoNumber ||
       (dateRaw !== null && dateRaw !== undefined && String(dateRaw).trim() !== '') ||
       (pksRaw !== null && pksRaw !== undefined && String(pksRaw).trim() !== '') ||
       (eupRaw !== null && eupRaw !== undefined && String(eupRaw).trim() !== '');
     if (!hasAny) continue;
 
-    if (!poNumber) {
+    // Skip subheader-only rows that slipped through
+    if (
+      !poNumber &&
+      !stoNumber &&
+      ['netto', 'nett', 'masuk', 'keluar', 'total'].includes(normalizeHeader(dateRaw))
+    ) {
+      continue;
+    }
+
+    if (!poNumber && !stoNumber) {
       rowParseFailures.push({
         sheetName,
         rowNumber,
         po_number: '-',
-        reason: 'PO/SO is missing',
+        reason: 'PO/SO (or No PO/STO / NO PO) and STO are both missing',
       });
       continue;
     }
@@ -181,8 +391,10 @@ export function parseWbRekapSheetMatrix(
       rowParseFailures.push({
         sheetName,
         rowNumber,
-        po_number: poNumber,
-        reason: 'Tanggal Masuk is missing or could not be parsed',
+        po_number: poNumber || stoNumber || '-',
+        sto_number: stoNumber ?? undefined,
+        reason:
+          'Date (Tanggal Masuk / TANGGAL / Tanggal Laporan) is missing or could not be parsed',
       });
       continue;
     }
@@ -193,8 +405,9 @@ export function parseWbRekapSheetMatrix(
       rowParseFailures.push({
         sheetName,
         rowNumber,
-        po_number: poNumber,
-        reason: 'Netto PKS or Netto EUP quantity is invalid',
+        po_number: poNumber || stoNumber || '-',
+        sto_number: stoNumber ?? undefined,
+        reason: 'Delivery or Receive quantity is invalid',
       });
       continue;
     }
@@ -205,7 +418,9 @@ export function parseWbRekapSheetMatrix(
       sheetName,
       klipProduct,
       rowNumber,
-      poNumber,
+      // Prefer PO column; if blank, leave empty — apply layer resolves STO→PO
+      poNumber: poNumber || '',
+      stoNumber,
       progressDateIso,
       nettoPksKg,
       nettoEupKg,
@@ -218,7 +433,11 @@ export function parseWbRekapSheetMatrix(
 export function aggregateWbRekapTickets(tickets: WbRekapTicketRow[]): WbRekapAggregatedRow[] {
   const byKey = new Map<string, WbRekapAggregatedRow>();
   for (const ticket of tickets) {
-    const key = `${ticket.poNumber.toLowerCase()}::${ticket.progressDateIso}`;
+    // Aggregate by PO (or STO identity) + date + STO so multi-STO POs stay separate.
+    const identity = (ticket.poNumber || ticket.stoNumber || '').toLowerCase();
+    if (!identity) continue;
+    const sto = String(ticket.stoNumber ?? '').trim();
+    const key = `${identity}::${ticket.progressDateIso}::${sto.toLowerCase()}`;
     const existing = byKey.get(key);
     if (existing) {
       existing.sumNettoPksKg += ticket.nettoPksKg;
@@ -227,20 +446,30 @@ export function aggregateWbRekapTickets(tickets: WbRekapTicketRow[]): WbRekapAgg
       if (!existing.sheetNames.includes(ticket.sheetName)) {
         existing.sheetNames.push(ticket.sheetName);
       }
+      if (sto && !existing.stoNumbers.includes(sto)) {
+        existing.stoNumbers.push(sto);
+      }
+      if (!existing.poNumber && ticket.poNumber) {
+        existing.poNumber = ticket.poNumber;
+      }
     } else {
       byKey.set(key, {
-        poNumber: ticket.poNumber,
+        poNumber: ticket.poNumber || ticket.stoNumber || '',
         progressDateIso: ticket.progressDateIso,
         sumNettoPksKg: ticket.nettoPksKg,
         sumNettoEupKg: ticket.nettoEupKg,
         ticketCount: 1,
         sheetNames: [ticket.sheetName],
+        stoNumber: sto,
+        stoNumbers: sto ? [sto] : [],
       });
     }
   }
   return Array.from(byKey.values()).sort((a, b) => {
     const poCmp = a.poNumber.localeCompare(b.poNumber, undefined, { numeric: true });
     if (poCmp !== 0) return poCmp;
+    const stoCmp = a.stoNumber.localeCompare(b.stoNumber, undefined, { numeric: true });
+    if (stoCmp !== 0) return stoCmp;
     return a.progressDateIso.localeCompare(b.progressDateIso);
   });
 }
@@ -269,8 +498,8 @@ export function parseWbRekapWorkbook(
     const parsed = parseWbRekapSheetMatrix(sheetName, matrix, parseDate);
     const structuralFail = parsed.rowParseFailures.find(
       (f) =>
-        f.reason.includes('Header row with PO/SO') ||
-        f.reason.includes('Required columns PO/SO'),
+        f.reason.includes('Header row with PO') ||
+        f.reason.includes('Required columns PO'),
     );
     if (structuralFail && parsed.tickets.length === 0) {
       sheetsSkipped.push({ sheetName, reason: structuralFail.reason });
@@ -278,7 +507,10 @@ export function parseWbRekapWorkbook(
       continue;
     }
     if (parsed.tickets.length === 0 && parsed.rowParseFailures.length === 0) {
-      sheetsSkipped.push({ sheetName, reason: 'No ticket rows with Netto PKS/EUP — skipped' });
+      sheetsSkipped.push({
+        sheetName,
+        reason: 'No ticket rows with Delivery/Receive qty — skipped',
+      });
       continue;
     }
 

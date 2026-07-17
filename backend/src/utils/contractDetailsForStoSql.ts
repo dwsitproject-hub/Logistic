@@ -1,5 +1,5 @@
 
-import { sqlSapQtyDeliveredKgFromSpd } from './contractLogisticsStoDetailSql';
+import { sqlSapQtyDeliveredKgFromSpd, sqlStoLookupKeyMatchExpr } from './contractLogisticsStoDetailSql';
 import {
   sqlNormalizeSapStoQtyToKgSql,
   sqlPoGlobalOutstandingPlanningKg,
@@ -8,16 +8,6 @@ import {
   sqlPoStoSapQtyKg,
 } from './contractPoGlobalMetricsSql';
 import { shipmentOutstandingQtyExpr } from './shipmentOutstandingQtySql';
-
-function spdEffectiveSto(alias: string): string {
-  return `NULLIF(TRIM(COALESCE(
-  ${alias}.sto_number::text,
-  ${alias}.data->'raw'->>'STO No.',
-  ${alias}.data->'raw'->>'STO Number',
-  ${alias}.data->'shipment'->>'sto_no',
-  ${alias}.data->'contract'->>'sto_no'
-)), '')`;
-}
 
 function spdPoNumber(alias: string): string {
   return `NULLIF(TRIM(COALESCE(
@@ -100,10 +90,7 @@ function stoScopedOutstandingActualSql(opts: {
 
 /** SQL for GET /shipments/contracts/details — one row per PO line on the STO. */
 export function buildContractDetailsForStoSql(): string {
-  const stoMatch = (alias: string) => `(
-              TRIM(COALESCE(${alias}.sto_number::text, '')) = TRIM($1::text)
-              OR ${spdEffectiveSto(alias)} = TRIM($1::text)
-            )`;
+  const stoMatch = (alias: string) => sqlStoLookupKeyMatchExpr('$1::text', alias);
   const poMatch = (alias: string) => `(
               pl.po_number IS NULL
               OR ${spdPoNumber(alias)} = pl.po_number

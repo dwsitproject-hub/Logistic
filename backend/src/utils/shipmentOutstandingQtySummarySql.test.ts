@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildShipmentOutstandingQtyExecutionAggregateQuery,
   isShipmentOsStatusOutsideActiveScope,
   mergeShipmentOutstandingQtySummaries,
   normalizeShipmentOsStatusParam,
@@ -26,11 +27,24 @@ describe('shipmentOutstandingQtySummarySql', () => {
     expect(isShipmentOsStatusOutsideActiveScope(null)).toBe(false)
   })
 
-  it('includes unplanned backlog only for ALL or UNPLANNED', () => {
+  it('includes unplanned backlog only for ALL or UNPLANNED (helper; page KPI always uses null)', () => {
     expect(shouldIncludeShipmentUnplannedBacklogForOs(null)).toBe(true)
     expect(shouldIncludeShipmentUnplannedBacklogForOs('UNPLANNED')).toBe(true)
     expect(shouldIncludeShipmentUnplannedBacklogForOs('PLANNED')).toBe(false)
     expect(shouldIncludeShipmentUnplannedBacklogForOs('SAILED')).toBe(false)
+  })
+
+  it('page KPI path (osStatus null) has no per-card stage filter beyond active predicate', () => {
+    const q = buildShipmentOutstandingQtyExecutionAggregateQuery(
+      'WITH shipment_base AS (SELECT 1)',
+      ' AND TRUE',
+      [],
+      null,
+    )
+    expect(q.text).toContain('PLANNED')
+    expect(q.text).toContain('SAILED')
+    // No bound stage param when osStatus is null
+    expect(q.params).toEqual([])
   })
 
   it('parses and merges bucket rows', () => {

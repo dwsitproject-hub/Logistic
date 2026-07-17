@@ -1,6 +1,7 @@
 /**
  * Global per-PO metrics for Shipment edit modal & PO eligibility (kg).
- * OS Actual = contract − incoterm fulfilled (qty_move). OS Plan = contract − SAP STO − all KLIP assignments.
+ * OS Actual = contract − incoterm fulfilled (qty_move).
+ * OS Plan = contract − KLIP assignments − SAP STO qty on STO keys without a KLIP assignment.
  */
 
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
@@ -78,35 +79,60 @@ export function sqlPoGlobalSapStoQtyKg(opts: {
   contractNumberExpr: string;
   poNumberExpr: string;
 }): string {
+  return sqlPoGlobalSapStoQtyKgInner(opts, false);
+}
+
+/**
+ * SAP STO qty (kg) for PO lines where the STO has no KLIP Shipment Plan assignment yet.
+ * Avoids double-counting SAP qty and user plan on the same STO key.
+ */
+export function sqlPoGlobalSapStoQtyKgExcludingAssigned(opts: {
+  contractNumberExpr: string;
+  poNumberExpr: string;
+}): string {
+  return sqlPoGlobalSapStoQtyKgInner(opts, true);
+}
+
+function sqlPoGlobalSapStoQtyKgInner(
+  opts: { contractNumberExpr: string; poNumberExpr: string },
+  excludeAssigned: boolean,
+): string {
   const { contractNumberExpr, poNumberExpr } = opts;
-  return `COALESCE((
-    SELECT SUM(latest.sto_kg)
-    FROM (
-      SELECT DISTINCT ON (
-        NULLIF(TRIM(COALESCE(
+  const stoKeySql = `NULLIF(TRIM(COALESCE(
           spd.sto_number::text,
           spd.data->'raw'->>'STO No.',
           spd.data->'raw'->>'STO Number',
           spd.data->'shipment'->>'sto_no',
           spd.data->'contract'->>'sto_no'
-        )), '')
+        )), '')`;
+  const excludeAssignedSql = excludeAssigned
+    ? `AND NOT EXISTS (
+        SELECT 1
+        FROM user_sto_contract_assignments u
+        WHERE TRIM(u.sto_number::text) = TRIM(latest.sto_key::text)
+          AND TRIM(u.contract_number::text) = TRIM(${contractNumberExpr}::text)
+          AND COALESCE(u.po_number, '') = COALESCE(NULLIF(TRIM(${poNumberExpr}::text), ''), '')
+          AND COALESCE(u.sto_qty_assigned, 0) > 0
+      )`
+    : '';
+  return `COALESCE((
+    SELECT SUM(latest.sto_kg)
+    FROM (
+      SELECT DISTINCT ON (
+        ${stoKeySql}
       )
+        ${stoKeySql} AS sto_key,
         ${SPD_STO_QTY_KG} AS sto_kg
       FROM sap_processed_data spd
       WHERE TRIM(spd.contract_number) = TRIM(${contractNumberExpr}::text)
         AND ${SPD_PO_MATCH(poNumberExpr)}
         AND ${SPD_STO_QTY_KG} IS NOT NULL
       ORDER BY
-        NULLIF(TRIM(COALESCE(
-          spd.sto_number::text,
-          spd.data->'raw'->>'STO No.',
-          spd.data->'raw'->>'STO Number',
-          spd.data->'shipment'->>'sto_no',
-          spd.data->'contract'->>'sto_no'
-        )), ''),
+        ${stoKeySql},
         spd.created_at DESC NULLS LAST
     ) latest
     WHERE latest.sto_kg IS NOT NULL
+      ${excludeAssignedSql}
   ), 0)::numeric`;
 }
 
@@ -150,7 +176,7 @@ export function sqlPoGlobalOutstandingPlanningKg(opts: {
   poNumberExpr: string;
 }): string {
   const { contractQtyExpr, contractNumberExpr, poNumberExpr } = opts;
-  const sap = sqlPoGlobalSapStoQtyKg({ contractNumberExpr, poNumberExpr });
+  const sap = sqlPoGlobalSapStoQtyKgExcludingAssigned({ contractNumberExpr, poNumberExpr });
   const assigned = sqlPoGlobalAssignedKg({
     contractNumberExpr,
     poNumberExpr,
@@ -172,7 +198,7 @@ export function sqlPoOutstandingPlanningRowBudgetKg(opts: {
   poNumberExpr: string;
   stoKeyParam: string;
 }): string {
-  const sap = sqlPoGlobalSapStoQtyKg({
+  const sap = sqlPoGlobalSapStoQtyKgExcludingAssigned({
     contractNumberExpr: opts.contractNumberExpr,
     poNumberExpr: opts.poNumberExpr,
   });
@@ -203,7 +229,7 @@ export function sqlPoOutstandingPlanningRowBudgetKgExpr(opts: {
   poNumberExpr: string;
   stoKeyExpr: string;
 }): string {
-  const sap = sqlPoGlobalSapStoQtyKg({
+  const sap = sqlPoGlobalSapStoQtyKgExcludingAssigned({
     contractNumberExpr: opts.contractNumberExpr,
     poNumberExpr: opts.poNumberExpr,
   });

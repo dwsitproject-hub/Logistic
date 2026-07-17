@@ -21,7 +21,10 @@ import logger from '../utils/logger';
 export type PipelineSummaryModule = 'trucking' | 'shipment';
 
 /** Bump when trucking pipeline status SQL changes — forces daily summary refresh. */
-export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 6;
+/** v7: COMPLETED when |OS Qty| displays as 0 MT (≤499 kg) even if GR PO/STO still Open. */
+export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 8;
+/** Bump when shipmentEffectiveStatusExpr / daily base CTE shape changes (e.g. Delivery Qty → PLANNED). */
+export const SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION = 2;
 
 export interface PipelineDailySummaryScope {
   dateFrom?: string;
@@ -192,6 +195,12 @@ export async function isPipelineDailySummaryFresh(module: PipelineSummaryModule)
   ) {
     return false;
   }
+  if (
+    module === 'shipment' &&
+    meta.logic_version < SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -222,7 +231,9 @@ async function upsertRefreshMeta(
   durationMs: number,
 ): Promise<void> {
   const logicVersion =
-    module === 'trucking' ? TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION : 1;
+    module === 'trucking'
+      ? TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION
+      : SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION;
   await query(
     `INSERT INTO pipeline_summary_refresh_meta (module, refreshed_at, is_stale, row_count, duration_ms, logic_version)
      VALUES ($1, NOW(), FALSE, $2, $3, $4)
@@ -387,7 +398,7 @@ export async function loadTruckingStagePageFromSnapshot(
       COUNT(*) OVER ()::bigint AS filtered_total
     FROM trucking_list_stage_snapshot
     ${whereSql}
-    ORDER BY supplier ${dir} NULLS LAST, created_at DESC NULLS LAST, operation_id, sto_line
+    ORDER BY supplier ${dir} NULLS LAST, created_at DESC NULLS LAST, operation_id
     LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
     pageParams,
   );

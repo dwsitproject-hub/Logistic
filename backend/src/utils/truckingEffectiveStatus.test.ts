@@ -95,11 +95,13 @@ describe('truckingEffectiveStatus', () => {
     ).toBe('IN_PROGRESS');
   });
 
-  it('isTruckingPipelineCompleted accepts GR Close or OS tolerance', () => {
+  it('isTruckingPipelineCompleted accepts GR Close or OS within 0 MT display band', () => {
     expect(isTruckingPipelineCompleted('Close', 100)).toBe(true);
     expect(isTruckingPipelineCompleted('Close', null)).toBe(true);
     expect(isTruckingPipelineCompleted('Open', 0)).toBe(true);
-    expect(isTruckingPipelineCompleted('Open', 100)).toBe(false);
+    expect(isTruckingPipelineCompleted('Open', 286)).toBe(true);
+    expect(isTruckingPipelineCompleted('Open', TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG)).toBe(true);
+    expect(isTruckingPipelineCompleted('Open', TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG + 1)).toBe(false);
     expect(isTruckingCompletedByGrAndOs('Close', 100)).toBe(true);
   });
 

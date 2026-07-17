@@ -42,6 +42,16 @@ export function formatShipmentStatusLabel(status: string | null | undefined): st
   return SHIPMENT_STATUS_DISPLAY_LABELS[key] ?? raw
 }
 
+/**
+ * Split long status labels for narrow table columns (e.g. "Completed Loading" → 2 lines).
+ * Single-line statuses return a one-element array.
+ */
+export function shipmentStatusLabelLines(status: string | null | undefined): string[] {
+  const key = normalizeShipmentStatusKey(status)
+  if (key === 'COMPLETED_LOADING') return ['Completed', 'Loading']
+  return [formatShipmentStatusLabel(status)]
+}
+
 /** Tailwind badge classes aligned with Shipments list status chips. */
 export function shipmentStatusBadgeClass(status: string | null | undefined): string {
   switch (normalizeShipmentStatusKey(status)) {

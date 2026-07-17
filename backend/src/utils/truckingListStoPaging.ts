@@ -22,7 +22,7 @@ function hasColumnFilters(colFilters?: ColumnFilterPayload): boolean {
 
 /**
  * Expansion-key paging is only safe when pipeline status / outer filters are off —
- * status is derived per expanded STO line and must not be applied before paging.
+ * status is derived per operation (PO grain) and must not be applied before paging.
  */
 export function canUseTruckingStoKeyPaging(input: TruckingStoPagingFilterInput): boolean {
   if (input.summaryOnly || input.unplannedHybrid) return false;
@@ -38,6 +38,16 @@ export function canUseTruckingStoKeyPaging(input: TruckingStoPagingFilterInput):
   return true;
 }
 
+/** Aggregated STO list for expansion-key sort (PO grain — one row per operation). */
+const AGGREGATED_STO_SORT = `COALESCE(
+  (
+    SELECT STRING_AGG(DISTINCT csl.sto_line, ', ' ORDER BY csl.sto_line)
+    FROM contract_sto_lines csl
+    WHERE csl.contract_uuid = ts.contract_id
+  ),
+  NULLIF(TRIM(ts.sto_number::text), '')
+)`;
+
 /** Sort expressions available on expansion_keys (trucking_source + contracts). */
 const EXPANSION_KEY_SORT_FIELD: Record<string, string> = {
   created_at: 'ts.created_at',
@@ -45,7 +55,7 @@ const EXPANSION_KEY_SORT_FIELD: Record<string, string> = {
   status: 'ts.status',
   contract_number: 'c.contract_id',
   po_number: 'c.po_number',
-  sto_number: 'COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), \'\'))',
+  sto_number: AGGREGATED_STO_SORT,
   supplier: 'c.supplier',
   trucking_owner: 'ts.trucking_owner',
   loading_location: 'ts.loading_location',
@@ -73,7 +83,7 @@ export function buildTruckingExpansionKeyOrderBy(
 ): string {
   const field = EXPANSION_KEY_SORT_FIELD[sortKey] || 'ts.created_at';
   return buildListOrderByWithSapStoPriority(
-    `COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), ''))`,
+    AGGREGATED_STO_SORT,
     `${field} ${sortDir} NULLS LAST, ts.created_at DESC`,
     stageFilter,
   );

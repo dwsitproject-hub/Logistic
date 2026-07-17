@@ -1,10 +1,12 @@
 import { SPD_EFFECTIVE_STO_SQL } from './contractLogisticsStoDetailSql';
 import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
-import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql';
+import { sqlTruckingPageIsCompletedExpr, sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql';
 import { TRUCKING_REALIZATIONS_JOIN } from './truckingRealizationSql';
 import {
   sqlTruckingExpandedStoLineQtyKgExpr,
   sqlTruckingOutstandingQtyByIncoterm,
+  sqlTruckingPoLevelSapDeliveryQty,
+  sqlTruckingPoLevelSapReceiveQty,
   sqlTruckingResolvedDeliveryQty,
   sqlTruckingResolvedReceiveQty,
 } from './truckingQuantitySql';
@@ -36,8 +38,24 @@ export interface TruckingListStoExpansionOptions {
   /**
    * Restrict the expansion to an already-resolved page of row keys (from the stage
    * snapshot). Bypasses expansion_keys/ranked_expansion; the caller supplies totals.
+   * Grain is one key per operation (PO); stoLine is ignored when joining.
    */
-  resolvedExpansionKeys?: Array<{ operationId: string; stoLine: string }>;
+  resolvedExpansionKeys?: Array<{ operationId: string; stoLine?: string }>;
+}
+
+/** Aggregated STO display for a trucking_source / expanded row (comma-separated). */
+export function sqlTruckingAggregatedStoLinesExpr(
+  contractIdExpr = 'ts.contract_id',
+  fallbackStoExpr = 'ts.sto_number',
+): string {
+  return `COALESCE(
+    (
+      SELECT STRING_AGG(DISTINCT csl.sto_line, ', ' ORDER BY csl.sto_line)
+      FROM contract_sto_lines csl
+      WHERE csl.contract_uuid = ${contractIdExpr}
+    ),
+    NULLIF(TRIM(${fallbackStoExpr}::text), '')
+  )`;
 }
 
 export function buildContractStoLinesCte(skipSapJoin: boolean): string {
@@ -97,71 +115,32 @@ function buildQuantitySelects(skipSapJoin: boolean): {
     };
   }
 
-  // Match SAP row by STO line when the operation has an STO identity; otherwise
-  // (no STO on the op nor in SAP — e.g. LAND FRC direct PO) fall back to PO match
-  // within the same contract so SAP qty is not lost. Contract scope already applies.
-  const spdStoOrPoMatch = `(
-    (
-      NULLIF(TRIM(e.sto_line_resolved::text), '') IS NOT NULL
-      AND ${SPD_EFFECTIVE_STO} = TRIM(e.sto_line_resolved::text)
-    )
-    OR (
-      NULLIF(TRIM(e.sto_line_resolved::text), '') IS NULL
-      AND NULLIF(TRIM(e.po_number::text), '') IS NOT NULL
-      AND TRIM(COALESCE(spd.po_number::text, spd.data->'raw'->>'PO No', spd.data->'raw'->>'PO No.', '')) = TRIM(e.po_number::text)
-    )
-  )`;
-
-  const qtyDeliveredPerStoSap = `(
-    SELECT SUM(NULLIF(regexp_replace(COALESCE(
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery Trucking'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered Trucking'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered via Trucking'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery'), ''),
-      ''
-    ), '[^0-9\\.-]', '', 'g'), '')::numeric)
-    FROM sap_processed_data spd
-    WHERE spd.contract_number = e.contract_number
-      AND ${spdStoOrPoMatch}
-      AND NULLIF(TRIM(COALESCE(
-        spd.data->'raw'->>'Quantity Delivery Trucking',
-        spd.data->'raw'->>'Quantity Delivered Trucking',
-        spd.data->'raw'->>'Quantity Delivered via Trucking',
-        spd.data->'raw'->>'Quantity Delivered',
-        spd.data->'raw'->>'Quantity Delivery'
-      )), '') IS NOT NULL
-  )`;
-
-  const qtyReceivePerStoSap = `(
-    SELECT SUM(NULLIF(regexp_replace(COALESCE(
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
-      ''
-    ), '[^0-9\\.-]', '', 'g'), '')::numeric)
-    FROM sap_processed_data spd
-    WHERE spd.contract_number = e.contract_number
-      AND ${spdStoOrPoMatch}
-      AND NULLIF(TRIM(COALESCE(
-        spd.data->'raw'->>'Quantity Receive',
-        spd.data->'raw'->>'Qty Receive'
-      )), '') IS NOT NULL
-  )`;
+  // PO-grain: sum SAP Delivery/Receive across all STOs for the PO.
+  const qtyDeliveredPoSap = sqlTruckingPoLevelSapDeliveryQty(
+    'e.contract_number',
+    'e.contract_id',
+    'e.po_number',
+  );
+  const qtyReceivePoSap = sqlTruckingPoLevelSapReceiveQty(
+    'e.contract_number',
+    'e.contract_id',
+    'e.po_number',
+  );
 
   const qtyDelivered = sqlTruckingResolvedDeliveryQty(
     'COALESCE(e.quantity_delivered, 0)',
-    qtyDeliveredPerStoSap,
+    qtyDeliveredPoSap,
     'e.id',
     'c',
   );
   const qtyReceive = sqlTruckingResolvedReceiveQty(
     'COALESCE(e.quantity_receive, e.quantity_delivered, 0)',
-    qtyReceivePerStoSap,
+    qtyReceivePoSap,
     'e.id',
     'c',
   );
   const stoLineQty = sqlTruckingExpandedStoLineQtyKgExpr();
-  // OS Qty uses Contract Qty only (ignore STO Qty) − Delivery/Receive by incoterm.
+  // OS = Contract Qty − Σ Delivery (LCO) / Σ Receive (FRC) across all STOs on the PO.
   const outstanding = sqlTruckingOutstandingQtyByIncoterm(
     qtyDelivered,
     qtyReceive,
@@ -180,25 +159,33 @@ function buildQuantitySelects(skipSapJoin: boolean): {
 
 /** paged_expansion from explicit keys (stage-snapshot fast path). Quotes are escaped. */
 function buildResolvedExpansionKeysCte(
-  keys: Array<{ operationId: string; stoLine: string }>,
+  keys: Array<{ operationId: string; stoLine?: string }>,
 ): string {
   if (keys.length === 0) {
     return `
       paged_expansion AS (
-        SELECT NULL::uuid AS operation_id, NULL::text AS sto_line WHERE FALSE
+        SELECT NULL::uuid AS operation_id WHERE FALSE
       ),`;
   }
-  const values = keys
-    .map((k) => {
-      const op = String(k.operationId).replace(/'/g, "''");
-      const line = String(k.stoLine ?? '').replace(/'/g, "''");
-      return `('${op}'::uuid, '${line}')`;
-    })
-    .join(', ');
+  // Dedupe by operation — snapshot may still carry legacy sto_line columns.
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const k of keys) {
+    const op = String(k.operationId).replace(/'/g, "''");
+    if (seen.has(op)) continue;
+    seen.add(op);
+    values.push(`('${op}'::uuid)`);
+  }
+  if (values.length === 0) {
+    return `
+      paged_expansion AS (
+        SELECT NULL::uuid AS operation_id WHERE FALSE
+      ),`;
+  }
   return `
       paged_expansion AS (
-        SELECT v.operation_id, v.sto_line
-        FROM (VALUES ${values}) v(operation_id, sto_line)
+        SELECT v.operation_id
+        FROM (VALUES ${values.join(', ')}) v(operation_id)
       ),`;
 }
 
@@ -208,42 +195,34 @@ function buildExpansionPagingCtes(paging: TruckingListStoExpansionPaging): strin
   const upper = offset + limit;
   return `
       expansion_keys AS (
-        SELECT DISTINCT
-          ts.id AS operation_id,
-          COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')) AS sto_line
+        SELECT DISTINCT ts.id AS operation_id
         FROM trucking_source ts
         INNER JOIN contracts c ON c.id = ts.contract_id
-        LEFT JOIN contract_sto_lines csl ON csl.contract_uuid = ts.contract_id
-        WHERE COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')) IS NOT NULL
       ),
       ranked_expansion AS (
         SELECT
           ek.operation_id,
-          ek.sto_line,
           ROW_NUMBER() OVER (ORDER BY ${paging.orderBySql}) AS rn
         FROM expansion_keys ek
         INNER JOIN trucking_source ts ON ts.id = ek.operation_id
         INNER JOIN contracts c ON c.id = ts.contract_id
-        LEFT JOIN contract_sto_lines csl
-          ON csl.contract_uuid = ts.contract_id
-          AND TRIM(csl.sto_line) = TRIM(ek.sto_line)
       ),
       paged_expansion AS (
-        SELECT operation_id, sto_line
+        SELECT operation_id
         FROM ranked_expansion
         WHERE rn > ${offset} AND rn <= ${upper}
       ),`;
 }
 
 function buildExpandedJoinSql(usePaging: boolean): string {
+  const stoAgg = sqlTruckingAggregatedStoLinesExpr('ts.contract_id', 'ts.sto_number');
   if (!usePaging) {
     return `
       expanded AS (
         SELECT
           ts.*,
-          COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')) AS sto_line_resolved
+          ${stoAgg} AS sto_line_resolved
         FROM trucking_source ts
-        LEFT JOIN contract_sto_lines csl ON csl.contract_uuid = ts.contract_id
       )`;
   }
 
@@ -251,17 +230,15 @@ function buildExpandedJoinSql(usePaging: boolean): string {
       expanded AS (
         SELECT
           ts.*,
-          COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')) AS sto_line_resolved
+          ${stoAgg} AS sto_line_resolved
         FROM trucking_source ts
-        LEFT JOIN contract_sto_lines csl ON csl.contract_uuid = ts.contract_id
-        INNER JOIN paged_expansion pe
-          ON pe.operation_id = ts.id
-          AND COALESCE(TRIM(pe.sto_line), '') = COALESCE(TRIM(COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), ''))), '')
+        INNER JOIN paged_expansion pe ON pe.operation_id = ts.id
       )`;
 }
 
 /**
  * Count expansion keys only — no SAP qty joins (toolbar-only fast path total).
+ * Grain is one key per trucking operation (PO).
  */
 export function buildTruckingExpansionKeysCountSql(
   innerSql: string,
@@ -273,21 +250,17 @@ export function buildTruckingExpansionKeysCountSql(
       ),
       ${buildContractStoLinesCte(skipSapJoin)},
       expansion_keys AS (
-        SELECT DISTINCT
-          ts.id AS operation_id,
-          COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')) AS sto_line
+        SELECT DISTINCT ts.id AS operation_id
         FROM trucking_source ts
         INNER JOIN contracts c ON c.id = ts.contract_id
-        LEFT JOIN contract_sto_lines csl ON csl.contract_uuid = ts.contract_id
-        WHERE COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')) IS NOT NULL
       )
       SELECT COUNT(*)::bigint AS c FROM expansion_keys`;
 }
 
 /**
- * Expand trucking list rows — one row per contract STO (contract_stos + SAP FRC/LCO).
- * Delivery/receive: Open + WB upload → op-level WB Delivery (PKS) / Receive (EUP) on every STO child;
- * Close → SAP per-STO. Outstanding = Contract Qty − delivered/receive by incoterm (not STO Qty).
+ * Trucking list rows — one row per operation / PO (multi-STO aggregated).
+ * Delivery/receive: Open + WB upload → op-level WB; Close → SAP sum across all STOs on the PO.
+ * Outstanding = Contract Qty − Σ delivered/receive by incoterm (not per-STO).
  */
 export function buildTruckingListExpansionSql(
   innerSql: string,
@@ -307,6 +280,12 @@ export function buildTruckingListExpansionSql(
   const filterTotalCol = paging
     ? ',\n        (SELECT COUNT(*)::bigint FROM expansion_keys) AS __filter_total'
     : '';
+
+  // Prefer aggregated sto_line_resolved; fall back to pre-joined sto_numbers.
+  const stoDisplay = `COALESCE(
+        NULLIF(TRIM(e.sto_line_resolved::text), ''),
+        NULLIF(TRIM(e.sto_numbers::text), '')
+      )`;
 
   return `
       WITH trucking_source AS (
@@ -344,14 +323,17 @@ export function buildTruckingListExpansionSql(
         e.status_db,
         ${
           useStageSnapshot
-            ? `COALESCE(sn.stage, ${sqlTruckingPagePipelineStageExpr(
-                'c',
-                `NULLIF(TRIM(e.sto_line_resolved::text), '')`,
-                qty.outstandingForStage,
-              )})`
+            ? `CASE
+          WHEN ${sqlTruckingPageIsCompletedExpr('c', qty.outstandingForStage)} THEN 'COMPLETED'
+          ELSE COALESCE(sn.stage, ${sqlTruckingPagePipelineStageExpr(
+            'c',
+            `NULLIF(TRIM((${stoDisplay})::text), '')`,
+            qty.outstandingForStage,
+          )})
+        END`
             : sqlTruckingPagePipelineStageExpr(
                 'c',
-                `NULLIF(TRIM(e.sto_line_resolved::text), '')`,
+                `NULLIF(TRIM((${stoDisplay})::text), '')`,
                 qty.outstandingForStage,
               )
         } AS status,
@@ -359,8 +341,8 @@ export function buildTruckingListExpansionSql(
         e.updated_at,
         e.contract_number,
         e.po_number,
-        e.sto_line_resolved AS sto_number,
-        e.sto_numbers,
+        ${stoDisplay} AS sto_number,
+        COALESCE(NULLIF(TRIM(e.sto_numbers::text), ''), ${stoDisplay}) AS sto_numbers,
         ${qty.stoLineQty} AS sto_quantity,
         e.contract_qty,
         e.contract_date,
@@ -382,8 +364,7 @@ export function buildTruckingListExpansionSql(
         useStageSnapshot
           ? `
       LEFT JOIN trucking_list_stage_snapshot sn
-        ON sn.operation_id = e.id
-        AND sn.sto_line = COALESCE(NULLIF(TRIM(e.sto_line_resolved::text), ''), '')`
+        ON sn.operation_id = e.id`
           : ''
       }
       ${TRUCKING_REALIZATIONS_JOIN}`;

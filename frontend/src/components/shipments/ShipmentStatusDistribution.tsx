@@ -59,7 +59,7 @@ export function ShipmentStatusDistribution({
       <button
         type="button"
         onClick={() => onStageClick(card.status)}
-        className={`relative flex min-h-[10rem] w-40 flex-col md:w-44 rounded-xl border border-black/5 px-4 py-3 text-left shadow-sm transition-all cursor-pointer hover:shadow-md hover:-translate-y-0.5 ${card.color} ${
+        className={`relative flex h-full min-h-[11.5rem] w-40 flex-col md:w-44 rounded-xl border border-black/5 px-4 py-3 text-left shadow-sm transition-all cursor-pointer hover:shadow-md hover:-translate-y-0.5 ${card.color} ${
           isActive ? 'ring-2 ring-blue-500 ring-offset-2 shadow-md' : ''
         }`}
       >
@@ -74,7 +74,7 @@ export function ShipmentStatusDistribution({
           {count.toLocaleString('en-US')}
         </div>
         <div
-          className={`mt-1.5 border-t border-black/10 pt-1.5 text-[11px] font-medium ${card.textColor}`}
+          className={`mt-1.5 flex min-h-[4.75rem] flex-1 flex-col border-t border-black/10 pt-1.5 text-[11px] font-medium ${card.textColor}`}
         >
           <div className="flex items-center gap-1 opacity-80">
             <Ship className="h-3 w-3 shrink-0" aria-hidden />
@@ -97,7 +97,7 @@ export function ShipmentStatusDistribution({
     )
 
     return (
-      <div className="relative">
+      <div className="relative h-full">
         <Tooltip delayDuration={200}>
           <TooltipTrigger asChild>{button}</TooltipTrigger>
           <TooltipContent
@@ -130,15 +130,15 @@ export function ShipmentStatusDistribution({
           aria-label="Shipment pipeline status — scroll horizontally on small screens"
         >
           <div
-            className={`mx-auto flex w-max min-w-full items-center gap-3 px-4 pb-4 pt-5 transition-opacity duration-200 md:gap-6 md:px-6 md:pb-6 md:pt-6 ${
+            className={`mx-auto flex w-max min-w-full items-stretch gap-3 px-4 pb-4 pt-5 transition-opacity duration-200 md:gap-6 md:px-6 md:pb-6 md:pt-6 ${
               loading ? 'opacity-65' : 'opacity-100'
             }`}
           >
             {SHIPMENT_PAGE_PIPELINE_CARDS.map((card, index, array) => (
-              <div key={card.status} className="flex flex-shrink-0 items-center">
+              <div key={card.status} className="flex flex-shrink-0 items-stretch self-stretch">
                 {renderPipelineCard(card)}
                 {index < array.length - 1 && (
-                  <div className="mx-2 flex-shrink-0 md:mx-3">
+                  <div className="mx-2 flex flex-shrink-0 items-center self-center md:mx-3">
                     <svg
                       width="28"
                       height="28"

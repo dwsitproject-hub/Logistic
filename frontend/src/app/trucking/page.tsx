@@ -98,7 +98,7 @@ import {
   operationalRowFieldTooltipText,
   shouldApplyOperationalTruncateTooltip,
 } from '@/lib/operationalTableTruncateUi'
-import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
+import { appendToolbarMultiToColumnFilters, filterIncotermOptions } from '@/lib/globalScopeFilters'
 
 const TRUCKING_ACTIONS_COL_WIDTH = 140
 
@@ -352,32 +352,22 @@ function mergeTruckingSapFields(
   hydrated: TruckingOperation[],
 ): TruckingOperation[] {
   if (!hydrated.length) return base
-  // STO-expanded rows share the operation id (one row per STO line), so hydrated rows
-  // must be matched by (id, sto line) — an id-only map let one line's quantities and
-  // STO number overwrite every sibling line of the same operation.
-  const byRowKey = new Map<string, TruckingOperation>()
-  const idRowCount = new Map<string, number>()
-  const soleById = new Map<string, TruckingOperation>()
+  // PO-grain list: one row per operation id. Match hydrate by id (sto line optional fallback).
+  const byId = new Map<string, TruckingOperation>()
   for (const row of hydrated) {
     if (!row.id) continue
-    const id = String(row.id)
-    const line = String(row.sto_number ?? '').trim()
-    byRowKey.set(`${id}|${line}`, row)
-    idRowCount.set(id, (idRowCount.get(id) ?? 0) + 1)
-    if (idRowCount.get(id) === 1) soleById.set(id, row)
-    else soleById.delete(id)
+    byId.set(String(row.id), row)
   }
   return base.map((row) => {
     if (!row.id) return row
-    const id = String(row.id)
-    const line = String(row.sto_number ?? '').trim()
-    const match = byRowKey.get(`${id}|${line}`) ?? soleById.get(id)
+    const match = byId.get(String(row.id))
     if (!match) return row
     return {
       ...row,
       status: match.status ?? row.status,
       status_db: match.status_db ?? row.status_db,
       contract_ext_no: match.contract_ext_no ?? row.contract_ext_no,
+      sto_number: match.sto_number ?? row.sto_number,
       sto_numbers: match.sto_numbers ?? row.sto_numbers,
       quantity_sent: match.quantity_sent ?? row.quantity_sent,
       quantity_delivered: match.quantity_delivered ?? row.quantity_delivered,
@@ -1919,7 +1909,7 @@ function TruckingPageContent() {
         const supplierPayload = supplierRes.data?.data
         const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
         setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
-        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
+        setAvailableIncoterms(filterIncotermOptions(Array.isArray(incs) ? incs : []))
         setAvailableProducts(Array.isArray(products) ? products : [])
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
       })
@@ -2000,12 +1990,8 @@ function TruckingPageContent() {
       summaryParams.set('summaryOnly', 'true')
       summaryParams.set('page', '1')
       summaryParams.set('limit', '1')
-      const osStatus = String(fetchStatusFilter ?? '').trim().toUpperCase()
-      if (osStatus && osStatus !== 'ALL') {
-        summaryParams.set('osStatus', osStatus)
-      } else {
-        summaryParams.delete('osStatus')
-      }
+      // OS strip is static (Unplanned/Planned/In Progress) — do not scope by status card.
+      summaryParams.delete('osStatus')
       const summaryUrl = `/trucking?${summaryParams.toString()}`
       const summaryCacheKey = buildCacheKey('GET', summaryUrl)
       const summaryForce = options?.force || section1SummaryForceNextFetchRef.current
@@ -2868,13 +2854,22 @@ function TruckingPageContent() {
       label: 'STO',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (o) => (isTruckingContractBacklogRow(o) ? '' : o.sto_number || ''),
-      render: (o) => (
-        <OperationalNowrapCell
-          value={isTruckingContractBacklogRow(o) ? '—' : o.sto_number}
-          title={isTruckingContractBacklogRow(o) ? '—' : o.sto_number || ''}
-        />
-      )
+      getSortValue: (o) =>
+        isTruckingContractBacklogRow(o)
+          ? ''
+          : o.sto_numbers || o.sto_number || '',
+      render: (o) => {
+        if (isTruckingContractBacklogRow(o)) {
+          return <OperationalNowrapCell value="—" title="—" />
+        }
+        const stoDisplay = o.sto_numbers || o.sto_number || ''
+        return (
+          <OperationalStackedCommaCell
+            value={stoDisplay}
+            title={stoDisplay}
+          />
+        )
+      }
     },
     {
       id: 'contract_date',
@@ -3630,7 +3625,7 @@ function TruckingPageContent() {
                     setHasMore(true)
                     setStatusFilter(e.target.value)
                   }}
-                  className="rounded-lg border px-4 py-2"
+                  className="rounded-lg border px-4 py-2 text-sm"
                 >
                   <option value="ALL">All Status</option>
                   <option value="UNPLANNED">Unplanned</option>
@@ -3642,7 +3637,7 @@ function TruckingPageContent() {
                 <select
                   value={lateIndicatorFilter}
                   onChange={(e) => setLateIndicatorFilter(e.target.value)}
-                  className="rounded-lg border px-4 py-2"
+                  className="rounded-lg border px-4 py-2 text-sm"
                 >
                   <option value="ALL">All Late Indicator</option>
                   <option value="ON_TIME">On Time</option>
@@ -3665,6 +3660,7 @@ function TruckingPageContent() {
                 selectedSuppliers={selectedSuppliers}
                 onSuppliersChange={onSuppliersChange}
                 groupPlantOptions={availableGroupPlants}
+                uppercaseGroupPlantLabels
                 selectedGroupPlants={selectedGroupPlants}
                 onGroupPlantsChange={handleGroupPlantsChange}
                 dateFrom={dateFrom}
@@ -4571,11 +4567,9 @@ function TruckingPageContent() {
                         ) : sortedOperations.map((operation, idx) => {
                           const isEditing = editingId === operation.id
                           const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
-                          // STO-expanded rows repeat operation.id (one row per STO line);
-                          // duplicate keys corrupt React list reconciliation and leave
-                          // stale rows in the DOM when the list shrinks (e.g. search).
+                          // PO-grain: one React key per operation id.
                           return (
-                              <tr key={`${operation.id}|${operation.sto_number ?? ''}|${idx}`} className={stripeClass}>
+                              <tr key={`${operation.id}|${idx}`} className={stripeClass}>
                                 {visibleColumns.map(col => {
                                   const layout = getOperationalColumnLayout('trucking', col.id)
                                   const opColClass = operationalTableColumnClass(layout)
@@ -4750,7 +4744,7 @@ function TruckingPageContent() {
 
                   return (
                     <div
-                      key={`${operation.id}|${operation.sto_number ?? ''}|${idx}`}
+                      key={`${operation.id}|${idx}`}
                       className={`border rounded-lg transition-colors ${isEditing ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
                     >
                       <div className="p-4">

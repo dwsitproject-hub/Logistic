@@ -118,13 +118,28 @@ export const TRUCKING_LIST_STO_LATERAL = `
         WHERE x.effective_sto IS NOT NULL AND x.effective_sto != ''
       ) sa ON true`;
 
-/** B2B child-contract exclusion — shell uses contract_type only (no SAP lateral). */
+const TRUCKING_LIST_B2B_REFERENCE_PO_SUBQUERY = `
+          SELECT COALESCE(
+            spd.data->'contract'->>'contract_reference_po',
+            spd.data->>'CONTRACT REFF PO',
+            spd.data->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'CONTRACT REFF PO'
+          )
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = c.contract_id
+          ORDER BY spd.created_at DESC NULLS LAST
+          LIMIT 1
+`;
+
+/** B2B child-contract exclusion — B2B origins without Contract Reff PO must remain visible. */
 export function truckingListB2bExcludeSql(skipSapJoin: boolean): string {
   if (skipSapJoin) {
     return `
         AND NOT (
           c.contract_id IS NOT NULL
           AND UPPER(NULLIF(TRIM(COALESCE(c.contract_type::text, '')), '')) = 'B2B'
+          AND NULLIF(TRIM(COALESCE((${TRUCKING_LIST_B2B_REFERENCE_PO_SUBQUERY}), '')), '') IS NOT NULL
         )`;
   }
   return `

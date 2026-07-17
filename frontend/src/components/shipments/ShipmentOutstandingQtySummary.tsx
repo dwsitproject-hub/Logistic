@@ -26,12 +26,22 @@ type ShipmentOutstandingQtySummaryProps = {
   data: ShipmentOutstandingQtySummaryData | null | undefined
 }
 
+function formatQtyOrPending(
+  kg: number | undefined,
+  pending: boolean,
+): string {
+  if (pending) return formatOutstandingQtyMtFromKg(0, { maxFractionDigits: 0 })
+  return formatOutstandingQtyMtFromKg(kg, { maxFractionDigits: 0 })
+}
+
 function BucketColumn({
   title,
   bucket,
+  pending,
 }: {
   title: string
-  bucket: ShipmentOutstandingQtyBucket
+  bucket: ShipmentOutstandingQtyBucket | null
+  pending: boolean
 }) {
   return (
     <div className="min-w-0">
@@ -39,14 +49,24 @@ function BucketColumn({
       <div className="mt-2 space-y-1 text-sm text-gray-600">
         <div className="flex items-baseline justify-between gap-3">
           <span>FOB</span>
-          <span className={cn('font-semibold tabular-nums', outstandingQtyMtColorClass(bucket.fobKg))}>
-            {formatOutstandingQtyMtFromKg(bucket.fobKg, { maxFractionDigits: 0 })}
+          <span
+            className={cn(
+              'font-semibold tabular-nums',
+              pending ? 'text-gray-400' : outstandingQtyMtColorClass(bucket?.fobKg),
+            )}
+          >
+            {formatQtyOrPending(bucket?.fobKg, pending)}
           </span>
         </div>
         <div className="flex items-baseline justify-between gap-3">
           <span>CIF</span>
-          <span className={cn('font-semibold tabular-nums', outstandingQtyMtColorClass(bucket.cifKg))}>
-            {formatOutstandingQtyMtFromKg(bucket.cifKg, { maxFractionDigits: 0 })}
+          <span
+            className={cn(
+              'font-semibold tabular-nums',
+              pending ? 'text-gray-400' : outstandingQtyMtColorClass(bucket?.cifKg),
+            )}
+          >
+            {formatQtyOrPending(bucket?.cifKg, pending)}
           </span>
         </div>
       </div>
@@ -56,12 +76,14 @@ function BucketColumn({
 
 /**
  * Toolbar + status-card scoped Outstanding Qty strip (FOB/CIF × Interco / 3rd Party).
+ * Shows 0 MT while loading when no prior value is available yet.
  */
 export function ShipmentOutstandingQtySummary({
   loading = false,
   data,
 }: ShipmentOutstandingQtySummaryProps) {
-  const summary = data ?? EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY
+  const pending = loading && data == null
+  const summary = data ?? null
 
   return (
     <Card>
@@ -89,10 +111,10 @@ export function ShipmentOutstandingQtySummary({
               <div
                 className={cn(
                   'mt-1 text-2xl font-bold tabular-nums',
-                  outstandingQtyMtColorClass(summary.totalKg),
+                  pending ? 'text-gray-400' : outstandingQtyMtColorClass(summary?.totalKg),
                 )}
               >
-                {formatOutstandingQtyMtFromKg(summary.totalKg, { maxFractionDigits: 0 })}
+                {formatQtyOrPending(summary?.totalKg, pending)}
               </div>
               <p className="mt-1 text-[11px] leading-snug text-gray-500">
                 FOB + CIF · Unplanned / Planned / At LP / Sailed / At DP
@@ -101,11 +123,11 @@ export function ShipmentOutstandingQtySummary({
           </div>
 
           <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <BucketColumn title="3rd Party" bucket={summary.thirdParty} />
+            <BucketColumn title="3rd Party" bucket={summary?.thirdParty ?? null} pending={pending} />
           </div>
 
           <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <BucketColumn title="Interco" bucket={summary.interco} />
+            <BucketColumn title="Interco" bucket={summary?.interco ?? null} pending={pending} />
           </div>
         </div>
       </CardContent>

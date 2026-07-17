@@ -16,6 +16,8 @@ export function SearchableMultiSelect({
   emptyMessage = 'Loading...',
   /** When true, selected values appear at the top of the list (for plotted Product / Group Plant). */
   pinSelectedToTop = false,
+  /** Display-only: uppercase the option labels (underlying value/filtering stays unchanged). */
+  uppercaseOptionLabels = false,
 }: {
   label: string
   options: string[]
@@ -24,6 +26,7 @@ export function SearchableMultiSelect({
   placeholder: string
   emptyMessage?: string
   pinSelectedToTop?: boolean
+  uppercaseOptionLabels?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -101,7 +104,7 @@ export function SearchableMultiSelect({
                     onChange={() => toggle(option)}
                     className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                   />
-                  <span className="truncate">{option}</span>
+                  <span className={`truncate${uppercaseOptionLabels ? ' uppercase' : ''}`}>{option}</span>
                 </label>
               ))
             )}

@@ -9,6 +9,16 @@ export interface TruckingModalActualRow {
   date: string
   quantity_delivery_kg: number
   quantity_receive_kg: number | null
+  /** Empty = legacy PO-level WB row (pre multi-STO split). */
+  sto_number: string
+}
+
+export interface TruckingModalStoActual {
+  sto_number: string
+  start_receive_date: string
+  last_receive_date: string
+  qty_delivery: number | null
+  qty_receive: number | null
 }
 
 export function parseDailyDeliverablesRaw(
@@ -61,10 +71,59 @@ export function normalizeDailyActualRows(raw: unknown): TruckingModalActualRow[]
         date,
         quantity_delivery_kg: Number.isFinite(delivery) ? delivery : 0,
         quantity_receive_kg: receive != null && Number.isFinite(receive) ? receive : null,
+        sto_number: String(r.sto_number ?? '').trim(),
       }
     })
     .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.date))
-    .sort((a, b) => a.date.localeCompare(b.date))
+    .sort((a, b) => {
+      const stoCmp = a.sto_number.localeCompare(b.sto_number)
+      if (stoCmp !== 0) return stoCmp
+      return a.date.localeCompare(b.date)
+    })
+}
+
+/** Normalize getById / validate `sto_actuals` for Section 4. */
+export function normalizeStoActuals(raw: unknown): TruckingModalStoActual[] {
+  if (!Array.isArray(raw)) return []
+  const toNullableNumber = (v: unknown): number | null => {
+    if (v == null || v === '') return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  return raw
+    .map((r: Record<string, unknown>) => {
+      const sto = String(r.sto_number ?? '').trim()
+      const start = String(r.sap_trucking_start_receive_date ?? r.start_receive_date ?? '').slice(0, 10)
+      const last = String(r.sap_trucking_last_receive_date ?? r.last_receive_date ?? '').slice(0, 10)
+      return {
+        sto_number: sto,
+        start_receive_date: /^\d{4}-\d{2}-\d{2}$/.test(start) ? start : '',
+        last_receive_date: /^\d{4}-\d{2}-\d{2}$/.test(last) ? last : '',
+        qty_delivery: toNullableNumber(r.sap_qty_delivery ?? r.qty_delivery),
+        qty_receive: toNullableNumber(r.sap_qty_receive ?? r.qty_receive),
+      }
+    })
+    .filter((r) => r.sto_number)
+    .sort((a, b) => a.sto_number.localeCompare(b.sto_number))
+}
+
+/**
+ * Filter WB rows for one STO. Also includes legacy empty-STO rows when
+ * `includeLegacyEmpty` is true (single-STO or PO-level fallback).
+ */
+export function filterActualRowsForSto(
+  rows: TruckingModalActualRow[],
+  stoNumber: string,
+  options?: { includeLegacyEmpty?: boolean },
+): TruckingModalActualRow[] {
+  const sto = String(stoNumber ?? '').trim()
+  const includeLegacy = options?.includeLegacyEmpty === true
+  return rows.filter((r) => {
+    const rowSto = String(r.sto_number ?? '').trim()
+    if (rowSto === sto) return true
+    if (includeLegacy && !rowSto) return true
+    return false
+  })
 }
 
 export function sumPlanningDeliveryKg(rows: TruckingModalPlanningRow[]): number {

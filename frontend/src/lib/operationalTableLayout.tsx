@@ -367,10 +367,13 @@ export function OperationalStackedCommaCell({
   value,
   className = 'text-sm',
   title,
+  truncateLongParts = false,
 }: {
   value?: string | null
   className?: string
   title?: string
+  /** Ellipsis each stacked value when longer than the column width. */
+  truncateLongParts?: boolean
 }) {
   const raw = String(value ?? '').trim()
   if (!raw || raw === '-') {
@@ -385,18 +388,35 @@ export function OperationalStackedCommaCell({
   if (parts.length === 0) {
     return <span className={className}>-</span>
   }
+  const partClass = truncateLongParts
+    ? 'block min-w-0 max-w-full truncate'
+    : `${COMPACT_TABLE_NOWRAP_CLASS} block`
   if (parts.length <= 1) {
     const display = parts[0]
     return (
-      <span className={`${className} ${COMPACT_TABLE_NOWRAP_CLASS} block`} title={title ?? display}>
+      <span
+        className={
+          truncateLongParts
+            ? `${className} block min-w-0 max-w-full truncate`
+            : `${className} ${COMPACT_TABLE_NOWRAP_CLASS} block`
+        }
+        title={title ?? display}
+      >
         {display}
       </span>
     )
   }
   return (
-    <span className={`${COMPACT_TABLE_STACK_CLASS} ${className}`} title={title ?? parts.join(', ')}>
+    <span
+      className={
+        truncateLongParts
+          ? `${className} flex w-full min-w-0 max-w-full flex-col gap-0.5`
+          : `${COMPACT_TABLE_STACK_CLASS} ${className}`
+      }
+      title={title ?? parts.join(', ')}
+    >
       {parts.map((part, i) => (
-        <span key={`${part}-${i}`} className={`${COMPACT_TABLE_NOWRAP_CLASS} block`}>
+        <span key={`${part}-${i}`} className={partClass} title={part}>
           {part}
         </span>
       ))}

@@ -8,12 +8,15 @@ import {
   sqlTruckingOutstandingQtyByIncoterm,
   sqlTruckingOutstandingWithinToleranceExpr,
   sqlTruckingPipelineIsCompletedExpr,
+  sqlTruckingPoLevelSapDeliveryQty,
+  sqlTruckingPoLevelSapReceiveQty,
   sqlTruckingPreferWbResolvedQty,
   sqlTruckingQuantityDeliveredCoalesce,
   sqlTruckingResolvedDeliveryQty,
   sqlTruckingResolvedReceiveQty,
   sqlWbActualDeliverySumKg,
   sqlWbActualReceiveSumKg,
+  TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
 } from './truckingQuantitySql';
 
 describe('truckingQuantitySql', () => {
@@ -95,11 +98,27 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('AND NOT (');
   });
 
-  it('sqlTruckingExpandedStoLineQtyKgExpr resolves SAP STO qty per expanded line', () => {
+  it('sqlTruckingPoLevelSapDeliveryQty sums delivery across PO STOs', () => {
+    const sql = sqlTruckingPoLevelSapDeliveryQty();
+    expect(sql).toContain('Quantity Delivery Trucking');
+    expect(sql).toContain("data->'raw'->>'PO No'");
+    expect(sql).toContain('e.po_number');
+    expect(sql).toContain('contract_sto_lines');
+  });
+
+  it('sqlTruckingPoLevelSapReceiveQty sums receive across PO STOs', () => {
+    const sql = sqlTruckingPoLevelSapReceiveQty();
+    expect(sql).toContain('Quantity Receive');
+    expect(sql).toContain('Qty Receive');
+    expect(sql).toContain('e.po_number');
+  });
+
+  it('sqlTruckingExpandedStoLineQtyKgExpr sums SAP STO qty across the PO', () => {
     const sql = sqlTruckingExpandedStoLineQtyKgExpr();
     expect(sql).toContain("data->'contract'->>'sto_quantity'");
-    expect(sql).toContain('e.sto_line_resolved');
+    expect(sql).toContain('e.po_number');
     expect(sql).toContain('e.contract_qty');
+    expect(sql).toContain('DISTINCT ON');
   });
 
   it('sqlTruckingOutstandingWithinToleranceExpr allows band around zero', () => {
@@ -113,9 +132,12 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain(' OR ');
   });
 
-  it('isTruckingPipelineCompleted accepts GR Close or OS tolerance', () => {
+  it('isTruckingPipelineCompleted accepts GR Close or OS within 0 MT display band', () => {
     expect(isTruckingPipelineCompleted('Close', 5000)).toBe(true);
     expect(isTruckingPipelineCompleted('Open', 0)).toBe(true);
+    expect(isTruckingPipelineCompleted('Open', 286)).toBe(true); // displays as 0 MT
+    expect(isTruckingPipelineCompleted('Open', TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG)).toBe(true);
+    expect(isTruckingPipelineCompleted('Open', TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG + 1)).toBe(false);
     expect(isTruckingPipelineCompleted('Open', 5000)).toBe(false);
   });
 });

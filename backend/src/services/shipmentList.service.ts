@@ -24,12 +24,8 @@ import { ListCacheKeepWarm } from '../utils/listCacheKeepWarm';
 import {
   buildShipmentOutstandingQtyBacklogAggregateQuery,
   buildShipmentOutstandingQtyExecutionAggregateQuery,
-  EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY,
-  isShipmentOsStatusOutsideActiveScope,
   mergeShipmentOutstandingQtySummaries,
-  normalizeShipmentOsStatusParam,
   parseShipmentOutstandingQtySummaryRow,
-  shouldIncludeShipmentUnplannedBacklogForOs,
   type ShipmentOutstandingQtySummary,
 } from '../utils/shipmentOutstandingQtySummarySql';
 import {
@@ -181,18 +177,16 @@ export function buildShipmentSummaryCacheKey(filterCacheKey: string, scopeStatus
   return `${filterCacheKey}:summary:${scopeStatus ?? ''}`;
 }
 
-export function buildShipmentOutstandingQtyCacheKey(
-  filterCacheKey: string,
-  osStatus: string | null,
-): string {
-  return `${filterCacheKey}:outstanding-qty:os:${osStatus ?? 'ALL'}`;
+export function buildShipmentOutstandingQtyCacheKey(filterCacheKey: string): string {
+  // OS strip is always active-scope (Unplanned … before Completed), not per status card.
+  return `${filterCacheKey}:outstanding-qty:active`;
 }
 
 export type { ShipmentOutstandingQtySummary };
 
 /**
  * Outstanding Qty strip for Section 1 (FOB/CIF × Interco / 3rd Party).
- * Scoped by Global Filters + optional pipeline card (`osStatus`).
+ * Scoped by Global Filters only — static across status cards (active stages only).
  */
 export async function loadShipmentOutstandingQtyForRequest(
   req: AuthRequest,
@@ -204,43 +198,24 @@ export async function loadShipmentOutstandingQtyForRequest(
     filterCacheKey: string;
   },
 ): Promise<ShipmentOutstandingQtySummary> {
-  const osStatus = normalizeShipmentOsStatusParam((req.query as { osStatus?: string }).osStatus);
-  const cacheKey = buildShipmentOutstandingQtyCacheKey(opts.filterCacheKey, osStatus);
+  const cacheKey = buildShipmentOutstandingQtyCacheKey(opts.filterCacheKey);
   const cached = OUTSTANDING_QTY_CACHE.get(cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
     return cached.summary;
   }
   if (cached) OUTSTANDING_QTY_CACHE.delete(cacheKey);
 
-  if (isShipmentOsStatusOutsideActiveScope(osStatus)) {
-    OUTSTANDING_QTY_CACHE.set(cacheKey, {
-      summary: EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY,
-      expiresAt: Date.now() + CACHE_TTL_MS,
-    });
-    evictMapIfNeeded(OUTSTANDING_QTY_CACHE, MAX_CACHE_ENTRIES);
-    return EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY;
-  }
-
   const baseParams = [...opts.innerParams, ...opts.toolbarOuterParams];
+  // Always aggregate Unplanned … before Completed (ignore status-card osStatus).
   const execQ = buildShipmentOutstandingQtyExecutionAggregateQuery(
     opts.shipmentBaseCteSql,
     opts.toolbarOuterSql,
     baseParams,
-    osStatus,
+    null,
   );
   const execPromise = query(execQ.text, execQ.params).then((res) =>
     parseShipmentOutstandingQtySummaryRow((res.rows[0] || {}) as Record<string, unknown>),
   );
-
-  if (!shouldIncludeShipmentUnplannedBacklogForOs(osStatus)) {
-    const execution = await execPromise;
-    OUTSTANDING_QTY_CACHE.set(cacheKey, {
-      summary: execution,
-      expiresAt: Date.now() + CACHE_TTL_MS,
-    });
-    evictMapIfNeeded(OUTSTANDING_QTY_CACHE, MAX_CACHE_ENTRIES);
-    return execution;
-  }
 
   const { dateFrom, dateTo, contract, plant } = req.query;
   const globalSearch =

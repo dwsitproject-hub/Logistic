@@ -352,7 +352,10 @@ function shipmentListSummaryPayload(
       shipmentRows: unplannedShipmentRows,
       totalTableRows: unplannedTableTotal,
     },
-    outstandingQty: outstandingQty ?? EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY,
+    // Omit when not loaded — callers must not block status cards on OS SQL.
+    ...(outstandingQty !== undefined
+      ? { outstandingQty: outstandingQty ?? EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY }
+      : {}),
   };
 }
 
@@ -413,11 +416,14 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     const includeSummary =
       String((req.query as any).includeSummary ?? 'true').toLowerCase() !== 'false';
     const summaryOnly = String((req.query as any).summaryOnly || '').toLowerCase() === 'true';
+    const outstandingQtyOnly =
+      String((req.query as any).outstandingQtyOnly || '').toLowerCase() === 'true';
     /** Skip heavy SAP table joins (compact list first paint; hydrate with a second request). */
     const skipSapJoin =
       compact &&
       String((req.query as any).skipSapJoin || '').toLowerCase() === 'true' &&
-      !summaryOnly;
+      !summaryOnly &&
+      !outstandingQtyOnly;
 
     // Query shipments grouped by STO number or Operation ID:
     // - SAP shipments are grouped by contracts.sto_number
@@ -1014,6 +1020,24 @@ ${contractMetaSelectCore}
         filterCacheKey: shipmentListFilterCacheKey,
       });
 
+    /** Decoupled OS strip — do not wait inside summaryOnly (status cards stay fast). */
+    if (compact && outstandingQtyOnly) {
+      const tOs0 = performance.now();
+      const outstandingQty = await loadSection1OutstandingQty();
+      timingsMs.dbOutstandingQtyOnly = performance.now() - tOs0;
+      timingsMs.total = performance.now() - tReq0;
+      emitShipmentListTimings(res, timingsMs, {
+        path: 'outstandingQtyOnly',
+        compact,
+        page: Number(page),
+        limit: Number(limit),
+      });
+      return res.json({
+        success: true,
+        data: { outstandingQty },
+      });
+    }
+
     const summaryCountQuery = `${shipmentBaseCteSqlSummary}
       ${buildUnplannedContractBacklogTableCountCte(contractScopeSql)}
       , filtered_shipments AS (
@@ -1110,15 +1134,12 @@ ${contractMetaSelectCore}
         scopeStatusParam,
       );
       const tSum0 = performance.now();
-      const [summaryBundle, outstandingQty] = await Promise.all([
-        loadShipmentSummaryBundle(req, {
-          summaryCountQuery,
-          params: [...section1SummaryFilterParams, ...summaryScopeParams],
-          cacheKey: summaryCacheKey,
-          loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
-        }),
-        loadSection1OutstandingQty(),
-      ]);
+      const summaryBundle = await loadShipmentSummaryBundle(req, {
+        summaryCountQuery,
+        params: [...section1SummaryFilterParams, ...summaryScopeParams],
+        cacheKey: summaryCacheKey,
+        loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+      });
       const { summaryRow: sr, totalCount: tc, unplannedBreakdown: unplannedBreakdownForSummary, source: summarySource } =
         summaryBundle;
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
@@ -1135,7 +1156,7 @@ ${contractMetaSelectCore}
         success: true,
         data: {
           shipments: [],
-          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary, outstandingQty),
+          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary),
           pagination: {
             total: tc,
             page: Number(page),
@@ -1335,15 +1356,12 @@ ${contractMetaSelectCore}
         scopeStatusParam,
       );
       const tSum0 = performance.now();
-      const [summaryBundle, outstandingQty] = await Promise.all([
-        loadShipmentSummaryBundle(req, {
-          summaryCountQuery,
-          params: [...section1SummaryFilterParams, ...summaryScopeParams],
-          cacheKey: summaryCacheKey,
-          loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
-        }),
-        loadSection1OutstandingQty(),
-      ]);
+      const summaryBundle = await loadShipmentSummaryBundle(req, {
+        summaryCountQuery,
+        params: [...section1SummaryFilterParams, ...summaryScopeParams],
+        cacheKey: summaryCacheKey,
+        loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+      });
       const {
         summaryRow: sr,
         totalCount: tc,
@@ -1366,7 +1384,7 @@ ${contractMetaSelectCore}
         success: true,
         data: {
           shipments: [],
-          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary, outstandingQty),
+          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary),
           pagination: {
             total: tc,
             page: Number(page),
@@ -4075,6 +4093,13 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       operationId != null && String(operationId).trim() !== ''
         ? String(operationId).trim()
         : null;
+    if (!resolvedOperationId && hasStoNumber) {
+      const stoTrimForOp = String(stoNumber).trim();
+      if (isOfficialSapStoNumber(stoTrimForOp)) {
+        // SAP STO groups share operation_id = STO number (matches list / plot expectations).
+        resolvedOperationId = stoTrimForOp;
+      }
+    }
     if (!resolvedOperationId && !hasStoNumber) {
       const dmy = formatDDMMYYYY(new Date());
       const seq = await allocateNextSyntheticSequenceDefault('shipments', 'SEA', dmy);

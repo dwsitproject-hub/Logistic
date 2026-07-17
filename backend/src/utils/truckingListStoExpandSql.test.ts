@@ -5,21 +5,23 @@ import {
 } from './truckingListStoExpandSql';
 
 describe('truckingListStoExpandSql', () => {
-  it('wrapTruckingListQueryWithStoExpansion expands by contract_stos with Open→WB dual qty', () => {
+  it('wrapTruckingListQueryWithStoExpansion aggregates STOs at PO grain with Open→WB dual qty', () => {
     const sql = wrapTruckingListQueryWithStoExpansion('SELECT 1 AS id');
     expect(sql).toContain('contract_stos');
     expect(sql).toContain('expanded');
+    expect(sql).toContain('STRING_AGG');
     expect(sql).toContain('trucking_daily_actuals');
     expect(sql).toContain('quantity_delivery_kg');
     expect(sql).toContain('quantity_receive_kg');
     expect(sql).toContain('Quantity Delivery Trucking');
     expect(sql).toContain("= 'FRC'");
     expect(sql).toContain("= 'LCO'");
-    // OS uses Contract Qty, not STO line qty
+    // OS uses Contract Qty − Σ Delivery/Receive across STOs on the PO
     expect(sql).toContain('COALESCE(e.contract_qty, 0)');
+    expect(sql).toContain("data->'raw'->>'PO No'");
   });
 
-  it('recomputes pipeline status per expanded STO line (not passthrough)', () => {
+  it('recomputes pipeline status per operation / PO (not passthrough)', () => {
     const sql = wrapTruckingListQueryWithStoExpansion('SELECT 1 AS id');
     expect(sql).toContain('sto_line_resolved');
     expect(sql).toContain("'COMPLETED'");
@@ -30,7 +32,7 @@ describe('truckingListStoExpandSql', () => {
     expect(sql).not.toMatch(/\be\.status\b/);
   });
 
-  it('skipSapJoin shell mode avoids SAP qty_move and per-STO SAP subqueries', () => {
+  it('skipSapJoin shell mode avoids SAP qty_move and PO-level SAP subqueries', () => {
     const sql = wrapTruckingListQueryWithStoExpansion('SELECT 1 AS id', { skipSapJoin: true });
     expect(sql).toContain('contract_stos');
     expect(sql).not.toContain('qty_move');
@@ -42,13 +44,15 @@ describe('truckingListStoExpandSql', () => {
     expect(sql).not.toMatch(/FROM sap_processed_data spd\s+WHERE spd\.contract_number = e\.contract_number/);
   });
 
-  it('expansion paging restricts expanded rows to paged keys', () => {
+  it('expansion paging restricts expanded rows to paged operation keys', () => {
     const sql = wrapTruckingListQueryWithStoExpansion('SELECT 1 AS id', {
       skipSapJoin: true,
       expansionPaging: { limit: 10, offset: 20, orderBySql: 'ts.created_at DESC' },
     });
     expect(sql).toContain('WHERE rn > 20 AND rn <= 30');
-    expect(sql).toContain('INNER JOIN paged_expansion pe');
+    expect(sql).toContain('INNER JOIN paged_expansion pe ON pe.operation_id = ts.id');
+    // One key per operation (no sto_line in expansion_keys)
+    expect(sql).toMatch(/expansion_keys AS \(\s*SELECT DISTINCT ts\.id AS operation_id/s);
   });
 
   it('resolves row stage from trucking_list_stage_snapshot only when enabled', () => {
@@ -58,7 +62,10 @@ describe('truckingListStoExpandSql', () => {
       useStageSnapshot: true,
     });
     expect(withSnap).toContain('LEFT JOIN trucking_list_stage_snapshot sn');
+    expect(withSnap).toContain('ON sn.operation_id = e.id');
     expect(withSnap).toContain('COALESCE(sn.stage,');
+    // Live COMPLETED (OS ≈ 0 MT / GR Close) must win over a stale snapshot stage.
+    expect(withSnap).toMatch(/WHEN[\s\S]*THEN 'COMPLETED'[\s\S]*ELSE COALESCE\(sn\.stage,/);
 
     const withoutSnap = buildTruckingListExpansionSql(inner, { skipSapJoin: true });
     expect(withoutSnap).not.toContain('trucking_list_stage_snapshot');

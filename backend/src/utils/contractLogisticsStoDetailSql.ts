@@ -11,6 +11,36 @@ export const SPD_EFFECTIVE_STO_SQL = `NULLIF(TRIM(COALESCE(
   spd.data->'contract'->>'sto_no'
 )), '')`;
 
+/**
+ * Match a sap_processed_data row to the KLIP lookup key used in shipment edit/details
+ * (numeric SAP STO, or OP-/MNL-/MSEA- when SAP has no STO / matching Operation ID).
+ */
+export function sqlStoLookupKeyMatchExpr(stoKeyExpr: string, spdAlias = 'spd'): string {
+  const effectiveSto = `NULLIF(TRIM(COALESCE(
+    ${spdAlias}.sto_number::text,
+    ${spdAlias}.data->'raw'->>'STO No.',
+    ${spdAlias}.data->'raw'->>'STO Number',
+    ${spdAlias}.data->'shipment'->>'sto_no',
+    ${spdAlias}.data->'contract'->>'sto_no'
+  )), '')`;
+  return `(
+    TRIM(COALESCE(${spdAlias}.sto_number::text, '')) = TRIM(${stoKeyExpr}::text)
+    OR ${effectiveSto} = TRIM(${stoKeyExpr}::text)
+    OR (
+      TRIM(${stoKeyExpr}::text) ~ '^(OP-|MNL-|MSEA-)'
+      AND (
+        NULLIF(TRIM(COALESCE(
+          ${spdAlias}.data->'raw'->>'Operation ID',
+          ${spdAlias}.data->'shipment'->>'operation_id',
+          ${spdAlias}.data->'trucking'->0->'data'->>'operation_id',
+          ''
+        )), '') = TRIM(${stoKeyExpr}::text)
+        OR ${effectiveSto} IS NULL
+      )
+    )
+  )`;
+}
+
 export const SPD_SEA_LAND_SQL = `UPPER(TRIM(COALESCE(
   spd.data->'raw'->>'SEA / LAND',
   spd.data->'contract'->>'sea_land',

@@ -13,6 +13,8 @@ describe('buildContractDetailsForStoSql', () => {
     expect(sql).toContain('pl.incoterm');
     expect(sql).toContain('pl.contract_qty');
     expect(sql).toContain('Quantity Delivery Vessel');
+    expect(sql).toContain("~ '^(OP-|MNL-|MSEA-)'");
+    expect(sql).toContain("'Operation ID'");
     expect(sql).not.toContain('qty_move');
     expect(sql).toContain('po_number::text');
     expect(sql).toContain('UNION ALL');

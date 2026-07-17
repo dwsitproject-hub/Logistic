@@ -72,7 +72,7 @@ export const FIELD_HELP = {
   truckingStatusInProgress: `Trucking shipment (STO/Operation) with Daily Planning and a valid Trucking Start Receive Date (SAP AV). Stays In Progress until GR PO/STO is Close, or until Outstanding Qty is within tolerance while GR is still Open.`,
   truckingStatusCompleted: `Trucking shipment (STO/Operation) is Complete when GR PO Status (FRC/CIF) or GR STO Status (LCO/FOB) is Close — no OS Qty check required. Alternatively, when GR is still Open, Complete applies if Outstanding Qty is within tolerance (kg, after WB actual qty when uploaded). Trucking Last Receive Date is informational only.`,
   truckingStatusCancelled: `Operation was set to Cancelled manually and is excluded from active execution. Use the Status filter below to view cancelled operations only.`,
-  truckingOutstandingQtyMt: `Outstanding Qty by incoterm: FRC = Contract Qty − Received Qty; LCO = Contract Qty − Delivered Qty. Displayed in MT. Green = over delivered (+MT); black = still outstanding. Other incoterms show —.`,
+  truckingOutstandingQtyMt: `Outstanding Qty by incoterm for the PO: FRC = Contract Qty − Σ Received Qty across all STOs on the PO; LCO = Contract Qty − Σ Delivered Qty across all STOs on the PO. Displayed in MT. Green = over delivered (+MT); black = still outstanding. Other incoterms show —.`,
 
   // Oil Loss
   oilLossAmount: `Formula: Qty Receive − Qty Delivery (displayed in MT). Qty Delivery follows SAP UAT incoterm rules (Trucking for FRC/LCO; Vessel for FOB/CIF; MIX sums by transport). Negative values indicate oil loss.`,
@@ -150,10 +150,10 @@ export type FieldHelpKey = keyof typeof FIELD_HELP
 export function truckingOutstandingQtyFormulaTooltip(incoterm?: string | null): string {
   const ic = String(incoterm ?? '').trim().toUpperCase()
   if (ic === 'FRC') {
-    return 'Formula: Contract Qty − Received Qty (displayed in MT). Green = over delivered; red = still outstanding.'
+    return 'Formula: Contract Qty − Σ Received Qty across all STOs on the PO (displayed in MT). Green = over delivered; red = still outstanding.'
   }
   if (ic === 'LCO') {
-    return 'Formula: Contract Qty − Delivered Qty (displayed in MT). Green = over delivered; red = still outstanding.'
+    return 'Formula: Contract Qty − Σ Delivered Qty across all STOs on the PO (displayed in MT). Green = over delivered; red = still outstanding.'
   }
   return FIELD_HELP.truckingOutstandingQtyMt
 }

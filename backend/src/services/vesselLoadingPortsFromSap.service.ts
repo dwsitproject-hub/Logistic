@@ -42,11 +42,62 @@ export function extractLoadingPortNamesFromSapData(parsedData: Record<string, un
   return names;
 }
 
-function isValidHumanPortName(value: unknown): boolean {
+export function isValidHumanPortName(value: unknown): boolean {
   const text = trimText(value);
   if (!text) return false;
   if (/^\d+(\.\d+)?$/.test(text)) return false;
   return true;
+}
+
+/** SAP loading port name for a fixed sequence (1–3); skips numeric SAP port codes. */
+export function resolveSapLoadingPortTextBySequence(
+  parsedData: Record<string, unknown>,
+  sequence: 1 | 2 | 3,
+): string | null {
+  const raw = (parsedData.raw ?? {}) as Record<string, unknown>;
+  const shipment = (parsedData.shipment ?? {}) as Record<string, unknown>;
+  const candidates: unknown[] =
+    sequence === 1
+      ? [
+          shipment.vessel_loading_port_1,
+          shipment.vessel_loading_port,
+          raw['Vessel Loading Port 1'],
+          raw['Vessel Loading Port'],
+          raw['Vessel Loading Port '],
+        ]
+      : sequence === 2
+        ? [shipment.vessel_loading_port_2, raw['Vessel Loading Port 2']]
+        : [shipment.vessel_loading_port_3, raw['Vessel Loading Port 3']];
+  for (const candidate of candidates) {
+    if (isValidHumanPortName(candidate)) return trimText(candidate);
+  }
+  return null;
+}
+
+export interface SapLoadingPortNameMap {
+  bySequence: Map<number, string>;
+  discharge: string | null;
+}
+
+/** Resolve SAP loading/discharge port labels for a shipment group (all linked SAP rows). */
+export async function resolveSapLoadingPortNameMapForShipment(
+  shipmentUuid: string,
+): Promise<SapLoadingPortNameMap> {
+  const stoRows = await resolveAllSapParsedDataForSto(shipmentUuid);
+  const bySequence = new Map<number, string>();
+  let discharge: string | null = null;
+  for (const row of stoRows) {
+    for (const seq of [1, 2, 3] as const) {
+      if (!bySequence.has(seq)) {
+        const name = resolveSapLoadingPortTextBySequence(row.data, seq);
+        if (name) bySequence.set(seq, name);
+      }
+    }
+    if (!discharge) {
+      discharge = resolvePrimarySapDischargePortText(row.data);
+    }
+  }
+  return { bySequence, discharge };
 }
 
 /** Primary SAP loading port text for denormalizing onto shipments.port_of_loading. */
@@ -217,7 +268,7 @@ export function buildVesselLoadingPortsFromSapParsedData(parsedData: Record<stri
     qualityLocation: string,
     eta: Record<string, unknown>,
   ) => {
-    const name = trimText(portName) ?? `Loading Port ${sequence}`;
+    const name = (isValidHumanPortName(portName) ? trimText(portName) : null) ?? `Loading Port ${sequence}`;
     const etaBerthed = parseDate(eta.berthed);
     loadingPorts.push({
       port_name: name,

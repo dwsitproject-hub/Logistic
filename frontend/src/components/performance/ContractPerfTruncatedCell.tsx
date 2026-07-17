@@ -30,7 +30,7 @@ export function ContractPerfTruncatedCell({
       <TooltipTrigger asChild>
         <div className="min-w-0 max-w-full cursor-default">{inner}</div>
       </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-md text-xs leading-snug break-words">
+      <TooltipContent side="top" className="max-w-md text-xs leading-snug break-words whitespace-pre-line">
         {full}
       </TooltipContent>
     </Tooltip>

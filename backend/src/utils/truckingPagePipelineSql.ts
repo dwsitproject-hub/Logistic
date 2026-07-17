@@ -70,7 +70,7 @@ export function sqlTruckingPageUnplannedPredicate(
   )`;
 }
 
-/** COMPLETED = GR PO/STO Close (incoterm) OR GR Open with OS Qty within tolerance. */
+/** COMPLETED = GR PO/STO Close (incoterm) OR |OS Qty| within 0 MT display band (≤499 kg). */
 export function sqlTruckingPageIsCompletedExpr(
   contractAlias = 'c',
   outstandingQtyExpr?: string,

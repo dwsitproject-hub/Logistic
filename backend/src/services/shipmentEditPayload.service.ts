@@ -29,6 +29,7 @@ import {
 import { groupPlantExpr } from '../utils/groupPlantSql';
 import { resolvedPlantCodeSql } from '../utils/portDisplaySql';
 import { resolveShipmentEditContext, type ShipmentEditContext } from './shipmentEditContext.service';
+import { resolveSapLoadingPortNameMapForShipment } from './vesselLoadingPortsFromSap.service';
 
 const SHIPMENT_BY_ID_SQL = `
   SELECT
@@ -122,16 +123,31 @@ async function loadPortsAndInfo(shipmentUuid: string): Promise<{
   ports: Record<string, unknown>[];
   shipmentInfo: Record<string, unknown> | null;
 }> {
-  const portsResult = await query(
-    `SELECT ${PORTS_SELECT}
-     FROM vessel_loading_ports vlp
-     LEFT JOIN shipments s ON vlp.shipment_id = s.id
-     LEFT JOIN contracts c ON s.contract_id = c.id
-     WHERE vlp.shipment_id = $1::uuid
-     ${ACTIVE_PORT_FILTER}
-     ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
-    [shipmentUuid],
-  );
+  const [portsResult, sapPortNames] = await Promise.all([
+    query(
+      `SELECT ${PORTS_SELECT}
+       FROM vessel_loading_ports vlp
+       LEFT JOIN shipments s ON vlp.shipment_id = s.id
+       LEFT JOIN contracts c ON s.contract_id = c.id
+       WHERE vlp.shipment_id = $1::uuid
+       ${ACTIVE_PORT_FILTER}
+       ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
+      [shipmentUuid],
+    ),
+    resolveSapLoadingPortNameMapForShipment(shipmentUuid),
+  ]);
+
+  const ports = (portsResult.rows as Record<string, unknown>[]).map((port) => {
+    const isDischarge = Boolean(port.is_discharge_port);
+    const sequence = Number(port.port_sequence ?? 0);
+    const sapPortName = isDischarge
+      ? sapPortNames.discharge
+      : sapPortNames.bySequence.get(sequence) ?? null;
+    return {
+      ...port,
+      sap_port_name: sapPortName,
+    };
+  });
 
   const shipmentInfoResult = await query(
     `SELECT
@@ -216,9 +232,17 @@ async function loadPortsAndInfo(shipmentUuid: string): Promise<{
     [shipmentUuid],
   );
 
+  const shipmentInfo = (shipmentInfoResult.rows[0] as Record<string, unknown>) ?? null;
+  if (shipmentInfo) {
+    shipmentInfo.sap_vessel_loading_port_1 = sapPortNames.bySequence.get(1) ?? null;
+    shipmentInfo.sap_vessel_loading_port_2 = sapPortNames.bySequence.get(2) ?? null;
+    shipmentInfo.sap_vessel_loading_port_3 = sapPortNames.bySequence.get(3) ?? null;
+    shipmentInfo.sap_vessel_discharge_port_1 = sapPortNames.discharge;
+  }
+
   return {
-    ports: portsResult.rows as Record<string, unknown>[],
-    shipmentInfo: (shipmentInfoResult.rows[0] as Record<string, unknown>) ?? null,
+    ports,
+    shipmentInfo,
   };
 }
 

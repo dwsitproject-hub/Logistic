@@ -111,6 +111,8 @@ function buildShipmentDailyBaseCteSql(): string {
           MAX(s.eta_discharge_berthed) AS eta_discharge_berthed,
           MAX(s.eta_discharge_start) AS eta_discharge_start,
           MAX(s.eta_discharge_complete) AS eta_vessel_complete_discharge,
+          COALESCE(SUM(s.quantity_delivered), 0) AS quantity_delivered,
+          COALESCE(SUM(s.quantity_delivered_klip), 0) AS quantity_delivered_klip,
           MAX(c.contract_date) AS contract_date,
           MAX(c.product) AS product,
           MAX(c.incoterm) AS incoterm,

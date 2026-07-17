@@ -35,11 +35,8 @@ import {
 import {
   buildTruckingOutstandingQtyBacklogAggregateQuery,
   buildTruckingOutstandingQtyExecutionAggregateQuery,
-  isTruckingOsStatusOutsideActiveScope,
   mergeTruckingOutstandingQtySummaries,
-  normalizeTruckingOsStatusParam,
   parseTruckingOutstandingQtySummaryRow,
-  shouldIncludeTruckingUnplannedBacklogForOs,
   type TruckingOutstandingQtySummary,
 } from '../utils/truckingOutstandingQtySummarySql';
 import {
@@ -122,7 +119,7 @@ const MERGED_SUMMARY_CACHE = new Map<
 >();
 const UNPLANNED_BACKLOG_CACHE = new Map<string, { count: number; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v34';
+const CACHE_VERSION = 'trucking-list-v35';
 const MAX_CACHE_ENTRIES = 80;
 
 // Re-runs recent page loads in the background (refresh-ahead + re-warm after edits)
@@ -238,8 +235,9 @@ export function buildTruckingSummaryCacheKey(filterCacheKey: string): string {
   return `${filterCacheKey}:summary`;
 }
 
-function buildTruckingMergedSummaryCacheKey(filterCacheKey: string, osStatus: string | null): string {
-  return `${filterCacheKey}:summary-unplanned-merged:os:${osStatus ?? 'ALL'}`;
+function buildTruckingMergedSummaryCacheKey(filterCacheKey: string): string {
+  // Status-card osStatus no longer scopes OS; one merged summary per toolbar filters.
+  return `${filterCacheKey}:summary-unplanned-merged:active-os`;
 }
 
 function buildTruckingUnplannedBacklogCacheKey(req: AuthRequest): string {
@@ -955,28 +953,16 @@ export async function loadTruckingListSummary(
 async function loadTruckingOutstandingQtyForRequest(
   req: AuthRequest,
   built: TruckingListBuiltQuery,
-  osStatus: string | null,
 ): Promise<TruckingOutstandingQtySummary> {
-  if (isTruckingOsStatusOutsideActiveScope(osStatus)) {
-    return {
-      totalKg: 0,
-      thirdParty: { frcKg: 0, lcoKg: 0 },
-      interco: { frcKg: 0, lcoKg: 0 },
-    };
-  }
-
   const executionBuilt: TruckingListBuiltQuery = {
     ...built,
     skipSapJoin: false,
   };
-  const execQ = buildTruckingOutstandingQtyExecutionAggregateQuery(executionBuilt, osStatus);
+  // Always Unplanned + Planned + In Progress (ignore status-card osStatus).
+  const execQ = buildTruckingOutstandingQtyExecutionAggregateQuery(executionBuilt, null);
   const execPromise = query(execQ.text, execQ.params).then((res) =>
     parseTruckingOutstandingQtySummaryRow((res.rows[0] || {}) as Record<string, unknown>),
   );
-
-  if (!shouldIncludeTruckingUnplannedBacklogForOs(osStatus)) {
-    return execPromise;
-  }
 
   const { dateFrom, dateTo, contract, plant } = req.query;
   const globalSearch =
@@ -1010,15 +996,14 @@ export async function loadTruckingListSummaryWithBacklog(
   req: AuthRequest,
   built: TruckingListBuiltQuery,
 ): Promise<TruckingListResponseData['summary']> {
-  const osStatus = normalizeTruckingOsStatusParam((req.query as { osStatus?: string }).osStatus);
-  const mergedCacheKey = buildTruckingMergedSummaryCacheKey(built.filterCacheKey, osStatus);
+  const mergedCacheKey = buildTruckingMergedSummaryCacheKey(built.filterCacheKey);
   const cachedMerged = MERGED_SUMMARY_CACHE.get(mergedCacheKey);
   if (cachedMerged && Date.now() < cachedMerged.expiresAt) {
     return cachedMerged.summary;
   }
   if (cachedMerged) MERGED_SUMMARY_CACHE.delete(mergedCacheKey);
 
-  const outstandingQtyPromise = loadTruckingOutstandingQtyForRequest(req, built, osStatus);
+  const outstandingQtyPromise = loadTruckingOutstandingQtyForRequest(req, built);
 
   const filters = buildPipelineDailyFilterInput(req);
   if (isPipelineDailySummaryEligible(filters)) {
@@ -1198,7 +1183,7 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
     !isUnplannedHybrid &&
     String(stageFilter).trim().toUpperCase() !== 'ALL';
 
-  // Pipeline status is computed per expanded STO row — filter only after expansion.
+  // Pipeline status is computed per operation (PO grain) — filter only after expansion.
   // Status-scoped requests force the full SAP variant (circle-consistent fallback).
   const built = buildTruckingListQuery(req, {
     omitStatusFilter: true,

@@ -1,8 +1,10 @@
 import {
   buildVesselLoadingPortsFromSapParsedData,
   extractLoadingPortNamesFromSapData,
+  isValidHumanPortName,
   resolvePrimarySapDischargePortText,
   resolvePrimarySapLoadingPortText,
+  resolveSapLoadingPortTextBySequence,
   sapParsedDataHasMultipleLoadingPorts,
 } from './vesselLoadingPortsFromSap.service';
 
@@ -74,5 +76,26 @@ describe('vesselLoadingPortsFromSap.service', () => {
         shipment: { vessel_discharge_port: 'PORT TANJUNG PRIOK' },
       }),
     ).toBe('PORT TANJUNG PRIOK');
+  });
+
+  it('rejects numeric port names and falls back to Loading Port N label in SAP build', () => {
+    expect(isValidHumanPortName('67.30')).toBe(false);
+    expect(isValidHumanPortName('Ketapang')).toBe(true);
+    expect(
+      resolveSapLoadingPortTextBySequence(
+        { shipment: { vessel_loading_port_2: '67.30', vessel_loading_port_1: 'Ketapang' } },
+        2,
+      ),
+    ).toBeNull();
+
+    const ports = buildVesselLoadingPortsFromSapParsedData({
+      shipment: {
+        vessel_loading_port_1: 'Ketapang',
+        vessel_loading_port_2: '67.30',
+        quantity_at_loading_port_2: 1000,
+      },
+    });
+    const loading2 = ports.find((p) => p.port_sequence === 2 && !p.is_discharge_port);
+    expect(loading2?.port_name).toBe('Loading Port 2');
   });
 });

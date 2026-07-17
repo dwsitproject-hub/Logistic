@@ -82,6 +82,7 @@ export type LoadingPortEtaSave = {
 
 export type LoadingPortRef = {
   id?: string
+  sap_port_name?: string | null
   port_name?: string
   port_sequence?: number
   is_discharge_port?: boolean

@@ -1,6 +1,6 @@
 /**
  * Trucking page — Outstanding Qty KPI strip (FRC/LCO × Interco / 3rd Party).
- * OS uses the same expanded-row outstanding_quantity as the view table (after WB).
+ * OS uses the same PO-grain outstanding_quantity as the view table (after WB).
  */
 
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
@@ -159,7 +159,8 @@ export function mergeTruckingOutstandingQtySummaries(
 }
 
 /**
- * Aggregate OS from expanded trucking execution rows (same expansion as list/summary).
+ * Aggregate OS from trucking execution rows (one row per operation / PO after expansion).
+ * OS is already PO-level (Contract Qty − Σ Delivery/Receive across STOs), so SUM is safe.
  */
 export function buildTruckingOutstandingQtyExecutionAggregateQuery(
   built: TruckingOutstandingQtyBuiltQuery,

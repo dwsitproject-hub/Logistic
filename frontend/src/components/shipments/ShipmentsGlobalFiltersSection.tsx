@@ -95,7 +95,7 @@ export function ShipmentsGlobalFiltersSection({
               onChange={(e) =>
                 onPipelineStageChange(e.target.value as ShipmentsPipelineStageFilter)
               }
-              className="rounded-lg border px-4 py-2"
+              className="rounded-lg border px-4 py-2 text-sm"
               aria-label="Pipeline status filter"
             >
               <option value="ALL">All Status</option>
@@ -108,7 +108,7 @@ export function ShipmentsGlobalFiltersSection({
             <select
               value={lateIndicatorFilter}
               onChange={(e) => onLateIndicatorChange(e.target.value)}
-              className="rounded-lg border px-4 py-2"
+              className="rounded-lg border px-4 py-2 text-sm"
               aria-label="Late indicator filter"
             >
               <option value="ALL">All Late Indicator</option>
@@ -132,6 +132,7 @@ export function ShipmentsGlobalFiltersSection({
             selectedSuppliers={selectedSuppliers}
             onSuppliersChange={onSuppliersChange}
             groupPlantOptions={availableGroupPlants}
+            uppercaseGroupPlantLabels
             selectedGroupPlants={selectedGroupPlants}
             onGroupPlantsChange={onGroupPlantsChange}
             dateFrom={dateFrom}

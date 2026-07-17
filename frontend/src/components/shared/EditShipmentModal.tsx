@@ -41,6 +41,7 @@ import {
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatQtyMtFromKg } from '@/lib/utils'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { resolveLoadingPortDisplayFromRow, resolveKlipPortInputValue } from '@/lib/loadingPortDisplay'
 import { hasVesselPortsQuantityUserEdits } from '@/lib/vesselPortsQuantityEdits'
 import {
   mergeShipmentQtyOverridesOnContractRows,
@@ -707,7 +708,7 @@ export function EditShipmentModal({
     Boolean(shipmentId) &&
     editContext?.can_add_po === true
 
-  const planQtyReadOnly = editContext?.has_sap_sto === true
+  const planQtyReadOnly = false
 
   const qtyTableRows: VesselPortsQuantityRow[] = useMemo(
     () =>
@@ -1014,17 +1015,15 @@ export function EditShipmentModal({
           .slice()
           .sort((a, b) => (a.port_sequence ?? 0) - (b.port_sequence ?? 0))
 
-        const resolveValidPortLabel = (value: unknown): string => {
-          const text = String(value ?? '').trim()
-          return text && text !== '0.00' ? text : ''
-        }
-        const pol =
-          resolveValidPortLabel(loadingPortRows[0]?.port_name) ||
-          resolveValidPortLabel(info.vessel_loading_port_1) ||
-          resolveValidPortLabel(row.port_of_loading)
-        const pod = String(info.vessel_discharge_port_1 ?? row.port_of_discharge ?? '')
-        setLoadingPort(pol)
-        setDischargePort(pod)
+        const polKlip =
+          resolveKlipPortInputValue(loadingPortRows[0]?.port_name) ||
+          resolveKlipPortInputValue(info.vessel_loading_port_1) ||
+          resolveKlipPortInputValue(row.port_of_loading)
+        const podKlip =
+          resolveKlipPortInputValue(info.vessel_discharge_port_1) ||
+          resolveKlipPortInputValue(row.port_of_discharge)
+        setLoadingPort(polKlip)
+        setDischargePort(podKlip)
 
         const sfal = parseApiNumber(info.sfal_qty ?? row.sfal_qty)
         const sfbd = parseApiNumber(info.sfbd_qty ?? row.sfbd_qty)
@@ -1056,7 +1055,7 @@ export function EditShipmentModal({
             portId: portRow.id,
             portSequence: portRow.port_sequence ?? 1,
             status: 'active' as const,
-            loadingPort: resolveValidPortLabel(portRow.port_name) || `Loading Port ${portRow.port_sequence ?? 1}`,
+            loadingPort: resolveKlipPortInputValue(portRow.port_name),
             contractLabels: poLabels,
             fields: loadingEtaFromPortRow(portRow, info, row),
             isEditing: false,
@@ -1083,7 +1082,7 @@ export function EditShipmentModal({
               portId: loadingPortRow?.id,
               portSequence: loadingPortRow?.port_sequence ?? 1,
               status: 'active',
-              loadingPort: pol,
+              loadingPort: polKlip,
               contractLabels: poLabels,
               fields: etaFields,
               isEditing: false,
@@ -1710,9 +1709,9 @@ export function EditShipmentModal({
                   </p>
                 )}
 
-                {planQtyReadOnly && !readOnly && (
+                {editContext?.has_sap_sto && !readOnly && (
                   <p className="text-xs italic text-gray-500">
-                    SAP STO shipment — Shipment Plan Qty is read-only. PO can still be added when global OS Qty (Plan) &gt; 0.
+                    SAP STO shipment — Shipment Plan Qty saves to KLIP planning. PO can still be added when global OS Qty (Plan) &gt; 0.
                   </p>
                 )}
 
@@ -1775,7 +1774,7 @@ export function EditShipmentModal({
                           <span title="Contract qty minus STO-scoped SAP receive/delivery (incoterm-aware) — same as Shipping Performance">OS Qty (MT)</span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="Global per PO — contract − SAP STO − all plans">OS Qty (Plan) (MT)</span>
+                          <span title="Global per PO — contract − KLIP plans − SAP STO without a KLIP plan">OS Qty (Plan) (MT)</span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
                           <span title="KLIP plan on this STO">Shipment Plan Qty (MT)</span>
@@ -1981,7 +1980,13 @@ export function EditShipmentModal({
                           <Badge className="bg-blue-600 text-white text-[10px]">
                             Loading Port {block.portSequence}
                           </Badge>
-                          <span className="text-xs text-gray-600">{block.loadingPort || '—'}</span>
+                          <span className="text-xs text-gray-600">
+                            {resolveLoadingPortDisplayFromRow(
+                              loadingPortRows.find((p) => (p.port_sequence ?? 1) === block.portSequence),
+                              shipmentInfo,
+                              block.portSequence,
+                            )}
+                          </span>
                         </div>
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                           {LOADING_ETA_FIELD_ROWS.map(({ key, label }) => (
@@ -2114,7 +2119,11 @@ export function EditShipmentModal({
                           />
                         ) : (
                           <div className={`flex min-h-9 items-center ${ETA_INFO_VALUE_CLASS}`}>
-                            {formatInfoDisplayValue(activeEtaBlock.loadingPort)}
+                            {resolveLoadingPortDisplayFromRow(
+                              loadingPortRows[0],
+                              shipmentInfo,
+                              loadingPortRows[0]?.port_sequence ?? 1,
+                            )}
                           </div>
                         )}
                       </div>
@@ -2205,7 +2214,13 @@ export function EditShipmentModal({
                             <Badge className="bg-emerald-600 text-white text-[10px]">
                               Loading Port {portRow.port_sequence ?? 1}
                             </Badge>
-                            <span className="text-xs text-gray-600">{portRow.port_name || '—'}</span>
+                            <span className="text-xs text-gray-600">
+                              {resolveLoadingPortDisplayFromRow(
+                                portRow,
+                                shipmentInfo,
+                                portRow.port_sequence ?? 1,
+                              )}
+                            </span>
                           </div>
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                             {LOADING_ATA_FIELD_ROWS.map(({ key, label }) => (
@@ -2331,7 +2346,13 @@ export function EditShipmentModal({
                       ) : null}
                       <span className="text-[10px] font-medium text-gray-600">Quality at Loading</span>
                       {isMultiPortLoading ? (
-                        <span className="text-xs text-gray-600">{portRow.port_name || '—'}</span>
+                        <span className="text-xs text-gray-600">
+                          {resolveLoadingPortDisplayFromRow(
+                            portRow,
+                            shipmentInfo,
+                            portRow.port_sequence ?? 1,
+                          )}
+                        </span>
                       ) : null}
                     </div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">

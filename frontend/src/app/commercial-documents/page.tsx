@@ -16,13 +16,13 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
-  FileCheck,
   FileDown,
   FileText,
   Loader2,
   Pencil,
   Search,
   SlidersHorizontal,
+  Upload,
   X,
 } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
@@ -30,6 +30,7 @@ import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
+import { filterIncotermOptions } from '@/lib/globalScopeFilters'
 import { cn } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
@@ -301,7 +302,7 @@ function CommercialDocumentsPageContent() {
         const supplierPayload = supplierRes.data?.data
         const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
         setAvailablePlants(Array.isArray(plants) ? plants : [])
-        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
+        setAvailableIncoterms(filterIncotermOptions(Array.isArray(incs) ? incs : []))
         setAvailableProducts(Array.isArray(products) ? products : [])
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
       })
@@ -518,6 +519,7 @@ function CommercialDocumentsPageContent() {
               selected={selectedPlants}
               onChange={handleGroupPlantsChange}
               pinSelectedToTop
+              uppercaseOptionLabels
             />
           </div>
           <div className="flex flex-wrap items-center gap-4">
@@ -889,7 +891,7 @@ function CommercialDocumentsPageContent() {
                                   canModifyDocuments
                                     ? hasUploads
                                       ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
-                                      : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'
+                                      : 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100'
                                     : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
                                 }
                               >
@@ -897,7 +899,7 @@ function CommercialDocumentsPageContent() {
                                   hasUploads ? (
                                     <Pencil className="h-4 w-4" />
                                   ) : (
-                                    <FileCheck className="h-4 w-4" />
+                                    <Upload className="h-4 w-4" />
                                   )
                                 ) : (
                                   <FileText className="h-4 w-4" />

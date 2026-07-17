@@ -47,7 +47,7 @@ import {
   TableInitialLoadPlaceholder,
   TableInitialLoadPlaceholderContent,
 } from '@/components/performance/TableInitialLoadPlaceholder'
-import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
+import { appendToolbarMultiToColumnFilters, filterIncotermOptions } from '@/lib/globalScopeFilters'
 import {
   CARGO_READINESS_UPLOAD_ACCEPT,
   triggerCargoReadinessTemplateDownload,
@@ -1130,6 +1130,8 @@ function ContractsPageContent() {
   const [summaryCardStatus, setSummaryCardStatus] = useState<'All' | 'Open' | 'Close'>('All')
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
+  const [selectedGroups, setSelectedGroups] = useState<string[]>([])
+  const [availableGroups, setAvailableGroups] = useState<string[]>([])
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
   const [uploadingId, setUploadingId] = useState<string>('')
   const [csvCargoUploading, setCsvCargoUploading] = useState(false)
@@ -1779,6 +1781,7 @@ function ContractsPageContent() {
     statusFilter,
     b2bFlagFilter,
     selectedProducts,
+    selectedGroups,
     selectedSuppliers,
     selectedGroupPlants,
     selectedIncoterms,
@@ -1907,6 +1910,7 @@ function ContractsPageContent() {
         : appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
         selectedIncoterms,
         selectedProducts,
+        selectedGroups,
         selectedSuppliers,
       })
       if (!isContractPerformance) {
@@ -2165,8 +2169,9 @@ function ContractsPageContent() {
       api.get('/contracts/filter-options/group-plants'),
       api.get('/dashboard/filter-options/products'),
       api.get('/dashboard/filter-options/suppliers'),
+      api.get('/dashboard/filter-options/groups'),
     ])
-      .then(([incRes, plantRes, productRes, supplierRes]) => {
+      .then(([incRes, plantRes, productRes, supplierRes, groupRes]) => {
         if (cancelled) return
         const incs = (incRes.data?.data?.incoterms || []) as string[]
         const plants = (plantRes.data?.data?.groupPlants || []) as string[]
@@ -2178,10 +2183,13 @@ function ContractsPageContent() {
             : []) as string[]
         const supplierPayload = supplierRes.data?.data
         const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
-        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
+        const groupPayload = groupRes.data?.data
+        const groups = (Array.isArray(groupPayload) ? groupPayload : []) as string[]
+        setAvailableIncoterms(filterIncotermOptions(Array.isArray(incs) ? incs : []))
         setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
         setAvailableProducts(Array.isArray(products) ? products : [])
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
+        setAvailableGroups(Array.isArray(groups) ? groups : [])
       })
       .catch((e) => {
         if (cancelled) return
@@ -2190,6 +2198,7 @@ function ContractsPageContent() {
         setAvailableGroupPlants([])
         setAvailableProducts([])
         setAvailableSuppliers([])
+        setAvailableGroups([])
       })
     return () => {
       cancelled = true
@@ -2206,6 +2215,7 @@ function ContractsPageContent() {
       if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
       const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
         selectedProducts,
+        selectedGroups,
         selectedSuppliers,
         selectedIncoterms,
       })
@@ -2239,6 +2249,7 @@ function ContractsPageContent() {
     searchTerm,
     b2bFlagFilter,
     selectedProducts,
+    selectedGroups,
     selectedSuppliers,
     selectedGroupPlants,
     selectedIncoterms,
@@ -2281,6 +2292,7 @@ function ContractsPageContent() {
     setTransportModeFilter('ALL')
     resetUserScopeFilters()
     setSelectedIncoterms([])
+    setSelectedGroups([])
     setSelectedSuppliers([])
     setB2bFlagFilter('ALL')
     setStatusFilter('All Status')
@@ -2295,6 +2307,7 @@ function ContractsPageContent() {
     searchTerm.trim().length > 0 ||
     transportModeFilter !== 'ALL' ||
     selectedProducts.length > 0 ||
+    selectedGroups.length > 0 ||
     selectedSuppliers.length > 0 ||
     selectedIncoterms.length > 0 ||
     selectedGroupPlants.length > 0 ||
@@ -4189,7 +4202,10 @@ function ContractsPageContent() {
         {/* Filters — hidden on Contract Performance; state (dateFrom, searchTerm, etc.) still drives API */}
         {!isContractPerformance && (
         <Card>
-          <CardContent className="pt-6">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-semibold">Global Filters</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
             <div className="space-y-4">
               {CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED ? (
                 <p className="text-xs text-gray-500">
@@ -4230,7 +4246,7 @@ function ContractsPageContent() {
                       setCurrentPage(1)
                     }
                   }}
-                  className="px-4 py-2 border rounded-lg"
+                  className="px-4 py-2 text-sm border rounded-lg"
                 >
                   <option value="All Status">All Status</option>
                   <option value="Open">Open</option>
@@ -4240,7 +4256,7 @@ function ContractsPageContent() {
                   <select
                     value={b2bFlagFilter}
                     onChange={(e) => setB2bFlagFilter(e.target.value)}
-                    className="px-4 py-2 border rounded-lg"
+                    className="px-4 py-2 text-sm border rounded-lg"
                   >
                     <option value="ALL">All Contract Type</option>
                     {availableB2bFlags.map(flag => (
@@ -4252,12 +4268,30 @@ function ContractsPageContent() {
                   <select
                     value={transportModeFilter}
                     onChange={(e) => setTransportModeFilter(e.target.value)}
-                    className="px-4 py-2 border rounded-lg"
+                    className="px-4 py-2 text-sm border rounded-lg"
                   >
                     <option value="ALL">All Transport</option>
                     <option value="SEA">Sea</option>
                     <option value="LAND">Land</option>
                     <option value="MIX">Mix</option>
+                  </select>
+                )}
+                {!isContractPerformance && (
+                  <select
+                    value={selectedIncoterms[0] ?? 'ALL'}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setSelectedIncoterms(value === 'ALL' ? [] : [value])
+                      setCurrentPage(1)
+                    }}
+                    className="px-4 py-2 text-sm border rounded-lg"
+                  >
+                    <option value="ALL">All Incoterm</option>
+                    {availableIncoterms.map((inc) => (
+                      <option key={inc} value={inc}>
+                        {inc}
+                      </option>
+                    ))}
                   </select>
                 )}
                 {isContractPerformance && (
@@ -4271,7 +4305,7 @@ function ContractsPageContent() {
                       else if (value === 'LATE') setPerfDashMode('late')
                       setCurrentPage(1)
                     }}
-                    className="px-4 py-2 border rounded-lg"
+                    className="px-4 py-2 text-sm border rounded-lg"
                     title="Late: Trade Cycle > 0. On Time: Trade Cycle ≤ 0."
                   >
                     <option value="ALL">Late/On Time: All</option>
@@ -4286,7 +4320,7 @@ function ContractsPageContent() {
                       if (isContractPerformance) lockSection1FilterChange()
                       setPerfTransportMode(e.target.value as 'ALL' | 'SEA' | 'LAND')
                     }}
-                    className="px-4 py-2 border rounded-lg"
+                    className="px-4 py-2 text-sm border rounded-lg"
                   >
                     <option value="ALL">Transport Mode: All</option>
                     <option value="SEA">SEA</option>
@@ -4336,6 +4370,8 @@ function ContractsPageContent() {
               ) : (
                 <PerformanceScopeFilters
                   hideGroupPlantFilter={false}
+                  uppercaseGroupPlantLabels
+                  showIncoterm={false}
                   incotermOptions={availableIncoterms}
                   selectedIncoterms={selectedIncoterms}
                   onIncotermsChange={setSelectedIncoterms}
@@ -4343,6 +4379,10 @@ function ContractsPageContent() {
                   productOptions={availableProducts}
                   selectedProducts={selectedProducts}
                   onProductsChange={handleProductsChange}
+                  showGroupFilter
+                  groupOptions={availableGroups}
+                  selectedGroups={selectedGroups}
+                  onGroupsChange={setSelectedGroups}
                   showSupplierFilter
                   supplierOptions={availableSuppliers}
                   selectedSuppliers={selectedSuppliers}
@@ -4355,8 +4395,8 @@ function ContractsPageContent() {
                   onDateFromChange={setDateFrom}
                   onDateToChange={setDateTo}
                   showDateRange={false}
-                  incotermEmptyMessage="Loading incoterms..."
                   productEmptyMessage="Loading products..."
+                  groupEmptyMessage="Loading groups..."
                   supplierEmptyMessage="Loading suppliers..."
                   groupPlantPlaceholder="Select group plant(s)"
                   groupPlantEmptyMessage="No group plants"
@@ -4390,6 +4430,7 @@ function ContractsPageContent() {
                     searchTerm ||
                     transportModeFilter !== 'ALL' ||
                     selectedProducts.length > 0 ||
+                    selectedGroups.length > 0 ||
                     selectedIncoterms.length > 0 ||
                     selectedGroupPlants.length > 0 ||
                     b2bFlagFilter !== 'ALL' ||

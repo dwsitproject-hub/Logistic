@@ -451,10 +451,6 @@ export async function batchSaveShipmentPoPlanQty(args: {
 
   await ensureUserStoContractAssignmentsTable();
 
-  if (context.has_sap_sto) {
-    return { ok: true };
-  }
-
   const contractList = context.contract_numbers
     .split(',')
     .map((c) => c.trim())

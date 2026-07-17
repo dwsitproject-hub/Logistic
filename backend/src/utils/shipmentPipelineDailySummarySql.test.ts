@@ -1,0 +1,10 @@
+import { describe, expect, it } from 'vitest';
+import { buildShipmentStageSnapshotInsertSql } from './shipmentPipelineDailySummarySql';
+
+describe('buildShipmentStageSnapshotInsertSql', () => {
+  it('includes delivery qty columns for Delivery Qty → PLANNED status', () => {
+    const sql = buildShipmentStageSnapshotInsertSql();
+    expect(sql).toContain('quantity_delivered');
+    expect(sql).toContain('quantity_delivered_klip');
+  });
+});

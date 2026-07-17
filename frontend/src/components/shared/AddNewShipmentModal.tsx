@@ -400,6 +400,8 @@ export function AddNewShipmentModal({
   const [showContractSuggestions, setShowContractSuggestions] = useState(false)
   const poNumberInputRef = useRef<HTMLInputElement>(null)
   const contractNumbersRef = useRef<string[]>([])
+  const contractQtyAssignedRef = useRef<Record<string, string>>({})
+  const stoPrefillLoadedRef = useRef<string | null>(null)
   const initSessionRef = useRef<string | null>(null)
   const [contractValidations, setContractValidations] = useState<{
     [contractId: string]: {
@@ -424,6 +426,10 @@ export function AddNewShipmentModal({
   useEffect(() => {
     contractNumbersRef.current = newShipment.contractNumbers
   }, [newShipment.contractNumbers])
+
+  useEffect(() => {
+    contractQtyAssignedRef.current = contractQtyAssigned
+  }, [contractQtyAssigned])
 
   const availablePoByKey = useMemo(() => {
     const map = new Map<string, ShipmentPoOption>()
@@ -1525,9 +1531,11 @@ export function AddNewShipmentModal({
           const planKg = Number(
             po.contractData?.shipment_plan_qty ?? po.contractData?.sto_qty_assigned ?? 0,
           )
-          const qtyKg = planKg > 0 ? planKg : sapStoKg
-          qtySeed[po.key] = qtyKg > 0 ? String(qtyKg / 1000) : ''
-          if (planKg <= 0 && sapStoKg > 0) {
+          const outstandingActualKg = Number(po.contractData?.outstanding_quantity ?? 0)
+          const shouldSuggestSapQty = outstandingActualKg === 0 && sapStoKg > 0
+          const qtyKg = planKg > 0 ? planKg : shouldSuggestSapQty ? sapStoKg : 0
+          qtySeed[po.key] = qtyKg > 0 ? String(qtyKg / 1000) : '0'
+          if (planKg <= 0 && shouldSuggestSapQty) {
             sapUntouchedSeed[po.key] = true
           }
         }
@@ -1725,15 +1733,24 @@ export function AddNewShipmentModal({
 
   /** Load STO-linked PO lines + SAP vessel/discharge when parent opens modal (add mode only). */
   useEffect(() => {
-    if (!open || isEditMode || isPlotMode) return
+    if (!open) {
+      stoPrefillLoadedRef.current = null
+      return
+    }
+    if (isEditMode || isPlotMode) return
     const sto = String(prefilledStoNumber ?? '').trim()
     if (!sto) return
     if (prefilledPOs?.length) return
 
+    const stoLoadKey = `${sto}::${(prefilledContractNumbers ?? []).filter(Boolean).join(',')}`
+    if (stoPrefillLoadedRef.current === stoLoadKey) return
+
     let cancelled = false
     setLoadingInitialData(true)
-    setInternalPrefilledPOs(null)
-    setSapStoPreview(null)
+    if (stoPrefillLoadedRef.current !== null) {
+      setInternalPrefilledPOs(null)
+      setSapStoPreview(null)
+    }
 
     void (async () => {
       try {
@@ -1743,6 +1760,7 @@ export function AddNewShipmentModal({
           fetchStoSapPreview(sto),
         ])
         if (cancelled) return
+        stoPrefillLoadedRef.current = stoLoadKey
         setInternalPrefilledPOs(pos)
         setSapStoPreview(preview)
         if (preview.has_sap_sto) {
@@ -1818,7 +1836,9 @@ export function AddNewShipmentModal({
     if (isInitialShell) resetForm()
 
     if (poSource?.length) {
-      applyStoLinkedPoOptionsToForm(poSource)
+      applyStoLinkedPoOptionsToForm(poSource, {
+        existingQtyByKey: contractQtyAssignedRef.current,
+      })
     }
   }, [
     open,

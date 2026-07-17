@@ -1,8 +1,110 @@
-import { sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
+import { SPD_EFFECTIVE_STO_SQL } from './contractLogisticsStoDetailSql';
+import { sqlPoGlobalSapStoQtyKg, sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
 import { isContractDeliveryClosed, sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
 
-/** OS Qty within this band (kg) counts as fulfilled for trucking COMPLETED status. */
-export const TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG = 1;
+const SPD_EFFECTIVE_STO = SPD_EFFECTIVE_STO_SQL;
+
+/** Match SAP rows to a trucking PO (preferred) or to any STO line on the contract. */
+export function sqlTruckingPoLevelSapRowMatch(
+  contractUuidExpr = 'e.contract_id',
+  poNumberExpr = 'e.po_number',
+  spdAlias = 'spd',
+): string {
+  const poRaw = `TRIM(COALESCE(
+    ${spdAlias}.po_number::text,
+    ${spdAlias}.data->'raw'->>'PO No',
+    ${spdAlias}.data->'raw'->>'PO No.',
+    ${spdAlias}.data->'raw'->>'PO Number',
+    ${spdAlias}.data->'contract'->>'po_number',
+    ''
+  ))`;
+  return `(
+    (
+      NULLIF(TRIM(${poNumberExpr}::text), '') IS NOT NULL
+      AND ${poRaw} = TRIM(${poNumberExpr}::text)
+    )
+    OR (
+      NULLIF(TRIM(${poNumberExpr}::text), '') IS NULL
+      AND (
+        EXISTS (
+          SELECT 1
+          FROM contract_sto_lines csl_m
+          WHERE csl_m.contract_uuid = ${contractUuidExpr}
+            AND TRIM(csl_m.sto_line) = TRIM(${SPD_EFFECTIVE_STO})
+        )
+        OR NOT EXISTS (
+          SELECT 1 FROM contract_sto_lines csl_any
+          WHERE csl_any.contract_uuid = ${contractUuidExpr}
+        )
+      )
+    )
+  )`;
+}
+
+/**
+ * SAP Delivery Qty (kg) summed across all STO rows for the PO (or contract STOs when PO blank).
+ * Used for trucking PO-grain list OS: Contract Qty − Σ Delivery.
+ */
+export function sqlTruckingPoLevelSapDeliveryQty(
+  contractNumberExpr = 'e.contract_number',
+  contractUuidExpr = 'e.contract_id',
+  poNumberExpr = 'e.po_number',
+): string {
+  const match = sqlTruckingPoLevelSapRowMatch(contractUuidExpr, poNumberExpr);
+  return `(
+    SELECT SUM(NULLIF(regexp_replace(COALESCE(
+      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery Trucking'), ''),
+      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered Trucking'), ''),
+      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered via Trucking'), ''),
+      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered'), ''),
+      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery'), ''),
+      ''
+    ), '[^0-9\\.-]', '', 'g'), '')::numeric)
+    FROM sap_processed_data spd
+    WHERE spd.contract_number = ${contractNumberExpr}
+      AND ${match}
+      AND NULLIF(TRIM(COALESCE(
+        spd.data->'raw'->>'Quantity Delivery Trucking',
+        spd.data->'raw'->>'Quantity Delivered Trucking',
+        spd.data->'raw'->>'Quantity Delivered via Trucking',
+        spd.data->'raw'->>'Quantity Delivered',
+        spd.data->'raw'->>'Quantity Delivery'
+      )), '') IS NOT NULL
+  )`;
+}
+
+/**
+ * SAP Receive Qty (kg) summed across all STO rows for the PO (or contract STOs when PO blank).
+ * Used for trucking PO-grain list OS: Contract Qty − Σ Receive.
+ */
+export function sqlTruckingPoLevelSapReceiveQty(
+  contractNumberExpr = 'e.contract_number',
+  contractUuidExpr = 'e.contract_id',
+  poNumberExpr = 'e.po_number',
+): string {
+  const match = sqlTruckingPoLevelSapRowMatch(contractUuidExpr, poNumberExpr);
+  return `(
+    SELECT SUM(NULLIF(regexp_replace(COALESCE(
+      NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
+      NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
+      ''
+    ), '[^0-9\\.-]', '', 'g'), '')::numeric)
+    FROM sap_processed_data spd
+    WHERE spd.contract_number = ${contractNumberExpr}
+      AND ${match}
+      AND NULLIF(TRIM(COALESCE(
+        spd.data->'raw'->>'Quantity Receive',
+        spd.data->'raw'->>'Qty Receive'
+      )), '') IS NOT NULL
+  )`;
+}
+
+/**
+ * OS Qty within this band (kg) counts as fulfilled for trucking COMPLETED when GR is still Open.
+ * Aligned with whole-MT table display (`maxFractionDigits: 0`): |OS| ≤ 499 kg → "0 MT".
+ * Example: contract 225,000 kg − receive 224,714 kg = 286 kg OS → Completed despite GR Open.
+ */
+export const TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG = 499;
 
 /**
  * SAP trucking quantity fields are often exported in MT while contracts.quantity_ordered is kg.
@@ -226,7 +328,8 @@ export function isTruckingOutstandingWithinToleranceKg(
 }
 
 /**
- * COMPLETED when GR PO/STO Close (incoterm), OR GR Open and |OS Qty| within tolerance (kg).
+ * COMPLETED when GR PO/STO Close (incoterm), OR |OS Qty| within 0 MT display band (≤499 kg)
+ * even while GR is still Open.
  */
 export function isTruckingPipelineCompleted(
   contractImportStatus: unknown,
@@ -252,7 +355,7 @@ export function sqlTruckingOutstandingWithinToleranceExpr(
   )`;
 }
 
-/** Pipeline COMPLETED: GR PO/STO Close (incoterm) OR GR Open with OS Qty within tolerance. */
+/** Pipeline COMPLETED: GR PO/STO Close (incoterm) OR |OS Qty| within 0 MT display band. */
 export function sqlTruckingPipelineIsCompletedExpr(
   contractAlias = 'c',
   outstandingQtyExpr?: string,
@@ -301,8 +404,25 @@ export function sqlTruckingListBaseOutstandingQtyExpr(contractAlias = 'c'): stri
   );
 }
 
-/** Per-STO SAP qty (kg) for STO-expanded trucking rows; falls back to full contract qty. */
+/**
+ * PO-level SAP STO qty (kg) summed across all STOs on the PO; falls back to contract qty.
+ * (Legacy name kept — list is now PO-grain, not per-STO-line.)
+ */
 export function sqlTruckingExpandedStoLineQtyKgExpr(
+  contractNumberExpr = 'e.contract_number',
+  poNumberExpr = 'e.po_number',
+  contractQtyExpr = 'e.contract_qty',
+  _stoKeyExpr = 'e.sto_line_resolved',
+): string {
+  const stoQty = sqlPoGlobalSapStoQtyKg({
+    contractNumberExpr,
+    poNumberExpr,
+  });
+  return `COALESCE(NULLIF((${stoQty}), 0), ${contractQtyExpr})`;
+}
+
+/** @deprecated Prefer sqlTruckingExpandedStoLineQtyKgExpr (PO-grain). */
+export function sqlTruckingExpandedPerStoLineQtyKgExpr(
   contractNumberExpr = 'e.contract_number',
   poNumberExpr = 'e.po_number',
   contractQtyExpr = 'e.contract_qty',

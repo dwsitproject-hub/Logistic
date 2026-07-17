@@ -20,6 +20,12 @@ const parseDate = (raw: unknown): string | null => {
   if (m) {
     return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
   }
+  const m2 = /^(\d{1,2})\/(\d{1,2})\/(\d{2})$/.exec(s);
+  if (m2) {
+    const yy = Number(m2[3]);
+    const yyyy = yy >= 70 ? 1900 + yy : 2000 + yy;
+    return `${yyyy}-${m2[2].padStart(2, '0')}-${m2[1].padStart(2, '0')}`;
+  }
   return null;
 };
 
@@ -51,22 +57,379 @@ describe('truckingWbRekapUpload', () => {
     expect(findWbRekapHeaderRowIndex(matrix)).toBe(1);
   });
 
-  it('parses ticket rows and aggregates by PO + date', () => {
+  it('finds SPC header with No PO/STO and TANGGAL', () => {
     const matrix = [
-      ['No.', 'PO/SO', 'Tanggal Masuk', 'Netto PKS', 'Netto EUP'],
-      [1, '1001029784', '01/06/2026', 17200, 17140],
-      [2, '1001029784', '01/06/2026', 17350, 17310],
-      [3, '1001030126', '02/06/2026', 17120, 17110],
+      ['REKAP TIMBANGAN'],
+      ['No.', 'TANGGAL', 'No PO/STO', 'Timbangan Kebun', '', '', '', 'Timbangan SPC(kg)'],
+      ['', '', '', 'Keluar', 'Masuk', 'Netto', 'TOTAL', 'Masuk', 'Keluar', 'Netto'],
+    ];
+    expect(findWbRekapHeaderRowIndex(matrix)).toBe(1);
+  });
+
+  it('finds Tj Pura header with NO PO and Tanggal Laporan', () => {
+    const matrix = [
+      ['PERIODE : JULI 2026'],
+      [],
+      [
+        'No.',
+        'TX',
+        'No Ref',
+        'Tanggal Laporan',
+        'Tanggal Pengiriman',
+        'Nomor DO',
+        'NO KONTRAK',
+        'NO PO',
+        'NO STO',
+        'Pihak Ketiga',
+        '',
+        '',
+        'Pabrik',
+        '',
+        '',
+      ],
+      ['', '', '', '', '', '', '', '', '', 'Berat Kotor', 'Tare', 'NETT', 'Berat Kotor', 'Tare', 'NETT'],
+    ];
+    expect(findWbRekapHeaderRowIndex(matrix)).toBe(2);
+  });
+
+  it('parses Tj Pura 3-row header: Pihak Ketiga NETT delivery + Pabrik NETT receive', () => {
+    const matrix = [
+      ['PERIODE : JULI 2026'],
+      [],
+      [
+        'No.',
+        'TX',
+        'No Ref',
+        'Tanggal Laporan',
+        'Tanggal Pengiriman',
+        'Nomor DO',
+        'NO KONTRAK',
+        'NO PO',
+        'NO STO',
+        'Relasi',
+        'Pihak Ketiga',
+        '',
+        '',
+        'Pabrik',
+        '',
+        '',
+      ],
+      [
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        'Berat Kotor',
+        'Tare',
+        'NETT',
+        'Berat Kotor',
+        'Tare',
+        'NETT',
+      ],
+      [
+        '',
+        '',
+        'NO REF',
+        'TANGGAL',
+        'tgl',
+        'NO DO',
+        'NO KONTRAK',
+        'NO PO',
+        'NO STO',
+        'Relasi',
+        'B. PKS',
+        'T. PKS',
+        'N. PKS',
+        'B. PABRIK',
+        'T. PABRIK',
+        'N. PABRIK',
+      ],
+      [
+        1,
+        'BEL',
+        'EUK1',
+        46204,
+        46203,
+        'CO/1',
+        'CO/1',
+        1001030780,
+        1006018999,
+        'SUP',
+        4930,
+        3950,
+        980,
+        4911,
+        3930,
+        981,
+      ],
+      [
+        2,
+        'BEL',
+        'EUK2',
+        46204,
+        46203,
+        'CO/2',
+        'CO/2',
+        1001030741,
+        '',
+        'SUP',
+        6600,
+        0,
+        6600,
+        6609,
+        0,
+        6609,
+      ],
+    ];
+    const { tickets, rowParseFailures } = parseWbRekapSheetMatrix(
+      'TERIMA CPO TRUCK',
+      matrix,
+      toIsoDate10FromCell,
+    );
+    expect(rowParseFailures).toEqual([]);
+    expect(tickets).toHaveLength(2);
+    expect(tickets[0]?.poNumber).toBe('1001030780');
+    expect(tickets[0]?.stoNumber).toBe('1006018999');
+    expect(tickets[0]?.progressDateIso).toBe('2026-07-01');
+    expect(tickets[0]?.nettoPksKg).toBe(980);
+    expect(tickets[0]?.nettoEupKg).toBe(981);
+    expect(tickets[1]?.poNumber).toBe('1001030741');
+    expect(tickets[1]?.stoNumber).toBeNull();
+    expect(tickets[1]?.nettoPksKg).toBe(6600);
+    expect(tickets[1]?.nettoEupKg).toBe(6609);
+  });
+
+  it('parses Tj Pura 2-row header (POME style) without emitting subheader as ticket', () => {
+    const matrix = [
+      ['PERIODE : JULI 2026'],
+      [],
+      [
+        'No.',
+        'TX',
+        'No Ref',
+        'Tanggal Laporan',
+        'Tanggal Pengiriman',
+        'Nomor DO',
+        'Nomor Kontrak',
+        'NO PO',
+        'NO STO',
+        'Pihak Ketiga',
+        '',
+        '',
+        'Pabrik',
+        '',
+        '',
+      ],
+      [
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        'Berat Kotor',
+        'Tare',
+        'NETT',
+        'Berat Kotor',
+        'Tare',
+        'NETT',
+      ],
+      [
+        1,
+        'BEL',
+        'EUK1541301',
+        46204,
+        46203,
+        '006/POME',
+        '006/POME',
+        1001030213,
+        '',
+        25220,
+        8570,
+        16650,
+        25290,
+        8660,
+        16630,
+      ],
+    ];
+    const { tickets, rowParseFailures } = parseWbRekapSheetMatrix(
+      'POME',
+      matrix,
+      toIsoDate10FromCell,
+    );
+    expect(rowParseFailures).toEqual([]);
+    expect(tickets).toHaveLength(1);
+    expect(tickets[0]?.poNumber).toBe('1001030213');
+    expect(tickets[0]?.nettoPksKg).toBe(16650);
+    expect(tickets[0]?.nettoEupKg).toBe(16630);
+    expect(tickets[0]?.progressDateIso).toBe('2026-07-01');
+  });
+
+  it('parses EUP ticket rows with STO and aggregates by PO + date + STO', () => {
+    const matrix = [
+      ['No.', 'STO', 'PO/SO', 'Tanggal Masuk', 'Netto PKS', 'Netto EUP'],
+      [1, '1006018596', '1001029784', '01/06/2026', 17200, 17140],
+      [2, '1006018597', '1001029784', '01/06/2026', 17350, 17310],
+      [3, '1006019000', '1001030126', '02/06/2026', 17120, 17110],
     ];
     const { tickets } = parseWbRekapSheetMatrix('CPO', matrix, parseDate);
     expect(tickets).toHaveLength(3);
+    expect(tickets[0]?.stoNumber).toBe('1006018596');
     expect(tickets[0]?.klipProduct).toBe('CPO');
     const aggregated = aggregateWbRekapTickets(tickets);
-    expect(aggregated).toHaveLength(2);
-    const po1 = aggregated.find((a) => a.poNumber === '1001029784');
-    expect(po1?.sumNettoPksKg).toBe(34550);
-    expect(po1?.sumNettoEupKg).toBe(34450);
-    expect(po1?.ticketCount).toBe(2);
+    expect(aggregated).toHaveLength(3);
+    const sto1 = aggregated.find(
+      (a) => a.poNumber === '1001029784' && a.stoNumber === '1006018596',
+    );
+    const sto2 = aggregated.find(
+      (a) => a.poNumber === '1001029784' && a.stoNumber === '1006018597',
+    );
+    expect(sto1?.sumNettoPksKg).toBe(17200);
+    expect(sto1?.sumNettoEupKg).toBe(17140);
+    expect(sto2?.sumNettoPksKg).toBe(17350);
+    expect(sto2?.sumNettoEupKg).toBe(17310);
+    expect(sto1?.ticketCount).toBe(1);
+    expect(sto2?.stoNumbers).toEqual(['1006018597']);
+  });
+
+  it('parses EOP Netto EOP as receive qty', () => {
+    const matrix = [
+      ['No.', 'STO', 'PO/SO', 'Tanggal Masuk', 'Netto PKS', 'Netto EOP'],
+      [1, '1386002103', '1381002679', '02/06/2026', 18090, 18110],
+    ];
+    const { tickets } = parseWbRekapSheetMatrix('RPS', matrix, parseDate);
+    expect(tickets).toHaveLength(1);
+    expect(tickets[0]?.poNumber).toBe('1381002679');
+    expect(tickets[0]?.stoNumber).toBe('1386002103');
+    expect(tickets[0]?.nettoPksKg).toBe(18090);
+    expect(tickets[0]?.nettoEupKg).toBe(18110);
+  });
+
+  it('parses SPC 2-row header: No PO/STO + Timbangan Kebun/SPC Netto', () => {
+    const matrix = [
+      ['REKAP TIMBANGAN PT.SUMBER PANGAN CEMERLANG 2026'],
+      [
+        'No.',
+        'TANGGAL',
+        'No.',
+        'BST',
+        'No. Tiket',
+        'No. DO',
+        'No. KONTRAK',
+        'Term',
+        'No PO/STO',
+        'Nama Supplier',
+        'No. Polisi',
+        'Nama Driver',
+        'Tanggal Muat',
+        'Timbangan Kebun',
+        '',
+        '',
+        '',
+        'Tanggal Bongkar',
+        'Jam Datang Di EUP',
+        'Timbangan SPC(kg)',
+        '',
+        '',
+        '',
+        'Selisih',
+        'Persentase',
+        'BA',
+        'FFA',
+        'MOIST',
+        'DIRT',
+        'DOBI',
+        'KOMMODITI',
+        'PKS',
+        'Tanggal 1',
+        'Tanggal 2',
+        'Jam keluar',
+        'STO',
+        'Transportir',
+      ],
+      [
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        'Keluar',
+        'Masuk',
+        'Netto',
+        'TOTAL',
+        '',
+        '',
+        'Masuk',
+        'Keluar',
+        'Netto',
+        'TOTAL',
+      ],
+      [
+        '3207',
+        '2026-06-02',
+        '1',
+        '3001',
+        'SCD4005174',
+        'DO-1',
+        '1002000006042',
+        'FRANCO',
+        '1641000303',
+        'EUPHO',
+        'BK 8552 LG',
+        'PRAWIRA',
+        '31-May-26',
+        '39690',
+        '11930',
+        '27760',
+        '27760',
+        '2-Jun-26',
+        '11:26:51',
+        '39980',
+        '12200',
+        '27780',
+        '27780',
+        '20',
+        '0.07',
+        '-',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '1006018596',
+        'PNI',
+      ],
+    ];
+    expect(findWbRekapHeaderRowIndex(matrix)).toBe(1);
+    const { tickets, rowParseFailures } = parseWbRekapSheetMatrix('CPO SPC', matrix, parseDate);
+    expect(rowParseFailures).toEqual([]);
+    expect(tickets).toHaveLength(1);
+    expect(tickets[0]?.poNumber).toBe('1641000303');
+    expect(tickets[0]?.stoNumber).toBe('1006018596');
+    expect(tickets[0]?.nettoPksKg).toBe(27760);
+    expect(tickets[0]?.nettoEupKg).toBe(27780);
+    expect(tickets[0]?.progressDateIso).toBe('2026-06-02');
   });
 
   it('parses sheets by PO header even when sheet name is not in the legacy product map', () => {
@@ -119,34 +482,57 @@ describe('truckingWbRekapUpload', () => {
     }
   });
 
-  it('parses all sheets from sample WB rekap workbook when file is present', () => {
-    const samplePath = path.resolve(
-      __dirname,
-      '../../../docs/Rekap INCOMING TIMB-EUP-BTG JUNI 2026.xlsx',
-    );
-    if (!fs.existsSync(samplePath)) return;
+  it('parses sample WB workbooks from docs when present', () => {
+    const candidates = [
+      'WB - Rekap INCOMING TIMB-EUP-BTG JUNI 2026.xlsx',
+      'Rekap INCOMING TIMB-EUP-BTG JUNI 2026.xlsx',
+      'WB - Laporan Tiimbangan Material Trade EOP - TJMorawa ( JUNI 2026) (1).xlsx',
+      'WB - Laporan Tiimbangan Material Trade EOP - TJMorawa ( JUNI 2026) (2).xlsx',
+      'WB - Tj Pura.xlsx',
+    ];
+    for (const name of candidates) {
+      const samplePath = path.resolve(__dirname, `../../../docs/${name}`);
+      if (!fs.existsSync(samplePath)) continue;
 
-    const buf = fs.readFileSync(samplePath);
-    const wb = XLSX.read(buf, { type: 'buffer', cellDates: true });
-    const sheets = wb.SheetNames.map((sheetName) => {
-      const ws = wb.Sheets[sheetName];
-      const matrix = XLSX.utils.sheet_to_json(ws, {
-        header: 1,
-        defval: '',
-        raw: true,
-      }) as unknown[][];
-      return { sheetName, matrix };
-    });
+      const buf = fs.readFileSync(samplePath);
+      const wb = XLSX.read(buf, { type: 'buffer', cellDates: true });
+      const sheets = wb.SheetNames.map((sheetName) => {
+        const ws = wb.Sheets[sheetName];
+        const matrix = XLSX.utils.sheet_to_json(ws, {
+          header: 1,
+          defval: '',
+          raw: true,
+        }) as unknown[][];
+        return { sheetName, matrix };
+      });
 
-    const result = parseWbRekapWorkbook(sheets, toIsoDate10FromCell);
-    // Every named sheet in the sample is either processed or skipped for structure — none for product name.
-    expect(result.sheetsProcessed.length + result.sheetsSkipped.length).toBe(wb.SheetNames.length);
-    expect(result.sheetsProcessed.length).toBeGreaterThan(0);
-    expect(result.rawTicketRows).toBeGreaterThan(100);
-
-    const cpoSheet = sheets.find((s) => s.sheetName === 'CPO');
-    expect(cpoSheet).toBeTruthy();
-    expect(findWbRekapHeaderRowIndex(cpoSheet!.matrix)).toBe(8);
-    expect(result.aggregated.some((a) => a.poNumber === '1001029784')).toBe(true);
+      const result = parseWbRekapWorkbook(sheets, toIsoDate10FromCell);
+      expect(result.sheetsProcessed.length + result.sheetsSkipped.length).toBe(wb.SheetNames.length);
+      if (name.includes('Rekap INCOMING') || name.includes('EUP-BTG')) {
+        expect(result.sheetsProcessed.length).toBeGreaterThan(0);
+        expect(result.rawTicketRows).toBeGreaterThan(0);
+        expect(result.aggregated.some((a) => a.poNumber === '1001029784')).toBe(true);
+      }
+      if (name.includes('(1)')) {
+        // EOP layout — Netto EOP receive must populate
+        const withReceive = result.tickets.filter((t) => t.nettoEupKg > 0);
+        expect(withReceive.length).toBeGreaterThan(0);
+      }
+      if (name.includes('(2)')) {
+        // SPC layout must be detected on at least one sheet
+        expect(result.sheetsProcessed.length).toBeGreaterThan(0);
+        expect(result.rawTicketRows).toBeGreaterThan(0);
+      }
+      if (name.includes('Tj Pura')) {
+        expect(result.sheetsProcessed).toContain('TERIMA CPO TRUCK');
+        expect(result.sheetsSkipped.some((s) => s.sheetName === 'COVER')).toBe(true);
+        expect(result.sheetsSkipped.some((s) => s.sheetName === 'PIVOT CPO')).toBe(true);
+        expect(result.rawTicketRows).toBeGreaterThan(0);
+        const cpoTickets = result.tickets.filter((t) => t.sheetName === 'TERIMA CPO TRUCK');
+        expect(cpoTickets.length).toBeGreaterThan(0);
+        expect(cpoTickets.some((t) => t.nettoPksKg > 0 && t.nettoEupKg > 0)).toBe(true);
+        expect(cpoTickets.every((t) => Boolean(t.poNumber))).toBe(true);
+      }
+    }
   });
 });

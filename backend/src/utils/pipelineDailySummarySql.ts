@@ -87,10 +87,10 @@ export function buildTruckingBacklogDailySummaryUpsertSql(): string {
 }
 
 /**
- * INSERT the pipeline stage per expanded (operation, STO line) row, from the SAME
- * source query the circle counts aggregate — so the list can read circles-consistent
- * stages. Must never itself read from trucking_list_stage_snapshot (useStageSnapshot
- * stays off in buildTruckingExecutionSourceSql).
+ * INSERT the pipeline stage per operation (PO grain), from the SAME source query the
+ * circle counts aggregate — so the list can read circles-consistent stages.
+ * Must never itself read from trucking_list_stage_snapshot (useStageSnapshot stays off
+ * in buildTruckingExecutionSourceSql).
  */
 export function buildTruckingStageSnapshotInsertSql(): string {
   const expanded = buildTruckingExecutionSourceSql();
@@ -112,5 +112,5 @@ export function buildTruckingStageSnapshotInsertSql(): string {
     FROM (${expanded}) src
     INNER JOIN contracts c ON c.id = src.contract_id
     WHERE src.id IS NOT NULL AND src.status IS NOT NULL
-    ON CONFLICT (operation_id, sto_line) DO NOTHING`;
+    ON CONFLICT (operation_id) DO NOTHING`;
 }

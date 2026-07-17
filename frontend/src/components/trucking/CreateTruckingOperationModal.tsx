@@ -42,13 +42,16 @@ function sliceIsoDate(value: string | null | undefined): string {
 import {
   formatQtyKgAsMt,
   formatSapQtyMtOrDash,
+  filterActualRowsForSto,
   normalizeDailyActualRows,
   normalizePlanningDeliverableRows,
+  normalizeStoActuals,
   sumActualDeliveryKg,
   sumActualReceiveKg,
   sumPlanningDeliveryKg,
   type TruckingModalActualRow,
   type TruckingModalPlanningRow,
+  type TruckingModalStoActual,
 } from '@/lib/truckingModalDailyTables'
 import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
 import {
@@ -146,6 +149,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
 
   const [planningRows, setPlanningRows] = useState<TruckingModalPlanningRow[]>([])
   const [actualRows, setActualRows] = useState<TruckingModalActualRow[]>([])
+  const [stoActuals, setStoActuals] = useState<TruckingModalStoActual[]>([])
   const [contractDueDates, setContractDueDates] = useState({
     delivery_start_date: '',
     delivery_end_date: '',
@@ -189,7 +193,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     const trimmed = term.trim()
     if (!trimmed) {
       setContractValidation({ checking: false, exists: false, contractData: null, message: '' })
-      return
+      return null
     }
     setContractValidation((prev) => ({ ...prev, checking: true }))
     try {
@@ -217,18 +221,39 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
           const plantLabel = cd.plant_name || ''
           const sapLoading = String(cd.sap_loading_location ?? cd.supplier ?? '').trim()
           const supplierMills = String(cd.supplier_mills_suggestion ?? '').trim()
+          // B2B origin: prefer child-PO Buyer (Contract Reff PO); else origin buyer / group plant.
+          const b2bChildBuyer = String(cd.b2b_child_buyer ?? '').trim()
+          const unloadingSuggestion = String(cd.unloading_location_suggestion ?? '').trim()
           const buyerLabel = String(cd.buyer ?? '').trim()
           const groupPlant = String(cd.group_plant_suggestion ?? '').trim()
+          const unloadingDefault = b2bChildBuyer || unloadingSuggestion || buyerLabel || groupPlant || ''
           setNewOperation((prev) => ({
             ...prev,
             location: plantLabel || prev.location,
             loading_location: sapLoading || supplierMills || '',
-            unloading_location: buyerLabel || groupPlant || '',
+            unloading_location: unloadingDefault,
           }))
           const cargoReady = cd.cargo_readiness_date ? String(cd.cargo_readiness_date).slice(0, 10) : ''
           if (cargoReady) {
             setNewOperation((prev) => ({ ...prev, cargo_readiness_date: cargoReady }))
           }
+          const nextStoActuals = normalizeStoActuals(cd.sto_actuals)
+          setStoActuals(nextStoActuals)
+          if (nextStoActuals.length === 1) {
+            const only = nextStoActuals[0]
+            setSapReceiveDates({
+              start_receive_date: only.start_receive_date,
+              last_receive_date: only.last_receive_date,
+            })
+            setSapQty({
+              qty_delivery: only.qty_delivery,
+              qty_receive: only.qty_receive,
+            })
+          } else if (nextStoActuals.length === 0) {
+            setSapReceiveDates({ start_receive_date: '', last_receive_date: '' })
+            setSapQty({ qty_delivery: null, qty_receive: null })
+          }
+          return cd
         } else {
           setContractValidation({
             checking: false,
@@ -238,8 +263,10 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
               response.data.message ||
               (mode === 'po' ? 'PO Number does not exist' : 'Contract does not exist'),
           })
+          return null
         }
       }
+      return null
     } catch (error) {
       console.error('Error validating contract lookup:', error)
       setContractValidation({
@@ -248,6 +275,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         contractData: null,
         message: mode === 'po' ? 'Error validating PO Number' : 'Error validating contract',
       })
+      return null
     }
   }, [])
 
@@ -322,6 +350,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     })
     setPlanningRows([])
     setActualRows([])
+    setStoActuals([])
     setContractDueDates({ delivery_start_date: '', delivery_end_date: '' })
     setSapReceiveDates({ start_receive_date: '', last_receive_date: '' })
     setSapQty({ qty_delivery: null, qty_receive: null })
@@ -365,8 +394,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       const po = String(op.po_number ?? listRow.po_number ?? initialPoNumber ?? '').trim()
       if (po) {
         setPoNumber(po)
-        await validateContractLookup(po, 'po')
-        return
+        return validateContractLookup(po, 'po')
       }
       const contractKey = String(
         op.contract_number
@@ -376,8 +404,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
           ?? '',
       ).trim()
       if (contractKey) {
-        await validateContractLookup(contractKey, 'contract')
+        return validateContractLookup(contractKey, 'contract')
       }
+      return null
     },
     [initialContractExtNo, initialContractId, initialPoNumber, validateContractLookup],
   )
@@ -386,14 +415,23 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     async (operationId: string, op: Record<string, unknown>, listRow: Record<string, unknown>, _contractId: string) => {
       setEditOperationId(operationId)
 
-      await resolveEditContractLookup(op, listRow)
+      const validated = await resolveEditContractLookup(op, listRow)
+
+      const b2bChildBuyer = String(validated?.b2b_child_buyer ?? '').trim()
+      const unloadingSuggestion = String(
+        validated?.unloading_location_suggestion ?? validated?.buyer ?? '',
+      ).trim()
+      const storedUnloading = String(op.unloading_location ?? '').trim()
+      // Prefer live contract Buyer / B2B child buyer over stale stored plant labels
+      // (e.g. "PLANT EUP KUMAI" vs correct "EUP BIOMASS KUMAI").
+      const unloadingForEdit = b2bChildBuyer || unloadingSuggestion || storedUnloading
 
       setNewOperation((prev) => ({
         ...prev,
         operation_id: String(op.operation_id ?? ''),
         location: String(op.location ?? ''),
         loading_location: String(op.loading_location ?? ''),
-        unloading_location: String(op.unloading_location ?? ''),
+        unloading_location: unloadingForEdit,
         trucking_owner: String(op.trucking_owner ?? ''),
         cargo_readiness_date:
           sliceIsoDate(op.cargo_readiness_date as string | undefined) ||
@@ -440,6 +478,10 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         qty_delivery: toNullableNumber(op.sap_qty_delivery),
         qty_receive: toNullableNumber(op.sap_qty_receive),
       })
+
+      const fromDetail = normalizeStoActuals(op.sto_actuals)
+      const fromValidated = normalizeStoActuals(validated?.sto_actuals)
+      setStoActuals(fromDetail.length > 0 ? fromDetail : fromValidated)
 
       if (isEditMode) {
         void loadActivityLog(operationId)
@@ -611,7 +653,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       cd?.delivery_start_date,
   )
   const step4Done = Boolean(
-    sapReceiveDates.start_receive_date ||
+    stoActuals.length > 0 ||
+      sapReceiveDates.start_receive_date ||
       sapReceiveDates.last_receive_date ||
       actualRows.length > 0 ||
       sapQty.qty_delivery != null ||
@@ -643,8 +686,134 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   const dueEndDisplay =
     contractDueDates.delivery_end_date || sliceIsoDate(cd?.delivery_end_date) || ''
   const planningTotalKg = sumPlanningDeliveryKg(planningRows)
-  const actualDeliveryTotalKg = sumActualDeliveryKg(actualRows)
-  const actualReceiveTotalKg = sumActualReceiveKg(actualRows)
+  const showPerStoActuals = stoActuals.length > 1
+  const singleStoFallback =
+    stoActuals.length === 1
+      ? stoActuals[0]
+      : null
+
+  const renderDailyActualsTable = (rows: TruckingModalActualRow[]) => {
+    const deliveryTotal = sumActualDeliveryKg(rows)
+    const receiveTotal = sumActualReceiveKg(rows)
+    return (
+      <div className="rounded-lg border border-gray-200 overflow-hidden">
+        <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+          <p className="text-xs font-semibold text-gray-700">Daily Actuals (WB)</p>
+          <p className="text-[10px] text-gray-400 mt-0.5">
+            From Upload WB — Qty Delivery = Netto PKS, Qty Receive = Netto EUP
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+              <tr>
+                <th className="px-3 py-2 text-left font-semibold">Date</th>
+                <th className="px-3 py-2 text-right font-semibold">Qty Delivery (MT)</th>
+                <th className="px-3 py-2 text-right font-semibold">Qty Receive (MT)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="px-3 py-4 text-center text-gray-400 italic">
+                    No WB actuals uploaded yet.
+                  </td>
+                </tr>
+              ) : (
+                rows.map((row) => (
+                  <tr
+                    key={`${row.sto_number || '_'}::${row.date}`}
+                    className="border-t border-gray-100"
+                  >
+                    <td className="px-3 py-2 tabular-nums text-gray-800">{fmtIsoDate(row.date)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-gray-800">
+                      {formatQtyKgAsMt(row.quantity_delivery_kg)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-gray-800">
+                      {row.quantity_receive_kg == null
+                        ? '-'
+                        : formatQtyKgAsMt(row.quantity_receive_kg)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+            {rows.length > 0 && (
+              <tfoot>
+                <tr className="border-t border-gray-200 bg-gray-50">
+                  <td className="px-3 py-2 text-xs font-semibold text-gray-700">Total</td>
+                  <td className="px-3 py-2 text-right text-xs font-semibold tabular-nums text-gray-800">
+                    {formatQtyKgAsMt(deliveryTotal)}
+                  </td>
+                  <td className="px-3 py-2 text-right text-xs font-semibold tabular-nums text-gray-800">
+                    {formatQtyKgAsMt(receiveTotal)}
+                  </td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+    )
+  }
+
+  const renderSapActualFields = (block: {
+    start_receive_date: string
+    last_receive_date: string
+    qty_delivery: number | null
+    qty_receive: number | null
+  }) => (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+          Trucking Start Receive Date (SAP)
+        </label>
+        <DateInputDdMmYyyy
+          valueIso={block.start_receive_date}
+          onChangeIso={() => {}}
+          disabled
+          className="bg-gray-100 cursor-not-allowed"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+          Trucking Last Receive Date (SAP)
+        </label>
+        <DateInputDdMmYyyy
+          valueIso={block.last_receive_date}
+          onChangeIso={() => {}}
+          disabled
+          className="bg-gray-100 cursor-not-allowed"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+          Qty Delivery (SAP)
+        </label>
+        <Input
+          value={formatSapQtyMtOrDash(
+            Number.isFinite(block.qty_delivery as number) ? block.qty_delivery : null,
+          )}
+          readOnly
+          disabled
+          className={`h-9 ${READONLY_FIELD_CLASS}`}
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+          Qty Receive (SAP)
+        </label>
+        <Input
+          value={formatSapQtyMtOrDash(
+            Number.isFinite(block.qty_receive as number) ? block.qty_receive : null,
+          )}
+          readOnly
+          disabled
+          className={`h-9 ${READONLY_FIELD_CLASS}`}
+        />
+      </div>
+    </div>
+  )
 
   const cargoReadinessDisplay =
     newOperation.cargo_readiness_date ||
@@ -891,8 +1060,16 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       </div>
                     </div>
                     <div className="grid grid-cols-2 md:grid-cols-3 divide-x divide-green-100 px-0">
+                      <div className="px-3 py-2">
+                        <div className="text-[10px] font-medium uppercase tracking-wide text-green-600">STO Number</div>
+                        <div className="text-xs font-semibold text-gray-800 mt-0.5 whitespace-pre-line break-words">
+                          {(cd.sto_numbers || cd.sto_number || '—')
+                            .split(/,\s*/)
+                            .filter(Boolean)
+                            .join('\n') || '—'}
+                        </div>
+                      </div>
                       {[
-                        { label: 'STO Number', value: cd.sto_number || '—' },
                         { label: 'Supplier', value: cd.supplier || '—' },
                         { label: 'Buyer', value: cd.buyer || '—' },
                         { label: 'Product', value: cd.product || '—' },
@@ -951,14 +1128,14 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                     <label className="block text-xs font-semibold text-gray-700 mb-1.5">Unloading Location</label>
                     <GroupPlantCombobox
                       value={newOperation.unloading_location}
-                      hint={cd?.buyer || cd?.plant_code}
+                      hint={cd?.b2b_child_buyer || cd?.buyer || cd?.plant_code}
                       onChange={(val) => {
                         setNewOperation((prev) => ({ ...prev, unloading_location: val }))
                         clearFieldError('unloading_location')
                       }}
                       disabled={isEditMode}
                       className={`h-9 ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.unloading_location ? 'border-red-500' : ''}`}
-                      placeholder="Buyer atau search group plant..."
+                      placeholder={cd?.is_b2b_origin ? 'B2B child buyer / group plant...' : 'Buyer atau search group plant...'}
                     />
                     {formErrors.unloading_location && <p className="text-xs mt-1 text-red-600">{formErrors.unloading_location}</p>}
                   </div>
@@ -1072,112 +1249,45 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                 {step4Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="p-4 space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                      Trucking Start Receive Date (SAP)
-                    </label>
-                    <DateInputDdMmYyyy
-                      valueIso={sapReceiveDates.start_receive_date}
-                      onChangeIso={() => {}}
-                      disabled
-                      className="bg-gray-100 cursor-not-allowed"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                      Trucking Last Receive Date (SAP)
-                    </label>
-                    <DateInputDdMmYyyy
-                      valueIso={sapReceiveDates.last_receive_date}
-                      onChangeIso={() => {}}
-                      disabled
-                      className="bg-gray-100 cursor-not-allowed"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                      Qty Delivery (SAP)
-                    </label>
-                    <Input
-                      value={formatSapQtyMtOrDash(
-                        Number.isFinite(sapQty.qty_delivery as number) ? sapQty.qty_delivery : null,
-                      )}
-                      readOnly
-                      disabled
-                      className={`h-9 ${READONLY_FIELD_CLASS}`}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                      Qty Receive (SAP)
-                    </label>
-                    <Input
-                      value={formatSapQtyMtOrDash(
-                        Number.isFinite(sapQty.qty_receive as number) ? sapQty.qty_receive : null,
-                      )}
-                      readOnly
-                      disabled
-                      className={`h-9 ${READONLY_FIELD_CLASS}`}
-                    />
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-gray-200 overflow-hidden">
-                  <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200">
-                    <p className="text-xs font-semibold text-gray-700">Daily Actuals (WB)</p>
-                    <p className="text-[10px] text-gray-400 mt-0.5">
-                      From Upload WB — Qty Delivery = Netto PKS, Qty Receive = Netto EUP
-                    </p>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
-                        <tr>
-                          <th className="px-3 py-2 text-left font-semibold">Date</th>
-                          <th className="px-3 py-2 text-right font-semibold">Qty Delivery (MT)</th>
-                          <th className="px-3 py-2 text-right font-semibold">Qty Receive (MT)</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {actualRows.length === 0 ? (
-                          <tr>
-                            <td colSpan={3} className="px-3 py-4 text-center text-gray-400 italic">
-                              No WB actuals uploaded yet.
-                            </td>
-                          </tr>
-                        ) : (
-                          actualRows.map((row) => (
-                            <tr key={row.date} className="border-t border-gray-100">
-                              <td className="px-3 py-2 tabular-nums text-gray-800">{fmtIsoDate(row.date)}</td>
-                              <td className="px-3 py-2 text-right tabular-nums text-gray-800">
-                                {formatQtyKgAsMt(row.quantity_delivery_kg)}
-                              </td>
-                              <td className="px-3 py-2 text-right tabular-nums text-gray-800">
-                                {row.quantity_receive_kg == null
-                                  ? '-'
-                                  : formatQtyKgAsMt(row.quantity_receive_kg)}
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                      {actualRows.length > 0 && (
-                        <tfoot>
-                          <tr className="border-t border-gray-200 bg-gray-50">
-                            <td className="px-3 py-2 text-xs font-semibold text-gray-700">Total</td>
-                            <td className="px-3 py-2 text-right text-xs font-semibold tabular-nums text-gray-800">
-                              {formatQtyKgAsMt(actualDeliveryTotalKg)}
-                            </td>
-                            <td className="px-3 py-2 text-right text-xs font-semibold tabular-nums text-gray-800">
-                              {formatQtyKgAsMt(actualReceiveTotalKg)}
-                            </td>
-                          </tr>
-                        </tfoot>
-                      )}
-                    </table>
-                  </div>
-                </div>
+                {showPerStoActuals ? (
+                  stoActuals.map((sto) => {
+                    const stoRows = filterActualRowsForSto(actualRows, sto.sto_number, {
+                      includeLegacyEmpty: false,
+                    })
+                    return (
+                      <div
+                        key={sto.sto_number}
+                        className="rounded-lg border border-emerald-100 bg-emerald-50/30 p-3 space-y-3"
+                      >
+                        <p className="text-xs font-semibold text-emerald-900">
+                          STO {sto.sto_number}
+                        </p>
+                        {renderSapActualFields(sto)}
+                        {renderDailyActualsTable(stoRows)}
+                      </div>
+                    )
+                  })
+                ) : (
+                  <>
+                    {renderSapActualFields(
+                      singleStoFallback
+                        ? singleStoFallback
+                        : {
+                            start_receive_date: sapReceiveDates.start_receive_date,
+                            last_receive_date: sapReceiveDates.last_receive_date,
+                            qty_delivery: sapQty.qty_delivery,
+                            qty_receive: sapQty.qty_receive,
+                          },
+                    )}
+                    {renderDailyActualsTable(
+                      singleStoFallback
+                        ? filterActualRowsForSto(actualRows, singleStoFallback.sto_number, {
+                            includeLegacyEmpty: true,
+                          })
+                        : actualRows,
+                    )}
+                  </>
+                )}
               </div>
             </div>
 

@@ -38,6 +38,7 @@ import {
   sqlSapTruckingLastReceiveDate,
   sqlSapTruckingStartReceiveDate,
 } from '../utils/truckingSapDates';
+import { sqlTruckingStoActualsByContractId } from '../utils/truckingStoActualsSql';
 import {
   TRUCKING_REALIZATIONS_JOIN,
   sqlRealizationEndDate,
@@ -75,6 +76,10 @@ import {
   sumPlanningEntriesKg,
   validatePlanningTotalAgainstOutstandingKg,
 } from '../utils/truckingUnplannedPlanningOsQty';
+import {
+  sqlContractMatchesStoParam,
+  sqlTruckingPoAggregatedStoNumbersExpr,
+} from '../utils/truckingPoStoIdentitySql';
 
 let truckingOpIdBackfillChecked = false;
 let truckingStatusReconcileLastRun = 0;
@@ -273,6 +278,8 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
         ${sqlRealizationEndDate('c')} AS effective_realization_end_date,
         c.contract_id as contract_number,
         c.po_number,
+        ${sqlTruckingPoAggregatedStoNumbersExpr('c')} AS sto_number,
+        ${sqlTruckingPoAggregatedStoNumbersExpr('c')} AS sto_numbers,
         c.supplier,
         c.buyer,
         c.product,
@@ -303,6 +310,16 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
     }
 
     const dailyActuals = await listTruckingDailyActuals(id);
+    let stoActuals: Array<Record<string, unknown>> = [];
+    const contractUuid = String((result.rows[0] as { contract_id?: string }).contract_id ?? '');
+    if (contractUuid) {
+      try {
+        const stoRes = await query(sqlTruckingStoActualsByContractId(), [contractUuid]);
+        stoActuals = stoRes.rows as Array<Record<string, unknown>>;
+      } catch (stoErr) {
+        logger.warn('Per-STO trucking actuals lookup failed', stoErr);
+      }
+    }
     return res.json({
       success: true,
       data: {
@@ -315,7 +332,9 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
           quantity_delivery_kg:
             a.quantity_delivery_kg != null ? a.quantity_delivery_kg : a.quantity_kg,
           quantity_receive_kg: a.quantity_receive_kg,
+          sto_number: a.sto_number ?? '',
         })),
+        sto_actuals: stoActuals,
       },
     });
   } catch (error) {
@@ -543,13 +562,18 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
     }
 
     const raw = lookupTerm;
+    // PO lookup also accepts STO → same contract (multi-STO per PO).
     const matchWhereSql = lookupByPo
-      ? `COALESCE(c.po_number, '') = $1`
+      ? `(
+          COALESCE(c.po_number, '') = $1
+          OR ${sqlContractMatchesStoParam('c', 1)}
+        )`
       : `(
           COALESCE(c.po_number, '') = $1
            OR c.contract_id = $1
            OR COALESCE(l.contract_ext_no, '') = $1
            OR c.id::text = $1
+           OR ${sqlContractMatchesStoParam('c', 1)}
         )`;
     const result = await query(
       `
@@ -576,39 +600,14 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       contract_candidates AS (
         SELECT contract_id AS contract_number FROM matched
       ),
-      ${buildQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_number FROM contract_candidates' })},
-      sto_lines AS (
-        SELECT STRING_AGG(DISTINCT TRIM(sto.sto_number), ', ' ORDER BY TRIM(sto.sto_number)) AS sto_numbers
-        FROM (
-          SELECT TRIM(cs.sto_number::text) AS sto_number
-          FROM contract_stos cs
-          INNER JOIN matched m ON m.id = cs.contract_id
-          WHERE cs.sto_number IS NOT NULL AND TRIM(cs.sto_number::text) != ''
-          UNION
-          SELECT TRIM(COALESCE(
-            spd.sto_number::text,
-            spd.data->'raw'->>'STO No.',
-            spd.data->'raw'->>'STO Number',
-            spd.data->'shipment'->>'sto_no'
-          )) AS sto_number
-          FROM sap_processed_data spd
-          INNER JOIN matched m ON m.contract_id = spd.contract_number
-          WHERE TRIM(COALESCE(
-            spd.sto_number::text,
-            spd.data->'raw'->>'STO No.',
-            spd.data->'raw'->>'STO Number',
-            spd.data->'shipment'->>'sto_no'
-          )) != ''
-        ) sto
-        WHERE sto.sto_number IS NOT NULL AND TRIM(sto.sto_number) != ''
-      )
+      ${buildQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_number FROM contract_candidates' })}
       SELECT
         c.id,
         c.contract_id,
         c.po_number,
         l.contract_ext_no,
-        COALESCE(NULLIF(TRIM(sl.sto_numbers), ''), NULLIF(TRIM(c.sto_number::text), '')) AS sto_number,
-        sl.sto_numbers,
+        ${sqlTruckingPoAggregatedStoNumbersExpr('c')} AS sto_number,
+        ${sqlTruckingPoAggregatedStoNumbersExpr('c')} AS sto_numbers,
         c.supplier,
         c.buyer,
         c.product,
@@ -663,7 +662,6 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         })} AS outstanding_quantity
       FROM matched c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-      LEFT JOIN sto_lines sl ON TRUE
       LEFT JOIN master_plants mp ON mp.plant_code = c.plant_code
       LEFT JOIN LATERAL (
         SELECT
@@ -686,7 +684,14 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       });
     }
 
-    const row = result.rows[0] as { transport_mode?: string | null; incoterm?: string | null };
+    const row = result.rows[0] as {
+      id?: string;
+      po_number?: string | null;
+      buyer?: string | null;
+      transport_mode?: string | null;
+      incoterm?: string | null;
+      contract_id?: string | null;
+    };
     if (!isTruckingPageIncoterm(row.incoterm)) {
       return res.json({
         success: true,
@@ -696,10 +701,109 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       });
     }
 
+    // B2B origin (Contract Reff PO empty): Unloading Location = Buyer of child PO
+    // (child rows whose Contract Reff PO Ini points at this origin PO).
+    let b2bChildBuyer: string | null = null;
+    let isB2bOrigin = false;
+    let stoActuals: Array<Record<string, unknown>> = [];
+    try {
+      if (row.id) {
+        const stoRes = await query(sqlTruckingStoActualsByContractId(), [row.id]);
+        stoActuals = stoRes.rows as Array<Record<string, unknown>>;
+      }
+    } catch (stoErr) {
+      logger.warn('Per-STO trucking actuals on validate failed', stoErr);
+    }
+    try {
+      const b2bMeta = await query(
+        `
+        WITH latest_spd AS (
+          SELECT DISTINCT ON (contract_number) contract_number, data
+          FROM sap_processed_data
+          WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
+          ORDER BY contract_number, created_at DESC NULLS LAST
+        )
+        SELECT
+          UPPER(NULLIF(TRIM(COALESCE(
+            l.data->'contract'->>'contract_type',
+            l.data->>'B2B Flag',
+            l.data->'raw'->>'B2B Flag',
+            c.contract_type::text,
+            ''
+          )), '')) AS b2b_flag,
+          NULLIF(TRIM(COALESCE(
+            l.data->'contract'->>'contract_reference_po',
+            l.data->>'CONTRACT REFF PO',
+            l.data->>'Contract Reff PO Ini',
+            l.data->'raw'->>'Contract Reff PO Ini',
+            l.data->'raw'->>'CONTRACT REFF PO'
+          )), '') AS contract_reference_po,
+          COALESCE(
+            NULLIF(TRIM(c.po_number), ''),
+            NULLIF(TRIM(l.data->'contract'->>'po_no'), ''),
+            NULLIF(TRIM(l.data->'raw'->>'PO No.'), ''),
+            NULLIF(TRIM(l.data->>'PO No.'), '')
+          ) AS origin_po_number
+        FROM contracts c
+        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        WHERE c.id = $1
+        LIMIT 1
+        `,
+        [row.id],
+      );
+      const meta = b2bMeta.rows[0] as
+        | { b2b_flag?: string | null; contract_reference_po?: string | null; origin_po_number?: string | null }
+        | undefined;
+      const originPo = String(meta?.origin_po_number ?? row.po_number ?? '').trim();
+      isB2bOrigin =
+        String(meta?.b2b_flag ?? '').toUpperCase() === 'B2B' &&
+        !String(meta?.contract_reference_po ?? '').trim();
+      if (isB2bOrigin && originPo) {
+        const childRes = await query(
+          `
+          WITH latest_spd AS (
+            SELECT DISTINCT ON (contract_number) contract_number, data
+            FROM sap_processed_data
+            WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
+            ORDER BY contract_number, created_at DESC NULLS LAST
+          )
+          SELECT
+            COALESCE(
+              NULLIF(TRIM(c.company_name), ''),
+              NULLIF(TRIM(l.data->'raw'->>'Buyer'), ''),
+              NULLIF(TRIM(l.data->>'Buyer'), ''),
+              NULLIF(TRIM(c.buyer), '')
+            ) AS child_buyer
+          FROM contracts c
+          LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+          WHERE NULLIF(TRIM(COALESCE(
+            l.data->'contract'->>'contract_reference_po',
+            l.data->>'CONTRACT REFF PO',
+            l.data->>'Contract Reff PO Ini',
+            l.data->'raw'->>'Contract Reff PO Ini',
+            l.data->'raw'->>'CONTRACT REFF PO'
+          )), '') = $1
+          ORDER BY c.contract_date DESC NULLS LAST, c.created_at DESC NULLS LAST
+          LIMIT 1
+          `,
+          [originPo],
+        );
+        b2bChildBuyer = String((childRes.rows[0] as { child_buyer?: string } | undefined)?.child_buyer ?? '').trim() || null;
+      }
+    } catch (b2bErr) {
+      logger.warn('B2B child buyer lookup failed during trucking contract validate', b2bErr);
+    }
+
     return res.json({
       success: true,
       exists: true,
-      data: result.rows[0],
+      data: {
+        ...result.rows[0],
+        is_b2b_origin: isB2bOrigin,
+        b2b_child_buyer: b2bChildBuyer,
+        unloading_location_suggestion: b2bChildBuyer || String(row.buyer ?? '').trim() || null,
+        sto_actuals: stoActuals,
+      },
     });
   } catch (error) {
     logger.error('Validate contract number error:', error);

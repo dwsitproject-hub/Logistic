@@ -24,14 +24,20 @@ describe('truckingOutstandingQtySummarySql', () => {
     expect(isTruckingOsStatusOutsideActiveScope(null)).toBe(false)
   })
 
-  it('includes unplanned backlog only for ALL or UNPLANNED', () => {
-    expect(shouldIncludeTruckingUnplannedBacklogForOs(null)).toBe(true)
-    expect(shouldIncludeTruckingUnplannedBacklogForOs('UNPLANNED')).toBe(true)
-    expect(shouldIncludeTruckingUnplannedBacklogForOs('PLANNED')).toBe(false)
-    expect(shouldIncludeTruckingUnplannedBacklogForOs('IN_PROGRESS')).toBe(false)
+  it('page KPI path (osStatus null) aggregates all active stages without per-card filter', () => {
+    const built = {
+      preOuterQuery: 'WHERE 1=1',
+      outerSql: '',
+      innerParams: [],
+      outerParams: [],
+    }
+    const allActive = buildTruckingOutstandingQtyExecutionAggregateQuery(built, null)
+    expect(allActive.text).toContain("IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')")
+    expect(allActive.text).not.toMatch(/tf\.status = \$/)
+    expect(allActive.params).toEqual([])
   })
 
-  it('Planned card OS aggregates PLANNED + IN_PROGRESS (matches status card filter)', () => {
+  it('helper still supports Planned card PLANNED + IN_PROGRESS (unused by page KPI)', () => {
     const built = {
       preOuterQuery: 'WHERE 1=1',
       outerSql: '',
@@ -45,6 +51,13 @@ describe('truckingOutstandingQtySummarySql', () => {
     const inProg = buildTruckingOutstandingQtyExecutionAggregateQuery(built, 'IN_PROGRESS')
     expect(inProg.text).toMatch(/tf\.status = \$1/)
     expect(inProg.params).toEqual(['IN_PROGRESS'])
+  })
+
+  it('includes unplanned backlog only for ALL or UNPLANNED (helper; page KPI always merges backlog)', () => {
+    expect(shouldIncludeTruckingUnplannedBacklogForOs(null)).toBe(true)
+    expect(shouldIncludeTruckingUnplannedBacklogForOs('UNPLANNED')).toBe(true)
+    expect(shouldIncludeTruckingUnplannedBacklogForOs('PLANNED')).toBe(false)
+    expect(shouldIncludeTruckingUnplannedBacklogForOs('IN_PROGRESS')).toBe(false)
   })
 
   it('parses and merges bucket rows', () => {

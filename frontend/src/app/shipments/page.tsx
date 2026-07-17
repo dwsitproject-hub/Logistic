@@ -18,6 +18,7 @@ import { FIELD_HELP } from '@/lib/fieldHelpText'
 import {
   formatShipmentStatusLabel,
   normalizeShipmentStatusKey,
+  shipmentStatusLabelLines,
   SHIPMENT_STATUS_DISPLAY_LABELS,
 } from '@/lib/shipmentStatusDisplay'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
@@ -151,7 +152,7 @@ import {
   operationalRowFieldTooltipText,
   shouldApplyOperationalTruncateTooltip,
 } from '@/lib/operationalTableTruncateUi'
-import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
+import { appendToolbarMultiToColumnFilters, filterIncotermOptions } from '@/lib/globalScopeFilters'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { format } from 'date-fns'
 import {
@@ -892,6 +893,8 @@ function ShipmentsPageContent() {
     etaDischarge?: Record<string, number>
   } | null>(null)
   const [summaryFetching, setSummaryFetching] = useState(false)
+  /** Outstanding Qty strip — separate from status-card summaryOnly (slow SQL). */
+  const [outstandingQtyFetching, setOutstandingQtyFetching] = useState(false)
   const [vesselIdleCount, setVesselIdleCount] = useState(0)
   const [vesselIdleList, setVesselIdleList] = useState<VesselIdleListRow[]>([])
   const [vesselIdleLoading, setVesselIdleLoading] = useState(false)
@@ -1411,7 +1414,7 @@ function ShipmentsPageContent() {
         const supplierPayload = supplierRes.data?.data
         const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
         setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
-        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
+        setAvailableIncoterms(filterIncotermOptions(Array.isArray(incs) ? incs : []))
         setAvailableProducts(Array.isArray(products) ? products : [])
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
       })
@@ -1473,9 +1476,17 @@ function ShipmentsPageContent() {
   ) => {
     const listGen = ++listFetchGenRef.current
     const hadRows = shipments.length > 0
+    const forceOsRefresh = Boolean(options?.force || section1SummaryForceNextFetchRef.current)
     if (!hadRows) setLoading(true)
     setListFetching(true)
     setSummaryFetching(true)
+    // OS strip is static across status cards — only reset/refetch on global-filter force.
+    if (forceOsRefresh) {
+      setOutstandingQtyFetching(true)
+      setShipmentsSection1Summary((prev) =>
+        prev?.outstandingQty != null ? { ...prev, outstandingQty: undefined } : prev,
+      )
+    }
     setQtyFieldsReady(false)
     try {
       const effectivePage = forcedPage ?? page
@@ -1555,12 +1566,8 @@ function ShipmentsPageContent() {
       summaryParams.set('summaryOnly', 'true')
       summaryParams.set('page', '1')
       summaryParams.set('limit', '1')
-      const osStatus = String(statusFilter ?? '').trim().toUpperCase()
-      if (osStatus && osStatus !== 'ALL') {
-        summaryParams.set('osStatus', osStatus)
-      } else {
-        summaryParams.delete('osStatus')
-      }
+      // OS strip is static (active stages only) — do not scope by status card.
+      summaryParams.delete('osStatus')
       const summaryUrl = `/shipments?${summaryParams.toString()}`
       const summaryCacheKey = buildCacheKey('GET', summaryUrl)
       const summaryForce = options?.force || section1SummaryForceNextFetchRef.current
@@ -1579,12 +1586,28 @@ function ShipmentsPageContent() {
             shipmentRows?: number
             totalTableRows?: number
           }
+          outstandingQty?: NonNullable<typeof shipmentsSection1Summary>['outstandingQty']
         }
       }) => {
         if (envelope?.data?.summary) {
-          setShipmentsSection1Summary(envelope.data.summary)
+          setShipmentsSection1Summary((prev) => {
+            const next = { ...envelope.data!.summary! }
+            // summaryOnly no longer includes OS — keep prior OS until outstandingQtyOnly lands.
+            if (next.outstandingQty == null && prev?.outstandingQty != null) {
+              next.outstandingQty = prev.outstandingQty
+            }
+            return next
+          })
+          setSummaryFetching(false)
+          section1SummaryForceNextFetchRef.current = false
         }
-        setSummaryFetching(false)
+        if (envelope?.data?.outstandingQty) {
+          setShipmentsSection1Summary((prev) => ({
+            ...(prev ?? {}),
+            outstandingQty: envelope.data!.outstandingQty!,
+          }))
+          setOutstandingQtyFetching(false)
+        }
         const breakdown =
           envelope?.data?.unplannedBreakdown ??
           envelope?.data?.summary?.unplannedTable
@@ -1617,8 +1640,15 @@ function ShipmentsPageContent() {
         setTotalPages(Math.max(1, pages))
         setTableScopeLoading(false)
         if (envelope?.data?.summary) {
-          setShipmentsSection1Summary(envelope.data.summary)
+          setShipmentsSection1Summary((prev) => {
+            const next = { ...envelope.data!.summary! }
+            if (next.outstandingQty == null && prev?.outstandingQty != null) {
+              next.outstandingQty = prev.outstandingQty
+            }
+            return next
+          })
           setSummaryFetching(false)
+          section1SummaryForceNextFetchRef.current = false
         }
         const breakdown = envelope?.data?.unplannedBreakdown
         if (breakdown) {
@@ -1627,9 +1657,59 @@ function ShipmentsPageContent() {
             shipmentRows: Number(breakdown.shipmentRows ?? 0),
             totalTableRows: Number(breakdown.totalTableRows ?? 0),
           })
-        } else {
+        } else if (isUnplannedHybridList) {
           setUnplannedBreakdown(null)
         }
+      }
+
+      // Section 1 summary in parallel with list shell — do not defer behind idle/list completion
+      // (first-load zeros were caused by requestIdleCallback + listGen races dropping summaryOnly).
+      const summaryPromise = cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+        force: summaryForce,
+        onRevalidate: (fresh) => {
+          if (listGen !== listFetchGenRef.current) return
+          applySummaryEnvelope(fresh)
+        },
+      })
+        .then(({ data }) => {
+          if (listGen !== listFetchGenRef.current) return
+          applySummaryEnvelope(data)
+        })
+        .catch(() => {
+          if (listGen === listFetchGenRef.current) {
+            setSummaryFetching(false)
+            section1SummaryForceNextFetchRef.current = false
+          }
+        })
+
+      // Outstanding Qty — separate request so slow OS SQL does not block status cards.
+      // Always active-scope total (ignore status card); skip network when only status card changed.
+      if (forceOsRefresh || shipmentsSection1Summary?.outstandingQty == null) {
+        const osParams = new URLSearchParams(summaryParams.toString())
+        osParams.delete('summaryOnly')
+        osParams.delete('osStatus')
+        osParams.set('outstandingQtyOnly', 'true')
+        const osUrl = `/shipments?${osParams.toString()}`
+        const osCacheKey = buildCacheKey('GET', osUrl)
+        if (!forceOsRefresh) setOutstandingQtyFetching(true)
+        void cachedGet(osCacheKey, () => api.get(osUrl).then((r) => r.data), {
+          force: forceOsRefresh,
+          onRevalidate: (fresh) => {
+            if (listGen !== listFetchGenRef.current) return
+            applySummaryEnvelope(fresh)
+          },
+        })
+          .then(({ data }) => {
+            if (listGen !== listFetchGenRef.current) return
+            applySummaryEnvelope(data)
+          })
+          .catch(() => {
+            if (listGen === listFetchGenRef.current) {
+              setOutstandingQtyFetching(false)
+            }
+          })
+      } else {
+        setOutstandingQtyFetching(false)
       }
 
       const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
@@ -1644,76 +1724,57 @@ function ShipmentsPageContent() {
           },
         },
       )
-      section1SummaryForceNextFetchRef.current = false
       if (listGen !== listFetchGenRef.current) return
       applyListEnvelope(listEnvelope)
       if (!listRevalidating) {
         setListFetching(false)
       }
 
-      /** Summary cards after table shell — avoids competing with list query on DB/CPU. */
-      const scheduleSummaryFetches = () => {
-        if (listGen !== listFetchGenRef.current) return
-
-        void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
-          force: summaryForce,
+      // Section 2 ETA scoped summary (only when a pipeline stage is selected).
+      if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && statusFilter !== 'ALL') {
+        const section2Params = new URLSearchParams(params.toString())
+        section2Params.delete('status')
+        section2Params.delete('etaLoading')
+        section2Params.delete('etaDischarge')
+        section2Params.delete('includeSummary')
+        section2Params.set('summaryOnly', 'true')
+        section2Params.set('page', '1')
+        section2Params.set('limit', '1')
+        section2Params.set('scopeStatus', statusFilter)
+        const section2Url = `/shipments?${section2Params.toString()}`
+        const section2CacheKey = buildCacheKey('GET', section2Url)
+        const summaryGen = ++summaryFetchGenRef.current
+        void cachedGet(section2CacheKey, () => api.get(section2Url).then((r) => r.data), {
+          force: true,
           onRevalidate: (fresh) => {
-            if (listGen !== listFetchGenRef.current) return
-            applySummaryEnvelope(fresh)
+            if (summaryGen !== summaryFetchGenRef.current) return
+            if (fresh?.data?.summary) {
+              setSection2EtaSummary({
+                etaLoading: fresh.data.summary.etaLoading,
+                etaDischarge: fresh.data.summary.etaDischarge,
+              })
+            }
           },
         })
           .then(({ data }) => {
-            if (listGen !== listFetchGenRef.current) return
-            applySummaryEnvelope(data)
+            if (summaryGen !== summaryFetchGenRef.current) return
+            if (data?.data?.summary) {
+              setSection2EtaSummary({
+                etaLoading: data.data.summary.etaLoading,
+                etaDischarge: data.data.summary.etaDischarge,
+              })
+            }
           })
           .catch(() => {
-            if (listGen === listFetchGenRef.current) setSummaryFetching(false)
+            if (summaryGen === summaryFetchGenRef.current) setSection2EtaSummary(null)
           })
-
-        if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && statusFilter !== 'ALL') {
-          const section2Params = new URLSearchParams(params.toString())
-          section2Params.delete('status')
-          section2Params.delete('etaLoading')
-          section2Params.delete('etaDischarge')
-          section2Params.delete('includeSummary')
-          section2Params.set('summaryOnly', 'true')
-          section2Params.set('page', '1')
-          section2Params.set('limit', '1')
-          section2Params.set('scopeStatus', statusFilter)
-          const section2Url = `/shipments?${section2Params.toString()}`
-          const section2CacheKey = buildCacheKey('GET', section2Url)
-          const summaryGen = ++summaryFetchGenRef.current
-          void cachedGet(section2CacheKey, () => api.get(section2Url).then((r) => r.data), {
-            force: true,
-            onRevalidate: (fresh) => {
-              if (summaryGen !== summaryFetchGenRef.current) return
-              if (fresh?.data?.summary) {
-                setSection2EtaSummary({
-                  etaLoading: fresh.data.summary.etaLoading,
-                  etaDischarge: fresh.data.summary.etaDischarge,
-                })
-              }
-            },
-          })
-            .then(({ data }) => {
-              if (summaryGen !== summaryFetchGenRef.current) return
-              if (data?.data?.summary) {
-                setSection2EtaSummary({
-                  etaLoading: data.data.summary.etaLoading,
-                  etaDischarge: data.data.summary.etaDischarge,
-                })
-              }
-            })
-            .catch(() => {
-              if (summaryGen === summaryFetchGenRef.current) setSection2EtaSummary(null)
-            })
-        } else {
-          setSection2EtaSummary(null)
-        }
+      } else {
+        setSection2EtaSummary(null)
       }
 
       // SAP hydrate after table paint — avoids competing with shell query on DB/CPU.
       const scheduleHydrate = () => {
+        if (listGen !== listFetchGenRef.current) return
         const hydrateParams = new URLSearchParams(params.toString())
         hydrateParams.set('skipSapJoin', 'false')
         hydrateParams.set('includeSummary', 'false')
@@ -1744,15 +1805,14 @@ function ShipmentsPageContent() {
             if (listGen === listFetchGenRef.current) setQtyFieldsReady(true)
           })
       }
-      const runDeferredFetches = () => {
-        scheduleSummaryFetches()
-        scheduleHydrate()
-      }
       if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
-        window.requestIdleCallback(() => runDeferredFetches(), { timeout: 2000 })
+        window.requestIdleCallback(() => scheduleHydrate(), { timeout: 2000 })
       } else {
-        setTimeout(runDeferredFetches, 250)
+        setTimeout(scheduleHydrate, 250)
       }
+
+      // Keep summary promise referenced so tooling/linters know it is intentional fire-and-forget.
+      void summaryPromise
     } catch (error: any) {
       if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch shipments:', error)
@@ -3219,9 +3279,16 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => resolveShipmentListLoadingPorts(s),
-      render: (s) => (
-        <span className="text-sm break-words">{formatOperationalTableTextDisplay(resolveShipmentListLoadingPorts(s))}</span>
-      ),
+      render: (s) => {
+        const loadingPorts = resolveShipmentListLoadingPorts(s)
+        return (
+          <OperationalStackedCommaCell
+            value={loadingPorts}
+            title={loadingPorts || ''}
+            truncateLongParts
+          />
+        )
+      },
     },
     {
       id: 'discharge_port',
@@ -3270,9 +3337,11 @@ function ShipmentsPageContent() {
       render: (s) => {
         const supplier = resolveShipmentListSuppliers(s)
         return (
-          <span className="text-sm truncate block" title={supplier || undefined}>
-            {formatOperationalTableTextDisplay(supplier)}
-          </span>
+          <OperationalStackedCommaCell
+            value={supplier}
+            title={supplier || ''}
+            truncateLongParts
+          />
         )
       },
     },
@@ -3290,11 +3359,24 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => s.status || '',
-      render: (s) => (
-        <Badge className={getStatusColor(s.status)}>
-          {formatShipmentStatusLabel(s.status)}
-        </Badge>
-      )
+      render: (s) => {
+        const lines = shipmentStatusLabelLines(s.status)
+        return (
+          <Badge
+            className={`${getStatusColor(s.status)}${lines.length > 1 ? ' h-auto whitespace-normal leading-tight text-center' : ''}`}
+          >
+            {lines.length > 1 ? (
+              <span className="inline-block text-center leading-tight">
+                {lines[0]}
+                <br />
+                {lines[1]}
+              </span>
+            ) : (
+              lines[0]
+            )}
+          </Badge>
+        )
+      }
     },
     {
       id: 'product',
@@ -5492,7 +5574,7 @@ function ShipmentsPageContent() {
         />
 
         <ShipmentOutstandingQtySummary
-          loading={summaryFetching}
+          loading={outstandingQtyFetching}
           data={shipmentsSection1Summary?.outstandingQty}
         />
 
@@ -5902,10 +5984,23 @@ function ShipmentsPageContent() {
                                         SHIPMENTS_TRUNCATE_TOOLTIP_COLUMN_IDS,
                                       )
                                     const truncateTooltip = useTruncateTooltip
-                                      ? operationalRowFieldTooltipText(
-                                          col.id,
-                                          shipment as unknown as Record<string, unknown>,
-                                        )
+                                      ? col.id === 'supplier' || col.id === 'loading_port'
+                                        ? (() => {
+                                            const text =
+                                              col.id === 'supplier'
+                                                ? resolveShipmentListSuppliers(shipment)
+                                                : resolveShipmentListLoadingPorts(shipment)
+                                            if (!text || text === '-') return null
+                                            return text
+                                              .split(',')
+                                              .map((part) => part.trim())
+                                              .filter(Boolean)
+                                              .join('\n')
+                                          })()
+                                        : operationalRowFieldTooltipText(
+                                            col.id,
+                                            shipment as unknown as Record<string, unknown>,
+                                          )
                                       : null
                                     const cellContent =
                                       col.id === 'vessel_name' && tableInlineEditActive ? (
