@@ -1066,6 +1066,8 @@ function TruckingPageContent() {
   const [truckingSection1Summary, setTruckingSection1Summary] = useState<any>(null)
   /** Stale-while-revalidate: true while summary API is in flight; keeps prior card counts. */
   const [summaryFetching, setSummaryFetching] = useState(false)
+  /** Outstanding Qty strip — independent of status-card summaryFetching (static across status clicks). */
+  const [outstandingQtyFetching, setOutstandingQtyFetching] = useState(false)
   /** UI-only: active status card count from view-table pagination.total (summary API still authoritative for other cards). */
   const [statusCardTotalFromList, setStatusCardTotalFromList] = useState<{
     status: string
@@ -1964,8 +1966,16 @@ function TruckingPageContent() {
   ) => {
     const listGen = ++listFetchGenRef.current
     const fetchStatusFilter = statusFilter
+    const forceOsRefresh = Boolean(options?.force || section1SummaryForceNextFetchRef.current)
     setListFetching(true)
     setSummaryFetching(true)
+    // OS strip is static across status cards — only reset/refetch spinner on toolbar/scope force.
+    if (forceOsRefresh) {
+      setOutstandingQtyFetching(true)
+      setTruckingSection1Summary((prev: any) =>
+        prev?.outstandingQty != null ? { ...prev, outstandingQty: undefined } : prev,
+      )
+    }
     setQtyFieldsReady(false)
     try {
       const effectivePage = forcedPage ?? page
@@ -2002,7 +2012,17 @@ function TruckingPageContent() {
         }
       }) => {
         if (envelope?.data?.summary) {
-          setTruckingSection1Summary(envelope.data.summary)
+          setTruckingSection1Summary((prev: any) => {
+            const next = { ...envelope.data!.summary! }
+            // Keep prior OS if this envelope omitted it (avoid blanking the strip).
+            if (next.outstandingQty == null && prev?.outstandingQty != null) {
+              next.outstandingQty = prev.outstandingQty
+            }
+            return next
+          })
+          if (envelope.data.summary.outstandingQty != null || !forceOsRefresh) {
+            setOutstandingQtyFetching(false)
+          }
         }
         setSummaryFetching(false)
       }
@@ -2092,8 +2112,15 @@ function TruckingPageContent() {
             applySummaryEnvelope(data)
           })
           .catch(() => {
-            if (summaryGen === summaryFetchGenRef.current) setSummaryFetching(false)
+            if (summaryGen === summaryFetchGenRef.current) {
+              setSummaryFetching(false)
+              setOutstandingQtyFetching(false)
+            }
           })
+      }
+      // Status-card-only: OS already on screen — do not leave a dangling spinner.
+      if (!forceOsRefresh && truckingSection1Summary?.outstandingQty != null) {
+        setOutstandingQtyFetching(false)
       }
       if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
         window.requestIdleCallback(() => scheduleSummaryFetches(), { timeout: 2000 })
@@ -2145,6 +2172,7 @@ function TruckingPageContent() {
       alert('Failed to load trucking operations. Please refresh the page.')
       setListFetching(false)
       setSummaryFetching(false)
+      setOutstandingQtyFetching(false)
     }
   }
 
@@ -3708,7 +3736,7 @@ function TruckingPageContent() {
         />
 
         <TruckingOutstandingQtySummary
-          loading={summaryFetching}
+          loading={outstandingQtyFetching}
           data={truckingSection1Summary?.outstandingQty}
         />
 

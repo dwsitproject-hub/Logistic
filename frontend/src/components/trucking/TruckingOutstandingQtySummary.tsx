@@ -55,7 +55,8 @@ function BucketColumn({
 }
 
 /**
- * Toolbar + status-card scoped Outstanding Qty strip (FRC/LCO × Interco / 3rd Party).
+ * Toolbar-scoped Outstanding Qty strip (FRC/LCO × Interco / 3rd Party).
+ * Static across status-card clicks (Unplanned / Planned / In Progress total).
  */
 export function TruckingOutstandingQtySummary({
   loading = false,
