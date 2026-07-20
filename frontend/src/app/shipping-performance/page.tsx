@@ -1612,9 +1612,9 @@ function ShippingPerformancePageContent() {
 
   const renderSummaryPrimaryTotals = (summary: PerVesselPerfSummary) => {
     return (
-      <div className="space-y-0.5">
+      <div className="space-y-2.5">
         <div>
-          <div className="text-[11px] font-medium uppercase tracking-wider text-gray-500 leading-none">
+          <div className="text-[11px] font-medium tracking-wider text-gray-500 leading-none">
             Total Vessels
           </div>
           <div className="mt-0.5 text-xl font-bold leading-none tabular-nums text-gray-900">
@@ -1622,7 +1622,7 @@ function ShippingPerformancePageContent() {
           </div>
         </div>
         <div>
-          <div className="text-[10px] font-medium uppercase tracking-wider text-gray-500 leading-none">
+          <div className="text-[10px] font-medium tracking-wider text-gray-500 leading-none">
             Contracts
           </div>
           <div className="mt-0.5 text-sm font-semibold leading-none tabular-nums text-gray-700">
@@ -1649,7 +1649,7 @@ function ShippingPerformancePageContent() {
     ]
 
     return (
-      <div className="flex w-fit shrink-0 flex-col gap-y-0">
+      <div className="flex w-fit shrink-0 flex-col gap-y-1.5">
         {metrics.map(({ key, value }) => {
           const shortLabel = getShippingSummaryMetricLabel(key, labelMode, 'short')
           const fullLabel = getShippingSummaryMetricLabel(key, labelMode, 'full')
@@ -1658,8 +1658,8 @@ function ShippingPerformancePageContent() {
             <div
               key={key}
               className={cn(
-                'flex min-w-[max-content] flex-row items-center justify-between gap-3 py-px',
-                isTotal && 'mt-0.5 border-t border-gray-200 pt-0.5',
+                'flex min-w-[max-content] flex-row items-center justify-between gap-3',
+                isTotal && 'mt-0.5 border-t border-gray-200 pt-1.5',
               )}
             >
               <span
@@ -1676,17 +1676,19 @@ function ShippingPerformancePageContent() {
     )
   }
 
-  /** Section 1 body — vessel/contract totals + gap averages (title chrome lives in shared shell). */
+  /** Section 1 body — left stays tight under icon; Avg bottom-aligns to Contracts. */
   const renderShippingSummaryCardBody = (
     card: ShippingPerfCardFilter,
     summary: PerVesselPerfSummary,
   ) => {
     return (
-      <div className="flex w-full min-w-0 flex-col gap-2 text-left sm:flex-row sm:items-start">
-        <div className="min-w-0 flex-1 pt-3 sm:border-r sm:border-gray-200 sm:pr-3">
+      <div className="relative w-full min-w-0 text-left">
+        <div className="min-w-0 pt-1 sm:max-w-[calc(100%-10.5rem)] sm:border-r sm:border-gray-200 sm:pr-3">
           {renderSummaryPrimaryTotals(summary)}
         </div>
-        <div className="w-fit shrink-0">{renderSummaryGapMetrics(summary, card)}</div>
+        <div className="mt-2 w-fit shrink-0 sm:absolute sm:bottom-0 sm:right-0 sm:mt-0">
+          {renderSummaryGapMetrics(summary, card)}
+        </div>
       </div>
     )
   }

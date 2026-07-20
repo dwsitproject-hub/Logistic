@@ -39,8 +39,9 @@ export function PerformanceSection1CardShell({
       type="button"
       onClick={onClick}
       className={cn(
-        'w-full rounded-xl border p-4 shadow-sm text-left transition-all focus:outline-none focus:ring-2 focus:ring-blue-300',
+        'w-full rounded-xl border p-4 shadow-sm text-left transition-all focus:outline-none',
         accent.surface,
+        accent.focus,
         selected ? accent.selected : accent.hover,
         className,
       )}
@@ -55,7 +56,7 @@ export function PerformanceSection1CardShell({
           >
             <Icon className="h-5 w-5" aria-hidden />
           </div>
-          <span className="text-sm font-semibold text-gray-800">{title}</span>
+          <span className="text-base font-semibold text-gray-800">{title}</span>
         </div>
         {headerEnd ? <div className="shrink-0">{headerEnd}</div> : null}
       </div>

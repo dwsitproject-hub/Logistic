@@ -7,13 +7,20 @@ import {
 } from './truckingSapDates';
 
 describe('truckingSapDates', () => {
-  it('sqlMaxTruckingRealizationEndForContract uses extension then SAP AW (not planning columns)', () => {
+  it('sqlMaxTruckingRealizationEndForContract uses extension then SAP AW then WB (not planning columns)', () => {
     const sql = sqlMaxTruckingRealizationEndForContract('c.id', 'c.contract_id');
     expect(sql).toContain('trucking_realizations');
     expect(sql).toContain('realization_end_date');
     expect(sql).toContain('Trucking Last Receive Date');
+    expect(sql).toContain('trucking_daily_actuals');
+    expect(sql).toContain('progress_date');
     expect(sql).not.toContain('t.trucking_completion_date');
     expect(sql).toContain('MM/DD/YYYY');
+    const sapIdx = sql.indexOf('Trucking Last Receive Date');
+    const wbIdx = sql.indexOf('trucking_daily_actuals');
+    expect(sapIdx).toBeGreaterThan(-1);
+    expect(wbIdx).toBeGreaterThan(-1);
+    expect(sapIdx).toBeLessThan(wbIdx);
   });
 
   it('sqlMinTruckingRealizationStartForContract prefers SAP AV then WB/extension then op start', () => {

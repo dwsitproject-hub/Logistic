@@ -782,7 +782,7 @@ describe('AC5 — Open status fallback / null trade_cycle_days handling', () => 
     expect(contractMatchesLateOnTimeFilter(0,  'ON_TIME')).toBe(true)
     expect(contractMatchesLateOnTimeFilter(-3, 'ON_TIME')).toBe(true)
     expect(contractMatchesLateOnTimeFilter(1,  'ON_TIME')).toBe(false)
-    // API flag mirrors Section 2 Condition B (0 = late when contract_perf_on_time is false).
+    // API flag takes precedence when present (e.g. contract_perf_on_time from GET /contracts).
     expect(contractMatchesLateOnTimeFilter(0, 'ON_TIME', false)).toBe(false)
     expect(contractMatchesLateOnTimeFilter(0, 'ON_TIME', true)).toBe(true)
   })

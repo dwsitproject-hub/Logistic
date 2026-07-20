@@ -77,6 +77,7 @@ export type ContractDetailModalContract = {
   log_cycle_days?: number | null
   trade_cycle_days?: number | null
   cash_cycle_days?: number | null
+  dp_cycle_days?: number | null
   payment_status?: string
   company_name?: string
 }
@@ -372,12 +373,14 @@ export function ContractDetailModal({
         log: FIELD_HELP.contractPerfLogCycle,
         trade: FIELD_HELP.contractPerfTradeCycle,
         cash: FIELD_HELP.contractPerfCashCycle,
+        dp: FIELD_HELP.contractPerfDpCycle,
       }
     : {
         outstanding: FIELD_HELP.outstandingQty,
         log: FIELD_HELP.logCycle,
         trade: FIELD_HELP.tradeCycle,
         cash: FIELD_HELP.cashCycle,
+        dp: FIELD_HELP.dpCycle,
       }
 
   const perms = usePermissions()
@@ -849,6 +852,15 @@ export function ContractDetailModal({
                       {formatSignedCycleDays(contract.cash_cycle_days)}
                     </div>
                   </div>
+                  <div className="p-3 bg-gray-50 rounded">
+                    <div className="text-gray-500 flex items-center gap-1">
+                      DP Cycle
+                      <FieldHelp text={cycleHelp.dp} />
+                    </div>
+                    <div className={cn('font-medium mt-1', signedCycleDaysClass(contract.dp_cycle_days))}>
+                      {formatSignedCycleDays(contract.dp_cycle_days)}
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -911,10 +923,10 @@ export function ContractDetailModal({
                           <th className="text-left p-2 font-medium">Quantity Received (MT)</th>
                           <th className="text-left p-2 font-medium">Vessel Name / Trucking Owner</th>
                           <th className="text-left p-2 font-medium">
-                            ETA Vessel Arrival at Loading Port / ETA Trucking Completion Date
+                            ETA at LP / ETA Trucking Completion Date
                           </th>
                           <th className="text-left p-2 font-medium">
-                            ATA Vessel Complete Discharge / Trucking Last Receive Date
+                            ATC at Discharge Port / Trucking Last Receive Date
                           </th>
                         </tr>
                       </thead>

@@ -13,6 +13,8 @@ export interface PerformanceSection1CardAccent {
   selected: string
   /** Unselected hover border. */
   hover: string
+  /** Focus ring — must match card accent (never a hardcoded global blue). */
+  focus: string
 }
 
 /**
@@ -30,6 +32,7 @@ export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
     chip: 'bg-blue-50 text-blue-700',
     selected: 'border-blue-600 ring-2 ring-blue-200',
     hover: 'hover:border-blue-500',
+    focus: 'focus-visible:ring-2 focus-visible:ring-blue-200',
   },
   close: {
     icon: CheckCircle2,
@@ -37,6 +40,7 @@ export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
     chip: 'bg-amber-50 text-amber-700',
     selected: 'border-amber-600 ring-2 ring-amber-200',
     hover: 'hover:border-amber-500',
+    focus: 'focus-visible:ring-2 focus-visible:ring-amber-200',
   },
   ongoing: {
     icon: Ship,
@@ -44,6 +48,7 @@ export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
     chip: 'bg-blue-50 text-blue-700',
     selected: 'border-blue-600 ring-2 ring-blue-200',
     hover: 'hover:border-blue-500',
+    focus: 'focus-visible:ring-2 focus-visible:ring-blue-200',
   },
   completed: {
     icon: BadgeCheck,
@@ -51,5 +56,6 @@ export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
     chip: 'bg-amber-50 text-amber-700',
     selected: 'border-amber-600 ring-2 ring-amber-200',
     hover: 'hover:border-amber-500',
+    focus: 'focus-visible:ring-2 focus-visible:ring-amber-200',
   },
 }

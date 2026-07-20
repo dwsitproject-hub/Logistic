@@ -196,7 +196,8 @@ export function sqlSapTruckingStartReceiveDateForLookupKeys(
 
 /**
  * Max realization end across trucking ops — matches Trucking page:
- * extension realization_end_date, then SAP AW (never planning columns).
+ * extension realization_end_date, then SAP AW, then WB daily actuals last date
+ * (never planning columns).
  */
 export function sqlMaxTruckingRealizationEndForContract(
   contractIdExpr: string,
@@ -204,7 +205,15 @@ export function sqlMaxTruckingRealizationEndForContract(
 ): string {
   const sap = sqlSapTruckingLastReceiveDateByContractNumber(contractNumberExpr);
   return `(
-    SELECT MAX(COALESCE(tr.realization_end_date, (${sap})))
+    SELECT MAX(COALESCE(
+      tr.realization_end_date,
+      (${sap}),
+      (
+        SELECT MAX(da.progress_date)
+        FROM trucking_daily_actuals da
+        WHERE da.trucking_operation_id = t.id
+      )
+    ))
     FROM trucking_operations t
     LEFT JOIN trucking_realizations tr ON tr.trucking_operation_id = t.id
     WHERE t.contract_id = ${contractIdExpr}

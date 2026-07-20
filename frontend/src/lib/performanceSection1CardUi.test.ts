@@ -14,13 +14,20 @@ describe('performanceSection1CardUi', () => {
       expect(accent.surface).toContain('border-')
       expect(accent.chip).toMatch(/bg-/)
       expect(accent.selected).toContain('ring-2')
+      expect(accent.focus).toMatch(/focus-visible:ring-/)
     }
   })
 
   it('uses blue for open/ongoing and amber for close/completed', () => {
     expect(PERFORMANCE_SECTION1_CARD_ACCENTS.open.surface).toContain('blue')
     expect(PERFORMANCE_SECTION1_CARD_ACCENTS.ongoing.surface).toContain('blue')
+    expect(PERFORMANCE_SECTION1_CARD_ACCENTS.open.focus).toContain('blue')
+    expect(PERFORMANCE_SECTION1_CARD_ACCENTS.ongoing.focus).toContain('blue')
     expect(PERFORMANCE_SECTION1_CARD_ACCENTS.close.surface).toContain('amber')
     expect(PERFORMANCE_SECTION1_CARD_ACCENTS.completed.surface).toContain('amber')
+    expect(PERFORMANCE_SECTION1_CARD_ACCENTS.close.focus).toContain('amber')
+    expect(PERFORMANCE_SECTION1_CARD_ACCENTS.completed.focus).toContain('amber')
+    expect(PERFORMANCE_SECTION1_CARD_ACCENTS.close.selected).toContain('amber')
+    expect(PERFORMANCE_SECTION1_CARD_ACCENTS.completed.selected).toContain('amber')
   })
 })

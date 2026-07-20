@@ -30,6 +30,7 @@ export type TruckingActualsTemplateRow = {
   templateKind?: 'default' | 'unplanned' | 'planned'
 }
 
+export const UNPLANNED_TEMPLATE_STATUS_HEADER = 'Status'
 export const UNPLANNED_TEMPLATE_OS_QTY_HEADER = 'OS Qty (MT)'
 export const UNPLANNED_TEMPLATE_PLAN_QTY_HEADER = 'Plan Qty (MT)'
 /** @deprecated Use UNPLANNED_TEMPLATE_OS_QTY_HEADER */
@@ -41,6 +42,21 @@ export const UNPLANNED_PLANNING_START_BUFFER_DAYS = 0
 /** @deprecated Unplanned window is now today … today + UNPLANNED_PLANNING_FORWARD_DAYS */
 export const UNPLANNED_PLANNING_END_BUFFER_DAYS = UNPLANNED_PLANNING_FORWARD_DAYS
 
+/** Display label for Status column — informational only; upload matches by PO. */
+export function formatPlanningTemplateStatusLabel(
+  status: unknown,
+  templateKind?: TruckingActualsTemplateRow['templateKind'],
+): string {
+  if (templateKind === 'unplanned') return 'Unplanned'
+  if (templateKind === 'planned') return 'Planned'
+  const upper = String(status ?? '')
+    .trim()
+    .toUpperCase()
+  if (upper === 'UNPLANNED') return 'Unplanned'
+  if (upper === 'PLANNED' || upper === 'IN_PROGRESS') return 'Planned'
+  return ''
+}
+
 export const UNPLANNED_TEMPLATE_METADATA_HEADERS = [
   'Group',
   'Supplier',
@@ -48,15 +64,19 @@ export const UNPLANNED_TEMPLATE_METADATA_HEADERS = [
   'Contract Date',
   'Contract Ext No',
   'PO',
+  UNPLANNED_TEMPLATE_STATUS_HEADER,
   UNPLANNED_TEMPLATE_OS_QTY_HEADER,
   UNPLANNED_TEMPLATE_PLAN_QTY_HEADER,
 ] as const
 
+export const UNPLANNED_TEMPLATE_STATUS_COL_INDEX = UNPLANNED_TEMPLATE_METADATA_HEADERS.indexOf(
+  UNPLANNED_TEMPLATE_STATUS_HEADER,
+)
 export const UNPLANNED_TEMPLATE_PLAN_QTY_COL_INDEX = UNPLANNED_TEMPLATE_METADATA_HEADERS.length - 1
 export const UNPLANNED_TEMPLATE_FIRST_DATE_COL_INDEX = UNPLANNED_TEMPLATE_METADATA_HEADERS.length
 
 const DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP =
-  'Download template is available when the status filter is Unplanned, Planned, or In Progress.'
+  'Download template is available when the status filter is Unplanned, Planned, or In Progress. The file includes both Unplanned and Planned rows.'
 
 export function isActualsTemplateDownloadEnabled(statusFilter: string): boolean {
   return (
@@ -64,6 +84,11 @@ export function isActualsTemplateDownloadEnabled(statusFilter: string): boolean 
     statusFilter === 'PLANNED' ||
     statusFilter === 'IN_PROGRESS'
   )
+}
+
+/** Download / upload daily planning when filter is Unplanned, Planned, or In Progress. */
+export function isDailyPlanningTemplateMode(statusFilter: string): boolean {
+  return isActualsTemplateDownloadEnabled(statusFilter)
 }
 
 export function isUnplannedPlanningTemplateMode(statusFilter: string): boolean {
@@ -256,6 +281,7 @@ function isWideTemplateMetadataHeader(header: string): boolean {
     h === 'po number' ||
     h === 'sto' ||
     h === 'sto number' ||
+    h === 'status' ||
     h === 'os qty' ||
     h === 'os qty (kg)' ||
     h === 'os qty' ||
@@ -445,6 +471,7 @@ export function buildActualsTemplateMatrix(
         formatContractDateForTemplate(row.contract_date),
         ext,
         po,
+        formatPlanningTemplateStatusLabel(undefined, row.templateKind),
         formatTemplateOsQtyMtFromKg(row.outstanding_quantity),
         computePlanQtyMtFromDeliverables(row),
         ...qtyCells,

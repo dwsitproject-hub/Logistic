@@ -36,8 +36,9 @@ function cellToString(value: unknown): string {
 function resolveWidePlanningTemplateQtyUnit(headerRow: unknown[]): 'kg' | 'mt' {
   for (const cell of headerRow) {
     const h = cellToString(cell).toLowerCase();
-    if (h.includes('(mt)') || h.includes('os qty') || h.includes('oq qty')) return 'mt';
+    // Explicit (kg) must win over bare "os qty" / "oq qty" labels.
     if (h.includes('(kg)')) return 'kg';
+    if (h.includes('(mt)') || h.includes('os qty') || h.includes('oq qty')) return 'mt';
     if (h.includes('outstanding') && h.includes('mt')) return 'mt';
   }
   return 'mt';
@@ -65,6 +66,7 @@ function isWideTemplateMetadataHeader(header: string): boolean {
     h === 'contract ext no' ||
     h === 'po' ||
     h === 'po number' ||
+    h === 'status' ||
     h === 'os qty' ||
     h === 'os qty (kg)' ||
     h === 'os qty' ||

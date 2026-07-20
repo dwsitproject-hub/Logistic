@@ -11,6 +11,7 @@ import {
   resolveSapDpCalendarDate,
   resolveSapPayoffCalendarDate,
 } from './latePerformance.service';
+import { diffCalendarDays } from '../utils/calendarDays';
 
 describe('resolveEffectiveDeliveryEnd', () => {
   it('uses contracts.delivery_end_date when present', () => {
@@ -41,14 +42,15 @@ describe('resolveEffectiveDeliveryEnd', () => {
 });
 
 describe('isContractPerfOnTimeTradeCycle', () => {
-  it('Condition B (no standard ETA): trade cycle 0 is late, not on-time', () => {
+  it('Condition B (no standard ETA): trade cycle 0 is on-time (due today)', () => {
     const row = {
       import_status: 'OPEN',
       transport_mode: 'SEA',
       open_standard_eta_vessel_loading: null,
     };
-    expect(isContractPerfOnTimeTradeCycle(row, 0)).toBe(false);
+    expect(isContractPerfOnTimeTradeCycle(row, 0)).toBe(true);
     expect(isContractPerfOnTimeTradeCycle(row, -1)).toBe(true);
+    expect(isContractPerfOnTimeTradeCycle(row, 1)).toBe(false);
   });
 
   it('Condition A (standard ETA present): trade cycle 0 is on-time', () => {
@@ -99,10 +101,53 @@ describe('Open cycle Today fallback (Condition B)', () => {
       transport_mode: 'LAND',
       open_standard_eta_trucking: null,
       last_trucking_daily_deliverable_date: null,
+      last_trucking_completion_date: null,
       latest_spd_data: { payment: { dp_date: '2026-06-05' } },
     };
     const days = computeOpenDpCycleDays(row, 'LAND', todayMid);
     expect(days).toBe(5);
+  });
+
+  it('LAND Condition B prefers last_trucking_completion_date over Today', () => {
+    const row = {
+      import_status: 'OPEN',
+      transport_mode: 'LAND',
+      open_standard_eta_trucking: null,
+      last_trucking_completion_date: '2026-06-08',
+      last_trucking_daily_deliverable_date: null,
+    };
+    const end = resolveOpenEffectiveCompletionEnd(row, 'LAND', todayMid);
+    expect(end).toBeInstanceOf(Date);
+    expect((end as Date).getFullYear()).toBe(2026);
+    expect((end as Date).getMonth()).toBe(5);
+    expect((end as Date).getDate()).toBe(8);
+
+    const logDays = computeOpenLogCycleDays(row, 'LAND', todayMid, '2026-06-01');
+    expect(logDays).toBe(diffCalendarDays('2026-06-01', end));
+    // Prefer completion over Today (Today mid = June 10)
+    expect(logDays).not.toBe(diffCalendarDays('2026-06-01', todayMid));
+
+    const dpDays = computeOpenDpCycleDays(
+      { ...row, latest_spd_data: { payment: { dp_date: '2026-06-05' } } },
+      'LAND',
+      todayMid,
+    );
+    expect(dpDays).not.toBeNull();
+    expect(dpDays).not.toBe(diffCalendarDays('2026-06-05', todayMid));
+  });
+
+  it('LAND Condition B falls back to Today when completion is null', () => {
+    const row = {
+      import_status: 'OPEN',
+      transport_mode: 'LAND',
+      open_standard_eta_trucking: null,
+      last_trucking_completion_date: null,
+    };
+    const end = resolveOpenEffectiveCompletionEnd(row, 'LAND', todayMid);
+    expect(end).toBeInstanceOf(Date);
+    expect((end as Date).getFullYear()).toBe(todayMid.getFullYear());
+    expect((end as Date).getMonth()).toBe(todayMid.getMonth());
+    expect((end as Date).getDate()).toBe(todayMid.getDate());
   });
 
   it('computeOpenLogCycleDays returns days when Open and ETA is empty', () => {
@@ -112,8 +157,9 @@ describe('Open cycle Today fallback (Condition B)', () => {
       open_standard_eta_vessel_loading: null,
       last_eta_vessel_complete_discharge: null,
     };
+    const end = resolveOpenEffectiveCompletionEnd(row, 'SEA', todayMid);
     const days = computeOpenLogCycleDays(row, 'SEA', todayMid, '2026-05-20');
-    expect(days).toBe(21);
+    expect(days).toBe(diffCalendarDays('2026-05-20', end));
   });
 
   it('uses completion ETA when standard ETA is present (Condition A)', () => {

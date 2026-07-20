@@ -69,7 +69,7 @@ import {
   buildTruckingActualsTemplateXlsxBlob,
   DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP,
   isActualsTemplateDownloadEnabled,
-  isPlannedPlanningTemplateMode,
+  isDailyPlanningTemplateMode,
   isUnplannedPlanningTemplateMode,
   isWidePlanningTemplateFile,
   triggerFailedUnplannedUploadRetemplateDownload,
@@ -1655,6 +1655,8 @@ function TruckingPageContent() {
       searchOverride?: string
       /** Full SAP join for exports (accurate contract ext no, qty, dates). */
       skipSapJoin?: boolean
+      /** Combined daily planning template includes Unplanned + Planned regardless of filter. */
+      omitStatus?: boolean
     }) => {
       const params = new URLSearchParams()
       params.append('skipSapJoin', opts?.skipSapJoin === false ? 'false' : 'true')
@@ -1662,7 +1664,7 @@ function TruckingPageContent() {
       params.append('page', String(opts?.page ?? page))
       params.append('sortKey', sortKey)
       params.append('sortDir', sortDir)
-      if (statusFilter && statusFilter !== 'ALL') {
+      if (!opts?.omitStatus && statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
       }
       if (loadingLocationFilter) {
@@ -1730,8 +1732,10 @@ function TruckingPageContent() {
   )
 
   const downloadFilteredActualsTemplate = useCallback(async () => {
-    const unplannedMode = isUnplannedPlanningTemplateMode(statusFilter)
-    const plannedMode = isPlannedPlanningTemplateMode(statusFilter)
+    if (!isActualsTemplateDownloadEnabled(statusFilter)) {
+      alert('Download template is available when the status filter is Unplanned, Planned, or In Progress.')
+      return
+    }
     const exportPageSize = 500
 
     setTemplateDownloading(true)
@@ -1746,6 +1750,7 @@ function TruckingPageContent() {
           limit: exportPageSize,
           includeSummary: false,
           skipSapJoin: false,
+          omitStatus: true,
         })
         const response = await api.get(`/trucking?${params.toString()}`)
         const envelope = response.data as {
@@ -1765,39 +1770,28 @@ function TruckingPageContent() {
         .filter((op) => {
           const osKg = parseTruckingQtyKg(op.outstanding_quantity) ?? 0
           if (osKg <= 0) return false
-          if (unplannedMode) return op.status === 'UNPLANNED'
-          if (plannedMode) return op.status === 'PLANNED' || op.status === 'IN_PROGRESS'
-          return false
+          return (
+            op.status === 'UNPLANNED' ||
+            op.status === 'PLANNED' ||
+            op.status === 'IN_PROGRESS'
+          )
         })
-        .map((op) =>
-          unplannedMode || plannedMode
-            ? {
-                contract_ext_no: op.contract_ext_no,
-                contract_number: op.contract_number,
-                po_number: op.po_number,
-                group_name: op.group_name,
-                supplier: op.supplier,
-                source_type: op.source_type,
-                contract_date: op.contract_date,
-                outstanding_quantity: op.outstanding_quantity,
-                daily_deliverables: op.daily_deliverables,
-                templateKind: unplannedMode ? ('unplanned' as const) : ('planned' as const),
-              }
-            : {
-                contract_ext_no: op.contract_ext_no,
-                contract_number: op.contract_number,
-                po_number: op.po_number,
-                planning_start_date: op.planning_start_date,
-                planning_end_date: op.planning_end_date,
-                daily_deliverables: op.daily_deliverables,
-              },
-        )
+        .map((op) => ({
+          contract_ext_no: op.contract_ext_no,
+          contract_number: op.contract_number,
+          po_number: op.po_number,
+          group_name: op.group_name,
+          supplier: op.supplier,
+          source_type: op.source_type,
+          contract_date: op.contract_date,
+          outstanding_quantity: op.outstanding_quantity,
+          daily_deliverables: op.daily_deliverables,
+          templateKind: op.status === 'UNPLANNED' ? ('unplanned' as const) : ('planned' as const),
+        }))
 
       if (rows.length === 0) {
         alert(
-          unplannedMode
-            ? 'No Unplanned operations with outstanding qty match the current filters.'
-            : 'No Planned or In Progress operations with outstanding qty match the current filters.',
+          'No Unplanned, Planned, or In Progress operations with outstanding qty match the current filters.',
         )
         return
       }
@@ -1806,7 +1800,7 @@ function TruckingPageContent() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = buildTruckingPlanningTemplateFilename(unplannedMode ? 'unplanned' : 'planned')
+      a.download = buildTruckingPlanningTemplateFilename('combined')
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -2176,35 +2170,10 @@ function TruckingPageContent() {
     }
   }
 
-  const uploadUnplannedPlanningFromWideTemplate = useCallback(async (file: File) => {
+  const uploadCombinedDailyPlanningFromWideTemplate = useCallback(async (file: File) => {
     const fd = new FormData()
     fd.append('file', file)
-    const res = await api.post('/trucking/unplanned-planning/bulk-upload', fd)
-    const data = res.data?.data
-    if (data) {
-      setBulkCreateSummary({
-        processedRows: Number(data.processedRows ?? 0),
-        operationsCreated: Number(data.operationsCreated ?? 0),
-        operationsUpdated: Number(data.operationsUpdated ?? 0),
-        operationsFailed: Number(data.operationsFailed ?? 0),
-        succeededRows: Number(data.succeededRows ?? 0),
-        rowParseFailures: data.rowParseFailures ?? [],
-        operationFailures: data.operationFailures ?? [],
-        operationWarnings: data.operationWarnings ?? [],
-        failedRetemplateRows: data.failedRetemplateRows ?? [],
-        uploadHeaderRow: data.uploadHeaderRow ?? [],
-      })
-      setBulkCreateUploadOpen(true)
-    }
-    invalidateLogisticsListCaches()
-    section1SummaryForceNextFetchRef.current = true
-    await fetchTruckingOperations(page, undefined, { force: true })
-  }, [fetchTruckingOperations, page])
-
-  const uploadPlannedPlanningFromWideTemplate = useCallback(async (file: File) => {
-    const fd = new FormData()
-    fd.append('file', file)
-    const res = await api.post('/trucking/planned-planning/bulk-upload', fd)
+    const res = await api.post('/trucking/daily-planning/bulk-upload', fd)
     const data = res.data?.data
     if (data) {
       setBulkCreateSummary({
@@ -2233,20 +2202,15 @@ function TruckingPageContent() {
 
     setBulkCreateUploading(true)
     try {
-      if (isUnplannedPlanningTemplateMode(statusFilter)) {
-        await uploadUnplannedPlanningFromWideTemplate(file)
-        return
-      }
-
-      if (isPlannedPlanningTemplateMode(statusFilter)) {
+      if (isDailyPlanningTemplateMode(statusFilter)) {
         const isPlanningTemplate = await isWidePlanningTemplateFile(file)
         if (!isPlanningTemplate) {
           alert(
-            'Invalid file. Upload the Planned daily trucking template (Group, Supplier, …, date columns).',
+            'Invalid file. Upload the daily trucking template (Group, Supplier, …, Status, OS Qty, date columns).',
           )
           return
         }
-        await uploadPlannedPlanningFromWideTemplate(file)
+        await uploadCombinedDailyPlanningFromWideTemplate(file)
         return
       }
 
@@ -3518,9 +3482,7 @@ function TruckingPageContent() {
       </button>
     </div>
   )
-  const dailyPlanningUploadEligible =
-    isUnplannedPlanningTemplateMode(statusFilter) ||
-    isPlannedPlanningTemplateMode(statusFilter)
+  const dailyPlanningUploadEligible = isDailyPlanningTemplateMode(statusFilter)
 
   return (
     <Layout>
@@ -3574,7 +3536,7 @@ function TruckingPageContent() {
               disabled={!dailyPlanningUploadEligible || bulkCreateUploading || listFetching}
               title={
                 dailyPlanningUploadEligible
-                  ? 'Upload Daily Planning'
+                  ? 'Upload Daily Planning (Unplanned + Planned in one file; Status is informational)'
                   : 'Upload Daily Planning tersedia pada status Unplanned atau Planned'
               }
             >
@@ -4072,11 +4034,9 @@ function TruckingPageContent() {
           <DialogContent className="max-w-2xl max-h-[88vh]" aria-describedby={undefined}>
             <DialogHeader>
               <DialogTitle>
-                {isUnplannedPlanningTemplateMode(statusFilter)
-                  ? 'Unplanned planning upload result'
-                  : isPlannedPlanningTemplateMode(statusFilter)
-                    ? 'Planned planning upload result'
-                    : 'Bulk create trucking upload result'}
+                {isDailyPlanningTemplateMode(statusFilter)
+                  ? 'Daily planning upload result'
+                  : 'Bulk create trucking upload result'}
               </DialogTitle>
             </DialogHeader>
             {bulkCreateSummary ? (
@@ -4153,8 +4113,7 @@ function TruckingPageContent() {
                     </ul>
                   </div>
                 )}
-                {(isUnplannedPlanningTemplateMode(statusFilter) ||
-                  isPlannedPlanningTemplateMode(statusFilter)) &&
+                {isDailyPlanningTemplateMode(statusFilter) &&
                 (bulkCreateSummary.failedRetemplateRows?.length ?? 0) > 0 &&
                 (bulkCreateSummary.uploadHeaderRow?.length ?? 0) > 0 ? (
                   <div className="rounded-md border border-red-200 bg-red-50/70 p-3">
@@ -4178,9 +4137,10 @@ function TruckingPageContent() {
                             cells: row.cells,
                             reason: row.reason,
                           })),
-                          filename: buildTruckingPlanningTemplateFilename(
-                            isUnplannedPlanningTemplateMode(statusFilter) ? 'unplanned' : 'planned',
-                          ).replace('.xlsx', '-failed.xlsx'),
+                          filename: buildTruckingPlanningTemplateFilename('combined').replace(
+                            '.xlsx',
+                            '-failed.xlsx',
+                          ),
                         })
                       }
                     >

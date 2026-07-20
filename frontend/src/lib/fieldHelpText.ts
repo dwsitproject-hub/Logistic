@@ -15,24 +15,24 @@ export const FIELD_HELP = {
 
   overUnderDelivery: `When contract status is Close: compares Outstanding Quantity vs 0 — "Over Delivery" when outstanding < 0, "Under Delivery" when outstanding > 0, or "Passed" when outstanding = 0. Open contracts show "-".`,
 
-  logCycle: `Land: Cargo Readiness → Trucking Last Receive (Close) or Open completion end. SEA: Cargo Readiness → ATA Vessel Complete Discharge (Close) or Open completion end. Open: today only when standard ETA is empty; if standard ETA exists, completion date is required (no today substitute).`,
+  logCycle: `Land: Cargo Readiness → completion end (Close/Open). LAND completion = Trucking Last Receive (SAP), else last WB daily actuals date, else Today when Open and standard ETA is empty. SEA: Cargo Readiness → ATA Vessel Complete Discharge (Close) or Open completion end. Open SEA: Today when standard ETA is empty; if standard ETA exists, completion date is required (no Today substitute).`,
 
-  tradeCycle: `Closed: completion receive/discharge → Due Date Delivery End. Open Condition A (standard ETA set): completion planning/discharge → due end. Open Condition B (standard ETA empty): today → due end. Trade cycle ≤ 0 counts as on time for Section 2/3 (Condition A); Condition B treats 0 days as late.`,
+  tradeCycle: `Closed: completion receive/discharge → Due Date Delivery End. LAND completion = SAP Last Receive, else last WB daily actuals date. Open Condition A (standard ETA set): completion planning/discharge → due end. Open Condition B (standard ETA empty): today → due end. Trade cycle ≤ 0 counts as on time for Section 2/3 (including due today / Trade Cycle 0).`,
 
   statusCardAvgDp: `Average DP Cycle (days) for Open or Close contracts in scope. Only contracts with a valid SAP DP Date and computable cycle are included; if none qualify, the card shows "- days" (not 0 days).`,
 
   statusCardAvgLog: `Average Log Cycle (days) for Open or Close contracts in scope. Only contracts with cargo readiness and a valid completion end are included; if none qualify, the card shows "- days" (not 0 days).`,
 
-  cashCycle: `Requires SAP Payoff Date (no payments-table fallback). Closed: completion receive/discharge → Payoff. Open: Payoff → completion end; if standard ETA is empty, completion end is today; if standard ETA exists, completion end must be planning/discharge (no today substitute). Missing Payoff or completion → no value.`,
+  cashCycle: `Requires SAP Payoff Date (no payments-table fallback). Closed: completion receive/discharge → Payoff. LAND completion = SAP Last Receive, else last WB daily actuals date. Open: Payoff → completion end; if standard ETA is empty, LAND uses SAP Last Receive then WB last date then Today; SEA uses Today; if standard ETA exists, completion end must be planning/discharge (no Today substitute). Missing Payoff or completion → no value.`,
 
-  dpCycle: `Requires SAP DP Date (no payments-table fallback). Closed: completion receive/discharge → DP Date. Open: DP Date → completion end (same Open ETA/today rules as Cash Cycle). Missing DP or completion → no value.`,
+  dpCycle: `Requires SAP DP Date (no payments-table fallback). Closed: completion receive/discharge → DP Date. LAND completion = SAP Last Receive, else last WB daily actuals date. Open: DP Date → completion end (same Open ETA / SAP / WB / Today rules as Cash Cycle). Missing DP or completion → no value.`,
 
   /** Contract Performance — concise header tooltips (view table + contract detail modal). */
   contractPerfOutstandingQty: `Contract Qty vs SAP Receive/Delivery by incoterm. Over-delivery: +MT (green). Remaining outstanding: MT (black).`,
-  contractPerfTradeCycle: `Completion Date vs Due Date Delivery End`,
-  contractPerfDpCycle: `Completion Date vs DP Date`,
-  contractPerfCashCycle: `Completion Date vs Payoff Date`,
-  contractPerfLogCycle: `Completion Date vs Cargo Readiness Date`,
+  contractPerfTradeCycle: `Completion Date vs Due Date Delivery End. LAND completion: SAP Last Receive → WB last date.`,
+  contractPerfDpCycle: `Completion Date vs DP Date. LAND completion: SAP Last Receive → WB last date → Today (Open, no ETA).`,
+  contractPerfCashCycle: `Completion Date vs Payoff Date. LAND completion: SAP Last Receive → WB last date → Today (Open, no ETA).`,
+  contractPerfLogCycle: `Completion Date vs Cargo Readiness Date. LAND completion: SAP Last Receive → WB last date → Today (Open, no ETA).`,
 
   outstandingQty: `Remaining quantity yet to be delivered. Green = Over Delivered (+MT); black = Still Outstanding.`,
 

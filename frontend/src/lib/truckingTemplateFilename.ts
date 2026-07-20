@@ -27,8 +27,13 @@ export function getAuthUsernameForFilename(): string {
   }
 }
 
-export function buildTruckingPlanningTemplateFilename(kind: 'unplanned' | 'planned'): string {
+export function buildTruckingPlanningTemplateFilename(
+  kind: 'unplanned' | 'planned' | 'combined' = 'combined',
+): string {
   const user = getAuthUsernameForFilename()
   const date = todayIsoDate()
+  if (kind === 'combined') {
+    return `daily-trucking-${user}-${date}.xlsx`
+  }
   return `${kind}-daily-trucking-${user}-${date}.xlsx`
 }

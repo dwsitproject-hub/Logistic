@@ -32,6 +32,44 @@ describe('truckingUnplannedPlanningUpload', () => {
     ).toBe(true);
   });
 
+  it('parses new template PO row with Status column and skips metadata', () => {
+    const { rows, rowParseFailures } = parseUnplannedWidePlanningMatrix([
+      [
+        'Group',
+        'Supplier',
+        'Source',
+        'Contract Date',
+        'Contract Ext No',
+        'PO',
+        'Status',
+        'OS Qty (MT)',
+        'Plan Qty (MT)',
+        '1-Jun-2026',
+        '2-Jun-2026',
+      ],
+      [
+        'G1',
+        'Sup A',
+        '3rd Party',
+        '1-May-2026',
+        'EXT-1',
+        '1001029994',
+        'Unplanned',
+        '0.5',
+        '',
+        '10',
+        '20',
+      ],
+    ]);
+    expect(rowParseFailures).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].po_number).toBe('1001029994');
+    expect(rows[0].contract_ext_no).toBe('EXT-1');
+    expect(rows[0].entries).toHaveLength(2);
+    expect(rows[0].entries[0].qtyMt).toBe(10000);
+    expect(rows[0].entries[1].qtyMt).toBe(20000);
+  });
+
   it('parses new template PO row and skips metadata columns', () => {
     const { rows, rowParseFailures } = parseUnplannedWidePlanningMatrix([
       [

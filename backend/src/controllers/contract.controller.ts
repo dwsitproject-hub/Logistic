@@ -61,8 +61,6 @@ import {
 import { sqlContractImportStatusExpr, sqlContractImportStatusIsClosedExpr, sqlContractImportStatusIsOpenExpr, sqlContractListImportStatusAggExpr, normalizeContractDeliveryStatusForDisplay } from '../utils/contractDeliveryStatus';
 import {
   sqlMaxTruckingRealizationEndForContract,
-  sqlSapTruckingLastReceiveDateForLookupKeys,
-  sqlSapTruckingLastReceiveDateForStoKey,
   sqlSapTruckingStartReceiveDateForStoKey,
   sqlSapTruckingStartReceiveDateForLookupKeys,
 } from '../utils/truckingSapDates';
@@ -2041,10 +2039,20 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
             AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
         ), 0) AS sto_qty_assigned,
         tp.trucking_owner,
-        tp.eta_trucking_completion_date,
+        -- ETA Trucking Completion = last date on Daily Planning Deliverables (upload)
         COALESCE(
-          (SELECT tr.realization_end_date FROM trucking_realizations tr WHERE tr.trucking_operation_id = tp.id LIMIT 1),
-          ${sqlSapTruckingLastReceiveDateForStoKey('c.contract_id', 'sk.sto_key')}
+          tp.last_daily_deliverable_date,
+          (
+            SELECT MAX((NULLIF(TRIM(dd.elem->>'date'), ''))::date)
+            FROM jsonb_array_elements(COALESCE(tp.daily_deliverables, '[]'::jsonb)) AS dd(elem)
+            WHERE NULLIF(TRIM(dd.elem->>'date'), '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          )
+        ) AS eta_trucking_completion_date,
+        -- Trucking Last Receive = last date on WB Actuals daily (upload)
+        (
+          SELECT MAX(da.progress_date)
+          FROM trucking_daily_actuals da
+          WHERE da.trucking_operation_id = tp.id
         ) AS trucking_completion_date,
         COALESCE(
           (SELECT tr.realization_start_date FROM trucking_realizations tr WHERE tr.trucking_operation_id = tp.id LIMIT 1),
@@ -2492,12 +2500,22 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
           tr.realization_start_date,
           ${sqlSapTruckingStartReceiveDateForLookupKeys('c.contract_id', '$2::text[]')}
         ) AS trucking_start_date,
-        COALESCE(
-          tr.realization_end_date,
-          ${sqlSapTruckingLastReceiveDateForLookupKeys('c.contract_id', '$2::text[]')}
+        -- Trucking Last Receive = last date on WB Actuals daily (upload)
+        (
+          SELECT MAX(da.progress_date)
+          FROM trucking_daily_actuals da
+          WHERE da.trucking_operation_id = t.id
         ) AS trucking_completion_date,
         t.eta_trucking_start_date,
-        t.eta_trucking_completion_date
+        -- ETA Trucking Completion = last date on Daily Planning Deliverables (upload)
+        COALESCE(
+          t.last_daily_deliverable_date,
+          (
+            SELECT MAX((NULLIF(TRIM(dd.elem->>'date'), ''))::date)
+            FROM jsonb_array_elements(COALESCE(t.daily_deliverables, '[]'::jsonb)) AS dd(elem)
+            WHERE NULLIF(TRIM(dd.elem->>'date'), '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          )
+        ) AS eta_trucking_completion_date
       FROM trucking_operations t
       INNER JOIN contracts c ON t.contract_id = c.id
       ${TRUCKING_REALIZATIONS_JOIN}

@@ -251,6 +251,11 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
               COALESCE(
                 t.trucking_completion_date,
                 lr.trucking_last_receive_date,
+                (
+                  SELECT MAX(da.progress_date)
+                  FROM trucking_daily_actuals da
+                  WHERE da.trucking_operation_id = t.id
+                ),
                 t.eta_trucking_completion_date,
                 t.eta_delivery_end_date
               )
@@ -647,7 +652,8 @@ export function resolveSapDpCalendarDate(row: any): Date | null {
 
 /**
  * Open projected completion end for cycle math (ETA side only):
- * - Condition B: standard ETA empty → Today (substitute missing ETA only)
+ * - Condition B: standard ETA empty → LAND: last_trucking_completion_date
+ *   (realization / SAP Last Receive / WB last date), else Today; SEA: Today
  * - Condition A: standard ETA present → require planning/discharge date (no Today substitute)
  */
 export function resolveOpenEffectiveCompletionEnd(
@@ -659,6 +665,9 @@ export function resolveOpenEffectiveCompletionEnd(
   const standardEta = resolveOpenStandardEta(row, t);
 
   if (!hasCalendarDate(standardEta)) {
+    if (t.startsWith('LAND') && hasCalendarDate(row.last_trucking_completion_date)) {
+      return due(row.last_trucking_completion_date);
+    }
     const today = new Date(todayMid);
     today.setHours(0, 0, 0, 0);
     return today;
@@ -684,7 +693,7 @@ export function resolveOpenCycleCompletionEnd(
   return resolveOpenEffectiveCompletionEnd(row, transport, todayMid);
 }
 
-/** Open Log Cycle: Cargo Readiness → effective completion (Today only when standard ETA is empty). */
+/** Open Log Cycle: Cargo Readiness → effective completion (LAND Cond B: completion/WB before Today). */
 export function computeOpenLogCycleDays(
   row: any,
   transport: string,
@@ -738,7 +747,7 @@ export function isContractPerfOnTimeTradeCycle(row: any, tradeCycle: number): bo
 /**
  * Open contracts — Trade Cycle for drilldown.
  *   A) Standard ETA present → delivery_end vs planning/discharge (unchanged).
- *   B) Standard ETA empty → today vs due date delivery end (Late if today >= due end).
+ *   B) Standard ETA empty → today vs due date delivery end (Late if today > due end; On Time if today ≤ due end).
  * Condition B applies to every Open row. Section-1 "Open" card only gates extra UI copy, not this rule.
  */
 function computeOpenTradeCycleDays(

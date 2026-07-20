@@ -82,7 +82,7 @@ export function hasCalendarDate(value: unknown): boolean {
 
 /**
  * Open drilldown Condition B (standard ETA empty): Trade Cycle = today − due date delivery end (calendar days).
- * Late when today >= due end (Trade Cycle >= 0); On Time when today < due end (Trade Cycle < 0).
+ * Late when today > due end (Trade Cycle > 0); On Time when today ≤ due end (Trade Cycle ≤ 0).
  */
 export function openDueDateTradeCycleDays(deliveryEnd: unknown, today: Date = new Date()): number | null {
   return diffCalendarDays(deliveryEnd, today);
@@ -93,9 +93,9 @@ export function openFallbackTradeCycleDays(fallbackDate: unknown, today: Date = 
   return diffCalendarDays(fallbackDate, today);
 }
 
-/** Condition B: On Time when today < due date delivery end (Trade Cycle < 0). */
+/** Condition B: On Time when today ≤ due date delivery end (Trade Cycle ≤ 0), including due today. */
 export function isOpenConditionBOnTime(tradeCycleDays: number): boolean {
-  return tradeCycleDays < 0;
+  return tradeCycleDays <= 0;
 }
 
 /** Condition A / legacy: On Time when Trade Cycle <= 0. */

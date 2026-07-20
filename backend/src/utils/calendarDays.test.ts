@@ -44,9 +44,9 @@ describe('open drilldown Condition B (Open summary, empty standard ETA)', () => 
     expect(openDueDateTradeCycleDays('2026-06-10', today)).toBe(0);
   });
 
-  it('On Time when today < due end (Trade Cycle < 0); Late when today >= due end', () => {
+  it('On Time when today ≤ due end (Trade Cycle ≤ 0); Late when today > due end', () => {
     expect(isOpenConditionBOnTime(-5)).toBe(true);
-    expect(isOpenConditionBOnTime(0)).toBe(false);
+    expect(isOpenConditionBOnTime(0)).toBe(true);
     expect(isOpenConditionBOnTime(3)).toBe(false);
   });
 

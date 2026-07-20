@@ -1052,7 +1052,7 @@ function ContractPerfDrilldownSectionHelp({
         {summaryCardStatus === 'Open' ? (
           <p className="text-gray-500">
             With <span className="font-medium">Open</span> selected: standard ETA → Trade Cycle vs due date.
-            No standard ETA → On Time if today &lt; due date delivery end; Late if today ≥ due date delivery end.
+            No standard ETA → On Time if today ≤ due date delivery end; Late if today &gt; due date delivery end.
           </p>
         ) : null}
         <p>
