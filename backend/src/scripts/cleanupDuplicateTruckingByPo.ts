@@ -14,6 +14,8 @@ import {
   dedupeActiveTruckingOpsForPo,
   listDuplicateTruckingByPo,
 } from '../services/truckingDedupe.service';
+import { invalidateTruckingListCache } from '../services/truckingList.service';
+import { PipelineDailySummaryService } from '../services/pipelineDailySummary.service';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -31,6 +33,7 @@ async function main() {
   }
 
   const client = await getClient();
+  let cancelledAny = false;
   try {
     const preview = await listDuplicateTruckingByPo(client, all ? null : poFilter);
     if (preview.length === 0) {
@@ -101,8 +104,10 @@ async function main() {
     await client.query('BEGIN');
     const results: Array<{ po: string; keeperId: string | null; cancelledIds: string[] }> = [];
     for (const po of pos) {
-      const r = await dedupeActiveTruckingOpsForPo(client, po);
+      // Defer pipeline refresh to after COMMIT + client.release (avoids pool timeout storm).
+      const r = await dedupeActiveTruckingOpsForPo(client, po, { skipPipelineRefresh: true });
       results.push({ po, keeperId: r.keeperId, cancelledIds: r.cancelledIds });
+      if (r.cancelledIds.length > 0) cancelledAny = true;
     }
     await client.query('COMMIT');
     console.log(JSON.stringify({ applied: results }, null, 2));
@@ -111,6 +116,13 @@ async function main() {
     throw e;
   } finally {
     client.release();
+  }
+
+  if (apply && cancelledAny) {
+    invalidateTruckingListCache();
+    console.log('Refreshing trucking pipeline summary (single pass)...');
+    const rowCount = await PipelineDailySummaryService.refreshTruckingPipelineDailySummary();
+    console.log(JSON.stringify({ pipelineRefreshed: true, rowCount }, null, 2));
   }
 }
 

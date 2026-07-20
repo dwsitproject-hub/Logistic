@@ -16,6 +16,41 @@ export interface TruckingDedupeRankedRow {
   rn: number;
 }
 
+export interface TruckingDedupeOptions {
+  /**
+   * Skip async pipeline refresh after cancel.
+   * Use for batch scripts that refresh once after COMMIT (avoids pool timeout storms).
+   */
+  skipPipelineRefresh?: boolean;
+}
+
+/** Coalesce concurrent refresh requests into one in-flight + one trailing run. */
+let truckingPipelineRefreshPending = false;
+let truckingPipelineRefreshRunning: Promise<void> | null = null;
+
+export function scheduleTruckingPipelineRefresh(): void {
+  truckingPipelineRefreshPending = true;
+  if (truckingPipelineRefreshRunning) return;
+
+  truckingPipelineRefreshRunning = (async () => {
+    while (truckingPipelineRefreshPending) {
+      truckingPipelineRefreshPending = false;
+      try {
+        await PipelineDailySummaryService.refreshTruckingPipelineDailySummary();
+      } catch (err) {
+        logger.warn('scheduleTruckingPipelineRefresh: trucking pipeline refresh failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  })().finally(() => {
+    truckingPipelineRefreshRunning = null;
+    if (truckingPipelineRefreshPending) {
+      scheduleTruckingPipelineRefresh();
+    }
+  });
+}
+
 async function mergeDailyActualsIntoKeeper(
   client: PoolClient,
   keeperId: string,
@@ -70,6 +105,7 @@ async function mergeDailyActualsIntoKeeper(
 export async function dedupeActiveTruckingOpsForContract(
   client: PoolClient,
   contractUuid: string,
+  options?: TruckingDedupeOptions,
 ): Promise<{ keeperId: string | null; cancelledIds: string[] }> {
   const ranked = await client.query<TruckingDedupeRankedRow>(
     `WITH ranked AS (
@@ -138,13 +174,9 @@ export async function dedupeActiveTruckingOpsForContract(
   if (cancelledIds.length > 0) {
     // Status cards + CANCELLED list use daily summary / stage snapshot — force rebuild.
     invalidateTruckingListCache();
-    setImmediate(() => {
-      PipelineDailySummaryService.refreshTruckingPipelineDailySummary().catch((err) => {
-        logger.warn('dedupeActiveTruckingOpsForContract: trucking pipeline refresh failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-    });
+    if (!options?.skipPipelineRefresh) {
+      scheduleTruckingPipelineRefresh();
+    }
   }
 
   return { keeperId: keeper.id, cancelledIds };
@@ -156,6 +188,7 @@ export async function dedupeActiveTruckingOpsForContract(
 export async function dedupeActiveTruckingOpsForPo(
   client: PoolClient,
   poNumber: string,
+  options?: TruckingDedupeOptions,
 ): Promise<{ keeperId: string | null; cancelledIds: string[]; contractUuid: string | null }> {
   const po = String(poNumber ?? '').trim();
   if (!po) return { keeperId: null, cancelledIds: [], contractUuid: null };
@@ -182,7 +215,7 @@ export async function dedupeActiveTruckingOpsForPo(
     [contractUuid, po],
   );
 
-  const result = await dedupeActiveTruckingOpsForContract(client, contractUuid);
+  const result = await dedupeActiveTruckingOpsForContract(client, contractUuid, options);
   return { ...result, contractUuid };
 }
 
